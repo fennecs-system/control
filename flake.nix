@@ -1,0 +1,19 @@
+{
+  description = "Control Rust development environment";
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  outputs = { self, nixpkgs }:
+    let
+      systems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
+      eachSystem = f: nixpkgs.lib.genAttrs systems (system: f (import nixpkgs { inherit system; }));
+    in {
+      devShells = eachSystem (pkgs: {
+        default = pkgs.mkShell {
+          packages = [ pkgs.rustc pkgs.cargo pkgs.rustfmt pkgs.clippy pkgs.trunk ];
+        };
+      });
+      packages = eachSystem (pkgs:
+        if pkgs.stdenv.isLinux then {
+          worker-image = import ./examples/worker-image.nix { inherit pkgs; };
+        } else { });
+    };
+}

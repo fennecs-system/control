@@ -1,0 +1,13 @@
+# Worker sandbox
+
+The outer container runs as the non-root UID/GID owning the host auth file, with a read-only root, all capabilities dropped, no-new-privileges, resource limits, and ephemeral home/state. Only the job workspace is writable host storage. The single credential-file bind mount is read-only and separate from that workspace.
+
+Codex runs tool commands through its Linux bubblewrap/seccomp sandbox. The named `control` permission profile denies the Codex state directory and `/sys`, permits workspace writes, and disables tool network access. Approval policy is `never`, so it cannot grant an unsandboxed fallback. The account-bearing Codex harness remains outside the tool PID/mount namespace. These controls protect tool access; the trusted harness necessarily reads the credential file.
+
+Docker's default seccomp policy blocks namespace setup, while its default proc masks prevent unprivileged bubblewrap from mounting its own proc filesystem. This runtime disables Docker's system-path masks and supplies a derived seccomp profile. It does **not** disable seccomp, add SYS_ADMIN, or use privileged mode. Non-root execution, dropped capabilities, and Codex's inner isolation are essential to this combination.
+
+`worker-seccomp.json` is based on Docker's upstream profile at <https://github.com/moby/profiles/blob/main/seccomp/default.json>, retrieved 2026-10-27. The downloaded upstream file had SHA-256 `6416b47770785a41ac59073cdc77d9fe98517df2799dc83ef207e622de3053f6`. The only semantic addition allows `clone`, `unshare`, `mount`, `umount2`, `pivot_root`, and `setns` for nested sandbox setup. Upstream restrictions, including clone3's ENOSYS fallback, remain. Kernel permission checks still apply to those syscalls.
+
+Before every run, a separate container mounts a harmless empty auth document at the same destination. The probe verifies that direct and proc-root alias reads fail, PID 1 is the isolated tool supervisor, and workspace writes succeed. Failure blocks account mounting. This is a compatibility and regression check, not proof against all kernel or harness vulnerabilities. Container engines and Codex upgrades require revalidation.
+
+The control plane does not read credential contents. Worker stdout/stderr are drained in memory, bounded for classification, and converted to fixed diagnostic messages; raw streams are never published or persisted. Final report reads are bounded and reject symlinks after the worker exits. Real account/tool execution can be checked with `cargo run --locked -- --check-worker`; this consumes a small amount of the signed-in account's usage and prints no account details or model output. The authenticated check passed on this laptop on 2026-10-27.

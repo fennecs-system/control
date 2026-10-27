@@ -1,0 +1,20 @@
+{
+  "channel_id": null,
+  "principals": [
+    {
+      "label": "geodesic",
+      "user_id": "119363447514202113",
+      "role": "architect"
+    },
+    {
+      "label": "vivkelly",
+      "user_id": "251592424139390976",
+      "role": "user"
+    },
+    {
+      "label": "olliev",
+      "user_id": "1032836812873400380",
+      "role": "user"
+    }
+  ]
+}

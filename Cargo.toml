@@ -1,0 +1,16 @@
+[package]
+name = "control"
+version = "0.1.0"
+edition = "2021"
+default-run = "control"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+control-context = { path = "crates/context" }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+
+
+[workspace]
+members = ["crates/context"]
+exclude = ["web"]

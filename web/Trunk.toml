@@ -1,0 +1,8 @@
+[build]
+target = "index.html"
+dist = "dist"
+public_url = "/tool-window/"
+filehash = true
+
+[watch]
+ignore = ["dist", "target"]
