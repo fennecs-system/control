@@ -8,6 +8,7 @@ mod identity;
 mod knowledge;
 mod lens_library;
 mod lens_ui;
+mod navigation;
 mod rooms;
 mod runtime;
 mod session_http;
@@ -83,12 +84,17 @@ fn fields(body: &str) -> HashMap<String, String> {
         .collect()
 }
 fn render(state: &State, view: &str, lens: &str, channel: &str) -> String {
+    let view = if view == "manage" { "nodes" } else { view };
     let lens = lens_ui::normalize(lens);
     let title = lens_ui::title(lens);
     let mut page = include_str!("../assets/index.html")
-        .replace("</head>", "<link rel='stylesheet' href='/collective.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'></head>")
+        .replace("</head>", "<link rel='stylesheet' href='/collective.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'><link rel='stylesheet' href='/navigation.css'></head>")
         .replace("{{title}}", title)
         .replace("{{page_discussion}}", &chat::discussion_link(view))
+        .replace("{{navigation}}", &navigation::primary(view))
+        .replace("{{section_navigation}}", &navigation::secondary(view))
+        .replace("{{layout_class}}", if navigation::managed(view) { "with-section-nav" } else { "" })
+        .replace("{{page_title}}", &navigation::heading(view))
         .replace(
             "{{lens}}",
             lens,
@@ -293,6 +299,13 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
             "text/plain",
             String::new(),
             format!("Location: {location}\r\n"),
+        )
+    } else if path == "/navigation.css" {
+        (
+            "200 OK",
+            "text/css; charset=utf-8",
+            include_str!("../assets/navigation.css").to_owned(),
+            String::new(),
         )
     } else if path == "/workspace.css" {
         (

@@ -1,4 +1,15 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CONTROL</title><link rel="stylesheet" href="/style.css"></head>
-<body><aside class="sidebar"><a href="/" class="brand"><span class="brand-icon">⌘</span>CONTROL<span class="version">/ 0.1</span></a><div class="workspace"><span class="dot"></span><div>Local workspace<small>control.local</small></div></div><div class="nav-label">WORKSPACE</div><nav><a href="/">▦ <span>Overview</span></a><a href="/chats">⌁ <span>Chat</span></a><a href="/?view=agents">⌁ <span>Agents</span></a><a href="/knowledge">▤ <span>Knowledge</span></a><a href="/?view=rooms"># <span>Rooms</span></a><a href="/?view=lenses">◈ <span>Lenses</span></a><a href="/?view=tools">⊞ <span>Tools</span></a><a href="/?view=monitor">▥ <span>Usage</span></a><a href="/?view=evolution">↻ <span>Improve</span></a><details class="nav-more"><summary>⚙ Settings</summary><a href="/?view=nodes">◇ <span>Nodes</span></a><a href="/?view=authority">◇ <span>Access requests</span></a><a href="/?view=personas">⌘ <span>Personas</span></a><a href="/?view=discord-access">◇ <span>Discord access</span></a><a href="/?view=integrations">⌁ <span>Integrations</span></a></details></nav><div class="sidebar-bottom"><p><span class="dot"></span> control.local</p><div class="profile"><span class="avatar">OP</span><div>Operator<small>Local access</small></div><span>⚙</span></div></div></aside>
-<div class="shell"><header><div>CONTROL</div><div class="header-right">{{page_discussion}}<a href="/?view=nodes">◇ LOCAL</a></div></header><div class="body-grid"><main>{{content}}<div class="bottom-note"><span>⌘ CONTROL</span></div></main></div></div></body></html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Control</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+<aside class="sidebar">
+  <a href="/" class="brand"><span class="brand-icon" aria-hidden="true">⌘</span>CONTROL<span class="version">/ 0.1</span></a>
+  <div class="workspace"><span class="dot"></span><div>Local workspace<small>control.local</small></div></div>
+  <div class="nav-label">WORKSPACE</div>
+  <nav aria-label="Workspace">{{navigation}}</nav>
+  <div class="sidebar-bottom"><div class="profile"><span class="avatar">OP</span><div>Operator<small>Local access</small></div></div></div>
+</aside>
+<div class="shell">
+  <header><div>{{page_title}}</div><div class="header-right">{{page_discussion}}<a href="/?view=nodes">◇ LOCAL</a></div></header>
+  <div class="body-grid {{layout_class}}">{{section_navigation}}<main>{{content}}<div class="bottom-note"><span>⌘ CONTROL</span></div></main></div>
+</div>
+</body></html>

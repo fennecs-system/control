@@ -121,10 +121,13 @@ Track provider-reported token usage at attempt/run, person, provider/model, day,
 
 ### Next
 
-- **Manage navigation:** replace the sidebar Settings dropdown with a normal top-level Manage entry (working name). Keep less frequently visited views, including Access requests, one level deep even when operational. Use a secondary navigation column to the right of the main sidebar: top-level navigation | section navigation | content. Avoid dropdown styling; do not add a separate top-level Inbox solely to surface these views.
 - **Tool orchestration:** authenticated MCP interface, declarative Nix tool-container requests, bounded swarm scheduling and cleanup.
 - **Independent verification:** separate-model judges, reproducible evidence, and usage/budget limits across the swarm.
 - **Credential broker:** authenticate outside workers, with revocable per-run capabilities, usage monitoring, and enforced prevention of direct-provider bypass.
+
+## Manage navigation
+
+Manage is a normal top-level sidebar entry. Its less frequently visited views—Nodes, Access requests, Personas, Discord access, and Integrations—stay one level deep in a secondary navigation column: top-level navigation | section navigation | content. Keep the section visible while moving between those views, including older direct links. On narrow screens, use a horizontal section row above the content. Keep the main sidebar compact, scroll only its links when needed, and avoid dropdown styling or a separate top-level Inbox.
 
 ## Control harness and shared sessions
 
