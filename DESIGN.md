@@ -119,6 +119,8 @@ Judges receive task criteria, evidence, artifacts, and check results. Record aut
 
 Track provider-reported token usage at attempt/run, person, provider/model, day, and node levels. Preserve retry costs, distinguish missing counts from zero, and keep cached tokens within input totals. Subscription usage is not an invented dollar bill. Keep website copy short and focused on actions and status; put architecture in docs or expandable details. Use local Locust for adversarial review where useful.
 
+Chat replies should answer the request naturally. Mention changes, checks, or limitations only when useful. Greetings do not need empty report sections or a disclaimer that no application task was specified. Keep that boilerplate out of subsequent replies too, even if it appears in earlier conversation history.
+
 ### Next
 
 - **Tool orchestration:** authenticated MCP interface, declarative Nix tool-container requests, bounded swarm scheduling and cleanup.
