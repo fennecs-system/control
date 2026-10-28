@@ -39,25 +39,32 @@
   header{height:auto;min-height:50px;flex-wrap:wrap;gap:10px;padding:12px 16px}
 }
 .provider-saved:not(:target){display:none}
-/* Chat uses the same secondary column as Manage; the right stays available for outputs. */
+/* Conversations are disclosed from the chat header, closed by default. */
 .session-view>.shell{height:100dvh;display:flex;flex-direction:column}
 .session-view header{flex-shrink:0}
-.session-view .body-grid.with-section-nav{flex:1;min-height:0;grid-template-rows:minmax(0,1fr);align-content:stretch}
-.session-view .conversation-navigation{position:static;min-height:0;max-height:none;height:100%;display:flex;flex-direction:column;overflow:hidden}
+.session-view .body-grid.chat-workspace{position:relative;display:grid;flex:1;min-height:0;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr);align-content:stretch}
+.chat-workspace:has(.conversation-toggle[open]){padding-left:200px}
+.conversation-toggle{flex-shrink:0}
+.conversation-toggle>summary{list-style:none;cursor:pointer;padding:6px 8px;border:1px solid var(--line);border-radius:4px;color:var(--muted);font-size:12px}
+.conversation-toggle>summary::-webkit-details-marker{display:none}
+.conversation-toggle>summary:hover,.conversation-toggle[open]>summary{color:var(--purple);border-color:#b5a0ff55;background:#b5a0ff08}
+.session-view .conversation-toggle>.conversation-navigation{position:absolute;left:0;top:0;width:200px;min-height:0;max-height:none;height:100%;display:flex;flex-direction:column;overflow:hidden}
+.session-view .conversation-toggle:not([open])>.conversation-navigation{display:none}
 .conversation-navigation nav{min-height:0;overflow:auto;flex:1;scrollbar-width:thin;scrollbar-color:#393340 transparent}
 .conversation-navigation nav a{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .conversation-navigation nav a:first-child{margin-bottom:12px;color:var(--purple)}
-.session-view .with-section-nav>main{height:100%;min-height:0}
+.session-view .chat-workspace>main{height:100%;min-height:0;margin:0 auto}
 .conversation-heading h2{max-width:100%}
 @media(max-width:930px){
-  .session-view .body-grid.with-section-nav{grid-template-rows:auto minmax(0,1fr)}
-  .session-view .conversation-navigation{height:auto;flex-shrink:0;padding:12px 16px}
-  .conversation-navigation nav{overflow-x:auto;overflow-y:hidden}
-  .conversation-navigation nav a{max-width:220px}
-  .conversation-navigation nav a:first-child{margin-bottom:0}
+  .chat-workspace:has(.conversation-toggle[open]){padding-left:0}
+  .session-view .conversation-toggle>.conversation-navigation{top:72px;height:calc(100% - 72px);width:min(280px,90%);z-index:3;box-shadow:12px 0 30px #0006;padding:16px}
+  .conversation-navigation nav{flex-direction:column;overflow:auto}
+  .conversation-heading{gap:12px}
+  .conversation-heading h2{min-width:0}
+  .conversation-toggle>summary span{display:none}
 }
 @media(max-width:580px){
   .session-view>.shell{height:auto}
-  .session-view .body-grid.with-section-nav{display:flex;flex-direction:column;align-items:stretch}
-  .session-view .with-section-nav>main{height:auto;flex:1;min-height:0}
+  .session-view .body-grid.chat-workspace{display:flex;flex-direction:column;align-items:stretch}
+  .session-view .chat-workspace>main{height:auto;flex:1;min-height:0}
 }

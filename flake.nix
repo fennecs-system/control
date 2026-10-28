@@ -14,6 +14,7 @@
       packages = eachSystem (pkgs:
         if pkgs.stdenv.isLinux then {
           worker-image = import ./examples/worker-image.nix { inherit pkgs; };
+          browser-image = import ./tools/browser/image.nix { inherit pkgs; };
         } else { });
     };
 }

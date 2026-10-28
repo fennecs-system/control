@@ -119,8 +119,9 @@ pub fn landing(state: &State, lens: &str, topic: Option<&str>) -> String {
             )
         })
         .unwrap_or_default();
-    let mut html = String::from(
-        "<section class='conversation'><div class='conversation-heading'><h2>New chat</h2></div>",
+    let mut html = format!(
+        "<section class='conversation'><div class='conversation-heading'>{}<h2>New chat</h2></div>",
+        crate::navigation::conversation_button(state, "")
     );
     let selected = if state.lens_library.get(lens).is_some() {
         vec![lens.into()]
@@ -338,7 +339,7 @@ pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
         .unwrap_or_default();
     let session = state.chats.iter().find(|s| s.id == id).unwrap();
     let lenses = selected_lenses(session);
-    Ok(format!("<section class='conversation'><div class='conversation-heading'><h2>{}</h2><span>{room}</span></div><iframe class='chat-transcript' src='/chat/{id}/transcript#latest' title='Conversation'></iframe><form class='conversation-composer' id='session-message' method='post' action='/chat/{id}/messages'><textarea name='message' required maxlength='2000' rows='3' aria-label='Message' placeholder='Message Control…'></textarea><div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></section>",escape(data["title"].as_str().unwrap_or("Chat")),crate::lens_library::choices(state,&lenses,"session-message")))
+    Ok(format!("<section class='conversation'><div class='conversation-heading'>{}<h2>{}</h2><span>{room}</span></div><iframe class='chat-transcript' src='/chat/{id}/transcript#latest' title='Conversation'></iframe><form class='conversation-composer' id='session-message' method='post' action='/chat/{id}/messages'><textarea name='message' required maxlength='2000' rows='3' aria-label='Message' placeholder='Message Control…'></textarea><div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></section>",crate::navigation::conversation_button(state,id),escape(data["title"].as_str().unwrap_or("Chat")),crate::lens_library::choices(state,&lenses,"session-message")))
 }
 pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
     let data = detail(state, id)?;
@@ -550,8 +551,11 @@ mod tests {
         let session = crate::render(&state, "session", "none", &id)
             .replace("<body>", "<body class='session-view'>")
             .replace(
-                &format!("/chat/{id}/transcript#latest"),
-                "transcript.html#latest",
+                &format!("src='/chat/{id}/transcript#latest'"),
+                &format!(
+                    "srcdoc='{}'",
+                    escape(&inline(transcript(&state, &id).unwrap()))
+                ),
             );
         let landing = crate::render(
             &state,

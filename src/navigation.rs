@@ -58,6 +58,9 @@ pub fn secondary(view: &str) -> String {
         .collect();
     format!("<aside class='section-navigation'><h2>Manage</h2><nav aria-label='Manage'>{links}</nav></aside>")
 }
+pub fn conversation_button(state: &crate::State, active: &str) -> String {
+    format!("<details class='conversation-toggle'><summary aria-label='Conversations' title='Conversations'>☰ <span>Conversations</span></summary>{}</details>",conversations(state,active))
+}
 pub fn heading(view: &str) -> String {
     if let Some((_, label)) = MANAGE.iter().find(|(id, _)| *id == view) {
         return format!("Manage<span class='slash' aria-hidden='true'>/</span>{label}");
@@ -70,7 +73,7 @@ pub fn conversations(state: &crate::State, active: &str) -> String {
     } else {
         ""
     };
-    let mut links = format!("<a href='/chats'{current}>＋ New chat</a>");
+    let mut links = format!("<a href='/chats'{current}>+ New chat</a>");
     if let Some(chats) = crate::chat::list(state).as_array() {
         for chat in chats.iter().rev() {
             let id = chat["id"].as_str().unwrap();
@@ -111,8 +114,11 @@ mod tests {
         }
         assert!(super::primary("knowledge-page").contains("href='/knowledge' aria-current='page'"));
         let chat = crate::render(&state, "session-list", "none", "");
-        assert!(chat.contains("aria-label='Conversations'"));
-        assert!(chat.contains("href='/chats' aria-current='page'"));
+        let landing = crate::chat::landing(&state, "none", None);
+        assert!(landing.contains("<details class='conversation-toggle'>"));
+        assert!(!landing.contains("conversation-toggle' open"));
+        assert!(landing.contains("href='/chats' aria-current='page'"));
+        assert!(chat.contains("chat-workspace"));
         assert!(super::primary("session-list").contains("href='/chats' aria-current='page'"));
     }
 }

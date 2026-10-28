@@ -98,7 +98,7 @@ fn save_with(
     Ok(draft)
 }
 pub fn choices(state: &State, selected: &[String], form: &str) -> String {
-    let mut html=format!("<input type='hidden' name='composition' value='1' form='{form}'><div class='chat-tags'><details class='lens-selector'><summary>＋ Lenses</summary></details><div class='tag-options'>");
+    let mut html=format!("<input type='hidden' name='composition' value='1' form='{form}'><div class='chat-tags'><details class='lens-selector'><summary>+ Lenses</summary></details><div class='tag-options'>");
     for lens in state.lens_library.current() {
         html.push_str(&format!("<label class='lens-option lens-tag'><input type='checkbox' name='lens_{}' value='{}' form='{form}'{}><span>{}</span></label>",escape(&lens.id),escape(&lens.id),if selected.contains(&lens.id){" checked"}else{""},escape(&lens.name)));
     }

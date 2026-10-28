@@ -38,7 +38,7 @@ An authenticated Codex run and sandboxed shell artifact were verified on this la
 
 Navigation pages are global, with one **Chat** destination and one **Lenses** menu item. The chat panel is absent from other pages. Local architects can use the header's **Discuss design** link to prepare a chat about that page; following the link sends nothing and creates no run. The topic is whitelisted context, not source-editing permission. Source changes still require an explicit authorized improvement action.
 
-Chat has a left-hand conversation submenu with New chat and the current selection. On narrow screens it becomes a horizontal row. Completed replies omit status labels; progress and failures remain visible. The right side is reserved for future artifact views.
+Chat has a top-left Conversations button, closed by default, opening a left-hand panel with New chat and the current selection. On narrow screens the panel overlays the chat. Completed replies omit status labels; progress and failures remain visible. The opposite side is reserved for future artifact views.
 
 **Manage** opens a secondary navigation column for Nodes, Access requests, Personas, Models & providers, Discord access, and Integrations. The section remains visible on direct links and becomes a horizontal row on narrow screens. The main sidebar scrolls its links independently when space is limited. Models & providers persists the default Codex model for new runs; each queued run keeps its selected model. `CONTROL_CODEX_MODEL` supplies the default until a model is saved in Manage. OpenAI API, Anthropic, and self-hosted adapters remain unconnected.
 
@@ -89,3 +89,13 @@ Questions to resolve: Are agent runs pinned to a lens version? Which node is aut
 ## Federation
 
 The [federation specification](docs/FEDERATION.md) and [author/critic review](reviews/2026-10-28-federation.md) define selective exchange and future delegated execution. `control federation help` exposes the implemented offline slice: node identities, scoped peer pinning/revocation, signed lens exports, quarantined imports, and inspection. Document bodies require opt-in at both ends. There is no live peer listener or remote execution yet. Agents can propose workflows; deterministic code enforces authority, state, budgets, retries, and cleanup.
+
+## Browser tools and local Codex integration
+
+`control browser capture preview.html 1280 800` renders an explicitly selected,
+self-contained HTML file using offline Nix Firefox and saves a private PNG artifact.
+`control mcp --root /absolute/control/checkout` exposes that capture tool and
+read-only Hive chat, lens and room tools over stdio for the host Codex. It does not
+expose message sending, agent launch or operator credentials. See the
+[browser tool setup and limits](tools/browser/README.md). The current profile uses
+software rendering; GPU access and interactive/networked browsing are not enabled.

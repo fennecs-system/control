@@ -24,7 +24,7 @@ use std::{
 };
 
 const VERSION: &str = "2025-11-25";
-struct Hive {
+pub(crate) struct Hive {
     client: Client,
     endpoint: String,
     next: u64,
@@ -49,7 +49,7 @@ fn local_server(value: &str) -> io::Result<Url> {
     Ok(url)
 }
 impl Hive {
-    fn connect(server: &str) -> io::Result<Self> {
+    pub(crate) fn connect(server: &str) -> io::Result<Self> {
         let url = local_server(server)?;
         let path = std::env::var("CONTROL_OPERATOR_FILE")
             .unwrap_or_else(|_| ".control/operator-session".into());
@@ -104,7 +104,7 @@ impl Hive {
         }
         Ok(hive)
     }
-    fn rpc(&mut self, method: &str, params: Value) -> io::Result<Value> {
+    pub(crate) fn rpc(&mut self, method: &str, params: Value) -> io::Result<Value> {
         self.next += 1;
         let response = self
             .client

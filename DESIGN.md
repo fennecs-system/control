@@ -167,7 +167,7 @@ Chat presents active lenses as composer tags, with additional choices revealed o
 
 Keep chat compact and minimal: text-fitting user bubbles, tight paragraph spacing, and small square corners rather than pill or squircle shapes. Use the same geometry for the composer and lens tags, retain the monospace typography and readable text size, and keep the composer visible on phone screens.
 
-Conversations belong in a persistent secondary navigation column on the left, with New chat and the current conversation highlighted. Use a compact horizontal row on narrow screens. Keep the right side available for actual artifacts and outputs rather than conversation history or an empty placeholder panel. Omit repetitive sender/status labels on completed replies; show progress or failures only when useful.
+Conversations open from a compact button at the top-left of the chat, closed by default. Expand a left navigation panel with New chat and the current conversation highlighted; on narrow screens it overlays the chat. Keep the opposite side available for an Artifacts button when actual outputs exist. Omit repetitive sender/status labels on completed replies; show progress or failures only when useful.
 
 ## Distribution, node operators, and persistent agents
 
@@ -186,3 +186,18 @@ The terminal should feel like one chat window, closer to Pi or Codex. Use the we
 Write a federation spec using ActivityPub and Bluesky/AT Protocol as theoretical foundations. Have two agents challenge and revise it, starting in a temporary document, then commit the spec and implement a concrete slice. Agents can propose how to schedule other agents and Nix containers through declarative workflows. Keep deterministic work in code: do not spend tokens on queue eligibility, state transitions, authorization, retry timing, or process cleanup. Balance reliable computer-science fundamentals against unnecessary framework bloat.
 
 The agreed [specification](docs/FEDERATION.md) starts with signed, recipient-bound, closed lens bundles and explicit directional trust. Imports remain quarantined. Live delegated execution must wait for enforced disk quotas and crash-safe worker reconciliation. Persistent agent managers propose plans and judge semantic results; a small deterministic supervisor owns enforcement.
+
+## Browser containers and using Control from Codex
+
+Headless browsers should be tools in Nix containers. Start with offline rendering
+and screenshots of explicitly selected HTML previews; keep profiles ephemeral and
+return bounded artifacts. Use software rendering for ordinary UI work. GPU access
+should be an optional capability with verified runtime support, not a default
+privilege grant. Networked browsing and interactive automation are separate steps.
+
+Use Control's own tools while building it. A native Rust stdio MCP bridge lets the
+host Codex read lenses, rooms and chats, and capture offline previews. Keep the
+operator credential inside the trusted bridge, out of configuration and browser
+containers. Worker agents retain their existing scoped tool access; they do not
+inherit the host operator's bridge. The browser runner, inputs, limits and setup
+are documented in [tools/browser](tools/browser/README.md).

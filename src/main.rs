@@ -1,4 +1,6 @@
 mod access;
+#[path = "../tools/browser/main.rs"]
+mod browser;
 mod chat;
 mod collective;
 mod discord;
@@ -8,6 +10,7 @@ mod identity;
 mod knowledge;
 mod lens_library;
 mod lens_ui;
+mod mcp_stdio;
 mod navigation;
 mod providers;
 mod rooms;
@@ -94,8 +97,8 @@ fn render(state: &State, view: &str, lens: &str, channel: &str) -> String {
         .replace("{{title}}", title)
         .replace("{{page_discussion}}", &chat::discussion_link(view))
         .replace("{{navigation}}", &navigation::primary(view))
-        .replace("{{section_navigation}}", &if chat_navigation { navigation::conversations(state, if view=="session" {channel} else {""}) } else { navigation::secondary(view) })
-        .replace("{{layout_class}}", if navigation::managed(view) || chat_navigation { "with-section-nav" } else { "" })
+        .replace("{{section_navigation}}", &navigation::secondary(view))
+        .replace("{{layout_class}}", if chat_navigation { "chat-workspace" } else if navigation::managed(view) { "with-section-nav" } else { "" })
         .replace("{{page_title}}", &navigation::heading(view))
         .replace(
             "{{lens}}",
@@ -390,6 +393,12 @@ fn main() -> std::io::Result<()> {
     if args.get(1).is_some_and(|s| s == "federation") {
         return federation::run(&args[2..]);
     }
+    if args.get(1).is_some_and(|s| s == "mcp") {
+        return mcp_stdio::run(&args[2..]);
+    }
+    if args.get(1).is_some_and(|s| s == "browser") {
+        return mcp_stdio::browser_cli(&args[2..]);
+    }
     let addr = std::env::var("CONTROL_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".into());
     let socket: std::net::SocketAddr = addr.parse().map_err(std::io::Error::other)?;
     if !socket.ip().is_loopback() {
@@ -401,7 +410,7 @@ fn main() -> std::io::Result<()> {
         return harness::run();
     }
     if args.get(1).is_some_and(|s| s == "--help" || s == "help") {
-        println!("control [serve | tui | federation | open | --check-worker]\nserve (default): local web/MCP server\ntui: Rust terminal client for the local server\nfederation: signed offline lens exchange (use federation help)\nopen: sign in to the local website\n--check-worker: exercise one authenticated container task\n\nWorker execution requires the configured Linux container engine and pinned Nix worker image.");
+        println!("control [serve | tui | mcp | browser | federation | open | --check-worker]\nserve (default): local web/MCP server\ntui: Rust terminal client for the local server\nmcp --root DIRECTORY: local read-only Hive tools and offline browser capture\nbrowser capture PREVIEW.html [WIDTH HEIGHT]: Nix Firefox screenshot\nfederation: signed offline lens exchange (use federation help)\nopen: sign in to the local website\n--check-worker: exercise one authenticated container task\n\nWorker execution requires the configured Linux container engine and pinned Nix worker image.");
         return Ok(());
     }
     if args
