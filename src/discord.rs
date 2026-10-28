@@ -28,6 +28,46 @@ impl Incoming {
         }
     }
 }
+pub fn chat_id(user: DiscordId, channel: DiscordId) -> String {
+    format!("d-{user}-{channel}")
+}
+pub fn chat_link(actor: &crate::identity::Actor) -> Option<String> {
+    match actor {
+        crate::identity::Actor::DiscordDm {
+            user_id,
+            channel_id,
+        } => Some(format!(
+            "http://localhost:8080/chat/{}",
+            chat_id(*user_id, *channel_id)
+        )),
+        _ => None,
+    }
+}
+pub fn native_reply(actor: &crate::identity::Actor, content: &str) -> Option<String> {
+    let link = chat_link(actor)?;
+    if ![
+        "hi",
+        "hello",
+        "hey",
+        "hello control",
+        "hi control",
+        "woof",
+        "help",
+        "/help",
+        "status",
+        "/status",
+    ]
+    .contains(&content.trim().to_lowercase().as_str())
+    {
+        return None;
+    }
+    let role = if crate::identity::authorize(actor, Action::Improve).is_ok() {
+        "architect"
+    } else {
+        "user"
+    };
+    Some(format!("Woof! Control is online. Role: {role}. DM me a task, or use /improve for an architect request.\nContinue on this laptop: {link}"))
+}
 pub fn direct_command(content: &str) -> Option<(Action, &str)> {
     let text = content.trim();
     if text.starts_with("!control ") {

@@ -107,11 +107,52 @@ Keep the integration strictly DM-only. Server membership enables the Discord rel
 
 Credentials should be mounted through to containers rather than injected into their environment. Mount only the required credential file read-only, separately from the writable job workspace, and deny agent tools access to it. Read-only mounting prevents modification; it does not itself prevent credential reads.
 
-### TODO: credential broker / proxy
-
-- Move provider authentication into a trusted broker outside agent containers, so workers receive no provider credentials or mounted credential files.
-- Give each run a short-lived, revocable broker capability scoped by its authorized provider, model, tools, and usage limits. A lens selects available tools; runtime policy enforces access.
-- Route provider requests through the broker and record usage, latency, cost where available, and failures without logging credentials or conversation content by default.
-- Prevent workers from bypassing the broker through direct provider access. Verify isolation, expiry, revocation, and cross-run access before treating this boundary as enforced.
-
 The broker is planned work. The worker adapter uses a read-only host Codex auth-file mount, an ephemeral Codex state directory, and a named permission profile denying tools access to that directory. A credential-free canary verifies filesystem isolation and the inner PID namespace before any real credentials are mounted. Authentication refresh remains host-owned because the mount cannot persist token updates.
+
+## Tool containers and swarms
+
+Tools themselves can be Nix containers that models work with. Control should expose an MCP interface for orchestrating agents and tools. Agents request separate tool containers as needed, rather than modifying their own sandbox. The end game is swarms with judge roles that verify results, ideally across different models so a model does not review its own work.
+
+A tool request declares its Nix derivation or pinned image, inputs, outputs, resource limits, lifetime, and requested capabilities. Policy authorizes it; unknown packages can be submitted for an isolated Nix build and review. Agents do not receive the Docker socket or permission to choose arbitrary mounts, credentials, host paths, or networks. A pure lens selects tool descriptions; the runtime launches and stops authorized instances. Tool containers can serve MCP and a Rust/WASM window through the same authorized interface.
+
+Judges receive task criteria, evidence, artifacts, and check results. Record author and reviewer model/provider provenance; require a different model for independent review and prefer a different provider when available. If none is configured, keep the result unverified. Agreement is not a substitute for reproducible checks, and a judge cannot grant itself deployment authority.
+
+Track provider-reported token usage at attempt/run, person, provider/model, day, and node levels. Preserve retry costs, distinguish missing counts from zero, and keep cached tokens within input totals. Subscription usage is not an invented dollar bill. Keep website copy short and focused on actions and status; put architecture in docs or expandable details. Use local Locust for adversarial review where useful.
+
+### Next
+
+- **Tool orchestration:** authenticated MCP interface, declarative Nix tool-container requests, bounded swarm scheduling and cleanup.
+- **Independent verification:** separate-model judges, reproducible evidence, and usage/budget limits across the swarm.
+- **Credential broker:** authenticate outside workers, with revocable per-run capabilities, usage monitoring, and enforced prevention of direct-provider bypass.
+
+## Control harness and shared sessions
+
+Build our own `control-harness`: a Rust TUI integrated with Control's server and MCP hive. Pi's minimal, pluggable shape is inspiration; Pi and its Node/TypeScript runtime are not dependencies. Keep clients thin. Providers, tools, policy, context, and scheduling belong behind the server interface, so a session can move between the terminal, Discord, and a browser.
+
+Discord should reply with a local chat link that opens the same conversation on the website. A link identifies a session; it is not an access token. Continuations retain the original actor's authority, even when the local operator opens a Discord user's chat. The first harness provides listing, creating, resuming, sending, and observing sessions through authenticated MCP. Codex feature parity remains a target, including streaming, steering/cancellation, resumable execution state, patch review, provider switching, and tool plugins; this first client does not claim parity.
+
+Efficiency, reliability, and distribution are design goals. Avoid polling unchanged transcripts, preserve durable queue transitions, and keep execution separate from clients. Build analysis/profiling tools as isolated Nix containers with explicit code/input and report/output mounts; establish measurements before adding complexity.
+
+The first analysis tool is `tools/rust-analysis`: a pinned Nix image for formatting and offline Clippy checks, with a read-only Rust source export, separate reports, and no network or credentials. It is currently a local launcher; MCP registration and sampled flamegraphs remain separate work. Profiling requires a declared workload and verified kernel support, not a blanket privileged container.
+
+Navigation is global: agents, usage, rooms, and settings are not children of Engineering or Research. A browser remembers a default context for new chats; each chat captures its own selected lens and does not change when the operator browses elsewhere. No lens is a valid choice. Older chats with no recorded lens remain unassigned. The current demo lens registry previews tool descriptors and contributes context to worker prompts; it does not enforce a per-lens tool capability set or grant authority.
+
+## Rooms, visible lenses, and writing
+
+Rooms need to connect to chats and be available as tools/MCP/skills so agents can use them. Lenses should stay visible in the sidebar, with a clear meaning, and the chat selector should use direct choices instead of an awkward dropdown. Clarify whether the editor is for knowledge-base documents.
+
+A room links explicitly to chats. Its agents can read shared updates and post concise findings through room-scoped MCP tools; the host binds identity and room membership. Room messages are untrusted context, not instructions from an architect. Private transcripts are not broadcast. Room updates do not automatically spawn work or become knowledge. The first implementation uses a credential-free Rust stdio transport in the Nix worker image and host-validated workspace messages, preserving disabled tool networking and original actor authority.
+
+Lenses are pure selections of context and tool descriptions, presented in a visible library and as choices for new chats. Global navigation stays global. The existing editor is a saved scratchpad, not a knowledge document editor or a write-through view of DESIGN.md; label it accordingly. Knowledge remains a separate, evidence-backed review flow.
+
+The saved-draft action needs obvious feedback. Bring the editor into Knowledge rather than keeping a separate tab: show a list of documents, a [+] action, and a web of connections like Obsidian. Preserve the existing draft as Scratchpad.md. Connections come from explicit [[note links]], with backlinks and unresolved references visible. Saving confirms the document and revision after persistence; stale tabs cannot silently overwrite newer edits. Writing notes and accepting evidence-backed claims remain distinct actions within the same workspace. The first document store stays local to Control's state file; a filesystem vault and sync are not implied.
+
+Keep a single Chat tab rather than a chat panel on every page. Architects can open a design discussion from a small link on the relevant page, carrying the page topic without sending a message or starting work automatically. Lenses need one compact menu item, not another stack at the bottom of the sidebar. Each chat selects lenses, and lenses compose: the UI must allow combinations instead of treating them as mutually exclusive modes. The first additive composition unions selections and deduplicates shared tool descriptors; it grants no authority. Changes apply to future messages, with the composed set captured per run.
+
+## Lens library and conversation layout
+
+Engineering and Research should be prebuilt compositions of smaller useful lenses, rather than two special cases. Build the lens library. Chat should resemble a traditional conversation, with tags at the bottom rather than an extra control bar above the messages.
+
+The first library represents a lens as a declarative pure context function: component references plus selected knowledge documents, tool descriptors, and instructions. Components can themselves be compositions. Resolve against explicit document snapshots; reject cycles and missing references, deduplicate outputs, and preserve definition revisions. Engineering and Research use the same mechanism as user-created lenses. Preview the resolved result before use, and retain the resolved definitions, instructions, and document contents/revisions with each run. Editing a live lens or document affects future runs. Definitions and their revision history are local, with JSON export; distributed publication and synchronization remain future work. A selection cannot grant authority, and complete runtime tool filtering remains separate work.
+
+Chat presents active lenses as composer tags, with additional choices revealed on demand. Submit lens changes with the next message so choosing context does not discard the draft. Keep transcript refresh independent of the composer and make that frame visually continuous with the conversation.

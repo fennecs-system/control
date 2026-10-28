@@ -1,0 +1,10 @@
+[
+  {"id":"context-inspector","name":"Context inspector","revision":1,"tools":["context.inspect"]},
+  {"id":"evidence","name":"Evidence","revision":1,"tools":["knowledge.propose"],"instructions":"Support factual claims with evidence. Distinguish findings from assumptions."},
+  {"id":"repository-read","name":"Repository read","revision":1,"tools":["repo.read"]},
+  {"id":"repository-edit","name":"Repository edit","revision":1,"tools":["repo.patch"]},
+  {"id":"source-search","name":"Source search","revision":1,"tools":["search.read"]},
+  {"id":"architecture-notes","name":"Architecture notes","revision":1},
+  {"id":"engineering","name":"Engineering","revision":1,"includes":["context-inspector","evidence","repository-read","repository-edit","architecture-notes"]},
+  {"id":"research","name":"Research","revision":1,"includes":["context-inspector","evidence","source-search"]}
+]

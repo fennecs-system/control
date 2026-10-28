@@ -94,7 +94,12 @@ pub fn open(addr: &str) -> io::Result<()> {
     crate::storage::initialize()?;
     let unlock = random()?;
     private_file(".control/operator-unlock", &unlock)?;
-    let url = format!("http://{addr}/unlock/{unlock}");
+    let port = addr
+        .parse::<std::net::SocketAddr>()
+        .map_err(io::Error::other)?
+        .port();
+    // Match Discord's localhost links so browser cookies use the same host.
+    let url = format!("http://localhost:{port}/unlock/{unlock}");
     #[cfg(target_os = "macos")]
     let status = Command::new("open").arg(&url).status()?;
     #[cfg(not(target_os = "macos"))]

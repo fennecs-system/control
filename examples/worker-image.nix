@@ -1,9 +1,16 @@
 # Build on a Linux Nix builder. This supplies the worker, not the control plane.
 { pkgs }:
+let
+  roomMcp = pkgs.runCommand "control-room-mcp" { nativeBuildInputs = [ pkgs.rustc pkgs.stdenv.cc ]; } ''
+    mkdir -p $out/bin
+    rustc --edition=2021 -O ${../tools/room-mcp/main.rs} -o $out/bin/control-room-mcp
+  '';
+in
 pkgs.dockerTools.buildLayeredImage {
   name = "control-worker";
   tag = "nix";
   contents = [
+    roomMcp
     pkgs.codex pkgs.rustc pkgs.cargo pkgs.rustfmt pkgs.clippy
     pkgs.gitMinimal pkgs.stdenv.cc pkgs.pkg-config
     pkgs.bash pkgs.coreutils pkgs.cacert

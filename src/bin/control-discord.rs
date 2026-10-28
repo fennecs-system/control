@@ -474,41 +474,26 @@ impl Bridge {
             if let Some(message) = incoming(&row, route, self.bot_id) {
                 let actor = message.actor();
                 if identity::authorize(&actor, message.action).is_ok() {
-                    let text = message.objective.trim().to_lowercase();
-                    let native = message.direct
-                        && [
-                            "hi",
-                            "hello",
-                            "hey",
-                            "hello control",
-                            "hi control",
-                            "woof",
-                            "help",
-                            "/help",
-                            "status",
-                            "/status",
-                        ]
-                        .contains(&text.as_str());
-                    if native {
-                        let role = if identity::authorize(&actor, Action::Improve).is_ok() {
-                            "architect"
-                        } else {
-                            "user"
-                        };
-                        let reply=format!("Woof! Control is online. Your role is {role}. Just DM me a task—no command prefix needed. Use /improve <request> for architect-only source changes. Agent jobs report their execution status separately.");
+                    let path = format!(".control/discord-inbox/{id}.json");
+                    if !Path::new(&path).exists() {
+                        checkpoint(
+                            &path,
+                            &serde_json::to_vec(&message)
+                                .map_err(|_| "Could not encode Discord task.")?,
+                        )?;
+                    }
+                    let native = if message.action == Action::Task {
+                        discord::native_reply(&actor, &message.objective)
+                    } else {
+                        None
+                    };
+                    if let Some(reply) = native {
                         if !self.reply(route.channel, &reply) {
                             return Ok(false);
                         }
                     } else {
-                        let path = format!(".control/discord-inbox/{id}.json");
-                        if !Path::new(&path).exists() {
-                            checkpoint(
-                                &path,
-                                &serde_json::to_vec(&message)
-                                    .map_err(|_| "Could not encode Discord task.")?,
-                            )?;
-                            let _=self.reply(route.channel,"Received. Waiting for the local runtime to accept this task; I will reply here with the result or any execution blocker.");
-                        }
+                        let link = discord::chat_link(&actor).unwrap_or_default();
+                        let _=self.reply(route.channel,&format!("Received.\nContinue on this laptop: {link}\nI’ll reply here when the task finishes."));
                     }
                 } else if identity::authorize(&actor, Action::Task).is_ok() {
                     let _=self.reply(route.channel,"Only the architect can request Control source changes. You can still DM me a normal task in your own isolated workspace.");
@@ -529,6 +514,7 @@ impl Bridge {
                 if !run["source"]
                     .as_str()
                     .is_some_and(|s| s.starts_with("discord:"))
+                    && run["chat_id"].is_null()
                 {
                     continue;
                 }
@@ -564,7 +550,11 @@ impl Bridge {
                 } else {
                     run["result"].as_str().unwrap_or("No report was produced.")
                 };
-                if self.reply(channel, &format!("Control run {id}: {status}.\n{report}")) {
+                let link = discord::chat_link(&actor).unwrap_or_default();
+                if self.reply(
+                    channel,
+                    &format!("Control: {status}.\nContinue on this laptop: {link}\n\n{report}"),
+                ) {
                     delivered.insert(receipt);
                     checkpoint(
                         ".control/discord-delivered.json",

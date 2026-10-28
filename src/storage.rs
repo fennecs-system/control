@@ -20,13 +20,27 @@ pub fn load() -> io::Result<State> {
         return Ok(State::initial());
     }
     let mut state: State = serde_json::from_slice(&fs::read(path)?).map_err(io::Error::other)?;
+    let migrated = crate::knowledge::migrate(&mut state);
     for run in &mut state.runtime.runs {
         if run.status == "running" {
             run.status = "interrupted".into();
             run.result =
                 "The control plane stopped during this run. Inspect the container before retrying."
                     .into();
+            if let Some(attempt) = run.attempts.last_mut() {
+                attempt.status = "interrupted".into();
+            }
+            if let Some(session) = state
+                .chats
+                .iter_mut()
+                .find(|c| Some(&c.id) == run.chat_id.as_ref())
+            {
+                session.revision = session.revision.saturating_add(1);
+            }
         }
+    }
+    if migrated {
+        save(&state)?;
     }
     Ok(state)
 }

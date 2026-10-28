@@ -1,4 +1,6 @@
 //! Pure lens selection. Resource permissions remain outside this function.
+mod library;
+pub use library::{valid_id, Definition, DocumentInput, LensVersion, Library, Resolved};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tool {
     pub name: &'static str,
@@ -39,18 +41,31 @@ pub const TOOLS: [Tool; 5] = [
     },
 ];
 pub fn lens<'a>(category: &str, tools: &'a [Tool]) -> Vec<&'a Tool> {
-    tools
-        .iter()
-        .filter(|tool| match category {
-            "engineering" => tool.name != "search.read",
-            "research" => tool.name != "repo.read" && tool.name != "repo.patch",
-            _ => false,
-        })
-        .collect()
+    compose(&[category], tools)
 }
 pub fn inspect(category: &str, authorized: &[&str]) -> String {
-    let mut text = format!("Lens: {category}\nPure selection over the supplied registry.\n\n");
-    for tool in lens(category, &TOOLS) {
+    inspect_composed(&[category], authorized)
+}
+/// Compose selections by union, retaining registry order and removing shared descriptors.
+pub fn compose<'a>(categories: &[&str], tools: &'a [Tool]) -> Vec<&'a Tool> {
+    let library = Library::default();
+    let roots = categories
+        .iter()
+        .filter(|id| library.get(id).is_some())
+        .map(|id| (*id).into())
+        .collect::<Vec<_>>();
+    let resolved = library.resolve(&roots, &[]).unwrap_or_default();
+    tools
+        .iter()
+        .filter(|tool| resolved.tools.iter().any(|id| id == tool.name))
+        .collect()
+}
+pub fn inspect_composed(categories: &[&str], authorized: &[&str]) -> String {
+    let mut text = format!(
+        "Lenses: {}\nPure selection over the supplied registry.\n\n",
+        categories.join(" + ")
+    );
+    for tool in compose(categories, &TOOLS) {
         let status = if !tool.available {
             "not connected"
         } else if authorized.contains(&tool.name) {
@@ -83,5 +98,16 @@ mod tests {
         assert!(inspect("engineering", &["context.inspect"])
             .contains("permitted in this local example"));
         assert!(inspect("engineering", &["repo.patch"]).contains("not connected"));
+    }
+    #[test]
+    fn composition_is_deduplicated_and_order_independent() {
+        let combined = compose(&["engineering", "research"], &TOOLS);
+        assert_eq!(combined.len(), 5);
+        assert_eq!(
+            combined,
+            compose(&["research", "engineering", "research"], &TOOLS)
+        );
+        assert!(compose(&[], &TOOLS).is_empty());
+        assert!(inspect_composed(&["engineering", "research"], &[]).contains("not authorized"));
     }
 }

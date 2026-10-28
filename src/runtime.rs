@@ -18,6 +18,14 @@ pub struct Runtime {
 #[derive(Serialize, Deserialize)]
 pub struct Run {
     #[serde(default)]
+    pub context: Option<control_context::Resolved>,
+    #[serde(default)]
+    pub lenses: Option<Vec<String>>,
+    #[serde(default)]
+    pub chat_id: Option<String>,
+    #[serde(default)]
+    pub attempts: Vec<crate::usage::Attempt>,
+    #[serde(default)]
     pub actor: Actor,
     #[serde(default)]
     pub action: Action,
@@ -84,6 +92,10 @@ impl Runtime {
             .unwrap_or_default()
             .as_nanos();
         self.runs.push(Run {
+            context: None,
+            lenses: None,
+            chat_id: None,
+            attempts: Vec::new(),
             actor,
             action,
             id: format!("{stamp:x}-{}", self.runs.len()),
@@ -118,34 +130,34 @@ impl Runtime {
     pub fn render(&self, view: &str, lens: &str) -> Option<String> {
         match view {
             "discord-access" => {
-                let mut h="<span class='eyebrow'>IDENTITY / DISCORD ACCESS</span><h2>People have roles. Names do not grant them.</h2><p class='muted'>Roles bind to Discord snowflake IDs from authenticated API messages. Display names are labels only. Unbound identities receive no access.</p>".to_owned();
+                let mut h="<span class='eyebrow'>DISCORD</span><h2>Access</h2><p class='muted'>Access uses Discord IDs. Display names cannot grant permissions.</p>".to_owned();
                 match identity::Policy::load() {
                     Ok(policy) => {
-                        h.push_str("<p>Transport: DMs only. Server-message routing and authorization are disabled.</p>");
+                        h.push_str("<p>DMs only. Server messages are ignored.</p>");
                         for p in policy.principals {
-                            h.push_str(&format!("<article class='record'><span class='tag'>{:?}</span><h3>@{}</h3><p>Discord ID: {}</p><p class='muted'>{}</p></article>",p.role,escape(&p.label),p.user_id.map(|id|id.to_string()).unwrap_or_else(||"not bound — no access".into()),if p.role==identity::Role::Architect {"May request explicit source-improvement runs. Changes still require local review."}else{"May use agents in isolated task workspaces. No Control source, operator session, role configuration, or deployment access."}));
+                            h.push_str(&format!("<article class='record'><span class='tag'>{:?}</span><h3>@{}</h3><p>Discord ID: {}</p><p class='muted'>{}</p></article>",p.role,escape(&p.label),p.user_id.map(|id|id.to_string()).unwrap_or_else(||"not bound — no access".into()),if p.role==identity::Role::Architect {"Can request source changes for local review."}else{"Can run agents. Cannot change Control, access settings, or deploy."}));
                         }
                     }
                     Err(message) => {
                         h.push_str(&format!("<div class='callout'>{}</div>", escape(message)))
                     }
                 }
-                h.push_str("<div class='callout'>Bind IDs locally with <code>cargo run -- --bind-discord &lt;label&gt; &lt;ID&gt;</code>. This command does not load .env. Discord chat cannot change bindings or enable server-message access.</div>");
+                h.push_str("<div class='callout'>Bind IDs locally with <code>cargo run -- --bind-discord &lt;label&gt; &lt;ID&gt;</code>. Access settings cannot be changed through Discord.</div>");
                 Some(h)
             }
             "evolution" | "agents" => {
-                let mut h = "<span class='eyebrow'>COLLECTIVE / EVOLUTION</span><h2>Control can work on Control.</h2><p class='muted'>Propose an improvement. A Codex container works on a separate source snapshot. Results return for review; the live source and service are never replaced automatically.</p><div class='callout'>Local Rust control plane → isolated source snapshot → Codex worker → review artifact. A missing engine, pinned image, or worker credential blocks execution.</div>".to_owned();
+                let mut h = "<span class='eyebrow'>AGENTS</span><h2>Runs</h2><p class='muted'>Tasks run in isolated containers. Source improvements return for review before anything is applied.</p>".to_owned();
                 if !self.notice.is_empty() {
                     h.push_str(&format!("<p role='status'>{}</p>", escape(&self.notice)));
                 }
-                h.push_str(if view == "agents" { "<form method='post' action='/task'><label>Agent objective<textarea name='objective' required maxlength='2000' rows='4' placeholder='Inspect the architecture and propose the next useful change…'></textarea></label><button class='primary'>Queue Codex container run ↗</button></form><h3 class='form-title'>Run ledger</h3>" } else { "<form method='post' action='/improve'><label>What should Control improve?<textarea name='objective' required maxlength='2000' rows='4' placeholder='Improve knowledge review: show which evidence supports each claim…'></textarea></label><button class='primary'>Queue improvement ↗</button></form><h3 class='form-title'>Run ledger</h3>" });
+                h.push_str(if view == "agents" { "<form method='post' action='/task'><label>Task<textarea name='objective' required maxlength='2000' rows='4' placeholder='What should the agent do?'></textarea></label><button class='primary'>Start task ↗</button></form><h3 class='form-title'>Runs</h3>" } else { "<form method='post' action='/improve'><label>What should Control improve?<textarea name='objective' required maxlength='2000' rows='4' placeholder='Improve knowledge review: show which evidence supports each claim…'></textarea></label><button class='primary'>Queue improvement ↗</button></form><h3 class='form-title'>Runs</h3>" });
                 if self.runs.is_empty() {
-                    h.push_str("<div class='empty'>No runs yet. Improvements and Discord tasks will appear here.</div>");
+                    h.push_str("<div class='empty'>No runs yet.</div>");
                 }
                 for r in self.runs.iter().rev() {
-                    h.push_str(&format!("<article class='record'><span class='tag'>{}</span><span class='eyebrow'>{} / {}</span><h3>{}</h3><p class='muted tiny'>run {} · Codex / container</p><pre class='run-result'>{}</pre>",escape(&r.status),escape(&r.kind),escape(&r.source),escape(&r.objective),escape(&r.id),escape(&r.result)));
+                    h.push_str(&format!("<article class='record'><span class='tag'>{}</span><span class='eyebrow'>{} / {}</span><h3>{}</h3><p class='muted tiny'>run {} · Codex</p><pre class='run-result'>{}</pre>",escape(&r.status),escape(&r.kind),escape(&r.source),escape(&r.objective),escape(&r.id),escape(&r.result)));
                     if ["blocked", "failed", "interrupted"].contains(&r.status.as_str()) {
-                        h.push_str(&format!("<form method='post' action='/retry-run'><input type='hidden' name='id' value='{}'><button class='primary'>Retry in container</button></form>",escape(&r.id)));
+                        h.push_str(&format!("<form method='post' action='/retry-run'><input type='hidden' name='id' value='{}'><button class='primary'>Retry</button></form>",escape(&r.id)));
                     }
                     h.push_str("</article>");
                 }
@@ -153,6 +165,9 @@ impl Runtime {
             }
             "integrations" => Some(integrations()),
             "tools" => {
+                if lens == "none" {
+                    return Some("<h2>Tools</h2><p class='muted'>Select a context lens to preview its tools.</p><div class='tabs'><a href='/?view=tools&lens=engineering'>Engineering</a><a href='/?view=tools&lens=research'>Research</a></div>".into());
+                }
                 let category = if lens == "research" {
                     "research"
                 } else {
@@ -160,7 +175,7 @@ impl Runtime {
                 };
                 let result =
                     control_context::inspect(category, &["context.inspect", "knowledge.propose"]);
-                Some(format!("<span class='eyebrow'>LENS TOOLS / INTERACTIVE WINDOW</span><h2>A tool can have a window.</h2><p class='muted'>Execution and presentation are separate surfaces. This inspector uses the same pure Rust selection library as the WASM component.</p><div class='tabs'><a href='/?view=tools&lens=engineering'>Engineering lens</a><a href='/?view=tools&lens=research'>Research lens</a></div><details class='record'><summary>Native Rust reference result</summary><pre class='run-result'>{}</pre></details><div class='tool-window'><iframe src='/tool-window/?lens={category}' title='Rust WASM context inspector' sandbox='allow-scripts allow-same-origin'></iframe></div><div class='callout'>Tool windows can present results in a workspace or chat. All effectful requests must pass through the authorized runtime API.</div>",escape(&result)))
+                Some(format!("<span class='eyebrow'>TOOLS</span><h2>Tool preview</h2><p class='muted'>Browse the tools selected by each lens.</p><div class='tabs'><a href='/?view=tools&lens=engineering'>Engineering</a><a href='/?view=tools&lens=research'>Research</a></div><details class='record'><summary>Details</summary><pre class='run-result'>{}</pre></details><div class='tool-window'><iframe src='/tool-window/?lens={category}' title='Selected tools' sandbox='allow-scripts allow-same-origin'></iframe></div>",escape(&result)))
             }
             _ => None,
         }
@@ -235,7 +250,7 @@ fn integrations() -> String {
         "offline / starting"
     };
     let profile=status["bot_id"].as_str().and_then(|s|s.parse::<identity::DiscordId>().ok()).map(|id|format!("<p><a href='https://discord.com/users/{id}' rel='noreferrer'>Open Control in Discord ↗</a></p>")).unwrap_or_default();
-    format!("<span class='eyebrow'>LOCAL NODE / INTEGRATIONS</span><h2>A laptop-sized collective.</h2><div class='record'><h3>Rust control plane</h3><p>Authenticated loopback service · durable local records</p></div><div class='record'><h3>Codex workers</h3><p>{}</p><p class='muted'>Worker authentication and a Linux container engine are required for agent execution.</p></div><div class='record'><span class='tag'>{label}</span><h3>Discord · direct messages</h3><p>DM Control normally—no command prefix or server channel required. Use /improve for architect-only source work.</p>{profile}<p class='muted'>Only bound user IDs can interact. Private messages remain private to their run and recipient. This view never loads .env.</p><a href='/?view=discord-access'>Review ID-based permissions ↗</a></div>",if worker_image().is_some(){"Nix image pinned by content hash."}else{"Blocked: no pinned worker image."})
+    format!("<span class='eyebrow'>INTEGRATIONS</span><h2>Connections</h2><div class='record'><h3>Local service</h3><p>Running on this laptop</p></div><div class='record'><h3>Codex workers</h3><p>{}</p><p class='muted'>Requires Codex login and the container engine.</p></div><div class='record'><span class='tag'>{label}</span><h3>Discord · direct messages</h3><p>Message Control directly. Architects can use /improve to request source changes.</p>{profile}<p class='muted'>Only approved users can chat. DMs are not shared with rooms.</p><a href='/?view=discord-access'>Manage access ↗</a></div>",if worker_image().is_some(){"Nix container configured."}else{"Blocked: worker image is not configured."})
 }
 
 #[cfg(test)]
