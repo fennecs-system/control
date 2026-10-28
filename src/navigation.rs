@@ -15,6 +15,7 @@ const MANAGE: &[(&str, &str)] = &[
     ("nodes", "Nodes"),
     ("authority", "Access requests"),
     ("personas", "Personas"),
+    ("providers", "Models &amp; providers"),
     ("discord-access", "Discord access"),
     ("integrations", "Integrations"),
 ];

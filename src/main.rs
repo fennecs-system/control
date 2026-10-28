@@ -9,6 +9,7 @@ mod knowledge;
 mod lens_library;
 mod lens_ui;
 mod navigation;
+mod providers;
 mod rooms;
 mod runtime;
 mod session_http;
@@ -100,6 +101,7 @@ fn render(state: &State, view: &str, lens: &str, channel: &str) -> String {
             lens,
         );
     let content = (if view == "monitor" { Some(usage::render(&state.runtime)) } else { state.runtime.render(view,lens) }).or_else(|| state.collective.render(view, channel)).unwrap_or_else(|| match view {
+        "providers" => providers::render(&state.runtime),
         "session" => chat::render(state,channel).unwrap_or_else(escape),
         "session-list" => channel.to_owned(),
         "editor" | "knowledge" => knowledge::render(state,if view=="editor"{"scratchpad"}else{""},None),
@@ -223,6 +225,22 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         return;
     }
     let mut state = state.lock().unwrap();
+    if method == "POST" && path == "/providers" {
+        let f = fields(&String::from_utf8_lossy(
+            &data[header_end..header_end + length],
+        ));
+        let result = providers::save_with(&mut state, &f, storage::save);
+        let (status, extra, body) = match result {
+            Ok(()) => (
+                "303 See Other",
+                "Location: /?view=providers#saved\r\n",
+                String::new(),
+            ),
+            Err(message) => ("400 Bad Request", "", message.to_owned()),
+        };
+        let _ = write!(stream,"HTTP/1.1 {status}\r\n{extra}Content-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",body.len());
+        return;
+    }
     if lens_library::handle(
         &mut stream,
         &mut state,

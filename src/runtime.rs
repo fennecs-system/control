@@ -12,11 +12,14 @@ use std::{
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Runtime {
+    pub model: Option<String>,
     pub runs: Vec<Run>,
     pub notice: String,
 }
 #[derive(Serialize, Deserialize)]
 pub struct Run {
+    #[serde(default)]
+    pub model: Option<String>,
     #[serde(default)]
     pub context: Option<control_context::Resolved>,
     #[serde(default)]
@@ -63,6 +66,13 @@ fn field(f: &HashMap<String, String>, name: &str) -> String {
     f.get(name).map(|s| s.trim().to_owned()).unwrap_or_default()
 }
 impl Runtime {
+    pub fn configured_model(&self) -> String {
+        self.model
+            .as_deref()
+            .filter(|s| crate::usage::valid_model(s))
+            .map(str::to_owned)
+            .unwrap_or_else(crate::usage::default_model)
+    }
     pub fn enqueue(&mut self, objective: String, kind: &str, source: &str) {
         let action = if kind == "self-improvement" {
             Action::Improve
@@ -92,6 +102,7 @@ impl Runtime {
             .unwrap_or_default()
             .as_nanos();
         self.runs.push(Run {
+            model: Some(self.configured_model()),
             context: None,
             lenses: None,
             chat_id: None,

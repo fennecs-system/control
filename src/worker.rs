@@ -339,9 +339,12 @@ fn checkpoint_next(
         .runs
         .iter()
         .position(|r| r.status == "queued")?;
+    let model = state.runtime.configured_model();
     let run = &mut state.runtime.runs[index];
     run.status = "running".into();
-    run.attempts.push(crate::usage::Attempt::new());
+    let mut attempt = crate::usage::Attempt::new();
+    attempt.model = run.model.clone().unwrap_or(model);
+    run.attempts.push(attempt);
     let chat_id = run.chat_id.clone();
     let previous_revision = state
         .chats
@@ -660,6 +663,7 @@ mod tests {
     #[test]
     fn failed_checkpoint_preserves_queue_and_dispatches_after_recovery() {
         let mut state = State::default();
+        state.runtime.model = Some("queued-model".into());
         state
             .runtime
             .enqueue_for(
@@ -670,6 +674,7 @@ mod tests {
                 Action::Task,
             )
             .unwrap();
+        state.runtime.model = Some("later-model".into());
         assert!(checkpoint_next(&mut state, |_| Err(std::io::Error::other(
             "simulated full disk"
         )))
@@ -679,6 +684,7 @@ mod tests {
         assert_eq!(checkpoint_next(&mut state, |_| Ok(())), Some(0));
         assert_eq!(state.runtime.runs[0].status, "running");
         assert_eq!(state.runtime.runs[0].attempts.len(), 1);
+        assert_eq!(state.runtime.runs[0].attempts[0].model, "queued-model");
     }
     #[test]
     fn user_workspace_has_no_control_source_or_configuration() {

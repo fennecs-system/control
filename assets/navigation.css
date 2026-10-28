@@ -38,3 +38,4 @@
   header .slash{margin:0 8px}
   header{height:auto;min-height:50px;flex-wrap:wrap;gap:10px;padding:12px 16px}
 }
+.provider-saved:not(:target){display:none}

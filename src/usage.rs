@@ -34,16 +34,7 @@ pub struct Attempt {
 }
 impl Attempt {
     pub fn new() -> Self {
-        let model = std::env::var("CONTROL_CODEX_MODEL")
-            .ok()
-            .filter(|s| {
-                !s.is_empty()
-                    && s.len() <= 100
-                    && !s.starts_with('-')
-                    && s.bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b"._-:/".contains(&b))
-            })
-            .unwrap_or_else(|| "gpt-6.1-sol".into());
+        let model = default_model();
         Self {
             started_unix: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -55,6 +46,19 @@ impl Attempt {
             ..Self::default()
         }
     }
+}
+pub fn valid_model(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 100
+        && !s.starts_with('-')
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-:/".contains(&b))
+}
+pub fn default_model() -> String {
+    std::env::var("CONTROL_CODEX_MODEL")
+        .ok()
+        .filter(|s| valid_model(s))
+        .unwrap_or_else(|| "gpt-6.1-sol".into())
 }
 
 /// Keep only numeric accounting events. Raw chat/tool events are discarded in memory.

@@ -93,6 +93,7 @@ pub fn design_topic(value: &str) -> Option<(&'static str, &'static str)> {
         "discord-access" => ("discord-access", "Discord access"),
         "evolution" => ("evolution", "Self-improvement"),
         "integrations" => ("integrations", "Integrations"),
+        "providers" => ("providers", "Models and providers"),
         _ => return None,
     })
 }
@@ -524,6 +525,7 @@ mod tests {
                 ("runtime.css", include_str!("../assets/runtime.css")),
                 ("collective.css", include_str!("../assets/collective.css")),
                 ("workspace.css", include_str!("../assets/workspace.css")),
+                ("navigation.css", include_str!("../assets/navigation.css")),
             ] {
                 html = html
                     .replace(

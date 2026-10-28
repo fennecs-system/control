@@ -129,7 +129,9 @@ Chat replies should answer the request naturally. Mention changes, checks, or li
 
 ## Manage navigation
 
-Manage is a normal top-level sidebar entry. Its less frequently visited views—Nodes, Access requests, Personas, Discord access, and Integrations—stay one level deep in a secondary navigation column: top-level navigation | section navigation | content. Keep the section visible while moving between those views, including older direct links. On narrow screens, use a horizontal section row above the content. Keep the main sidebar compact, scroll only its links when needed, and avoid dropdown styling or a separate top-level Inbox.
+Manage is a normal top-level sidebar entry. Its less frequently visited views—Nodes, Access requests, Personas, Models & providers, Discord access, and Integrations—stay one level deep in a secondary navigation column: top-level navigation | section navigation | content. Keep the section visible while moving between those views, including older direct links. On narrow screens, use a horizontal section row above the content. Keep the main sidebar compact, scroll only its links when needed, and avoid dropdown styling or a separate top-level Inbox.
+
+Keep management screens minimal: controls, status, and useful feedback. Discuss and explicit improvement requests let us evolve Control; pages do not need instructional architecture prose. Models & providers stores the default Codex model for new runs, captures it per run, and labels unconnected adapters honestly. Additional provider backends remain separate implementation work.
 
 ## Control harness and shared sessions
 
@@ -162,6 +164,8 @@ Engineering and Research should be prebuilt compositions of smaller useful lense
 The first library represents a lens as a declarative pure context function: component references plus selected knowledge documents, tool descriptors, and instructions. Components can themselves be compositions. Resolve against explicit document snapshots; reject cycles and missing references, deduplicate outputs, and preserve definition revisions. Engineering and Research use the same mechanism as user-created lenses. Preview the resolved result before use, and retain the resolved definitions, instructions, and document contents/revisions with each run. Editing a live lens or document affects future runs. Definitions and their revision history are local, with JSON export; distributed publication and synchronization remain future work. A selection cannot grant authority, and complete runtime tool filtering remains separate work.
 
 Chat presents active lenses as composer tags, with additional choices revealed on demand. Submit lens changes with the next message so choosing context does not discard the draft. Keep transcript refresh independent of the composer and make that frame visually continuous with the conversation.
+
+Keep chat compact and minimal: text-fitting user bubbles, tight paragraph spacing, and small square corners rather than pill or squircle shapes. Use the same geometry for the composer and lens tags, retain the monospace typography and readable text size, and keep the composer visible on phone screens.
 
 ## Distribution, node operators, and persistent agents
 
