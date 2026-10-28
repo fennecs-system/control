@@ -119,20 +119,15 @@ pub fn landing(state: &State, lens: &str, topic: Option<&str>) -> String {
             )
         })
         .unwrap_or_default();
-    let mut html=String::from("<section class='conversation'><div class='conversation-heading'><h2>Chat</h2><details class='chat-history'><summary>Conversations</summary><div>");
-    for session in list(state).as_array().unwrap().iter().rev() {
-        html.push_str(&format!(
-            "<a href='/chat/{}'>{}</a>",
-            session["id"].as_str().unwrap(),
-            escape(session["title"].as_str().unwrap())
-        ));
-    }
+    let mut html = String::from(
+        "<section class='conversation'><div class='conversation-heading'><h2>New chat</h2></div>",
+    );
     let selected = if state.lens_library.get(lens).is_some() {
         vec![lens.into()]
     } else {
         Vec::new()
     };
-    html.push_str(&format!("</div></details></div><div class='conversation-empty'><h1>What are we working on?</h1>{context}</div><form class='conversation-composer' id='chat-list-new' method='post' action='/chats'><textarea name='message' maxlength='2000' rows='3' aria-label='First message' placeholder='Message Control…'>{}</textarea>{}<div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></section>",escape(&draft),discussion.map(|(key,_)|format!("<input type='hidden' name='design_context' value='{key}'>")).unwrap_or_default(),crate::lens_library::choices(state,&selected,"chat-list-new")));
+    html.push_str(&format!("<div class='conversation-empty'><h1>What are we working on?</h1>{context}</div><form class='conversation-composer' id='chat-list-new' method='post' action='/chats'><textarea name='message' maxlength='2000' rows='3' aria-label='First message' placeholder='Message Control…'>{}</textarea>{}<div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></section>",escape(&draft),discussion.map(|(key,_)|format!("<input type='hidden' name='design_context' value='{key}'>")).unwrap_or_default(),crate::lens_library::choices(state,&selected,"chat-list-new")));
     html
 }
 pub fn valid_id(id: &str) -> bool {
@@ -343,7 +338,7 @@ pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
         .unwrap_or_default();
     let session = state.chats.iter().find(|s| s.id == id).unwrap();
     let lenses = selected_lenses(session);
-    Ok(format!("<section class='conversation'><div class='conversation-heading'><a class='back-to-chats' href='/chats'>← Chats</a><h2>{}</h2><span>{room}</span></div><iframe class='chat-transcript' src='/chat/{id}/transcript#latest' title='Conversation'></iframe><form class='conversation-composer' id='session-message' method='post' action='/chat/{id}/messages'><textarea name='message' required maxlength='2000' rows='3' aria-label='Message' placeholder='Message Control…'></textarea><div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></section>",escape(data["title"].as_str().unwrap_or("Chat")),crate::lens_library::choices(state,&lenses,"session-message")))
+    Ok(format!("<section class='conversation'><div class='conversation-heading'><h2>{}</h2><span>{room}</span></div><iframe class='chat-transcript' src='/chat/{id}/transcript#latest' title='Conversation'></iframe><form class='conversation-composer' id='session-message' method='post' action='/chat/{id}/messages'><textarea name='message' required maxlength='2000' rows='3' aria-label='Message' placeholder='Message Control…'></textarea><div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></section>",escape(data["title"].as_str().unwrap_or("Chat")),crate::lens_library::choices(state,&lenses,"session-message")))
 }
 pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
     let data = detail(state, id)?;
@@ -354,7 +349,20 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
         .any(|m| ["queued", "running"].contains(&m["status"].as_str().unwrap_or("")));
     let mut html = format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'>{}</head><body class='transcript'>",if pending {"<meta http-equiv='refresh' content='3'>"} else {""});
     for message in data["messages"].as_array().unwrap() {
-        html.push_str(&format!("<article class='user-message'><span class='eyebrow'>YOU</span><p class='preserve'>{}</p></article><article class='assistant-message'><span class='eyebrow'>CONTROL · {}</span><p class='preserve'>{}</p></article>", escape(message["text"].as_str().unwrap_or("")), escape(message["status"].as_str().unwrap_or("")), escape(message["reply"].as_str().unwrap_or(""))));
+        let status = match message["status"].as_str().unwrap_or("") {
+            "queued" => "Queued",
+            "running" => "Working…",
+            "blocked" => "Blocked",
+            "failed" => "Failed",
+            "interrupted" => "Interrupted",
+            _ => "",
+        };
+        let status = if status.is_empty() {
+            String::new()
+        } else {
+            format!("<span class='message-status' role='status'>{status}</span>")
+        };
+        html.push_str(&format!("<article class='user-message' aria-label='You'><p class='preserve'>{}</p></article><article class='assistant-message' aria-label='Control'>{status}<p class='preserve'>{}</p></article>", escape(message["text"].as_str().unwrap_or("")), escape(message["reply"].as_str().unwrap_or(""))));
     }
     html.push_str("<div id='latest'></div></body></html>");
     Ok(html)

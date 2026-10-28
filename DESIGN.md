@@ -167,6 +167,8 @@ Chat presents active lenses as composer tags, with additional choices revealed o
 
 Keep chat compact and minimal: text-fitting user bubbles, tight paragraph spacing, and small square corners rather than pill or squircle shapes. Use the same geometry for the composer and lens tags, retain the monospace typography and readable text size, and keep the composer visible on phone screens.
 
+Conversations belong in a persistent secondary navigation column on the left, with New chat and the current conversation highlighted. Use a compact horizontal row on narrow screens. Keep the right side available for actual artifacts and outputs rather than conversation history or an empty placeholder panel. Omit repetitive sender/status labels on completed replies; show progress or failures only when useful.
+
 ## Distribution, node operators, and persistent agents
 
 Control is Nix, a collection of Nix-built containers, an MCP server, lenses, chats, a harness, and agent swarm managers: something like a federated, AI-native Kubernetes. Each node has operators and agents. Agents can run persistently with personas and manage other agents. Package Control as a single distributable binary so other people can run nodes and link them together. Review the code's security and prioritize making Control usable.

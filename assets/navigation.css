@@ -39,3 +39,25 @@
   header{height:auto;min-height:50px;flex-wrap:wrap;gap:10px;padding:12px 16px}
 }
 .provider-saved:not(:target){display:none}
+/* Chat uses the same secondary column as Manage; the right stays available for outputs. */
+.session-view>.shell{height:100dvh;display:flex;flex-direction:column}
+.session-view header{flex-shrink:0}
+.session-view .body-grid.with-section-nav{flex:1;min-height:0;grid-template-rows:minmax(0,1fr);align-content:stretch}
+.session-view .conversation-navigation{position:static;min-height:0;max-height:none;height:100%;display:flex;flex-direction:column;overflow:hidden}
+.conversation-navigation nav{min-height:0;overflow:auto;flex:1;scrollbar-width:thin;scrollbar-color:#393340 transparent}
+.conversation-navigation nav a{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.conversation-navigation nav a:first-child{margin-bottom:12px;color:var(--purple)}
+.session-view .with-section-nav>main{height:100%;min-height:0}
+.conversation-heading h2{max-width:100%}
+@media(max-width:930px){
+  .session-view .body-grid.with-section-nav{grid-template-rows:auto minmax(0,1fr)}
+  .session-view .conversation-navigation{height:auto;flex-shrink:0;padding:12px 16px}
+  .conversation-navigation nav{overflow-x:auto;overflow-y:hidden}
+  .conversation-navigation nav a{max-width:220px}
+  .conversation-navigation nav a:first-child{margin-bottom:0}
+}
+@media(max-width:580px){
+  .session-view>.shell{height:auto}
+  .session-view .body-grid.with-section-nav{display:flex;flex-direction:column;align-items:stretch}
+  .session-view .with-section-nav>main{height:auto;flex:1;min-height:0}
+}

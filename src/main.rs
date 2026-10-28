@@ -87,14 +87,15 @@ fn fields(body: &str) -> HashMap<String, String> {
 fn render(state: &State, view: &str, lens: &str, channel: &str) -> String {
     let view = if view == "manage" { "nodes" } else { view };
     let lens = lens_ui::normalize(lens);
+    let chat_navigation = matches!(view, "session" | "session-list");
     let title = lens_ui::title(lens);
     let mut page = include_str!("../assets/index.html")
         .replace("</head>", "<link rel='stylesheet' href='/collective.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'><link rel='stylesheet' href='/navigation.css'></head>")
         .replace("{{title}}", title)
         .replace("{{page_discussion}}", &chat::discussion_link(view))
         .replace("{{navigation}}", &navigation::primary(view))
-        .replace("{{section_navigation}}", &navigation::secondary(view))
-        .replace("{{layout_class}}", if navigation::managed(view) { "with-section-nav" } else { "" })
+        .replace("{{section_navigation}}", &if chat_navigation { navigation::conversations(state, if view=="session" {channel} else {""}) } else { navigation::secondary(view) })
+        .replace("{{layout_class}}", if navigation::managed(view) || chat_navigation { "with-section-nav" } else { "" })
         .replace("{{page_title}}", &navigation::heading(view))
         .replace(
             "{{lens}}",

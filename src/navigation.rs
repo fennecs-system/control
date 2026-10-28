@@ -64,6 +64,29 @@ pub fn heading(view: &str) -> String {
     }
     "Control".into()
 }
+pub fn conversations(state: &crate::State, active: &str) -> String {
+    let current = if active.is_empty() {
+        " aria-current='page'"
+    } else {
+        ""
+    };
+    let mut links = format!("<a href='/chats'{current}>＋ New chat</a>");
+    if let Some(chats) = crate::chat::list(state).as_array() {
+        for chat in chats.iter().rev() {
+            let id = chat["id"].as_str().unwrap();
+            let title = crate::escape(chat["title"].as_str().unwrap_or("Chat"));
+            let current = if id == active {
+                " aria-current='page'"
+            } else {
+                ""
+            };
+            links.push_str(&format!(
+                "<a href='/chat/{id}' title='{title}'{current}>{title}</a>"
+            ));
+        }
+    }
+    format!("<aside class='section-navigation conversation-navigation'><h2>Conversations</h2><nav aria-label='Conversations'>{links}</nav></aside>")
+}
 #[cfg(test)]
 mod tests {
     #[test]
@@ -81,19 +104,15 @@ mod tests {
         }
         let entry = crate::render(&state, "manage", "none", "");
         assert!(entry.contains("href='/?view=nodes' aria-current='page'"));
-        for view in [
-            "hub",
-            "session-list",
-            "knowledge-page",
-            "lens-page",
-            "rooms",
-            "monitor",
-        ] {
+        for view in ["hub", "knowledge-page", "lens-page", "rooms", "monitor"] {
             let html = crate::render(&state, view, "engineering", "");
             assert!(!html.contains("class='section-navigation'"));
             assert!(!html.contains("nav-more"));
         }
         assert!(super::primary("knowledge-page").contains("href='/knowledge' aria-current='page'"));
+        let chat = crate::render(&state, "session-list", "none", "");
+        assert!(chat.contains("aria-label='Conversations'"));
+        assert!(chat.contains("href='/chats' aria-current='page'"));
         assert!(super::primary("session-list").contains("href='/chats' aria-current='page'"));
     }
 }
