@@ -121,6 +121,7 @@ Track provider-reported token usage at attempt/run, person, provider/model, day,
 
 ### Next
 
+- **Manage navigation:** replace the sidebar Settings dropdown with a normal top-level Manage entry (working name). Keep less frequently visited views, including Access requests, one level deep even when operational. Use a secondary navigation column to the right of the main sidebar: top-level navigation | section navigation | content. Avoid dropdown styling; do not add a separate top-level Inbox solely to surface these views.
 - **Tool orchestration:** authenticated MCP interface, declarative Nix tool-container requests, bounded swarm scheduling and cleanup.
 - **Independent verification:** separate-model judges, reproducible evidence, and usage/budget limits across the swarm.
 - **Credential broker:** authenticate outside workers, with revocable per-run capabilities, usage monitoring, and enforced prevention of direct-provider bypass.
@@ -156,3 +157,21 @@ Engineering and Research should be prebuilt compositions of smaller useful lense
 The first library represents a lens as a declarative pure context function: component references plus selected knowledge documents, tool descriptors, and instructions. Components can themselves be compositions. Resolve against explicit document snapshots; reject cycles and missing references, deduplicate outputs, and preserve definition revisions. Engineering and Research use the same mechanism as user-created lenses. Preview the resolved result before use, and retain the resolved definitions, instructions, and document contents/revisions with each run. Editing a live lens or document affects future runs. Definitions and their revision history are local, with JSON export; distributed publication and synchronization remain future work. A selection cannot grant authority, and complete runtime tool filtering remains separate work.
 
 Chat presents active lenses as composer tags, with additional choices revealed on demand. Submit lens changes with the next message so choosing context does not discard the draft. Keep transcript refresh independent of the composer and make that frame visually continuous with the conversation.
+
+## Distribution, node operators, and persistent agents
+
+Control is Nix, a collection of Nix-built containers, an MCP server, lenses, chats, a harness, and agent swarm managers: something like a federated, AI-native Kubernetes. Each node has operators and agents. Agents can run persistently with personas and manage other agents. Package Control as a single distributable binary so other people can run nodes and link them together. Review the code's security and prioritize making Control usable.
+
+The single-binary target is one executable per platform with server, TUI, MCP, and node-management commands, embedded UI assets, and explicit local configuration/state paths. Worker environments remain separately pinned Nix artifacts running under a compatible container runtime. The first shared CLI entry point is `control serve` / `control tui`; complete standalone packaging is not yet implemented.
+
+Federation should connect independently administered nodes, not make every peer a local operator. Use authenticated node identities, explicit pairing, and scoped, revocable delegation. Resolve remote resources into explicit snapshots before pure lens evaluation. Share selected lens/document revisions and room events deliberately; do not replicate private chats or credentials by default. Start with two paired nodes exchanging an explicitly shared resource, then add delegated jobs with durable IDs, deadlines, budgets, and local authorization. Persistent agents should be supervised services with durable state, restart rules, and bounded delegation; model processes need not remain alive indefinitely.
+
+Local readiness comes first: hard per-run storage bounds and crash/restart worker reconciliation are concrete gaps identified by the independent review. Agent-management permissions, model capabilities, and node operator authority must remain distinct. Peer pairing and a network tunnel do not themselves grant execution or source-editing authority.
+
+## Federation specification and harness refinement
+
+The terminal should feel like one chat window, closer to Pi or Codex. Use the website's muted dark palette, a grey-purple input area with a `>` prompt, ordinary title case, and compact keyboard menus rather than three permanent boxes.
+
+Write a federation spec using ActivityPub and Bluesky/AT Protocol as theoretical foundations. Have two agents challenge and revise it, starting in a temporary document, then commit the spec and implement a concrete slice. Agents can propose how to schedule other agents and Nix containers through declarative workflows. Keep deterministic work in code: do not spend tokens on queue eligibility, state transitions, authorization, retry timing, or process cleanup. Balance reliable computer-science fundamentals against unnecessary framework bloat.
+
+The agreed [specification](docs/FEDERATION.md) starts with signed, recipient-bound, closed lens bundles and explicit directional trust. Imports remain quarantined. Live delegated execution must wait for enforced disk quotas and crash-safe worker reconciliation. Persistent agent managers propose plans and judge semantic results; a small deterministic supervisor owns enforcement.

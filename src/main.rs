@@ -2,6 +2,8 @@ mod access;
 mod chat;
 mod collective;
 mod discord;
+mod federation;
+mod harness;
 mod identity;
 mod knowledge;
 mod lens_library;
@@ -352,6 +354,10 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
     let _ = stream.write_all(response.as_bytes());
 }
 fn main() -> std::io::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).is_some_and(|s| s == "federation") {
+        return federation::run(&args[2..]);
+    }
     let addr = std::env::var("CONTROL_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".into());
     let socket: std::net::SocketAddr = addr.parse().map_err(std::io::Error::other)?;
     if !socket.ip().is_loopback() {
@@ -359,7 +365,21 @@ fn main() -> std::io::Result<()> {
             "Control currently requires a loopback bind address.",
         ));
     }
-    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).is_some_and(|s| s == "tui") {
+        return harness::run();
+    }
+    if args.get(1).is_some_and(|s| s == "--help" || s == "help") {
+        println!("control [serve | tui | federation | open | --check-worker]\nserve (default): local web/MCP server\ntui: Rust terminal client for the local server\nfederation: signed offline lens exchange (use federation help)\nopen: sign in to the local website\n--check-worker: exercise one authenticated container task\n\nWorker execution requires the configured Linux container engine and pinned Nix worker image.");
+        return Ok(());
+    }
+    if args
+        .get(1)
+        .is_some_and(|s| s != "serve" && s != "open" && !s.starts_with("--"))
+    {
+        return Err(std::io::Error::other(
+            "Unknown command. Use control --help.",
+        ));
+    }
     if args.get(1).is_some_and(|s| s == "--check-worker") {
         storage::initialize()?;
         return worker::check();
