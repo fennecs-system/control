@@ -1,7 +1,7 @@
 use std::{cell::Cell, rc::Rc};
 use wasm_bindgen::{closure::Closure, JsCast, JsValue};
 
-const COMMANDS: [&str; 2] = ["/improve", "/improve off"];
+const COMMANDS: [&str; 6] = ["/improve", "/improve off", "/steer", "/btw", "/spawn", "/cancel"];
 
 fn completions(value: &str) -> Vec<usize> {
     if !value.starts_with('/') || value.contains('\n') {
@@ -15,6 +15,11 @@ fn completions(value: &str) -> Vec<usize> {
 }
 
 fn command_length(value: &str) -> usize {
+    for command in ["/steer", "/btw", "/spawn", "/cancel"] {
+        if value.strip_prefix(command).is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace)) {
+            return command.len();
+        }
+    }
     let Some(rest) = value.strip_prefix("/improve") else {
         return 0;
     };
@@ -59,7 +64,7 @@ impl Composer {
         self.mirror.append_child(&text)?;
         self.mirror.set_scroll_top(self.input.scroll_top());
         self.mirror.set_scroll_left(self.input.scroll_left());
-        let matches = completions(&value);
+        let matches = self.completions(&value);
         let visible = self.menu.is_some() && !self.dismissed.get() && !matches.is_empty();
         if let Some(menu) = &self.menu {
             menu.toggle_attribute_with_force("hidden", !visible)?;
@@ -99,6 +104,10 @@ impl Composer {
         let _ = self.input.set_selection_range(end, end);
         let _ = self.refresh();
     }
+
+    fn completions(&self, value: &str) -> Vec<usize> {
+        completions(value).into_iter().filter(|index| self.options[*index].is_connected()).collect()
+    }
 }
 
 fn attach_composer(
@@ -117,10 +126,10 @@ fn attach_composer(
     wrapper.append_child(&mirror)?;
     wrapper.append_child(&input)?;
     let menu = document.get_element_by_id("chat-commands");
-    let options = ["command-improve", "command-improve-off"]
+    let options = ["command-improve", "command-improve-off", "command-steer", "command-btw", "command-spawn", "command-cancel"]
         .into_iter()
-        .filter_map(|id| document.get_element_by_id(id))
-        .collect();
+        .map(|id| document.get_element_by_id(id).map(Ok).unwrap_or_else(|| document.create_element("button")))
+        .collect::<Result<Vec<_>, _>>()?;
     if menu.is_some() {
         input.set_attribute("aria-autocomplete", "list")?;
         input.set_attribute("aria-controls", "chat-commands")?;
@@ -170,7 +179,7 @@ fn attach_composer(
                 return;
             }
             let value = target.input.value();
-            let matches = completions(&value);
+            let matches = target.completions(&value);
             let visible = target.menu.is_some() && !target.dismissed.get() && !matches.is_empty();
             if visible && !event.shift_key() {
                 match event.key().as_str() {
@@ -270,7 +279,7 @@ mod tests {
     use super::*;
     #[test]
     fn completion_and_highlighting_keep_arguments_and_regular_chat_distinct() {
-        assert_eq!(completions("/"), vec![0, 1]);
+        assert_eq!(completions("/"), vec![0, 1, 2, 3, 4, 5]);
         assert_eq!(completions("/imp"), vec![0, 1]);
         assert_eq!(completions("/improve o"), vec![1]);
         assert!(completions("/improve change the UI").is_empty());
@@ -281,5 +290,9 @@ mod tests {
         assert_eq!(command_length("/improve on"), 11);
         assert_eq!(command_length("/improvements"), 0);
         assert_eq!(command_length("ordinary chat"), 0);
+        assert_eq!(completions("/bt"), vec![3]);
+        assert_eq!(command_length("/btw <script>"), 4);
+        assert_eq!(command_length("/steer change approach"), 6);
+        assert_eq!(command_length("/steering"), 0);
     }
 }

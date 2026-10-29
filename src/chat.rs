@@ -153,10 +153,22 @@ pub fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 100 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 fn command_menu(actor: &Actor) -> String {
-    if identity::authorize(actor, Action::Improve).is_err() {
+    command_menu_for(identity::authorize(actor, Action::Task).is_ok(), identity::authorize(actor, Action::Improve).is_ok())
+}
+fn command_menu_for(task: bool, improve: bool) -> String {
+    if !task {
         return String::new();
     }
-    "<div class='chat-commands' id='chat-commands' role='listbox' aria-label='Chat commands' hidden><button type='button' role='option' id='command-improve' data-command='/improve' aria-selected='false'><span>/improve</span><small>Discuss and change Control</small></button><button type='button' role='option' id='command-improve-off' data-command='/improve off' aria-selected='false'><span>/improve off</span><small>Return to regular chat</small></button></div>".into()
+    let mut menu = "<div class='chat-commands' id='chat-commands' role='listbox' aria-label='Chat commands' hidden>".to_owned();
+    let mut commands = vec![("steer", "/steer", "Queue a direction for the next turn"), ("btw", "/btw", "Ask in a separate conversation"), ("spawn", "/spawn", "Start an independent agent"), ("cancel", "/cancel", "Stop the current run")];
+    if improve {
+        commands.splice(0..0, [("improve", "/improve", "Discuss and change Control"), ("improve-off", "/improve off", "Return to regular chat")]);
+    }
+    for (id, command, description) in commands {
+        menu.push_str(&format!("<button type='button' role='option' id='command-{id}' data-command='{command}' aria-selected='false'><span>{command}</span><small>{description}</small></button>"));
+    }
+    menu.push_str("</div>");
+    menu
 }
 fn parse_mode(value: Option<&Value>, current: bool) -> Result<bool, &'static str> {
     match value {
@@ -281,6 +293,16 @@ pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -
 }
 
 pub fn send(state: &mut State, id: &str, text: &str, source: &str) -> Result<(), &'static str> {
+    if let Some(question) = text.trim().strip_prefix("/btw").filter(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace)) {
+        if question.trim().is_empty() || text.trim().chars().count() > 2000 {
+            return Err("Use /btw followed by a side question (up to 2000 characters).");
+        }
+        let child = fork(state, id, question.trim(), source)?;
+        let session = state.chats.iter_mut().find(|s| s.id == id).unwrap();
+        session.messages.push(Message { text: text.trim().into(), run_id: None, reply: format!("Agent conversation: /chat/{child}") });
+        session.revision = session.revision.saturating_add(1);
+        return Ok(());
+    }
     if let Some(objective) = text.trim().strip_prefix("/spawn").filter(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace)) {
         let child = fork(state, id, objective, source)?;
         let session = state.chats.iter_mut().find(|s| s.id == id).unwrap();
@@ -331,7 +353,20 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
         session.revision = session.revision.saturating_add(1);
         return Ok(());
     }
-    let (requested, objective) = if literal { (Action::Task, text) } else { discord::direct_command(text).ok_or("Enter 1–2000 characters.")? };
+    let steering = if literal { None } else { text.trim().strip_prefix("/steer").filter(|s| s.is_empty() || s.starts_with(char::is_whitespace)) };
+    if steering.is_some_and(|s| s.trim().is_empty()) {
+        return Err("Use /steer followed by a direction for the next turn.");
+    }
+    if text.trim().chars().count() > 2000 {
+        return Err("Enter 1–2000 characters.");
+    }
+    let (requested, objective) = if literal {
+        (Action::Task, text)
+    } else if let Some(direction) = steering {
+        (Action::Task, direction.trim())
+    } else {
+        discord::direct_command(text).ok_or("Enter 1–2000 characters.")?
+    };
     let action = if requested == Action::Improve || state.chats[index].improve_mode {
         Action::Improve
     } else {
@@ -343,7 +378,7 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
         .map_err(|_| {
             "Selected context cannot be resolved. Check the lens library before sending."
         })?;
-    let native = if requested == Action::Task && !literal {
+    let native = if requested == Action::Task && !literal && steering.is_none() {
         discord::native_reply(&actor, objective)
     } else {
         None
@@ -361,6 +396,9 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
             action,
         )?;
         let run = state.runtime.runs.last_mut().unwrap();
+        if steering.is_some() {
+            run.kind = "steering".into();
+        }
         run.chat_id = Some(id.into());
         run.lenses = Some(selected_lenses(&state.chats[index]));
         run.context = Some(context);
@@ -478,7 +516,7 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
         json!({"id":session.id,"title":session.title,"parent_chat":session.parent_chat,"mode":if session.improve_mode {"improve"} else {"chat"},"room":session.room,"lens":session.lens,"lenses":selected_lenses(session),"design_context":session.design_context,"revision":session.revision,"messages": session.messages.iter().map(|m| {
         let (status, reply) = response(m, &state.runtime);
         let run = m.run_id.as_ref().and_then(|id| state.runtime.runs.iter().find(|r| &r.id == id));
-        json!({"text":m.text,"reply":reply,"status":status,"run_id":m.run_id,"attempts":run.map(|r| &r.attempts)})
+        json!({"text":m.text,"reply":reply,"status":status,"run_id":m.run_id,"kind":run.map(|r| &r.kind),"attempts":run.map(|r| &r.attempts)})
     }).collect::<Vec<_>>()}),
     )
 }
@@ -511,6 +549,11 @@ pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
 }
 fn command_text(text: &str) -> String {
     let trimmed = text.trim_start();
+    for command in ["/steer", "/btw", "/spawn", "/cancel"] {
+        if let Some(rest) = trimmed.strip_prefix(command).filter(|s| s.is_empty() || s.starts_with(char::is_whitespace)) {
+            return format!("{}<span class='chat-command'>{command}</span>{}", escape(&text[..text.len() - trimmed.len()]), escape(rest));
+        }
+    }
     if let Some(rest) = trimmed
         .strip_prefix("/improve")
         .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
@@ -542,6 +585,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
     let mut html = format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'>{}</head><body class='transcript'>",if pending {"<meta http-equiv='refresh' content='3'>"} else {""});
     for message in data["messages"].as_array().unwrap() {
         let status = match message["status"].as_str().unwrap_or("") {
+            "queued" if message["kind"] == "steering" => "Queued · next turn",
             "queued" => "Queued",
             "running" => "Working…",
             "blocked" => "Blocked",
@@ -777,6 +821,63 @@ mod tests {
         );
         state.chats[0].actor = Actor::Unknown;
         assert!(command_menu(&state.chats[0].actor).is_empty());
+        let user_menu = command_menu_for(true, false);
+        for command in ["/btw", "/steer", "/spawn"] {
+            assert!(user_menu.contains(&format!("data-command='{command}'")));
+        }
+        assert!(!user_menu.contains("/improve"));
+    }
+    #[test]
+    fn side_question_captures_context_without_reusing_parent_workspace_or_authority() {
+        let mut state = State::default();
+        let parent = create(&mut state);
+        state.chats[0].workspace = Some("published-parent".into());
+        state.chats[0].improve_workspace = Some("source-parent".into());
+        send(&mut state, &parent, "/improve Build a parser", "test").unwrap();
+        state.runtime.runs[0].status = "running".into();
+        send(&mut state, &parent, "/btw What is a parser?", "test").unwrap();
+        assert_eq!(state.chats.len(), 2);
+        let child = &state.chats[1];
+        assert_eq!(child.parent_chat.as_deref(), Some(parent.as_str()));
+        assert!(child.fork_context.as_ref().unwrap().contains("Build a parser"));
+        assert!(child.workspace.is_none());
+        assert!(child.improve_workspace.is_none());
+        assert!(!child.improve_mode);
+        assert!(state.chats[0].improve_mode);
+        assert_eq!(state.chats[0].workspace.as_deref(), Some("published-parent"));
+        assert_eq!(state.runtime.runs[0].status, "running");
+        assert_eq!(state.runtime.runs[1].action, Action::Task);
+        assert!(transcript(&state, &parent).unwrap().contains(&format!("href='/chat/{}'", child.id)));
+        let captured = child.fork_context.clone();
+        state.runtime.runs[0].result = "Later result".into();
+        assert_eq!(state.chats[1].fork_context, captured);
+        assert!(send(&mut state, &parent, "/btw", "test").is_err());
+        assert_eq!(state.chats.len(), 2);
+    }
+    #[test]
+    fn steering_is_durable_ordered_and_never_mutates_an_active_request() {
+        let mut state = State::default();
+        let id = create(&mut state);
+        send(&mut state, &id, "Build a parser", "test").unwrap();
+        state.runtime.runs[0].status = "running".into();
+        let original = state.runtime.runs[0].objective.clone();
+        send(&mut state, &id, "Also add examples", "test").unwrap();
+        send(&mut state, &id, "/steer Keep the API small", "test").unwrap();
+        let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        assert_eq!(restored.runtime.runs[0].objective, original);
+        assert_eq!(restored.runtime.runs[0].status, "running");
+        assert_eq!(restored.runtime.runs[1].objective, "Also add examples");
+        assert_eq!(restored.runtime.runs[2].objective, "Keep the API small");
+        assert_eq!(restored.runtime.runs[2].kind, "steering");
+        assert!(restored.runtime.runs.windows(2).all(|pair| pair[0].queue_order < pair[1].queue_order));
+        assert!(transcript(&restored, &id).unwrap().contains("Queued · next turn"));
+        restored.runtime.runs[0].status = "completed".into();
+        restored.runtime.runs[0].result = "Parser complete".into();
+        let steering = restored.runtime.runs[2].id.clone();
+        assert!(prompt(&restored, &steering).unwrap().contains("Parser complete"));
+        assert!(send(&mut restored, &id, "/steer", "test").is_err());
+        assert_eq!(restored.runtime.runs.len(), 3);
+        assert_eq!(command_text("/steer <img>"), "<span class='chat-command'>/steer</span> &lt;img&gt;");
     }
     #[test]
     fn improve_mode_persists_discussion_and_can_exit_without_changing_queued_authority() {

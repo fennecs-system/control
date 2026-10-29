@@ -24,6 +24,16 @@ use std::{
 };
 
 const VERSION: &str = "2025-11-25";
+const CHAT_COMMANDS: [&str; 6] = ["/improve", "/improve off", "/steer", "/btw", "/spawn", "/cancel"];
+
+fn command_line(text: &str) -> Line<'static> {
+    let prefix = CHAT_COMMANDS.iter().rev().find(|command| text.strip_prefix(**command).is_some_and(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace)));
+    if let Some(command) = prefix {
+        Line::from(vec![Span::styled((*command).to_owned(), Style::default().fg(Color::Rgb(181, 160, 255))), Span::raw(text[command.len()..].to_owned())])
+    } else {
+        Line::from(text.to_owned())
+    }
+}
 pub(crate) struct Hive {
     client: Client,
     endpoint: String,
@@ -269,7 +279,7 @@ impl App {
                 let lines=self.chats.iter().map(|c|format!("{}\n  /resume {}",c["title"].as_str().unwrap_or("Chat"),c["id"].as_str().unwrap_or(""))).collect::<Vec<_>>().join("\n\n");
                 self.inspector=Some(("Conversations".into(),lines));self.scroll=0;self.follow=false;self.status="↑ ↓ choose · Enter open · Esc back".into();
             }
-            "/help" => self.status = "/chats · /lenses · /use ID ID · /use none · /context · /chat · /new · /resume ID · /improve request · Ctrl+Q quit".into(),
+            "/help" => self.status = "/chats · /lenses · /use ID ID · /use none · /context · /chat · /new · /resume ID · /improve request · /steer direction · /btw question · /spawn task · Ctrl+Q quit".into(),
             "/lenses"=>{
                 let definitions=hive.tool("control.lenses.list",json!({}))?;
                 let entries=definitions.as_array().ok_or_else(||failure("Invalid lens library response."))?.iter().map(|d| (d["name"].as_str().unwrap_or("Lens").into(), d["includes"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" + ")).unwrap_or_default(), d["id"].as_str().unwrap_or("").into())).collect();
@@ -298,7 +308,7 @@ impl App {
                 self.inspector=None;self.status=format!("Future messages: {}",lens_label(&self.detail));self.follow=true;
             }
             _ if text.starts_with("/resume ") => { self.active = text[8..].trim().into(); self.inspector=None;self.refresh(hive)?; }
-            _ if text.starts_with('/') && text != "/improve" && !text.starts_with("/improve ")=>return Err(failure("Unknown command. Use /help.")),
+            _ if text.starts_with('/') && !CHAT_COMMANDS.iter().any(|command| text.strip_prefix(command).is_some_and(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace)))=>return Err(failure("Unknown command. Use /help.")),
             _ if !text.is_empty() => {
                 if text.chars().count() > 2000 { return Err(failure("Messages are limited to 2000 characters.")); }
                 if self.active.is_empty() { self.new_chat(hive)?; }
@@ -306,7 +316,7 @@ impl App {
                 self.inspector=None;
                 self.scroll = u16::MAX;
                 self.follow = true;
-                self.status = if self.detail["mode"] == "improve" { "Improve · sent" } else { "Sent" }.into();
+                self.status = if text.starts_with("/steer ") { "Queued for next turn" } else if self.detail["mode"] == "improve" { "Improve · sent" } else { "Sent" }.into();
             }
             _ => {}
         }
@@ -386,12 +396,12 @@ impl App {
                 lines.extend(
                     clean(message["text"].as_str().unwrap_or(""))
                         .lines()
-                        .map(|s| Line::from(s.to_owned())),
+                        .map(command_line),
                 );
                 lines.push(Line::styled(
                     format!(
                         "Control · {}",
-                        clean(message["status"].as_str().unwrap_or(""))
+                        if message["status"] == "queued" && message["kind"] == "steering" { "queued · next turn".into() } else { clean(message["status"].as_str().unwrap_or("")) }
                     ),
                     Style::default().fg(Color::Rgb(140, 218, 203)),
                 ));
@@ -528,13 +538,12 @@ pub fn run() -> io::Result<()> {
                     .split('\n')
                     .enumerate()
                     .map(|(i, line)| {
-                        Line::from(vec![
-                            Span::styled(
+                        let mut spans = vec![Span::styled(
                                 if i == 0 { "> " } else { "  " },
                                 Style::default().fg(Color::Rgb(181, 160, 255)),
-                            ),
-                            Span::raw(line.to_owned()),
-                        ])
+                            )];
+                        spans.extend(command_line(line).spans);
+                        Line::from(spans)
                     })
                     .collect();
                 let input_text = Text::from(input_lines);
@@ -641,6 +650,15 @@ pub fn run() -> io::Result<()> {
                     },
                     KeyCode::Backspace => {
                         app.input.pop();
+                    }
+                    KeyCode::Tab => {
+                        let matches: Vec<_> = CHAT_COMMANDS.iter().filter(|command| command.starts_with(&app.input)).collect();
+                        if let [command] = matches.as_slice() {
+                            app.input = format!("{command} ");
+                            app.status.clear();
+                        } else if !matches.is_empty() && app.input.starts_with('/') {
+                            app.status = matches.iter().map(|command| **command).collect::<Vec<_>>().join(" · ");
+                        }
                     }
                     KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                         if app.input.chars().count() < 2100 {
@@ -933,6 +951,17 @@ mod tests {
             browser.get(&format!("/element/{input}/property/value")),
             "/improve off"
         );
+        for (draft, command) in [("/bt", "/btw"), ("/spa", "/spawn"), ("/ste", "/steer")] {
+            browser.post("/url", json!({"url":format!("{server}/chat/{chat_id}")}));
+            let input = browser.input();
+            browser.post(&format!("/element/{input}/value"), json!({"text":draft}));
+            let option = browser.post("/element", json!({"using":"css selector","value":format!("#chat-commands:not([hidden]) [data-command='{command}']")}))["element-6066-11e4-a52e-4f735466cecf"].as_str().unwrap().to_owned();
+            assert_eq!(browser.get(&format!("/element/{option}/css/color")), "rgb(181, 160, 255)");
+            browser.enter();
+            assert_eq!(browser.get(&format!("/element/{input}/property/value")), command);
+            let prefix = browser.post("/element", json!({"using":"css selector","value":".composer-highlight .chat-command"}))["element-6066-11e4-a52e-4f735466cecf"].as_str().unwrap().to_owned();
+            assert_eq!(browser.get(&format!("/element/{prefix}/css/color")), "rgb(181, 160, 255)");
+        }
     }
     #[test]
     #[ignore = "requires an isolated Control server and pinned Nix development image; no model calls"]
