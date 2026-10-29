@@ -27,6 +27,7 @@ mod rooms;
 mod runtime;
 mod scheduler;
 mod session_http;
+mod shutdown;
 mod storage;
 mod tool_catalog;
 mod toolbox;
@@ -196,6 +197,10 @@ fn read_until(stream: &mut TcpStream, data: &mut Vec<u8>, deadline: std::time::I
 }
 fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::Access>) {
     let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(3)));
+    if shutdown::requested() {
+        let _ = stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 20\r\nConnection: close\r\n\r\nControl is stopping.");
+        return;
+    }
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let mut data = Vec::new();
     if !read_until(&mut stream, &mut data, deadline, MAX_HEADER, |d| d.windows(4).any(|w| w == b"\r\n\r\n")) {
@@ -559,14 +564,44 @@ fn main() -> std::io::Result<()> {
     let _state_lock = storage::lock()?;
     let access = Arc::new(access::Access::load()?);
     let state = Arc::new(Mutex::new(storage::load()?));
-    worker::start(state.clone());
+    listener.set_nonblocking(true)?;
+    shutdown::install()?;
+    let workers = worker::start(state.clone());
     println!("control · {} · run ./target/release/control open in another terminal to sign in", config::server_url());
-    for stream in listener.incoming().flatten() {
-        let state = state.clone();
-        let access = access.clone();
-        std::thread::spawn(move || handle(stream, state, access));
+    let mut listener_error = None;
+    let mut requests: Vec<std::thread::JoinHandle<()>> = Vec::new();
+    while !shutdown::requested() {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                // Accepted sockets can inherit nonblocking mode on BSD hosts.
+                if stream.set_nonblocking(false).is_err() { continue; }
+                let state = state.clone();
+                let access = access.clone();
+                requests.retain(|request| !request.is_finished());
+                requests.push(std::thread::spawn(move || handle(stream, state, access)));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                shutdown::pause(std::time::Duration::from_millis(50));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => {
+                listener_error = Some(error);
+                shutdown::request();
+            }
+        }
     }
-    Ok(())
+    drop(listener);
+    eprintln!("Control is stopping; waiting for owned workers and saving state.");
+    let stopped = workers.join();
+    // Already-admitted HTTP tool calls have their own bounded waits. Let those
+    // handlers finish too before the final state save and process exit.
+    let mut request_failed = false;
+    for request in requests { request_failed |= request.join().is_err(); }
+    let state = state.lock().map_err(|_| std::io::Error::other("State unavailable during shutdown; retained attempts require inspection on restart."))?;
+    storage::save(&state)?;
+    stopped?;
+    if request_failed { return Err(std::io::Error::other("A request stopped unexpectedly during shutdown; inspect node state before restarting.")); }
+    match listener_error { Some(error) => Err(error), None => Ok(()) }
 }
 
 #[cfg(test)]

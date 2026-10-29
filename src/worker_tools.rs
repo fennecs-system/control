@@ -18,6 +18,7 @@ fn rpc_at(
     };
     let error =
         |message: &str| json!({"jsonrpc":"2.0","id":id,"error":{"code":-32602,"message":message}});
+    if crate::shutdown::requested() { return error("Control is stopping; no new tools may run."); }
     if request["jsonrpc"] != "2.0" {
         return error("Invalid JSON-RPC request");
     }
@@ -26,6 +27,7 @@ fn rpc_at(
             "State unavailable; tools are disabled until Control is checked and restarted",
         );
     };
+    if crate::shutdown::requested() { return error("Control is stopping; no new tools may run."); }
     let Some(run) = state
         .runtime
         .runs
