@@ -1541,3 +1541,30 @@ fn live_artifacts_preserve_project_files_and_viewer_after_restart() {
         assert_eq!(unauthenticated.status().as_u16(), 401);
     }
 }
+
+#[test]
+#[ignore = "requires an isolated Control server; modifies only its model configuration, no model calls"]
+fn live_model_library_selection_and_reload() {
+    let server = std::env::var("CONTROL_QA_URL").expect("Use an isolated server");
+    let hive = Hive::connect(&server).unwrap();
+    let page = || hive.client.get(format!("{server}/?view=providers")).send().unwrap().text().unwrap();
+    if std::env::var_os("CONTROL_QA_VERIFY_RELOAD").is_none() {
+        for (provider,model) in [("codex","fixture-codex"),("claude","fixture-claude")] {
+            let response = hive.client.post(format!("{server}/providers")).header("Origin", &server).form(&[("action","add"),("provider",provider),("model",model)]).send().unwrap();
+            assert_eq!(response.status().as_u16(),303);
+        }
+        for (provider,model) in [("claude","fixture-claude"),("codex","fixture-codex")] {
+            let response = hive.client.post(format!("{server}/providers")).header("Origin", &server).form(&[("action","select"),("provider",provider),("model",model)]).send().unwrap();
+            assert_eq!(response.status().as_u16(),303);
+            let html = page();
+            assert!(html.contains("fixture-codex"));
+            assert!(html.contains("fixture-claude"));
+            assert_eq!(html.matches("aria-pressed='true'").count(),1);
+        }
+    }
+    let html = page();
+    assert!(html.contains("value='fixture-codex'") && html.contains("value='fixture-claude'"));
+    assert!(html.contains("value='fixture-codex'><button class='model-choice' aria-pressed='true'"));
+    assert!(!html.contains("<select"));
+    assert!(!html.contains("provider-new"));
+}

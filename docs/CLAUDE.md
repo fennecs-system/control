@@ -49,9 +49,12 @@ macOS Keychain entry. `CONTROL_CLAUDE_AUTH_FILE` can reference another absolute,
 private credential-file path without copying it. Repeat login if the read-only session expires or needs
 refresh; task runs cannot modify the stored login.
 
-In **Manage → Models & providers**, choose **+ New → Anthropic / Claude Code**.
-The initial model is `sonnet`; Edit accepts another model available to your
-account. The selection applies to new runs. Existing runs and retries retain
+In **Manage → Models & providers**, click a saved Claude Code model to make it
+the default. Each saved model stays visible, with the default marked. Use
+**+ New model** to add another backend/model pair, or **Edit** on an existing row.
+Older single-model settings preserve their selection and add the default model
+for another installed backend (`sonnet` for Claude Code). The selection applies
+to new runs. Existing runs and retries retain
 their backend/model, and failures never fall back to another backend or the host.
 
 Claude's built-in tools are disabled. It receives only Control's explicit MCP

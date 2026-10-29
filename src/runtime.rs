@@ -13,6 +13,8 @@ use std::{
 #[serde(default)]
 pub struct Runtime {
     #[serde(skip)]
+    pub models: Vec<crate::providers::Model>,
+    #[serde(skip)]
     pub backend: crate::backend::Backend,
     // Read old checkpoints for migration; new configuration belongs in the home directory.
     #[serde(skip_serializing)]

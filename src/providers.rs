@@ -1,9 +1,18 @@
 //! Operator-managed model selection; unsupported adapters never silently fall back.
 use std::collections::HashMap;
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Model {
+    backend: crate::backend::Backend,
+    model: String,
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Settings {
+    #[serde(default)]
+    models: Vec<Model>,
     #[serde(default)]
     backend: crate::backend::Backend,
     model: String,
@@ -11,6 +20,7 @@ struct Settings {
 
 pub fn save_settings(state: &crate::State) -> std::io::Result<()> {
     let settings = Settings {
+        models: configured(&state.runtime),
         backend: state.runtime.backend,
         model: state.runtime.configured_model(),
     };
@@ -26,9 +36,15 @@ pub fn load_settings(runtime: &mut crate::runtime::Runtime) -> std::io::Result<(
         Ok(bytes) => {
             let settings: Settings = serde_json::from_slice(&bytes)
                 .map_err(|_| std::io::Error::other("Invalid model.json configuration"))?;
-            if !crate::usage::valid_model(&settings.model) {
-                return Err(std::io::Error::other("Invalid model ID in model.json"));
-            }
+            let installed: Vec<_> = [
+                crate::backend::Backend::Codex,
+                crate::backend::Backend::Claude,
+            ]
+            .into_iter()
+            .filter(|b| b.image().is_some())
+            .collect();
+            let settings = migrate(settings, &installed)?;
+            runtime.models = settings.models;
             runtime.model = Some(settings.model);
             runtime.backend = settings.backend;
             Ok(())
@@ -40,6 +56,10 @@ pub fn load_settings(runtime: &mut crate::runtime::Runtime) -> std::io::Result<(
                 }
                 // Preserve an old default before the next checkpoint omits it.
                 let bytes = serde_json::to_vec_pretty(&Settings {
+                    models: vec![Model {
+                        backend: crate::backend::Backend::Codex,
+                        model: model.clone(),
+                    }],
                     backend: crate::backend::Backend::Codex,
                     model: model.clone(),
                 })
@@ -52,20 +72,73 @@ pub fn load_settings(runtime: &mut crate::runtime::Runtime) -> std::io::Result<(
     }
 }
 
-pub fn render(runtime: &crate::runtime::Runtime) -> String {
-    let model = crate::escape(&runtime.configured_model());
-    let backend = runtime.backend;
-    let other = if backend == crate::backend::Backend::Codex {
-        crate::backend::Backend::Claude
-    } else {
-        crate::backend::Backend::Codex
+fn migrate(
+    mut settings: Settings,
+    installed: &[crate::backend::Backend],
+) -> std::io::Result<Settings> {
+    let selected = Model {
+        backend: settings.backend,
+        model: settings.model.clone(),
     };
-    let label = backend.label();
-    let id = backend.id();
-    let other_label = other.label();
-    let other_id = other.id();
-    let other_model = crate::escape(&other.default_model());
-    format!("<div class='section-heading'><h2>Models &amp; providers</h2><details class='provider-new'><summary class='primary'>+ New</summary><form method='post' action='/providers'><input type='hidden' name='provider' value='{other_id}'><input type='hidden' name='model' value='{other_model}'><button>{other_label}</button></form></details></div><p id='saved' class='provider-saved save-confirmation' role='status'>Default model updated.</p><section class='record provider-current'><h3>{label} <span class='tag'>Active</span></h3><p class='muted'>Default · <code>{model}</code></p><details class='provider-edit'><summary>Edit</summary><form method='post' action='/providers'><input type='hidden' name='provider' value='{id}'><label>Default model<input name='model' required maxlength='100' value='{model}' spellcheck='false' autocapitalize='none'></label><p class='muted'>Applies to new runs.</p><button class='primary'>Update default</button></form></details></section>")
+    if settings.models.is_empty() {
+        settings.models.push(selected.clone());
+        // Older settings retained only the selection. Seed other installed backends.
+        for &backend in installed {
+            if backend != selected.backend {
+                settings.models.push(Model {
+                    backend,
+                    model: backend.default_model(),
+                });
+            }
+        }
+    }
+    validate_models(&settings.models, &selected)?;
+    Ok(settings)
+}
+
+fn validate_models(models: &[Model], selected: &Model) -> std::io::Result<()> {
+    if models.len() > 64
+        || !models.contains(selected)
+        || models
+            .iter()
+            .enumerate()
+            .any(|(i, m)| !crate::usage::valid_model(&m.model) || models[..i].contains(m))
+    {
+        return Err(std::io::Error::other(
+            "Invalid saved models or default in model.json",
+        ));
+    }
+    Ok(())
+}
+fn configured(runtime: &crate::runtime::Runtime) -> Vec<Model> {
+    let mut models = runtime.models.clone();
+    let current = Model {
+        backend: runtime.backend,
+        model: runtime.configured_model(),
+    };
+    if !models.contains(&current) {
+        models.push(current);
+    }
+    models
+}
+
+pub fn render(runtime: &crate::runtime::Runtime) -> String {
+    let mut html = String::from("<h2>Models &amp; providers</h2><p id='saved' class='provider-saved save-confirmation' role='status'>Saved.</p><div class='model-list' aria-label='Configured models'>");
+    for entry in configured(runtime) {
+        let model = crate::escape(&entry.model);
+        let id = entry.backend.id();
+        let label = entry.backend.label();
+        let selected =
+            entry.backend == runtime.backend && entry.model == runtime.configured_model();
+        let marker = if selected {
+            "<span class='model-default'>Default</span>"
+        } else {
+            ""
+        };
+        html.push_str(&format!("<section class='model-row'><form method='post' action='/providers'><input type='hidden' name='action' value='select'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='model' value='{model}'><button class='model-choice' aria-pressed='{selected}'><span class='model-dot' aria-hidden='true'></span><span class='model-name'>{model}<span class='model-provider'>{label}</span></span>{marker}</button></form><details class='model-edit'><summary>Edit</summary><form method='post' action='/providers'><input type='hidden' name='action' value='edit'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='old_model' value='{model}'><label>Model<input name='model' required maxlength='100' value='{model}' spellcheck='false' autocapitalize='none'></label><button>Save</button></form></details></section>"));
+    }
+    html.push_str("</div><details class='model-add'><summary>+ New model</summary><form method='post' action='/providers'><input type='hidden' name='action' value='add'><fieldset><legend>Provider</legend><label><input type='radio' name='provider' value='codex' checked>Codex</label><label><input type='radio' name='provider' value='claude'>Claude Code</label></fieldset><label>Model<input name='model' required maxlength='100' spellcheck='false' autocapitalize='none'></label><button>Add model</button></form></details>");
+    html
 }
 pub fn save_with(
     state: &mut crate::State,
@@ -81,11 +154,63 @@ pub fn save_with(
     if !crate::usage::valid_model(model) {
         return Err("Enter a model ID of 1–100 letters, digits, dots, hyphens, underscores, colons or slashes.");
     }
-    let previous = state.runtime.model.replace(model.to_owned());
-    let previous_backend = std::mem::replace(&mut state.runtime.backend, backend);
+    let entry = Model {
+        backend,
+        model: model.to_owned(),
+    };
+    let mut models = configured(&state.runtime);
+    let mut selected = Model {
+        backend: state.runtime.backend,
+        model: state.runtime.configured_model(),
+    };
+    match fields.get("action").map(String::as_str).unwrap_or("use") {
+        "select" => {
+            if !models.contains(&entry) {
+                return Err("This model is no longer configured. Reload the list.");
+            }
+            selected = entry;
+        }
+        "add" => {
+            if models.contains(&entry) {
+                return Err("This model is already configured.");
+            }
+            models.push(entry);
+        }
+        "edit" => {
+            let old = Model {
+                backend,
+                model: fields.get("old_model").cloned().unwrap_or_default(),
+            };
+            let Some(index) = models.iter().position(|m| m == &old) else {
+                return Err("This model changed. Reload the list.");
+            };
+            if old != entry && models.contains(&entry) {
+                return Err("This model is already configured.");
+            }
+            if selected == old {
+                selected = entry.clone();
+            }
+            models[index] = entry;
+        }
+        "use" => {
+            // Compatibility with existing local forms.
+            if !models.contains(&entry) {
+                models.push(entry.clone());
+            }
+            selected = entry;
+        }
+        _ => return Err("Unknown model action."),
+    }
+    if models.len() > 64 {
+        return Err("At most 64 models can be configured.");
+    }
+    let previous = state.runtime.model.replace(selected.model);
+    let previous_backend = std::mem::replace(&mut state.runtime.backend, selected.backend);
+    let previous_models = std::mem::replace(&mut state.runtime.models, models);
     if save(state).is_err() {
         state.runtime.model = previous;
         state.runtime.backend = previous_backend;
+        state.runtime.models = previous_models;
         return Err(
             "Could not confirm the model setting was saved. Reload settings before retrying.",
         );
@@ -95,6 +220,71 @@ pub fn save_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_selection_migrates_and_saved_libraries_roundtrip_without_reseeding() {
+        use crate::backend::Backend;
+        let old: Settings = serde_json::from_str(r#"{"model":"custom-codex"}"#).unwrap();
+        let mut settings = migrate(old, &[Backend::Codex, Backend::Claude]).unwrap();
+        assert_eq!(settings.backend, Backend::Codex);
+        assert_eq!(settings.model, "custom-codex");
+        assert_eq!(settings.models.len(), 2);
+        settings.models[1].model = "custom-claude".into();
+        let reloaded = migrate(
+            serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap(),
+            &[Backend::Codex, Backend::Claude],
+        )
+        .unwrap();
+        assert_eq!(reloaded.models, settings.models);
+        let invalid = Settings {
+            backend: Backend::Claude,
+            model: "not-in-list".into(),
+            models: settings.models,
+        };
+        assert!(migrate(invalid, &[]).is_err());
+    }
+    #[test]
+    fn adding_selecting_and_editing_keep_the_library_and_selection_separate() {
+        use crate::backend::Backend;
+        let mut state = crate::State::default();
+        let original = state.runtime.configured_model();
+        let mut fields = HashMap::from([
+            ("action".into(), "add".into()),
+            ("provider".into(), "claude".into()),
+            ("model".into(), "sonnet".into()),
+        ]);
+        save_with(&mut state, &fields, |_| Ok(())).unwrap();
+        assert_eq!(state.runtime.backend, Backend::Codex);
+        assert_eq!(state.runtime.configured_model(), original);
+        assert_eq!(state.runtime.models.len(), 2);
+        fields.insert("action".into(), "select".into());
+        save_with(&mut state, &fields, |_| Ok(())).unwrap();
+        state
+            .runtime
+            .enqueue("Uses saved selection".into(), "task", "test");
+        fields.insert("action".into(), "edit".into());
+        fields.insert("old_model".into(), "sonnet".into());
+        fields.insert("model".into(), "opus".into());
+        let previous_models = state.runtime.models.clone();
+        assert!(
+            save_with(&mut state, &fields, |_| Err(std::io::Error::other(
+                "disk full"
+            )))
+            .is_err()
+        );
+        assert_eq!(state.runtime.models, previous_models);
+        assert_eq!(state.runtime.configured_model(), "sonnet");
+        save_with(&mut state, &fields, |_| Ok(())).unwrap();
+        assert_eq!(state.runtime.configured_model(), "opus");
+        assert_eq!(state.runtime.models.len(), 2);
+        assert_eq!(state.runtime.runs[0].model.as_deref(), Some("sonnet"));
+        fields.insert("action".into(), "select".into());
+        fields.insert("model".into(), "unknown-model".into());
+        assert!(save_with(&mut state, &fields, |_| panic!(
+            "unknown selection must not save"
+        ))
+        .is_err());
+        assert_eq!(state.runtime.configured_model(), "opus");
+    }
     #[test]
     fn backend_selection_is_captured_and_failed_settings_do_not_reroute_runs() {
         use crate::backend::Backend;
