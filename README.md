@@ -254,7 +254,9 @@ The same service exposes `control.artifacts.list` and `control.artifact.read` ov
 HTTP/stdio MCP. Outputs are bounded to 512 files, 2 MiB per file and 16 MiB per
 snapshot, with hashes verified on read and restore. Text previews are bounded;
 HTML is escaped, and binary files have metadata only. Harness/private files,
-symlinks and special files are excluded or rejected. Editing and syntax
+symlinks and special files are excluded or rejected. If project files cannot fit
+within the checkpoint limits, publication fails, the previous checkpoint stays
+unchanged, and the attempted workspace is retained for inspection. Editing and syntax
 highlighting are later work. Artifacts do not become accepted knowledge.
 
 `POST /mcp` exposes a minimal stateless Streamable HTTP MCP interface (protocols `2025-11-25` and `2025-03-26`), protected by the same operator session and origin checks as the website. Chat tools list/create/read/send sessions and update their lenses. Room tools list/read/post updates. Lens tools are `control.lenses.list`, `control.lens.read`, and `control.lenses.resolve`. GET returns 405 because SSE is not implemented. This endpoint is for trusted local operator clients, not a capability granted to worker agents. The Rust session service is the shared policy boundary; UI and Discord never provide a claimed role. Pi is design inspiration only. Streaming, steering/cancellation, per-session provider switching, external tool registration and Codex feature parity remain future work.

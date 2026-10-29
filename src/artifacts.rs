@@ -15,7 +15,7 @@ const FILE_COUNT: usize = 512;
 pub struct Manifest {
     pub id: String,
     pub files: Vec<Entry>,
-    /// Workspace files that were not published, with the reason. The turn still succeeds.
+    /// Omissions recorded by older versions. New checkpoints reject unpublishable files.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub omitted: Vec<Omitted>,
 }
@@ -317,6 +317,15 @@ fn publish_in(root: &Path, source: &Path, id: &str) -> io::Result<Manifest> {
         0,
     )
     .map_err(|e| fail(&format!("{e}. Outputs are retained in {}.", source.display())))?;
+    // This manifest is also the next turn's workspace, not just a viewer index.
+    // Never promote a partial checkpoint: even an unchanged file could otherwise
+    // disappear on restore when another file pushes the workspace over a limit.
+    if let Some(omitted) = manifest.omitted.first() {
+        return Err(fail(&format!(
+            "{}: {}. Cannot publish an incomplete workspace checkpoint. Outputs are retained in {}.",
+            omitted.path, omitted.reason, source.display()
+        )));
+    }
     manifest.files.sort_by(|a, b| a.path.cmp(&b.path));
     let bytes = serde_json::to_vec(&manifest).map_err(io::Error::other)?;
     if bytes.len() > 256 * 1024 {
@@ -679,14 +688,12 @@ mod tests {
         assert!(!root.join("output/test-1/files/.env").exists());
         assert!(publish_in(&root.join("output"), &root.join("source"), "test-1").is_err());
         std::os::unix::fs::symlink("/etc/passwd", root.join("source/link")).unwrap();
-        // Unpublishable files are omitted with a reason; the turn still publishes.
+        // Generated output is excluded by policy; unsafe project entries reject publication.
         fs::create_dir_all(root.join("source/dist")).unwrap();
         fs::write(root.join("source/dist/bundle.js"), "built").unwrap();
-        let manifest = publish_in(&root.join("output"), &root.join("source"), "test-2").unwrap();
-        assert_eq!(manifest.files.len(), 1);
-        assert_eq!((manifest.omitted[0].path.as_str(), manifest.omitted[0].reason.as_str()), ("link", "Symlink or special file"));
-        assert!(!root.join("output/test-2/files/link").exists() && !root.join("output/test-2/files/dist").exists());
-        assert_eq!(manifest_in(&root.join("output"), "test-2").unwrap().omitted.len(), 1);
+        let error = publish_in(&root.join("output"), &root.join("source"), "test-2").err().unwrap().to_string();
+        assert!(error.contains("link: Symlink or special file"));
+        assert!(!root.join("output/test-2").exists());
         assert!(safe_read(&root.join("source"), "../source/src/main.rs", FILE_BYTES).is_err());
         assert!(safe_read(&root.join("source"), "link", FILE_BYTES).is_err());
         fs::remove_file(root.join("source/link")).unwrap();
@@ -694,18 +701,46 @@ mod tests {
             .unwrap()
             .set_len(FILE_BYTES + 1)
             .unwrap();
-        let manifest = publish_in(&root.join("output"), &root.join("source"), "test-3").unwrap();
-        assert_eq!(manifest.files.len(), 1);
-        assert!(manifest.omitted[0].reason.contains("2 MiB"));
+        let error = publish_in(&root.join("output"), &root.join("source"), "test-3").err().unwrap().to_string();
+        assert!(error.contains("large: Larger than the 2 MiB file limit"));
+        assert!(!root.join("output/test-3").exists());
         fs::remove_file(root.join("source/large")).unwrap();
         for n in 0..9 {
             fs::File::create(root.join(format!("source/big-{n}"))).unwrap().set_len(FILE_BYTES).unwrap();
         }
-        let manifest = publish_in(&root.join("output"), &root.join("source"), "test-4").unwrap();
-        assert_eq!(manifest.files.len(), 8);
-        assert!(["big-8", "src/main.rs"].iter().all(|p| manifest.omitted.iter().any(|o| o.path == *p && o.reason.contains("16 MiB"))));
-        restore_in(&root.join("output"), "test-4", &root.join("restored")).unwrap();
-        assert_eq!(fs::metadata(root.join("restored/big-7")).unwrap().len(), FILE_BYTES);
+        let error = publish_in(&root.join("output"), &root.join("source"), "test-4").err().unwrap().to_string();
+        assert!(error.contains("16 MiB total limit"));
+        assert!(!root.join("output/test-4").exists());
+        restore_in(&root.join("output"), "test-1", &root.join("restored")).unwrap();
+        assert_eq!(fs::read(root.join("restored/src/main.rs")).unwrap(), b"fn main() {}\n");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn incomplete_turn_never_replaces_the_restorable_project_checkpoint() {
+        let root = std::env::temp_dir().join(format!("control-checkpoint-limits-{}", std::process::id()));
+        let source = root.join("source");
+        let outputs = root.join("outputs");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("project.txt"), "original project data").unwrap();
+        publish_in(&outputs, &source, "before").unwrap();
+        let workspace = root.join("turn-two");
+        restore_in(&outputs, "before", &workspace).unwrap();
+        fs::OpenOptions::new().write(true).open(workspace.join("project.txt")).unwrap().set_len(FILE_BYTES + 1).unwrap();
+        let error = publish_in(&outputs, &workspace, "oversized").err().unwrap().to_string();
+        assert!(error.contains("project.txt") && error.contains("incomplete workspace checkpoint"));
+        assert!(!outputs.join("oversized").exists());
+        assert_eq!(fs::metadata(workspace.join("project.txt")).unwrap().len(), FILE_BYTES + 1);
+        fs::write(workspace.join("project.txt"), "updated project data").unwrap();
+        for n in 0..FILE_COUNT {
+            fs::write(workspace.join(format!("file-{n:04}")), "x").unwrap();
+        }
+        let error = publish_in(&outputs, &workspace, "too-many").err().unwrap().to_string();
+        assert!(error.contains("512-file limit"));
+        assert!(!outputs.join("too-many").exists());
+        let next = root.join("next-turn");
+        restore_in(&outputs, "before", &next).unwrap();
+        assert_eq!(fs::read(next.join("project.txt")).unwrap(), b"original project data");
         fs::remove_dir_all(root).unwrap();
     }
 }
