@@ -265,6 +265,11 @@ pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -
         let model = previous.model.clone();
         let context = previous.context.clone();
         let lenses = previous.lenses.clone();
+        if let Some(lenses) = &lenses {
+            let session = state.chats.last_mut().unwrap();
+            session.lenses = Some(lenses.clone());
+            session.lens = if lenses.len() == 1 { Some(lenses[0].clone()) } else { None };
+        }
         if let Some(run) = state.runtime.runs.last_mut().filter(|r| r.chat_id.as_deref() == Some(&child)) {
             run.backend = backend;
             run.model = model;
@@ -715,6 +720,7 @@ mod tests {
         assert_eq!(state.runtime.runs[1].action, Action::Task);
         assert_eq!(state.runtime.runs[1].objective, "/improve inspect this");
         assert_eq!(state.runtime.runs[1].model.as_deref(), Some("parent-model"));
+        assert_eq!(child.lenses, state.runtime.runs[1].lenses);
         assert!(transcript(&state, &parent).unwrap().contains("target='_top'>Agent conversation"));
         assert!(render(&state, &child.id).unwrap().contains("Parent chat"));
         let restored: State = serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
