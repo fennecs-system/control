@@ -6,13 +6,21 @@ fn respond(stream: &mut impl Write, status: &str, mime: &str, body: &str, extra:
     respond_with_policy(stream, status, mime, body, extra, "'none'");
 }
 fn respond_chat(stream: &mut impl Write, html: &str) {
+    respond_chat_status(stream, "200 OK", html);
+}
+/// A chat page; a rejected submission shows its escaped error and keeps the draft.
+fn chat_page(state: &State, lens: &str, id: &str, error: &str, draft: &str) -> String {
+    let page = crate::render(state, "session", lens, id).replace("<body>", "<body class='session-view'>");
+    if error.is_empty() { page } else { chat::rejected(&page, error, draft) }
+}
+fn respond_chat_status(stream: &mut impl Write, status: &str, html: &str) {
     let page = html.replace(
         "</head>",
         "<script type='module' src='/tool-window/chat-bootstrap.js'></script></head>",
     );
     respond_with_policy(
         stream,
-        "200 OK",
+        status,
         "text/html; charset=utf-8",
         &page,
         "",
@@ -39,21 +47,30 @@ fn change_with_save(
     arguments: &Value,
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Result<Value, &'static str> {
+    transact(state, arguments["id"].as_str(), |state| if name.starts_with("control.room") {
+        crate::rooms::tool(state, name, arguments)
+    } else {
+        chat::tool(state, name, arguments)
+    }, save)
+}
+/// Apply `operation` and checkpoint once; any failure restores chats, runs and posts together.
+fn transact(
+    state: &mut State,
+    id: Option<&str>,
+    operation: impl FnOnce(&mut State) -> Result<Value, &'static str>,
+    save: impl FnOnce(&State) -> std::io::Result<()>,
+) -> Result<Value, &'static str> {
     let count = state.chats.len();
     let previous = state
         .chats
         .iter()
-        .position(|s| Some(s.id.as_str()) == arguments["id"].as_str())
+        .position(|s| Some(s.id.as_str()) == id)
         .map(|i| (i, state.chats[i].clone()));
     let run_count = state.runtime.runs.len();
-    let pending = crate::runtime::RunStatusCheckpoint::capture(&state.runtime, |run| run.chat_id.as_deref() == arguments["id"].as_str());
+    let pending = crate::runtime::RunStatusCheckpoint::capture(&state.runtime, |run| run.chat_id.as_deref() == id);
     let notice = state.runtime.notice.clone();
     let post_count = state.collective.posts.len();
-    let result = if name.starts_with("control.room") {
-        crate::rooms::tool(state, name, arguments)
-    } else {
-        chat::tool(state, name, arguments)
-    };
+    let result = operation(state);
     if result.is_err() || save(state).is_err() {
         state.chats.truncate(count);
         if let Some((index, session)) = previous {
@@ -243,40 +260,29 @@ pub fn handle(
         let fields = crate::fields(&String::from_utf8_lossy(body));
         let chosen = fields.get("lens").map(String::as_str).unwrap_or(lens);
         let arguments = json!({"lenses":chat::form_lenses(&fields,lens),"room":fields.get("room"),"design_context":fields.get("design_context"),"mode":if path == "/improve" {json!("improve")} else {Value::Null}});
-        let result = change(state, "control.chat.create", &arguments);
-        match result {
-            Ok(value) => {
-                let id = value["id"].as_str().unwrap();
-                if let Some(text) = fields
-                    .get(if path == "/improve" {
-                        "objective"
-                    } else {
-                        "message"
-                    })
-                    .filter(|text| !text.trim().is_empty())
-                {
-                    if let Err(message) =
-                        change(state, "control.chat.send", &json!({"id":id,"message":text}))
-                    {
-                        respond(stream, "400 Bad Request", "text/plain", message, "");
-                        return true;
-                    }
-                }
-                respond(
-                    stream,
-                    "303 See Other",
-                    "text/plain",
-                    "",
-                    &format!("Location: /chat/{id}\r\n{}", crate::lens_ui::cookie(chosen)),
-                );
+        let text = fields
+            .get(if path == "/improve" { "objective" } else { "message" })
+            .filter(|text| !text.trim().is_empty());
+        // Create and first message commit together, so a rejected message leaves no empty chat.
+        let result = transact(state, None, |state| {
+            let value = chat::tool(state, "control.chat.create", &arguments)?;
+            if let Some(text) = text {
+                chat::tool(state, "control.chat.send", &json!({"id":value["id"],"message":text}))?;
             }
-            Err(message) => respond(
+            Ok(value)
+        }, storage::save);
+        match result {
+            Ok(value) => respond(
                 stream,
-                "500 Internal Server Error",
+                "303 See Other",
                 "text/plain",
-                message,
                 "",
+                &format!("Location: /chat/{}\r\n{}", value["id"].as_str().unwrap(), crate::lens_ui::cookie(chosen)),
             ),
+            Err(message) => {
+                let html = chat::rejected(&chat::landing_mode(state, lens, fields.get("design_context").map(String::as_str), false), message, text.map(String::as_str).unwrap_or(""));
+                respond_chat_status(stream, "400 Bad Request", &crate::render(state, "session-list", lens, &html).replace("<body>", "<body class='session-view'>"));
+            }
         }
         return true;
     }
@@ -302,7 +308,7 @@ pub fn handle(
                 "",
                 &format!("Location: /chat/{id}\r\n"),
             ),
-            Err(message) => respond(stream, "400 Bad Request", "text/plain", message, ""),
+            Err(message) => respond_chat_status(stream, "400 Bad Request", &chat_page(state, lens, id, message, "")),
         }
     } else if method == "POST" && operation == "messages" {
         let fields = crate::fields(&String::from_utf8_lossy(body));
@@ -319,7 +325,7 @@ pub fn handle(
                 "",
                 &format!("Location: /chat/{id}\r\n"),
             ),
-            Err(message) => respond(stream, "400 Bad Request", "text/plain", message, ""),
+            Err(message) => respond_chat_status(stream, "400 Bad Request", &chat_page(state, lens, id, message, fields.get("message").map(String::as_str).unwrap_or(""))),
         }
     } else if method == "GET" && operation == "artifacts" {
         match crate::artifacts::render(state, id, &crate::fields(query)) {
@@ -339,11 +345,7 @@ pub fn handle(
         }
     } else if method == "GET" && operation.is_empty() {
         match chat::detail(state, id) {
-            Ok(_) => respond_chat(
-                stream,
-                &crate::render(state, "session", lens, id)
-                    .replace("<body>", "<body class='session-view'>"),
-            ),
+            Ok(_) => respond_chat(stream, &chat_page(state, lens, id, "", "")),
             Err(_) if chat::discord_actor(id).is_some_and(|actor|crate::identity::authorize(&actor,crate::identity::Action::Task).is_ok()) => respond(stream,"202 Accepted","text/html; charset=utf-8","<!doctype html><html lang='en'><head><meta http-equiv='refresh' content='2'><title>Control / Chat</title></head><body><p>Waiting for the Discord message…</p></body></html>",""),
             Err(message) => respond(stream, "404 Not Found", "text/plain", message, ""),
         }
@@ -371,6 +373,17 @@ mod tests {
         assert!(change_with_save(&mut state,"control.chat.send",&json!({"id":id,"message":"2"}),|_|Ok(())).is_ok());
         assert_eq!(state.runtime.runs[0].status,"continued");
         assert_eq!(state.runtime.runs.len(),2);
+    }
+    #[test]
+    fn rejected_first_message_creates_no_chat_and_keeps_the_escaped_draft() {
+        let mut state = State::default();
+        let mut response = Vec::new();
+        assert!(handle(&mut response, &mut state, "POST", "/chats", "none", "", b"message=%2Fanswer+%3Cb%3Edraft"));
+        let response = String::from_utf8(response).unwrap();
+        assert!(state.chats.is_empty() && state.runtime.runs.is_empty());
+        assert!(response.starts_with("HTTP/1.1 400 Bad Request\r\n"));
+        assert!(response.contains("role='alert'>Use /answer"));
+        assert!(response.contains("/answer &lt;b&gt;draft</textarea>") && !response.contains("<b>draft"));
     }
     #[test]
     fn failed_cancel_checkpoint_restores_existing_run_and_conversation() {

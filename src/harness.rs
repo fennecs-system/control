@@ -24,6 +24,7 @@ use std::{
 };
 
 const VERSION: &str = "2025-11-25";
+const MUTATIONS: [&str; 4] = ["control.chat.create", "control.chat.send", "control.room.post", "control.chat.lenses"];
 const CHAT_COMMANDS: [&str; 7] = ["/improve", "/improve off", "/steer", "/btw", "/spawn", "/cancel", "/answer"];
 
 fn command_line(text: &str) -> Line<'static> {
@@ -69,7 +70,7 @@ impl Hive {
             .unwrap_or_else(|| crate::config::state("operator-session"))
             .map_err(failure)?;
         let metadata = fs::symlink_metadata(&path).map_err(|_| {
-            failure("Run control-harness from the Control directory after starting the server.")
+            failure("Start the server first: ./target/release/control serve, then ./target/release/control open.")
         })?;
         use std::os::unix::fs::PermissionsExt;
         if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
@@ -134,6 +135,9 @@ impl Hive {
                     )
                 {
                     Duration::from_secs(25)
+                } else if method == "tools/call" && MUTATIONS.contains(&params["name"].as_str().unwrap_or("")) {
+                    // A slow checkpoint must not look like a failure after the server committed it.
+                    Duration::from_secs(30)
                 } else {
                     Duration::from_secs(3)
                 },
@@ -279,7 +283,7 @@ impl App {
                 let lines=self.chats.iter().map(|c|format!("{}\n  /resume {}",c["title"].as_str().unwrap_or("Chat"),c["id"].as_str().unwrap_or(""))).collect::<Vec<_>>().join("\n\n");
                 self.inspector=Some(("Conversations".into(),lines));self.scroll=0;self.follow=false;self.status="↑ ↓ choose · Enter open · Esc back".into();
             }
-            "/help" => self.status = "/chats · /lenses · /use ID ID · /use none · /context · /chat · /new · /resume ID · /improve request · /steer direction · /btw question · /spawn task · /cancel · Ctrl+Q quit".into(),
+            "/help" => self.status = "/chats · /lenses · /use ID ID · /use none · /context · /chat · /new · /resume ID · /improve request · /improve off · /answer QUESTION_ID choice · /steer direction · /btw question · /spawn task · /cancel · Ctrl+Q quit".into(),
             "/lenses"=>{
                 let definitions=hive.tool("control.lenses.list",json!({}))?;
                 let entries=definitions.as_array().ok_or_else(||failure("Invalid lens library response."))?.iter().map(|d| (d["name"].as_str().unwrap_or("Lens").into(), d["includes"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" + ")).unwrap_or_default(), d["id"].as_str().unwrap_or("").into())).collect();
@@ -463,7 +467,7 @@ impl Drop for Restore {
 pub fn run() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|s| s == "--help") {
-        println!("control tui [--server http://localhost:8080] [--session ID] [--check]\nAlso available as control-harness. Rust TUI for the local Control server. Run from the Control directory.\n\n/lenses · /use ID ID · /use none · /context · /chat · /help");
+        println!("control tui [--server {}] [--session ID] [--check]\nAlso available as control-harness. Rust TUI for the local Control server (CONTROL_ADDR sets the default).\n\n/lenses · /use ID ID · /use none · /context · /chat · /help", crate::config::server_url());
         return Ok(());
     }
     let option = |name: &str| {
@@ -472,7 +476,8 @@ pub fn run() -> io::Result<()> {
             .and_then(|i| args.get(i + 1))
             .map(String::as_str)
     };
-    let mut hive = Hive::connect(option("--server").unwrap_or("http://localhost:8080"))?;
+    let default = crate::config::server_url();
+    let mut hive = Hive::connect(option("--server").unwrap_or(&default))?;
     let mut app = App {
         follow: true,
         active: option("--session").unwrap_or("").into(),

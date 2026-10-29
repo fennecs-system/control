@@ -35,6 +35,28 @@ struct Bridge {
     token: String,
     bot_id: DiscordId,
     bot_name: String,
+    state: std::cell::RefCell<StateCache>,
+}
+/// state.json is re-parsed only when its size or modification time changes.
+#[derive(Default)]
+struct StateCache {
+    stamp: Option<(SystemTime, u64)>,
+    value: std::rc::Rc<Value>,
+}
+impl StateCache {
+    fn load(&mut self, path: &Path) -> std::rc::Rc<Value> {
+        let stamp = fs::metadata(path).ok().map(|m| (m.modified().unwrap_or(UNIX_EPOCH), m.len()));
+        if stamp.is_none() || stamp != self.stamp {
+            self.value = std::rc::Rc::new(load_json(path));
+            self.stamp = stamp;
+        }
+        std::rc::Rc::clone(&self.value)
+    }
+}
+/// Ok, retry after a delay, or a permanent refusal (None) that must not be retried.
+type Sent = Result<(), Option<Duration>>;
+fn retry_after(response: reqwest::blocking::Response) -> Duration {
+    Duration::from_secs_f64(response.json::<Value>().ok().and_then(|v| v["retry_after"].as_f64()).unwrap_or(5.0).clamp(1.0, 300.0))
 }
 fn credential() -> Result<String, &'static str> {
     // Only this explicitly activated process consumes the private credential file.
@@ -119,6 +141,12 @@ fn delivery_message(run: &Value, status: &str, link: &str, report: &str) -> Stri
     }else{report.to_owned()};
     format!("{prefix}{body}{suffix}")
 }
+fn cancelled_receipts(state: &Value) -> Vec<String> {
+    state["runtime"]["runs"].as_array().into_iter().flatten()
+        .filter(|run| run["status"] == "cancelled")
+        .filter_map(|run| Some(format!("{}:cancelled", run["id"].as_str()?)))
+        .collect()
+}
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -135,7 +163,7 @@ fn dm_channel(row: &Value, user: DiscordId) -> Option<DiscordId> {
     }
     row["id"].as_str()?.parse().ok()
 }
-fn incoming(row: &Value, route: &Route, bot: DiscordId) -> Option<discord::Incoming> {
+fn sender(row: &Value, route: &Route, bot: DiscordId) -> Option<DiscordId> {
     route.recipient?;
     if row["author"]["bot"].as_bool() == Some(true)
         || !row["webhook_id"].is_null()
@@ -151,6 +179,14 @@ fn incoming(row: &Value, route: &Route, bot: DiscordId) -> Option<discord::Incom
         return None;
     }
     route.actor(user)?;
+    Some(user)
+}
+fn rejected(row: &Value, route: &Route, bot: DiscordId) -> Option<&'static str> {
+    sender(row, route, bot)?;
+    discord::direct_rejection(row["content"].as_str().unwrap_or(""), row["attachments"].as_array().is_some_and(|a| !a.is_empty()))
+}
+fn incoming(row: &Value, route: &Route, bot: DiscordId) -> Option<discord::Incoming> {
+    let user = sender(row, route, bot)?;
     let content = row["content"].as_str()?;
     let (action, objective) = if route.recipient.is_some() {
         discord::direct_command(content)?
@@ -347,6 +383,7 @@ impl Bridge {
             token,
             bot_id,
             bot_name: user["username"].as_str().unwrap_or("Control").into(),
+            state: Default::default(),
         })
     }
     fn status(&self, routes: &[Route], ready: bool, message: &str) {
@@ -410,7 +447,14 @@ impl Bridge {
         Ok(routes)
     }
     fn reply(&self, channel: DiscordId, content: &str) -> bool {
-        let allowed = DmBindings::load().is_ok_and(|bindings| {
+        self.send(channel, content).is_ok()
+    }
+    fn snapshot(&self) -> Result<std::rc::Rc<Value>, &'static str> {
+        Ok(self.state.borrow_mut().load(&config::state("state.json")?))
+    }
+    fn send(&self, channel: DiscordId, content: &str) -> Sent {
+        let bindings = DmBindings::load().map_err(|_| Some(Duration::from_secs(5)))?;
+        let allowed = {
             bindings.recipients.iter().any(|r| {
                 r.channel_id == channel
                     && identity::authorize(
@@ -422,17 +466,24 @@ impl Bridge {
                     )
                     .is_ok()
             })
-        });
+        };
         if !allowed {
-            return false;
+            return Err(None);
         }
         let safe = content.replace(&self.token, "[REDACTED]");
         let content: String = safe.chars().take(1800).collect();
-        self.client
+        match self
+            .client
             .post(format!("{API}/channels/{channel}/messages"))
             .json(&json!({"content":content,"allowed_mentions":{"parse":[]}}))
             .send()
-            .is_ok_and(|r| r.status().is_success())
+        {
+            Ok(r) if r.status().is_success() => Ok(()),
+            Ok(r) if r.status().as_u16() == 429 => Err(Some(retry_after(r))),
+            // Other 4xx (403, 50007 cannot DM user, ...) will not succeed on retry.
+            Ok(r) if r.status().is_client_error() => Err(None),
+            _ => Err(Some(Duration::from_secs(5))),
+        }
     }
     fn receive(
         &self,
@@ -477,13 +528,7 @@ impl Bridge {
             .send()
             .map_err(|_| "Discord message read failed.")?;
         if response.status().as_u16() == 429 {
-            let delay = response
-                .json::<Value>()
-                .ok()
-                .and_then(|v| v["retry_after"].as_f64())
-                .unwrap_or(5.0)
-                .clamp(1.0, 30.0);
-            std::thread::sleep(Duration::from_secs_f64(delay));
+            std::thread::sleep(retry_after(response).min(Duration::from_secs(30)));
             return Ok(false);
         }
         if !response.status().is_success() {
@@ -513,14 +558,17 @@ impl Bridge {
                         None
                     };
                     let path = config::state("discord-inbox")?.join(format!("{id}.json"));
-                    if !Path::new(&path).exists() {
+                    // Already written or ingested before the cursor checkpoint: do not acknowledge twice.
+                    let duplicate = Path::new(&path).exists() || self.snapshot()?["discord_seen"].as_array().is_some_and(|seen| seen.iter().any(|s| s.as_str() == Some(&id.to_string())));
+                    if !duplicate {
                         checkpoint(
                             &path,
                             &serde_json::to_vec(&message)
                                 .map_err(|_| "Could not encode Discord task.")?,
                         )?;
                     }
-                    if message.objective.strip_prefix("/cancel").is_some_and(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace)) {
+                    if duplicate && native.is_none() {
+                    } else if message.objective.strip_prefix("/cancel").is_some_and(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace)) {
                         let link = discord::chat_link(&actor).unwrap_or_default();
                         let _ = self.reply(route.channel, &format!("Cancellation queued.\n{link}"));
                     } else if message.objective.strip_prefix("/steer").is_some_and(|tail| tail.starts_with(char::is_whitespace)) {
@@ -537,17 +585,44 @@ impl Bridge {
                 } else if identity::authorize(&actor, Action::Task).is_ok() {
                     let _=self.reply(route.channel,"Only the architect can request Control source changes. You can still DM me a normal task in your own isolated workspace.");
                 }
+            } else if let Some(reason) = rejected(&row, route, self.bot_id) {
+                if route.recipient.and_then(|user| route.actor(user)).is_some_and(|actor| identity::authorize(&actor, Action::Task).is_ok()) {
+                    let _ = self.reply(route.channel, reason);
+                }
             }
             cursors.insert(channel.clone(), id.to_string());
         }
         Ok(true)
     }
-    fn deliver(
-        &self,
-        routes: &[Route],
-        delivered: &mut HashSet<String>,
-    ) -> Result<(), &'static str> {
-        let state: Value = load_json(config::state("state.json")?);
+    /// One delivery attempt honouring per-receipt backoff. Permanent refusals are recorded and not retried.
+    fn attempt(&self, receipt: &str, channel: DiscordId, content: &str, outbound: &mut Outbound) -> bool {
+        if outbound.backoff.get(receipt).is_some_and(|(until, _)| now() < *until) {
+            return false;
+        }
+        match self.send(channel, content) {
+            Ok(()) => {
+                outbound.backoff.remove(receipt);
+                true
+            }
+            Err(Some(delay)) => {
+                let failures = outbound.backoff.get(receipt).map_or(0, |(_, n)| *n) + 1;
+                let wait = delay.as_secs().max(5u64 << failures.min(7)).min(600);
+                outbound.backoff.insert(receipt.into(), (now() + wait, failures));
+                false
+            }
+            Err(None) => {
+                eprintln!("Discord refused a delivery permanently; it will not be retried.");
+                outbound.backoff.remove(receipt);
+                outbound.undelivered.insert(receipt.into());
+                if let Ok(path) = config::state("discord-undelivered.json") {
+                    let _ = serde_json::to_vec(&outbound.undelivered).map_err(|_| "").and_then(|b| checkpoint(path, &b));
+                }
+                true
+            }
+        }
+    }
+    fn deliver(&self, routes: &[Route], outbound: &mut Outbound) -> Result<(), &'static str> {
+        let state = self.snapshot()?;
         if let Some(runs) = state["runtime"]["runs"].as_array() {
             for run in runs {
                 if !run["source"]
@@ -576,12 +651,12 @@ impl Bridge {
                     continue;
                 }
                 let status = run["status"].as_str().unwrap_or("");
-                if !["completed", "blocked", "failed", "interrupted", "waiting"].contains(&status) {
+                if !["completed", "blocked", "failed", "interrupted", "waiting", "cancelled"].contains(&status) {
                     continue;
                 }
                 let id = run["id"].as_str().unwrap_or("");
                 let receipt = format!("{id}:{status}");
-                if delivered.contains(&receipt) {
+                if outbound.delivered.contains(&receipt) {
                     continue;
                 }
                 let decision = (status == "waiting").then(||design_report(&run["question"])).flatten();
@@ -593,14 +668,11 @@ impl Bridge {
                     run["result"].as_str().unwrap_or("No report was produced.")
                 };
                 let link = discord::session_link(&actor, run["chat_id"].as_str()).unwrap_or_default();
-                if self.reply(
-                    channel,
-                    &delivery_message(run,status,&link,report),
-                ) {
-                    delivered.insert(receipt);
+                if self.attempt(&receipt, channel, &delivery_message(run,status,&link,report), outbound) {
+                    outbound.delivered.insert(receipt);
                     checkpoint(
                         config::state("discord-delivered.json")?,
-                        &serde_json::to_vec(delivered)
+                        &serde_json::to_vec(&outbound.delivered)
                             .map_err(|_| "Could not encode delivery progress.")?,
                     )?;
                 }
@@ -608,6 +680,36 @@ impl Bridge {
         }
         Ok(())
     }
+    /// Worker-queued notices (for example a DM that could not become a task).
+    fn outbox(&self, routes: &[Route], outbound: &mut Outbound) -> Result<(), &'static str> {
+        let directory = config::state("discord-outbox")?;
+        let Ok(entries) = fs::read_dir(&directory) else { return Ok(()) };
+        for entry in entries.flatten().take(64) {
+            let path = entry.path();
+            if entry.file_type().is_ok_and(|t| t.is_symlink()) || path.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let notice: Value = load_json(&path);
+            let (Some(channel), Some(user), Some(text)) = (notice["channel_id"].as_str().and_then(|s| s.parse::<DiscordId>().ok()), notice["user_id"].as_str().and_then(|s| s.parse::<DiscordId>().ok()), notice["text"].as_str()) else {
+                let _ = fs::remove_file(&path);
+                continue;
+            };
+            if !routes.iter().any(|r| r.channel == channel && r.recipient == Some(user)) {
+                continue;
+            }
+            let receipt = format!("outbox:{}", entry.file_name().to_string_lossy());
+            if self.attempt(&receipt, channel, text, outbound) {
+                let _ = fs::remove_file(&path);
+            }
+        }
+        Ok(())
+    }
+}
+#[derive(Default)]
+struct Outbound {
+    delivered: HashSet<String>,
+    undelivered: HashSet<String>,
+    backoff: HashMap<String, (u64, u32)>,
 }
 fn run(check_only: bool) -> Result<(), &'static str> {
     Policy::load()?;
@@ -638,7 +740,16 @@ fn run(check_only: bool) -> Result<(), &'static str> {
         return Ok(());
     }
     let mut cursors: HashMap<String, String> = load_json(config::state("discord-cursors.json")?);
-    let mut delivered: HashSet<String> = load_json(config::state("discord-delivered.json")?);
+    let mut outbound = Outbound {
+        delivered: load_json(config::state("discord-delivered.json")?),
+        undelivered: load_json(config::state("discord-undelivered.json")?),
+        ..Default::default()
+    };
+    if outbound.delivered.insert("migration:cancelled".into()) {
+        // Cancellations became deliverable later; do not announce historical ones.
+        outbound.delivered.extend(cancelled_receipts(&*bridge.snapshot()?));
+        checkpoint(config::state("discord-delivered.json")?, &serde_json::to_vec(&outbound.delivered).map_err(|_| "Could not encode delivery progress.")?)?;
+    }
     let mut refresh = now();
     loop {
         if now().saturating_sub(refresh) >= 60 {
@@ -655,11 +766,13 @@ fn run(check_only: bool) -> Result<(), &'static str> {
                 Err(m) => eprintln!("{m}"),
             };
         }
-        checkpoint(
-            config::state("discord-cursors.json")?,
-            &serde_json::to_vec(&cursors).map_err(|_| "Could not encode conversation cursors.")?,
-        )?;
-        bridge.deliver(&routes, &mut delivered)?;
+        // Transient storage or Discord failures are logged; the bridge keeps polling.
+        if let Err(m) = config::state("discord-cursors.json").and_then(|path| checkpoint(path, &serde_json::to_vec(&cursors).map_err(|_| "Could not encode conversation cursors.")?)) {
+            eprintln!("{m}");
+        }
+        if let Err(m) = bridge.deliver(&routes, &mut outbound).and_then(|()| bridge.outbox(&routes, &mut outbound)) {
+            eprintln!("{m}");
+        }
         bridge.status(
             &routes,
             ready,
@@ -777,6 +890,33 @@ mod tests {
         row["author"]["id"] = json!("2");
         row["author"]["bot"] = json!(true);
         assert!(incoming(&row, &route, id("99")).is_none());
+    }
+    #[test]
+    fn oversized_and_attachment_only_dms_get_a_reason_and_cancellations_are_seeded() {
+        let route = Route { channel: id("100"), recipient: Some(id("2")) };
+        let mut row = json!({"id":"10","channel_id":"100","author":{"id":"2"},"content":"x".repeat(2001)});
+        assert!(incoming(&row, &route, id("99")).is_none());
+        assert!(rejected(&row, &route, id("99")).unwrap().contains("2000"));
+        row["content"] = json!("");
+        row["attachments"] = json!([{"id":"1"}]);
+        assert!(rejected(&row, &route, id("99")).unwrap().contains("attachments"));
+        row["author"]["id"] = json!("3");
+        assert!(rejected(&row, &route, id("99")).is_none());
+        let state = json!({"runtime":{"runs":[{"id":"r1","status":"cancelled"},{"id":"r2","status":"completed"}]}});
+        assert_eq!(cancelled_receipts(&state), ["r1:cancelled"]);
+    }
+    #[test]
+    fn state_cache_reparses_only_after_the_file_changes() {
+        let path = std::env::temp_dir().join(format!("control-bridge-cache-{}.json", std::process::id()));
+        fs::write(&path, br#"{"a":1}"#).unwrap();
+        let mut cache = StateCache::default();
+        let first = cache.load(&path);
+        assert_eq!(first["a"], 1);
+        assert!(std::rc::Rc::ptr_eq(&first, &cache.load(&path)));
+        fs::write(&path, br#"{"a":22}"#).unwrap();
+        assert_eq!(cache.load(&path)["a"], 22);
+        fs::remove_file(&path).unwrap();
+        assert!(cache.load(&path).is_null());
     }
     #[test]
     fn server_messages_are_rejected_even_with_a_prefix() {

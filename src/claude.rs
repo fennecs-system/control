@@ -91,6 +91,9 @@ fn base(name: &str, node: &str, uid: u32, gid: u32) -> Command {
         &format!("dev.control.node={node}"),
         "--label",
         &format!("dev.control.attempt={name}"),
+        "--label",
+        // Login and offline checks are supervised by their command, not run reconciliation.
+        if name.starts_with("control-claude-login-") || name.starts_with("control-claude-probe-") { crate::lifecycle::CHECK_LABEL } else { "dev.control.purpose=run" },
         "--user",
         &format!("{uid}:{gid}"),
         "--read-only",
@@ -127,6 +130,13 @@ fn drain(mut reader: impl Read + Send + 'static, max: usize) -> std::thread::Joi
     })
 }
 
+/// Classify bounded Claude stderr into a fixed message; raw diagnostics are never shown.
+fn diagnose(stderr: &[u8]) -> String {
+    match crate::worker::worker_failure(stderr) {
+        crate::worker::UNKNOWN_FAILURE => "Claude stopped without success. Check its login, selected model and usage limits; credentials remain read-only.".into(),
+        known => known.replace("Codex", "Claude"),
+    }
+}
 /// A credential-free shell is the only workspace execution capability Claude receives.
 /// The caller supplies persisted attempt inputs, never Docker options from the model.
 pub fn shell(
@@ -235,6 +245,10 @@ pub struct Stream {
     pub result: Option<String>,
     invalid: bool,
     initialized: bool,
+    /// Set as soon as the init event lists a tool outside the allow-list.
+    bad_tools: bool,
+    /// Subtype and error text of an unsuccessful result event, for the user.
+    failure: Option<String>,
 }
 impl Stream {
     fn event(&mut self, value: &Value) -> Option<Activity> {
@@ -256,9 +270,14 @@ impl Stream {
                         .all(|t| t.as_str().is_some_and(|s| allowed.contains(&s)))
                 }) {
                     self.invalid = true;
+                    self.bad_tools = true;
                 }
             }
             "result" => {
+                if value["is_error"] != false || value["subtype"] != "success" {
+                    let detail: String = value["result"].as_str().or(value["error"].as_str()).unwrap_or("").chars().filter(|c| !c.is_control()).take(300).collect();
+                    self.failure = Some(format!("Claude ended with {}{}{}", value["subtype"].as_str().unwrap_or("an error").chars().take(40).collect::<String>(), if detail.is_empty() { "" } else { ": " }, detail));
+                }
                 if self.result.is_some()
                     || value["is_error"] != false
                     || value["subtype"] != "success"
@@ -308,6 +327,12 @@ impl Stream {
         None
     }
     fn finish(self) -> io::Result<(String, Option<Tokens>)> {
+        if let Some(failure) = &self.failure {
+            return Err(fail(&format!("{failure}.")));
+        }
+        if self.bad_tools {
+            return Err(fail("Claude started with an unexpected tool configuration and was stopped before doing work."));
+        }
         if self.invalid {
             return Err(fail(
                 "Claude returned an invalid result or unexpected tool configuration",
@@ -318,9 +343,14 @@ impl Stream {
         })
     }
 }
-fn capture(
+#[cfg(test)]
+fn capture(reader: impl Read, update: impl FnMut(Activity)) -> io::Result<(String, Option<Tokens>)> {
+    capture_with(reader, update, &std::sync::atomic::AtomicBool::new(false))
+}
+fn capture_with(
     mut reader: impl Read,
     mut update: impl FnMut(Activity),
+    bad_tools: &std::sync::atomic::AtomicBool,
 ) -> io::Result<(String, Option<Tokens>)> {
     let mut stream = Stream::default();
     let mut line = Vec::new();
@@ -340,6 +370,9 @@ fn capture(
                         Ok(value) => {
                             if let Some(event) = stream.event(&value) {
                                 update(event);
+                            }
+                            if stream.bad_tools {
+                                bad_tools.store(true, std::sync::atomic::Ordering::Relaxed);
                             }
                         }
                         Err(_) => stream.invalid = true,
@@ -396,31 +429,38 @@ pub fn execute(
     let mut child = command
         .spawn()
         .map_err(|_| failed("Cannot start the Claude Nix container"))?;
-    let diagnostics = drain(child.stderr.take().unwrap(), 0);
+    let diagnostics = drain(child.stderr.take().unwrap(), 64000);
+    let bad_tools = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = Arc::clone(&bad_tools);
     let stdout = child.stdout.take().unwrap();
     let live = bridge.map(|(s, r)| (Arc::clone(s), r.to_owned()));
     let generation = id.to_owned();
     let output = std::thread::spawn(move || {
-        capture(stdout, |event| {
+        capture_with(stdout, |event| {
             if let Some((s, r)) = &live {
                 if let Ok(mut s) = s.lock() {
                     crate::worker::record_activity_for(&mut s, r, &generation, event);
                 }
             }
-        })
+        }, &flag)
     });
     let prompt = format!("You are working on a task in Control. Your only project access is control_workspace_run: it runs commands in a separate offline Nix container at /workspace, with Rust, rg and fd. Use it to read/write task files. You cannot read the harness filesystem or credentials. Use Rust/WASM for application code. Work freely within the sandbox for routine edits, builds and tests. Use control_design_ask for consequential architecture, scope or behavior decisions requiring user direction: offer concrete options and a recommendation, then stop work. This is not permission escalation. Keep replies direct; omit empty report sections. You may use public search without private text. Control node policy determines authority; tools cannot administer it. Objective:\n{objective}");
     let sent = child
         .stdin
         .take()
         .is_some_and(|mut stdin| stdin.write_all(prompt.as_bytes()).is_ok());
-    let start = Instant::now();
+    let (start, deadline, mut timed_out) = (Instant::now(), crate::config::worker_deadline(), false);
     let success = loop {
         if crate::design::requested(bridge) { break false; }
         if crate::lifecycle::cancelled(bridge) {
             break false;
         }
-        if !sent || start.elapsed() > Duration::from_secs(600) {
+        // An unexpected init tool list is final: stop before the model can act.
+        if !sent || bad_tools.load(std::sync::atomic::Ordering::Relaxed) {
+            break false;
+        }
+        if start.elapsed() > deadline {
+            timed_out = true;
             break false;
         }
         if let Some((s, r)) = bridge {
@@ -445,7 +485,7 @@ pub fn execute(
     let result = output
         .join()
         .map_err(|_| failed("Claude stream reader stopped"))?;
-    let _ = diagnostics.join();
+    let stderr = diagnostics.join().unwrap_or_default();
     if !success {
         if crate::lifecycle::cancelled(bridge) {
             return Err((
@@ -456,14 +496,30 @@ pub fn execute(
         if crate::design::requested(bridge) {
             return Err(("waiting", "Waiting for a design decision.".into()));
         }
-        return Err(failed("Claude stopped without success. Check its login, selected model and usage limits; credentials remain read-only."));
+        if timed_out {
+            return Err(("failed", crate::worker::timeout_message(deadline)));
+        }
+        if let Err(e) = &result {
+            if e.to_string().starts_with("Claude ended with") || bad_tools.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(failed(&e.to_string()));
+            }
+        }
+        return Err(failed(&diagnose(&stderr)));
     }
-    let (text, tokens) = result.map_err(|_| failed("Claude result or tool configuration failed validation; the previous workspace checkpoint is unchanged."))?;
+    let (text, tokens) = result.map_err(|e| failed(&format!("{e} The previous workspace checkpoint is unchanged.")))?;
     attempt.tokens = tokens;
     Ok(text)
 }
 
 pub fn command(args: &[String]) -> io::Result<()> {
+    // Usage must work before the Claude image is built.
+    if !matches!(args, [a] if a == "login" || a == "check") {
+        if matches!(args, [a] if a == "--help" || a == "-h" || a == "help") {
+            println!("control claude login: sign in inside the pinned Nix Claude container\ncontrol claude check: offline tool isolation check; no credentials or model calls");
+            return Ok(());
+        }
+        return Err(fail("Use control claude login | check"));
+    }
     let image = Backend::Claude.image().ok_or_else(|| fail("Build/load the Nix claude-image and save its digest in ~/.config/control/claude-image-id"))?;
     match args.first().map(String::as_str) {
         Some("login") if args.len() == 1 => {
@@ -560,6 +616,20 @@ mod tests {
         assert_eq!(next["stdout"].as_str().unwrap().len(), 12000);
         assert_eq!(fs::read(workspace.join("counter.txt")).unwrap(), b"2");
         fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn failures_name_the_result_subtype_and_bad_tools_abort_early() {
+        let init = "{\"type\":\"system\",\"subtype\":\"init\",\"tools\":[\"mcp__control__control_workspace_run\"]}\n";
+        let failed = format!("{init}{{\"type\":\"result\",\"subtype\":\"error_max_turns\",\"is_error\":true,\"result\":\"Reached max turns\"}}\n");
+        let error = capture(failed.as_bytes(), |_| {}).unwrap_err().to_string();
+        assert!(error.contains("error_max_turns") && error.contains("Reached max turns"));
+        let flag = std::sync::atomic::AtomicBool::new(false);
+        let bad = init.replace("mcp__control__control_workspace_run", "Bash");
+        assert!(capture_with(bad.as_bytes(), |_| {}, &flag).unwrap_err().to_string().contains("tool configuration"));
+        assert!(flag.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(diagnose(b"429 rate limit reached").contains("rate limit"));
+        assert!(diagnose(b"401 unauthorized").contains("Claude account"));
+        assert!(diagnose(b"secret-ish noise").starts_with("Claude stopped"));
     }
     #[test]
     fn stream_requires_valid_init_and_final_and_normalizes_caches() {

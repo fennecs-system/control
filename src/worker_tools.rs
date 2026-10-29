@@ -143,10 +143,17 @@ fn rpc_at(
                 };
                 // Persist intent outside both model-visible mounts before the command.
                 // A retry after an ambiguous acknowledgement never repeats the effect.
+                // The fsync runs without the state lock; this mailbox is served serially,
+                // and the run is re-fenced below before anything executes.
+                drop(state);
                 if crate::claude::claim(workspace, nonce).is_err() {
                     return error("Workspace command already admitted or intent could not be saved; inspect the attempt before retrying");
                 }
-                crate::worker::record_activity_for(
+                let Ok(mut state) = shared.lock() else {
+                    return error("State unavailable; tools are disabled until Control is checked and restarted");
+                };
+                // Records only while the same attempt is still running (cancellation fences here).
+                if !crate::worker::record_activity_for(
                     &mut state,
                     run_id,
                     &generation,
@@ -160,7 +167,9 @@ fn rpc_at(
                         output: String::new(),
                         status: "running".into(),
                     },
-                );
+                ) {
+                    return error("Run is not active");
+                }
                 drop(state);
                 let result = crate::claude::shell(&image, &name, &node, workspace, &input.command);
                 crate::worker::observe_workspace_diff(shared,run_id,&generation,workspace,"observed");

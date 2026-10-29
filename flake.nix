@@ -19,7 +19,8 @@
           linuxSystem = builtins.replaceStrings [ "darwin" ] [ "linux" ] pkgs.stdenv.hostPlatform.system;
           setup = pkgs.writeShellApplication {
             name = "control-setup";
-            runtimeInputs = [ pkgs.rustc pkgs.cargo pkgs.lld pkgs.trunk pkgs.gitMinimal pkgs.coreutils ];
+            # stdenv.cc supplies the C compiler native crates (ring) need; Xcode CLT is not required.
+            runtimeInputs = [ pkgs.rustc pkgs.cargo pkgs.lld pkgs.trunk pkgs.gitMinimal pkgs.coreutils pkgs.stdenv.cc ];
             text = ''
               export CONTROL_SETUP_LINUX_SYSTEM=${linuxSystem}
               ${builtins.readFile ./hosting/setup.sh}

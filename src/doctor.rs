@@ -22,17 +22,17 @@ pub fn run() -> io::Result<()> {
     check(
         "configuration",
         private(&config, true),
-        "run control config init; directory mode must be 0700",
+        "run ./target/release/control config init; directory mode must be 0700",
     );
     check(
         "state",
         private(&state, true),
-        "run control config init; state directory mode must be 0700",
+        "run ./target/release/control config init; state directory mode must be 0700",
     );
     check(
         "node identity",
         crate::config::node_id().is_ok(),
-        "run control config init or inspect the node-id file",
+        "run ./target/release/control config init or inspect the node-id file",
     );
     check(
         "embedded UI",
@@ -47,35 +47,52 @@ pub fn run() -> io::Result<()> {
     );
     let mut runtime = crate::runtime::Runtime::default();
     crate::providers::load_settings(&mut runtime)?;
-    let image = runtime.backend.image();
-    check(
-        "pinned worker image",
-        image.is_some(),
-        match runtime.backend {
-            crate::backend::Backend::Codex => {
-                "set worker-image-id in the configuration directory to the Nix image digest"
-            }
-            crate::backend::Backend::Claude => {
-                "set claude-image-id in the configuration directory to the Nix image digest"
-            }
-        },
-    );
-    if let (true, Some(image)) = (engine, image) {
+    // Every backend with a pinned image is checked; the selected one must be complete.
+    for backend in [crate::backend::Backend::Codex, crate::backend::Backend::Claude] {
+        let image = backend.image();
+        if image.is_none() && backend != runtime.backend {
+            continue;
+        }
+        let name = backend.label();
         check(
-            "worker image installed",
-            crate::runtime::docker_query(&["image", "inspect", &image, "--format", "{{.Id}}"])
-                .is_ok(),
-            "load the Nix-built worker image into the engine",
+            &format!("{name}: pinned image"),
+            image.is_some(),
+            match backend {
+                crate::backend::Backend::Codex => {
+                    "set worker-image-id in the configuration directory to the Nix image digest"
+                }
+                crate::backend::Backend::Claude => {
+                    "set claude-image-id in the configuration directory to the Nix image digest"
+                }
+            },
         );
-    }
-    let credentials = match runtime.backend {
-        crate::backend::Backend::Codex => crate::worker::credentials_ready(),
-        crate::backend::Backend::Claude => crate::claude::credentials_ready()
-            .map_err(|_| "run control claude login; its private login stays outside the checkout"),
-    };
-    match credentials {
-        Ok(()) => check("Selected backend credential metadata", true, ""),
-        Err(reason) => check("Selected backend credential metadata", false, reason),
+        if let (true, Some(image)) = (engine, &image) {
+            let installed = crate::runtime::docker_query(&["image", "inspect", image, "--format", "{{.Id}}"]).is_ok();
+            check(&format!("{name}: image installed"), installed, "load the Nix-built image into the engine");
+            if installed {
+                // Offline isolation probe with an empty canary credential: no account is mounted and no model is called.
+                let probe = match backend {
+                    crate::backend::Backend::Codex => crate::worker::offline_probe(image),
+                    crate::backend::Backend::Claude => crate::config::node_id()
+                        .map_err(io::Error::other)
+                        .and_then(|node| crate::claude::probe(image, &node, &crate::config::state("claude-check").map_err(io::Error::other)?))
+                        .map_err(|_| "the offline Claude tool-isolation probe failed; check the pinned image and container sandbox support"),
+                };
+                match probe {
+                    Ok(()) => check(&format!("{name}: offline sandbox probe"), true, ""),
+                    Err(reason) => check(&format!("{name}: offline sandbox probe"), false, reason),
+                }
+            }
+        }
+        let credentials = match backend {
+            crate::backend::Backend::Codex => crate::worker::credentials_ready(),
+            crate::backend::Backend::Claude => crate::claude::credentials_ready()
+                .map_err(|_| "run ./target/release/control claude login; its private login stays outside the checkout"),
+        };
+        match credentials {
+            Ok(()) => check(&format!("{name}: credential metadata"), true, ""),
+            Err(reason) => check(&format!("{name}: credential metadata"), false, reason),
+        }
     }
     if config.join("discord.env").exists() || config.join("discord-access.json").exists() {
         // A placeholder policy is valid; a missing token leaves the optional bridge off.

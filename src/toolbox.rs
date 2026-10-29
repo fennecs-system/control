@@ -247,10 +247,7 @@ fn playground(code: &str) -> io::Result<Value> {
         .spawn()
         .map_err(|_| fail("Could not start the Nix playground"))?;
     let stdout = child.stdout.take().unwrap();
-    let reader = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        stdout.take(65537).read_to_end(&mut bytes).map(|_| bytes)
-    });
+    let reader = std::thread::spawn(move || drain(stdout, 65536));
     let delivered = child
         .stdin
         .take()
@@ -275,10 +272,10 @@ fn playground(code: &str) -> io::Result<Value> {
         let _ = child.kill();
         let _ = child.wait();
     }
-    let bytes = reader
+    let (bytes, truncated) = reader
         .join()
         .map_err(|_| fail("Playground output reader failed"))??;
-    if !status.is_some_and(|s| s.success()) || bytes.len() > 65536 {
+    if !status.is_some_and(|s| s.success()) {
         return Err(fail(
             "Playground stopped or exceeded its limits. Check the configured Nix image.",
         ));
@@ -297,7 +294,20 @@ fn playground(code: &str) -> io::Result<Value> {
         .chars()
         .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
         .collect::<String>();
-    Ok(json!({"status":status,"success":status=="run 0","output":output,"image":image}))
+    Ok(json!({"status":status,"success":status=="run 0","output":output,"truncated":truncated,"image":image}))
+}
+/// Keep the first `limit` bytes and discard the rest, reading to EOF so the child never blocks on a full pipe.
+fn drain(mut reader: impl Read, limit: usize) -> io::Result<(Vec<u8>, bool)> {
+    let (mut kept, mut chunk, mut truncated) = (Vec::new(), [0u8; 8192], false);
+    loop {
+        let count = reader.read(&mut chunk)?;
+        if count == 0 {
+            return Ok((kept, truncated));
+        }
+        let room = limit.saturating_sub(kept.len()).min(count);
+        kept.extend_from_slice(&chunk[..room]);
+        truncated |= room < count;
+    }
 }
 
 #[cfg(test)]
@@ -323,6 +333,13 @@ mod tests {
             &json!({"query":"", "url":"http://localhost"})
         )
         .is_err());
+    }
+    #[test]
+    fn playground_output_is_drained_past_the_cap_and_marked_truncated() {
+        let input = vec![b'x'; 200_000];
+        let (kept, truncated) = drain(&input[..], 65536).unwrap();
+        assert_eq!((kept.len(), truncated), (65536, true));
+        assert_eq!(drain(&b"run 0\nok"[..], 65536).unwrap(), (b"run 0\nok".to_vec(), false));
     }
     #[test]
     #[ignore = "requires the pinned Nix development image; no model calls"]

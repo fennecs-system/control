@@ -4,21 +4,21 @@ Control renders self-contained HTML previews in a Nix-built Firefox container.
 The runner and MCP bridge are Rust. There is no distribution base or host browser
 profile, and no Node/Python automation service.
 
-Build through a compatible Linux Nix builder, then load and pin the resulting image:
+`nix run .#setup -- --browser` builds, loads and pins it with the worker image. To do it
+manually, build through a compatible Linux Nix builder, then load and pin the image:
 
 ```sh
-nix build .#packages.aarch64-linux.browser-image --out-link /private/tmp/control-browser-image
-docker load --input /private/tmp/control-browser-image
-control config init
+docker load --input "$(nix build .#packages.aarch64-linux.browser-image --no-link --print-out-paths)"
+./target/release/control config init
 umask 077
-docker image inspect --format '{{.Id}}' control-browser:nix > "$HOME/.config/control/browser-image-id"
+docker image inspect --format '{{.Id}}' control-browser:nix > "$(./target/release/control config path)/browser-image-id"
 ```
 
 Use `x86_64-linux` instead when appropriate. `flake.lock` pins the Nix inputs;
 runs require an immutable image ID, never a mutable tag.
 
 ```sh
-control browser capture path/to/preview.html 1280 800
+./target/release/control browser capture path/to/preview.html 1280 800
 ```
 
 In the local web UI, open **Tools → Browser** (`/tools/browser`), enter a
@@ -55,7 +55,7 @@ it is unnecessary for basic layout screenshots.
 
 ## Codex MCP
 
-`control mcp --root /absolute/control/checkout` is a stdio MCP server for the local
+`./target/release/control mcp --root /absolute/control/checkout` is a stdio MCP server for the local
 operator. The optional `--root` bounds browser inputs; without it, the root is the
 node's state directory. It exposes read-only chat/lens/room/artifact tools and `control.browser.capture`,
 which accepts `input`, optional `width` and `height`, and returns PNG content plus

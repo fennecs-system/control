@@ -15,6 +15,8 @@ Start Control first and reload Claude Code. The bridge uses the local operator
 credential internally; do not put that credential in Claude configuration.
 It exposes chat/lens/room/artifact reads, public search, the Rust playground and
 browser capture. It does not expose job submission or Control administration.
+Browser capture needs the optional browser image: run `nix run .#setup -- --browser`
+(or the manual steps in [the browser tool README](../tools/browser/README.md)).
 Pass `--root /absolute/preview/directory` after `mcp` to select a browser input
 directory. The operator's MCP bridge belongs on the trusted host, outside workers.
 

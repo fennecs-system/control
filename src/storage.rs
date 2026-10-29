@@ -96,7 +96,7 @@ fn interrupt_active(state: &mut State) -> bool {
     changed
 }
 pub fn save(state: &State) -> io::Result<()> {
-    let data = serde_json::to_vec_pretty(state).map_err(io::Error::other)?;
+    let data = serde_json::to_vec(state).map_err(io::Error::other)?;
     let mut options = fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -118,6 +118,29 @@ pub fn save(state: &State) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn finished_diagnostics_survive_compact_and_pretty_serialization() {
+        let mut state = State::initial();
+        state.runtime.enqueue("t".into(), "task", "test");
+        let run = &mut state.runtime.runs[0];
+        let mut attempt = crate::usage::Attempt::new();
+        attempt.activity.push(crate::usage::Activity { id: "workspace-diff".into(), kind: "file_change".into(), text: "1 file".into(), output: "x".repeat(5000), status: "completed".into() });
+        for i in 0..20 {
+            attempt.activity.push(crate::usage::Activity { id: i.to_string(), kind: "command_execution".into(), text: "c".into(), output: "y".repeat(3000), status: "completed".into() });
+        }
+        run.attempts.push(attempt);
+        run.status = "completed".into();
+        let pretty = serde_json::to_vec_pretty(&state).unwrap();
+        let compact = serde_json::to_vec(&state).unwrap();
+        assert!(compact.len() < pretty.len());
+        assert_eq!(serde_json::to_vec(&serde_json::from_slice::<State>(&pretty).unwrap()).unwrap(), compact);
+        let restored: State = serde_json::from_slice(&compact).unwrap();
+        let activity = &restored.runtime.runs[0].attempts[0].activity;
+        assert_eq!(activity.len(), 21);
+        assert_eq!(activity[0].output.len(), 5000);
+        assert_eq!(activity[1].id, "0");
+        assert!(activity[1..].iter().all(|event| event.output.len() == 3000));
+    }
     #[test]
     fn restart_fences_running_and_cancelling_without_replaying_or_publishing() {
         let mut state = State::initial();

@@ -54,6 +54,31 @@ pub fn node_id() -> Result<String, &'static str> {
     Ok(id.into())
 }
 
+/// Loopback address the server binds: `CONTROL_ADDR`, default `127.0.0.1:8080`.
+pub fn server_addr() -> String {
+    std::env::var("CONTROL_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".into())
+}
+
+/// Client origin for the local server. Uses `localhost`, where the operator cookie is scoped.
+pub fn server_url() -> String {
+    url_for(&server_addr())
+}
+fn url_for(addr: &str) -> String {
+    let port = addr.rsplit_once(':').and_then(|(_, p)| p.parse::<u16>().ok()).unwrap_or(8080);
+    format!("http://localhost:{port}")
+}
+
+/// Model run time limit: `CONTROL_WORKER_TIMEOUT_SECS` or `worker-timeout-secs` in the
+/// node configuration directory; default 600 s, clamped to 60 s – 24 h.
+pub fn worker_deadline() -> std::time::Duration {
+    let configured = std::env::var("CONTROL_WORKER_TIMEOUT_SECS").ok()
+        .or_else(|| fs::read_to_string(directory().ok()?.join("worker-timeout-secs")).ok());
+    std::time::Duration::from_secs(deadline_secs(configured.as_deref()))
+}
+fn deadline_secs(configured: Option<&str>) -> u64 {
+    configured.and_then(|s| s.trim().parse::<u64>().ok()).map_or(600, |s| s.clamp(60, 86400))
+}
+
 pub fn source_root() -> io::Result<PathBuf> {
     let path = std::env::var_os("CONTROL_SOURCE_ROOT").map(PathBuf::from)
         .or_else(|| fs::read_to_string(directory().ok()?.join("source-root")).ok().map(|p| PathBuf::from(p.trim())))
@@ -150,6 +175,19 @@ fn resolve(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn worker_deadline_defaults_and_clamps() {
+        assert_eq!(deadline_secs(None), 600);
+        assert_eq!(deadline_secs(Some(" 1800\n")), 1800);
+        assert_eq!(deadline_secs(Some("5")), 60);
+        assert_eq!(deadline_secs(Some("soon")), 600);
+    }
+    #[test]
+    fn client_url_uses_localhost_and_the_bound_port() {
+        assert_eq!(url_for("127.0.0.1:9090"), "http://localhost:9090");
+        assert_eq!(url_for("[::1]:8181"), "http://localhost:8181");
+        assert_eq!(url_for("bad"), "http://localhost:8080");
+    }
     #[test]
     fn initialization_preserves_existing_configuration_and_rejects_symlinks() {
         let directory = std::env::temp_dir().join(format!("control-init-{}", std::process::id()));

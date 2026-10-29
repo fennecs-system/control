@@ -5,3 +5,5 @@
 /.control
 /web/dist
 /web/target
+*.tmp
+/result*

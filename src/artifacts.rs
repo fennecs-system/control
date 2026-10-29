@@ -15,6 +15,15 @@ const FILE_COUNT: usize = 512;
 pub struct Manifest {
     pub id: String,
     pub files: Vec<Entry>,
+    /// Omissions recorded by older versions. New checkpoints reject unpublishable files.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub omitted: Vec<Omitted>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Omitted {
+    pub path: String,
+    pub reason: String,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -178,6 +187,8 @@ fn diff_directory_names(directory: &fs::File) -> io::Result<Vec<std::ffi::OsStri
     }
     Ok(names)
 }
+/// Write without syncing; callers sync the whole tree once with `sync_tree`
+/// before any rename or pointer makes it durable-visible.
 fn private_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
     fs::DirBuilder::new().recursive(true).mode(0o700).create(
@@ -189,8 +200,20 @@ fn private_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         .create_new(true)
         .mode(0o600)
         .open(path)?;
-    file.write_all(bytes)?;
-    file.sync_all()
+    file.write_all(bytes)
+}
+/// Generated or environment directories that are never published (as in `runtime::snapshot`).
+/// Kept out of `excluded` so older manifests that contain them remain valid.
+fn skipped_directory(name: &str) -> bool {
+    matches!(name, "dist" | "pkg" | ".venv" | "__pycache__")
+}
+const OMITTED_LIMIT: usize = 128;
+fn omit(manifest: &mut Manifest, path: String, reason: &str) {
+    if manifest.omitted.len() < OMITTED_LIMIT {
+        manifest.omitted.push(Omitted { path, reason: reason.into() });
+    } else if manifest.omitted.len() == OMITTED_LIMIT {
+        manifest.omitted.push(Omitted { path: "…".into(), reason: "Further omissions not listed".into() });
+    }
 }
 fn walk(
     source: &Path,
@@ -201,71 +224,70 @@ fn walk(
     visited: &mut usize,
     depth: usize,
 ) -> io::Result<()> {
+    let label = |path: &Path| path.strip_prefix(source).unwrap_or(path).to_string_lossy().into_owned();
     if depth > 32 {
-        return Err(fail("Artifact directory depth exceeded"));
+        return Err(fail(&format!("{}: directory depth limit (32) exceeded", label(directory))));
     }
     let mut entries = fs::read_dir(directory)?
         .take(FILE_COUNT * 4 + 1)
         .collect::<io::Result<Vec<_>>>()?;
     if entries.len() > FILE_COUNT * 4 {
-        return Err(fail("Artifact directory entry limit exceeded"));
+        return Err(fail(&format!("{}: more than {} directory entries", label(directory), FILE_COUNT * 4)));
     }
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
         *visited += 1;
         if *visited > FILE_COUNT * 8 {
-            return Err(fail("Artifact tree entry limit exceeded"));
+            return Err(fail(&format!("{}: tree entry limit ({}) exceeded", label(&entry.path()), FILE_COUNT * 8)));
         }
         let name = entry.file_name();
-        let name = name
-            .to_str()
-            .ok_or_else(|| fail("Artifact filenames must be UTF-8"))?;
+        let Some(name) = name.to_str() else {
+            omit(manifest, label(&entry.path()), "Filename is not UTF-8");
+            continue;
+        };
         if excluded(name) {
             continue;
         }
+        // DirEntry::file_type does not follow symlinks; neither does safe_read.
         let kind = entry.file_type()?;
+        let relative = label(&entry.path());
         if kind.is_dir() {
-            walk(
-                source,
-                &entry.path(),
-                destination,
-                manifest,
-                total,
-                visited,
-                depth + 1,
-            )?;
-        } else if kind.is_file() {
-            if manifest.files.len() >= FILE_COUNT {
-                return Err(fail("Artifact file-count limit exceeded"));
+            if !skipped_directory(name) {
+                walk(source, &entry.path(), destination, manifest, total, visited, depth + 1)?;
             }
-            let relative = entry
-                .path()
-                .strip_prefix(source)
-                .map_err(|_| fail("Invalid artifact root"))?
-                .to_str()
-                .ok_or_else(|| fail("Invalid artifact filename"))?
-                .to_owned();
-            let bytes = safe_read(source, &relative, FILE_BYTES)?;
-            *total += bytes.len() as u64;
-            if *total > TOTAL_BYTES {
-                return Err(fail("Artifact byte limit exceeded"));
-            }
-            private_write(&destination.join(&relative), &bytes)?;
-            manifest.files.push(Entry {
-                path: relative,
-                bytes: bytes.len() as u64,
-                sha256: hash(&bytes),
-                media_type: if std::str::from_utf8(&bytes).is_ok() && !bytes.contains(&0) {
-                    "text/plain"
-                } else {
-                    "application/octet-stream"
-                }
-                .into(),
-            });
+        } else if !kind.is_file() {
+            omit(manifest, relative, "Symlink or special file");
+        } else if !valid_path(&relative) {
+            omit(manifest, relative, "Path is not publishable");
         } else {
-            return Err(fail(
-                "Artifact symlinks and special files are not published",
-            ));
+            let length = entry.metadata()?.len();
+            if length > FILE_BYTES {
+                omit(manifest, relative, "Larger than the 2 MiB file limit");
+            } else if manifest.files.len() >= FILE_COUNT {
+                omit(manifest, relative, "Over the 512-file limit");
+            } else if *total + length > TOTAL_BYTES {
+                omit(manifest, relative, "Over the 16 MiB total limit");
+            } else {
+                let bytes = safe_read(source, &relative, FILE_BYTES)
+                    .map_err(|e| fail(&format!("{relative}: {e}")))?;
+                if *total + bytes.len() as u64 > TOTAL_BYTES {
+                    omit(manifest, relative, "Over the 16 MiB total limit");
+                    continue;
+                }
+                *total += bytes.len() as u64;
+                private_write(&destination.join(&relative), &bytes)?;
+                manifest.files.push(Entry {
+                    path: relative,
+                    bytes: bytes.len() as u64,
+                    sha256: hash(&bytes),
+                    media_type: if std::str::from_utf8(&bytes).is_ok() && !bytes.contains(&0) {
+                        "text/plain"
+                    } else {
+                        "application/octet-stream"
+                    }
+                    .into(),
+                });
+            }
         }
     }
     Ok(())
@@ -281,6 +303,7 @@ fn publish_in(root: &Path, source: &Path, id: &str) -> io::Result<Manifest> {
     let mut manifest = Manifest {
         id: id.into(),
         files: Vec::new(),
+        omitted: Vec::new(),
     };
     let mut total = 0;
     let mut visited = 0;
@@ -292,15 +315,26 @@ fn publish_in(root: &Path, source: &Path, id: &str) -> io::Result<Manifest> {
         &mut total,
         &mut visited,
         0,
-    )?;
+    )
+    .map_err(|e| fail(&format!("{e}. Outputs are retained in {}.", source.display())))?;
+    // This manifest is also the next turn's workspace, not just a viewer index.
+    // Never promote a partial checkpoint: even an unchanged file could otherwise
+    // disappear on restore when another file pushes the workspace over a limit.
+    if let Some(omitted) = manifest.omitted.first() {
+        return Err(fail(&format!(
+            "{}: {}. Cannot publish an incomplete workspace checkpoint. Outputs are retained in {}.",
+            omitted.path, omitted.reason, source.display()
+        )));
+    }
     manifest.files.sort_by(|a, b| a.path.cmp(&b.path));
     let bytes = serde_json::to_vec(&manifest).map_err(io::Error::other)?;
     if bytes.len() > 256 * 1024 {
         return Err(fail("Artifact manifest limit exceeded"));
     }
     private_write(&staging.join("manifest.json"), &bytes)?;
-    // Publish files before any durable chat pointer refers to them.
-    sync_directories(&staging)?;
+    // Publish files before any durable chat pointer refers to them: one batched
+    // sync of every file and directory, then the atomic rename.
+    sync_tree(&staging)?;
     if root.join(id).exists() {
         return Err(fail("Artifact ID already published"));
     }
@@ -308,11 +342,23 @@ fn publish_in(root: &Path, source: &Path, id: &str) -> io::Result<Manifest> {
     fs::File::open(root)?.sync_all()?;
     Ok(manifest)
 }
-fn sync_directories(directory: &Path) -> io::Result<()> {
+fn sync_tree(directory: &Path) -> io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        // One filesystem-wide flush instead of an fsync per file.
+        use std::os::fd::AsRawFd;
+        let handle = fs::File::open(directory)?;
+        if unsafe { libc::syncfs(handle.as_raw_fd()) } == 0 {
+            return Ok(());
+        }
+    }
     for entry in fs::read_dir(directory)? {
         let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            sync_directories(&entry.path())?;
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            sync_tree(&entry.path())?;
+        } else if kind.is_file() {
+            fs::File::open(entry.path())?.sync_all()?;
         }
     }
     fs::File::open(directory)?.sync_all()
@@ -332,6 +378,7 @@ fn manifest_in(root: &Path, id: &str) -> io::Result<Manifest> {
         serde_json::from_slice(&bytes).map_err(|_| fail("Invalid artifact manifest"))?;
     let mut paths = std::collections::HashSet::new();
     if manifest.id != id
+        || manifest.omitted.len() > OMITTED_LIMIT + 1
         || manifest.files.len() > FILE_COUNT
         || manifest
             .files
@@ -376,7 +423,8 @@ fn restore_in(root: &Path, id: &str, destination: &Path) -> io::Result<()> {
             &read_in(root, &manifest, &entry.path)?,
         )?;
     }
-    fs::create_dir_all(destination)
+    fs::create_dir_all(destination)?;
+    sync_tree(destination)
 }
 
 pub const TOOLS: &[&str] = &["control.artifacts.list", "control.artifact.read"];
@@ -640,7 +688,11 @@ mod tests {
         assert!(!root.join("output/test-1/files/.env").exists());
         assert!(publish_in(&root.join("output"), &root.join("source"), "test-1").is_err());
         std::os::unix::fs::symlink("/etc/passwd", root.join("source/link")).unwrap();
-        assert!(publish_in(&root.join("output"), &root.join("source"), "test-2").is_err());
+        // Generated output is excluded by policy; unsafe project entries reject publication.
+        fs::create_dir_all(root.join("source/dist")).unwrap();
+        fs::write(root.join("source/dist/bundle.js"), "built").unwrap();
+        let error = publish_in(&root.join("output"), &root.join("source"), "test-2").err().unwrap().to_string();
+        assert!(error.contains("link: Symlink or special file"));
         assert!(!root.join("output/test-2").exists());
         assert!(safe_read(&root.join("source"), "../source/src/main.rs", FILE_BYTES).is_err());
         assert!(safe_read(&root.join("source"), "link", FILE_BYTES).is_err());
@@ -649,8 +701,46 @@ mod tests {
             .unwrap()
             .set_len(FILE_BYTES + 1)
             .unwrap();
-        assert!(publish_in(&root.join("output"), &root.join("source"), "test-3").is_err());
+        let error = publish_in(&root.join("output"), &root.join("source"), "test-3").err().unwrap().to_string();
+        assert!(error.contains("large: Larger than the 2 MiB file limit"));
         assert!(!root.join("output/test-3").exists());
+        fs::remove_file(root.join("source/large")).unwrap();
+        for n in 0..9 {
+            fs::File::create(root.join(format!("source/big-{n}"))).unwrap().set_len(FILE_BYTES).unwrap();
+        }
+        let error = publish_in(&root.join("output"), &root.join("source"), "test-4").err().unwrap().to_string();
+        assert!(error.contains("16 MiB total limit"));
+        assert!(!root.join("output/test-4").exists());
+        restore_in(&root.join("output"), "test-1", &root.join("restored")).unwrap();
+        assert_eq!(fs::read(root.join("restored/src/main.rs")).unwrap(), b"fn main() {}\n");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn incomplete_turn_never_replaces_the_restorable_project_checkpoint() {
+        let root = std::env::temp_dir().join(format!("control-checkpoint-limits-{}", std::process::id()));
+        let source = root.join("source");
+        let outputs = root.join("outputs");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("project.txt"), "original project data").unwrap();
+        publish_in(&outputs, &source, "before").unwrap();
+        let workspace = root.join("turn-two");
+        restore_in(&outputs, "before", &workspace).unwrap();
+        fs::OpenOptions::new().write(true).open(workspace.join("project.txt")).unwrap().set_len(FILE_BYTES + 1).unwrap();
+        let error = publish_in(&outputs, &workspace, "oversized").err().unwrap().to_string();
+        assert!(error.contains("project.txt") && error.contains("incomplete workspace checkpoint"));
+        assert!(!outputs.join("oversized").exists());
+        assert_eq!(fs::metadata(workspace.join("project.txt")).unwrap().len(), FILE_BYTES + 1);
+        fs::write(workspace.join("project.txt"), "updated project data").unwrap();
+        for n in 0..FILE_COUNT {
+            fs::write(workspace.join(format!("file-{n:04}")), "x").unwrap();
+        }
+        let error = publish_in(&outputs, &workspace, "too-many").err().unwrap().to_string();
+        assert!(error.contains("512-file limit"));
+        assert!(!outputs.join("too-many").exists());
+        let next = root.join("next-turn");
+        restore_in(&outputs, "before", &next).unwrap();
+        assert_eq!(fs::read(next.join("project.txt")).unwrap(), b"original project data");
         fs::remove_dir_all(root).unwrap();
     }
 }

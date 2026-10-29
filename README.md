@@ -33,7 +33,8 @@ pins change only after every requested image builds and loads successfully.
 It does not read login contents, sign in, call a model, or start services.
 
 To include the Claude Code image, use `nix run .#setup -- --claude`, then follow
-[Claude login](docs/CLAUDE.md#control-runs-claude-code). Repeat setup to rebuild
+[Claude login](docs/CLAUDE.md#control-runs-claude-code). Add `--browser` to also
+build and pin the optional [browser-capture image](tools/browser/README.md). Repeat setup to rebuild
 after source changes. `nix develop` remains available for individual build/test
 commands; it is not required before `nix run`.
 
@@ -84,12 +85,11 @@ For the individual build steps instead of the setup helper:
 ```sh
 nix develop
 (cd web && trunk build --release --locked)
-cargo build --release --locked --bin control
+env -u CARGO_TARGET_DIR cargo build --release --locked --bin control
 ./target/release/control config init
-nix build .#packages.aarch64-linux.worker-image -o result-worker
-docker load -i result-worker
+docker load -i "$(nix build .#packages.aarch64-linux.worker-image --no-link --print-out-paths)"
 umask 077
-docker image inspect control-worker:nix --format '{{.Id}}' > "$HOME/.config/control/worker-image-id"
+docker image inspect control-worker:nix --format '{{.Id}}' > "$(./target/release/control config path)/worker-image-id"
 ```
 
 Use `x86_64-linux` for Intel. A Linux host can build the matching image locally.
@@ -103,7 +103,7 @@ The UI includes lenses, rooms, a Knowledge workspace, an authority queue, a run 
 
 A node owns data and execution. A lens selects knowledge, tools, and instructions for a context. Effective tool access should be the intersection of lens selection, node policy, and user permissions. Lens lists describe selections; the concrete tools below execute through a separately authorized broker. Complete lens-based execution filtering remains future work.
 
-The server requires a loopback bind address, checks Host/Origin headers, and requires an operator session for every UI/API/asset route. Run `control open` for a single-use local sign-in link. Operator credentials stay in private node state and are never passed to workers. Only `/health` is public. Tailscale publication and remote access remain unconfigured. The launchd files in `hosting/` are templates; replace their path placeholders before loading them as user services.
+The server requires a loopback bind address, checks Host/Origin headers, and requires an operator session for every UI/API/asset route. Run `./target/release/control open` for a single-use local sign-in link. Operator credentials stay in private node state and are never passed to workers. Only `/health` is public. Tailscale publication and remote access remain unconfigured. The launchd files in `hosting/` are templates; replace their `@…@` placeholders (paths and `@CONTROL_USER@`) before loading them as user services.
 
 Lenses are pure functions over explicit context snapshots, without node ownership. They select knowledge and tools; resource permissions are enforced separately.
 
@@ -160,7 +160,7 @@ those terms and risk account suspension. Operators are responsible for their
 configuration and use; this software's permissions do not establish contractual
 permission. See [OpenAI's terms](https://openai.com/policies/terms-of-use/).
 
-The container runs as the credential file's non-root UID/GID. A named Codex permission profile denies agent tools access to the entire Codex state directory and disables tool network access. Each run first tests a separate empty auth canary: direct and proc-alias reads must fail, the tool supervisor must be inside its own PID namespace, and workspace writes must succeed. Verification failure blocks the run before mounting real credentials. `cargo run --locked -- --check-worker` exercises this path and one small authenticated model/tool task, reporting only a safe success/failure message.
+The container runs as the credential file's non-root UID/GID. A named Codex permission profile denies agent tools access to the entire Codex state directory and disables tool network access. Each run first tests a separate empty auth canary: direct and proc-alias reads must fail, the tool supervisor must be inside its own PID namespace, and workspace writes must succeed. Verification failure blocks the run before mounting real credentials. `./target/release/control --check-worker` exercises this path and one small authenticated model/tool task, reporting only a safe success/failure message.
 
 The read-only mount cannot persist refreshed tokens. If authentication expires or token rotation requires a write, refresh the host Codex login and submit a new run; workers never make the credential mount writable. Account access remains subject to the plan's entitlements and limits. See the [official authentication documentation](https://learn.chatgpt.com/docs/auth). A broker that keeps provider credentials outside workers is planned in DESIGN.md.
 
@@ -243,9 +243,9 @@ scripts remain disabled. Without built assets, the send button remains usable.
 
 The local [lens library](http://localhost:8080/lenses) supports creating and revising declarative definitions containing component lens IDs, tool descriptors, document IDs, and instructions. Engineering and Research are compositions of smaller lenses declared in [builtin-lenses.json](crates/context/src/builtin-lenses.json). Architecture notes starts without documents; attach the relevant notes in its editor. The pure Rust resolver expands nested compositions, deduplicates selections, and rejects cycles, unknown references/tools, excessive nesting, and context above 48,000 characters. The editor previews the resolved composition and exports definitions as JSON. Revisions are retained in local state; stale saves are rejected. Each new run stores its full resolved snapshot, including instructions and selected document contents/revisions, so later library or note edits cannot change that run's context. Tool selections remain descriptors: runtime authority is enforced separately, and lens-specific execution filtering is not yet implemented. The embedded WASM inspector remains a built-in-definition preview; the library editor and run resolver use the live local library.
 
-New Discord DMs belong to a persistent chat. Replies include `http://localhost:8080/chat/<id>`; the link grants no access itself. An authenticated operator browser can open it using `control open`. Continuations retain the original Discord identity and role. History is shared across Discord, web and TUI, with up to 20,000 characters of earlier exchanges in model context. Each turn starts a fresh Codex process, restoring ordinary project files from the last published checkpoint. Failed or interrupted work does not replace that checkpoint.
+New Discord DMs belong to a persistent chat. Replies include `http://localhost:8080/chat/<id>`; the link grants no access itself. An authenticated operator browser can open it using `./target/release/control open`. Continuations retain the original Discord identity and role. History is shared across Discord, web and TUI, with up to 20,000 characters of earlier exchanges in model context. Each turn starts a fresh Codex process, restoring ordinary project files from the last published checkpoint. Failed or interrupted work does not replace that checkpoint.
 
-Run `cargo run -- tui` or `target/release/control tui` from this directory. `control-harness` remains available as a compatibility executable; both entry points share the same Rust Ratatui client. It uses Control's MCP endpoint, loads the private local operator credential internally, and never receives provider credentials. The single transcript and grey-purple composer use the website palette. Use Ctrl+N or `/new`, Ctrl+Up/Down to switch chats, Enter to send, Alt+Enter for a newline, arrows or PageUp/PageDown to scroll, End to follow new replies, and Ctrl+Q to quit. `/chats` opens a keyboard picker; `/lenses` opens a composable picker with Space to toggle and Enter to apply. Esc returns to chat. `/use engineering evidence` composes lenses directly, `/use none` clears them, `/context` previews the next-message context, and `/chat` returns to the transcript. `--session <id>` or `/resume <id>` opens a specific conversation; `--check` verifies the connection without entering the terminal UI. The default server is `http://localhost:8080`; `--server` currently permits only loopback HTTP origins. `CONTROL_OPERATOR_FILE` overrides the non-secret path to the local operator credential. Unchanged transcripts are not fetched again: the client checks session revisions and redraws only when needed.
+Run `./target/release/control tui`; it does not depend on the working directory. `control-harness` remains available as a compatibility executable; both entry points share the same Rust Ratatui client. It uses Control's MCP endpoint, loads the private local operator credential internally, and never receives provider credentials. The single transcript and grey-purple composer use the website palette. Use Ctrl+N or `/new`, Ctrl+Up/Down to switch chats, Enter to send, Alt+Enter for a newline, arrows or PageUp/PageDown to scroll, End to follow new replies, and Ctrl+Q to quit. `/chats` opens a keyboard picker; `/lenses` opens a composable picker with Space to toggle and Enter to apply. Esc returns to chat. `/use engineering evidence` composes lenses directly, `/use none` clears them, `/context` previews the next-message context, and `/chat` returns to the transcript. `--session <id>` or `/resume <id>` opens a specific conversation; `--check` verifies the connection without entering the terminal UI. The default server is `http://localhost:8080`, or the port in `CONTROL_ADDR`; `--server` currently permits only loopback HTTP origins. `CONTROL_OPERATOR_FILE` overrides the non-secret path to the local operator credential. Unchanged transcripts are not fetched again: the client checks session revisions and redraws only when needed.
 
 The single `control` binary includes the server, TUI, Discord bridge (`control discord`), offline federation commands, WASM UI and worker seccomp profile. Execution still requires a Linux container engine and pinned Nix worker image. Startup preserves interrupted attempts and blocks dispatch while earlier containers from this node remain active; it does not automatically delete or adopt them. Live federation, persistent personas and distributed scheduling remain unimplemented. The hard bound on live workspace writes is still open; publication limits below do not enforce it.
 
@@ -254,7 +254,9 @@ The same service exposes `control.artifacts.list` and `control.artifact.read` ov
 HTTP/stdio MCP. Outputs are bounded to 512 files, 2 MiB per file and 16 MiB per
 snapshot, with hashes verified on read and restore. Text previews are bounded;
 HTML is escaped, and binary files have metadata only. Harness/private files,
-symlinks and special files are excluded or rejected. Editing and syntax
+symlinks and special files are excluded or rejected. If project files cannot fit
+within the checkpoint limits, publication fails, the previous checkpoint stays
+unchanged, and the attempted workspace is retained for inspection. Editing and syntax
 highlighting are later work. Artifacts do not become accepted knowledge.
 
 `POST /mcp` exposes a minimal stateless Streamable HTTP MCP interface (protocols `2025-11-25` and `2025-03-26`), protected by the same operator session and origin checks as the website. Chat tools list/create/read/send sessions and update their lenses. Room tools list/read/post updates. Lens tools are `control.lenses.list`, `control.lens.read`, and `control.lenses.resolve`. GET returns 405 because SSE is not implemented. This endpoint is for trusted local operator clients, not a capability granted to worker agents. The Rust session service is the shared policy boundary; UI and Discord never provide a claimed role. Pi is design inspiration only. Streaming, steering/cancellation, per-session provider switching, external tool registration and Codex feature parity remain future work.
@@ -275,15 +277,15 @@ DMs address the particular Control node connected to that Discord bot. Its priva
 `discord-access.json` configures labels, numeric IDs and `architect`/`user` roles;
 each node should use its own bot credential. Labels are display text; numeric
 bindings grant access. Duplicate labels/IDs and unknown actors are denied.
-Bind IDs with `cargo run -- --bind-discord <label> <ID>` or the bridge's
+Bind IDs with `./target/release/control --bind-discord <label> <ID>` or the bridge's
 `--bind <label> <ID>`, without loading `discord.env`. Configured users can chat
 and run tasks; only architects may request Control source changes. Neither role
 receives a website operator session through Discord. `channel_id` must remain
 null: server access and legacy environment allowlists stay disabled.
 
-Run `control discord --check` to verify the bot and provision recipient channels without sending messages. Run `control discord --enable` to listen. Either explicit flag permits only the bridge process to load `discord.env`; running with neither does not read it. The bridge suppresses credential-bearing errors and disables automatic mentions in replies. Queued runs retain their actor identity; messages cannot supply their own role. Legacy runs without actor provenance are denied and must be resubmitted.
+Run `./target/release/control discord --check` to verify the bot and provision recipient channels without sending messages. Run `./target/release/control discord --enable` to listen. Either explicit flag permits only the bridge process to load `discord.env`; running with neither does not read it. The bridge suppresses credential-bearing errors and disables automatic mentions in replies. Queued runs retain their actor identity; messages cannot supply their own role. Legacy runs without actor provenance are denied and must be resubmitted.
 
-If Discord refuses to deliver a user DM, run `cargo run --bin control-discord -- --diagnose`. It reports only selected non-secret bot/application installation metadata, checks shared server membership with the architect, and supplies a zero-permission server installation link. It never emits raw API bodies or credentials. A listening bridge and a bot-side DM channel do not prove user-to-bot delivery. A shared server and compatible Discord privacy settings may still be required; installing Control there does not require moving the conversation out of DMs.
+If Discord refuses to deliver a user DM, run `./target/release/control discord --diagnose`. It reports only selected non-secret bot/application installation metadata, checks shared server membership with the architect, and supplies a zero-permission server installation link. It never emits raw API bodies or credentials. A listening bridge and a bot-side DM channel do not prove user-to-bot delivery. A shared server and compatible Discord privacy settings may still be required; installing Control there does not require moving the conversation out of DMs.
 
 The bot needs access to the user's DM conversation; Discord privacy settings and app/server membership may affect messaging. The bridge skips historical messages on first activation, persists per-conversation cursors, deduplicates tasks by message ID, and backs off rate-limited reads. It is a REST-polling adapter, not a full Gateway or persistent-model-conversation implementation. Acknowledging a DM does not mean the worker is provisioned; missing worker authentication is reported back as a blocked run.
 
@@ -330,7 +332,7 @@ The [federation specification](docs/FEDERATION.md) and [author/critic review](re
 
 ## Browser tools and local Codex integration
 
-`control browser capture preview.html 1280 800` renders an explicitly selected,
+`./target/release/control browser capture preview.html 1280 800` renders an explicitly selected,
 self-contained HTML file using offline Nix Firefox and saves a private PNG artifact.
 `control mcp` exposes that capture tool and read-only Hive chat, lens, room and
 artifact tools over stdio. `--root /absolute/preview/directory` explicitly changes

@@ -11,10 +11,10 @@ Build the launcher on the host:
 rustc --edition=2021 -C opt-level=2 tools/rust-analysis/main.rs -o /tmp/control-analyze
 ```
 
-On this laptop, build through the existing Linux Nix builder, then load the image:
+From the checkout root, build through a Linux Nix builder, then load the image:
 
 ```sh
-nix build --impure --expr 'let pkgs = import (builtins.getFlake "nixpkgs").outPath { system = "aarch64-linux"; }; in import /Users/fennecs/control/tools/rust-analysis/image.nix { inherit pkgs; }' --out-link /tmp/control-analysis-image
+nix build --impure --expr "let pkgs = import (builtins.getFlake \"nixpkgs\").outPath { system = \"aarch64-linux\"; }; in import $PWD/tools/rust-analysis/image.nix { inherit pkgs; }" --out-link /tmp/control-analysis-image
 docker load --input /tmp/control-analysis-image
 docker image inspect --format '{{.Id}}' control-analysis:nix
 ```
