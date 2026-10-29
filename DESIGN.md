@@ -280,3 +280,7 @@ Have an agent review the post, compare goals, and identify ideas worth borrowing
 For now this is architecture and investigation, not a request to implement changes
 from the post. The consolidated direction and implementation boundaries are in
 [Control architecture](docs/ARCHITECTURE.md).
+
+Models & providers should show the active backend and current default model,
+with an Edit action rather than a permanent “Save model” form. Use one compact
++ New action for additional providers; unavailable adapters must remain explicit.
