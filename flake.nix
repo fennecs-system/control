@@ -21,7 +21,11 @@
             name = "control-setup";
             # stdenv.cc supplies the C compiler native crates (ring) need; Xcode CLT is not required.
             runtimeInputs = [ pkgs.rustc pkgs.cargo pkgs.lld pkgs.trunk pkgs.gitMinimal pkgs.coreutils pkgs.stdenv.cc ];
-            text = ''
+            # runtimeInputs only extends PATH; Rust's Darwin std links -liconv, which stdenv
+            # hooks would otherwise put on the linker search path.
+            text = nixpkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
+              export LIBRARY_PATH=${pkgs.lib.getLib pkgs.libiconv}/lib''${LIBRARY_PATH:+:$LIBRARY_PATH}
+            '' + ''
               export CONTROL_SETUP_LINUX_SYSTEM=${linuxSystem}
               ${builtins.readFile ./hosting/setup.sh}
             '';
