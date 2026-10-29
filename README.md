@@ -249,13 +249,6 @@ Run `./target/release/control tui`; it does not depend on the working directory.
 
 The single `control` binary includes the server, TUI, Discord bridge (`control discord`), offline federation commands, WASM UI and worker seccomp profile. Execution still requires a Linux container engine and pinned Nix worker image. Startup preserves interrupted attempts and blocks dispatch while earlier containers from this node remain active; it does not automatically delete or adopt them. Live federation, persistent personas and distributed scheduling remain unimplemented. The hard bound on live workspace writes is still open; publication limits below do not enforce it.
 
-Stop the server with Ctrl+C or SIGTERM. It stops dispatch, waits for supervised
-workers to terminate, and saves interrupted status without promoting unfinished
-files. Queued messages, diagnostics and the last published workspace remain.
-Uncertain container cleanup stays interrupted for inspection on restart. SIGKILL
-and host crashes still rely on startup recovery. The launchd web template allows
-60 seconds for shutdown; existing service files need that setting added locally.
-
 Use **Artifacts** in a chat for its published file list and read-only text viewer.
 The same service exposes `control.artifacts.list` and `control.artifact.read` over
 HTTP/stdio MCP. Outputs are bounded to 512 files, 2 MiB per file and 16 MiB per
