@@ -123,6 +123,11 @@ fn hive(connection: &mut Option<Hive>) -> io::Result<&mut Hive> {
     }
     Ok(connection.as_mut().unwrap())
 }
+pub(crate) fn local_definitions() -> Vec<Value> {
+    let mut tools = vec![json!({"name":"control.browser.capture","description":"Render a self-contained HTML preview inside the configured root using offline Nix Firefox. Returns a PNG artifact. No network or host browser profile. Requires the pinned browser image.","inputSchema":{"type":"object","properties":{"input":{"type":"string"},"width":{"type":"integer","minimum":240,"maximum":2560},"height":{"type":"integer","minimum":240,"maximum":2560}},"required":["input"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})];
+    tools.extend(crate::toolbox::definitions());
+    tools
+}
 fn dispatch(connection: &mut Option<Hive>, root: &Path, request: &Value) -> Value {
     let id = request.get("id").cloned().unwrap_or(Value::Null);
     let result = (|| -> io::Result<Value> {
@@ -154,8 +159,7 @@ fn dispatch(connection: &mut Option<Hive>, root: &Path, request: &Value) -> Valu
                         .collect::<Vec<_>>(),
                     Err(_) => Vec::new(),
                 };
-                tools.push(json!({"name":"control.browser.capture","description":"Render a self-contained HTML preview inside the configured root using offline Nix Firefox. Returns a PNG artifact. No network or host browser profile. Requires the pinned browser image.","inputSchema":{"type":"object","properties":{"input":{"type":"string"},"width":{"type":"integer","minimum":240,"maximum":2560},"height":{"type":"integer","minimum":240,"maximum":2560}},"required":["input"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}}));
-                tools.extend(crate::toolbox::definitions());
+                tools.extend(local_definitions());
                 Ok(json!({"tools":tools}))
             }
             "tools/call" => {
