@@ -398,11 +398,12 @@ pub fn execute(
     let diagnostics = drain(child.stderr.take().unwrap(), 0);
     let stdout = child.stdout.take().unwrap();
     let live = bridge.map(|(s, r)| (Arc::clone(s), r.to_owned()));
+    let generation = id.to_owned();
     let output = std::thread::spawn(move || {
         capture(stdout, |event| {
             if let Some((s, r)) = &live {
                 if let Ok(mut s) = s.lock() {
-                    crate::worker::record_activity(&mut s, r, event);
+                    crate::worker::record_activity_for(&mut s, r, &generation, event);
                 }
             }
         })

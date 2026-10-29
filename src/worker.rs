@@ -589,13 +589,38 @@ fn ingest_discord(state: &Arc<Mutex<State>>) -> Result<(), ()> {
     }
     Ok(())
 }
-pub(crate) fn record_activity(state: &mut State, id: &str, event: crate::usage::Activity) -> bool {
+#[cfg(test)]
+fn record_activity(state: &mut State, id: &str, event: crate::usage::Activity) -> bool {
+    let generation = state
+        .runtime
+        .runs
+        .iter()
+        .find(|r| r.id == id)
+        .and_then(|r| r.attempts.last())
+        .and_then(|a| a.workspace_id.clone());
+    let Some(generation) = generation else {
+        return false;
+    };
+    record_activity_for(state, id, &generation, event)
+}
+pub(crate) fn record_activity_for(
+    state: &mut State,
+    id: &str,
+    generation: &str,
+    event: crate::usage::Activity,
+) -> bool {
     let Some(run) = state.runtime.runs.iter_mut().find(|r| r.id == id) else {
         return false;
     };
+    if run.status != "running" {
+        return false;
+    }
     let Some(attempt) = run.attempts.last_mut() else {
         return false;
     };
+    if attempt.workspace_id.as_deref() != Some(generation) {
+        return false;
+    }
     if let Some(old) = attempt.activity.iter_mut().find(|a| a.id == event.id) {
         *old = event;
     } else {
@@ -743,6 +768,7 @@ fn execute(
     let diagnostics = capture_diagnostics(child.stderr.take().unwrap());
     let stdout = child.stdout.take().unwrap();
     let live = bridge.map(|(state, run)| (Arc::clone(state), run.to_owned()));
+    let generation = id.to_owned();
     let accounting = std::thread::spawn(move || {
         crate::usage::capture_with(stdout, |event| {
             let Some((state, id)) = &live else {
@@ -753,7 +779,7 @@ fn execute(
             };
             // Progress is disposable; lifecycle/result checkpoints persist the
             // accumulated activity. Never fsync the entire history per event.
-            record_activity(&mut state, id, event);
+            record_activity_for(&mut state, id, &generation, event);
         })
     });
     let context = if scope == Workspace::ControlSource {
@@ -980,6 +1006,10 @@ mod tests {
         let chat = crate::chat::create(&mut state);
         crate::chat::send(&mut state, &chat, "Check build", "test").unwrap();
         checkpoint_next(&mut state, |_| Ok(())).unwrap();
+        let old_generation = state.runtime.runs[0].attempts[0]
+            .workspace_id
+            .clone()
+            .unwrap();
         let run = state.runtime.runs[0].id.clone();
         let event = |id: usize, status: &str| crate::usage::Activity {
             id: id.to_string(),
@@ -1006,7 +1036,22 @@ mod tests {
             "/retry-run",
             &std::collections::HashMap::from([("id".into(), run.clone())]),
         );
+        assert!(!record_activity_for(
+            &mut state,
+            &run,
+            &old_generation,
+            event(99, "completed")
+        ));
         checkpoint_next(&mut state, |_| Ok(())).unwrap();
+        let revision = state.chats[0].revision;
+        assert!(!record_activity_for(
+            &mut state,
+            &run,
+            &old_generation,
+            event(99, "completed")
+        ));
+        assert_eq!(state.chats[0].revision, revision);
+        assert!(state.runtime.runs[0].attempts[1].activity.is_empty());
         record_activity(&mut state, &run, event(0, "running"));
         assert_eq!(state.runtime.runs[0].attempts[0].activity.len(), 64);
         assert_eq!(state.runtime.runs[0].attempts[1].activity.len(), 1);

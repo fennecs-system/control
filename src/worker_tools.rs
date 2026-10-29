@@ -37,6 +37,19 @@ fn rpc_at(
     if let Err(message) = identity::authorize(&run.actor, run.action) {
         return error(message);
     }
+    // Every request is fenced before dispatch, including room writes and search.
+    // A late mailbox from a previous attempt cannot acquire the retry's authority.
+    if let Some(workspace) = workspace {
+        let expected = run
+            .attempts
+            .last()
+            .and_then(|a| a.workspace_id.as_deref())
+            .and_then(|id| crate::runtime::workspace(id).ok())
+            .and_then(|p| p.canonicalize().ok());
+        if expected.as_deref() != Some(workspace) {
+            return error("Mailbox belongs to an inactive attempt");
+        }
+    }
     let has_room = state.chats.iter().any(|c| {
         Some(&c.id) == run.chat_id.as_ref() && c.room.as_deref().is_some_and(rooms::valid)
     });
@@ -91,6 +104,7 @@ fn rpc_at(
                 };
                 let image = image.clone();
                 let node = node.clone();
+                let generation = attempt.workspace_id.clone().unwrap_or_default();
                 let name = format!(
                     "control-{}-tool",
                     attempt.workspace_id.as_deref().unwrap_or(run_id)
@@ -117,9 +131,10 @@ fn rpc_at(
                 if crate::claude::claim(workspace, nonce).is_err() {
                     return error("Workspace command already admitted or intent could not be saved; inspect the attempt before retrying");
                 }
-                crate::worker::record_activity(
+                crate::worker::record_activity_for(
                     &mut state,
                     run_id,
+                    &generation,
                     crate::usage::Activity {
                         id: envelope["nonce"]
                             .as_str()
@@ -134,9 +149,10 @@ fn rpc_at(
                 drop(state);
                 let result = crate::claude::shell(&image, &name, &node, workspace, &input.command);
                 if let Ok(mut state) = shared.lock() {
-                    crate::worker::record_activity(
+                    crate::worker::record_activity_for(
                         &mut state,
                         run_id,
+                        &generation,
                         crate::usage::Activity {
                             id: envelope["nonce"]
                                 .as_str()
@@ -205,6 +221,26 @@ mod tests {
     use super::*;
     fn rpc(state: &Arc<Mutex<State>>, run: &str, value: &Value) -> Value {
         rpc_at(state, run, value, None)
+    }
+    #[test]
+    fn stale_workspace_is_rejected_for_room_posts_before_dispatch() {
+        let mut state = State::default();
+        state.runtime.enqueue("task".into(), "task", "test");
+        let run = &mut state.runtime.runs[0];
+        run.status = "running".into();
+        let id = run.id.clone();
+        let mut attempt = crate::usage::Attempt::new();
+        attempt.workspace_id = Some("current-attempt".into());
+        run.attempts.push(attempt);
+        let state = Arc::new(Mutex::new(state));
+        let stale = std::env::temp_dir().canonicalize().unwrap();
+        let request = json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_room_post","arguments":{"text":"late effect"}}}});
+        let response = rpc_at(&state, &id, &request, Some(&stale));
+        assert_eq!(
+            response["error"]["message"],
+            "Mailbox belongs to an inactive attempt"
+        );
+        assert!(state.lock().unwrap().collective.posts.is_empty());
     }
     #[test]
     fn workspace_execution_is_backend_scoped_and_rejects_model_supplied_mounts() {
