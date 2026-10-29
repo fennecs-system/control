@@ -84,6 +84,7 @@ pub fn design_topic(value: &str) -> Option<(&'static str, &'static str)> {
     Some(match value {
         "hub" | "overview" => ("overview", "Overview"),
         "knowledge" | "knowledge-page" | "editor" => ("knowledge", "Knowledge"),
+        "runs" => ("runs", "Runs"),
         "agents" => ("agents", "Agents"),
         "rooms" => ("rooms", "Rooms"),
         "lenses" | "lens-page" => ("lenses", "Lenses"),

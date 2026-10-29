@@ -168,7 +168,7 @@ impl Runtime {
             status: "queued".into(),
             result: String::new(),
         });
-        self.notice = "Run recorded. It will only execute inside a configured container.".into();
+        self.notice = "Run queued.".into();
         Ok(())
     }
     pub fn action(&mut self, path: &str, f: &HashMap<String, String>) -> &'static str {
@@ -193,14 +193,14 @@ impl Runtime {
             }) {
                 if let Err(message) = identity::authorize(&run.actor, run.action) {
                     self.notice = message.into();
-                    return "/?view=evolution";
+                    return "/?view=runs";
                 }
                 run.status = "queued".into();
                 run.queue_order = order;
                 run.result.clear();
             }
         }
-        "/?view=evolution"
+        "/?view=runs"
     }
     pub fn render(&self, view: &str, _lens: &str) -> Option<String> {
         match view {
@@ -220,21 +220,30 @@ impl Runtime {
                 h.push_str("<div class='callout'>Bind IDs locally with <code>cargo run -- --bind-discord &lt;label&gt; &lt;ID&gt;</code>. Access settings cannot be changed through Discord.</div>");
                 Some(h)
             }
-            "evolution" | "agents" => {
-                let mut h = "<span class='eyebrow'>AGENTS</span><h2>Runs</h2><p class='muted'>Tasks run in isolated containers. Source improvements return for review before anything is applied.</p>".to_owned();
+            "evolution" => Some("<div class='section-heading'><h2>Improve Control</h2><a href='/?view=runs'>View runs ↗</a></div><form method='post' action='/improve'><label>What should Control improve?<textarea name='objective' required maxlength='2000' rows='4' placeholder='Describe the change…'></textarea></label><button class='primary'>Queue improvement ↗</button></form>".into()),
+            "agents" => {
+                let mut h = "<div class='section-heading'><h2>Agents</h2><a href='/?view=runs'>Run history ↗</a></div>".to_owned();
+                let mut running = self.runs.iter().filter(|r| r.status == "running").peekable();
+                if running.peek().is_none() { h.push_str("<div class='empty'>No active agents.</div>"); }
+                for run in running { h.push_str(&run_record(run)); }
+                let mut queued = self.runs.iter().filter(|r| r.status == "queued").collect::<Vec<_>>();
+                queued.sort_by_key(|r| r.queue_order);
+                if !queued.is_empty() {
+                    h.push_str("<h3 class='form-title'>Queued</h3>");
+                    for run in queued { h.push_str(&run_record(run)); }
+                }
+                Some(h)
+            }
+            "runs" => {
+                let mut h = "<h2>Runs</h2>".to_owned();
                 if !self.notice.is_empty() {
                     h.push_str(&format!("<p role='status'>{}</p>", escape(&self.notice)));
                 }
-                h.push_str(if view == "agents" { "<form method='post' action='/task'><label>Task<textarea name='objective' required maxlength='2000' rows='4' placeholder='What should the agent do?'></textarea></label><button class='primary'>Start task ↗</button></form><h3 class='form-title'>Runs</h3>" } else { "<form method='post' action='/improve'><label>What should Control improve?<textarea name='objective' required maxlength='2000' rows='4' placeholder='Improve knowledge review: show which evidence supports each claim…'></textarea></label><button class='primary'>Queue improvement ↗</button></form><h3 class='form-title'>Runs</h3>" });
                 if self.runs.is_empty() {
                     h.push_str("<div class='empty'>No runs yet.</div>");
                 }
                 for r in self.runs.iter().rev() {
-                    h.push_str(&format!("<article class='record'><span class='tag'>{}</span><span class='eyebrow'>{} / {}</span><h3>{}</h3><p class='muted tiny'>run {} · Codex</p><pre class='run-result'>{}</pre>",escape(&r.status),escape(&r.kind),escape(&r.source),escape(&r.objective),escape(&r.id),escape(&r.result)));
-                    if ["blocked", "failed", "interrupted"].contains(&r.status.as_str()) {
-                        h.push_str(&format!("<form method='post' action='/retry-run'><input type='hidden' name='id' value='{}'><button class='primary'>Retry</button></form>",escape(&r.id)));
-                    }
-                    h.push_str("</article>");
+                    h.push_str(&run_record(r));
                 }
                 Some(h)
             }
@@ -242,6 +251,24 @@ impl Runtime {
             _ => None,
         }
     }
+}
+
+fn run_record(run: &Run) -> String {
+    let mut html = format!("<article class='record'><span class='tag'>{}</span><span class='eyebrow'>{} / {}</span><h3>{}</h3><p class='muted tiny'>run {} · {}{}</p>", escape(&run.status), escape(&run.kind), escape(&run.source), escape(&run.objective), escape(&run.id), escape(run.backend.label()), run.model.as_ref().map(|m| format!(" · {}", escape(m))).unwrap_or_default());
+    if !run.result.is_empty() {
+        html.push_str(&format!(
+            "<pre class='run-result'>{}</pre>",
+            escape(&run.result)
+        ));
+    }
+    if let Some(chat) = run.chat_id.as_ref().filter(|id| crate::chat::valid_id(id)) {
+        html.push_str(&format!("<a href='/chat/{}'>Open chat ↗</a>", escape(chat)));
+    }
+    if ["blocked", "failed", "interrupted"].contains(&run.status.as_str()) {
+        html.push_str(&format!("<form method='post' action='/retry-run'><input type='hidden' name='id' value='{}'><button class='primary'>Retry</button></form>",escape(&run.id)));
+    }
+    html.push_str("</article>");
+    html
 }
 
 /// Only allow known source roots. Never recursively copy the repository root,
