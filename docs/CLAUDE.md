@@ -71,10 +71,9 @@ missing telemetry stays unknown. Provider-reported costs are not presented as
 subscription billing. Published artifacts and chat workspace checkpoints use
 the same service as Codex.
 
-Automatic cancellation, container reconciliation and hard live-workspace storage
-quotas remain shared roadmap work. Auth-expiry/refresh and cancellation fault
-testing remain open; the successful task and offline probe do not close the
-full release gate.
+Cancellation and startup container reconciliation use the shared run service.
+Hard live-workspace storage quotas and broader auth-expiry/refresh fault tests
+remain open; successful tasks and offline probes do not close the full release gate.
 
 Use your own model access according to the provider's terms. Multiple Discord
 identities can belong to one person and retain user roles. Making a personal
