@@ -472,14 +472,7 @@ fn checkpoint_next(
     state: &mut State,
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Option<usize> {
-    let index = state
-        .runtime
-        .runs
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| r.status == "queued")
-        .min_by_key(|(index, r)| (r.queue_order, *index))
-        .map(|(index, _)| index)?;
+    let index = crate::scheduler::next(&state.runtime)?;
     let omitted_history = crate::chat::omitted_history(state, &state.runtime.runs[index].id);
     let parent = {
         if let Some(previous) = state.runtime.runs[index].attempts.last() {

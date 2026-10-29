@@ -162,6 +162,7 @@ impl Runtime {
         action: Action,
     ) -> Result<(), &'static str> {
         identity::authorize(&actor, action)?;
+        crate::scheduler::admit(self)?;
         if objective.is_empty() || objective.chars().count() > 2000 {
             return Err("An objective must contain 1–2000 characters.");
         }
@@ -204,6 +205,10 @@ impl Runtime {
             self.enqueue(field(f, "objective"), "task", "website");
         }
         if path == "/retry-run" {
+            if let Err(message) = crate::scheduler::admit(self) {
+                self.notice = message.into();
+                return "/?view=runs";
+            }
             let id = field(f, "id");
             let order = self
                 .runs

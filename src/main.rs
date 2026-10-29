@@ -23,6 +23,7 @@ mod navigation;
 mod providers;
 mod rooms;
 mod runtime;
+mod scheduler;
 mod session_http;
 mod storage;
 mod tool_catalog;

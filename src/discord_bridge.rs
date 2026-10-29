@@ -559,7 +559,7 @@ impl Bridge {
                 } else {
                     run["result"].as_str().unwrap_or("No report was produced.")
                 };
-                let link = discord::chat_link(&actor).unwrap_or_default();
+                let link = discord::session_link(&actor, run["chat_id"].as_str()).unwrap_or_default();
                 if self.reply(
                     channel,
                     &format!("Control: {status}.\nContinue on this laptop: {link}\n\n{report}"),

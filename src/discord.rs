@@ -43,6 +43,12 @@ pub fn chat_link(actor: &crate::identity::Actor) -> Option<String> {
         _ => None,
     }
 }
+pub fn session_link(actor: &crate::identity::Actor, id: Option<&str>) -> Option<String> {
+    let fallback = chat_link(actor)?;
+    Some(id.filter(|id| !id.is_empty() && id.len() <= 100 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))
+        .map(|id| format!("http://localhost:8080/chat/{id}"))
+        .unwrap_or(fallback))
+}
 pub fn native_reply(actor: &crate::identity::Actor, content: &str) -> Option<String> {
     let link = chat_link(actor)?;
     if ![
@@ -114,6 +120,10 @@ mod tests {
     use super::*;
     #[test]
     fn commands_and_ids_are_bounded() {
+        let actor = crate::identity::Actor::DiscordDm { user_id: "2".parse().unwrap(), channel_id: "100".parse().unwrap() };
+        assert_eq!(session_link(&actor, Some("c-child")).as_deref(), Some("http://localhost:8080/chat/c-child"));
+        assert_eq!(session_link(&actor, Some("../secret")), chat_link(&actor));
+        assert!(session_link(&crate::identity::Actor::Unknown, Some("c-child")).is_none());
         assert_eq!(
             task("!control improve the inspector"),
             Some("improve the inspector")
