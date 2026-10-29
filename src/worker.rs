@@ -942,6 +942,23 @@ mod tests {
         );
     }
     #[test]
+    fn child_uses_frozen_task_checkpoint_and_unique_writable_attempt() {
+        let mut state = State::default();
+        let parent = crate::chat::create(&mut state);
+        state.chats[0].workspace = Some("published-task".into());
+        state.chats[0].improve_workspace = Some("private-source".into());
+        let child = crate::chat::fork(&mut state, &parent, "Inspect files", "test").unwrap();
+        state.chats[0].workspace = Some("later-parent-output".into());
+        checkpoint_next(&mut state, |_| Ok(())).unwrap();
+        let attempt = &state.runtime.runs[0].attempts[0];
+        assert_eq!(attempt.parent_artifact.as_deref(), Some("published-task"));
+        assert!(attempt.workspace_id.as_deref().unwrap().starts_with(&state.runtime.runs[0].id));
+        assert_eq!(state.runtime.runs[0].chat_id.as_deref(), Some(child.as_str()));
+        assert_eq!(state.runtime.runs[0].action, Action::Task);
+        assert_eq!(state.chats[0].workspace.as_deref(), Some("later-parent-output"));
+        assert!(state.chats[1].improve_workspace.is_none());
+    }
+    #[test]
     fn followups_capture_workspace_at_dispatch_and_retries_keep_their_parent() {
         let mut state = State::default();
         let chat = crate::chat::create(&mut state);

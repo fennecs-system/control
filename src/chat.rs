@@ -247,7 +247,8 @@ pub fn receive(state: &mut State, incoming: &discord::Incoming) -> Result<(), &'
     )
 }
 
-/// Explicit user-created child work. Never shares a mutable workspace or inherits improve mode.
+/// Explicit user-created child work. Only immutable ordinary-task checkpoints
+/// are inherited; execution restores a separate writable copy for the child.
 pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -> Result<String, &'static str> {
     let parent = state.chats.iter().find(|s| s.id == parent_id).ok_or("Chat not found.")?.clone();
     identity::authorize(&parent.actor, Action::Task)?;
@@ -260,6 +261,7 @@ pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -
     let child = create(state);
     let session = state.chats.last_mut().unwrap();
     session.actor = parent.actor;
+    session.workspace = parent.workspace;
     session.parent_chat = Some(parent_id.into());
     session.fork_context = Some(context);
     session.lenses = parent.lenses;
@@ -759,7 +761,9 @@ mod tests {
         assert_eq!(child.parent_chat.as_deref(), Some(parent.as_str()));
         assert_eq!(child.actor, state.chats[0].actor);
         assert!(!child.improve_mode);
-        assert!(child.workspace.is_none() && child.improve_workspace.is_none());
+        assert_eq!(child.workspace.as_deref(), Some("parent-output"));
+        assert!(child.improve_workspace.is_none());
+        assert!(state.runtime.runs[1].attempts.is_empty());
         assert!(child.fork_context.as_ref().unwrap().contains("Parent task"));
         assert_eq!(state.runtime.runs[1].action, Action::Task);
         assert_eq!(state.runtime.runs[1].objective, "/improve inspect this");
