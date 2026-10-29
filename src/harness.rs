@@ -279,7 +279,7 @@ impl App {
                 let lines=self.chats.iter().map(|c|format!("{}\n  /resume {}",c["title"].as_str().unwrap_or("Chat"),c["id"].as_str().unwrap_or(""))).collect::<Vec<_>>().join("\n\n");
                 self.inspector=Some(("Conversations".into(),lines));self.scroll=0;self.follow=false;self.status="↑ ↓ choose · Enter open · Esc back".into();
             }
-            "/help" => self.status = "/chats · /lenses · /use ID ID · /use none · /context · /chat · /new · /resume ID · /improve request · /steer direction · /btw question · /spawn task · Ctrl+Q quit".into(),
+            "/help" => self.status = "/chats · /lenses · /use ID ID · /use none · /context · /chat · /new · /resume ID · /improve request · /steer direction · /btw question · /spawn task · /cancel · Ctrl+Q quit".into(),
             "/lenses"=>{
                 let definitions=hive.tool("control.lenses.list",json!({}))?;
                 let entries=definitions.as_array().ok_or_else(||failure("Invalid lens library response."))?.iter().map(|d| (d["name"].as_str().unwrap_or("Lens").into(), d["includes"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" + ")).unwrap_or_default(), d["id"].as_str().unwrap_or("").into())).collect();
@@ -724,6 +724,37 @@ pub fn run() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires isolated local server with workers disabled; no model calls"]
+    fn live_harness_commands_create_children_and_cancel_without_losing_history() {
+        let server = std::env::var("CONTROL_QA_URL").expect("Use an isolated server");
+        let mut hive = Hive::connect(&server).unwrap();
+        let parent = hive.tool("control.chat.create", json!({})).unwrap()["id"].as_str().unwrap().to_owned();
+        hive.tool("control.chat.send", json!({"id":parent,"message":"Build a parser"})).unwrap();
+        hive.tool("control.chat.send", json!({"id":parent,"message":"/steer Include tests"})).unwrap();
+        hive.tool("control.chat.send", json!({"id":parent,"message":"/btw Explain the grammar"})).unwrap();
+        let detail = hive.tool("control.chat.send", json!({"id":parent,"message":"/spawn Review the grammar"})).unwrap();
+        assert_eq!(detail["messages"].as_array().unwrap().len(), 4);
+        for message in &detail["messages"].as_array().unwrap()[2..] {
+            let child = message["reply"].as_str().unwrap().strip_prefix("Agent conversation: /chat/").unwrap();
+            let child = hive.tool("control.chat.read", json!({"id":child})).unwrap();
+            assert_eq!(child["parent_chat"], parent);
+            assert_eq!(child["mode"], "chat");
+            assert_eq!(child["messages"][0]["status"], "queued");
+        }
+        let first = detail["messages"][0]["run_id"].as_str().unwrap();
+        let detail = hive.tool("control.chat.send", json!({"id":parent,"message":format!("/cancel {first}")})).unwrap();
+        assert_eq!(detail["messages"][0]["status"], "cancelled");
+        let revision = detail["revision"].as_u64().unwrap();
+        let steering = detail["messages"][1]["run_id"].as_str().unwrap();
+        let response = hive.client.post(format!("{server}/cancel-run"))
+            .header("Origin", &server).form(&[("id", steering)]).send().unwrap();
+        assert_eq!(response.status().as_u16(), 303);
+        let detail = hive.tool("control.chat.read", json!({"id":parent})).unwrap();
+        assert_eq!(detail["messages"][1]["status"], "cancelled");
+        assert!(detail["revision"].as_u64().unwrap() > revision);
+        assert_eq!(detail["messages"][0]["text"], "Build a parser");
+    }
     #[test]
     #[ignore = "requires isolated server with workers disabled, built WASM assets, and local Firefox WebDriver"]
     fn live_chat_enter_sends_and_shift_enter_adds_newline() {

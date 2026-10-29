@@ -496,7 +496,10 @@ impl Bridge {
                                 .map_err(|_| "Could not encode Discord task.")?,
                         )?;
                     }
-                    if message.objective.strip_prefix("/steer").is_some_and(|tail| tail.starts_with(char::is_whitespace)) {
+                    if message.objective.strip_prefix("/cancel").is_some_and(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace)) {
+                        let link = discord::chat_link(&actor).unwrap_or_default();
+                        let _ = self.reply(route.channel, &format!("Cancellation queued.\n{link}"));
+                    } else if message.objective.strip_prefix("/steer").is_some_and(|tail| tail.starts_with(char::is_whitespace)) {
                         let link = discord::chat_link(&actor).unwrap_or_default();
                         let _ = self.reply(route.channel, &format!("Queued for the next turn; the current task keeps running.\n{link}"));
                     } else if let Some(reply) = native {
