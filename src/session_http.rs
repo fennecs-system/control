@@ -240,7 +240,7 @@ pub fn handle(
     if ["/chats", "/chat", "/improve"].contains(&path) && method == "POST" {
         let fields = crate::fields(&String::from_utf8_lossy(body));
         let chosen = fields.get("lens").map(String::as_str).unwrap_or(lens);
-        let arguments = json!({"lenses":chat::form_lenses(&fields,lens),"room":fields.get("room"),"design_context":fields.get("design_context"),"mode":if path == "/improve" {json!("improve")} else {chat::form_mode(&fields)}});
+        let arguments = json!({"lenses":chat::form_lenses(&fields,lens),"room":fields.get("room"),"design_context":fields.get("design_context"),"mode":if path == "/improve" {json!("improve")} else {Value::Null}});
         let result = change(state, "control.chat.create", &arguments);
         match result {
             Ok(value) => {
@@ -304,7 +304,8 @@ pub fn handle(
         }
     } else if method == "POST" && operation == "messages" {
         let fields = crate::fields(&String::from_utf8_lossy(body));
-        let mut arguments = json!({"id":id,"message":fields.get("message").map(String::as_str).unwrap_or(""),"mode":chat::form_mode(&fields)});
+        let mut arguments =
+            json!({"id":id,"message":fields.get("message").map(String::as_str).unwrap_or("")});
         if fields.contains_key("composition") {
             arguments["lenses"] = chat::form_lenses(&fields, "none");
         }

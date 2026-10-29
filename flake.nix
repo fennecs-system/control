@@ -14,6 +14,23 @@
           packages = [ pkgs.rustc pkgs.cargo pkgs.rustfmt pkgs.clippy pkgs.lld pkgs.trunk pkgs.ripgrep pkgs.fd ];
         };
       });
+      apps = eachSystem (pkgs:
+        let
+          linuxSystem = builtins.replaceStrings [ "darwin" ] [ "linux" ] pkgs.stdenv.hostPlatform.system;
+          setup = pkgs.writeShellApplication {
+            name = "control-setup";
+            runtimeInputs = [ pkgs.rustc pkgs.cargo pkgs.lld pkgs.trunk pkgs.gitMinimal pkgs.coreutils ];
+            text = ''
+              export CONTROL_SETUP_LINUX_SYSTEM=${linuxSystem}
+              ${builtins.readFile ./hosting/setup.sh}
+            '';
+          };
+        in {
+          setup = { type = "app"; program = "${setup}/bin/control-setup"; };
+          codex = { type = "app"; program = "${pkgs.codex}/bin/codex"; };
+        } // nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
+          builder = { type = "app"; program = "${pkgs.darwin.linux-builder}/bin/create-builder"; };
+        });
       packages = eachSystem (pkgs:
         if pkgs.stdenv.hostPlatform.isLinux then {
           worker-image = import ./examples/worker-image.nix { inherit pkgs; };

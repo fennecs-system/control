@@ -122,7 +122,7 @@ pub fn landing_mode(state: &State, lens: &str, topic: Option<&str>, improve: boo
     let discussion = topic
         .and_then(design_topic)
         .filter(|_| identity::authorize(&Actor::LocalOperator, Action::Improve).is_ok());
-    let (context, draft) = discussion
+    let (context, mut draft) = discussion
         .map(|(_, label)| {
             (
                 format!("<p class='muted'>Discussing the design of {label}.</p>"),
@@ -130,6 +130,9 @@ pub fn landing_mode(state: &State, lens: &str, topic: Option<&str>, improve: boo
             )
         })
         .unwrap_or_default();
+    if improve && identity::authorize(&Actor::LocalOperator, Action::Improve).is_ok() {
+        draft = format!("/improve {draft}");
+    }
     let mut html = format!(
         "<section class='conversation'><div class='conversation-heading'>{}<h2>New chat</h2></div>",
         crate::navigation::conversation_button(state, "")
@@ -139,17 +142,17 @@ pub fn landing_mode(state: &State, lens: &str, topic: Option<&str>, improve: boo
     } else {
         Vec::new()
     };
-    html.push_str(&format!("<div class='conversation-empty'><h1>What are we working on?</h1>{context}</div><form class='conversation-composer' id='chat-list-new' method='post' action='/chats'><textarea name='message' maxlength='2000' rows='3' aria-label='First message' placeholder='Message Control…'>{}</textarea>{}<div class='composer-footer'>{}{}<button class='send-message' aria-label='Send message'>↑</button></div></form></section>",escape(&draft),discussion.map(|(key,_)|format!("<input type='hidden' name='design_context' value='{key}'>")).unwrap_or_default(),crate::lens_library::choices(state,&selected,"chat-list-new"),mode_choice(&Actor::LocalOperator, improve)));
+    html.push_str(&format!("<div class='conversation-empty'><h1>What are we working on?</h1>{context}</div><form class='conversation-composer' id='chat-list-new' method='post' action='/chats'><textarea name='message' maxlength='2000' rows='3' aria-label='First message' placeholder='Message Control…'>{}</textarea>{}{}<div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></section>",escape(&draft),command_menu(&Actor::LocalOperator),discussion.map(|(key,_)|format!("<input type='hidden' name='design_context' value='{key}'>")).unwrap_or_default(),crate::lens_library::choices(state,&selected,"chat-list-new")));
     html
 }
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 100 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
-fn mode_choice(actor: &Actor, improve: bool) -> String {
+fn command_menu(actor: &Actor) -> String {
     if identity::authorize(actor, Action::Improve).is_err() {
         return String::new();
     }
-    format!("<input type='hidden' name='mode_present' value='1'><label class='chat-mode'><input type='checkbox' name='improve_mode' value='true'{}>Improve Control</label>",if improve { " checked" } else { "" })
+    "<div class='chat-commands' id='chat-commands' role='listbox' aria-label='Chat commands' hidden><button type='button' role='option' id='command-improve' data-command='/improve' aria-selected='false'><span>/improve</span><small>Discuss and change Control</small></button><button type='button' role='option' id='command-improve-off' data-command='/improve off' aria-selected='false'><span>/improve off</span><small>Return to regular chat</small></button></div>".into()
 }
 fn parse_mode(value: Option<&Value>, current: bool) -> Result<bool, &'static str> {
     match value {
@@ -157,17 +160,6 @@ fn parse_mode(value: Option<&Value>, current: bool) -> Result<bool, &'static str
         Some(Value::String(s)) if s == "chat" => Ok(false),
         Some(Value::String(s)) if s == "improve" => Ok(true),
         _ => Err("Unknown chat mode."),
-    }
-}
-pub fn form_mode(fields: &std::collections::HashMap<String, String>) -> Value {
-    if fields.contains_key("mode_present") {
-        json!(if fields.contains_key("improve_mode") {
-            "improve"
-        } else {
-            "chat"
-        })
-    } else {
-        Value::Null
     }
 }
 pub fn discord_actor(id: &str) -> Option<Actor> {
@@ -440,7 +432,35 @@ pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
         .unwrap_or_default();
     let session = state.chats.iter().find(|s| s.id == id).unwrap();
     let lenses = selected_lenses(session);
-    Ok(format!("<section class='conversation'><div class='conversation-heading'>{}<h2>{}</h2><span class='conversation-links'>{room}<a href='/chat/{id}/artifacts'>Artifacts ↗</a></span></div><iframe class='chat-transcript' src='/chat/{id}/transcript#latest' title='Conversation'></iframe><form class='conversation-composer' id='session-message' method='post' action='/chat/{id}/messages'><textarea name='message' required maxlength='2000' rows='3' aria-label='Message' placeholder='Message Control…'></textarea><div class='composer-footer'>{}{}<button class='send-message' aria-label='Send message'>↑</button></div></form></section>",crate::navigation::conversation_button(state,id),escape(data["title"].as_str().unwrap_or("Chat")),crate::lens_library::choices(state,&lenses,"session-message"),mode_choice(&session.actor,session.improve_mode)))
+    let mode = if session.improve_mode {
+        "<span class='chat-command active-command' title='Use /improve off to return to regular chat'>/improve</span>"
+    } else {
+        ""
+    };
+    Ok(format!("<section class='conversation'><div class='conversation-heading'>{}<h2>{}</h2>{mode}<span class='conversation-links'>{room}<a href='/chat/{id}/artifacts'>Artifacts ↗</a></span></div><iframe class='chat-transcript' src='/chat/{id}/transcript#latest' title='Conversation'></iframe><form class='conversation-composer' id='session-message' method='post' action='/chat/{id}/messages'><textarea name='message' required maxlength='2000' rows='3' aria-label='Message' placeholder='Message Control…'></textarea>{}<div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></section>",crate::navigation::conversation_button(state,id),escape(data["title"].as_str().unwrap_or("Chat")),command_menu(&session.actor),crate::lens_library::choices(state,&lenses,"session-message")))
+}
+fn command_text(text: &str) -> String {
+    let trimmed = text.trim_start();
+    if let Some(rest) = trimmed
+        .strip_prefix("/improve")
+        .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+    {
+        let command_end = [" off", " on"]
+            .into_iter()
+            .find(|suffix| {
+                rest.strip_prefix(suffix)
+                    .is_some_and(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace))
+            })
+            .unwrap_or("");
+        format!(
+            "{}<span class='chat-command'>/improve{}</span>{}",
+            escape(&text[..text.len() - trimmed.len()]),
+            command_end,
+            escape(&rest[command_end.len()..])
+        )
+    } else {
+        escape(text)
+    }
 }
 pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
     let data = detail(state, id)?;
@@ -464,7 +484,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
         } else {
             format!("<span class='message-status' role='status'>{status}</span>")
         };
-        html.push_str(&format!("<article class='user-message' aria-label='You'><p class='preserve'>{}</p></article><article class='assistant-message' aria-label='Control'>{status}<p class='preserve'>{}</p></article>", escape(message["text"].as_str().unwrap_or("")), escape(message["reply"].as_str().unwrap_or(""))));
+        html.push_str(&format!("<article class='user-message' aria-label='You'><p class='preserve'>{}</p></article><article class='assistant-message' aria-label='Control'>{status}<p class='preserve'>{}</p></article>", command_text(message["text"].as_str().unwrap_or("")), escape(message["reply"].as_str().unwrap_or(""))));
         if let Some(attempts) = message["attempts"].as_array() {
             for (index, attempt) in attempts.iter().enumerate() {
                 if let Some(count) = attempt["omitted_history"].as_u64().filter(|n| *n > 0) {
@@ -605,6 +625,40 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn slash_commands_replace_mode_form_controls_and_escape_chat_text() {
+        let mut state = State::default();
+        let id = create(&mut state);
+        let landing = landing_mode(&state, "engineering", None, true);
+        assert!(landing.contains(">/improve </textarea>"));
+        assert!(landing.contains("role='listbox'"));
+        assert!(!landing.contains("name='improve_mode'"));
+        assert!(!landing.contains("mode_present"));
+        assert!(!landing.contains("type='checkbox' name='improve"));
+        send(
+            &mut state,
+            &id,
+            "/improve <script>alert(1)</script>",
+            "test",
+        )
+        .unwrap();
+        let html = render(&state, &id).unwrap();
+        assert!(html.contains("class='chat-command active-command'"));
+        assert!(html.contains("data-command='/improve off'"));
+        let transcript = transcript(&state, &id).unwrap();
+        assert!(transcript.contains("<span class='chat-command'>/improve</span> &lt;script&gt;"));
+        assert!(!transcript.contains("<script>"));
+        assert_eq!(
+            command_text("/improve off"),
+            "<span class='chat-command'>/improve off</span>"
+        );
+        assert_eq!(
+            command_text("/improvements <img>"),
+            "/improvements &lt;img&gt;"
+        );
+        state.chats[0].actor = Actor::Unknown;
+        assert!(command_menu(&state.chats[0].actor).is_empty());
+    }
     #[test]
     fn improve_mode_persists_discussion_and_can_exit_without_changing_queued_authority() {
         let mut state = State::default();

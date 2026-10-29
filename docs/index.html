@@ -32,18 +32,11 @@
       <h3>1. Build</h3>
       <pre><code>git clone https://github.com/fennecs-system/control.git
 cd control
-nix develop
-cd web
-trunk build --release --locked
-cd ..
-cargo build --release --locked --bin control
-./target/release/control config init</code></pre>
+nix run .#setup</code></pre>
+      <p>Setup builds the embedded Rust/WASM interface, the ordinary release binary, and the Nix worker image. It loads the image and saves its immutable ID, preserving private configuration and state. Add <code>-- --claude</code> to build the Claude Code image too.</p>
+      <p>Need a macOS Linux builder? <code>nix run .#builder</code> starts the pinned upstream VM installer. This requests administrator access for builder credentials; follow the <a href="https://github.com/fennecs-system/control#linux-builder-on-macos">one-time daemon and SSH configuration</a>. Setup itself never changes system settings.</p>
       <h3>2. Configure your node</h3>
       <p>Private configuration lives in <code>~/.config/control/</code>, outside the checkout. Initialization preserves existing files. Set <code>CONTROL_CONFIG_DIR</code> to an absolute path for a different directory. Chats and outputs live separately in <code>~/.local/state/control/</code>.</p>
-      <pre><code>nix build .#packages.aarch64-linux.worker-image -o result-worker
-docker load -i result-worker
-umask 077
-docker image inspect control-worker:nix --format '{{.Id}}' &gt; "$HOME/.config/control/worker-image-id"</code></pre>
       <p>Use your own Codex login with file-based credential storage. The worker mounts its private <code>auth.json</code> read-only; keep credentials out of source, images and chat. See the <a href="https://github.com/fennecs-system/control#codex-container-workers">authentication instructions</a> for the login command and supported paths.</p>
       <h3>3. Start</h3>
       <pre><code>./target/release/control doctor

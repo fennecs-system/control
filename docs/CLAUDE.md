@@ -27,19 +27,16 @@ It uses the unmodified Claude Code binary pinned by `flake.lock`, without a Node
 service or a custom OAuth implementation. The Linux image is built directly with
 Nix, using the same development tools as the Codex image.
 
-On Apple Silicon with a Linux Nix builder and running container engine:
+From the checkout, with a configured Linux Nix builder and running container engine:
 
 ```sh
-nix build .#packages.aarch64-linux.claude-image -o result-claude
-docker load -i result-claude
-control config init
-umask 077
-docker image inspect control-claude:nix --format '{{.Id}}' > "$HOME/.config/control/claude-image-id"
-control claude check
-control claude login
+nix run .#setup -- --claude
+./target/release/control claude check
+./target/release/control claude login
 ```
 
-Use `x86_64-linux` for an Intel Mac. `check` exercises offline workspace isolation
+Setup selects the host architecture and preserves existing configuration and
+model choices. `check` exercises offline workspace isolation
 without mounting a login or calling a model. `login` runs Claude's supported
 interactive authentication inside the image. Follow its instructions in your
 terminal/browser; never paste codes or credentials into chat. Private login files
