@@ -180,7 +180,7 @@ fn sandbox_probe(
         .map_err(|_| "Cannot start sandbox verification.")?;
     let result = wait(&mut child, Duration::from_secs(30));
     if result.is_err() {
-        remove_container(name);
+        crate::lifecycle::stop_resource(name, node, image, &workspace)?;
     }
     match child.try_wait().ok().flatten().and_then(|s| s.code()) {
         Some(41) => return Err("Credential canary was readable through a sandbox path. No account credentials were mounted."),
@@ -193,14 +193,6 @@ fn sandbox_probe(
         return Err("Credential isolation verification failed. No account credentials were mounted. Check the pinned Codex image and container sandbox support.");
     }
     Ok(())
-}
-
-fn remove_container(name: &str) {
-    let _ = Command::new("docker")
-        .args(["rm", "--force", name])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
 }
 
 const UNKNOWN_FAILURE: &str = "Codex container exited unsuccessfully. Check host account authentication and the pinned worker configuration. No host fallback was attempted.";
@@ -294,63 +286,20 @@ pub fn start(state: Arc<Mutex<State>>) {
     });
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(2));
-        // Refuse overlapping launches after a crash. Labels identify this node;
-        // legacy interrupted attempts are matched by their exact persisted name.
-        // Discovery never authorizes deletion or adoption of an unknown container.
-        let legacy = {
+        let interrupted = {
             let Ok(s) = state.lock() else {
                 return;
             };
-            if !s.runtime.runs.iter().any(|r| r.status == "queued") {
-                continue;
-            }
-            s.runtime
-                .runs
-                .iter()
-                .flat_map(|run| {
-                    run.attempts
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, a)| a.status == "interrupted")
-                        .flat_map(|(index, a)| {
-                            let id = a
-                                .workspace_id
-                                .clone()
-                                .unwrap_or_else(|| format!("{}-attempt-{}", run.id, index + 1));
-                            [format!("control-{id}"), format!("control-{id}-probe")]
-                        })
-                })
-                .collect::<Vec<_>>()
+            s.runtime.runs.clone()
         };
         if crate::backend::Backend::Codex.image().is_some()
             || crate::backend::Backend::Claude.image().is_some()
         {
-            match (
-                crate::config::node_id(),
-                runtime::docker_query(&[
-                    "ps",
-                    "--format",
-                    "{{.Names}}|{{.Label \"dev.control.node\"}} ",
-                ]),
-            ) {
-                (Ok(node), Ok(containers)) => {
-                    if containers
-                        .lines()
-                        .filter_map(|line| line.trim().split_once('|'))
-                        .any(|(name, owner)| owner == node || legacy.iter().any(|old| old == name))
-                    {
-                        if let Ok(mut s) = state.lock() {
-                            s.runtime.notice = "An earlier container is still active. Inspect and stop it before this node resumes queued work.".into();
-                        }
-                        continue;
-                    }
+            if let Err(message) = crate::lifecycle::reconcile(&interrupted) {
+                if let Ok(mut s) = state.lock() {
+                    s.runtime.notice = message.into();
                 }
-                _ => {
-                    if let Ok(mut s) = state.lock() {
-                        s.runtime.notice = "Container ownership inspection is unavailable. Dispatch is waiting; check the engine with control doctor.".into();
-                    }
-                    continue;
-                }
+                continue;
             }
         }
         let task = {
@@ -392,6 +341,18 @@ pub fn start(state: Arc<Mutex<State>>) {
             eprintln!("Worker result not committed: state unavailable; inspect artifacts before restarting.");
             return;
         };
+        let Some(run) = s.runtime.runs.iter().find(|r| r.id == task.0) else {
+            continue;
+        };
+        if !crate::lifecycle::current(run, &attempt) {
+            continue;
+        }
+        if run.status == "cancelling" && !matches!(&outcome, Err(("interrupted", _))) {
+            outcome = Err((
+                "cancelled",
+                "Cancelled. The previous published workspace is unchanged.".into(),
+            ));
+        }
         let previous_run = s
             .runtime
             .runs
@@ -664,6 +625,9 @@ fn execute(
     let blocked = |m: &str| ("blocked", m.to_owned());
     let failed = |m: &str| ("failed", m.to_owned());
     let scope = identity::authorize(actor, action).map_err(blocked)?;
+    if crate::lifecycle::cancelled(bridge) {
+        return Err(("cancelled", "Cancelled before launch.".into()));
+    }
     let image = attempt.image.clone().ok_or_else(|| blocked("No captured worker image. Configure the selected backend's pinned image and submit a new run."))?;
     let node = attempt
         .node_id
@@ -770,6 +734,9 @@ fn execute(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if crate::lifecycle::cancelled(bridge) {
+        return Err(("cancelled", "Cancelled before launch.".into()));
+    }
     let mut child = command
         .spawn()
         .map_err(|_| failed("Could not start the container worker."))?;
@@ -811,12 +778,15 @@ fn execute(
     {
         let _ = child.kill();
         let _ = child.wait();
-        remove_container(&container);
+        crate::lifecycle::stop_attempt(attempt).map_err(|m| ("interrupted", m.to_owned()))?;
         return Err(failed("Could not deliver the objective."));
     }
     let started = Instant::now();
     let result = loop {
         if let Some((state, run)) = bridge {
+            if crate::lifecycle::cancelled(bridge) {
+                break Err(std::io::Error::other("Cancellation requested"));
+            }
             if state.is_poisoned() {
                 break Err(std::io::Error::other("Control state unavailable"));
             }
@@ -838,11 +808,18 @@ fn execute(
     if result.is_err() {
         let _ = child.kill();
         let _ = child.wait();
-        remove_container(&container);
+        if let Err(message) = crate::lifecycle::stop_attempt(attempt) {
+            return Err(("interrupted", message.into()));
+        }
         attempt.tokens = accounting.join().unwrap_or(None);
-        return Err(failed(
-            "Worker stopped after its deadline or a process error.",
-        ));
+        return Err(if crate::lifecycle::cancelled(bridge) {
+            (
+                "cancelled",
+                "Cancelled. The previous published workspace is unchanged.".into(),
+            )
+        } else {
+            failed("Worker stopped after its deadline or a process error.")
+        });
     }
     attempt.tokens = accounting.join().unwrap_or(None);
     if !result.unwrap_or(false) {

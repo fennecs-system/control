@@ -1,11 +1,11 @@
 mod access;
 mod artifacts;
 mod backend;
-mod claude;
 #[path = "../tools/browser/main.rs"]
 mod browser;
 mod browser_ui;
 mod chat;
+mod claude;
 mod collective;
 use control::config;
 mod discord;
@@ -18,6 +18,7 @@ mod identity;
 mod knowledge;
 mod lens_library;
 mod lens_ui;
+mod lifecycle;
 mod mcp_stdio;
 mod navigation;
 mod providers;
@@ -318,7 +319,9 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
                 &data[header_end..header_end + length],
             ));
             let location = match path {
-                "/improve" | "/task" | "/retry-run" => state.runtime.action(path, &f),
+                "/improve" | "/task" | "/retry-run" | "/cancel-run" => {
+                    state.runtime.action(path, &f)
+                }
                 "/room" | "/propose" | "/review" | "/request" | "/decide" => {
                     state.collective.action(path, &f)
                 }

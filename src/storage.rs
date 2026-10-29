@@ -66,8 +66,16 @@ pub fn load() -> io::Result<State> {
     };
     crate::providers::load_settings(&mut state.runtime)?;
     let mut changed = crate::knowledge::migrate(&mut state);
+    changed |= interrupt_active(&mut state);
+    if changed {
+        save(&state)?;
+    }
+    Ok(state)
+}
+fn interrupt_active(state: &mut State) -> bool {
+    let mut changed = false;
     for run in &mut state.runtime.runs {
-        if run.status == "running" {
+        if ["running", "cancelling"].contains(&run.status.as_str()) {
             changed = true;
             run.status = "interrupted".into();
             run.result =
@@ -85,10 +93,7 @@ pub fn load() -> io::Result<State> {
             }
         }
     }
-    if changed {
-        save(&state)?;
-    }
-    Ok(state)
+    changed
 }
 pub fn save(state: &State) -> io::Result<()> {
     let data = serde_json::to_vec_pretty(state).map_err(io::Error::other)?;
@@ -108,4 +113,38 @@ pub fn save(state: &State) -> io::Result<()> {
         crate::config::state("state.json").map_err(io::Error::other)?,
     )?;
     fs::File::open(crate::config::state_directory().map_err(io::Error::other)?)?.sync_all()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn restart_fences_running_and_cancelling_without_replaying_or_publishing() {
+        let mut state = State::initial();
+        for status in ["running", "cancelling", "queued", "completed"] {
+            state.runtime.enqueue(status.into(), "task", "test");
+            let run = state.runtime.runs.last_mut().unwrap();
+            run.status = status.into();
+            let mut a = crate::usage::Attempt::new();
+            a.workspace_id = Some(format!("{}-attempt-1", run.id));
+            run.attempts.push(a);
+        }
+        assert!(interrupt_active(&mut state));
+        assert_eq!(
+            state
+                .runtime
+                .runs
+                .iter()
+                .map(|r| r.status.as_str())
+                .collect::<Vec<_>>(),
+            vec!["interrupted", "interrupted", "queued", "completed"]
+        );
+        assert_eq!(state.runtime.runs[1].attempts[0].status, "interrupted");
+        assert!(!interrupt_active(&mut state));
+        assert!(state
+            .runtime
+            .runs
+            .iter()
+            .all(|r| r.attempts[0].artifact.is_none()));
+    }
 }
