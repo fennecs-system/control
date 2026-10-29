@@ -31,7 +31,7 @@ fn image() -> io::Result<String> {
     }
     Ok(image)
 }
-fn source(root: &Path, input: &str) -> io::Result<PathBuf> {
+pub(crate) fn source(root: &Path, input: &str) -> io::Result<PathBuf> {
     let candidate = root.join(input);
     let resolved = fs::canonicalize(&candidate)?;
     if !resolved.starts_with(root)
@@ -46,7 +46,11 @@ fn source(root: &Path, input: &str) -> io::Result<PathBuf> {
     }
     Ok(candidate)
 }
-fn render_preview(input: &Path, width: u16, height: u16) -> io::Result<crate::browser::Capture> {
+pub(crate) fn render_preview(
+    input: &Path,
+    width: u16,
+    height: u16,
+) -> io::Result<crate::browser::Capture> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let directory = Path::new(".control/browser");
     fs::create_dir_all(directory)?;

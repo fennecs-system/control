@@ -201,3 +201,38 @@ operator credential inside the trusted bridge, out of configuration and browser
 containers. Worker agents retain their existing scoped tool access; they do not
 inherit the host operator's bridge. The browser runner, inputs, limits and setup
 are documented in [tools/browser](tools/browser/README.md).
+
+Expose Browser under Tools with a small capture form and a protected screenshot
+preview. Keep its current offline HTML scope explicit.
+
+## Agent state, attempts, and live activity
+
+Agents and their containers need a clear separation of concerns. A container can
+die or an agent can break its environment without losing the conversation. Keep
+chat sessions, objectives, captured context, attempts, and results in the control
+plane. Retries should create fresh environments and preserve previous evidence.
+Show the current command and its output in both the web chat and terminal,
+together with context-compaction activity when it happens.
+
+Current implementation: each attempt uses a fresh ephemeral Codex process and a
+separate host-backed workspace. Retry is explicit; it does not resume the previous
+process or automatically replay side effects. Startup marks in-flight runs
+interrupted. Reconciling orphan containers and resumable provider sessions remain
+work before automatic recovery or delegated execution is safe.
+
+Persist a bounded recent activity log per attempt, from structured provider events,
+excluding reasoning and arbitrary event payloads. Commands and reported output
+are untrusted text: escape HTML and strip terminal control characters. Web chat
+refreshes its transcript independently of the composer; the TUI uses chat revision
+updates. Output arrives at provider event granularity, not necessarily per stdout
+chunk. The current Codex exec event schema does not expose compaction notifications;
+surfacing backend compaction needs a richer adapter and must not be inferred from
+tool activity.
+
+The current 20,000-character history window is trimming, not semantic compaction.
+Record the number of earlier exchanges omitted for each attempt while retaining
+the full saved conversation. Durable summaries with provenance and an inspectable
+before/after boundary remain future work. Bound each attempt to 64 recent activity
+items and 4,000 output characters per item; this is progress evidence rather than
+a complete command audit log. Activity is visible only through authenticated local
+operator chat/MCP access and never automatically forwarded to Discord or rooms.

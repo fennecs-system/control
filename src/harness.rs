@@ -381,6 +381,32 @@ impl App {
                         .lines()
                         .map(|s| Line::from(s.to_owned())),
                 );
+                if let Some(attempts) = message["attempts"].as_array() {
+                    for (index, attempt) in attempts.iter().enumerate() {
+                        if let Some(count) = attempt["omitted_history"].as_u64().filter(|n| *n > 0)
+                        {
+                            lines.push(Line::styled(format!("Context window · {count} earlier exchanges excluded from attempt {}. History retained.", index + 1), Style::default().fg(Color::Rgb(133, 133, 143))));
+                        }
+                        if let Some(events) = attempt["activity"].as_array() {
+                            for event in events {
+                                lines.push(Line::styled(
+                                    format!(
+                                        "  [{} · attempt {}] {}",
+                                        clean(event["status"].as_str().unwrap_or("")),
+                                        index + 1,
+                                        clean(event["text"].as_str().unwrap_or(""))
+                                    ),
+                                    Style::default().fg(Color::Rgb(133, 133, 143)),
+                                ));
+                                lines.extend(
+                                    clean(event["output"].as_str().unwrap_or(""))
+                                        .lines()
+                                        .map(|s| Line::from(format!("  {s}"))),
+                                );
+                            }
+                        }
+                    }
+                }
                 lines.push(Line::from(""));
             }
         }
@@ -661,6 +687,77 @@ pub fn run() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn activity_and_context_boundary_render_in_terminal() {
+        let app = App {
+            detail: json!({"messages":[{"text":"Build", "status":"running", "reply":"", "attempts":[{"omitted_history":3,"activity":[{"status":"completed","text":"cargo check", "output":"finished\u{001b}[31m"}]}]}]}),
+            ..App::default()
+        };
+        let text = app.transcript().to_string();
+        assert!(text.contains("cargo check"));
+        assert!(text.contains("finished"));
+        assert!(text.contains("3 earlier exchanges excluded"));
+        assert!(!text.contains('\u{001b}'));
+    }
+    #[test]
+    #[ignore = "requires an isolated Control server and pinned browser image; no model calls"]
+    fn live_browser_ui_capture_and_protected_artifact() {
+        let server = std::env::var("CONTROL_QA_URL").expect("Use an isolated server");
+        let hive = Hive::connect(&server).unwrap();
+        let page = hive
+            .client
+            .get(format!("{server}/tools/browser"))
+            .send()
+            .unwrap();
+        assert_eq!(page.status().as_u16(), 200);
+        assert_eq!(page.headers()["referrer-policy"], "same-origin");
+        assert!(page.text().unwrap().contains("/tools/browser/capture"));
+        let outside = hive
+            .client
+            .post(format!("{server}/tools/browser/capture"))
+            .form(&[
+                ("input", "../outside.html"),
+                ("width", "390"),
+                ("height", "844"),
+            ])
+            .send()
+            .unwrap();
+        assert_eq!(outside.status().as_u16(), 400);
+        let capture = hive
+            .client
+            .post(format!("{server}/tools/browser/capture"))
+            .header("Origin", &server)
+            .form(&[
+                ("input", "preview.html"),
+                ("width", "390"),
+                ("height", "844"),
+            ])
+            .send()
+            .unwrap();
+        assert_eq!(capture.status().as_u16(), 303);
+        let location = capture.headers()["location"].to_str().unwrap();
+        let page = hive
+            .client
+            .get(format!("{server}{location}"))
+            .send()
+            .unwrap()
+            .text()
+            .unwrap();
+        let name = location.split_once("capture=").unwrap().1;
+        let url = format!("{server}/tools/browser/artifacts/{name}");
+        assert!(page.contains(&format!("src='/tools/browser/artifacts/{name}'")));
+        let image = hive.client.get(&url).send().unwrap();
+        assert_eq!(image.headers()["content-type"], "image/png");
+        assert!(image.bytes().unwrap().starts_with(b"\x89PNG\r\n\x1a\n"));
+        let unauthenticated = reqwest::blocking::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap()
+            .get(url)
+            .send()
+            .unwrap();
+        assert_ne!(unauthenticated.status().as_u16(), 200);
+    }
     #[test]
     fn remote_urls_and_terminal_control_injection_are_rejected() {
         assert!(local_server("http://localhost:8080").is_ok());

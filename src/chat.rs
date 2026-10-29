@@ -86,7 +86,7 @@ pub fn design_topic(value: &str) -> Option<(&'static str, &'static str)> {
         "rooms" => ("rooms", "Rooms"),
         "lenses" | "lens-page" => ("lenses", "Lenses"),
         "monitor" => ("monitor", "Usage"),
-        "tools" => ("tools", "Tools"),
+        "tools" | "browser" => ("tools", "Tools"),
         "nodes" => ("nodes", "Nodes"),
         "authority" => ("authority", "Access requests"),
         "personas" => ("personas", "Personas"),
@@ -255,18 +255,7 @@ pub fn prompt(state: &State, run_id: &str) -> Option<String> {
         .messages
         .iter()
         .position(|m| m.run_id.as_deref() == Some(run_id))?;
-    let mut history = Vec::new();
-    let mut count = 0;
-    for message in session.messages[..current].iter().rev() {
-        let response = response(message, &state.runtime);
-        let entry = format!("User: {}\nAssistant: {}\n", message.text, response.1);
-        count += entry.chars().count();
-        if count > 20000 {
-            break;
-        }
-        history.push(entry);
-    }
-    history.reverse();
+    let (history, _) = history_window(session, current, &state.runtime);
     let names = run
         .lenses
         .clone()
@@ -289,6 +278,35 @@ pub fn prompt(state: &State, run_id: &str) -> Option<String> {
         history.concat(),
         run.objective
     ))
+}
+fn history_window(session: &Session, current: usize, runtime: &Runtime) -> (Vec<String>, usize) {
+    let mut history = Vec::new();
+    let mut count = 0;
+    for message in session.messages[..current].iter().rev() {
+        let response = response(message, runtime);
+        let entry = format!("User: {}\nAssistant: {}\n", message.text, response.1);
+        count += entry.chars().count();
+        if count > 20000 {
+            break;
+        }
+        history.push(entry);
+    }
+    let omitted = current - history.len();
+    history.reverse();
+    (history, omitted)
+}
+pub fn omitted_history(state: &State, run: &str) -> usize {
+    state
+        .chats
+        .iter()
+        .find_map(|session| {
+            session
+                .messages
+                .iter()
+                .position(|m| m.run_id.as_deref() == Some(run))
+                .map(|current| history_window(session, current, &state.runtime).1)
+        })
+        .unwrap_or(0)
 }
 fn response<'a>(message: &'a Message, runtime: &'a Runtime) -> (&'a str, &'a str) {
     message
@@ -316,7 +334,8 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
     Ok(
         json!({"id":session.id,"title":session.title,"room":session.room,"lens":session.lens,"lenses":selected_lenses(session),"design_context":session.design_context,"revision":session.revision,"messages": session.messages.iter().map(|m| {
         let (status, reply) = response(m, &state.runtime);
-        json!({"text":m.text,"reply":reply,"status":status,"run_id":m.run_id})
+        let run = m.run_id.as_ref().and_then(|id| state.runtime.runs.iter().find(|r| &r.id == id));
+        json!({"text":m.text,"reply":reply,"status":status,"run_id":m.run_id,"attempts":run.map(|r| &r.attempts)})
     }).collect::<Vec<_>>()}),
     )
 }
@@ -364,6 +383,24 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
             format!("<span class='message-status' role='status'>{status}</span>")
         };
         html.push_str(&format!("<article class='user-message' aria-label='You'><p class='preserve'>{}</p></article><article class='assistant-message' aria-label='Control'>{status}<p class='preserve'>{}</p></article>", escape(message["text"].as_str().unwrap_or("")), escape(message["reply"].as_str().unwrap_or(""))));
+        if let Some(attempts) = message["attempts"].as_array() {
+            for (index, attempt) in attempts.iter().enumerate() {
+                if let Some(count) = attempt["omitted_history"].as_u64().filter(|n| *n > 0) {
+                    html.push_str(&format!("<p class='message-status'>Context window · {count} earlier exchanges excluded from attempt {}. Chat history retained.</p>", index + 1));
+                }
+                let Some(events) = attempt["activity"].as_array().filter(|a| !a.is_empty()) else {
+                    continue;
+                };
+                html.push_str(&format!(
+                    "<details class='run-activity'{}><summary>Recent activity · attempt {}</summary>",
+                    if message["status"] == "running" && index + 1 == attempts.len() { " open" } else { "" }, index + 1
+                ));
+                for (event_index, event) in events.iter().enumerate() {
+                    html.push_str(&format!("<details class='command-activity'{}><summary><span>{}</span> <code>{}</code></summary><pre>{}</pre></details>", if event_index + 1 == events.len() {" open"} else {""}, escape(event["status"].as_str().unwrap_or("")), escape(event["text"].as_str().unwrap_or("")), escape(event["output"].as_str().unwrap_or(""))));
+                }
+                html.push_str("</details>");
+            }
+        }
     }
     html.push_str("<div id='latest'></div></body></html>");
     Ok(html)
@@ -466,6 +503,48 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn attempt_activity_and_context_trimming_survive_serialization_and_escape_html() {
+        let mut state = State::default();
+        let id = create(&mut state);
+        state.chats[0].messages.push(Message {
+            text: "x".repeat(21000),
+            run_id: None,
+            reply: String::new(),
+        });
+        send(&mut state, &id, "Check the build", "test").unwrap();
+        let run_id = state.runtime.runs[0].id.clone();
+        assert_eq!(omitted_history(&state, &run_id), 1);
+        state.runtime.runs[0].attempts.push(crate::usage::Attempt {
+            omitted_history: 1,
+            activity: vec![crate::usage::Activity {
+                id: "cmd1".into(),
+                kind: "command_execution".into(),
+                text: "echo <script>".into(),
+                output: "<img src=x onerror=bad()>".into(),
+                status: "completed".into(),
+            }],
+            ..crate::usage::Attempt::default()
+        });
+        state.runtime.runs[0].status = "failed".into();
+        let mut stored: State =
+            serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        stored.runtime.action(
+            "/retry-run",
+            &std::collections::HashMap::from([("id".into(), run_id)]),
+        );
+        assert_eq!(stored.runtime.runs[0].attempts.len(), 1);
+        assert_eq!(stored.runtime.runs[0].status, "queued");
+        let html = transcript(&stored, &id).unwrap();
+        assert!(html.contains("1 earlier exchanges excluded"));
+        assert!(html.contains("echo &lt;script&gt;"));
+        assert!(html.contains("&lt;img src=x onerror=bad()&gt;"));
+        assert!(!html.contains("<script>"));
+        assert_eq!(stored.chats[0].messages[0].text.len(), 21000);
+        assert!(!prompt(&stored, &stored.runtime.runs[0].id)
+            .unwrap()
+            .contains(&"x".repeat(21000)));
+    }
     #[test]
     fn runs_pin_nested_definitions_and_document_contents() {
         let mut state = State::default();

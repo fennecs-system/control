@@ -25,12 +25,62 @@ impl Tokens {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Attempt {
+    pub activity: Vec<Activity>,
+    pub omitted_history: usize,
     pub started_unix: u64,
     pub elapsed_ms: u64,
     pub provider: String,
     pub model: String,
     pub status: String,
     pub tokens: Option<Tokens>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Activity {
+    pub id: String,
+    pub kind: String,
+    pub text: String,
+    pub output: String,
+    pub status: String,
+}
+pub fn activity(value: &serde_json::Value) -> Option<Activity> {
+    let event = value["type"].as_str()?;
+    if !["item.started", "item.updated", "item.completed"].contains(&event) {
+        return None;
+    }
+    let item = &value["item"];
+    let kind = item["type"].as_str()?;
+    let text = match kind {
+        "command_execution" => item["command"].as_str()?,
+        "mcp_tool_call" => item["tool"].as_str()?,
+        "file_change" => "File changes",
+        _ => return None,
+    };
+    Some(Activity {
+        id: item["id"].as_str()?.chars().take(100).collect(),
+        kind: kind.into(),
+        text: text
+            .chars()
+            .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+            .take(2000)
+            .collect(),
+        output: item["aggregated_output"]
+            .as_str()
+            .unwrap_or("")
+            .chars()
+            .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+            .take(4000)
+            .collect(),
+        status: item["status"]
+            .as_str()
+            .unwrap_or(if event == "item.completed" {
+                "completed"
+            } else {
+                "running"
+            })
+            .chars()
+            .take(40)
+            .collect(),
+    })
 }
 impl Attempt {
     pub fn new() -> Self {
@@ -61,8 +111,12 @@ pub fn default_model() -> String {
         .unwrap_or_else(|| "gpt-6.1-sol".into())
 }
 
-/// Keep only numeric accounting events. Raw chat/tool events are discarded in memory.
-pub fn capture(mut reader: impl Read) -> Option<Tokens> {
+/// Keep numeric accounting and a bounded selection of command/activity fields.
+#[cfg(test)]
+pub fn capture(reader: impl Read) -> Option<Tokens> {
+    capture_with(reader, |_| {})
+}
+pub fn capture_with(mut reader: impl Read, mut update: impl FnMut(Activity)) -> Option<Tokens> {
     let mut total = None;
     let mut line = Vec::new();
     let mut oversized = false;
@@ -75,6 +129,11 @@ pub fn capture(mut reader: impl Read) -> Option<Tokens> {
             if byte == b'\n' {
                 if !oversized {
                     record(&line, &mut total);
+                    if let Ok(value) = serde_json::from_slice(&line) {
+                        if let Some(event) = activity(&value) {
+                            update(event);
+                        }
+                    }
                 }
                 line.clear();
                 oversized = false;
@@ -88,6 +147,11 @@ pub fn capture(mut reader: impl Read) -> Option<Tokens> {
     }
     if !oversized {
         record(&line, &mut total);
+        if let Ok(value) = serde_json::from_slice(&line) {
+            if let Some(event) = activity(&value) {
+                update(event);
+            }
+        }
     }
     total
 }
@@ -233,6 +297,24 @@ pub(crate) fn day_label(timestamp: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn structured_activity_keeps_tools_bounded_and_excludes_reasoning() {
+        let events = format!(
+            "{}\n{}\n{}\n{}",
+            serde_json::json!({"type":"item.started","item":{"id":"cmd1","type":"command_execution","command":"cargo check","status":"in_progress"}}),
+            serde_json::json!({"type":"item.completed","item":{"id":"cmd1","type":"command_execution","command":"cargo check","status":"completed","aggregated_output":format!("done\u{1b}[31m{}", "x".repeat(5000))}}),
+            serde_json::json!({"type":"item.completed","item":{"id":"thought","type":"reasoning","text":"private reasoning"}}),
+            serde_json::json!({"type":"turn.completed","usage":{"input_tokens":12,"cached_input_tokens":4,"output_tokens":8}})
+        );
+        let mut activity = Vec::new();
+        let tokens = capture_with(events.as_bytes(), |event| activity.push(event)).unwrap();
+        assert_eq!(tokens.output_tokens, 8);
+        assert_eq!(activity.len(), 2);
+        assert_eq!(activity[0].text, "cargo check");
+        assert_eq!(activity[1].output.chars().count(), 4000);
+        assert!(!activity[1].output.contains('\u{1b}'));
+        assert!(super::activity(&serde_json::json!({"type":"item.completed","item":{"id":"secret","type":"agent_message","text":"not tool output"}})).is_none());
+    }
     #[test]
     fn aggregates_retries_preserves_legacy_runs_and_escapes_content() {
         let mut state = crate::State::default();

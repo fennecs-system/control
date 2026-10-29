@@ -19,6 +19,11 @@ runs require an immutable image ID, never a mutable tag.
 control browser capture path/to/preview.html 1280 800
 ```
 
+In the local web UI, open **Tools → Browser** (`/tools/browser`), enter a
+workspace-relative HTML path and viewport, then capture. The resulting PNG preview
+and its download route require the same operator authentication as chat. Rendering
+runs outside the shared chat-state lock.
+
 The input must be an HTML file inside the current tool root. Only that file is
 copied into a fresh private export and mounted read-only; inline CSS/images or
 iframe `srcdoc` make previews self-contained. External assets and URLs cannot be

@@ -313,6 +313,7 @@ pub fn start(state: Arc<Mutex<State>>) {
             }
             attempt.status.clone_from(&r.status);
             if let Some(last) = r.attempts.last_mut() {
+                attempt.activity = std::mem::take(&mut last.activity);
                 *last = attempt;
             }
         }
@@ -340,9 +341,11 @@ fn checkpoint_next(
         .iter()
         .position(|r| r.status == "queued")?;
     let model = state.runtime.configured_model();
+    let omitted_history = crate::chat::omitted_history(state, &state.runtime.runs[index].id);
     let run = &mut state.runtime.runs[index];
     run.status = "running".into();
     let mut attempt = crate::usage::Attempt::new();
+    attempt.omitted_history = omitted_history;
     attempt.model = run.model.clone().unwrap_or(model);
     run.attempts.push(attempt);
     let chat_id = run.chat_id.clone();
@@ -458,6 +461,31 @@ fn ingest_discord(state: &Arc<Mutex<State>>) {
         }
     }
 }
+fn record_activity(state: &mut State, id: &str, event: crate::usage::Activity) -> bool {
+    let Some(run) = state.runtime.runs.iter_mut().find(|r| r.id == id) else {
+        return false;
+    };
+    let Some(attempt) = run.attempts.last_mut() else {
+        return false;
+    };
+    if let Some(old) = attempt.activity.iter_mut().find(|a| a.id == event.id) {
+        *old = event;
+    } else {
+        if attempt.activity.len() >= 64 {
+            attempt.activity.remove(0);
+        }
+        attempt.activity.push(event);
+    }
+    let chat = run.chat_id.clone();
+    if let Some(chat) = state
+        .chats
+        .iter_mut()
+        .find(|c| Some(&c.id) == chat.as_ref())
+    {
+        chat.revision = chat.revision.saturating_add(1);
+    }
+    true
+}
 fn execute(
     id: &str,
     objective: &str,
@@ -548,7 +576,18 @@ fn execute(
         .map_err(|_| failed("Could not start the container worker."))?;
     let diagnostics = capture_diagnostics(child.stderr.take().unwrap());
     let stdout = child.stdout.take().unwrap();
-    let accounting = std::thread::spawn(move || crate::usage::capture(stdout));
+    let live = bridge.map(|(state, run)| (Arc::clone(state), run.to_owned()));
+    let accounting = std::thread::spawn(move || {
+        crate::usage::capture_with(stdout, |event| {
+            let Some((state, id)) = &live else {
+                return;
+            };
+            let mut state = state.lock().unwrap();
+            if record_activity(&mut state, id, event) && storage::save(&state).is_err() {
+                eprintln!("Could not persist worker activity.");
+            }
+        })
+    });
     let context = if scope == Workspace::ControlSource {
         "You are working on an authorized, isolated source snapshot of Control."
     } else {
@@ -660,6 +699,43 @@ fn prepare_workspace(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn activity_updates_keep_attempt_identity_and_bounded_history() {
+        let mut state = State::default();
+        let chat = crate::chat::create(&mut state);
+        crate::chat::send(&mut state, &chat, "Check build", "test").unwrap();
+        checkpoint_next(&mut state, |_| Ok(())).unwrap();
+        let run = state.runtime.runs[0].id.clone();
+        let event = |id: usize, status: &str| crate::usage::Activity {
+            id: id.to_string(),
+            kind: "command_execution".into(),
+            text: "cargo check".into(),
+            output: String::new(),
+            status: status.into(),
+        };
+        let revision = state.chats[0].revision;
+        record_activity(&mut state, &run, event(0, "running"));
+        record_activity(&mut state, &run, event(0, "completed"));
+        assert_eq!(state.runtime.runs[0].attempts[0].activity.len(), 1);
+        assert_eq!(
+            state.runtime.runs[0].attempts[0].activity[0].status,
+            "completed"
+        );
+        assert_eq!(state.chats[0].revision, revision + 2);
+        for id in 1..70 {
+            record_activity(&mut state, &run, event(id, "completed"));
+        }
+        assert_eq!(state.runtime.runs[0].attempts[0].activity.len(), 64);
+        state.runtime.runs[0].status = "failed".into();
+        state.runtime.action(
+            "/retry-run",
+            &std::collections::HashMap::from([("id".into(), run.clone())]),
+        );
+        checkpoint_next(&mut state, |_| Ok(())).unwrap();
+        record_activity(&mut state, &run, event(0, "running"));
+        assert_eq!(state.runtime.runs[0].attempts[0].activity.len(), 64);
+        assert_eq!(state.runtime.runs[0].attempts[1].activity.len(), 1);
+    }
     #[test]
     fn failed_checkpoint_preserves_queue_and_dispatches_after_recovery() {
         let mut state = State::default();

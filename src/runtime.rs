@@ -177,7 +177,7 @@ impl Runtime {
             "integrations" => Some(integrations()),
             "tools" => {
                 if lens == "none" {
-                    return Some("<h2>Tools</h2><p class='muted'>Select a context lens to preview its tools.</p><div class='tabs'><a href='/?view=tools&lens=engineering'>Engineering</a><a href='/?view=tools&lens=research'>Research</a></div>".into());
+                    return Some("<h2>Tools</h2><article class='record'><h3><a href='/tools/browser'>Browser ↗</a></h3><p class='muted'>Offline HTML capture · Firefox</p></article><details class='record'><summary>Lens tools</summary><div class='tabs'><a href='/?view=tools&lens=engineering'>Engineering</a><a href='/?view=tools&lens=research'>Research</a></div></details>".into());
                 }
                 let category = if lens == "research" {
                     "research"
@@ -186,7 +186,7 @@ impl Runtime {
                 };
                 let result =
                     control_context::inspect(category, &["context.inspect", "knowledge.propose"]);
-                Some(format!("<span class='eyebrow'>TOOLS</span><h2>Tool preview</h2><p class='muted'>Browse the tools selected by each lens.</p><div class='tabs'><a href='/?view=tools&lens=engineering'>Engineering</a><a href='/?view=tools&lens=research'>Research</a></div><details class='record'><summary>Details</summary><pre class='run-result'>{}</pre></details><div class='tool-window'><iframe src='/tool-window/?lens={category}' title='Selected tools' sandbox='allow-scripts allow-same-origin'></iframe></div>",escape(&result)))
+                Some(format!("<h2>Tools</h2><article class='record'><h3><a href='/tools/browser'>Browser ↗</a></h3><p class='muted'>Offline HTML capture · Firefox</p></article><h3>Lens tools</h3><div class='tabs'><a href='/?view=tools&lens=engineering'>Engineering</a><a href='/?view=tools&lens=research'>Research</a></div><details class='record'><summary>Details</summary><pre class='run-result'>{}</pre></details><div class='tool-window'><iframe src='/tool-window/?lens={category}' title='Selected tools' sandbox='allow-scripts allow-same-origin'></iframe></div>",escape(&result)))
             }
             _ => None,
         }
