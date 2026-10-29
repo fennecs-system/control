@@ -56,8 +56,10 @@ it is unnecessary for basic layout screenshots.
 `control mcp --root /absolute/control/checkout` is a stdio MCP server for the local
 operator. It exposes read-only chat/lens/room tools and `control.browser.capture`,
 which accepts `input`, optional `width` and `height`, and returns PNG content plus
-an artifact path. It rejects tools that send messages, start runs or change state.
-Capturing a preview writes only its bounded artifact.
+an artifact path. It also exposes `control.web.search` and `control.rust.run`.
+It rejects tools that send messages, start agent runs or administer Control.
+Capturing a preview writes only its bounded artifact; Rust snippets execute in
+fresh offline Nix containers without host mounts or credentials.
 
 The bridge consumes the existing operator credential internally to read the local
 Hive. No token is placed in Codex configuration, MCP output or a browser container.

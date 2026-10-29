@@ -6,7 +6,7 @@ Run `cargo run --locked` and visit http://127.0.0.1:8080. `nix develop` provides
 
 The UI includes lenses, rooms, a Knowledge workspace, an authority queue, a run ledger, self-improvement proposals, and a Rust/WASM tool window. Knowledge combines a document list, Markdown editor, linked-note graph, and evidence review. The previous saved draft is preserved as Scratchpad.md; it does not edit the repository's DESIGN.md. Website chat, agent tasks, and self-improvement proposals enqueue Codex container runs. Missing prerequisites produce blocked runs; there is no host fallback.
 
-A node owns data and execution. A lens selects knowledge, tools, and instructions for a context. Effective tool access should be the intersection of lens selection, node policy, and user permissions. The current tool lists illustrate that model; they do not execute tools.
+A node owns data and execution. A lens selects knowledge, tools, and instructions for a context. Effective tool access should be the intersection of lens selection, node policy, and user permissions. Lens lists describe selections; the concrete tools below execute through a separately authorized broker. Complete lens-based execution filtering remains future work.
 
 The server requires a loopback bind address, checks Host/Origin headers, and requires an operator session for every UI/API/asset route. On this laptop, run `cargo run -- open` to open the browser through a single-use local sign-in link. Operator credentials stay in private `.control/` files and are never passed to workers. Only `/health` is public. Tailscale publication and remote access remain unconfigured. For a background macOS service, build `cargo build --release --bins`, create `.control`, then load `hosting/dev.control.web.plist` with `launchctl bootstrap gui/$(id -u) hosting/dev.control.web.plist`. The supplied paths target this laptop. Unload with `launchctl bootout gui/$(id -u)/dev.control.web`.
 
@@ -79,6 +79,28 @@ Server privacy has two layers: this application never requests server messages, 
 `hosting/dev.control.discord.plist` runs the bridge as a separate macOS user background service. Its service definition contains no token. The Integrations page reads a credential-free, freshness-checked status record and links to the bot's profile.
 
 ## Validation
+
+The **Tools** page is a single catalogue. Search tool names or combine them with
+`lens:engineering`; multiple `lens:` filters compose their saved selections. It
+does not repeat lens previews or show a pile of membership tags.
+
+`control.web.search` uses key-free DuckDuckGo HTML search with Bing fallback and
+returns bounded titles, URLs, and snippets. Availability depends on provider
+responses; challenges and format failures are surfaced rather than bypassed.
+Queries go to public search providers; do not include private information.
+`control.rust.run` compiles a standalone Rust 2024 program with the standard
+library in a fresh Nix development container: no network, credentials or host
+mounts, 768 MiB RAM, one CPU, 64 PIDs, 96 MiB temporary storage, 12-second compiler
+and 3-second program deadlines, plus a 20-second host deadline and bounded logs.
+The temporary filesystem permits executable output explicitly. It does not run Cargo
+or download crates. Both tools have small web forms, authenticated HTTP MCP, and
+local stdio MCP access. Active agents use the credential-free worker mailbox,
+authorized against their original actor; room tools remain room-scoped. The
+default development shell and worker image include `rg` and `fd`.
+
+Snapshot/provider/subagent investigations are in [research notes](docs/RESEARCH-NOTES.md).
+No implementation changes were derived from the reviewed paper. Claude, API-key
+providers, resumable snapshots and child-run scheduling are not yet implemented.
 
 The first independent tool container is [Rust analysis](tools/rust-analysis/README.md): Nix-built formatting/offline Clippy checks, a read-only source export, separate reports, no network or credentials, and bounded runtime. Fixture success and failure were verified in the actual Linux image. It is a local launcher today; MCP registration, external dependency packaging, and perf/flamegraphs remain future work.
 

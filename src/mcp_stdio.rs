@@ -1,4 +1,4 @@
-//! A local Codex tool boundary: read-only Hive access plus bounded offline rendering.
+//! Local host tools: read-only Hive access, web search, and bounded offline execution.
 use crate::harness::Hive;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
@@ -150,6 +150,7 @@ fn dispatch(connection: &mut Option<Hive>, root: &Path, request: &Value) -> Valu
                     Err(_) => Vec::new(),
                 };
                 tools.push(json!({"name":"control.browser.capture","description":"Render a self-contained HTML preview inside the configured root using offline Nix Firefox. Returns a PNG artifact. No network or host browser profile. Requires the pinned browser image.","inputSchema":{"type":"object","properties":{"input":{"type":"string"},"width":{"type":"integer","minimum":240,"maximum":2560},"height":{"type":"integer","minimum":240,"maximum":2560}},"required":["input"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}}));
+                tools.extend(crate::toolbox::definitions());
                 Ok(json!({"tools":tools}))
             }
             "tools/call" => {
@@ -157,10 +158,14 @@ fn dispatch(connection: &mut Option<Hive>, root: &Path, request: &Value) -> Valu
                 let arguments = &request["params"]["arguments"];
                 let result = if name == "control.browser.capture" {
                     capture(root, arguments)
+                } else if crate::toolbox::known(name) {
+                    Ok(crate::toolbox::result(crate::toolbox::call(
+                        name, arguments,
+                    )))
                 } else if READ_TOOLS.contains(&name) {
                     hive(connection).and_then(|h| h.rpc("tools/call", request["params"].clone()))
                 } else {
-                    Err(fail("Tool unavailable: this bridge exposes read-only Control tools and offline capture only"))
+                    Err(fail("Tool unavailable: this bridge exposes read-only Control access, web search, offline captures and Rust snippets"))
                 };
                 Ok(result.unwrap_or_else(
                     |e| json!({"content":[{"type":"text","text":e.to_string()}],"isError":true}),

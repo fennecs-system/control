@@ -182,7 +182,7 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
 }
 
 /// Never follow agent-controlled links or block on a FIFO on the host.
-fn read_request(path: &Path) -> std::io::Result<Value> {
+pub(crate) fn read_request(path: &Path) -> std::io::Result<Value> {
     use std::os::unix::fs::OpenOptionsExt;
     #[cfg(target_os = "macos")]
     let flags = 0x100 | 0x4; // O_NOFOLLOW | O_NONBLOCK
@@ -202,17 +202,7 @@ fn read_request(path: &Path) -> std::io::Result<Value> {
     }
     serde_json::from_slice(&bytes).map_err(std::io::Error::other)
 }
-pub fn pump(state: &mut State, run: &str, workspace: &Path) {
-    let path = workspace.join(".control-room-request");
-    let Ok(envelope) = read_request(&path) else {
-        return;
-    };
-    let previous = state.collective.posts.len();
-    let response = worker_rpc(state, run, &envelope);
-    if state.collective.posts.len() != previous && crate::storage::save(state).is_err() {
-        state.collective.posts.truncate(previous);
-        return;
-    }
+pub(crate) fn reply(workspace: &Path, response: &Value) {
     // A fresh file plus rename prevents symlink/hardlink replacement from redirecting host writes.
     let temp = workspace.join(format!(
         ".control-room-response-{}",
@@ -229,7 +219,7 @@ pub fn pump(state: &mut State, run: &str, workspace: &Path) {
         return;
     };
     if file.write_all(response.to_string().as_bytes()).is_ok() {
-        let _ = fs::remove_file(path);
+        let _ = fs::remove_file(workspace.join(".control-room-request"));
         let _ = fs::rename(&temp, workspace.join(".control-room-response"));
     }
     let _ = fs::remove_file(temp);

@@ -8,7 +8,7 @@
     in {
       devShells = eachSystem (pkgs: {
         default = pkgs.mkShell {
-          packages = [ pkgs.rustc pkgs.cargo pkgs.rustfmt pkgs.clippy pkgs.trunk ];
+          packages = [ pkgs.rustc pkgs.cargo pkgs.rustfmt pkgs.clippy pkgs.trunk pkgs.ripgrep pkgs.fd ];
         };
       });
       packages = eachSystem (pkgs:

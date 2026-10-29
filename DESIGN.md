@@ -236,3 +236,24 @@ before/after boundary remain future work. Bound each attempt to 64 recent activi
 items and 4,000 output characters per item; this is progress evidence rather than
 a complete command audit log. Activity is visible only through authenticated local
 operator chat/MCP access and never automatically forwarded to Discord or rooms.
+
+## Everyday tools and the next backend boundary
+
+Add useful defaults: public web search using a key-free provider such as
+DuckDuckGo or Bing, a Rust playground for small programs, and modern `rg`/`fd`
+commands in the Nix development environment and worker image. Playground runs
+should use fresh credential-free, offline containers with bounded resources and
+output, rather than changing an agent's environment.
+
+Tools should be one searchable catalogue, not repeated under “lens tools” and
+“selected tools.” Search accepts ordinary tool names and `lens:engineering`
+filters (also accept `lense:`). Multiple lens filters compose their tool selections;
+text terms narrow the result. Resolve saved compositions, not hard-coded categories.
+Avoid lens-tag piles and duplicated previews.
+
+Snapshots are next. Have an agent review arXiv:2608.25512 for possible lessons,
+without making code changes from the paper. Investigate Claude integration behind
+Control's harness and MCP rather than depending on Claude's own tools. API keys
+and subagents should be supported in future; use another independent review to
+find small, justified abstractions. Keep the todo short. Findings and limitations
+are recorded in [research notes](docs/RESEARCH-NOTES.md).

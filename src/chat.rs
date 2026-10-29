@@ -86,7 +86,7 @@ pub fn design_topic(value: &str) -> Option<(&'static str, &'static str)> {
         "rooms" => ("rooms", "Rooms"),
         "lenses" | "lens-page" => ("lenses", "Lenses"),
         "monitor" => ("monitor", "Usage"),
-        "tools" | "browser" => ("tools", "Tools"),
+        "tools" | "browser" | "tool-page" => ("tools", "Tools"),
         "nodes" => ("nodes", "Nodes"),
         "authority" => ("authority", "Access requests"),
         "personas" => ("personas", "Personas"),

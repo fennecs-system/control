@@ -109,6 +109,18 @@ impl Hive {
         let response = self
             .client
             .post(&self.endpoint)
+            .timeout(
+                if method == "tools/call"
+                    && matches!(
+                        params["name"].as_str(),
+                        Some("control.web.search" | "control.rust.run")
+                    )
+                {
+                    Duration::from_secs(25)
+                } else {
+                    Duration::from_secs(3)
+                },
+            )
             .json(&json!({"jsonrpc":"2.0","id":self.next,"method":method,"params":params}))
             .send()
             .map_err(|_| failure("Control is unavailable. Reconnecting on the next refresh."))?;
@@ -687,6 +699,108 @@ pub fn run() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires an isolated Control server and pinned Nix development image; no model calls"]
+    fn live_tools_catalog_and_rust_roundtrip() {
+        let server = std::env::var("CONTROL_QA_URL").expect("Use an isolated server");
+        let mut hive = Hive::connect(&server).unwrap();
+        let page = hive
+            .client
+            .get(format!("{server}/?view=tools"))
+            .send()
+            .unwrap()
+            .text()
+            .unwrap();
+        assert_eq!(page.matches("href='/tools/browser'").count(), 1);
+        assert!(!page.contains("Lens tools"));
+        assert!(!page.contains("<iframe"));
+        let filtered = hive
+            .client
+            .get(format!("{server}/?view=tools&q=lens%3Aresearch"))
+            .send()
+            .unwrap()
+            .text()
+            .unwrap();
+        assert!(filtered.contains("href='/tools/search'"));
+        assert!(!filtered.contains("href='/tools/rust'"));
+        let catalog = hive.rpc("tools/list", json!({})).unwrap();
+        assert!(catalog["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "control.rust.run"));
+        let result = hive
+            .tool(
+                "control.rust.run",
+                json!({"code":"fn main() { println!(\"tool-roundtrip-ok\"); }"}),
+            )
+            .unwrap();
+        assert_eq!(result["success"], true);
+        assert!(result["output"]
+            .as_str()
+            .unwrap()
+            .contains("tool-roundtrip-ok"));
+        let result = hive
+            .client
+            .post(format!("{server}/tools/rust"))
+            .timeout(Duration::from_secs(25))
+            .header("Origin", &server)
+            .form(&[(
+                "code",
+                "fn main() { println!(\"<script>escaped</script>\"); }",
+            )])
+            .send()
+            .unwrap()
+            .text()
+            .unwrap();
+        assert!(result.contains("&lt;script&gt;escaped&lt;/script&gt;"));
+        assert!(!result.contains("<script>escaped</script>"));
+        let rejected = hive.client.post(format!("{server}/mcp")).json(&json!({"jsonrpc":"2.0","method":"tools/call","params":{"name":"control.rust.run","arguments":{"code":"fn main() {}"}}})).send().unwrap();
+        assert_eq!(rejected.status().as_u16(), 400);
+    }
+    #[test]
+    #[ignore = "requires isolated Control server, authenticated worker image, and one model call"]
+    fn live_worker_uses_credential_free_playground_tool() {
+        let server = std::env::var("CONTROL_QA_URL").expect("Use isolated server");
+        let mut hive = Hive::connect(&server).unwrap();
+        let chat = hive.tool("control.chat.create", json!({})).unwrap();
+        let id = chat["id"].as_str().unwrap();
+        hive.tool("control.chat.send", json!({"id":id,"message":"Use the control_rust_run MCP tool to compile and run fn main() { println!(\"worker-playground-ok\"); }. Do not use shell commands. Reply briefly with its output."})).unwrap();
+        let start = Instant::now();
+        loop {
+            let chat = hive.tool("control.chat.read", json!({"id":id})).unwrap();
+            let message = chat["messages"].as_array().unwrap().last().unwrap();
+            match message["status"].as_str().unwrap() {
+                "queued" | "running" if start.elapsed() < Duration::from_secs(180) => {
+                    std::thread::sleep(Duration::from_millis(500))
+                }
+                "completed" => {
+                    assert!(message["reply"]
+                        .as_str()
+                        .unwrap()
+                        .contains("worker-playground-ok"));
+                    assert!(message["attempts"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(
+                            |attempt| attempt["activity"].as_array().unwrap().iter().any(|a| a
+                                ["kind"]
+                                == "mcp_tool_call"
+                                && a["text"]
+                                    .as_str()
+                                    .unwrap_or("")
+                                    .contains("control_rust_run"))
+                        ));
+                    break;
+                }
+                status => panic!(
+                    "Worker tool check ended with {status}: {}",
+                    message["reply"]
+                ),
+            }
+        }
+    }
     #[test]
     fn activity_and_context_boundary_render_in_terminal() {
         let app = App {

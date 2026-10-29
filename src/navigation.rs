@@ -30,7 +30,7 @@ pub fn primary(view: &str) -> String {
             "session-list" => "session",
             "editor" | "knowledge-page" => "knowledge",
             "lens-page" => "lenses",
-            "browser" => "tools",
+            "browser" | "tool-page" => "tools",
             "hub" => "hub",
             other => other,
         }

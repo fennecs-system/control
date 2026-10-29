@@ -18,9 +18,13 @@ mod rooms;
 mod runtime;
 mod session_http;
 mod storage;
+mod tool_catalog;
+mod toolbox;
+mod tools_http;
 mod usage;
 mod web_assets;
 mod worker;
+mod worker_tools;
 use std::{
     collections::HashMap,
     io::{Read, Write},
@@ -107,8 +111,9 @@ fn render(state: &State, view: &str, lens: &str, channel: &str) -> String {
         );
     let content = (if view == "monitor" { Some(usage::render(&state.runtime)) } else { state.runtime.render(view,lens) }).or_else(|| state.collective.render(view, channel)).unwrap_or_else(|| match view {
         "providers" => providers::render(&state.runtime),
+        "tools" => tool_catalog::render(state, if channel == "general" { "" } else { channel }),
         "session" => chat::render(state,channel).unwrap_or_else(escape),
-        "session-list" | "browser" => channel.to_owned(),
+        "session-list" | "browser" | "tool-page" => channel.to_owned(),
         "editor" | "knowledge" => knowledge::render(state,if view=="editor"{"scratchpad"}else{""},None),
         "knowledge-page" => channel.to_owned(),
         "rooms" => rooms::render(state,channel),
@@ -214,6 +219,15 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         }
     }
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    if tools_http::handle(
+        &mut stream,
+        method,
+        target,
+        &header,
+        &data[header_end..header_end + length],
+    ) {
+        return;
+    }
     if browser_ui::handle(
         &mut stream,
         method,
@@ -375,7 +389,11 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
                 query.get("view").map(String::as_str).unwrap_or("hub"),
                 lens,
                 query
-                    .get("channel")
+                    .get(if query.get("view").is_some_and(|v| v == "tools") {
+                        "q"
+                    } else {
+                        "channel"
+                    })
                     .map(String::as_str)
                     .unwrap_or("general"),
             ),

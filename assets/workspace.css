@@ -10,3 +10,10 @@
 .command-activity pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; font: inherit; color: #c4c2cd; }
 .browser-viewport { display: flex; gap: 12px; max-width: 360px; }
 .browser-capture { display: block; max-width: 100%; height: auto; margin-top: 20px; border: 1px solid #393244; }
+.tool-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 12px; }
+.tool-cards .record { margin: 0 0 20px; }
+.rust-source, .tool-output { font: inherit; line-height: 1.6; tab-size: 4; }
+.tool-output { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 480px; overflow: auto; }
+.tool-search { display: flex; align-items: stretch; gap: 10px; margin-bottom: 24px; }
+.tool-search input[name=q] { flex: 1; min-width: 0; margin: 0; }
+.tool-search button { margin: 0; padding: 10px 14px; }

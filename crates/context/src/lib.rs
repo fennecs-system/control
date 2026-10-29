@@ -8,7 +8,7 @@ pub struct Tool {
     pub surface: &'static str,
     pub available: bool,
 }
-pub const TOOLS: [Tool; 5] = [
+pub const TOOLS: [Tool; 7] = [
     Tool {
         name: "context.inspect",
         execution: "pure Rust",
@@ -35,9 +35,21 @@ pub const TOOLS: [Tool; 5] = [
     },
     Tool {
         name: "search.read",
-        execution: "remote node",
+        execution: "host search broker",
         surface: "search window",
-        available: false,
+        available: true,
+    },
+    Tool {
+        name: "rust.run",
+        execution: "offline Nix container",
+        surface: "Rust playground",
+        available: true,
+    },
+    Tool {
+        name: "browser.capture",
+        execution: "offline Nix Firefox",
+        surface: "screenshot",
+        available: true,
     },
 ];
 pub fn lens<'a>(category: &str, tools: &'a [Tool]) -> Vec<&'a Tool> {

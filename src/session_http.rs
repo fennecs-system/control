@@ -49,7 +49,7 @@ pub fn rpc(state: &mut State, request: &Value) -> Value {
     if request["jsonrpc"] != "2.0" || !request.is_object() {
         return error(-32600, "Invalid request.");
     }
-    let result = match request["method"].as_str().unwrap_or("") {
+    let mut result = match request["method"].as_str().unwrap_or("") {
         "initialize" => {
             let version = match request["params"]["protocolVersion"].as_str() {
                 Some("2025-03-26") => "2025-03-26",
@@ -99,6 +99,12 @@ pub fn rpc(state: &mut State, request: &Value) -> Value {
         }
         _ => return error(-32601, "Method not found."),
     };
+    if request["method"] == "tools/list" {
+        result["tools"]
+            .as_array_mut()
+            .unwrap()
+            .extend(crate::toolbox::definitions());
+    }
     json!({"jsonrpc":"2.0","id":id,"result":result})
 }
 
@@ -328,7 +334,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            11
+            13
         );
         assert_eq!(
             rpc(

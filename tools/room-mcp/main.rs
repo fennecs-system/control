@@ -34,7 +34,7 @@ fn main() -> io::Result<()> {
     let mut count = 0u64;
     loop {
         let mut line = String::new();
-        if input.read_line(&mut line)? == 0 {
+        if input.by_ref().take(32701).read_line(&mut line)? == 0 {
             return Ok(());
         }
         if line.len() > 32700 {
@@ -64,10 +64,10 @@ fn main() -> io::Result<()> {
                 }
                 break;
             }
-            if start.elapsed() > Duration::from_secs(20) {
+            if start.elapsed() > Duration::from_secs(35) {
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
-                    "Control room host did not respond",
+                    "Control tool host did not respond",
                 ));
             }
             std::thread::sleep(Duration::from_millis(50));

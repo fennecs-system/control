@@ -138,7 +138,7 @@ impl Runtime {
         }
         "/?view=evolution"
     }
-    pub fn render(&self, view: &str, lens: &str) -> Option<String> {
+    pub fn render(&self, view: &str, _lens: &str) -> Option<String> {
         match view {
             "discord-access" => {
                 let mut h="<span class='eyebrow'>DISCORD</span><h2>Access</h2><p class='muted'>Access uses Discord IDs. Display names cannot grant permissions.</p>".to_owned();
@@ -175,19 +175,6 @@ impl Runtime {
                 Some(h)
             }
             "integrations" => Some(integrations()),
-            "tools" => {
-                if lens == "none" {
-                    return Some("<h2>Tools</h2><article class='record'><h3><a href='/tools/browser'>Browser ↗</a></h3><p class='muted'>Offline HTML capture · Firefox</p></article><details class='record'><summary>Lens tools</summary><div class='tabs'><a href='/?view=tools&lens=engineering'>Engineering</a><a href='/?view=tools&lens=research'>Research</a></div></details>".into());
-                }
-                let category = if lens == "research" {
-                    "research"
-                } else {
-                    "engineering"
-                };
-                let result =
-                    control_context::inspect(category, &["context.inspect", "knowledge.propose"]);
-                Some(format!("<h2>Tools</h2><article class='record'><h3><a href='/tools/browser'>Browser ↗</a></h3><p class='muted'>Offline HTML capture · Firefox</p></article><h3>Lens tools</h3><div class='tabs'><a href='/?view=tools&lens=engineering'>Engineering</a><a href='/?view=tools&lens=research'>Research</a></div><details class='record'><summary>Details</summary><pre class='run-result'>{}</pre></details><div class='tool-window'><iframe src='/tool-window/?lens={category}' title='Selected tools' sandbox='allow-scripts allow-same-origin'></iframe></div>",escape(&result)))
-            }
             _ => None,
         }
     }
@@ -203,6 +190,7 @@ pub fn snapshot(source: &Path, destination: &Path) -> std::io::Result<()> {
         "crates",
         "examples",
         "web",
+        "tools",
         "Cargo.toml",
         "Cargo.lock",
         "DESIGN.md",
@@ -300,11 +288,16 @@ mod tests {
         fs::create_dir_all(source.join("src")).unwrap();
         fs::write(source.join(".env"), "fake-secret").unwrap();
         fs::write(source.join("src/main.rs"), "fn main() {}").unwrap();
+        fs::create_dir_all(source.join("tools/playground")).unwrap();
+        fs::write(source.join("tools/playground/main.rs"), "fn main() {}").unwrap();
+        fs::write(source.join("tools/.env"), "nested-secret").unwrap();
         fs::write(source.join("src/.env"), "nested-secret").unwrap();
         #[cfg(unix)]
         std::os::unix::fs::symlink(source.join(".env"), source.join("src/linked.rs")).unwrap();
         snapshot(&source, &dest).unwrap();
         assert!(dest.join("src/main.rs").exists());
+        assert!(dest.join("tools/playground/main.rs").exists());
+        assert!(!dest.join("tools/.env").exists());
         assert!(!dest.join(".env").exists());
         assert!(!dest.join("src/.env").exists());
         assert!(!dest.join("src/linked.rs").exists());
