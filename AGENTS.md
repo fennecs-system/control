@@ -1,8 +1,9 @@
 # Repository workflow
 
-Use a feature branch for changes. Open a pull request and merge into `main` after
-the Rust CI checks pass. Keep `main` buildable; fix a failed main check before
-starting another feature. Deploy the merged revision. See [CONTRIBUTING.md](CONTRIBUTING.md)
+Use a feature branch for changes. Run the relevant local checks before pushing
+and report their results in the pull request. The maintainer manages PR merges;
+agents must not merge PRs. Keep `main` buildable; fix a failed main check before
+starting another feature. Deploy a merged revision when requested. See [CONTRIBUTING.md](CONTRIBUTING.md)
 for the local validation commands and check scope.
 
 Application code is Rust/WASM. Nix builds environments and tools; shell is for
