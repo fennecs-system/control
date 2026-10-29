@@ -46,6 +46,7 @@ fn change_with_save(
         .position(|s| Some(s.id.as_str()) == arguments["id"].as_str())
         .map(|i| (i, state.chats[i].clone()));
     let run_count = state.runtime.runs.len();
+    let pending = crate::runtime::RunStatusCheckpoint::capture(&state.runtime, |run| run.chat_id.as_deref() == arguments["id"].as_str());
     let notice = state.runtime.notice.clone();
     let post_count = state.collective.posts.len();
     let result = if name.starts_with("control.room") {
@@ -59,6 +60,7 @@ fn change_with_save(
             state.chats[index] = session;
         }
         state.runtime.runs.truncate(run_count);
+        pending.restore(&mut state.runtime);
         state.runtime.notice = notice;
         state.collective.posts.truncate(post_count);
         return result.and(Err("Could not save the chat. Try again."));
@@ -360,6 +362,19 @@ pub fn handle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_cancel_checkpoint_restores_existing_run_and_conversation() {
+        for status in ["queued", "running"] {
+            let mut state = State::default();
+            let id = chat::create(&mut state);
+            chat::send(&mut state, &id, "Keep my work", "test").unwrap();
+            state.runtime.runs[0].status = status.into();
+            state.runtime.runs[0].result = "Existing progress".into();
+            let before = serde_json::to_vec(&state).unwrap();
+            assert!(change_with_save(&mut state, "control.chat.send", &json!({"id":id,"message":"/cancel"}), |_| Err(std::io::Error::other("disk full"))).is_err());
+            assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+        }
+    }
     #[test]
     fn failed_chat_checkpoint_rolls_back_message_and_run() {
         let mut state = State::default();

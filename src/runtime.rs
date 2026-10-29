@@ -50,6 +50,39 @@ pub struct Run {
     pub result: String,
 }
 
+// Cancellation changes only status/result. Keep rollback proportional to pending
+// work, without cloning attempt activity or completed conversation history.
+pub(crate) struct RunStatusCheckpoint {
+    runs: Vec<(String, String, String)>,
+    notice: String,
+}
+impl RunStatusCheckpoint {
+    pub(crate) fn capture(runtime: &Runtime, matches: impl Fn(&Run) -> bool) -> Self {
+        Self {
+            runs: runtime.runs.iter()
+                .filter(|run| ["queued", "running", "cancelling"].contains(&run.status.as_str()) && matches(run))
+                .map(|run| (run.id.clone(), run.status.clone(), run.result.clone())).collect(),
+            notice: runtime.notice.clone(),
+        }
+    }
+    pub(crate) fn restore(self, runtime: &mut Runtime) {
+        for (id, status, result) in self.runs {
+            if let Some(run) = runtime.runs.iter_mut().find(|run| run.id == id) {
+                run.status = status;
+                run.result = result;
+            }
+        }
+        runtime.notice = self.notice;
+    }
+    pub(crate) fn save(self, state: &mut crate::State, save: impl FnOnce(&crate::State) -> std::io::Result<()>) -> std::io::Result<()> {
+        if let Err(error) = save(state) {
+            self.restore(&mut state.runtime);
+            return Err(error);
+        }
+        Ok(())
+    }
+}
+
 pub fn worker_image() -> Option<String> {
     std::env::var("CONTROL_WORKER_IMAGE")
         .ok()
@@ -434,6 +467,22 @@ fn integrations() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_cancel_form_checkpoint_restores_target_run_and_notice() {
+        for status in ["queued", "running"] {
+            let mut state = crate::State::default();
+            state.runtime.enqueue("Keep my work".into(), "task", "test");
+            state.runtime.runs[0].status = status.into();
+            state.runtime.runs[0].result = "Existing progress".into();
+            state.runtime.notice = "Before cancellation".into();
+            let id = state.runtime.runs[0].id.clone();
+            let checkpoint = RunStatusCheckpoint::capture(&state.runtime, |run| run.id == id);
+            let before = serde_json::to_vec(&state).unwrap();
+            state.runtime.action("/cancel-run", &HashMap::from([("id".into(), id)]));
+            assert!(checkpoint.save(&mut state, |_| Err(std::io::Error::other("disk full"))).is_err());
+            assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+        }
+    }
     #[test]
     fn engine_inspection_drains_pipes_and_rejects_partial_results() {
         let output = engine_output(

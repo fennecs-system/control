@@ -558,36 +558,40 @@ fn ingest_discord(state: &Arc<Mutex<State>>) -> Result<(), ()> {
             continue;
         }
         let id = crate::discord::chat_id(message.user_id, message.channel_id);
-        let before = s
-            .chats
-            .iter()
-            .position(|c| c.id == id)
-            .map(|i| (i, s.chats[i].clone()));
-        let counts = (s.chats.len(), s.runtime.runs.len(), s.discord_seen.len());
-        let notice = s.runtime.notice.clone();
-        let rollback = move |state: &mut State| {
-            state.chats.truncate(counts.0);
-            if let Some((index, chat)) = before {
-                state.chats[index] = chat;
-            }
-            state.runtime.runs.truncate(counts.1);
-            state.discord_seen.truncate(counts.2);
-            state.runtime.notice = notice;
-        };
-        if crate::chat::receive(&mut s, &message).is_err() {
-            rollback(&mut s);
-            continue;
-        }
-        s.discord_seen.push(message_id);
-        if storage::save(&s).is_err() {
-            rollback(&mut s);
-            eprintln!("Could not persist Discord task.");
-        } else {
+        let ingested = receive_with_save(&mut s, &id, message_id, |s| crate::chat::receive(s, &message), storage::save);
+        if ingested.is_ok() {
             // Consume only after the conversation and deduplication checkpoint are durable.
             let _ = fs::remove_file(path);
+        } else if ingested == Err("Could not persist Discord task.") {
+            eprintln!("Could not persist Discord task.");
         }
     }
     Ok(())
+}
+fn receive_with_save(
+    state: &mut State,
+    id: &str,
+    message_id: String,
+    receive: impl FnOnce(&mut State) -> Result<(), &'static str>,
+    save: impl FnOnce(&State) -> std::io::Result<()>,
+) -> Result<(), &'static str> {
+    let before = state.chats.iter().position(|chat| chat.id == id).map(|index| (index, state.chats[index].clone()));
+    let counts = (state.chats.len(), state.runtime.runs.len(), state.discord_seen.len());
+    let pending = runtime::RunStatusCheckpoint::capture(&state.runtime, |run| run.chat_id.as_deref() == Some(id));
+    let result = receive(state).and_then(|()| {
+        state.discord_seen.push(message_id);
+        save(state).map_err(|_| "Could not persist Discord task.")
+    });
+    if result.is_err() {
+        state.chats.truncate(counts.0);
+        if let Some((index, chat)) = before {
+            state.chats[index] = chat;
+        }
+        state.runtime.runs.truncate(counts.1);
+        state.discord_seen.truncate(counts.2);
+        pending.restore(&mut state.runtime);
+    }
+    result
 }
 #[cfg(test)]
 fn record_activity(state: &mut State, id: &str, event: crate::usage::Activity) -> bool {
@@ -923,6 +927,22 @@ fn prepare_workspace(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_discord_cancel_checkpoint_preserves_run_and_retryable_delivery() {
+        for status in ["queued", "running"] {
+            let mut state = State::default();
+            let id = crate::chat::create(&mut state);
+            crate::chat::send(&mut state, &id, "Keep my work", "test").unwrap();
+            state.runtime.runs[0].status = status.into();
+            state.runtime.runs[0].result = "Existing progress".into();
+            let before = serde_json::to_vec(&state).unwrap();
+            assert!(receive_with_save(&mut state, &id, "fixture-message".into(), |state| crate::chat::send(state, &id, "/cancel", "test"), |_| Err(std::io::Error::other("disk full"))).is_err());
+            assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+            assert!(receive_with_save(&mut state, &id, "fixture-message".into(), |state| crate::chat::send(state, &id, "/cancel", "test"), |_| Ok(())).is_ok());
+            assert_eq!(state.discord_seen, ["fixture-message"]);
+            assert_eq!(state.runtime.runs[0].status, if status == "queued" { "cancelled" } else { "cancelling" });
+        }
+    }
     #[test]
     fn improvement_followups_and_ordinary_tasks_use_separate_workspace_lineages() {
         let mut state = State::default();

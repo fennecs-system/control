@@ -318,6 +318,7 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
             let f = fields(&String::from_utf8_lossy(
                 &data[header_end..header_end + length],
             ));
+            let cancellation = (path == "/cancel-run").then(|| runtime::RunStatusCheckpoint::capture(&state.runtime, |run| Some(&run.id) == f.get("id")));
             let location = match path {
                 "/improve" | "/task" | "/retry-run" | "/cancel-run" => {
                     state.runtime.action(path, &f)
@@ -350,7 +351,8 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
                 }
                 _ => "/",
             };
-            if storage::save(state).is_err() {
+            let persisted = if let Some(checkpoint) = cancellation { checkpoint.save(state, storage::save) } else { storage::save(state) };
+            if persisted.is_err() {
                 let _ = stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\nContent-Length: 35\r\n\r\nCould not persist the local change.");
                 return;
             }
