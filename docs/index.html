@@ -34,10 +34,10 @@
 cd control
 nix run .#setup</code></pre>
       <p>Setup builds the embedded Rust/WASM interface, the ordinary release binary, and the Nix worker image. It loads the image and saves its immutable ID, preserving private configuration and state. Add <code>-- --claude</code> to build the Claude Code image too.</p>
-      <p>Need a macOS Linux builder? <code>nix run .#builder</code> starts the pinned upstream VM installer. This requests administrator access for builder credentials; follow the <a href="https://github.com/fennecs-system/control#linux-builder-on-macos">one-time daemon and SSH configuration</a>. Setup itself never changes system settings.</p>
+      <p>Need a macOS Linux builder? <code>nix run .#builder</code> starts the pinned upstream VM installer. This requests administrator access for builder credentials; follow the <a href="https://github.com/fennecs-system/control/blob/main/docs/setup.md#linux-builder-on-macos">one-time daemon and SSH configuration</a>. Setup itself never changes system settings.</p>
       <h3>2. Configure your node</h3>
       <p>Private configuration lives in <code>~/.config/control/</code>, outside the checkout. Initialization preserves existing files. Set <code>CONTROL_CONFIG_DIR</code> to an absolute path for a different directory. Chats and outputs live separately in <code>~/.local/state/control/</code>.</p>
-      <p>Use your own Codex login with file-based credential storage. The worker mounts its private <code>auth.json</code> read-only; keep credentials out of source, images and chat. See the <a href="https://github.com/fennecs-system/control#codex-container-workers">authentication instructions</a> for the login command and supported paths.</p>
+      <p>Use your own Codex login with file-based credential storage. The worker mounts its private <code>auth.json</code> read-only; keep credentials out of source, images and chat. See the <a href="https://github.com/fennecs-system/control/blob/main/docs/setup.md#codex-login">authentication instructions</a> for the login command and supported paths.</p>
       <h3>3. Start</h3>
       <pre><code>./target/release/control doctor
 ./target/release/control serve
@@ -47,11 +47,11 @@ nix run .#setup</code></pre>
 # Or use terminal chat:
 ./target/release/control tui</code></pre>
       <p>Ask for a small project, then a follow-up about its files. Open <strong>Artifacts</strong> to view the result. Restarting Control uses the same state.</p>
-      <p>Discord is optional. Its activated bridge reads a private <code>discord.env</code> in the configuration directory; numeric ID bindings determine access. User accounts can run tasks without architect or website operator privileges. Follow the <a href="https://github.com/fennecs-system/control#discord-bridge">Discord setup</a> before enabling it.</p>
+      <p>Discord is optional. Its activated bridge reads a private <code>discord.env</code> in the configuration directory; numeric ID bindings determine access. User accounts can run tasks without architect or website operator privileges. Follow the <a href="https://github.com/fennecs-system/control/blob/main/docs/setup.md#discord">Discord setup</a> before enabling it.</p>
     </section>
     <section class="status" aria-labelledby="status-title">
       <h2 id="status-title">Where things stand</h2>
-      <p>Codex and Claude Code are connected backends. Claude can also use Control through MCP; see <a href="https://github.com/fennecs-system/control/blob/main/docs/CLAUDE.md">both setup paths</a>. Native API and self-hosted adapters, live federation, and artifact editing are still on the roadmap. Earlier active containers block new dispatch after a restart; automatic cleanup and cancellation remain pending. Snapshot publication is bounded, but live workspaces do not yet have a hard disk quota.</p>
+      <p>Codex and Claude Code are connected backends. Claude can also use Control through MCP; see <a href="https://github.com/fennecs-system/control/blob/main/docs/CLAUDE.md">both setup paths</a>. Native API and self-hosted adapters, live federation, and artifact editing are still on the roadmap. Cancellation and startup reconciliation verify owned resources; unknown containers pause dispatch for inspection. Snapshot publication is bounded, but live workspaces do not yet have a hard disk quota.</p>
       <p>Use model access according to your provider’s terms. Sharing a personal subscription with others may violate those terms and risk suspension.</p>
     </section>
   </main>

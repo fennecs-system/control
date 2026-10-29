@@ -30,7 +30,7 @@ declare -A image_path image_id
 for image in "${images[@]}"; do
   if ! image_path[$image]=$(nix build ".#packages.${CONTROL_SETUP_LINUX_SYSTEM}.${image}-image" --no-link --print-out-paths); then
     printf '%s\n' "Could not build the ${CONTROL_SETUP_LINUX_SYSTEM} ${image} image. On macOS this needs a Linux Nix builder;" \
-      'see "Linux builder on macOS" in README.md.' >&2
+      'see "Linux builder on macOS" in docs/setup.md.' >&2
     exit 1
   fi
 done
