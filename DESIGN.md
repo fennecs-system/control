@@ -257,3 +257,26 @@ Control's harness and MCP rather than depending on Claude's own tools. API keys
 and subagents should be supported in future; use another independent review to
 find small, justified abstractions. Keep the todo short. Findings and limitations
 are recorded in [research notes](docs/RESEARCH-NOTES.md).
+
+## An augmentable collective construction tool
+
+I like some of the ideas in [Pi Durable](https://earendil.com/posts/pi-durable/),
+but we are not using Node. We are trying to go beyond it. Control is a harness,
+an MCP server, a NixOS configuration, and potentially a model-calling server or
+router: parts of a new, augmentable tool that anyone can run and improve with Nix.
+
+Federation provides interoperability and social-style connections between nodes.
+Control should still be useful to an individual on its own: a general-purpose
+constructor for code. Nix, functional programming, and Rust are fundamental, so
+we avoid whole classes of implementation issues and make the system easier to
+reason about.
+
+Imagine packaging Control with a model and a Nix configuration, ready to deploy
+on suitable infrastructure and join a collective. Anyone can extend their own
+installation; that does not make them an architect or administrator of someone
+else's node.
+
+Have an agent review the post, compare goals, and identify ideas worth borrowing.
+For now this is architecture and investigation, not a request to implement changes
+from the post. The consolidated direction and implementation boundaries are in
+[Control architecture](docs/ARCHITECTURE.md).

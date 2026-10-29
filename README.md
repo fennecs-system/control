@@ -2,6 +2,11 @@
 
 A local Rust control plane for federated agent workflows. Lenses are pure functions over explicit context snapshots: they select knowledge and tool descriptors, without ownership or authority. Personas guide behavior, policy bounds authority, and workflows describe control flow.
 
+The [architecture](docs/ARCHITECTURE.md) describes the broader goal: an augmentable
+construction tool combining the harness, MCP, declarative Nix deployments,
+optional model routing/local inference, and independently operated federated nodes.
+It separates that direction from what is implemented today.
+
 Run `cargo run --locked` and visit http://127.0.0.1:8080. `nix develop` provides the Rust toolchain. Rooms, reviews, chat, and the run ledger persist in `.control/state.json`, written atomically with private file permissions. Only one service instance should use a state directory. The web service never loads `.env`.
 
 The UI includes lenses, rooms, a Knowledge workspace, an authority queue, a run ledger, self-improvement proposals, and a Rust/WASM tool window. Knowledge combines a document list, Markdown editor, linked-note graph, and evidence review. The previous saved draft is preserved as Scratchpad.md; it does not edit the repository's DESIGN.md. Website chat, agent tasks, and self-improvement proposals enqueue Codex container runs. Missing prerequisites produce blocked runs; there is no host fallback.
