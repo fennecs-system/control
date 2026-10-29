@@ -16,7 +16,8 @@ For now, use macOS with Nix (flakes enabled), Git, and a running Linux
 Docker-compatible engine. Building worker images on macOS also needs a
 [Linux Nix builder](https://nixos.org/manual/nixpkgs/stable/#sec-darwin-builder).
 Use a builder matching the image architecture: `aarch64-linux` for Apple Silicon,
-or `x86_64-linux` for an Intel Mac. Codex is the currently connected model backend.
+or `x86_64-linux` for an Intel Mac. Codex is the default backend;
+[Claude Code works in both directions](docs/CLAUDE.md).
 
 ```sh
 git clone https://github.com/fennecs-system/control.git
@@ -117,7 +118,9 @@ Each node authorizes its own bound Discord identities. Multiple accounts may
 belong to one person and stay in the `user` role: they can run tasks without
 Control source/editor, settings or operator-session access. This policy is
 provider-neutral; future API and self-hosted adapters use the same boundary.
-Codex is currently the only connected worker backend.
+Codex is the default. The [Claude Code adapter](docs/CLAUDE.md) runs the unmodified
+CLI in a pinned container, with workspace commands in separate offline containers.
+The same guide covers Claude Code using Control as an MCP server.
 
 **Provider terms:** configure model access in accordance with your provider's
 terms. Making a personal subscription available to other people may violate
@@ -139,7 +142,7 @@ Navigation pages are global, with one **Chat** destination and one **Lenses** me
 
 Chat has a top-left Conversations button, closed by default, opening a left-hand panel with New chat and the current selection. On narrow screens the panel overlays the chat. Completed replies omit status labels; progress and failures remain visible. The opposite side opens Artifacts.
 
-**Manage** opens a secondary navigation column for Nodes, Access requests, Personas, Models & providers, Discord access, and Integrations. The section remains visible on direct links and becomes a horizontal row on narrow screens. The main sidebar scrolls its links independently when space is limited. Models & providers persists the default Codex model for new runs; each queued run keeps its selected model. `CONTROL_CODEX_MODEL` supplies the default until a model is saved in Manage. OpenAI API, Anthropic, and self-hosted adapters remain unconnected.
+**Manage** opens a secondary navigation column for Nodes, Access requests, Personas, Models & providers, Discord access, and Integrations. The section remains visible on direct links and becomes a horizontal row on narrow screens. The main sidebar scrolls its links independently when space is limited. Models & providers persists the default backend and model for new runs. **+ New** selects Codex or Claude Code; **Edit** changes the model. Queued runs and retries retain their backend/model. `CONTROL_CODEX_MODEL` supplies the Codex default until a model is saved. OpenAI API, native Anthropic API, and self-hosted adapters remain unconnected.
 
 Chat uses one conversation area with lens tags in the bottom composer. **+ Lenses** reveals selectable library entries; selected tags remain visible when it closes. Sending captures the tags and message together. The borderless transcript refreshes independently while work is pending, preserving the composer draft. MCP `control.chat.create` accepts `lenses`, and `control.chat.lenses` updates an existing chat. Older single `lens` values remain readable and accepted for creation. Legacy and Discord chats without lenses stay unassigned.
 
@@ -219,7 +222,7 @@ authorized against their original actor; room tools remain room-scoped. The
 default development shell and worker image include `rg` and `fd`.
 
 Snapshot/provider/subagent investigations are in [research notes](docs/RESEARCH-NOTES.md).
-No implementation changes were derived from the reviewed paper. Claude, API-key
+No implementation changes were derived from the reviewed paper. API-key
 providers, resumable snapshots and child-run scheduling are not yet implemented.
 
 The first independent tool container is [Rust analysis](tools/rust-analysis/README.md): Nix-built formatting/offline Clippy checks, a read-only source export, separate reports, no network or credentials, and bounded runtime. Fixture success and failure were verified in the actual Linux image. It is a local launcher today; MCP registration, external dependency packaging, and perf/flamegraphs remain future work.

@@ -1,5 +1,5 @@
 # Build on a Linux Nix builder. This supplies the worker, not the control plane.
-{ pkgs }:
+{ pkgs, backend ? "codex" }:
 let
   playground = pkgs.runCommand "control-playground" { nativeBuildInputs = [ pkgs.rustc pkgs.stdenv.cc ]; } ''
     mkdir -p $out/bin
@@ -11,11 +11,12 @@ let
   '';
 in
 pkgs.dockerTools.buildLayeredImage {
-  name = "control-worker";
+  name = if backend == "claude" then "control-claude" else "control-worker";
   tag = "nix";
   contents = [
     roomMcp playground
-    pkgs.codex pkgs.rustc pkgs.cargo pkgs.rustfmt pkgs.clippy
+    (if backend == "claude" then pkgs.claude-code else pkgs.codex)
+    pkgs.rustc pkgs.cargo pkgs.rustfmt pkgs.clippy
     pkgs.gitMinimal pkgs.stdenv.cc pkgs.pkg-config pkgs.ripgrep pkgs.fd
     pkgs.bash pkgs.coreutils pkgs.cacert
   ];
@@ -31,6 +32,6 @@ pkgs.dockerTools.buildLayeredImage {
       "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
       "PATH=/bin"
     ];
-    Cmd = [ "codex" "--version" ];
+    Cmd = [ (if backend == "claude" then "claude" else "codex") "--version" ];
   };
 }

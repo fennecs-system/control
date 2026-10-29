@@ -113,7 +113,7 @@ an immutable execution manifest and explicit recovery semantics, as recorded in
 ## Current implementation boundary
 
 Control currently has a Rust local server and thin TUI, persisted conversations
-and attempts, composable lens snapshots, Codex-backed Nix worker containers,
+and attempts, composable lens snapshots, Codex and Claude Code Nix containers,
 selected brokered tool integrations, and signed offline federation resource exchange. A restart marks
 in-flight runs interrupted; it does not resume individual model/tool steps.
 
@@ -124,6 +124,14 @@ with a committed successful result. Artifact list/read is one bounded service us
 by the chat explorer/viewer and MCP. Output hashes, relative paths and attempt
 provenance describe files without making them accepted knowledge or authority.
 The first viewer executes no content and performs no edits.
+
+Backend/model selection is captured per run. The Claude adapter runs an unmodified,
+pinned CLI with built-in tools disabled and an explicit Control MCP bridge.
+Its harness sees a mailbox, while a separate offline container mounts the task
+workspace without any login or harness process. Shared node authorization gates
+tool calls; durable admission prevents replaying an ambiguously acknowledged
+workspace command. The external `control mcp` entry point also remains available
+to a user's independently run Claude Code. See [both paths](CLAUDE.md).
 
 A state-directory lock prevents competing servers. Durable interrupted attempts
 and node labels prevent dispatch alongside earlier active containers; unknown

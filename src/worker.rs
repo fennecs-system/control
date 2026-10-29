@@ -322,7 +322,9 @@ pub fn start(state: Arc<Mutex<State>>) {
                 })
                 .collect::<Vec<_>>()
         };
-        if runtime::worker_image().is_some() {
+        if crate::backend::Backend::Codex.image().is_some()
+            || crate::backend::Backend::Claude.image().is_some()
+        {
             match (
                 crate::config::node_id(),
                 runtime::docker_query(&[
@@ -469,7 +471,6 @@ fn checkpoint_next(
         .filter(|(_, r)| r.status == "queued")
         .min_by_key(|(index, r)| (r.queue_order, *index))
         .map(|(index, _)| index)?;
-    let model = state.runtime.configured_model();
     let omitted_history = crate::chat::omitted_history(state, &state.runtime.runs[index].id);
     let parent = if state.runtime.runs[index].action == Action::Task {
         if let Some(previous) = state.runtime.runs[index].attempts.last() {
@@ -487,12 +488,17 @@ fn checkpoint_next(
     let run = &mut state.runtime.runs[index];
     run.status = "running".into();
     let mut attempt = crate::usage::Attempt::new();
-    attempt.image = runtime::worker_image();
+    attempt.backend = run.backend;
+    attempt.provider = run.backend.label().into();
+    attempt.image = run.backend.image();
     attempt.node_id = crate::config::node_id().ok();
     attempt.parent_artifact = parent;
     attempt.workspace_id = Some(format!("{}-attempt-{}", run.id, run.attempts.len() + 1));
     attempt.omitted_history = omitted_history;
-    attempt.model = run.model.clone().unwrap_or(model);
+    attempt.model = run
+        .model
+        .clone()
+        .unwrap_or_else(|| run.backend.default_model());
     run.attempts.push(attempt);
     let chat_id = run.chat_id.clone();
     let previous_revision = state
@@ -616,7 +622,7 @@ fn ingest_discord(state: &Arc<Mutex<State>>) -> Result<(), ()> {
     }
     Ok(())
 }
-fn record_activity(state: &mut State, id: &str, event: crate::usage::Activity) -> bool {
+pub(crate) fn record_activity(state: &mut State, id: &str, event: crate::usage::Activity) -> bool {
     let Some(run) = state.runtime.runs.iter_mut().find(|r| r.id == id) else {
         return false;
     };
@@ -652,7 +658,7 @@ fn execute(
     let blocked = |m: &str| ("blocked", m.to_owned());
     let failed = |m: &str| ("failed", m.to_owned());
     let scope = identity::authorize(actor, action).map_err(blocked)?;
-    let image = attempt.image.clone().or_else(runtime::worker_image).ok_or_else(|| blocked("No pinned worker image. Configure CONTROL_WORKER_IMAGE or worker-image-id in the node configuration directory with the Nix-built image's sha256 ID."))?;
+    let image = attempt.image.clone().ok_or_else(|| blocked("No captured worker image. Configure the selected backend's pinned image and submit a new run."))?;
     let node = attempt
         .node_id
         .clone()
@@ -662,7 +668,6 @@ fn execute(
     if !runtime::engine_ready() {
         return Err(blocked("Linux container engine unavailable. Start Docker on this laptop; Control will not fall back to host execution."));
     }
-    let auth = Credentials::locate().map_err(blocked)?;
     let workspace = runtime::workspace(id).map_err(blocked)?;
     let baseline = workspace.parent().unwrap().join("baseline");
     if baseline.exists() || workspace.exists() {
@@ -678,6 +683,15 @@ fn execute(
     }
     let absolute =
         fs::canonicalize(&workspace).map_err(|_| failed("Could not resolve worker workspace."))?;
+    if attempt.backend == crate::backend::Backend::Claude {
+        let output =
+            crate::claude::execute(id, objective, attempt, bridge, &absolute, &image, &node)?;
+        let manifest = crate::artifacts::publish(&workspace, id)
+            .map_err(|_| failed("Claude outputs could not be safely published; the previous checkpoint is unchanged."))?;
+        attempt.artifact = Some(manifest.id);
+        return Ok(output);
+    }
+    let auth = Credentials::locate().map_err(blocked)?;
     let policy = absolute.parent().unwrap().join("worker-seccomp.json");
     fs::write(&policy, include_bytes!("../hosting/worker-seccomp.json"))
         .map_err(|_| failed("Could not prepare embedded worker security profile."))?;
@@ -691,8 +705,8 @@ fn execute(
     )
     .map_err(blocked)?;
     let container = format!("control-{id}");
-    let mut command = container_command(&image, &container, &absolute, &auth, &policy, &node)
-        .map_err(blocked)?;
+    let mut command =
+        container_command(&image, &container, &absolute, &auth, &policy, &node).map_err(blocked)?;
     command.args([
         "codex",
         "exec",
@@ -864,6 +878,8 @@ pub fn check() -> std::io::Result<()> {
             .as_nanos()
     );
     let mut attempt = crate::usage::Attempt::new();
+    attempt.image = runtime::worker_image();
+    attempt.node_id = crate::config::node_id().ok();
     execute(&id,
         "Run a shell command that writes exactly control-account-check-ok to /workspace/connection-check. Do not inspect credentials. Then reply with one short confirmation.",
         &Actor::LocalOperator, Action::Task, &mut attempt, None)

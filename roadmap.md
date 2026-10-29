@@ -23,7 +23,7 @@ doctor checks and a single-writer state lock are implemented. Ordinary chats
 restore bounded published snapshots, and the artifact explorer/viewer shares
 list/read services with MCP. Interrupted attempts are persisted and earlier active
 containers block new dispatch. Hard live-workspace quotas, automatic reconciliation,
-cancellation, the Claude adapter and broader release gates remain open. Friends
+cancellation, Claude refresh/fault verification and broader release gates remain open. Friends
 build the ordinary release binary from main with Nix; there is no separate preview
 target. A working local build does not close those reliability and provider gates.
 
@@ -169,6 +169,16 @@ adapter gate below for the first Claude-user cohort, or explicitly invite that
 cohort to an external-MCP-only preview. Do not count MCP as provider completion.
 
 ## 4. Parallel priority: Claude inside Control
+
+Implementation update: backend/model selection is now captured per run, with
+backward-compatible Codex defaults. The pinned Claude Code container adapter,
+explicit login, bounded stream parsing and cache accounting are implemented.
+Built-in Claude tools are disabled; workspace commands use separate offline,
+credential-free containers and durable command admission. Its offline isolation
+and workspace-continuity tests pass. Authenticated Claude two-turn work, restart
+continuation and artifact viewing now pass on this Mac. Refresh and cancellation
+fault tests remain open; do not count this as phase completion.
+The external `control mcp` direction remains available independently.
 
 Develop this adapter alongside configuration and recovery, reusing phase 2's
 supervisor contracts. Its runtime release depends on those safety gates. Choose

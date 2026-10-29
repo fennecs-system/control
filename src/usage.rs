@@ -25,6 +25,7 @@ impl Tokens {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Attempt {
+    pub backend: crate::backend::Backend,
     pub image: Option<String>,
     pub node_id: Option<String>,
     pub parent_artifact: Option<String>,

@@ -1,5 +1,7 @@
 mod access;
 mod artifacts;
+mod backend;
+mod claude;
 #[path = "../tools/browser/main.rs"]
 mod browser;
 mod browser_ui;
@@ -424,6 +426,9 @@ fn serve_stylesheet(stream: &mut impl Write, path: &str) -> bool {
 
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).is_some_and(|s| s == "claude") {
+        return claude::command(&args[2..]);
+    }
     if args.get(1).is_some_and(|s| s == "--version") {
         println!(
             "control {} · {}-{}",
@@ -461,7 +466,7 @@ fn main() -> std::io::Result<()> {
     }
     if args.get(1).is_some_and(|s| s == "--help" || s == "help") {
         println!("control [serve | tui | mcp | discord | doctor | config | open | browser | federation]\nserve: local web/MCP server\ntui: Rust terminal client\nmcp [--root DIRECTORY]: local tools for an external harness\ndiscord --enable: listen to this node's configured DMs\ndoctor: offline prerequisites; no model calls\nconfig init | path: initialize or locate personal configuration\nopen: sign in to the local website\nbrowser capture FILE [WIDTH HEIGHT]: offline Nix Firefox capture\nfederation help: signed offline lens exchange\n--check-worker: one authenticated sandbox test (uses model usage)\n--version: version and platform");
-        println!("config init: create private node configuration\nconfig path: show the node configuration directory\n--bind-discord LABEL ID: bind a configured principal locally");
+        println!("claude login | check: container login or offline tool isolation check\nconfig init: create private node configuration\nconfig path: show the node configuration directory\n--bind-discord LABEL ID: bind a configured principal locally");
         return Ok(());
     }
     if args.get(1).is_some_and(|s| s == "config") {

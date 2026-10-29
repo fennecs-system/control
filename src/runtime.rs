@@ -12,6 +12,8 @@ use std::{
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Runtime {
+    #[serde(skip)]
+    pub backend: crate::backend::Backend,
     // Read old checkpoints for migration; new configuration belongs in the home directory.
     #[serde(skip_serializing)]
     pub model: Option<String>,
@@ -20,6 +22,8 @@ pub struct Runtime {
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Run {
+    #[serde(default)]
+    pub backend: crate::backend::Backend,
     #[serde(default)]
     pub queue_order: u64,
     #[serde(default)]
@@ -53,7 +57,7 @@ pub fn worker_image() -> Option<String> {
         .map(|s| s.trim().to_owned())
         .filter(|s| pinned_image(s))
 }
-fn pinned_image(s: &str) -> bool {
+pub(crate) fn pinned_image(s: &str) -> bool {
     if s.starts_with('-') || s.chars().any(char::is_whitespace) {
         return false;
     }
@@ -109,7 +113,7 @@ impl Runtime {
             .as_deref()
             .filter(|s| crate::usage::valid_model(s))
             .map(str::to_owned)
-            .unwrap_or_else(crate::usage::default_model)
+            .unwrap_or_else(|| self.backend.default_model())
     }
     pub fn enqueue(&mut self, objective: String, kind: &str, source: &str) {
         let action = if kind == "self-improvement" {
@@ -140,6 +144,7 @@ impl Runtime {
             .unwrap_or_default()
             .as_nanos();
         self.runs.push(Run {
+            backend: self.backend,
             queue_order: self
                 .runs
                 .iter()

@@ -45,11 +45,20 @@ pub fn run() -> io::Result<()> {
         engine,
         "start a Linux Docker-compatible engine",
     );
-    let image = crate::runtime::worker_image();
+    let mut runtime = crate::runtime::Runtime::default();
+    crate::providers::load_settings(&mut runtime)?;
+    let image = runtime.backend.image();
     check(
         "pinned worker image",
         image.is_some(),
-        "set worker-image-id in the configuration directory to the Nix image digest",
+        match runtime.backend {
+            crate::backend::Backend::Codex => {
+                "set worker-image-id in the configuration directory to the Nix image digest"
+            }
+            crate::backend::Backend::Claude => {
+                "set claude-image-id in the configuration directory to the Nix image digest"
+            }
+        },
     );
     if let (true, Some(image)) = (engine, image) {
         check(
@@ -59,9 +68,14 @@ pub fn run() -> io::Result<()> {
             "load the Nix-built worker image into the engine",
         );
     }
-    match crate::worker::credentials_ready() {
-        Ok(()) => check("Codex credential metadata", true, ""),
-        Err(reason) => check("Codex credential metadata", false, reason),
+    let credentials = match runtime.backend {
+        crate::backend::Backend::Codex => crate::worker::credentials_ready(),
+        crate::backend::Backend::Claude => crate::claude::credentials_ready()
+            .map_err(|_| "run control claude login; its private login stays outside the checkout"),
+    };
+    match credentials {
+        Ok(()) => check("Selected backend credential metadata", true, ""),
+        Err(reason) => check("Selected backend credential metadata", false, reason),
     }
     if config.join("discord.env").exists() || config.join("discord-access.json").exists() {
         // A placeholder policy is valid; a missing token leaves the optional bridge off.

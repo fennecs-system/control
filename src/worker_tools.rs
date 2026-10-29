@@ -6,7 +6,12 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-fn rpc(state: &Arc<Mutex<State>>, run_id: &str, envelope: &Value) -> Value {
+fn rpc_at(
+    shared: &Arc<Mutex<State>>,
+    run_id: &str,
+    envelope: &Value,
+    workspace: Option<&Path>,
+) -> Value {
     let request = &envelope["request"];
     let Some(id) = request.get("id") else {
         return Value::Null;
@@ -16,7 +21,7 @@ fn rpc(state: &Arc<Mutex<State>>, run_id: &str, envelope: &Value) -> Value {
     if request["jsonrpc"] != "2.0" {
         return error("Invalid JSON-RPC request");
     }
-    let Ok(mut state) = state.lock() else {
+    let Ok(mut state) = shared.lock() else {
         return error(
             "State unavailable; tools are disabled until Control is checked and restarted",
         );
@@ -35,6 +40,7 @@ fn rpc(state: &Arc<Mutex<State>>, run_id: &str, envelope: &Value) -> Value {
     let has_room = state.chats.iter().any(|c| {
         Some(&c.id) == run.chat_id.as_ref() && c.room.as_deref().is_some_and(rooms::valid)
     });
+    let claude = run.backend == crate::backend::Backend::Claude;
     let result = match request["method"].as_str().unwrap_or("") {
         "initialize" => {
             json!({"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"control-worker","version":"0.1"}})
@@ -42,10 +48,14 @@ fn rpc(state: &Arc<Mutex<State>>, run_id: &str, envelope: &Value) -> Value {
         "ping" => json!({}),
         "tools/list" => {
             let mut tools = crate::toolbox::definitions();
+            if claude {
+                tools.push(crate::claude::definition());
+            }
             for tool in &mut tools {
                 tool["name"] = json!(match tool["name"].as_str().unwrap() {
                     "control.web.search" => "control_web_search",
-                    _ => "control_rust_run",
+                    "control.rust.run" => "control_rust_run",
+                    other => other,
                 });
             }
             if has_room {
@@ -57,6 +67,102 @@ fn rpc(state: &Arc<Mutex<State>>, run_id: &str, envelope: &Value) -> Value {
             json!({"tools":tools})
         }
         "tools/call" => {
+            if request["params"]["name"] == "control_workspace_run" {
+                if !claude {
+                    return error("Workspace tool is not enabled for this backend");
+                }
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Input {
+                    command: String,
+                }
+                let Ok(input) =
+                    serde_json::from_value::<Input>(request["params"]["arguments"].clone())
+                else {
+                    return error("Expected a command");
+                };
+                let Some(attempt) = run.attempts.last() else {
+                    return error("No active attempt");
+                };
+                let (Some(image), Some(node), Some(workspace)) =
+                    (&attempt.image, &attempt.node_id, workspace)
+                else {
+                    return error("Attempt workspace is unavailable");
+                };
+                let image = image.clone();
+                let node = node.clone();
+                let name = format!(
+                    "control-{}-tool",
+                    attempt.workspace_id.as_deref().unwrap_or(run_id)
+                );
+                let Some(expected) = attempt
+                    .workspace_id
+                    .as_deref()
+                    .and_then(|id| crate::runtime::workspace(id).ok())
+                else {
+                    return error("No captured workspace identity");
+                };
+                if expected.canonicalize().ok().as_deref() != Some(workspace) {
+                    return error("Workspace does not match the active attempt");
+                }
+                let Some(nonce) = envelope["nonce"].as_str().filter(|s| {
+                    !s.is_empty()
+                        && s.len() <= 128
+                        && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                }) else {
+                    return error("Invalid tool request nonce");
+                };
+                // Persist intent outside both model-visible mounts before the command.
+                // A retry after an ambiguous acknowledgement never repeats the effect.
+                if crate::claude::claim(workspace, nonce).is_err() {
+                    return error("Workspace command already admitted or intent could not be saved; inspect the attempt before retrying");
+                }
+                crate::worker::record_activity(
+                    &mut state,
+                    run_id,
+                    crate::usage::Activity {
+                        id: envelope["nonce"]
+                            .as_str()
+                            .unwrap_or("workspace-command")
+                            .into(),
+                        kind: "command_execution".into(),
+                        text: input.command.chars().take(2000).collect(),
+                        output: String::new(),
+                        status: "running".into(),
+                    },
+                );
+                drop(state);
+                let result = crate::claude::shell(&image, &name, &node, workspace, &input.command);
+                if let Ok(mut state) = shared.lock() {
+                    crate::worker::record_activity(
+                        &mut state,
+                        run_id,
+                        crate::usage::Activity {
+                            id: envelope["nonce"]
+                                .as_str()
+                                .unwrap_or("workspace-command")
+                                .into(),
+                            kind: "command_execution".into(),
+                            text: input.command.chars().take(2000).collect(),
+                            output: result
+                                .as_ref()
+                                .ok()
+                                .map(|v| v.to_string())
+                                .unwrap_or_default()
+                                .chars()
+                                .take(8000)
+                                .collect(),
+                            status: if result.as_ref().is_ok_and(|v| v["exit_code"] == 0) {
+                                "completed"
+                            } else {
+                                "failed"
+                            }
+                            .into(),
+                        },
+                    );
+                }
+                return json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(result)});
+            }
             let name = match request["params"]["name"].as_str().unwrap_or("") {
                 "control_web_search" => "control.web.search",
                 "control_rust_run" => "control.rust.run",
@@ -83,17 +189,49 @@ fn rpc(state: &Arc<Mutex<State>>, run_id: &str, envelope: &Value) -> Value {
     json!({"jsonrpc":"2.0","id":id,"result":result})
 }
 pub fn pump(state: &Arc<Mutex<State>>, run: &str, workspace: &Path) {
-    let path = workspace.join(".control-room-request");
+    pump_at(state, run, workspace, workspace);
+}
+pub fn pump_at(state: &Arc<Mutex<State>>, run: &str, mailbox: &Path, workspace: &Path) {
+    let path = mailbox.join(".control-room-request");
     let Ok(envelope) = rooms::read_request(&path) else {
         return;
     };
-    let response = rpc(state, run, &envelope);
-    rooms::reply(workspace, &response);
+    let response = rpc_at(state, run, &envelope, Some(workspace));
+    rooms::reply(mailbox, &response);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn rpc(state: &Arc<Mutex<State>>, run: &str, value: &Value) -> Value {
+        rpc_at(state, run, value, None)
+    }
+    #[test]
+    fn workspace_execution_is_backend_scoped_and_rejects_model_supplied_mounts() {
+        let mut state = State::default();
+        state.runtime.enqueue("Test".into(), "task", "test");
+        state.runtime.runs[0].status = "running".into();
+        let id = state.runtime.runs[0].id.clone();
+        let state = Arc::new(Mutex::new(state));
+        let request = json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_workspace_run","arguments":{"command":"true"}}}});
+        assert!(rpc(&state, &id, &request).get("error").is_some());
+        state.lock().unwrap().runtime.runs[0].backend = crate::backend::Backend::Claude;
+        let tools = rpc(
+            &state,
+            &id,
+            &json!({"request":{"jsonrpc":"2.0","id":2,"method":"tools/list"}}),
+        );
+        assert!(tools["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "control_workspace_run"));
+        let mut forged = request.clone();
+        forged["request"]["params"]["arguments"]["mount"] =
+            json!("/Users/operator/.config/control");
+        assert!(rpc(&state, &id, &forged).get("error").is_some());
+        assert!(rpc(&state, &id, &request).get("error").is_some()); // no captured attempt
+    }
     #[test]
     fn workers_get_concrete_tools_without_operator_authority_or_room_access() {
         let mut state = State::default();

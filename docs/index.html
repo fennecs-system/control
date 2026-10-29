@@ -58,7 +58,7 @@ docker image inspect control-worker:nix --format '{{.Id}}' &gt; "$HOME/.config/c
     </section>
     <section class="status" aria-labelledby="status-title">
       <h2 id="status-title">Where things stand</h2>
-      <p>Codex is the connected backend today. Claude, API and self-hosted adapters, live federation, and artifact editing are still on the roadmap. Earlier active containers block new dispatch after a restart; automatic cleanup and cancellation remain pending. Snapshot publication is bounded, but live workspaces do not yet have a hard disk quota.</p>
+      <p>Codex and Claude Code are connected backends. Claude can also use Control through MCP; see <a href="https://github.com/fennecs-system/control/blob/main/docs/CLAUDE.md">both setup paths</a>. Native API and self-hosted adapters, live federation, and artifact editing are still on the roadmap. Earlier active containers block new dispatch after a restart; automatic cleanup and cancellation remain pending. Snapshot publication is bounded, but live workspaces do not yet have a hard disk quota.</p>
       <p>Use model access according to your provider’s terms. Sharing a personal subscription with others may violate those terms and risk suspension.</p>
     </section>
   </main>
