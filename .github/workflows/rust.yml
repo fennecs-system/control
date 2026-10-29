@@ -1,0 +1,41 @@
+name: Rust
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@d9186cbdca7adedf113a159fa91f725a27866771 # v31
+      - name: Rust tests
+        run: nix develop --command cargo test --locked --workspace
+      - name: Rust UI tests
+        run: nix develop --command cargo test --locked --manifest-path web/Cargo.toml
+      - name: Clippy
+        run: nix develop --command cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: UI Clippy
+        run: nix develop --command cargo clippy --locked --manifest-path web/Cargo.toml --all-targets -- -D warnings
+      - name: Build WASM UI
+        run: nix develop --command sh -c 'cd web && env -u NO_COLOR trunk build --release --locked'
+      - name: Build release binaries
+        run: nix develop --command cargo build --release --locked --bins

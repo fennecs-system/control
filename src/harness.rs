@@ -852,6 +852,87 @@ mod tests {
                 .len(),
             2
         );
+        // Completing a slash command changes only the draft. A second Enter sends it.
+        browser.post(&format!("/element/{input}/value"), json!({"text":"/imp"}));
+        let command = browser.post("/element", json!({"using":"css selector","value":"#chat-commands:not([hidden]) [data-command='/improve']"}))["element-6066-11e4-a52e-4f735466cecf"].as_str().unwrap().to_owned();
+        assert_eq!(
+            browser.get(&format!("/element/{command}/css/color")),
+            "rgb(181, 160, 255)"
+        );
+        browser.enter();
+        assert_eq!(
+            browser.get(&format!("/element/{input}/property/value")),
+            "/improve"
+        );
+        assert_eq!(
+            hive.tool("control.chat.read", json!({"id":chat_id}))
+                .unwrap()["mode"],
+            "chat"
+        );
+        let highlighted = browser.post(
+            "/element",
+            json!({"using":"css selector","value":".composer-highlight .chat-command"}),
+        )["element-6066-11e4-a52e-4f735466cecf"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(
+            browser.get(&format!("/element/{highlighted}/css/color")),
+            "rgb(181, 160, 255)"
+        );
+        browser.enter();
+        let start = Instant::now();
+        loop {
+            if hive
+                .tool("control.chat.read", json!({"id":chat_id}))
+                .unwrap()["mode"]
+                == "improve"
+            {
+                break;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "Slash command did not enable improve mode"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        browser.post("/url", json!({"url":format!("{server}/chat/{chat_id}")}));
+        let input = browser.input();
+        // Tab completes an off command, and mouse completion remains available.
+        browser.post(
+            &format!("/element/{input}/value"),
+            json!({"text":"/improve o"}),
+        );
+        browser.post("/actions", json!({"actions":[{"type":"key","id":"keyboard","actions":[{"type":"keyDown","value":"\u{e004}"},{"type":"keyUp","value":"\u{e004}"}]}]}));
+        assert_eq!(
+            browser.get(&format!("/element/{input}/property/value")),
+            "/improve off"
+        );
+        browser.enter();
+        let start = Instant::now();
+        loop {
+            if hive
+                .tool("control.chat.read", json!({"id":chat_id}))
+                .unwrap()["mode"]
+                == "chat"
+            {
+                break;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "Slash command did not exit improve mode"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        browser.post("/url", json!({"url":format!("{server}/chat/{chat_id}")}));
+        let input = browser.input();
+        browser.post(&format!("/element/{input}/value"), json!({"text":"/"}));
+        let off = browser.post("/element", json!({"using":"css selector","value":"#chat-commands:not([hidden]) [data-command='/improve off']"}))["element-6066-11e4-a52e-4f735466cecf"].as_str().unwrap().to_owned();
+        browser.post(&format!("/element/{off}/click"), json!({}));
+        assert_eq!(
+            browser.get(&format!("/element/{input}/property/value")),
+            "/improve off"
+        );
     }
     #[test]
     #[ignore = "requires an isolated Control server and pinned Nix development image; no model calls"]
@@ -1480,8 +1561,14 @@ fn live_artifacts_preserve_project_files_and_viewer_after_restart() {
             .to_owned()
     };
     if improve {
-        if !reload { hive.tool("control.chat.send",json!({"id":chat,"message":"/improve"})).unwrap(); }
-        assert_eq!(hive.tool("control.chat.read",json!({"id":chat})).unwrap()["mode"], "improve");
+        if !reload {
+            hive.tool("control.chat.send", json!({"id":chat,"message":"/improve"}))
+                .unwrap();
+        }
+        assert_eq!(
+            hive.tool("control.chat.read", json!({"id":chat})).unwrap()["mode"],
+            "improve"
+        );
     }
     let messages = if reload {
         vec!["Read counter.txt in the existing workspace, increment its integer by one and write it back. Preserve preview.txt. Actually use a shell command to read the file. Reply briefly."]
@@ -1509,7 +1596,12 @@ fn live_artifacts_preserve_project_files_and_viewer_after_restart() {
             .unwrap();
         let artifact = listed["artifacts"][0]["id"].as_str().unwrap();
         if improve {
-            let source = hive.tool("control.artifact.read",json!({"id":chat,"artifact":artifact,"path":"src/main.rs"})).unwrap();
+            let source = hive
+                .tool(
+                    "control.artifact.read",
+                    json!({"id":chat,"artifact":artifact,"path":"src/main.rs"}),
+                )
+                .unwrap();
             assert!(source["text"].as_str().unwrap().contains("fixture"));
         }
         let read = hive
@@ -1556,19 +1648,42 @@ fn live_artifacts_preserve_project_files_and_viewer_after_restart() {
 fn live_model_library_selection_and_reload() {
     let server = std::env::var("CONTROL_QA_URL").expect("Use an isolated server");
     let hive = Hive::connect(&server).unwrap();
-    let page = || hive.client.get(format!("{server}/?view=providers")).send().unwrap().text().unwrap();
+    let page = || {
+        hive.client
+            .get(format!("{server}/?view=providers"))
+            .send()
+            .unwrap()
+            .text()
+            .unwrap()
+    };
     if std::env::var_os("CONTROL_QA_VERIFY_RELOAD").is_none() {
-        for (provider,model) in [("codex","fixture-codex"),("claude","fixture-claude")] {
-            let response = hive.client.post(format!("{server}/providers")).header("Origin", &server).form(&[("action","add"),("provider",provider),("model",model)]).send().unwrap();
-            assert_eq!(response.status().as_u16(),303);
+        for (provider, model) in [("codex", "fixture-codex"), ("claude", "fixture-claude")] {
+            let response = hive
+                .client
+                .post(format!("{server}/providers"))
+                .header("Origin", &server)
+                .form(&[("action", "add"), ("provider", provider), ("model", model)])
+                .send()
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 303);
         }
-        for (provider,model) in [("claude","fixture-claude"),("codex","fixture-codex")] {
-            let response = hive.client.post(format!("{server}/providers")).header("Origin", &server).form(&[("action","select"),("provider",provider),("model",model)]).send().unwrap();
-            assert_eq!(response.status().as_u16(),303);
+        for (provider, model) in [("claude", "fixture-claude"), ("codex", "fixture-codex")] {
+            let response = hive
+                .client
+                .post(format!("{server}/providers"))
+                .header("Origin", &server)
+                .form(&[
+                    ("action", "select"),
+                    ("provider", provider),
+                    ("model", model),
+                ])
+                .send()
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 303);
             let html = page();
             assert!(html.contains("fixture-codex"));
             assert!(html.contains("fixture-claude"));
-            assert_eq!(html.matches("aria-pressed='true'").count(),1);
+            assert_eq!(html.matches("aria-pressed='true'").count(), 1);
         }
     }
     let html = page();

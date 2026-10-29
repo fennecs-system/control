@@ -22,28 +22,45 @@ or `x86_64-linux` for an Intel Mac. Codex is the default backend;
 ```sh
 git clone https://github.com/fennecs-system/control.git
 cd control
-nix develop
-cd web
-trunk build --release --locked
-cd ..
-cargo build --release --locked --bin control
-./target/release/control config init
+nix run .#setup
 ```
 
-Build and load the Nix worker image (Apple Silicon example):
+`setup` builds the Rust/WASM UI and ordinary `target/release/control` binary,
+initializes private configuration, then builds and loads the Nix Codex worker.
+It selects the Linux image architecture to match the host and saves its immutable
+image ID. Existing configuration, state and model choices are preserved; image
+pins change only after every requested image builds and loads successfully.
+It does not read login contents, sign in, call a model, or start services.
+
+To include the Claude Code image, use `nix run .#setup -- --claude`, then follow
+[Claude login](docs/CLAUDE.md#control-runs-claude-code). Repeat setup to rebuild
+after source changes. `nix develop` remains available for individual build/test
+commands; it is not required before `nix run`.
+
+### Linux builder on macOS
+
+If you already have a Linux Nix builder, keep using it. Otherwise the flake
+exposes the pinned Nixpkgs local VM bootstrap:
 
 ```sh
-nix build .#packages.aarch64-linux.worker-image -o result-worker
-docker load -i result-worker
-umask 077
-docker image inspect control-worker:nix --format '{{.Id}}' > "$HOME/.config/control/worker-image-id"
+nix run .#builder
 ```
+
+This is an explicit system setup step: the upstream installer requests `sudo`
+to install the builder's SSH credentials. Follow the
+[Nix builder instructions](https://nixos.org/manual/nixpkgs/stable/#sec-darwin-builder)
+to configure the Nix daemon's trusted user, builder and SSH connection, then
+restart that daemon. Keep the VM running in its terminal and run setup in another.
+The builder does not provide a Docker engine. Control's setup command does not
+change system configuration or silently provision a VM.
+
+### Sign in and start
 
 Sign in using your own Codex installation with file-based credential storage,
 then start Control. The pinned Nixpkgs revision in this checkout provides Codex:
 
 ```sh
-nix shell github:NixOS/nixpkgs/31ecbaca1bdefa45dffc409f0250bd8039ea0010#codex --command codex -c 'cli_auth_credentials_store="file"' login
+nix run .#codex -- -c 'cli_auth_credentials_store="file"' login
 ./target/release/control doctor
 ./target/release/control serve
 ```
@@ -61,6 +78,21 @@ A state-directory lock prevents competing servers. The web service never loads
 Discord credentials. See [configuration](#personal-node-configuration) and
 [worker authentication](#codex-container-workers) below before enabling Discord
 or changing credential paths.
+
+For the individual build steps instead of the setup helper:
+
+```sh
+nix develop
+(cd web && trunk build --release --locked)
+cargo build --release --locked --bin control
+./target/release/control config init
+nix build .#packages.aarch64-linux.worker-image -o result-worker
+docker load -i result-worker
+umask 077
+docker image inspect control-worker:nix --format '{{.Id}}' > "$HOME/.config/control/worker-image-id"
+```
+
+Use `x86_64-linux` for Intel. A Linux host can build the matching image locally.
 
 HTTP responses release shared state before socket writes; static stylesheets
 bypass that lock. Discord inbox admission runs independently of the single worker
@@ -140,8 +172,8 @@ An authenticated Codex run and sandboxed shell artifact were verified on this la
 
 **Agents** shows active executions and the queue. **Runs** is the full execution
 history, including tasks and improvements, with retry actions. Improvement is a
-chat mode: use the composer's **Improve Control** toggle, or send `/improve` to
-enable it (`/improve off` exits). Discuss a change, refine it, and ask for an
+chat mode: type `/improve` to enable it (`/improve off` exits). The composer offers
+command completion and highlights commands in purple. Discuss a change, refine it, and ask for an
 implementation in the same conversation. Each message rechecks the original
 actor's architect access. Ordinary task files and improvement source files have
 separate checkpoints; changes remain isolated for review. Set the private
@@ -211,6 +243,9 @@ Server privacy has two layers: this application never requests server messages, 
 `hosting/dev.control.discord.plist` runs the bridge as a separate macOS user background service. Its service definition contains no token. The Integrations page reads a credential-free, freshness-checked status record and links to the bot's profile.
 
 ## Validation
+
+Pull requests and `main` run Rust tests, Clippy and release/WASM builds on macOS
+and Linux. Use [feature branches and pull requests](CONTRIBUTING.md) for changes.
 
 The **Tools** page is a single catalogue. Search tool names or combine them with
 `lens:engineering`; multiple `lens:` filters compose their saved selections. It
