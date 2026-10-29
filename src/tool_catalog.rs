@@ -1,56 +1,5 @@
 //! One catalogue; lens membership is a filter, never a second tool listing.
 use crate::{escape, State};
-struct Entry {
-    id: &'static str,
-    name: &'static str,
-    description: &'static str,
-    href: &'static str,
-    aliases: &'static str,
-}
-const ENTRIES: &[Entry] = &[
-    Entry {
-        id: "artifacts.read",
-        name: "Artifacts",
-        description: "Published files · read only",
-        href: "/chats",
-        aliases: "files outputs viewer control.artifacts.list control.artifact.read",
-    },
-    Entry {
-        id: "search.read",
-        name: "Search",
-        description: "Web · DuckDuckGo / Bing",
-        href: "/tools/search",
-        aliases: "web search control.web.search",
-    },
-    Entry {
-        id: "rust.run",
-        name: "Rust playground",
-        description: "Offline · standard library",
-        href: "/tools/rust",
-        aliases: "code compile execute control.rust.run",
-    },
-    Entry {
-        id: "browser.capture",
-        name: "Browser",
-        description: "Offline HTML · Firefox",
-        href: "/tools/browser",
-        aliases: "screenshot preview control.browser.capture",
-    },
-    Entry {
-        id: "context.inspect",
-        name: "Context inspector",
-        description: "Pure context preview",
-        href: "/tool-window/",
-        aliases: "wasm lens context",
-    },
-    Entry {
-        id: "knowledge.propose",
-        name: "Knowledge",
-        description: "Documents and evidence",
-        href: "/knowledge",
-        aliases: "notes files knowledge.propose",
-    },
-];
 pub fn render(state: &State, query: &str) -> String {
     let mut roots = Vec::new();
     let mut words = Vec::new();
@@ -88,19 +37,25 @@ pub fn render(state: &State, query: &str) -> String {
     }
     html.push_str("<div class='tool-cards'>");
     let mut count = 0;
-    for entry in ENTRIES {
+    for entry in control_context::TOOLS.iter().filter(|tool| tool.available) {
         let haystack = format!(
-            "{} {} {} {}",
-            entry.id, entry.name, entry.description, entry.aliases
+            "{} {} {} {} {}",
+            entry.name,
+            entry.title,
+            entry.description,
+            entry.aliases,
+            entry.mcp_names.join(" ")
         )
         .to_lowercase();
         if !words.iter().all(|word| haystack.contains(word))
-            || selected.as_ref().is_some_and(|ids| !ids.contains(entry.id))
+            || selected
+                .as_ref()
+                .is_some_and(|ids| !ids.contains(entry.name))
         {
             continue;
         }
         count += 1;
-        html.push_str(&format!("<article class='record'><h3><a href='{}'>{} ↗</a></h3><p class='muted'>{}</p></article>", entry.href, entry.name, entry.description));
+        html.push_str(&format!("<article class='record'><h3><a href='{}'>{} ↗</a></h3><p class='muted'>{}</p></article>", escape(entry.href), escape(entry.title), escape(entry.description)));
     }
     html.push_str("</div>");
     if count == 0 {
@@ -112,6 +67,33 @@ pub fn render(state: &State, query: &str) -> String {
 mod tests {
     use super::*;
     #[test]
+    fn every_operator_mcp_tool_is_discoverable_in_the_catalogue() {
+        let mut state = State::default();
+        let listed = crate::session_http::rpc(
+            &mut state,
+            &serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+        );
+        let tools = listed["result"]["tools"].as_array().unwrap();
+        for definition in tools
+            .iter()
+            .chain(crate::mcp_stdio::local_definitions().iter())
+        {
+            let name = definition["name"].as_str().unwrap();
+            let entry = control_context::tool_for_mcp(name)
+                .unwrap_or_else(|| panic!("Missing catalogue registration: {name}"));
+            let html = render(&state, name);
+            assert!(
+                html.contains(&format!("{} ↗", entry.title)),
+                "MCP name not searchable: {name}"
+            );
+        }
+        let html = render(&state, "");
+        for entry in control_context::TOOLS.iter().filter(|tool| tool.available) {
+            assert_eq!(html.matches(&format!("{} ↗", entry.title)).count(), 1);
+        }
+        assert!(!html.contains("Repository patch ↗") && !html.contains("Repository read ↗"));
+    }
+    #[test]
     fn catalogue_search_resolves_live_composed_lenses_without_duplicate_lists() {
         let mut state = State::default();
         state
@@ -122,13 +104,16 @@ mod tests {
                 name: "Test".into(),
                 revision: 1,
                 includes: vec!["source-search".into()],
-                tools: vec!["rust.run".into()],
+                tools: vec!["rust.run".into(), "design.ask".into()],
                 ..Default::default()
             });
         let all = render(&state, "");
         assert_eq!(all.matches("href='/tools/browser'").count(), 1);
         assert!(!all.contains("<iframe"));
         assert!(!all.contains("Lens tools"));
+        assert_eq!(all.matches("Design decision ↗").count(), 1);
+        assert!(render(&state, "control_design_ask").contains("Design decision ↗"));
+        assert!(render(&state, "lens:test-tools control_design_ask").contains("Design decision ↗"));
         let result = render(&state, "lens:test-tools rust");
         assert!(result.contains("href='/tools/rust'"));
         assert!(!result.contains("href='/tools/search'"));

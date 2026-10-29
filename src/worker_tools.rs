@@ -245,6 +245,28 @@ pub fn pump_at(state: &Arc<Mutex<State>>, run: &str, mailbox: &Path, workspace: 
 mod tests {
     use super::*;
     #[test]
+    fn every_advertised_worker_tool_has_ui_registration() {
+        for backend in [crate::backend::Backend::Codex, crate::backend::Backend::Claude] {
+            for room in [None, Some("engineering")] {
+                let mut state = State::default();
+                let chat = crate::chat::create(&mut state);
+                state.chats[0].room = room.map(str::to_owned);
+                crate::chat::send(&mut state, &chat, "Inspect tools", "test").unwrap();
+                let run = &mut state.runtime.runs[0];
+                run.status = "running".into();
+                run.backend = backend;
+                let id = run.id.clone();
+                let shared = Arc::new(Mutex::new(state));
+                let response = rpc_at(&shared, &id, &json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/list"}}), None);
+                for definition in response["result"]["tools"].as_array().unwrap() {
+                    let name = definition["name"].as_str().unwrap();
+                    let entry = control_context::tool_for_mcp(name).unwrap_or_else(|| panic!("Missing worker tool in UI: {name}"));
+                    assert!(crate::tool_catalog::render(&shared.lock().unwrap(), name).contains(entry.title));
+                }
+            }
+        }
+    }
+    #[test]
     fn design_pause_blocks_further_tool_effects_until_user_answers() {
         let (mut state,_) = crate::design::tests::paused();
         state.runtime.runs[0].status="running".into();

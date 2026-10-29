@@ -298,9 +298,11 @@ Server privacy has two layers: this application never requests server messages, 
 Pull requests and `main` run Rust tests, Clippy and release/WASM builds on macOS
 and Linux. Use [feature branches and pull requests](CONTRIBUTING.md) for changes.
 
-The **Tools** page is a single catalogue. Search tool names or combine them with
+The **Tools** page uses the shared tool registry. Search tool names, exact MCP
+names (such as `control_design_ask`), or combine them with
 `lens:engineering`; multiple `lens:` filters compose their saved selections. It
-does not repeat lens previews or show a pile of membership tags.
+groups related methods into one card and identifies agent-only tools. Registration
+does not grant tool access; each adapter still enforces its own authority.
 
 `control.web.search` uses key-free DuckDuckGo HTML search with Bing fallback and
 returns bounded titles, URLs, and snippets. Availability depends on provider
