@@ -26,8 +26,10 @@ known resource ownership and confirm exit; unknown or mismatched resources block
 dispatch. Completion fencing preserves the last published checkpoint. Explicit
 `/steer` follow-ups wait for the next turn; `/btw` and `/spawn` create linked,
 independent task workspaces from published checkpoints, with one execution slot
-and at most 32 pending runs. Hard live-workspace quotas, persisted daemon IDs at
-launch, graceful signal shutdown, Claude refresh/fault verification and broader
+and at most 32 pending runs. SIGINT/SIGTERM now stop dispatch, join worker
+supervisors and persist interrupted attempts without promoting partial work;
+queued turns and diagnostics remain. Hard live-workspace quotas, persisted daemon IDs at
+launch, Claude refresh/fault verification and broader
 release gates remain open. Friends
 build the ordinary release binary from main with Nix; there is no separate preview
 target. A working local build does not close those reliability and provider gates.

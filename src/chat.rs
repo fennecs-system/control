@@ -303,6 +303,9 @@ pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -
 }
 
 pub fn send(state: &mut State, id: &str, text: &str, source: &str) -> Result<(), &'static str> {
+    if crate::shutdown::requested() {
+        return Err("Control is stopping; try again after restart.");
+    }
     if let Some(answer) = text.trim().strip_prefix("/answer").filter(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace)) {
         let (question, answer) = answer.trim().split_once(char::is_whitespace).ok_or("Use /answer QUESTION_ID followed by an option number or your direction.")?;
         return crate::design::answer(state, id, Some(question), answer.trim(), source);

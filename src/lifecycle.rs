@@ -34,7 +34,7 @@ pub fn request_cancel(runtime: &mut Runtime, id: &str, actor: &Actor) -> Result<
 }
 
 pub fn cancelled(bridge: Option<(&Arc<Mutex<State>>, &str)>) -> bool {
-    bridge.is_some_and(|(state, id)| {
+    crate::shutdown::requested() || bridge.is_some_and(|(state, id)| {
         state.lock().map_or(true, |s| {
             !s.runtime
                 .runs

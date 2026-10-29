@@ -282,7 +282,7 @@ fn wait(child: &mut Child, limit: Duration) -> std::io::Result<bool> {
         if let Some(status) = child.try_wait()? {
             return Ok(status.success());
         }
-        if start.elapsed() > limit {
+        if crate::shutdown::requested() || start.elapsed() > limit {
             let _ = child.kill();
             let _ = child.wait();
             return Err(std::io::Error::new(
@@ -293,13 +293,27 @@ fn wait(child: &mut Child, limit: Duration) -> std::io::Result<bool> {
         std::thread::sleep(Duration::from_millis(250));
     }
 }
-pub fn start(state: Arc<Mutex<State>>) {
+pub struct Threads {
+    inbox: std::thread::JoinHandle<()>,
+    dispatcher: std::thread::JoinHandle<()>,
+}
+impl Threads {
+    pub fn join(self) -> std::io::Result<()> {
+        let inbox = self.inbox.join();
+        let dispatcher = self.dispatcher.join();
+        if inbox.is_err() || dispatcher.is_err() {
+            return Err(std::io::Error::other("A worker thread stopped unexpectedly; inspect retained attempts before retrying."));
+        }
+        Ok(())
+    }
+}
+pub fn start(state: Arc<Mutex<State>>) -> Threads {
     // Inbox admission is independent of the execution slot: a model can run for
     // minutes without preventing a new DM from becoming a durable queued turn.
     let inbox_state = Arc::clone(&state);
     let mut notified = std::collections::HashSet::new();
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(2));
+    let inbox = std::thread::spawn(move || loop {
+        if crate::shutdown::pause(Duration::from_secs(2)) { return; }
         if ingest_discord(&inbox_state, &mut notified).is_err() {
             eprintln!(
                 "Discord ingestion stopped: state unavailable; restart Control after checking."
@@ -307,10 +321,10 @@ pub fn start(state: Arc<Mutex<State>>) {
             return;
         }
     });
-    std::thread::spawn(move || {
+    let dispatcher = std::thread::spawn(move || {
     let mut fenced: Option<String> = None;
     loop {
-        std::thread::sleep(Duration::from_secs(2));
+        if crate::shutdown::pause(Duration::from_secs(2)) { return; }
         if crate::backend::Backend::Codex.image().is_some()
             || crate::backend::Backend::Claude.image().is_some()
         {
@@ -378,7 +392,7 @@ pub fn start(state: Arc<Mutex<State>>) {
         if let Ok(workspace) = runtime::workspace(&workspace_id) {
             observe_workspace_diff(&state,&task.0,&workspace_id,&workspace,if outcome.is_ok() {"completed"} else {"observed"});
         }
-        if matches!(&outcome, Err(("waiting", _))) {
+        if !crate::shutdown::requested() && matches!(&outcome, Err(("waiting", _))) {
             outcome = match runtime::workspace(&workspace_id).map_err(std::io::Error::other)
                 .and_then(|workspace| crate::artifacts::publish(&workspace, &workspace_id)) {
                 Ok(manifest) => {
@@ -397,7 +411,7 @@ pub fn start(state: Arc<Mutex<State>>) {
                 eprintln!("Worker result not committed: state unavailable; inspect artifacts before restarting.");
                 return;
             };
-            match commit(&mut s, &task.0, task.3, attempt.clone(), outcome.clone(), storage::save) {
+            match commit(&mut s, &task.0, task.3, attempt.clone(), outcome.clone(), crate::shutdown::requested(), storage::save) {
                 Ok(()) => {
                     if s.runtime.notice.starts_with(SAVE_NOTICE) {
                         s.runtime.notice.clear();
@@ -405,16 +419,21 @@ pub fn start(state: Arc<Mutex<State>>) {
                     break;
                 }
                 Err(()) => {
+                    if crate::shutdown::requested() {
+                        eprintln!("Could not persist the stopped attempt; its durable running intent and workspace are retained for restart inspection.");
+                        return;
+                    }
                     s.runtime.notice = format!("{SAVE_NOTICE} free disk space or fix the state directory; retrying in {delay} s.");
                     eprintln!("Could not persist worker result; retrying in {delay} s. Artifacts are retained.");
                 }
             }
             drop(s);
-            std::thread::sleep(Duration::from_secs(delay));
+            crate::shutdown::pause(Duration::from_secs(delay));
             delay = (delay * 2).min(60);
         }
     }
     });
+    Threads { inbox, dispatcher }
 }
 const SAVE_NOTICE: &str = "Could not save a run result:";
 /// Apply one finished attempt to state and persist it. On a failed save the
@@ -425,6 +444,7 @@ fn commit(
     action: Action,
     mut attempt: crate::usage::Attempt,
     mut outcome: Result<String, (&'static str, String)>,
+    stopping: bool,
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Result<(), ()> {
     let Some(run) = s.runtime.runs.iter().find(|r| r.id == id) else {
@@ -433,7 +453,9 @@ fn commit(
     if !crate::lifecycle::current(run, &attempt) {
         return Ok(());
     }
-    if run.status == "cancelling" && !matches!(&outcome, Err(("interrupted", _))) {
+    if stopping && !matches!(&outcome, Err(("interrupted", _))) {
+        outcome = Err(("interrupted", "Control stopped during this attempt. Its workspace and diagnostics are retained; the previous published checkpoint is unchanged. Retry explicitly after restart.".into()));
+    } else if run.status == "cancelling" && !matches!(&outcome, Err(("interrupted", _))) {
         outcome = Err((
             "cancelled",
             "Cancelled. The previous published workspace is unchanged.".into(),
@@ -513,6 +535,7 @@ fn checkpoint_next(
     state: &mut State,
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Option<usize> {
+    if crate::shutdown::requested() { return None; }
     let index = crate::scheduler::next(&state.runtime)?;
     let omitted_history = crate::chat::omitted_history(state, &state.runtime.runs[index].id);
     let parent = {
@@ -660,6 +683,7 @@ fn ingest_discord(state: &Arc<Mutex<State>>, notified: &mut std::collections::Ha
             continue;
         }
         let mut s = state.lock().map_err(|_| ())?;
+        if crate::shutdown::requested() { return Ok(()); }
         let message_id = message.message_id.to_string();
         if s.discord_seen.contains(&message_id) {
             let _ = fs::remove_file(&path);
@@ -667,6 +691,8 @@ fn ingest_discord(state: &Arc<Mutex<State>>, notified: &mut std::collections::Ha
         }
         let id = crate::design::discord_chat(&s, &message);
         let ingested = receive_with_save(&mut s, &id, message_id.clone(), |s| crate::chat::receive(s, &message), storage::save);
+        // A shutdown refusal is transient: leave the message for the next process.
+        if crate::shutdown::requested() && ingested.is_err() { return Ok(()); }
         match ingested {
             // Consume only after the conversation and deduplication checkpoint are durable.
             Ok(()) => {
@@ -1102,6 +1128,94 @@ fn prepare_workspace(
 mod tests {
     use super::*;
     #[test]
+    #[ignore = "starts an isolated server and one authenticated model task; requires pinned images and CONTROL_QA_URL/CONTROL_QA_SERVER_BIN"]
+    fn live_signal_stops_active_worker_and_preserves_queued_turn() {
+        use serde_json::json;
+        struct Server(std::process::Child);
+        impl Drop for Server {
+            fn drop(&mut self) {
+                if self.0.try_wait().ok().flatten().is_some() { return; }
+                unsafe { libc::kill(self.0.id() as libc::pid_t, libc::SIGTERM); }
+                let start = Instant::now();
+                while self.0.try_wait().ok().flatten().is_none() && start.elapsed() < Duration::from_secs(30) {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let url = std::env::var("CONTROL_QA_URL").expect("isolated server URL");
+        let parsed = reqwest::Url::parse(&url).unwrap();
+        assert_eq!(parsed.host_str(), Some("127.0.0.1"));
+        let addr = format!("127.0.0.1:{}", parsed.port().unwrap());
+        assert!(std::net::TcpStream::connect(&addr).is_err(), "QA port is already in use");
+        let binary = std::env::var("CONTROL_QA_SERVER_BIN").expect("built server binary");
+        if let Ok(bytes) = fs::read(crate::config::state("state.json").unwrap()) {
+            let previous: State = serde_json::from_slice(&bytes).unwrap();
+            assert!(previous.runtime.runs.is_empty(), "Use fresh QA state; an old queued turn must not dispatch during a repeated check");
+        }
+        let mut server = Server(Command::new(binary).arg("serve").env("CONTROL_ADDR", addr)
+            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap());
+        let client = reqwest::blocking::Client::builder().timeout(Duration::from_secs(1)).build().unwrap();
+        let started = Instant::now();
+        while !client.get(format!("{url}/health")).send().is_ok_and(|r| r.status().is_success()) {
+            assert!(started.elapsed() < Duration::from_secs(15), "QA server did not start");
+            assert!(server.0.try_wait().unwrap().is_none());
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        // Use the application's normal client; this test never reads or prints a credential.
+        let mut hive = crate::harness::Hive::connect(&url).unwrap();
+        let mut tool = |name: &str, arguments: serde_json::Value| {
+            let value = hive.rpc("tools/call", json!({"name":name,"arguments":arguments})).unwrap();
+            assert_ne!(value["isError"], true, "QA request refused");
+            value["structuredContent"]["data"].clone()
+        };
+        let chat = tool("control.chat.create", json!({}))["id"].as_str().unwrap().to_owned();
+        tool("control.chat.send", json!({"id":chat,"message":"Use one workspace shell command to run exactly: printf shutdown-proof > shutdown-proof.txt; sleep 90. Do not change other files or inspect credentials. Wait for the command."}));
+        let started = Instant::now();
+        loop {
+            let detail = tool("control.chat.read", json!({"id":chat}));
+            let message = &detail["messages"][0];
+            let executing = message["attempts"].as_array().into_iter().flatten()
+                .flat_map(|a| a["activity"].as_array().into_iter().flatten())
+                .any(|event| event["kind"] == "command_execution" && ["running", "in_progress"].contains(&event["status"].as_str().unwrap_or("")) && event["text"].as_str().is_some_and(|s| s.contains("sleep 90")));
+            let marker = message["attempts"].as_array().and_then(|a| a.last())
+                .and_then(|a| a["workspace_id"].as_str())
+                .and_then(|id| runtime::workspace(id).ok())
+                .is_some_and(|workspace| workspace.join("shutdown-proof.txt").is_file());
+            if executing && marker { break; }
+            assert!(["queued", "running"].contains(&message["status"].as_str().unwrap_or("")), "QA worker did not remain active");
+            assert!(started.elapsed() < Duration::from_secs(120), "model did not start the requested command");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        tool("control.chat.send", json!({"id":chat,"message":"Follow up after this task."}));
+        assert_eq!(unsafe { libc::kill(server.0.id() as libc::pid_t, libc::SIGTERM) }, 0);
+        let started = Instant::now();
+        loop {
+            if let Some(status) = server.0.try_wait().unwrap() {
+                assert!(status.success(), "server shutdown failed");
+                break;
+            }
+            assert!(started.elapsed() < Duration::from_secs(30), "active worker shutdown timed out");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let state: State = serde_json::from_slice(&fs::read(crate::config::state("state.json").unwrap()).unwrap()).unwrap();
+        let chat = state.chats.iter().find(|c| c.id == chat).unwrap();
+        assert!(chat.workspace.is_none());
+        assert_eq!(chat.messages.len(), 2);
+        let run = state.runtime.runs.iter().find(|r| Some(&r.id) == chat.messages[0].run_id.as_ref()).unwrap();
+        assert_eq!(run.status, "interrupted");
+        let attempt = run.attempts.last().unwrap();
+        assert!(!attempt.activity.is_empty());
+        let id = attempt.workspace_id.as_ref().unwrap();
+        assert!(runtime::workspace(id).unwrap().join("shutdown-proof.txt").is_file());
+        let next = state.runtime.runs.iter().find(|r| Some(&r.id) == chat.messages[1].run_id.as_ref()).unwrap();
+        assert_eq!(next.status, "queued");
+        assert!(next.attempts.is_empty());
+        let names = runtime::docker_query(&["ps", "--all", "--format", "{{.Names}}", "--filter", &format!("name=control-{id}")]).unwrap();
+        assert!(names.trim().is_empty(), "attempt still has a container");
+    }
+    #[test]
     fn failed_discord_design_answer_restores_question_and_delivery_checkpoint() {
         let (mut state,id) = crate::design::tests::paused();
         let before = serde_json::to_vec(&state).unwrap();
@@ -1110,6 +1224,30 @@ mod tests {
         assert!(receive_with_save(&mut state,&id,"fixture-answer".into(),|state|crate::chat::send(state,&id,"2","test"),|_|Ok(())).is_ok());
         assert_eq!(state.runtime.runs[0].status,"continued");
         assert_eq!(state.discord_seen,vec!["fixture-answer"]);
+    }
+    #[test]
+    fn shutdown_fences_success_preserves_diagnostics_queue_and_checkpoint() {
+        let mut state = State::default();
+        let chat = crate::chat::create(&mut state);
+        state.chats[0].workspace = Some("previous-output".into());
+        crate::chat::send(&mut state, &chat, "Build", "test").unwrap();
+        checkpoint_next(&mut state, |_| Ok(())).unwrap();
+        let id = state.runtime.runs[0].id.clone();
+        let mut attempt = state.runtime.runs[0].attempts[0].clone();
+        attempt.artifact = Some("uncommitted-output".into());
+        let event = crate::usage::Activity { id: "command".into(), kind: "command_execution".into(), text: "build".into(), output: "retained diagnostics".into(), status: "completed".into() };
+        record_activity_for(&mut state, &id, attempt.workspace_id.as_deref().unwrap(), event);
+        crate::chat::send(&mut state, &chat, "Next turn", "test").unwrap();
+        let before = serde_json::to_vec(&state).unwrap();
+        assert!(commit(&mut state, &id, Action::Task, attempt.clone(), Ok("done".into()), true, |_| Err(std::io::Error::other("disk full"))).is_err());
+        assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+        commit(&mut state, &id, Action::Task, attempt, Ok("done".into()), true, |_| Ok(())).unwrap();
+        assert_eq!(state.runtime.runs[0].status, "interrupted");
+        assert_eq!(state.runtime.runs[0].attempts[0].activity[0].output, "retained diagnostics");
+        assert_eq!(state.runtime.runs[1].status, "queued");
+        assert!(state.runtime.runs[1].attempts.is_empty());
+        assert_eq!(state.chats[0].workspace.as_deref(), Some("previous-output"));
+        assert_eq!(state.chats[0].messages.len(), 2);
     }
     #[test]
     fn failed_result_checkpoint_restores_state_and_can_be_retried_or_cancelled() {
@@ -1121,10 +1259,10 @@ mod tests {
         let mut attempt = state.runtime.runs[0].attempts[0].clone();
         attempt.artifact = Some("new-output".into());
         let before = serde_json::to_vec(&state).unwrap();
-        assert!(commit(&mut state, &id, Action::Task, attempt.clone(), Ok("done".into()), |_| Err(std::io::Error::other("disk full"))).is_err());
+        assert!(commit(&mut state, &id, Action::Task, attempt.clone(), Ok("done".into()), false, |_| Err(std::io::Error::other("disk full"))).is_err());
         assert_eq!(serde_json::to_vec(&state).unwrap(), before);
         state.runtime.runs[0].status = "cancelling".into();
-        assert!(commit(&mut state, &id, Action::Task, attempt, Ok("done".into()), |_| Ok(())).is_ok());
+        assert!(commit(&mut state, &id, Action::Task, attempt, Ok("done".into()), false, |_| Ok(())).is_ok());
         assert_eq!(state.runtime.runs[0].status, "cancelled");
         assert!(state.chats[0].workspace.is_none());
     }

@@ -146,6 +146,7 @@ pub fn shell(
     workspace: &Path,
     command: &str,
 ) -> io::Result<Value> {
+    if crate::shutdown::requested() { return Err(fail("Control is stopping; workspace command was not started.")); }
     if command.is_empty() || command.len() > 16000 {
         return Err(fail("Command must contain 1–16000 bytes"));
     }
@@ -174,7 +175,7 @@ pub fn shell(
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Ok(status),
-            Ok(None) if start.elapsed() < Duration::from_secs(25) => {
+            Ok(None) if !crate::shutdown::requested() && start.elapsed() < Duration::from_secs(25) => {
                 std::thread::sleep(Duration::from_millis(50))
             }
             _ => {
@@ -426,6 +427,9 @@ pub fn execute(
         "--permission-mode", "dontAsk", "--allowedTools", "mcp__control__control_workspace_run,mcp__control__control_web_search,mcp__control__control_rust_run,mcp__control__control_room_read,mcp__control__control_room_post,mcp__control__control_design_ask",
         "--model", &attempt.model])
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    if crate::lifecycle::cancelled(bridge) {
+        return Err(("cancelled", "Cancelled before Claude launch.".into()));
+    }
     let mut child = command
         .spawn()
         .map_err(|_| failed("Cannot start the Claude Nix container"))?;
@@ -591,6 +595,63 @@ mod tests {
         );
         claim(&workspace, "request-2").unwrap();
         fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    #[ignore = "requires pinned Claude image and local engine; subprocess signal test, no credentials or model calls"]
+    fn live_shutdown_stops_offline_workspace_command() {
+        const CHILD: &str = "CONTROL_QA_SHELL_SIGNAL_CHILD";
+        if let Ok(root) = std::env::var(CHILD) {
+            let root = Path::new(&root);
+            let name = std::env::var("CONTROL_QA_SHELL_SIGNAL_NAME").unwrap();
+            crate::shutdown::install().unwrap();
+            let result = shell(&Backend::Claude.image().unwrap(), &name, "shutdown-fixture", root,
+                "printf ready > ready; sleep 90");
+            assert!(crate::shutdown::requested());
+            assert!(result.is_err());
+            return;
+        }
+        let image = Backend::Claude.image().expect("pinned Claude image");
+        let name = format!("control-shell-shutdown-{}", std::process::id());
+        let root = std::env::temp_dir().join(&name);
+        fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        struct Probe {
+            child: std::process::Child,
+            name: String,
+            image: String,
+            root: std::path::PathBuf,
+        }
+        impl Drop for Probe {
+            fn drop(&mut self) {
+                let _ = crate::lifecycle::stop_resource(&self.name, "shutdown-fixture", &self.image, &self.root);
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+                let _ = fs::remove_dir_all(&self.root);
+            }
+        }
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args(["claude::tests::live_shutdown_stops_offline_workspace_command", "--ignored", "--exact"])
+            .env(CHILD, &root).env("CONTROL_QA_SHELL_SIGNAL_NAME", &name)
+            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+        let mut probe = Probe { child, name, image, root };
+        let start = Instant::now();
+        while !probe.root.join("ready").is_file() {
+            assert!(probe.child.try_wait().unwrap().is_none(), "probe exited before its command started");
+            assert!(start.elapsed() < Duration::from_secs(15), "offline command did not start");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(unsafe { libc::kill(probe.child.id() as libc::pid_t, libc::SIGTERM) }, 0);
+        let start = Instant::now();
+        loop {
+            if let Some(status) = probe.child.try_wait().unwrap() {
+                assert!(status.success(), "offline shutdown check failed");
+                break;
+            }
+            assert!(start.elapsed() < Duration::from_secs(15), "offline command did not stop");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let names = crate::runtime::docker_query(&["ps", "--all", "--format", "{{.Names}}", "--filter", &format!("name={}", probe.name)]).unwrap();
+        assert!(names.trim().is_empty());
     }
     #[test]
     #[ignore = "requires the pinned Claude image and a Linux container engine; no credentials or model calls"]
