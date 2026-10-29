@@ -63,6 +63,10 @@ struct Container {
 const INSPECT: &str = r#"{"id":{{json .Id}},"name":{{json .Name}},"node":{{json (index .Config.Labels "dev.control.node")}},"attempt":{{json (index .Config.Labels "dev.control.attempt")}},"image":{{json .Config.Image}},"source":{{range .Mounts}}{{if eq .Destination "/workspace"}}{{json .Source}}{{end}}{{end}},"running":{{json .State.Running}}}"#;
 
 fn expected(attempt: &Attempt, name: &str) -> Result<PathBuf, &'static str> {
+    let path = expected_path(attempt, name)?;
+    Ok(path.canonicalize().unwrap_or(path))
+}
+fn expected_path(attempt: &Attempt, name: &str) -> Result<PathBuf, &'static str> {
     let id = attempt
         .workspace_id
         .as_deref()
@@ -260,20 +264,56 @@ mod tests {
     #[test]
     #[ignore = "requires the pinned Nix worker image and local Linux engine; offline, no credentials or model calls"]
     fn live_owned_resource_stop_and_mismatch_preserves_unrelated_writer() {
-        let image=crate::runtime::worker_image().expect("pinned worker image");
-        let name=format!("control-lifecycle-fixture-{}",std::process::id());
-        let workspace=std::env::temp_dir().join(&name);
+        let image = crate::runtime::worker_image().expect("pinned worker image");
+        let name = format!("control-lifecycle-fixture-{}", std::process::id());
+        let workspace = std::env::temp_dir().join(&name);
         std::fs::create_dir_all(&workspace).unwrap();
-        let workspace=workspace.canonicalize().unwrap();
-        let mount=format!("type=bind,src={},dst=/workspace",workspace.display());
-        let id=crate::runtime::docker_query(&["run","--detach","--rm","--pull=never","--network=none","--read-only","--cap-drop=ALL","--security-opt=no-new-privileges","--name",&name,"--label","dev.control.node=lifecycle-fixture","--label",&format!("dev.control.attempt={name}"),"--mount",&mount,&image,"bash","-c","sleep 120"]).unwrap();
-        let wrong=stop_resource(&name,"wrong-node",&image,&workspace);
-        let still_running=crate::runtime::docker_query(&["ps","--quiet","--filter",&format!("id={}",id.trim())]).unwrap();
-        let stopped=stop_resource(&name,"lifecycle-fixture",&image,&workspace);
-        let absent=crate::runtime::docker_query(&["ps","--quiet","--filter",&format!("id={}",id.trim())]).unwrap();
+        let workspace = workspace.canonicalize().unwrap();
+        let mount = format!("type=bind,src={},dst=/workspace", workspace.display());
+        let id = crate::runtime::docker_query(&[
+            "run",
+            "--detach",
+            "--rm",
+            "--pull=never",
+            "--network=none",
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            "--name",
+            &name,
+            "--label",
+            "dev.control.node=lifecycle-fixture",
+            "--label",
+            &format!("dev.control.attempt={name}"),
+            "--mount",
+            &mount,
+            &image,
+            "bash",
+            "-c",
+            "sleep 120",
+        ])
+        .unwrap();
+        let wrong = stop_resource(&name, "wrong-node", &image, &workspace);
+        let still_running = crate::runtime::docker_query(&[
+            "ps",
+            "--quiet",
+            "--filter",
+            &format!("id={}", id.trim()),
+        ])
+        .unwrap();
+        let stopped = stop_resource(&name, "lifecycle-fixture", &image, &workspace);
+        let absent = crate::runtime::docker_query(&[
+            "ps",
+            "--quiet",
+            "--filter",
+            &format!("id={}", id.trim()),
+        ])
+        .unwrap();
         std::fs::remove_dir(&workspace).unwrap();
-        assert!(wrong.is_err());assert!(!still_running.trim().is_empty());
-        assert!(stopped.is_ok(),"{stopped:?}");assert!(absent.trim().is_empty());
+        assert!(wrong.is_err());
+        assert!(!still_running.trim().is_empty());
+        assert!(stopped.is_ok(), "{stopped:?}");
+        assert!(absent.trim().is_empty());
     }
     #[test]
     fn cancel_authority_queue_and_completion_generation() {
