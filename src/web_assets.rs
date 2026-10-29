@@ -1,6 +1,22 @@
 use std::{fs, io::Write, net::TcpStream, path::Path};
 
 pub fn serve(stream: &mut TcpStream, path: &str) {
+    if path == "/tool-window/chat-bootstrap.js" {
+        let bootstrap = fs::read_to_string("web/dist/index.html")
+            .ok()
+            .and_then(|html| generated_bootstrap(&html).map(str::to_owned));
+        match bootstrap {
+            Some(body) => respond(stream, "200 OK", "text/javascript", body.as_bytes(), false),
+            None => respond(
+                stream,
+                "503 Service Unavailable",
+                "text/plain",
+                b"Build the Rust/WASM UI with Trunk.",
+                false,
+            ),
+        }
+        return;
+    }
     let name = path
         .strip_prefix("/tool-window/")
         .filter(|s| !s.is_empty())
@@ -26,6 +42,11 @@ pub fn serve(stream: &mut TcpStream, path: &str) {
         _ => "application/octet-stream",
     };
     respond(stream, "200 OK", mime, &body, true);
+}
+// Reuse Trunk's generated module verbatim, served externally so chat needs no inline scripts.
+fn generated_bootstrap(html: &str) -> Option<&str> {
+    let (_, rest) = html.split_once("<script type=\"module\">")?;
+    rest.split_once("</script>").map(|(body, _)| body)
 }
 fn respond(stream: &mut TcpStream, status: &str, mime: &str, body: &[u8], scripts: bool) {
     // Only the isolated, compiler-generated tool window needs bootstrap scripts.

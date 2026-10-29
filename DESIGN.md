@@ -283,4 +283,8 @@ from the post. The consolidated direction and implementation boundaries are in
 
 Models & providers should show the active backend and current default model,
 with an Edit action rather than a permanent “Save model” form. Use one compact
-+ New action for additional providers; unavailable adapters must remain explicit.
+**+ New** action for additional providers; unavailable adapters must remain explicit.
+
+In the Chat composer, Enter sends the message and Shift+Enter inserts a newline.
+Keep this interaction in Rust/WASM, preserve input-method composition, and use
+the same validated form submission as the send button.

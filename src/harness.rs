@@ -28,6 +28,8 @@ pub(crate) struct Hive {
     client: Client,
     endpoint: String,
     next: u64,
+    #[cfg(test)]
+    operator_cookie: HeaderValue,
 }
 fn failure(message: &str) -> io::Error {
     io::Error::other(message)
@@ -72,7 +74,7 @@ impl Hive {
             .map_err(|_| failure("Invalid operator credential."))?;
         cookie.set_sensitive(true);
         let mut headers = HeaderMap::new();
-        headers.insert(COOKIE, cookie);
+        headers.insert(COOKIE, cookie.clone());
         headers.insert(
             ACCEPT,
             HeaderValue::from_static("application/json, text/event-stream"),
@@ -88,6 +90,8 @@ impl Hive {
             client,
             endpoint: url.join("mcp").unwrap().to_string(),
             next: 0,
+            #[cfg(test)]
+            operator_cookie: cookie,
         };
         let init = hive.rpc("initialize", json!({"protocolVersion":VERSION,"capabilities":{},"clientInfo":{"name":"control-harness","version":env!("CARGO_PKG_VERSION")}}))?;
         if init["protocolVersion"] != VERSION {
@@ -699,6 +703,153 @@ pub fn run() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires isolated server with workers disabled, built WASM assets, and local Firefox WebDriver"]
+    fn live_chat_enter_sends_and_shift_enter_adds_newline() {
+        let server =
+            std::env::var("CONTROL_QA_URL").expect("Use isolated server with workers disabled");
+        let mut hive = Hive::connect(&server).unwrap();
+        let driver = std::env::var("CONTROL_WEBDRIVER_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:18082".into());
+        local_server(&driver).unwrap();
+        let client = Client::builder()
+            .timeout(Duration::from_secs(20))
+            .build()
+            .unwrap();
+        let session: Value = client.post(format!("{driver}/session")).json(&json!({"capabilities":{"alwaysMatch":{"browserName":"firefox","moz:firefoxOptions":{"args":["-headless"],"binary":"/Applications/Firefox.app/Contents/MacOS/firefox"}}}})).send().unwrap().json().unwrap();
+        let id = session["value"]["sessionId"]
+            .as_str()
+            .expect("Firefox session failed");
+        struct Browser {
+            client: Client,
+            url: String,
+        }
+        impl Browser {
+            fn request(&self, method: reqwest::Method, path: &str, args: Value) -> Value {
+                let mut request = self
+                    .client
+                    .request(method.clone(), format!("{}{path}", self.url));
+                if method == reqwest::Method::POST {
+                    request = request.json(&args);
+                }
+                let response = request.send().unwrap();
+                let status = response.status();
+                let value: Value = response.json().unwrap();
+                assert!(
+                    status.is_success(),
+                    "WebDriver {method} {path}: {}",
+                    value["value"]["error"].as_str().unwrap_or("request failed")
+                );
+                value["value"].clone()
+            }
+            fn post(&self, path: &str, args: Value) -> Value {
+                self.request(reqwest::Method::POST, path, args)
+            }
+            fn get(&self, path: &str) -> Value {
+                self.request(reqwest::Method::GET, path, Value::Null)
+            }
+            fn enter(&self) {
+                self.post("/actions", json!({"actions":[{"type":"key","id":"keyboard","actions":[{"type":"keyDown","value":"\u{e007}"},{"type":"keyUp","value":"\u{e007}"}]}]}));
+            }
+            fn input(&self) -> String {
+                self.post("/element", json!({"using":"css selector","value":".conversation-composer textarea[data-enter-sends=true]"}))["element-6066-11e4-a52e-4f735466cecf"].as_str().expect("Chat WASM did not initialize").to_owned()
+            }
+        }
+        impl Drop for Browser {
+            fn drop(&mut self) {
+                let _ = self.client.delete(&self.url).send();
+            }
+        }
+        let browser = Browser {
+            client,
+            url: format!("{driver}/session/{id}"),
+        };
+        browser.post("/timeouts", json!({"implicit":5000,"pageLoad":15000}));
+        browser.post("/url", json!({"url":format!("{server}/health")}));
+        // The existing native client consumes the operator credential internally.
+        // Pass it directly to the browser cookie store; never print it or put it in a URL.
+        let cookie = hive
+            .operator_cookie
+            .to_str()
+            .unwrap()
+            .strip_prefix("control_operator=")
+            .unwrap();
+        browser.post("/cookie", json!({"cookie":{"name":"control_operator","value":cookie,"path":"/","httpOnly":true,"sameSite":"Strict"}}));
+        browser.post("/url", json!({"url":format!("{server}/chats")}));
+        let before = hive.tool("control.chats.list", json!({})).unwrap();
+        let input = browser.input();
+        browser.post(&format!("/element/{input}/value"), json!({"text":"first"}));
+        browser.post("/actions", json!({"actions":[{"type":"key","id":"keyboard","actions":[{"type":"keyDown","value":"\u{e008}"},{"type":"keyDown","value":"\u{e007}"},{"type":"keyUp","value":"\u{e007}"},{"type":"keyUp","value":"\u{e008}"}]}]}));
+        browser.post(&format!("/element/{input}/value"), json!({"text":"second"}));
+        assert_eq!(
+            browser.get(&format!("/element/{input}/property/value")),
+            "first\nsecond"
+        );
+        assert_eq!(hive.tool("control.chats.list", json!({})).unwrap(), before);
+        browser.enter();
+        let start = Instant::now();
+        let chat_id = loop {
+            let url = browser.get("/url");
+            let path = Url::parse(url.as_str().unwrap()).unwrap().path().to_owned();
+            if let Some(id) = path.strip_prefix("/chat/c-") {
+                break format!("c-{id}");
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "Enter did not submit"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        let chat = hive
+            .tool("control.chat.read", json!({"id":chat_id}))
+            .unwrap();
+        assert_eq!(chat["messages"][0]["text"], "first\r\nsecond");
+        let transcript = hive
+            .client
+            .get(format!("{server}/chat/{chat_id}/transcript"))
+            .send()
+            .unwrap();
+        assert!(transcript.headers()["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .contains("script-src 'none'"));
+        let input = browser.input();
+        browser.post(
+            &format!("/element/{input}/value"),
+            json!({"text":"followup"}),
+        );
+        browser.enter();
+        let start = Instant::now();
+        loop {
+            let chat = hive
+                .tool("control.chat.read", json!({"id":chat_id}))
+                .unwrap();
+            if chat["messages"].as_array().unwrap().len() == 2 {
+                assert_eq!(chat["messages"][1]["text"], "followup");
+                break;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "Existing chat did not submit"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        browser.post("/url", json!({"url":format!("{server}/chat/{chat_id}")}));
+        let input = browser.input();
+        browser.post(
+            &format!("/element/{input}/value"),
+            json!({"text":"\u{e007}"}),
+        );
+        assert_eq!(browser.get(&format!("/element/{input}/property/value")), "");
+        assert_eq!(
+            hive.tool("control.chat.read", json!({"id":chat_id}))
+                .unwrap()["messages"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+    }
     #[test]
     #[ignore = "requires an isolated Control server and pinned Nix development image; no model calls"]
     fn live_tools_catalog_and_rust_roundtrip() {

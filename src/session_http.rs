@@ -3,7 +3,31 @@ use serde_json::{json, Value};
 use std::{io::Write, net::TcpStream};
 
 fn respond(stream: &mut TcpStream, status: &str, mime: &str, body: &str, extra: &str) {
-    let _ = write!(stream,"HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\n{extra}Connection: close\r\nCache-Control: no-store\r\nReferrer-Policy: same-origin\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'\r\n\r\n{body}",body.len());
+    respond_with_policy(stream, status, mime, body, extra, "'none'");
+}
+fn respond_chat(stream: &mut TcpStream, html: &str) {
+    let page = html.replace(
+        "</head>",
+        "<script type='module' src='/tool-window/chat-bootstrap.js'></script></head>",
+    );
+    respond_with_policy(
+        stream,
+        "200 OK",
+        "text/html; charset=utf-8",
+        &page,
+        "",
+        "'self' 'wasm-unsafe-eval'",
+    );
+}
+fn respond_with_policy(
+    stream: &mut TcpStream,
+    status: &str,
+    mime: &str,
+    body: &str,
+    extra: &str,
+    scripts: &str,
+) {
+    let _ = write!(stream,"HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\n{extra}Connection: close\r\nCache-Control: no-store\r\nReferrer-Policy: same-origin\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; script-src {scripts}; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'\r\n\r\n{body}",body.len());
 }
 
 fn change(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &'static str> {
@@ -184,7 +208,7 @@ pub fn handle(
         let html = chat::landing(state, lens, query.get("discuss").map(String::as_str));
         let page = crate::render(state, "session-list", lens, &html)
             .replace("<body>", "<body class='session-view'>");
-        respond(stream, "200 OK", "text/html; charset=utf-8", &page, "");
+        respond_chat(stream, &page);
         return true;
     }
     if ["/chats", "/chat"].contains(&path) && method == "POST" {
@@ -269,13 +293,10 @@ pub fn handle(
         }
     } else if method == "GET" && operation.is_empty() {
         match chat::detail(state, id) {
-            Ok(_) => respond(
+            Ok(_) => respond_chat(
                 stream,
-                "200 OK",
-                "text/html; charset=utf-8",
                 &crate::render(state, "session", lens, id)
                     .replace("<body>", "<body class='session-view'>"),
-                "",
             ),
             Err(_) if chat::discord_actor(id).is_some_and(|actor|crate::identity::authorize(&actor,crate::identity::Action::Task).is_ok()) => respond(stream,"202 Accepted","text/html; charset=utf-8","<!doctype html><html lang='en'><head><meta http-equiv='refresh' content='2'><title>Control / Chat</title></head><body><p>Waiting for the Discord message…</p></body></html>",""),
             Err(message) => respond(stream, "404 Not Found", "text/plain", message, ""),
