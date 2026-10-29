@@ -651,6 +651,18 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
                 let Some(events) = attempt["activity"].as_array().filter(|a| !a.is_empty()) else {
                     continue;
                 };
+                for event in events.iter().filter(|event|event["kind"] == "file_change") {
+                    let patch=event["output"].as_str().unwrap_or("");
+                    if patch.is_empty() {continue;}
+                    let mut body=String::new();
+                    for line in patch.lines() {
+                        let class=match control::diff::kind(line) {control::diff::Kind::Add=>"diff-add",control::diff::Kind::Remove=>"diff-remove",control::diff::Kind::Header=>"diff-header",control::diff::Kind::Context=>"diff-context"};
+                        body.push_str(&format!("<span class='diff-line {class}'>{}</span>",escape(line)));
+                    }
+                    html.push_str(&format!("<details class='edit-diff' open><summary>Changes · attempt {} <span>{}</span></summary><pre aria-label='File changes'>{body}</pre></details>",index+1,escape(event["text"].as_str().unwrap_or(""))));
+                }
+                let events=events.iter().filter(|event|event["kind"] != "file_change").collect::<Vec<_>>();
+                if events.is_empty() {continue;}
                 html.push_str(&format!(
                     "<details class='run-activity'{}><summary>Recent activity · attempt {}</summary>",
                     if message["status"] == "running" && index + 1 == attempts.len() { " open" } else { "" }, index + 1
@@ -783,6 +795,19 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn completed_file_diffs_are_visible_escaped_and_separate_from_command_logs() {
+        let mut state=State::default();let id=create(&mut state);
+        send(&mut state,&id,"Edit the file","test").unwrap();
+        state.runtime.runs[0].status="completed".into();
+        state.runtime.runs[0].attempts.push(crate::usage::Attempt{activity:vec![crate::usage::Activity{id:"workspace-diff".into(),kind:"file_change".into(),text:"1 file · +1 −1".into(),output:"@@ -1 +1 @@\n-old\n+<script>\n".into(),status:"completed".into()}],..crate::usage::Attempt::default()});
+        let html=transcript(&state,&id).unwrap();
+        assert!(html.contains("class='edit-diff' open"));
+        assert!(html.contains("diff-line diff-add'>+&lt;script&gt;"));
+        assert!(html.contains("diff-line diff-remove'>-old"));
+        assert!(!html.contains("<script>"));
+        assert!(!html.contains("Recent activity"));
+    }
     #[test]
     fn cancel_targets_only_this_chats_pending_work_and_refreshes_until_exit() {
         let mut state = State::default();

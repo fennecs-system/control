@@ -108,6 +108,17 @@ fn design_report(question: &Value) -> Option<String> {
     }
     Some(report)
 }
+fn delivery_message(run: &Value, status: &str, link: &str, report: &str) -> String {
+    let prefix=format!("Control: {status}.\nContinue on this laptop: {link}\n\n");
+    let edits=if status=="waiting" {None}else{run["attempts"].as_array().and_then(|a|a.last())
+        .and_then(|a|a["activity"].as_array()).and_then(|events|events.iter().rev().find(|event|event["kind"]=="file_change" && event["output"].as_str().is_some_and(|s|!s.is_empty())))};
+    let suffix=edits.map(|event|format!("\n\nChanges · {}\n{}",event["text"].as_str().unwrap_or("").chars().take(100).collect::<String>(),control::diff::discord_preview(event["output"].as_str().unwrap_or("")))).unwrap_or_default();
+    let budget=1800usize.saturating_sub(prefix.chars().count()+suffix.chars().count());
+    let body=if report.chars().count()>budget {
+        format!("{}\n… Full reply in chat.",report.chars().take(budget.saturating_sub(23)).collect::<String>())
+    }else{report.to_owned()};
+    format!("{prefix}{body}{suffix}")
+}
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -584,7 +595,7 @@ impl Bridge {
                 let link = discord::session_link(&actor, run["chat_id"].as_str()).unwrap_or_default();
                 if self.reply(
                     channel,
-                    &format!("Control: {status}.\nContinue on this laptop: {link}\n\n{report}"),
+                    &delivery_message(run,status,&link,report),
                 ) {
                     delivered.insert(receipt);
                     checkpoint(
@@ -719,6 +730,15 @@ mod tests {
     use super::*;
     fn id(s: &str) -> DiscordId {
         s.parse().unwrap()
+    }
+    #[test]
+    fn delivery_reserves_space_for_actual_changes_without_greening_or_losing_link() {
+        let run=json!({"attempts":[{"activity":[{"kind":"file_change","text":"1 file · +1 −1","output":"@@ -1 +1 @@\n-old\n+new\n"}]}]});
+        let message=delivery_message(&run,"completed","http://localhost/chat/test",&"reply ".repeat(1000));
+        assert!(message.chars().count()<=1800);
+        assert!(message.contains("http://localhost/chat/test") && message.contains("```text\n"));
+        assert!(message.contains("-old\n+new") && message.ends_with("```"));
+        assert!(!delivery_message(&run,"waiting","link","Question").contains("```"));
     }
     #[test]
     fn design_reports_keep_answer_identity_and_all_options_within_dm_budget() {

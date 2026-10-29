@@ -418,6 +418,8 @@ impl App {
                         }
                         if let Some(events) = attempt["activity"].as_array() {
                             for event in events {
+                                let patch=event["kind"] == "file_change";
+                                if patch && event["output"].as_str().unwrap_or("").is_empty() {continue;}
                                 lines.push(Line::styled(
                                     format!(
                                         "  [{} · attempt {}] {}",
@@ -430,7 +432,16 @@ impl App {
                                 lines.extend(
                                     clean(event["output"].as_str().unwrap_or(""))
                                         .lines()
-                                        .map(|s| Line::from(format!("  {s}"))),
+                                        .map(|s| {
+                                            let color=if patch {match control::diff::kind(s) {
+                                                control::diff::Kind::Add=>{let (r,g,b)=control::diff::ADD_RGB;Some(Color::Rgb(r,g,b))},
+                                                control::diff::Kind::Remove=>{let (r,g,b)=control::diff::REMOVE_RGB;Some(Color::Rgb(r,g,b))},
+                                                control::diff::Kind::Header=>Some(Color::Rgb(133,133,143)),
+                                                control::diff::Kind::Context=>None,
+                                            }}else{None};
+                                            let style=color.map(|color|Style::default().fg(color)).unwrap_or_default();
+                                            Line::styled(format!("  {s}"),style)
+                                        }),
                                 );
                             }
                         }
@@ -724,6 +735,44 @@ pub fn run() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires isolated server and authenticated worker; two small model calls, optional reload mode makes no calls"]
+    fn live_workspace_diff_tracks_real_edits_and_persists() {
+        let server=std::env::var("CONTROL_QA_URL").expect("Use isolated server");
+        let mut hive=Hive::connect(&server).unwrap();
+        let fixture=crate::config::state("diff-qa-chat").unwrap();
+        let id=if std::env::var_os("CONTROL_QA_DIFF_RELOAD").is_some() {fs::read_to_string(&fixture).unwrap()}else{
+            let id=hive.tool("control.chat.create",json!({})).unwrap()["id"].as_str().unwrap().to_owned();
+            for request in ["Create edit-demo.txt containing exactly two lines: alpha and beta, each ending with a newline. Do not create any other files. Reply briefly.","Edit edit-demo.txt: replace only the second line beta with gamma, retaining alpha and the final newline. Use the edit/patch tool if available. Do not create any other files. Reply briefly."] {
+                let submitted=hive.tool("control.chat.send",json!({"id":id,"message":request})).unwrap();
+                let index=submitted["messages"].as_array().unwrap().len()-1;
+                let deadline=Instant::now()+Duration::from_secs(180);
+                loop {
+                    let detail=hive.tool("control.chat.read",json!({"id":id})).unwrap();
+                    let status=detail["messages"][index]["status"].as_str().unwrap();
+                    if status=="completed" {break;}
+                    assert!(["queued","running"].contains(&status),"Diff task ended with {status}");
+                    assert!(Instant::now()<deadline,"Diff task timed out");
+                    std::thread::sleep(Duration::from_millis(300));
+                }
+                if index==0 {
+                    let first=hive.tool("control.chat.read",json!({"id":id})).unwrap();
+                    let changes=first["messages"][0]["attempts"][0]["activity"].as_array().unwrap().iter().find(|event|event["id"]=="workspace-diff").expect("New file creation must also have a diff");
+                    assert_eq!(changes["text"],"1 file · +2 −0");
+                    assert!(changes["output"].as_str().unwrap().contains("+alpha\n+beta\n"));
+                }
+            }
+            fs::write(&fixture,&id).unwrap();id
+        };
+        let detail=hive.tool("control.chat.read",json!({"id":id})).unwrap();
+        let events=detail["messages"][1]["attempts"][0]["activity"].as_array().unwrap();
+        let patch=events.iter().find(|e|e["id"]=="workspace-diff").expect("No observed workspace diff");
+        assert_eq!(patch["text"],"1 file · +1 −1");
+        let output=patch["output"].as_str().unwrap();
+        assert!(output.contains("edit-demo.txt") && output.contains(" alpha\n-beta\n+gamma\n"));
+        let page=hive.client.get(format!("{server}/chat/{id}/transcript")).send().unwrap().text().unwrap();
+        assert!(page.contains("class='edit-diff' open") && page.contains("diff-line diff-add'>+gamma") && page.contains("diff-line diff-remove'>-beta"));
+    }
     #[test]
     #[ignore = "requires isolated server, authenticated container worker and two small model calls; optional pause/resume phases test server restart"]
     fn live_design_question_pauses_and_resumes_checkpoint() {
@@ -1046,6 +1095,24 @@ mod tests {
             let prefix = browser.post("/element", json!({"using":"css selector","value":".composer-highlight .chat-command"}))["element-6066-11e4-a52e-4f735466cecf"].as_str().unwrap().to_owned();
             assert_eq!(browser.get(&format!("/element/{prefix}/css/color")), "rgb(181, 160, 255)");
         }
+        if std::env::var_os("CONTROL_QA_DIFF_BROWSER").is_some() {
+            let diff_chat=fs::read_to_string(crate::config::state("diff-qa-chat").unwrap()).unwrap();
+            browser.post("/url",json!({"url":format!("{server}/chat/{diff_chat}/transcript")}));
+            for (selector,color) in [(".edit-diff[open] .diff-add","rgb(181, 160, 255)"),(".edit-diff[open] .diff-remove","rgb(217, 154, 171)")] {
+                let element=browser.post("/element",json!({"using":"css selector","value":selector}))["element-6066-11e4-a52e-4f735466cecf"].as_str().unwrap().to_owned();
+                assert_eq!(browser.get(&format!("/element/{element}/css/color")),color);
+            }
+            if let Ok(path)=std::env::var("CONTROL_QA_DIFF_SCREENSHOT") {
+                use base64::Engine;
+                let screenshot=browser.get("/screenshot");
+                fs::write(path,base64::engine::general_purpose::STANDARD.decode(screenshot.as_str().unwrap()).unwrap()).unwrap();
+            }
+            browser.post("/url",json!({"url":format!("{server}/?view=providers#saved")}));
+            for (selector,property) in [(".provider-saved:target","color"),(".model-choice[aria-pressed=true] .model-dot","background-color")] {
+                let element=browser.post("/element",json!({"using":"css selector","value":selector}))["element-6066-11e4-a52e-4f735466cecf"].as_str().unwrap().to_owned();
+                assert_eq!(browser.get(&format!("/element/{element}/css/{property}")),"rgb(181, 160, 255)");
+            }
+        }
     }
     #[test]
     #[ignore = "requires an isolated Control server and pinned Nix development image; no model calls"]
@@ -1148,6 +1215,17 @@ mod tests {
                 ),
             }
         }
+    }
+    #[test]
+    fn file_diffs_use_purple_additions_and_pastel_red_removals_in_terminal() {
+        let app=App{detail:json!({"messages":[{"text":"Edit","status":"completed","reply":"Done","attempts":[{"activity":[{"kind":"file_change","status":"completed","text":"1 file · +1 −1","output":"@@ -1 +1 @@\n-old\n+new\n"},{"kind":"command_execution","text":"echo","output":"+ordinary output"}]}]}]}),..App::default()};
+        let text=app.transcript();
+        let add=text.lines.iter().find(|line|line.to_string()=="  +new").unwrap();
+        let removed=text.lines.iter().find(|line|line.to_string()=="  -old").unwrap();
+        assert_eq!(add.style.fg,Some(Color::Rgb(181,160,255)));
+        assert_eq!(removed.style.fg,Some(Color::Rgb(217,154,171)));
+        let ordinary=text.lines.iter().find(|line|line.to_string()=="  +ordinary output").unwrap();
+        assert_eq!(ordinary.style.fg,None);
     }
     #[test]
     fn activity_and_context_boundary_render_in_terminal() {
