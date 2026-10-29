@@ -295,6 +295,27 @@ pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -
 }
 
 pub fn send(state: &mut State, id: &str, text: &str, source: &str) -> Result<(), &'static str> {
+    if let Some(target) = text.trim().strip_prefix("/cancel").filter(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace)) {
+        let session = state.chats.iter().find(|s| s.id == id).ok_or("Chat not found.")?;
+        let actor = session.actor.clone();
+        let target = target.trim();
+        let run = state.runtime.runs.iter()
+            .filter(|run| run.chat_id.as_deref() == Some(id))
+            .filter(|run| ["queued", "running", "cancelling"].contains(&run.status.as_str()))
+            .filter(|run| target.is_empty() || run.id == target)
+            .min_by_key(|run| (run.status == "queued", run.queue_order))
+            .ok_or("No matching pending run in this chat.")?;
+        let run_id = run.id.clone();
+        crate::lifecycle::request_cancel(&mut state.runtime, &run_id, &actor)?;
+        let stopping = state.runtime.runs.iter().any(|run| run.id == run_id && run.status == "cancelling");
+        let session = state.chats.iter_mut().find(|s| s.id == id).unwrap();
+        session.messages.push(Message {
+            text: text.trim().into(), run_id: None,
+            reply: if stopping { "Stopping the current run…" } else { "Queued run cancelled." }.into(),
+        });
+        session.revision = session.revision.saturating_add(1);
+        return Ok(());
+    }
     if let Some(question) = text.trim().strip_prefix("/btw").filter(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace)) {
         if question.trim().is_empty() || text.trim().chars().count() > 2000 {
             return Err("Use /btw followed by a side question (up to 2000 characters).");
@@ -583,13 +604,15 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
         .as_array()
         .unwrap()
         .iter()
-        .any(|m| ["queued", "running"].contains(&m["status"].as_str().unwrap_or("")));
+        .any(|m| ["queued", "running", "cancelling"].contains(&m["status"].as_str().unwrap_or("")));
     let mut html = format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'>{}</head><body class='transcript'>",if pending {"<meta http-equiv='refresh' content='3'>"} else {""});
     for message in data["messages"].as_array().unwrap() {
         let status = match message["status"].as_str().unwrap_or("") {
             "queued" if message["kind"] == "steering" => "Queued · next turn",
             "queued" => "Queued",
             "running" => "Working…",
+            "cancelling" => "Stopping…",
+            "cancelled" => "Cancelled",
             "blocked" => "Blocked",
             "failed" => "Failed",
             "interrupted" => "Interrupted",
@@ -747,6 +770,31 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
 mod tests {
     use super::*;
     #[test]
+    fn cancel_targets_only_this_chats_pending_work_and_refreshes_until_exit() {
+        let mut state = State::default();
+        let parent = create(&mut state);
+        send(&mut state, &parent, "Build parser", "test").unwrap();
+        state.runtime.runs[0].status = "running".into();
+        send(&mut state, &parent, "Add tests", "test").unwrap();
+        let other = create(&mut state);
+        send(&mut state, &other, "Other task", "test").unwrap();
+        let other_run = state.runtime.runs[2].id.clone();
+        assert!(send(&mut state, &parent, &format!("/cancel {other_run}"), "test").is_err());
+        let revision = state.chats[0].revision;
+        send(&mut state, &parent, "/cancel", "test").unwrap();
+        assert_eq!(state.runtime.runs[0].status, "cancelling");
+        assert_eq!(state.runtime.runs[1].status, "queued");
+        assert_eq!(state.runtime.runs[2].status, "queued");
+        assert!(state.chats[0].revision > revision);
+        let html = transcript(&state, &parent).unwrap();
+        assert!(html.contains("Stopping…") && html.contains("http-equiv='refresh'"));
+        let queued = state.runtime.runs[1].id.clone();
+        send(&mut state, &parent, &format!("/cancel {queued}"), "test").unwrap();
+        assert_eq!(state.runtime.runs[1].status, "cancelled");
+        assert!(transcript(&state, &parent).unwrap().contains("Cancelled"));
+        assert_eq!(state.runtime.runs.len(), 3);
+    }
+    #[test]
     fn explicit_spawn_inherits_snapshot_without_workspace_authority_or_recursion() {
         let mut state = State::default();
         let parent = create(&mut state);
@@ -844,7 +892,7 @@ mod tests {
         let child = &state.chats[1];
         assert_eq!(child.parent_chat.as_deref(), Some(parent.as_str()));
         assert!(child.fork_context.as_ref().unwrap().contains("Build a parser"));
-        assert!(child.workspace.is_none());
+        assert_eq!(child.workspace.as_deref(), Some("published-parent"));
         assert!(child.improve_workspace.is_none());
         assert!(!child.improve_mode);
         assert!(state.chats[0].improve_mode);
