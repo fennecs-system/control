@@ -72,31 +72,55 @@ pub fn engine_ready() -> bool {
     docker_query(&["info", "--format", "{{.OSType}}"]).is_ok_and(|output| output.trim() == "linux")
 }
 pub fn docker_query(arguments: &[&str]) -> std::io::Result<String> {
+    engine_output(
+        Command::new("docker").args(arguments),
+        std::time::Duration::from_secs(5),
+    )
+}
+
+// Drain while the process runs: waiting first can deadlock on a full stdout pipe.
+// Ownership inspection must fail closed on oversized output, never use a prefix.
+fn engine_output(command: &mut Command, timeout: std::time::Duration) -> std::io::Result<String> {
     use std::{
         io::Read,
         process::Stdio,
+        sync::mpsc,
         time::{Duration, Instant},
     };
-    let mut child = Command::new("docker")
-        .args(arguments)
+    const OUTPUT_LIMIT: u64 = 1024 * 1024;
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()?;
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| std::io::Error::other("No engine response"))?;
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let result = stdout
+            .take(OUTPUT_LIMIT + 1)
+            .read_to_end(&mut output)
+            .map(|_| output);
+        let _ = sender.send(result);
+    });
+    let deadline = Instant::now() + timeout;
     loop {
         if let Some(status) = child.try_wait()? {
             if !status.success() {
                 return Err(std::io::Error::other("Container engine request failed"));
             }
-            let mut output = String::new();
-            child
-                .stdout
-                .take()
-                .ok_or_else(|| std::io::Error::other("No engine response"))?
-                .take(8192)
-                .read_to_string(&mut output)?;
-            return Ok(output);
+            let output = receiver
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .map_err(|_| std::io::Error::other("Container engine response timed out"))??;
+            if output.len() as u64 > OUTPUT_LIMIT {
+                return Err(std::io::Error::other(
+                    "Container engine response exceeded its limit",
+                ));
+            }
+            return String::from_utf8(output).map_err(std::io::Error::other);
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
@@ -394,6 +418,30 @@ fn integrations() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn engine_inspection_drains_pipes_and_rejects_partial_results() {
+        let output = engine_output(
+            Command::new("head").args(["-c", "131072", "/dev/zero"]),
+            std::time::Duration::from_secs(5),
+        )
+        .unwrap();
+        assert_eq!(output.len(), 131072);
+        assert!(engine_output(
+            Command::new("head").args(["-c", "1048577", "/dev/zero"]),
+            std::time::Duration::from_secs(5),
+        )
+        .is_err());
+    }
+    #[test]
+    fn engine_inspection_deadline_does_not_wait_for_process_exit() {
+        let started = std::time::Instant::now();
+        assert!(engine_output(
+            Command::new("sleep").arg("5"),
+            std::time::Duration::from_millis(30),
+        )
+        .is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
     #[test]
     fn workers_require_content_addressed_images() {
         assert!(!pinned_image("control-worker:latest"));
