@@ -50,6 +50,39 @@ pub struct Run {
     pub result: String,
 }
 
+// Cancellation changes only status/result. Keep rollback proportional to pending
+// work, without cloning attempt activity or completed conversation history.
+pub(crate) struct RunStatusCheckpoint {
+    runs: Vec<(String, String, String)>,
+    notice: String,
+}
+impl RunStatusCheckpoint {
+    pub(crate) fn capture(runtime: &Runtime, matches: impl Fn(&Run) -> bool) -> Self {
+        Self {
+            runs: runtime.runs.iter()
+                .filter(|run| ["queued", "running", "cancelling"].contains(&run.status.as_str()) && matches(run))
+                .map(|run| (run.id.clone(), run.status.clone(), run.result.clone())).collect(),
+            notice: runtime.notice.clone(),
+        }
+    }
+    pub(crate) fn restore(self, runtime: &mut Runtime) {
+        for (id, status, result) in self.runs {
+            if let Some(run) = runtime.runs.iter_mut().find(|run| run.id == id) {
+                run.status = status;
+                run.result = result;
+            }
+        }
+        runtime.notice = self.notice;
+    }
+    pub(crate) fn save(self, state: &mut crate::State, save: impl FnOnce(&crate::State) -> std::io::Result<()>) -> std::io::Result<()> {
+        if let Err(error) = save(state) {
+            self.restore(&mut state.runtime);
+            return Err(error);
+        }
+        Ok(())
+    }
+}
+
 pub fn worker_image() -> Option<String> {
     std::env::var("CONTROL_WORKER_IMAGE")
         .ok()
@@ -72,31 +105,55 @@ pub fn engine_ready() -> bool {
     docker_query(&["info", "--format", "{{.OSType}}"]).is_ok_and(|output| output.trim() == "linux")
 }
 pub fn docker_query(arguments: &[&str]) -> std::io::Result<String> {
+    engine_output(
+        Command::new("docker").args(arguments),
+        std::time::Duration::from_secs(5),
+    )
+}
+
+// Drain while the process runs: waiting first can deadlock on a full stdout pipe.
+// Ownership inspection must fail closed on oversized output, never use a prefix.
+fn engine_output(command: &mut Command, timeout: std::time::Duration) -> std::io::Result<String> {
     use std::{
         io::Read,
         process::Stdio,
+        sync::mpsc,
         time::{Duration, Instant},
     };
-    let mut child = Command::new("docker")
-        .args(arguments)
+    const OUTPUT_LIMIT: u64 = 1024 * 1024;
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()?;
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| std::io::Error::other("No engine response"))?;
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let result = stdout
+            .take(OUTPUT_LIMIT + 1)
+            .read_to_end(&mut output)
+            .map(|_| output);
+        let _ = sender.send(result);
+    });
+    let deadline = Instant::now() + timeout;
     loop {
         if let Some(status) = child.try_wait()? {
             if !status.success() {
                 return Err(std::io::Error::other("Container engine request failed"));
             }
-            let mut output = String::new();
-            child
-                .stdout
-                .take()
-                .ok_or_else(|| std::io::Error::other("No engine response"))?
-                .take(8192)
-                .read_to_string(&mut output)?;
-            return Ok(output);
+            let output = receiver
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .map_err(|_| std::io::Error::other("Container engine response timed out"))??;
+            if output.len() as u64 > OUTPUT_LIMIT {
+                return Err(std::io::Error::other(
+                    "Container engine response exceeded its limit",
+                ));
+            }
+            return String::from_utf8(output).map_err(std::io::Error::other);
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
@@ -138,6 +195,7 @@ impl Runtime {
         action: Action,
     ) -> Result<(), &'static str> {
         identity::authorize(&actor, action)?;
+        crate::scheduler::admit(self)?;
         if objective.is_empty() || objective.chars().count() > 2000 {
             return Err("An objective must contain 1–2000 characters.");
         }
@@ -173,6 +231,12 @@ impl Runtime {
     }
     pub fn action(&mut self, path: &str, f: &HashMap<String, String>) -> &'static str {
         self.notice.clear();
+        if path == "/cancel-run" {
+            let id = field(f, "id");
+            self.notice = crate::lifecycle::request_cancel(self, &id, &Actor::LocalOperator)
+                .map(|()| "Cancellation requested.".to_owned())
+                .unwrap_or_else(str::to_owned);
+        }
         if path == "/improve" {
             self.enqueue(field(f, "objective"), "self-improvement", "website");
         }
@@ -180,6 +244,10 @@ impl Runtime {
             self.enqueue(field(f, "objective"), "task", "website");
         }
         if path == "/retry-run" {
+            if let Err(message) = crate::scheduler::admit(self) {
+                self.notice = message.into();
+                return "/?view=runs";
+            }
             let id = field(f, "id");
             let order = self
                 .runs
@@ -189,7 +257,9 @@ impl Runtime {
                 .unwrap_or(0)
                 .saturating_add(1);
             if let Some(run) = self.runs.iter_mut().find(|r| {
-                r.id == id && ["blocked", "failed", "interrupted"].contains(&r.status.as_str())
+                r.id == id
+                    && ["blocked", "failed", "interrupted", "cancelled"]
+                        .contains(&r.status.as_str())
             }) {
                 if let Err(message) = identity::authorize(&run.actor, run.action) {
                     self.notice = message.into();
@@ -225,7 +295,7 @@ impl Runtime {
                 let mut running = self
                     .runs
                     .iter()
-                    .filter(|r| r.status == "running")
+                    .filter(|r| ["running", "cancelling"].contains(&r.status.as_str()))
                     .peekable();
                 if running.peek().is_none() {
                     h.push_str("<div class='empty'>No active agents.</div>");
@@ -277,7 +347,10 @@ fn run_record(run: &Run) -> String {
     if let Some(chat) = run.chat_id.as_ref().filter(|id| crate::chat::valid_id(id)) {
         html.push_str(&format!("<a href='/chat/{}'>Open chat ↗</a>", escape(chat)));
     }
-    if ["blocked", "failed", "interrupted"].contains(&run.status.as_str()) {
+    if ["queued", "running"].contains(&run.status.as_str()) {
+        html.push_str(&format!("<form method='post' action='/cancel-run'><input type='hidden' name='id' value='{}'><button>Cancel</button></form>",escape(&run.id)));
+    }
+    if ["blocked", "failed", "interrupted", "cancelled"].contains(&run.status.as_str()) {
         html.push_str(&format!("<form method='post' action='/retry-run'><input type='hidden' name='id' value='{}'><button class='primary'>Retry</button></form>",escape(&run.id)));
     }
     html.push_str("</article>");
@@ -394,6 +467,46 @@ fn integrations() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_cancel_form_checkpoint_restores_target_run_and_notice() {
+        for status in ["queued", "running"] {
+            let mut state = crate::State::default();
+            state.runtime.enqueue("Keep my work".into(), "task", "test");
+            state.runtime.runs[0].status = status.into();
+            state.runtime.runs[0].result = "Existing progress".into();
+            state.runtime.notice = "Before cancellation".into();
+            let id = state.runtime.runs[0].id.clone();
+            let checkpoint = RunStatusCheckpoint::capture(&state.runtime, |run| run.id == id);
+            let before = serde_json::to_vec(&state).unwrap();
+            state.runtime.action("/cancel-run", &HashMap::from([("id".into(), id)]));
+            assert!(checkpoint.save(&mut state, |_| Err(std::io::Error::other("disk full"))).is_err());
+            assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+        }
+    }
+    #[test]
+    fn engine_inspection_drains_pipes_and_rejects_partial_results() {
+        let output = engine_output(
+            Command::new("head").args(["-c", "131072", "/dev/zero"]),
+            std::time::Duration::from_secs(5),
+        )
+        .unwrap();
+        assert_eq!(output.len(), 131072);
+        assert!(engine_output(
+            Command::new("head").args(["-c", "1048577", "/dev/zero"]),
+            std::time::Duration::from_secs(5),
+        )
+        .is_err());
+    }
+    #[test]
+    fn engine_inspection_deadline_does_not_wait_for_process_exit() {
+        let started = std::time::Instant::now();
+        assert!(engine_output(
+            Command::new("sleep").arg("5"),
+            std::time::Duration::from_millis(30),
+        )
+        .is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
     #[test]
     fn workers_require_content_addressed_images() {
         assert!(!pinned_image("control-worker:latest"));

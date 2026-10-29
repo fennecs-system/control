@@ -1,11 +1,11 @@
 mod access;
 mod artifacts;
 mod backend;
-mod claude;
 #[path = "../tools/browser/main.rs"]
 mod browser;
 mod browser_ui;
 mod chat;
+mod claude;
 mod collective;
 use control::config;
 mod discord;
@@ -18,11 +18,13 @@ mod identity;
 mod knowledge;
 mod lens_library;
 mod lens_ui;
+mod lifecycle;
 mod mcp_stdio;
 mod navigation;
 mod providers;
 mod rooms;
 mod runtime;
+mod scheduler;
 mod session_http;
 mod storage;
 mod tool_catalog;
@@ -316,8 +318,17 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
             let f = fields(&String::from_utf8_lossy(
                 &data[header_end..header_end + length],
             ));
+            let cancellation = (path == "/cancel-run").then(|| runtime::RunStatusCheckpoint::capture(&state.runtime, |run| Some(&run.id) == f.get("id")));
+            let cancel_chat = if path == "/cancel-run" {
+                state.runtime.runs.iter().find(|run| Some(&run.id) == f.get("id"))
+                    .and_then(|run| run.chat_id.as_ref())
+                    .and_then(|id| state.chats.iter().position(|chat| &chat.id == id))
+                    .map(|index| (index, state.chats[index].revision))
+            } else { None };
             let location = match path {
-                "/improve" | "/task" | "/retry-run" => state.runtime.action(path, &f),
+                "/improve" | "/task" | "/retry-run" | "/cancel-run" => {
+                    state.runtime.action(path, &f)
+                }
                 "/room" | "/propose" | "/review" | "/request" | "/decide" => {
                     state.collective.action(path, &f)
                 }
@@ -346,7 +357,14 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
                 }
                 _ => "/",
             };
-            if storage::save(state).is_err() {
+            if let Some((index, _)) = cancel_chat {
+                state.chats[index].revision = state.chats[index].revision.saturating_add(1);
+            }
+            let persisted = if let Some(checkpoint) = cancellation { checkpoint.save(state, storage::save) } else { storage::save(state) };
+            if persisted.is_err() {
+                if let Some((index, revision)) = cancel_chat {
+                    state.chats[index].revision = revision;
+                }
                 let _ = stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\nContent-Length: 35\r\n\r\nCould not persist the local change.");
                 return;
             }

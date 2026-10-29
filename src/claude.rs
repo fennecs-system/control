@@ -112,13 +112,6 @@ fn base(name: &str, node: &str, uid: u32, gid: u32) -> Command {
     ]);
     command
 }
-fn remove(name: &str) {
-    let _ = docker()
-        .args(["rm", "--force", name])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-}
 fn drain(mut reader: impl Read + Send + 'static, max: usize) -> std::thread::JoinHandle<Vec<u8>> {
     std::thread::spawn(move || {
         let mut kept = Vec::new();
@@ -177,7 +170,7 @@ pub fn shell(
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
-                remove(name);
+                crate::lifecycle::stop_resource(name, node, image, workspace).map_err(fail)?;
                 break Err(fail(
                     "Workspace command stopped after its deadline or a process error",
                 ));
@@ -216,16 +209,18 @@ pub fn claim(workspace: &Path, nonce: &str) -> io::Result<()> {
 }
 
 pub fn probe(image: &str, node: &str, root: &Path) -> io::Result<()> {
+    probe_named(
+        image,
+        node,
+        root,
+        &format!("control-claude-probe-{}", std::process::id()),
+    )
+}
+fn probe_named(image: &str, node: &str, root: &Path, name: &str) -> io::Result<()> {
     let directory = root.join("claude-isolation-probe");
     fs::create_dir_all(&directory)?;
     let command = "set -eu; test ! -e /home/agent/.claude/.credentials.json; test ! -S /var/run/docker.sock; test ! -e /proc/1/root/home/agent/.claude/.credentials.json; test -z \"${ANTHROPIC_API_KEY-}${CLAUDE_CODE_OAUTH_TOKEN-}\"; printf verified > isolation-check";
-    let output = shell(
-        image,
-        &format!("control-claude-probe-{}", std::process::id()),
-        node,
-        &directory,
-        command,
-    )?;
+    let output = shell(image, name, node, &directory, command)?;
     if output["exit_code"] != 0 || fs::read(directory.join("isolation-check"))? != b"verified" {
         return Err(fail(
             "Claude workspace isolation check failed; no credentials were mounted",
@@ -380,7 +375,7 @@ pub fn execute(
     let root = workspace
         .parent()
         .ok_or_else(|| blocked("Invalid attempt workspace"))?;
-    probe(image, node, root).map_err(|_| {
+    probe_named(image, node, root, &format!("control-{id}-probe")).map_err(|_| {
         blocked("Claude tool isolation probe failed. No account credentials were mounted.")
     })?;
     let meta = fs::symlink_metadata(&auth)
@@ -403,11 +398,12 @@ pub fn execute(
     let diagnostics = drain(child.stderr.take().unwrap(), 0);
     let stdout = child.stdout.take().unwrap();
     let live = bridge.map(|(s, r)| (Arc::clone(s), r.to_owned()));
+    let generation = id.to_owned();
     let output = std::thread::spawn(move || {
         capture(stdout, |event| {
             if let Some((s, r)) = &live {
                 if let Ok(mut s) = s.lock() {
-                    crate::worker::record_activity(&mut s, r, event);
+                    crate::worker::record_activity_for(&mut s, r, &generation, event);
                 }
             }
         })
@@ -419,6 +415,9 @@ pub fn execute(
         .is_some_and(|mut stdin| stdin.write_all(prompt.as_bytes()).is_ok());
     let start = Instant::now();
     let success = loop {
+        if crate::lifecycle::cancelled(bridge) {
+            break false;
+        }
         if !sent || start.elapsed() > Duration::from_secs(600) {
             break false;
         }
@@ -438,13 +437,19 @@ pub fn execute(
     if !success {
         let _ = child.kill();
         let _ = child.wait();
-        remove(&name);
+        crate::lifecycle::stop_attempt(attempt).map_err(|m| ("interrupted", m.to_owned()))?;
     }
     let result = output
         .join()
         .map_err(|_| failed("Claude stream reader stopped"))?;
     let _ = diagnostics.join();
     if !success {
+        if crate::lifecycle::cancelled(bridge) {
+            return Err((
+                "cancelled",
+                "Cancelled. The previous published workspace is unchanged.".into(),
+            ));
+        }
         return Err(failed("Claude stopped without success. Check its login, selected model and usage limits; credentials remain read-only."));
     }
     let (text, tokens) = result.map_err(|_| failed("Claude result or tool configuration failed validation; the previous workspace checkpoint is unchanged."))?;

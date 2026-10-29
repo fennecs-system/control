@@ -21,9 +21,14 @@ Configuration and state now resolve under independent home-directory roots. The
 binary embeds UI assets, the security profile, TUI and Discord bridge; offline
 doctor checks and a single-writer state lock are implemented. Ordinary chats
 restore bounded published snapshots, and the artifact explorer/viewer shares
-list/read services with MCP. Interrupted attempts are persisted and earlier active
-containers block new dispatch. Hard live-workspace quotas, automatic reconciliation,
-cancellation, Claude refresh/fault verification and broader release gates remain open. Friends
+list/read services with MCP. Cancellation and restart reconciliation now validate
+known resource ownership and confirm exit; unknown or mismatched resources block
+dispatch. Completion fencing preserves the last published checkpoint. Explicit
+`/steer` follow-ups wait for the next turn; `/btw` and `/spawn` create linked,
+independent task workspaces from published checkpoints, with one execution slot
+and at most 32 pending runs. Hard live-workspace quotas, persisted daemon IDs at
+launch, graceful signal shutdown, Claude refresh/fault verification and broader
+release gates remain open. Friends
 build the ordinary release binary from main with Nix; there is no separate preview
 target. A working local build does not close those reliability and provider gates.
 

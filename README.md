@@ -179,6 +179,29 @@ actor's architect access. Ordinary task files and improvement source files have
 separate checkpoints; changes remain isolated for review. Set the private
 `source-root` path before using this mode. Old Improve-page links open chat.
 
+The same chat commands work in the web UI, TUI and approved Discord DMs:
+
+| Command | Behavior |
+| --- | --- |
+| `/cancel` | Cancel the active run, or the oldest queued run in this chat. `/cancel RUN_ID` selects one pending run. |
+| `/steer direction` | Queue a follow-up for the next safe turn; it does not change a running provider request. |
+| `/btw question` | Ask in a linked side conversation using a captured parent context. |
+| `/spawn task` | Create a linked agent conversation with the parent's actor and captured model/context. |
+
+Child conversations restore their own copy of the last published task checkpoint;
+they never share a running writable workspace or inherit improvement source.
+Execution uses one slot and a FIFO queue capped at 32 pending runs. Side questions
+and child agents wait their turn. Web and TUI offer command completion.
+
+Cancellation remains **Stopping** until worker exit is confirmed. An in-flight
+Claude workspace command can delay cancellation by its 25-second deadline.
+After a restart, Control reconciles known resources against the persisted attempt,
+node, image and workspace before stopping them by inspected container ID. Unknown
+or mismatched resources pause dispatch for inspection. Failed or cancelled work
+does not replace the previous published checkpoint; retry is explicit in Runs.
+Hard workspace quotas, persisted container IDs at launch, graceful signal shutdown
+and provider credential-refresh fault verification remain open.
+
 Navigation pages are global, with one **Chat** destination and one **Lenses** menu item. The chat panel is absent from other pages. Local architects can use the header's **Discuss design** link to prepare a chat about that page; following the link sends nothing and creates no run. The topic is whitelisted context, not source-editing permission. Source changes still require an explicit authorized improvement action.
 
 Chat has a top-left Conversations button, closed by default, opening a left-hand panel with New chat and the current selection. On narrow screens the panel overlays the chat. Completed replies omit status labels; progress and failures remain visible. The opposite side opens Artifacts.

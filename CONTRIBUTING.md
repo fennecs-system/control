@@ -1,8 +1,10 @@
 # Working on Control
 
 Keep `main` ready for someone to clone, build and use. Make changes on a short-lived
-feature branch, open a pull request, and merge after its Rust checks pass. Deploy
-the merged revision. Fix a failing main build before starting another feature.
+feature branch, run the relevant local checks before pushing, and open a pull
+request. The maintainer merges after its Rust checks pass; coding agents do not
+merge pull requests. Deploy the merged revision when requested. Fix a failing
+main build before starting another feature.
 
 ```sh
 git switch main

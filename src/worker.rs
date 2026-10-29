@@ -180,7 +180,7 @@ fn sandbox_probe(
         .map_err(|_| "Cannot start sandbox verification.")?;
     let result = wait(&mut child, Duration::from_secs(30));
     if result.is_err() {
-        remove_container(name);
+        crate::lifecycle::stop_resource(name, node, image, &workspace)?;
     }
     match child.try_wait().ok().flatten().and_then(|s| s.code()) {
         Some(41) => return Err("Credential canary was readable through a sandbox path. No account credentials were mounted."),
@@ -193,14 +193,6 @@ fn sandbox_probe(
         return Err("Credential isolation verification failed. No account credentials were mounted. Check the pinned Codex image and container sandbox support.");
     }
     Ok(())
-}
-
-fn remove_container(name: &str) {
-    let _ = Command::new("docker")
-        .args(["rm", "--force", name])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
 }
 
 const UNKNOWN_FAILURE: &str = "Codex container exited unsuccessfully. Check host account authentication and the pinned worker configuration. No host fallback was attempted.";
@@ -294,63 +286,20 @@ pub fn start(state: Arc<Mutex<State>>) {
     });
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(2));
-        // Refuse overlapping launches after a crash. Labels identify this node;
-        // legacy interrupted attempts are matched by their exact persisted name.
-        // Discovery never authorizes deletion or adoption of an unknown container.
-        let legacy = {
+        let interrupted = {
             let Ok(s) = state.lock() else {
                 return;
             };
-            if !s.runtime.runs.iter().any(|r| r.status == "queued") {
-                continue;
-            }
-            s.runtime
-                .runs
-                .iter()
-                .flat_map(|run| {
-                    run.attempts
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, a)| a.status == "interrupted")
-                        .flat_map(|(index, a)| {
-                            let id = a
-                                .workspace_id
-                                .clone()
-                                .unwrap_or_else(|| format!("{}-attempt-{}", run.id, index + 1));
-                            [format!("control-{id}"), format!("control-{id}-probe")]
-                        })
-                })
-                .collect::<Vec<_>>()
+            s.runtime.runs.clone()
         };
         if crate::backend::Backend::Codex.image().is_some()
             || crate::backend::Backend::Claude.image().is_some()
         {
-            match (
-                crate::config::node_id(),
-                runtime::docker_query(&[
-                    "ps",
-                    "--format",
-                    "{{.Names}}|{{.Label \"dev.control.node\"}} ",
-                ]),
-            ) {
-                (Ok(node), Ok(containers)) => {
-                    if containers
-                        .lines()
-                        .filter_map(|line| line.trim().split_once('|'))
-                        .any(|(name, owner)| owner == node || legacy.iter().any(|old| old == name))
-                    {
-                        if let Ok(mut s) = state.lock() {
-                            s.runtime.notice = "An earlier container is still active. Inspect and stop it before this node resumes queued work.".into();
-                        }
-                        continue;
-                    }
+            if let Err(message) = crate::lifecycle::reconcile(&interrupted) {
+                if let Ok(mut s) = state.lock() {
+                    s.runtime.notice = message.into();
                 }
-                _ => {
-                    if let Ok(mut s) = state.lock() {
-                        s.runtime.notice = "Container ownership inspection is unavailable. Dispatch is waiting; check the engine with control doctor.".into();
-                    }
-                    continue;
-                }
+                continue;
             }
         }
         let task = {
@@ -392,6 +341,18 @@ pub fn start(state: Arc<Mutex<State>>) {
             eprintln!("Worker result not committed: state unavailable; inspect artifacts before restarting.");
             return;
         };
+        let Some(run) = s.runtime.runs.iter().find(|r| r.id == task.0) else {
+            continue;
+        };
+        if !crate::lifecycle::current(run, &attempt) {
+            continue;
+        }
+        if run.status == "cancelling" && !matches!(&outcome, Err(("interrupted", _))) {
+            outcome = Err((
+                "cancelled",
+                "Cancelled. The previous published workspace is unchanged.".into(),
+            ));
+        }
         let previous_run = s
             .runtime
             .runs
@@ -472,14 +433,7 @@ fn checkpoint_next(
     state: &mut State,
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Option<usize> {
-    let index = state
-        .runtime
-        .runs
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| r.status == "queued")
-        .min_by_key(|(index, r)| (r.queue_order, *index))
-        .map(|(index, _)| index)?;
+    let index = crate::scheduler::next(&state.runtime)?;
     let omitted_history = crate::chat::omitted_history(state, &state.runtime.runs[index].id);
     let parent = {
         if let Some(previous) = state.runtime.runs[index].attempts.last() {
@@ -604,44 +558,73 @@ fn ingest_discord(state: &Arc<Mutex<State>>) -> Result<(), ()> {
             continue;
         }
         let id = crate::discord::chat_id(message.user_id, message.channel_id);
-        let before = s
-            .chats
-            .iter()
-            .position(|c| c.id == id)
-            .map(|i| (i, s.chats[i].clone()));
-        let counts = (s.chats.len(), s.runtime.runs.len(), s.discord_seen.len());
-        let notice = s.runtime.notice.clone();
-        let rollback = move |state: &mut State| {
-            state.chats.truncate(counts.0);
-            if let Some((index, chat)) = before {
-                state.chats[index] = chat;
-            }
-            state.runtime.runs.truncate(counts.1);
-            state.discord_seen.truncate(counts.2);
-            state.runtime.notice = notice;
-        };
-        if crate::chat::receive(&mut s, &message).is_err() {
-            rollback(&mut s);
-            continue;
-        }
-        s.discord_seen.push(message_id);
-        if storage::save(&s).is_err() {
-            rollback(&mut s);
-            eprintln!("Could not persist Discord task.");
-        } else {
+        let ingested = receive_with_save(&mut s, &id, message_id, |s| crate::chat::receive(s, &message), storage::save);
+        if ingested.is_ok() {
             // Consume only after the conversation and deduplication checkpoint are durable.
             let _ = fs::remove_file(path);
+        } else if ingested == Err("Could not persist Discord task.") {
+            eprintln!("Could not persist Discord task.");
         }
     }
     Ok(())
 }
-pub(crate) fn record_activity(state: &mut State, id: &str, event: crate::usage::Activity) -> bool {
+fn receive_with_save(
+    state: &mut State,
+    id: &str,
+    message_id: String,
+    receive: impl FnOnce(&mut State) -> Result<(), &'static str>,
+    save: impl FnOnce(&State) -> std::io::Result<()>,
+) -> Result<(), &'static str> {
+    let before = state.chats.iter().position(|chat| chat.id == id).map(|index| (index, state.chats[index].clone()));
+    let counts = (state.chats.len(), state.runtime.runs.len(), state.discord_seen.len());
+    let pending = runtime::RunStatusCheckpoint::capture(&state.runtime, |run| run.chat_id.as_deref() == Some(id));
+    let result = receive(state).and_then(|()| {
+        state.discord_seen.push(message_id);
+        save(state).map_err(|_| "Could not persist Discord task.")
+    });
+    if result.is_err() {
+        state.chats.truncate(counts.0);
+        if let Some((index, chat)) = before {
+            state.chats[index] = chat;
+        }
+        state.runtime.runs.truncate(counts.1);
+        state.discord_seen.truncate(counts.2);
+        pending.restore(&mut state.runtime);
+    }
+    result
+}
+#[cfg(test)]
+fn record_activity(state: &mut State, id: &str, event: crate::usage::Activity) -> bool {
+    let generation = state
+        .runtime
+        .runs
+        .iter()
+        .find(|r| r.id == id)
+        .and_then(|r| r.attempts.last())
+        .and_then(|a| a.workspace_id.clone());
+    let Some(generation) = generation else {
+        return false;
+    };
+    record_activity_for(state, id, &generation, event)
+}
+pub(crate) fn record_activity_for(
+    state: &mut State,
+    id: &str,
+    generation: &str,
+    event: crate::usage::Activity,
+) -> bool {
     let Some(run) = state.runtime.runs.iter_mut().find(|r| r.id == id) else {
         return false;
     };
+    if run.status != "running" {
+        return false;
+    }
     let Some(attempt) = run.attempts.last_mut() else {
         return false;
     };
+    if attempt.workspace_id.as_deref() != Some(generation) {
+        return false;
+    }
     if let Some(old) = attempt.activity.iter_mut().find(|a| a.id == event.id) {
         *old = event;
     } else {
@@ -671,6 +654,9 @@ fn execute(
     let blocked = |m: &str| ("blocked", m.to_owned());
     let failed = |m: &str| ("failed", m.to_owned());
     let scope = identity::authorize(actor, action).map_err(blocked)?;
+    if crate::lifecycle::cancelled(bridge) {
+        return Err(("cancelled", "Cancelled before launch.".into()));
+    }
     let image = attempt.image.clone().ok_or_else(|| blocked("No captured worker image. Configure the selected backend's pinned image and submit a new run."))?;
     let node = attempt
         .node_id
@@ -777,12 +763,16 @@ fn execute(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if crate::lifecycle::cancelled(bridge) {
+        return Err(("cancelled", "Cancelled before launch.".into()));
+    }
     let mut child = command
         .spawn()
         .map_err(|_| failed("Could not start the container worker."))?;
     let diagnostics = capture_diagnostics(child.stderr.take().unwrap());
     let stdout = child.stdout.take().unwrap();
     let live = bridge.map(|(state, run)| (Arc::clone(state), run.to_owned()));
+    let generation = id.to_owned();
     let accounting = std::thread::spawn(move || {
         crate::usage::capture_with(stdout, |event| {
             let Some((state, id)) = &live else {
@@ -793,7 +783,7 @@ fn execute(
             };
             // Progress is disposable; lifecycle/result checkpoints persist the
             // accumulated activity. Never fsync the entire history per event.
-            record_activity(&mut state, id, event);
+            record_activity_for(&mut state, id, &generation, event);
         })
     });
     let context = if scope == Workspace::ControlSource {
@@ -818,12 +808,15 @@ fn execute(
     {
         let _ = child.kill();
         let _ = child.wait();
-        remove_container(&container);
+        crate::lifecycle::stop_attempt(attempt).map_err(|m| ("interrupted", m.to_owned()))?;
         return Err(failed("Could not deliver the objective."));
     }
     let started = Instant::now();
     let result = loop {
         if let Some((state, run)) = bridge {
+            if crate::lifecycle::cancelled(bridge) {
+                break Err(std::io::Error::other("Cancellation requested"));
+            }
             if state.is_poisoned() {
                 break Err(std::io::Error::other("Control state unavailable"));
             }
@@ -845,11 +838,18 @@ fn execute(
     if result.is_err() {
         let _ = child.kill();
         let _ = child.wait();
-        remove_container(&container);
+        if let Err(message) = crate::lifecycle::stop_attempt(attempt) {
+            return Err(("interrupted", message.into()));
+        }
         attempt.tokens = accounting.join().unwrap_or(None);
-        return Err(failed(
-            "Worker stopped after its deadline or a process error.",
-        ));
+        return Err(if crate::lifecycle::cancelled(bridge) {
+            (
+                "cancelled",
+                "Cancelled. The previous published workspace is unchanged.".into(),
+            )
+        } else {
+            failed("Worker stopped after its deadline or a process error.")
+        });
     }
     attempt.tokens = accounting.join().unwrap_or(None);
     if !result.unwrap_or(false) {
@@ -928,6 +928,22 @@ fn prepare_workspace(
 mod tests {
     use super::*;
     #[test]
+    fn failed_discord_cancel_checkpoint_preserves_run_and_retryable_delivery() {
+        for status in ["queued", "running"] {
+            let mut state = State::default();
+            let id = crate::chat::create(&mut state);
+            crate::chat::send(&mut state, &id, "Keep my work", "test").unwrap();
+            state.runtime.runs[0].status = status.into();
+            state.runtime.runs[0].result = "Existing progress".into();
+            let before = serde_json::to_vec(&state).unwrap();
+            assert!(receive_with_save(&mut state, &id, "fixture-message".into(), |state| crate::chat::send(state, &id, "/cancel", "test"), |_| Err(std::io::Error::other("disk full"))).is_err());
+            assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+            assert!(receive_with_save(&mut state, &id, "fixture-message".into(), |state| crate::chat::send(state, &id, "/cancel", "test"), |_| Ok(())).is_ok());
+            assert_eq!(state.discord_seen, ["fixture-message"]);
+            assert_eq!(state.runtime.runs[0].status, if status == "queued" { "cancelled" } else { "cancelling" });
+        }
+    }
+    #[test]
     fn improvement_followups_and_ordinary_tasks_use_separate_workspace_lineages() {
         let mut state = State::default();
         let chat = crate::chat::create(&mut state);
@@ -947,6 +963,23 @@ mod tests {
             state.runtime.runs[1].attempts[0].parent_artifact.as_deref(),
             Some("ordinary-files")
         );
+    }
+    #[test]
+    fn child_uses_frozen_task_checkpoint_and_unique_writable_attempt() {
+        let mut state = State::default();
+        let parent = crate::chat::create(&mut state);
+        state.chats[0].workspace = Some("published-task".into());
+        state.chats[0].improve_workspace = Some("private-source".into());
+        let child = crate::chat::fork(&mut state, &parent, "Inspect files", "test").unwrap();
+        state.chats[0].workspace = Some("later-parent-output".into());
+        checkpoint_next(&mut state, |_| Ok(())).unwrap();
+        let attempt = &state.runtime.runs[0].attempts[0];
+        assert_eq!(attempt.parent_artifact.as_deref(), Some("published-task"));
+        assert!(attempt.workspace_id.as_deref().unwrap().starts_with(&state.runtime.runs[0].id));
+        assert_eq!(state.runtime.runs[0].chat_id.as_deref(), Some(child.as_str()));
+        assert_eq!(state.runtime.runs[0].action, Action::Task);
+        assert_eq!(state.chats[0].workspace.as_deref(), Some("later-parent-output"));
+        assert!(state.chats[1].improve_workspace.is_none());
     }
     #[test]
     fn followups_capture_workspace_at_dispatch_and_retries_keep_their_parent() {
@@ -993,6 +1026,10 @@ mod tests {
         let chat = crate::chat::create(&mut state);
         crate::chat::send(&mut state, &chat, "Check build", "test").unwrap();
         checkpoint_next(&mut state, |_| Ok(())).unwrap();
+        let old_generation = state.runtime.runs[0].attempts[0]
+            .workspace_id
+            .clone()
+            .unwrap();
         let run = state.runtime.runs[0].id.clone();
         let event = |id: usize, status: &str| crate::usage::Activity {
             id: id.to_string(),
@@ -1019,7 +1056,22 @@ mod tests {
             "/retry-run",
             &std::collections::HashMap::from([("id".into(), run.clone())]),
         );
+        assert!(!record_activity_for(
+            &mut state,
+            &run,
+            &old_generation,
+            event(99, "completed")
+        ));
         checkpoint_next(&mut state, |_| Ok(())).unwrap();
+        let revision = state.chats[0].revision;
+        assert!(!record_activity_for(
+            &mut state,
+            &run,
+            &old_generation,
+            event(99, "completed")
+        ));
+        assert_eq!(state.chats[0].revision, revision);
+        assert!(state.runtime.runs[0].attempts[1].activity.is_empty());
         record_activity(&mut state, &run, event(0, "running"));
         assert_eq!(state.runtime.runs[0].attempts[0].activity.len(), 64);
         assert_eq!(state.runtime.runs[0].attempts[1].activity.len(), 1);
