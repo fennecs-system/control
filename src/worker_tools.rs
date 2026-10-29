@@ -163,6 +163,7 @@ fn rpc_at(
                 );
                 drop(state);
                 let result = crate::claude::shell(&image, &name, &node, workspace, &input.command);
+                crate::worker::observe_workspace_diff(shared,run_id,&generation,workspace,"observed");
                 if let Ok(mut state) = shared.lock() {
                     crate::worker::record_activity_for(
                         &mut state,

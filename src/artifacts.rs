@@ -101,6 +101,83 @@ fn safe_read(root: &Path, relative: &str, limit: u64) -> io::Result<Vec<u8>> {
     }
     Ok(bytes)
 }
+
+/// Best-effort bounded text inspection for chat previews. Use the artifact path
+/// rules and no-follow reads; omitted files must never look like deletions.
+pub(crate) fn diff_snapshot(root: &Path) -> io::Result<control::diff::Snapshot> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fn collect(directory: &fs::File, prefix: &str, snapshot: &mut control::diff::Snapshot, total: &mut usize, visited: &mut usize, depth: usize) -> io::Result<()> {
+        if depth>32 || *visited>=4096 {snapshot.incomplete=true;return Ok(());}
+        let mut entries=diff_directory_names(directory)?;
+        if entries.len()>2048 {snapshot.incomplete=true;return Ok(());}
+        entries.sort();
+        for name in entries {
+            *visited+=1;
+            if *visited>4096 || *total>=4*1024*1024 || snapshot.files.len()>=512 {snapshot.incomplete=true;break;}
+            let Some(label)=name.to_str() else {snapshot.incomplete=true;continue;};
+            if label=="." || label==".." || excluded(label)
+                || [".ssh",".aws",".config",".secrets",".direnv","dist","credentials.json",".credentials.json",".git-credentials",".netrc","id_rsa","id_ed25519"].contains(&label)
+                || [".pem",".key",".p12",".pfx"].iter().any(|suffix|label.ends_with(suffix)) {continue;}
+            let relative=if prefix.is_empty(){label.into()}else{format!("{prefix}/{label}")};
+            if !valid_path(&relative) {snapshot.incomplete=true;continue;}
+            let Ok(file)=diff_open_child(directory,&name) else {snapshot.skipped.insert(relative);continue;};
+            let metadata=file.metadata()?;
+            if metadata.is_dir() {
+                if collect(&file,&relative,snapshot,total,visited,depth+1).is_err() {snapshot.incomplete=true;}
+            } else if metadata.is_file() && metadata.len()<=128*1024 {
+                let mut bytes=Vec::new();
+                let read=file.take(128*1024+1).read_to_end(&mut bytes);
+                let text=if read.is_ok() && bytes.len()<=128*1024 && !bytes.contains(&0) {String::from_utf8(bytes).ok()}else{None};
+                match text {
+                    Some(text) if *total+text.len()<=4*1024*1024 => {*total+=text.len();snapshot.files.insert(relative,text);}
+                    _ => {snapshot.skipped.insert(relative);}
+                }
+            } else {snapshot.skipped.insert(relative);}
+        }
+        Ok(())
+    }
+    let directory=fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW|libc::O_DIRECTORY|libc::O_CLOEXEC).open(root)?;
+    let mut snapshot=control::diff::Snapshot::default();
+    collect(&directory,"",&mut snapshot,&mut 0,&mut 0,0)?;
+    Ok(snapshot)
+}
+
+fn diff_open_child(directory: &fs::File, name: &std::ffi::OsStr) -> io::Result<fs::File> {
+    use std::os::{fd::{AsRawFd,FromRawFd},unix::ffi::OsStrExt};
+    let name=std::ffi::CString::new(name.as_bytes()).map_err(|_|fail("Invalid diff filename"))?;
+    // One relative component and a pinned parent descriptor: no intermediate
+    // symlink can redirect a live workspace read into the host filesystem.
+    let fd=unsafe{libc::openat(directory.as_raw_fd(),name.as_ptr(),libc::O_RDONLY|libc::O_NOFOLLOW|libc::O_NONBLOCK|libc::O_CLOEXEC)};
+    if fd<0 {return Err(io::Error::last_os_error());}
+    Ok(unsafe{fs::File::from_raw_fd(fd)})
+}
+fn diff_directory_names(directory: &fs::File) -> io::Result<Vec<std::ffi::OsString>> {
+    use std::os::{fd::IntoRawFd,unix::ffi::OsStrExt};
+    let fd=directory.try_clone()?.into_raw_fd();
+    // fdopendir owns the duplicated descriptor only on success.
+    let dir=unsafe{libc::fdopendir(fd)};
+    if dir.is_null() {let error=io::Error::last_os_error();unsafe{libc::close(fd)};return Err(error);}
+    struct Directory(*mut libc::DIR);
+    impl Drop for Directory {fn drop(&mut self){unsafe{libc::closedir(self.0)};}}
+    let dir=Directory(dir);
+    let mut names=Vec::new();
+    loop {
+        #[cfg(target_os="macos")]
+        let errno=unsafe{libc::__error()};
+        #[cfg(target_os="linux")]
+        let errno=unsafe{libc::__errno_location()};
+        unsafe{*errno=0};
+        let entry=unsafe{libc::readdir(dir.0)};
+        if entry.is_null() {
+            if unsafe{*errno}!=0 {return Err(io::Error::last_os_error());}
+            break;
+        }
+        let name=unsafe{std::ffi::CStr::from_ptr((*entry).d_name.as_ptr())};
+        names.push(std::ffi::OsStr::from_bytes(name.to_bytes()).to_owned());
+        if names.len()>2050 {break;}
+    }
+    Ok(names)
+}
 fn private_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
     fs::DirBuilder::new().recursive(true).mode(0o700).create(
@@ -463,6 +540,33 @@ pub fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn live_diff_reads_stay_inside_pinned_directories_and_skip_private_outputs() {
+        let root=std::env::temp_dir().join(format!("control-diff-safe-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let workspace=root.join("workspace");let outside=root.join("outside");
+        fs::create_dir_all(workspace.join("src")).unwrap();fs::create_dir_all(&outside).unwrap();
+        fs::write(workspace.join("src/main.rs"),"inside\n").unwrap();
+        fs::write(outside.join("main.rs"),"outside-fixture\n").unwrap();
+        fs::write(workspace.join(".env"),"private-fixture").unwrap();
+        fs::write(workspace.join("private.key"),"private-key-fixture").unwrap();
+        fs::write(workspace.join("binary.dat"),[0,1,2]).unwrap();
+        fs::write(workspace.join("large.txt"),vec![b'x';128*1024+1]).unwrap();
+        std::os::unix::fs::symlink(&outside,workspace.join("linked")).unwrap();
+        let snapshot=diff_snapshot(&workspace).unwrap();
+        assert_eq!(snapshot.files.len(),1);
+        assert_eq!(snapshot.files["src/main.rs"],"inside\n");
+        assert!(snapshot.skipped.contains("linked") && snapshot.skipped.contains("binary.dat") && snapshot.skipped.contains("large.txt"));
+        let pinned=fs::File::open(workspace.join("src")).unwrap();
+        fs::rename(workspace.join("src"),workspace.join("original-src")).unwrap();
+        std::os::unix::fs::symlink(&outside,workspace.join("src")).unwrap();
+        let mut text=String::new();
+        diff_open_child(&pinned,std::ffi::OsStr::new("main.rs")).unwrap().read_to_string(&mut text).unwrap();
+        assert_eq!(text,"inside\n");
+        let snapshot=diff_snapshot(&workspace).unwrap();
+        assert!(snapshot.files.values().all(|text| !text.contains("outside-fixture")));
+        assert!(diff_snapshot(&workspace.join("src")).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn artifact_tools_keep_chat_authority_and_reject_actor_overrides() {
         let mut state = crate::State::default();

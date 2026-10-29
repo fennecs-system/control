@@ -113,6 +113,7 @@ dependencies = [
  "base64 0.22.1",
  "control-context",
  "crossterm",
+ "libc",
  "ratatui",
  "reqwest",
  "ring",

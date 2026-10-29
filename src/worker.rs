@@ -336,6 +336,9 @@ pub fn start(state: Arc<Mutex<State>>) {
             &mut attempt,
             Some((&state, &task.0)),
         );
+        if let Ok(workspace) = runtime::workspace(&workspace_id) {
+            observe_workspace_diff(&state,&task.0,&workspace_id,&workspace,if outcome.is_ok() {"completed"} else {"observed"});
+        }
         if matches!(&outcome, Err(("waiting", _))) {
             outcome = match runtime::workspace(&workspace_id).map_err(std::io::Error::other)
                 .and_then(|workspace| crate::artifacts::publish(&workspace, &workspace_id)) {
@@ -656,6 +659,19 @@ pub(crate) fn record_activity_for(
     }
     true
 }
+
+pub(crate) fn observe_workspace_diff(state: &Arc<Mutex<State>>, run: &str, generation: &str, workspace: &Path, status: &str) {
+    // File reads and diff computation never hold the control-plane state lock.
+    let Some(baseline)=workspace.parent().map(|p|p.join("baseline")) else {return;};
+    let (Ok(before),Ok(after))=(crate::artifacts::diff_snapshot(&baseline),crate::artifacts::diff_snapshot(workspace)) else {return;};
+    let preview=control::diff::between(&before,&after);
+    let text=if preview.files==0 && preview.omitted==0 {String::new()} else {preview.summary()};
+    if let Ok(mut state)=state.lock() {
+        record_activity_for(&mut state,run,generation,crate::usage::Activity {
+            id:"workspace-diff".into(),kind:"file_change".into(),text,output:preview.text,status:status.into(),
+        });
+    }
+}
 fn execute(
     id: &str,
     objective: &str,
@@ -788,11 +804,21 @@ fn execute(
     let stdout = child.stdout.take().unwrap();
     let live = bridge.map(|(state, run)| (Arc::clone(state), run.to_owned()));
     let generation = id.to_owned();
+    let diff_workspace = absolute.clone();
     let accounting = std::thread::spawn(move || {
         crate::usage::capture_with(stdout, |event| {
             let Some((state, id)) = &live else {
                 return;
             };
+            if event.kind == "file_change" {
+                if !["running","in_progress"].contains(&event.status.as_str()) {
+                    observe_workspace_diff(state,id,&generation,&diff_workspace,"observed");
+                }
+                return;
+            }
+            if event.kind == "command_execution" && event.status == "completed" {
+                observe_workspace_diff(state,id,&generation,&diff_workspace,"observed");
+            }
             let Ok(mut state) = state.lock() else {
                 return;
             };
@@ -943,6 +969,7 @@ fn prepare_workspace(
         runtime::snapshot(&crate::config::source_root()?, baseline)?;
         runtime::snapshot(baseline, workspace)
     } else {
+        fs::create_dir_all(baseline)?;
         fs::create_dir_all(workspace)
     }
 }
@@ -1159,7 +1186,7 @@ mod tests {
         let baseline = root.join("baseline");
         let workspace = root.join("workspace");
         prepare_workspace(Workspace::User, &baseline, &workspace).unwrap();
-        assert!(!baseline.exists());
+        assert_eq!(fs::read_dir(&baseline).unwrap().count(), 0);
         assert_eq!(fs::read_dir(&workspace).unwrap().count(), 0);
         fs::remove_dir_all(root).unwrap();
     }

@@ -224,6 +224,14 @@ Navigation pages are global, with one **Chat** destination and one **Lenses** me
 
 Chat has a top-left Conversations button, closed by default, opening a left-hand panel with New chat and the current selection. On narrow screens the panel overlays the chat. Completed replies omit status labels; progress and failures remain visible. The opposite side opens Artifacts.
 
+Web chat and the TUI show file changes as unified diff previews: purple additions,
+muted red removals, filenames, hunks and `+`/`-` markers. One card per attempt
+updates after edits/commands and when the run finishes, relative to that attempt's
+starting files. These are observed workspace changes, not a Git commit or approval
+to apply them. Previews bound file size, output and computation; private paths,
+binary files and oversized content are omitted. Discord replies include a short
+plain monospaced preview and a chat link, with no green syntax highlighting.
+
 **Manage** opens a secondary navigation column for Nodes, Access requests, Personas, Models & providers, Discord access, and Integrations. The section remains visible on direct links and becomes a horizontal row on narrow screens. The main sidebar scrolls its links independently when space is limited. Models & providers lists every saved backend/model pair; click a row to select the default for new runs. **+ New model** adds an entry without changing the default; **Edit** updates that entry. The list and default persist in private `model.json`. Queued runs and retries retain their backend/model. `CONTROL_CODEX_MODEL` supplies the Codex default until a model is saved. OpenAI API, native Anthropic API, and self-hosted adapters remain unconnected.
 
 Chat uses one conversation area with lens tags in the bottom composer. **+ Lenses** reveals selectable library entries; selected tags remain visible when it closes. Sending captures the tags and message together. The borderless transcript refreshes independently while work is pending, preserving the composer draft. MCP `control.chat.create` accepts `lenses`, and `control.chat.lenses` updates an existing chat. Older single `lens` values remain readable and accepted for creation. Legacy and Discord chats without lenses stay unassigned.
