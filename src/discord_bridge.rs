@@ -481,7 +481,9 @@ impl Bridge {
             if let Some(message) = incoming(&row, route, self.bot_id) {
                 let actor = message.actor();
                 if identity::authorize(&actor, message.action).is_ok() {
-                    let native = if message.action == Action::Task {
+                    let native = if message.action == Action::Improve && ["on", "off"].contains(&message.objective.as_str()) {
+                        Some(format!("Improve mode change queued.\n{}", discord::chat_link(&actor).unwrap_or_default()))
+                    } else if message.action == Action::Task {
                         discord::native_reply(&actor, &message.objective)
                     } else {
                         None

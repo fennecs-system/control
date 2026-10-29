@@ -406,14 +406,19 @@ pub fn start(state: Arc<Mutex<State>>) {
             .iter()
             .position(|c| Some(&c.id) == chat_id.as_ref())
             .map(|i| (i, s.chats[i].clone()));
-        if outcome.is_ok() && task.3 == Action::Task {
+        if outcome.is_ok() {
             if let Some((_, chat)) = &previous_chat {
-                if chat.workspace != attempt.parent_artifact {
+                let current = if task.3 == Action::Improve {
+                    &chat.improve_workspace
+                } else {
+                    &chat.workspace
+                };
+                if current != &attempt.parent_artifact {
                     outcome = Err(("interrupted", "The conversation workspace changed. Outputs were retained; start a new turn to continue from the current version.".into()));
                 }
             }
         }
-        let published = if outcome.is_ok() && task.3 == Action::Task {
+        let published = if outcome.is_ok() {
             attempt.artifact.clone()
         } else {
             None
@@ -443,7 +448,11 @@ pub fn start(state: Arc<Mutex<State>>) {
             .and_then(|r| r.chat_id.clone());
         if let Some(session) = s.chats.iter_mut().find(|c| Some(&c.id) == chat_id.as_ref()) {
             if let Some(published) = published {
-                session.workspace = Some(published);
+                if task.3 == Action::Improve {
+                    session.improve_workspace = Some(published);
+                } else {
+                    session.workspace = Some(published);
+                }
             }
             session.revision = session.revision.saturating_add(1);
         }
@@ -472,7 +481,7 @@ fn checkpoint_next(
         .min_by_key(|(index, r)| (r.queue_order, *index))
         .map(|(index, _)| index)?;
     let omitted_history = crate::chat::omitted_history(state, &state.runtime.runs[index].id);
-    let parent = if state.runtime.runs[index].action == Action::Task {
+    let parent = {
         if let Some(previous) = state.runtime.runs[index].attempts.last() {
             previous.parent_artifact.clone()
         } else {
@@ -480,10 +489,14 @@ fn checkpoint_next(
                 .chats
                 .iter()
                 .find(|c| Some(&c.id) == state.runtime.runs[index].chat_id.as_ref())
-                .and_then(|c| c.workspace.clone())
+                .and_then(|c| {
+                    if state.runtime.runs[index].action == Action::Improve {
+                        c.improve_workspace.clone()
+                    } else {
+                        c.workspace.clone()
+                    }
+                })
         }
-    } else {
-        None
     };
     let run = &mut state.runtime.runs[index];
     run.status = "running".into();
@@ -673,13 +686,13 @@ fn execute(
     if baseline.exists() || workspace.exists() {
         return Err(blocked("A source snapshot already exists for this run. Inspect its artifacts; submit a new run to avoid overwriting evidence."));
     }
-    prepare_workspace(scope, &baseline, &workspace)
-        .map_err(|_| failed("Could not prepare the authorized workspace."))?;
-    if scope == Workspace::User {
-        if let Some(parent) = &attempt.parent_artifact {
-            crate::artifacts::restore(parent, &workspace)
-                .map_err(|_| failed("Could not restore the previous published workspace. Its checkpoint is unchanged."))?;
-        }
+    if let Some(parent) = &attempt.parent_artifact {
+        crate::artifacts::restore(parent, &baseline)
+            .and_then(|_| crate::artifacts::restore(parent, &workspace))
+            .map_err(|_| failed("Could not restore the previous published workspace. Its checkpoint is unchanged."))?;
+    } else {
+        prepare_workspace(scope, &baseline, &workspace)
+            .map_err(|_| failed("Could not prepare the authorized workspace."))?;
     }
     let absolute =
         fs::canonicalize(&workspace).map_err(|_| failed("Could not resolve worker workspace."))?;
@@ -914,6 +927,27 @@ fn prepare_workspace(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn improvement_followups_and_ordinary_tasks_use_separate_workspace_lineages() {
+        let mut state = State::default();
+        let chat = crate::chat::create(&mut state);
+        state.chats[0].workspace = Some("ordinary-files".into());
+        state.chats[0].improve_workspace = Some("source-files".into());
+        crate::chat::send(&mut state, &chat, "/improve discuss this design", "test").unwrap();
+        checkpoint_next(&mut state, |_| Ok(())).unwrap();
+        assert_eq!(
+            state.runtime.runs[0].attempts[0].parent_artifact.as_deref(),
+            Some("source-files")
+        );
+        state.runtime.runs[0].status = "completed".into();
+        crate::chat::send(&mut state, &chat, "/improve off", "test").unwrap();
+        crate::chat::send(&mut state, &chat, "Continue my project", "test").unwrap();
+        checkpoint_next(&mut state, |_| Ok(())).unwrap();
+        assert_eq!(
+            state.runtime.runs[1].attempts[0].parent_artifact.as_deref(),
+            Some("ordinary-files")
+        );
+    }
     #[test]
     fn followups_capture_workspace_at_dispatch_and_retries_keep_their_parent() {
         let mut state = State::default();

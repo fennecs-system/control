@@ -9,7 +9,6 @@ const PRIMARY: &[(&str, &str, &str, &str)] = &[
     ("lenses", "/lenses", "◈", "Lenses"),
     ("tools", "/?view=tools", "⊞", "Tools"),
     ("monitor", "/?view=monitor", "▥", "Usage"),
-    ("evolution", "/?view=evolution", "↻", "Improve"),
     ("manage", "/?view=manage", "⚙", "Manage"),
 ];
 const MANAGE: &[(&str, &str)] = &[

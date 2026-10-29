@@ -220,17 +220,30 @@ impl Runtime {
                 h.push_str("<div class='callout'>Bind IDs locally with <code>cargo run -- --bind-discord &lt;label&gt; &lt;ID&gt;</code>. Access settings cannot be changed through Discord.</div>");
                 Some(h)
             }
-            "evolution" => Some("<div class='section-heading'><h2>Improve Control</h2><a href='/?view=runs'>View runs ↗</a></div><form method='post' action='/improve'><label>What should Control improve?<textarea name='objective' required maxlength='2000' rows='4' placeholder='Describe the change…'></textarea></label><button class='primary'>Queue improvement ↗</button></form>".into()),
             "agents" => {
                 let mut h = "<div class='section-heading'><h2>Agents</h2><a href='/?view=runs'>Run history ↗</a></div>".to_owned();
-                let mut running = self.runs.iter().filter(|r| r.status == "running").peekable();
-                if running.peek().is_none() { h.push_str("<div class='empty'>No active agents.</div>"); }
-                for run in running { h.push_str(&run_record(run)); }
-                let mut queued = self.runs.iter().filter(|r| r.status == "queued").collect::<Vec<_>>();
+                let mut running = self
+                    .runs
+                    .iter()
+                    .filter(|r| r.status == "running")
+                    .peekable();
+                if running.peek().is_none() {
+                    h.push_str("<div class='empty'>No active agents.</div>");
+                }
+                for run in running {
+                    h.push_str(&run_record(run));
+                }
+                let mut queued = self
+                    .runs
+                    .iter()
+                    .filter(|r| r.status == "queued")
+                    .collect::<Vec<_>>();
                 queued.sort_by_key(|r| r.queue_order);
                 if !queued.is_empty() {
                     h.push_str("<h3 class='form-title'>Queued</h3>");
-                    for run in queued { h.push_str(&run_record(run)); }
+                    for run in queued {
+                        h.push_str(&run_record(run));
+                    }
                 }
                 Some(h)
             }
@@ -346,7 +359,36 @@ fn integrations() -> String {
         "offline / starting"
     };
     let profile=status["bot_id"].as_str().and_then(|s|s.parse::<identity::DiscordId>().ok()).map(|id|format!("<p><a href='https://discord.com/users/{id}' rel='noreferrer'>Open Control in Discord ↗</a></p>")).unwrap_or_default();
-    format!("<span class='eyebrow'>INTEGRATIONS</span><h2>Connections</h2><div class='record'><h3>Local service</h3><p>Running on this laptop</p></div><div class='record'><h3>Codex workers</h3><p>{}</p><p class='muted'>Requires Codex login and the container engine.</p></div><div class='record'><span class='tag'>{label}</span><h3>Discord · direct messages</h3><p>Message Control directly. Architects can use /improve to request source changes.</p>{profile}<p class='muted'>Only approved users can chat. DMs are not shared with rooms.</p><a href='/?view=discord-access'>Manage access ↗</a></div>",if worker_image().is_some(){"Nix container configured."}else{"Blocked: worker image is not configured."})
+    let backends: String = [
+        (
+            crate::backend::Backend::Codex,
+            "Codex",
+            crate::worker::credentials_ready().is_ok(),
+        ),
+        (
+            crate::backend::Backend::Claude,
+            "Claude Code",
+            crate::claude::credentials_ready().is_ok(),
+        ),
+    ]
+    .into_iter()
+    .map(|(backend, name, login)| {
+        format!(
+            "<div class='record'><h3>{name}</h3><p>{} · {}</p></div>",
+            if backend.image().is_some() {
+                "Image pinned"
+            } else {
+                "Image missing"
+            },
+            if login {
+                "Login present"
+            } else {
+                "Login missing"
+            }
+        )
+    })
+    .collect();
+    format!("<h2>Connections</h2><div class='record'><h3>Local service</h3><p>Running on this laptop</p></div><div class='section-heading'><h3>Agent backends</h3><a href='/?view=providers'>Models &amp; providers ↗</a></div>{backends}<div class='record'><h3>Control MCP</h3><p>Local stdio · <code>control mcp</code></p></div><div class='record'><span class='tag'>{label}</span><h3>Discord · direct messages</h3>{profile}<p class='muted'>Only approved users can chat. DMs are not shared with rooms.</p><a href='/?view=discord-access'>Manage access ↗</a></div>")
 }
 
 #[cfg(test)]

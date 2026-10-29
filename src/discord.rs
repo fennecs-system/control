@@ -76,6 +76,9 @@ pub fn direct_command(content: &str) -> Option<(Action, &str)> {
     if text.is_empty() || text.chars().count() > 2000 {
         return None;
     }
+    if text == "/improve" {
+        return Some((Action::Improve, "on"));
+    }
     if let Some(objective) = text
         .strip_prefix("/improve ")
         .map(str::trim)

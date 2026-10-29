@@ -29,3 +29,4 @@
 .artifact-versions a{padding:5px 8px;white-space:nowrap}
 .conversation-links{display:flex;gap:12px;margin-left:auto;white-space:nowrap}
 @media(max-width:700px){.artifact-layout{grid-template-columns:1fr}.artifact-files{max-height:220px;border-right:0;border-bottom:1px solid var(--line)}}
+.composer-footer .chat-mode{display:flex;align-items:center;gap:7px;margin:0 10px 0 0;white-space:nowrap;font:inherit;color:var(--muted);cursor:pointer}.chat-mode input[type=checkbox]{display:inline-block;width:auto;margin:0;padding:0;accent-color:var(--purple)}.chat-mode:has(input:checked){color:var(--purple)}

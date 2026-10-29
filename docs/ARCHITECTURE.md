@@ -125,6 +125,14 @@ by the chat explorer/viewer and MCP. Output hashes, relative paths and attempt
 provenance describe files without making them accepted knowledge or authority.
 The first viewer executes no content and performs no edits.
 
+Improvement is a persistent architect-authorized chat mode rather than a separate
+prompt page. Conversation history follows the discussion and implementation;
+ordinary-task and source-improvement workspaces keep independent checkpoints.
+Each queued turn captures its action, and each message/dispatch/tool call checks
+the original actor. Discussion behavior is instructed through the prompt;
+filesystem isolation and the lack of live application/deployment are enforced
+separately. Agents shows current execution and the queue, while Runs keeps history.
+
 Backend/model selection is captured per run. The Claude adapter runs an unmodified,
 pinned CLI with built-in tools disabled and an explicit Control MCP bridge.
 Its harness sees a mailbox, while a separate offline container mounts the task

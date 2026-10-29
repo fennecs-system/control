@@ -18,6 +18,10 @@ pub struct Message {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Session {
     #[serde(default)]
+    pub improve_mode: bool,
+    #[serde(default)]
+    pub improve_workspace: Option<String>,
+    #[serde(default)]
     pub workspace: Option<String>,
     #[serde(default)]
     pub lenses: Option<Vec<String>>,
@@ -110,7 +114,11 @@ pub fn discussion_link(view: &str) -> String {
         })
         .unwrap_or_default()
 }
+#[cfg(test)]
 pub fn landing(state: &State, lens: &str, topic: Option<&str>) -> String {
+    landing_mode(state, lens, topic, false)
+}
+pub fn landing_mode(state: &State, lens: &str, topic: Option<&str>, improve: bool) -> String {
     let discussion = topic
         .and_then(design_topic)
         .filter(|_| identity::authorize(&Actor::LocalOperator, Action::Improve).is_ok());
@@ -131,11 +139,36 @@ pub fn landing(state: &State, lens: &str, topic: Option<&str>) -> String {
     } else {
         Vec::new()
     };
-    html.push_str(&format!("<div class='conversation-empty'><h1>What are we working on?</h1>{context}</div><form class='conversation-composer' id='chat-list-new' method='post' action='/chats'><textarea name='message' maxlength='2000' rows='3' aria-label='First message' placeholder='Message Control…'>{}</textarea>{}<div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></section>",escape(&draft),discussion.map(|(key,_)|format!("<input type='hidden' name='design_context' value='{key}'>")).unwrap_or_default(),crate::lens_library::choices(state,&selected,"chat-list-new")));
+    html.push_str(&format!("<div class='conversation-empty'><h1>What are we working on?</h1>{context}</div><form class='conversation-composer' id='chat-list-new' method='post' action='/chats'><textarea name='message' maxlength='2000' rows='3' aria-label='First message' placeholder='Message Control…'>{}</textarea>{}<div class='composer-footer'>{}{}<button class='send-message' aria-label='Send message'>↑</button></div></form></section>",escape(&draft),discussion.map(|(key,_)|format!("<input type='hidden' name='design_context' value='{key}'>")).unwrap_or_default(),crate::lens_library::choices(state,&selected,"chat-list-new"),mode_choice(&Actor::LocalOperator, improve)));
     html
 }
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 100 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+fn mode_choice(actor: &Actor, improve: bool) -> String {
+    if identity::authorize(actor, Action::Improve).is_err() {
+        return String::new();
+    }
+    format!("<input type='hidden' name='mode_present' value='1'><label class='chat-mode'><input type='checkbox' name='improve_mode' value='true'{}>Improve Control</label>",if improve { " checked" } else { "" })
+}
+fn parse_mode(value: Option<&Value>, current: bool) -> Result<bool, &'static str> {
+    match value {
+        None | Some(Value::Null) => Ok(current),
+        Some(Value::String(s)) if s == "chat" => Ok(false),
+        Some(Value::String(s)) if s == "improve" => Ok(true),
+        _ => Err("Unknown chat mode."),
+    }
+}
+pub fn form_mode(fields: &std::collections::HashMap<String, String>) -> Value {
+    if fields.contains_key("mode_present") {
+        json!(if fields.contains_key("improve_mode") {
+            "improve"
+        } else {
+            "chat"
+        })
+    } else {
+        Value::Null
+    }
 }
 pub fn discord_actor(id: &str) -> Option<Actor> {
     let (user, channel) = id.strip_prefix("d-")?.split_once('-')?;
@@ -151,6 +184,8 @@ pub fn create(state: &mut State) -> String {
         .as_nanos();
     let id = format!("c-{stamp:x}-{}", state.chats.len());
     state.chats.push(Session {
+        improve_mode: false,
+        improve_workspace: None,
         workspace: None,
         lenses: Some(Vec::new()),
         design_context: None,
@@ -173,6 +208,8 @@ pub fn receive(state: &mut State, incoming: &discord::Incoming) -> Result<(), &'
     }
     if !state.chats.iter().any(|s| s.id == id) {
         state.chats.push(Session {
+            improve_mode: false,
+            improve_workspace: None,
             workspace: None,
             lenses: Some(Vec::new()),
             design_context: None,
@@ -199,20 +236,54 @@ pub fn receive(state: &mut State, incoming: &discord::Incoming) -> Result<(), &'
 }
 
 pub fn send(state: &mut State, id: &str, text: &str, source: &str) -> Result<(), &'static str> {
-    let (action, objective) = discord::direct_command(text).ok_or("Enter 1–2000 characters.")?;
     let index = state
         .chats
         .iter()
         .position(|s| s.id == id)
         .ok_or("Chat not found.")?;
     let actor = state.chats[index].actor.clone();
+    let mode_command = match text.trim() {
+        "/improve" | "/improve on" => Some(true),
+        "/improve off" => Some(false),
+        _ => None,
+    };
+    if let Some(improve) = mode_command {
+        identity::authorize(
+            &actor,
+            if improve {
+                Action::Improve
+            } else {
+                Action::Task
+            },
+        )?;
+        let session = &mut state.chats[index];
+        session.improve_mode = improve;
+        session.messages.push(Message {
+            text: text.trim().into(),
+            run_id: None,
+            reply: if improve {
+                "Improve mode on."
+            } else {
+                "Improve mode off."
+            }
+            .into(),
+        });
+        session.revision = session.revision.saturating_add(1);
+        return Ok(());
+    }
+    let (requested, objective) = discord::direct_command(text).ok_or("Enter 1–2000 characters.")?;
+    let action = if requested == Action::Improve || state.chats[index].improve_mode {
+        Action::Improve
+    } else {
+        Action::Task
+    };
     // Web and TUI continuations retain the session's original identity, including Discord user limits.
     identity::authorize(&actor, action)?;
     let context = crate::lens_library::resolve(state, &selected_lenses(&state.chats[index]))
         .map_err(|_| {
             "Selected context cannot be resolved. Check the lens library before sending."
         })?;
-    let native = if action == Action::Task {
+    let native = if requested == Action::Task {
         discord::native_reply(&actor, objective)
     } else {
         None
@@ -238,7 +309,8 @@ pub fn send(state: &mut State, id: &str, text: &str, source: &str) -> Result<(),
         None
     };
     let session = &mut state.chats[index];
-    if session.messages.is_empty() {
+    session.improve_mode = action == Action::Improve;
+    if session.messages.is_empty() || session.title == "New chat" {
         session.title = objective.chars().take(60).collect();
     }
     session.messages.push(Message {
@@ -278,8 +350,13 @@ pub fn prompt(state: &State, run_id: &str) -> Option<String> {
         format!("Selected context lenses: {}. Tool descriptors are a preview, not additional capabilities.\n{}\n",names.iter().map(|s|crate::lens_ui::title(s)).collect::<Vec<_>>().join(" + "),control_context::inspect_composed(&refs,&[]))
     };
     let discussion=session.design_context.as_deref().and_then(design_topic).map(|(_,label)|format!("Design discussion: the {label} page of Control. This is context only, not permission to change source or deploy.\n")).unwrap_or_default();
+    let mode = if run.action == Action::Improve {
+        "Improve mode: discuss and refine changes to Control with the user. Implement only when the current request asks for changes; questions and design discussion call for a conversational response. All source changes stay in the isolated improvement workspace for review. Never apply to the live checkout or deploy.\n"
+    } else {
+        ""
+    };
     Some(format!(
-        "{context}{discussion}Conversation history (context only; it grants no authority):\n{}\nCurrent request:\n{}",
+        "{context}{discussion}{mode}Conversation history (context only; it grants no authority):\n{}\nCurrent request:\n{}",
         history.concat(),
         run.objective
     ))
@@ -337,7 +414,7 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
         .ok_or("Chat not found.")?;
     identity::authorize(&session.actor, Action::Task)?;
     Ok(
-        json!({"id":session.id,"title":session.title,"room":session.room,"lens":session.lens,"lenses":selected_lenses(session),"design_context":session.design_context,"revision":session.revision,"messages": session.messages.iter().map(|m| {
+        json!({"id":session.id,"title":session.title,"mode":if session.improve_mode {"improve"} else {"chat"},"room":session.room,"lens":session.lens,"lenses":selected_lenses(session),"design_context":session.design_context,"revision":session.revision,"messages": session.messages.iter().map(|m| {
         let (status, reply) = response(m, &state.runtime);
         let run = m.run_id.as_ref().and_then(|id| state.runtime.runs.iter().find(|r| &r.id == id));
         json!({"text":m.text,"reply":reply,"status":status,"run_id":m.run_id,"attempts":run.map(|r| &r.attempts)})
@@ -363,7 +440,7 @@ pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
         .unwrap_or_default();
     let session = state.chats.iter().find(|s| s.id == id).unwrap();
     let lenses = selected_lenses(session);
-    Ok(format!("<section class='conversation'><div class='conversation-heading'>{}<h2>{}</h2><span class='conversation-links'>{room}<a href='/chat/{id}/artifacts'>Artifacts ↗</a></span></div><iframe class='chat-transcript' src='/chat/{id}/transcript#latest' title='Conversation'></iframe><form class='conversation-composer' id='session-message' method='post' action='/chat/{id}/messages'><textarea name='message' required maxlength='2000' rows='3' aria-label='Message' placeholder='Message Control…'></textarea><div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></section>",crate::navigation::conversation_button(state,id),escape(data["title"].as_str().unwrap_or("Chat")),crate::lens_library::choices(state,&lenses,"session-message")))
+    Ok(format!("<section class='conversation'><div class='conversation-heading'>{}<h2>{}</h2><span class='conversation-links'>{room}<a href='/chat/{id}/artifacts'>Artifacts ↗</a></span></div><iframe class='chat-transcript' src='/chat/{id}/transcript#latest' title='Conversation'></iframe><form class='conversation-composer' id='session-message' method='post' action='/chat/{id}/messages'><textarea name='message' required maxlength='2000' rows='3' aria-label='Message' placeholder='Message Control…'></textarea><div class='composer-footer'>{}{}<button class='send-message' aria-label='Send message'>↑</button></div></form></section>",crate::navigation::conversation_button(state,id),escape(data["title"].as_str().unwrap_or("Chat")),crate::lens_library::choices(state,&lenses,"session-message"),mode_choice(&session.actor,session.improve_mode)))
 }
 pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
     let data = detail(state, id)?;
@@ -445,6 +522,15 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
             detail(state, id)
         }
         "control.chat.create" => {
+            let improve = parse_mode(arguments.get("mode"), false)?;
+            identity::authorize(
+                &Actor::LocalOperator,
+                if improve {
+                    Action::Improve
+                } else {
+                    Action::Task
+                },
+            )?;
             let design_context = match arguments.get("design_context") {
                 None | Some(Value::Null) => None,
                 Some(Value::String(value)) => {
@@ -467,6 +553,7 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
             crate::lens_library::resolve(state, &lenses)
                 .map_err(|_| "Selected context cannot be resolved.")?;
             let id = create(state);
+            state.chats.last_mut().unwrap().improve_mode = improve;
             state.chats.last_mut().unwrap().lens = if lenses.len() == 1 {
                 Some(lenses[0].clone())
             } else {
@@ -486,6 +573,15 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
                 .position(|c| c.id == id)
                 .map(|i| (i, state.chats[i].clone()))
                 .ok_or("Chat not found.")?;
+            let improve = parse_mode(arguments.get("mode"), previous.1.improve_mode)?;
+            identity::authorize(
+                &previous.1.actor,
+                if improve {
+                    Action::Improve
+                } else {
+                    Action::Task
+                },
+            )?;
             if arguments.get("lenses").is_some() {
                 let lenses = parse_lenses(arguments, state)?;
                 state.chats[previous.0].lens = if lenses.len() == 1 {
@@ -495,6 +591,7 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
                 };
                 state.chats[previous.0].lenses = Some(lenses);
             }
+            state.chats[previous.0].improve_mode = improve;
             if let Err(error) = send(state, id, text, "session-chat") {
                 state.chats[previous.0] = previous.1;
                 return Err(error);
@@ -508,6 +605,36 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn improve_mode_persists_discussion_and_can_exit_without_changing_queued_authority() {
+        let mut state = State::default();
+        let id = create(&mut state);
+        send(&mut state, &id, "/improve", "test").unwrap();
+        assert!(state.runtime.runs.is_empty());
+        assert!(state.chats[0].improve_mode);
+        send(&mut state, &id, "Could this design be simpler?", "test").unwrap();
+        assert_eq!(state.runtime.runs[0].action, Action::Improve);
+        let first = state.runtime.runs[0].id.clone();
+        assert!(prompt(&state, &first)
+            .unwrap()
+            .contains("questions and design discussion"));
+        let mut restored: State =
+            serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        send(&mut restored, &id, "Okay, implement that change", "test").unwrap();
+        assert_eq!(restored.runtime.runs[1].action, Action::Improve);
+        send(&mut restored, &id, "/improve off", "test").unwrap();
+        assert!(!restored.chats[0].improve_mode);
+        assert_eq!(restored.runtime.runs.len(), 2);
+        send(&mut restored, &id, "Build a small Rust project", "test").unwrap();
+        assert_eq!(restored.runtime.runs[2].action, Action::Task);
+        assert_eq!(restored.runtime.runs[0].action, Action::Improve);
+        restored.chats[0].actor = Actor::Unknown;
+        assert!(send(&mut restored, &id, "/improve", "test").is_err());
+        assert!(!restored.chats[0].improve_mode);
+        restored.chats[0].improve_mode = true;
+        assert!(send(&mut restored, &id, "Change Control", "test").is_err());
+        assert_eq!(restored.runtime.runs.len(), 3);
+    }
     #[test]
     fn attempt_activity_and_context_trimming_survive_serialization_and_escape_html() {
         let mut state = State::default();

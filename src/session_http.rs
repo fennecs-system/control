@@ -84,7 +84,7 @@ pub fn rpc(state: &mut State, request: &Value) -> Value {
         "ping" => json!({}),
         "tools/list" => json!({"tools":[
             {"name":"control.chats.list","description":"List local chats.","inputSchema":{"type":"object","properties":{}}},
-            {"name":"control.chat.create","description":"Create a local operator chat with lenses from the library and an optional room or design topic.","inputSchema":{"type":"object","properties":{"room":{"type":"string","enum":["general","engineering","research"]},"lens":{"type":"string"},"lenses":{"type":"array","items":{"type":"string"}},"design_context":{"type":"string"}}}},
+            {"name":"control.chat.create","description":"Create a local operator chat with lenses, optional room/design topic and chat or architect-only improve mode.","inputSchema":{"type":"object","properties":{"mode":{"type":"string","enum":["chat","improve"]},"room":{"type":"string","enum":["general","engineering","research"]},"lens":{"type":"string"},"lenses":{"type":"array","items":{"type":"string"}},"design_context":{"type":"string"}}}},
             {"name":"control.chat.lenses","description":"Set lenses from the library for future messages. Existing runs retain their resolved context.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"lenses":{"type":"array","items":{"type":"string"}}},"required":["id","lenses"]}},
             {"name":"control.lenses.list","description":"List current declarative lens definitions.","inputSchema":{"type":"object","properties":{}}},
             {"name":"control.lens.read","description":"Read a lens definition and its current revision.","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}},
@@ -93,7 +93,7 @@ pub fn rpc(state: &mut State, request: &Value) -> Value {
             {"name":"control.room.read","description":"Read recent room posts and linked chats.","inputSchema":{"type":"object","properties":{"room":{"type":"string"}},"required":["room"]}},
             {"name":"control.room.post","description":"Post a concise shared update. This does not send a chat prompt or grant authority.","inputSchema":{"type":"object","properties":{"room":{"type":"string"},"message":{"type":"string","minLength":1,"maxLength":2000}},"required":["room","message"]}},
             {"name":"control.chat.read","description":"Read a chat and its run status.","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}},
-            {"name":"control.chat.send","description":"Send a message as the chat's original actor.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"message":{"type":"string","minLength":1,"maxLength":2000}},"required":["id","message"]}}
+            {"name":"control.chat.send","description":"Send as the chat's original actor. Optional mode changes persist; improve requires architect access.","inputSchema":{"type":"object","properties":{"mode":{"type":"string","enum":["chat","improve"]},"id":{"type":"string"},"message":{"type":"string","minLength":1,"maxLength":2000}},"required":["id","message"]}}
         ]}),
         "tools/call" => {
             let name = request["params"]["name"].as_str().unwrap_or("");
@@ -148,6 +148,21 @@ pub fn handle(
     body: &[u8],
 ) -> bool {
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    if method == "GET"
+        && path == "/"
+        && crate::fields(query)
+            .get("view")
+            .is_some_and(|v| v == "evolution")
+    {
+        respond(
+            stream,
+            "303 See Other",
+            "text/plain",
+            "",
+            "Location: /chats?improve=1\r\n",
+        );
+        return true;
+    }
     if path == "/mcp" {
         if method != "POST" {
             respond(
@@ -211,21 +226,33 @@ pub fn handle(
     }
     if path == "/chats" && method == "GET" {
         let query = crate::fields(query);
-        let html = chat::landing(state, lens, query.get("discuss").map(String::as_str));
+        let html = chat::landing_mode(
+            state,
+            lens,
+            query.get("discuss").map(String::as_str),
+            query.get("improve").is_some_and(|v| v == "1"),
+        );
         let page = crate::render(state, "session-list", lens, &html)
             .replace("<body>", "<body class='session-view'>");
         respond_chat(stream, &page);
         return true;
     }
-    if ["/chats", "/chat"].contains(&path) && method == "POST" {
+    if ["/chats", "/chat", "/improve"].contains(&path) && method == "POST" {
         let fields = crate::fields(&String::from_utf8_lossy(body));
         let chosen = fields.get("lens").map(String::as_str).unwrap_or(lens);
-        let arguments = json!({"lenses":chat::form_lenses(&fields,lens),"room":fields.get("room"),"design_context":fields.get("design_context")});
+        let arguments = json!({"lenses":chat::form_lenses(&fields,lens),"room":fields.get("room"),"design_context":fields.get("design_context"),"mode":if path == "/improve" {json!("improve")} else {chat::form_mode(&fields)}});
         let result = change(state, "control.chat.create", &arguments);
         match result {
             Ok(value) => {
                 let id = value["id"].as_str().unwrap();
-                if let Some(text) = fields.get("message").filter(|text| !text.trim().is_empty()) {
+                if let Some(text) = fields
+                    .get(if path == "/improve" {
+                        "objective"
+                    } else {
+                        "message"
+                    })
+                    .filter(|text| !text.trim().is_empty())
+                {
                     if let Err(message) =
                         change(state, "control.chat.send", &json!({"id":id,"message":text}))
                     {
@@ -277,8 +304,7 @@ pub fn handle(
         }
     } else if method == "POST" && operation == "messages" {
         let fields = crate::fields(&String::from_utf8_lossy(body));
-        let mut arguments =
-            json!({"id":id,"message":fields.get("message").map(String::as_str).unwrap_or("")});
+        let mut arguments = json!({"id":id,"message":fields.get("message").map(String::as_str).unwrap_or(""),"mode":chat::form_mode(&fields)});
         if fields.contains_key("composition") {
             arguments["lenses"] = chat::form_lenses(&fields, "none");
         }
@@ -355,6 +381,20 @@ mod tests {
         )
         .is_ok());
         assert_eq!(state.runtime.runs.len(), 1);
+    }
+    #[test]
+    fn failed_mode_change_does_not_persist_mode_or_new_source_work() {
+        let mut state = State::default();
+        let id = chat::create(&mut state);
+        let before = serde_json::to_vec(&state).unwrap();
+        assert!(change_with_save(
+            &mut state,
+            "control.chat.send",
+            &json!({"id":id,"mode":"improve","message":"Discuss a simpler UI"}),
+            |_| Err(std::io::Error::other("disk full"))
+        )
+        .is_err());
+        assert_eq!(serde_json::to_vec(&state).unwrap(), before);
     }
     #[test]
     fn mcp_negotiation_catalog_and_unknown_methods() {

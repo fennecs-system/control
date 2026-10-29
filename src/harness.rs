@@ -298,7 +298,7 @@ impl App {
                 self.inspector=None;self.status=format!("Future messages: {}",lens_label(&self.detail));self.follow=true;
             }
             _ if text.starts_with("/resume ") => { self.active = text[8..].trim().into(); self.inspector=None;self.refresh(hive)?; }
-            _ if text.starts_with('/') && !text.starts_with("/improve ")=>return Err(failure("Unknown command. Use /help.")),
+            _ if text.starts_with('/') && text != "/improve" && !text.starts_with("/improve ")=>return Err(failure("Unknown command. Use /help.")),
             _ if !text.is_empty() => {
                 if text.chars().count() > 2000 { return Err(failure("Messages are limited to 2000 characters.")); }
                 if self.active.is_empty() { self.new_chat(hive)?; }
@@ -306,7 +306,7 @@ impl App {
                 self.inspector=None;
                 self.scroll = u16::MAX;
                 self.follow = true;
-                self.status = "Sent".into();
+                self.status = if self.detail["mode"] == "improve" { "Improve · sent" } else { "Sent" }.into();
             }
             _ => {}
         }
@@ -1462,6 +1462,7 @@ fn live_artifacts_preserve_project_files_and_viewer_after_restart() {
     let server = std::env::var("CONTROL_QA_URL").expect("Use an isolated server");
     let mut hive = Hive::connect(&server).unwrap();
     let reload = std::env::var_os("CONTROL_QA_VERIFY_RELOAD").is_some();
+    let improve = std::env::var_os("CONTROL_QA_IMPROVE_MODE").is_some();
     let chat = if reload {
         hive.tool("control.chats.list", json!({}))
             .unwrap()
@@ -1478,6 +1479,10 @@ fn live_artifacts_preserve_project_files_and_viewer_after_restart() {
             .unwrap()
             .to_owned()
     };
+    if improve {
+        if !reload { hive.tool("control.chat.send",json!({"id":chat,"message":"/improve"})).unwrap(); }
+        assert_eq!(hive.tool("control.chat.read",json!({"id":chat})).unwrap()["mode"], "improve");
+    }
     let messages = if reload {
         vec!["Read counter.txt in the existing workspace, increment its integer by one and write it back. Preserve preview.txt. Actually use a shell command to read the file. Reply briefly."]
     } else {
@@ -1503,6 +1508,10 @@ fn live_artifacts_preserve_project_files_and_viewer_after_restart() {
             .tool("control.artifacts.list", json!({"id":chat}))
             .unwrap();
         let artifact = listed["artifacts"][0]["id"].as_str().unwrap();
+        if improve {
+            let source = hive.tool("control.artifact.read",json!({"id":chat,"artifact":artifact,"path":"src/main.rs"})).unwrap();
+            assert!(source["text"].as_str().unwrap().contains("fixture"));
+        }
         let read = hive
             .tool(
                 "control.artifact.read",

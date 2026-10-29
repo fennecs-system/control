@@ -307,3 +307,8 @@ text viewer. A basic editor and syntax highlighting can follow. Artifacts may
 represent other outputs later; avoid speculative features. Keep the design
 consistent with the tool/MCP architecture and its deterministic, efficient,
 reliable, functional foundations.
+### Improvement as conversation
+
+Improve should allow an ongoing discussion: an `/improve` mode in chat rather
+than a separate window. Keep an Agents tab for active agents, and keep the run
+history separate. Integrations should include Claude agents alongside Codex.

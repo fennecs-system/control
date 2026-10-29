@@ -139,8 +139,13 @@ An authenticated Codex run and sandboxed shell artifact were verified on this la
 ## Chats and terminal harness
 
 **Agents** shows active executions and the queue. **Runs** is the full execution
-history, including tasks and improvements, with retry actions. **Improve** contains
-only the source-change request form; submitting it opens Runs to track the result.
+history, including tasks and improvements, with retry actions. Improvement is a
+chat mode: use the composer's **Improve Control** toggle, or send `/improve` to
+enable it (`/improve off` exits). Discuss a change, refine it, and ask for an
+implementation in the same conversation. Each message rechecks the original
+actor's architect access. Ordinary task files and improvement source files have
+separate checkpoints; changes remain isolated for review. Set the private
+`source-root` path before using this mode. Old Improve-page links open chat.
 
 Navigation pages are global, with one **Chat** destination and one **Lenses** menu item. The chat panel is absent from other pages. Local architects can use the header's **Discuss design** link to prepare a chat about that page; following the link sends nothing and creates no run. The topic is whitelisted context, not source-editing permission. Source changes still require an explicit authorized improvement action.
 
