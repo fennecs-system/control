@@ -61,6 +61,7 @@ fn rpc_at(
         "ping" => json!({}),
         "tools/list" => {
             let mut tools = crate::toolbox::definitions();
+            tools.push(crate::design::definition());
             if claude {
                 tools.push(crate::claude::definition());
             }
@@ -80,6 +81,20 @@ fn rpc_at(
             json!({"tools":tools})
         }
         "tools/call" => {
+            if request["params"]["name"] == "control_design_ask" {
+                let Some(nonce) = envelope["nonce"].as_str() else { return error("Missing request identity"); };
+                let input = match serde_json::from_value(request["params"]["arguments"].clone()) {
+                    Ok(input) => input,
+                    Err(_) => return error("Invalid design question"),
+                };
+                return match crate::design::ask(&mut state, run_id, nonce, input) {
+                    Ok(value) => json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":value.to_string()}],"isError":false}}),
+                    Err(message) => error(message),
+                };
+            }
+            if run.question.as_ref().is_some_and(|q| q.answer.is_none() && run.attempts.last().is_some_and(|a| a.workspace_id.as_deref() == Some(&q.generation))) {
+                return error("This attempt is pausing for a design answer; no more tools may run.");
+            }
             if request["params"]["name"] == "control_workspace_run" {
                 if !claude {
                     return error("Workspace tool is not enabled for this backend");
@@ -219,6 +234,18 @@ pub fn pump_at(state: &Arc<Mutex<State>>, run: &str, mailbox: &Path, workspace: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn design_pause_blocks_further_tool_effects_until_user_answers() {
+        let (mut state,_) = crate::design::tests::paused();
+        state.runtime.runs[0].status="running".into();
+        let id = state.runtime.runs[0].id.clone();
+        let state = Arc::new(Mutex::new(state));
+        assert!(crate::design::requested(Some((&state,&id))));
+        let response = rpc(&state,&id,&json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_rust_run","arguments":{"code":"fn main() {}"}}}}));
+        assert!(response["error"]["message"].as_str().unwrap().contains("pausing"));
+        state.lock().unwrap().runtime.runs[0].attempts[0].workspace_id=Some("retry-generation".into());
+        assert!(!crate::design::requested(Some((&state,&id))));
+    }
     fn rpc(state: &Arc<Mutex<State>>, run: &str, value: &Value) -> Value {
         rpc_at(state, run, value, None)
     }
@@ -280,7 +307,7 @@ mod tests {
             &run,
             &json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/list"}}),
         );
-        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 2);
+        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 3);
         let forbidden = rpc(
             &state,
             &run,

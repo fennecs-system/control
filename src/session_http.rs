@@ -363,6 +363,16 @@ pub fn handle(
 mod tests {
     use super::*;
     #[test]
+    fn failed_design_answer_checkpoint_restores_question_and_does_not_resume() {
+        let (mut state,id) = crate::design::tests::paused();
+        let before = serde_json::to_vec(&state).unwrap();
+        assert!(change_with_save(&mut state,"control.chat.send",&json!({"id":id,"message":"2"}),|_|Err(std::io::Error::other("disk full"))).is_err());
+        assert_eq!(serde_json::to_vec(&state).unwrap(),before);
+        assert!(change_with_save(&mut state,"control.chat.send",&json!({"id":id,"message":"2"}),|_|Ok(())).is_ok());
+        assert_eq!(state.runtime.runs[0].status,"continued");
+        assert_eq!(state.runtime.runs.len(),2);
+    }
+    #[test]
     fn failed_cancel_checkpoint_restores_existing_run_and_conversation() {
         for status in ["queued", "running"] {
             let mut state = State::default();

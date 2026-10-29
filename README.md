@@ -187,6 +187,24 @@ The same chat commands work in the web UI, TUI and approved Discord DMs:
 | `/steer direction` | Queue a follow-up for the next safe turn; it does not change a running provider request. |
 | `/btw question` | Ask in a linked side conversation using a captured parent context. |
 | `/spawn task` | Create a linked agent conversation with the parent's actor and captured model/context. |
+| `/answer QUESTION_ID answer` | Answer a specific pending design question, including one from a child agent. |
+
+Control-managed Codex and Claude agents can use `control_design_ask` for a
+consequential architecture, scope or behavior choice. Web chat shows 2–4 options
+and a recommendation; you can choose one or write your own direction. TUI and
+Discord accept an option number or text. Recommendations are never selected
+automatically. Routine sandbox edits, builds and tests remain autonomous;
+deciding when to ask is guided by the agent prompt, not a formal design verifier.
+
+Asking stops the owned worker and saves a bounded, immutable workspace checkpoint.
+The question survives restart and blocks only that conversation's queued turns.
+Answering queues a fresh continuation with the original actor, action, model and
+context; it restores the paused files without granting new permissions. Other
+chats can run while you decide. `/cancel` also dismisses a waiting task. If stopping
+or checkpointing fails, the run stays interrupted or failed rather than offering
+an unsafe continuation. A crash before the pause checkpoint commits requires
+explicit inspection/retry. Completed pauses do not replace the last successful
+conversation checkpoint until their continuation succeeds.
 
 Child conversations restore their own copy of the last published task checkpoint;
 they never share a running writable workspace or inherit improvement source.
