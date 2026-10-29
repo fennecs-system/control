@@ -29,13 +29,12 @@ fn image() -> io::Result<String> {
         .trim()
         .to_owned();
     if !crate::browser::valid_image(&image) {
-        return Err(fail("No pinned browser image. Build the Nix browser-image and set browser-image-id in the node configuration directory."));
+        return Err(fail("No pinned browser image. Run `nix run .#setup -- --browser` to build it and record browser-image-id in the node configuration directory."));
     }
     Ok(image)
 }
 pub(crate) fn source(root: &Path, input: &str) -> io::Result<PathBuf> {
-    let candidate = root.join(input);
-    let resolved = fs::canonicalize(&candidate)?;
+    let resolved = fs::canonicalize(root.join(input))?;
     if !resolved.starts_with(root)
         || !matches!(
             resolved.extension().and_then(|s| s.to_str()),
@@ -46,7 +45,7 @@ pub(crate) fn source(root: &Path, input: &str) -> io::Result<PathBuf> {
             "Select an HTML preview inside the configured tool root",
         ));
     }
-    Ok(candidate)
+    Ok(resolved)
 }
 pub(crate) fn render_preview(
     input: &Path,
@@ -120,7 +119,7 @@ fn capture(root: &Path, args: &Value) -> io::Result<Value> {
 }
 fn hive(connection: &mut Option<Hive>) -> io::Result<&mut Hive> {
     if connection.is_none() {
-        *connection = Some(Hive::connect("http://127.0.0.1:8080")?);
+        *connection = Some(Hive::connect(&format!("http://{}", crate::config::server_addr()))?);
     }
     Ok(connection.as_mut().unwrap())
 }
@@ -203,17 +202,26 @@ pub fn run(args: &[String]) -> io::Result<()> {
         if count == 0 {
             return Ok(());
         }
-        if bytes.len() > 65536 {
-            return Err(fail("MCP input exceeds 64 KiB"));
+        let oversized = bytes.len() > 65536;
+        if oversized && bytes.last() != Some(&b'\n') {
+            // Discard the remainder of the oversized line, then keep serving.
+            loop {
+                let buffer = input.fill_buf()?;
+                if buffer.is_empty() {
+                    break;
+                }
+                let (used, done) = buffer.iter().position(|b| *b == b'\n').map_or((buffer.len(), false), |i| (i + 1, true));
+                input.consume(used);
+                if done {
+                    break;
+                }
+            }
         }
-        let request: Value = match serde_json::from_slice(&bytes) {
-            Ok(v) => v,
-            Err(_) => {
-                writeln!(
-                    output,
-                    "{}",
-                    json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Invalid JSON"}})
-                )?;
+        let request: Value = match (!oversized).then(|| serde_json::from_slice(&bytes).ok()).flatten() {
+            Some(v) => v,
+            None => {
+                let (code, message) = if oversized { (-32600, "MCP input exceeds 64 KiB") } else { (-32700, "Invalid JSON") };
+                writeln!(output, "{}", json!({"jsonrpc":"2.0","id":null,"error":{"code":code,"message":message}}))?;
                 output.flush()?;
                 continue;
             }

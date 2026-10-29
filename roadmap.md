@@ -293,3 +293,46 @@ new adapter alongside durable bounded work and safe recovery → invited macOS
 cohorts with explicit provider gates and useful MCP capabilities → improvements
 selected from actual feedback. Prepare onboarding throughout; bring scoped
 remote MCP forward when that is what lets a friend participate.
+
+## Later — carried from the review (not release blockers)
+
+Pick these up when feedback or the phases above need them.
+
+- **Execution core:** a typed `RunStatus` state machine and immutable
+  manifest; a SQLite (WAL) store plus an append-only event log with replay
+  tests, replacing whole-state JSON rewrites; deterministic simulation tests
+  for the supervisor (fake engine, fake clock, injected crashes); per-actor
+  concurrency once workspace serialization is safe.
+- **Backends:** a Control-owned tool loop with a credential-free tool-executor
+  container, a typed append-only transcript (needed for prompt caching and
+  preserved thinking), an OpenAI-compatible adapter (vLLM, llama.cpp, Ollama),
+  per-run and per-actor spend budgets, and live text streaming to web/TUI.
+- **Identity and security:** per-principal revocable capability tokens (e.g.
+  Biscuit), MCP OAuth for remote clients, operator-session rotation and expiry,
+  0600 and atomic writes for the policy file and `.control` logs, one response
+  helper with uniform security headers, typed HTML templating, and a
+  `docs/THREAT-MODEL.md` that links each claim to its test.
+- **Quality:** `proptest`/`cargo-fuzz` targets for the HTTP, SSE, mailbox and
+  federation parsers; an eval suite of 15–20 checkable tasks run before and
+  after self-improvement; a flake `packages.control` and CI that runs it.
+- **Product:** user-created rooms; lens export as Claude Code skills or
+  `AGENTS.md`/`CLAUDE.md` fragments; removal of demo/simulated views (`agents`,
+  `nodes` and the `/spawn` demo in `main.rs`).
+- **Future design goals (after the pilot):** declarative Nix tool containers
+  requested by agents, which never touch the Docker socket; tool windows on a
+  separate origin; a microVM tier and GPU as explicit capabilities; persistent
+  supervised agents with leases, fencing and inherited authority ceilings; live
+  federation transport, scoped peer trust, federated rooms and delegated jobs;
+  an optional model router and bundled local inference in a packaged node.
+- **Guardrails for every phase:** something a new user can try at the end of
+  each phase; every security claim links to a test; scheduling, authorization,
+  retries and cleanup stay deterministic and out of the model; prefer small
+  closed sets (enums, data files) to plugin frameworks; the UI never shows
+  simulated work as real.
+
+## Open checks before inviting
+
+- Confirm the default Codex model (`gpt-6.1-sol`, `src/usage.rs:117`) is available
+  on ordinary ChatGPT plans, and that testers can access the clone URL.
+- Run the new doctor sandbox probe and a real two-turn run on a second engine
+  (Docker Desktop, OrbStack or Colima), then name the verified engines in the README.

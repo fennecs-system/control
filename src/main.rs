@@ -66,6 +66,10 @@ impl State {
         state
     }
 }
+/// Minimal error page; the browser's Back button keeps the submitted form draft.
+pub(crate) fn error_page(message: &str, back: &str) -> String {
+    format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><title>Control / Not saved</title><link rel='stylesheet' href='/style.css'></head><body><main><h1>Not saved</h1><p role='alert'>{}</p><p>Use the browser's Back button to recover your draft, or <a href='{}'>return</a>.</p></main></body></html>", escape(message), escape(back))
+}
 fn escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -131,7 +135,6 @@ fn render(state: &State, view: &str, lens: &str, channel: &str) -> String {
         "lens-page" => channel.to_owned(),
         "agents" => format!("<div class='section-heading'><div><span class='eyebrow'>EXECUTION / SIMULATED</span><h2>Agent sessions</h2></div></div><p class='muted'>Spawn a local demonstration session. Remote execution is not connected.</p>{}<form method='post' action='/spawn'><label>Session objective<input required name='objective' placeholder='Map the knowledge graph…' maxlength='300'></label><label>Provider<select name='provider'><option>Anthropic</option><option>OpenAI</option><option>Self-hosted</option></select></label><button class='primary'>＋ Spawn demo agent</button></form>", state.agents.iter().enumerate().map(|(i,a)| format!("<div class='session'><span class='dot'></span><div><strong>agent / {:03}</strong><p>{}</p></div><span class='tag'>simulated</span></div>", i+1, escape(a))).collect::<String>()),
         "nodes" => "<span class='eyebrow'>NODES · PLANNED</span><h2>Nodes</h2><p class='muted'>Remote nodes are not connected.</p><div class='node-grid'><article><span class='node-icon'>⌘</span><h3>control.local</h3><p>This laptop</p><span class='tag'>local</span></article><article><span class='node-icon'>◇</span><h3>forge.tailnet</h3><p>Development · planned</p><span class='tag'>not connected</span></article><article><span class='node-icon'>◈</span><h3>archive.tailnet</h3><p>Knowledge · planned</p><span class='tag'>not connected</span></article></div>".into(),
-        "monitor" => "<span class='eyebrow'>PROVIDERS</span><h2>Providers</h2><p class='muted'>Additional providers are not connected.</p><div class='provider'><b>Anthropic</b><span>API adapter</span><span class='tag'>not configured</span></div><div class='provider'><b>OpenAI</b><span>API adapter</span><span class='tag'>not configured</span></div><div class='provider'><b>Self-hosted</b><span>Local endpoint</span><span class='tag'>not configured</span></div>".into(),
         _ => lens_ui::overview(state,lens),
     });
     page = page.replace("{{content}}", &content);
@@ -154,25 +157,51 @@ fn render(state: &State, view: &str, lens: &str, channel: &str) -> String {
         .replace("DEMO AGENTS", "RUNS")
         .replace("3 sources · 2 tools", "3 sources · 3 tools")
 }
-fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::Access>) {
-    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(3)));
-    let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(3)));
-    let mut data = Vec::new();
+/// Views whose `channel` is trusted, pre-rendered HTML from internal routes only.
+const INTERNAL_VIEWS: [&str; 6] = ["session-list", "artifact-page", "browser", "tool-page", "knowledge-page", "lens-page"];
+/// `GET /`: query values are untrusted, so internal HTML-carrying views fall back to the hub.
+fn public_render(state: &State, query: &HashMap<String, String>, lens: &str) -> String {
+    let view = query.get("view").map(String::as_str).filter(|v| !INTERNAL_VIEWS.contains(v)).unwrap_or("hub");
+    let channel = query.get(if view == "tools" { "q" } else { "channel" }).map(String::as_str).unwrap_or("general");
+    render(state, view, lens, channel)
+}
+const MAX_HEADER: usize = 65536;
+enum Body { Length(usize), Invalid, Chunked }
+fn body_length(header: &str) -> Body {
+    let values = |name: &str| header.lines().skip(1).filter_map(|l| l.split_once(':')).filter(|(k, _)| k.trim().eq_ignore_ascii_case(name)).map(|(_, v)| v.trim()).collect::<Vec<_>>();
+    if !values("transfer-encoding").is_empty() {
+        return Body::Chunked;
+    }
+    match values("content-length").as_slice() {
+        [] => Body::Length(0),
+        [first, rest @ ..] if rest.iter().all(|v| v == first) && first.bytes().all(|b| b.is_ascii_digit()) => first.parse().map_or(Body::Invalid, Body::Length),
+        _ => Body::Invalid,
+    }
+}
+/// Read until `done` or the overall request deadline; per-read timeouts alone allow trickled bytes.
+fn read_until(stream: &mut TcpStream, data: &mut Vec<u8>, deadline: std::time::Instant, limit: usize, done: impl Fn(&[u8]) -> bool) -> bool {
     let mut buf = [0; 4096];
-    let header_end;
-    loop {
+    while !done(data) {
+        let Some(left) = deadline.checked_duration_since(std::time::Instant::now()).filter(|d| !d.is_zero()) else { return false };
+        let _ = stream.set_read_timeout(Some(left.min(std::time::Duration::from_secs(3))));
         match stream.read(&mut buf) {
-            Ok(0) | Err(_) => return,
+            Ok(0) | Err(_) => return false,
             Ok(n) => data.extend_from_slice(&buf[..n]),
         }
-        if data.len() > 65536 {
-            return;
-        }
-        if let Some(i) = data.windows(4).position(|w| w == b"\r\n\r\n") {
-            header_end = i + 4;
-            break;
+        if data.len() > limit {
+            return false;
         }
     }
+    true
+}
+fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::Access>) {
+    let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(3)));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut data = Vec::new();
+    if !read_until(&mut stream, &mut data, deadline, MAX_HEADER, |d| d.windows(4).any(|w| w == b"\r\n\r\n")) {
+        return;
+    }
+    let header_end = data.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
     let header = String::from_utf8_lossy(&data[..header_end]).into_owned();
     let mut request = header.lines().next().unwrap_or("").split_whitespace();
     let method = request.next().unwrap_or("");
@@ -204,12 +233,17 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
     if access.gate(&mut stream, method, target, &header) {
         return;
     }
-    let length = header
-        .lines()
-        .filter_map(|l| l.split_once(':'))
-        .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
-        .and_then(|(_, v)| v.trim().parse::<usize>().ok())
-        .unwrap_or(0);
+    let length = match body_length(&header) {
+        Body::Length(length) => length,
+        Body::Chunked => {
+            let _ = stream.write_all(b"HTTP/1.1 411 Length Required\r\nContent-Length: 30\r\nConnection: close\r\n\r\nSend a fixed Content-Length.\r\n");
+            return;
+        }
+        Body::Invalid => {
+            let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 25\r\nConnection: close\r\n\r\nInvalid Content-Length.\r\n");
+            return;
+        }
+    };
     let limit = if target
         .split('?')
         .next()
@@ -223,11 +257,8 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         let _=stream.write_all(b"HTTP/1.1 413 Content Too Large\r\nContent-Length: 17\r\nConnection: close\r\n\r\nRequest too large");
         return;
     }
-    while data.len() < header_end + length {
-        match stream.read(&mut buf) {
-            Ok(0) | Err(_) => return,
-            Ok(n) => data.extend_from_slice(&buf[..n]),
-        }
+    if !read_until(&mut stream, &mut data, deadline, usize::MAX, |d| d.len() >= header_end + length) {
+        return;
     }
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     if tools_http::handle(
@@ -327,24 +358,12 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
                     .map(|index| (index, state.chats[index].revision))
             } else { None };
             let location = match path {
-                "/improve" | "/task" | "/retry-run" | "/cancel-run" => {
+                // POST /chat and /improve are handled by session_http.
+                "/task" | "/retry-run" | "/cancel-run" => {
                     state.runtime.action(path, &f)
                 }
                 "/room" | "/propose" | "/review" | "/request" | "/decide" => {
                     state.collective.action(path, &f)
-                }
-                "/chat" => {
-                    if let Some(msg) = f.get("message").filter(|s| !s.trim().is_empty()) {
-                        let message: String = msg.chars().take(2000).collect();
-                        let source = format!("website-chat:{}", state.messages.len());
-                        state.runtime.enqueue(message.clone(), "chat", &source);
-                        state.messages.push(message);
-                    }
-                    if f.get("lens").is_some_and(|v| v == "research") {
-                        "/?lens=research"
-                    } else {
-                        "/"
-                    }
                 }
                 "/spawn" => {
                     if let Some(task) = f.get("objective").filter(|s| !s.trim().is_empty()) {
@@ -366,7 +385,8 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
                 if let Some((index, revision)) = cancel_chat {
                     state.chats[index].revision = revision;
                 }
-                let _ = stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\nContent-Length: 35\r\n\r\nCould not persist the local change.");
+                let body = error_page("Could not persist the local change.", location);
+                let _ = write!(stream, "HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}", body.len());
                 return;
             }
             (
@@ -379,19 +399,7 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
             (
                 "200 OK",
                 "text/html; charset=utf-8",
-                render(
-                    state,
-                    query.get("view").map(String::as_str).unwrap_or("hub"),
-                    lens,
-                    query
-                        .get(if query.get("view").is_some_and(|v| v == "tools") {
-                            "q"
-                        } else {
-                            "channel"
-                        })
-                        .map(String::as_str)
-                        .unwrap_or("general"),
-                ),
+                public_render(state, &query, lens),
                 String::new(),
             )
         } else {
@@ -473,8 +481,13 @@ fn main() -> std::io::Result<()> {
     if args.get(1).is_some_and(|s| s == "browser") {
         return mcp_stdio::browser_cli(&args[2..]);
     }
-    let addr = std::env::var("CONTROL_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".into());
-    let socket: std::net::SocketAddr = addr.parse().map_err(std::io::Error::other)?;
+    if args.get(1).is_some_and(|s| s == "--help" || s == "help") {
+        println!("control [serve | tui | mcp | discord | doctor | config | open | browser | federation]\nserve: local web/MCP server on CONTROL_ADDR (default 127.0.0.1:8080)\ntui: Rust terminal client\nmcp [--root DIRECTORY]: local tools for an external harness\ndiscord --enable: listen to this node's configured DMs\ndoctor: offline prerequisites; no model calls\nconfig init | path: initialize or locate personal configuration\nopen: sign in to the local website\nbrowser capture FILE [WIDTH HEIGHT]: offline Nix Firefox capture\nfederation help: signed offline lens exchange\n--check-worker: one authenticated sandbox test (uses model usage)\n--version: version and platform");
+        println!("claude login | check: container login or offline tool isolation check\nconfig init: create private node configuration\nconfig path: show the node configuration directory\n--bind-discord LABEL ID: bind a configured principal locally");
+        return Ok(());
+    }
+    let addr = config::server_addr();
+    let socket: std::net::SocketAddr = addr.parse().map_err(|_| std::io::Error::other(format!("CONTROL_ADDR must be a loopback IP:port, such as 127.0.0.1:8080; got {addr:?}")))?;
     if !socket.ip().is_loopback() {
         return Err(std::io::Error::other(
             "Control currently requires a loopback bind address.",
@@ -482,11 +495,6 @@ fn main() -> std::io::Result<()> {
     }
     if args.get(1).is_some_and(|s| s == "tui") {
         return harness::run();
-    }
-    if args.get(1).is_some_and(|s| s == "--help" || s == "help") {
-        println!("control [serve | tui | mcp | discord | doctor | config | open | browser | federation]\nserve: local web/MCP server\ntui: Rust terminal client\nmcp [--root DIRECTORY]: local tools for an external harness\ndiscord --enable: listen to this node's configured DMs\ndoctor: offline prerequisites; no model calls\nconfig init | path: initialize or locate personal configuration\nopen: sign in to the local website\nbrowser capture FILE [WIDTH HEIGHT]: offline Nix Firefox capture\nfederation help: signed offline lens exchange\n--check-worker: one authenticated sandbox test (uses model usage)\n--version: version and platform");
-        println!("claude login | check: container login or offline tool isolation check\nconfig init: create private node configuration\nconfig path: show the node configuration directory\n--bind-discord LABEL ID: bind a configured principal locally");
-        return Ok(());
     }
     if args.get(1).is_some_and(|s| s == "config") {
         let directory = config::directory().map_err(std::io::Error::other)?;
@@ -526,7 +534,7 @@ fn main() -> std::io::Result<()> {
         ));
     }
     if args.get(1).is_some_and(|s| s == "open") {
-        return access::open(&addr);
+        return access::open();
     }
     if args.get(1).is_some_and(|s| s == "--bind-discord") {
         let result = (|| -> Result<(), &'static str> {
@@ -544,13 +552,15 @@ fn main() -> std::io::Result<()> {
             "Unknown command. Use control --help.",
         ));
     }
-    let listener = TcpListener::bind(&addr)?;
+    let listener = TcpListener::bind(&addr).map_err(|error| if error.kind() == std::io::ErrorKind::AddrInUse {
+        std::io::Error::other(format!("{addr} is already in use. Stop the other server or set CONTROL_ADDR, e.g. CONTROL_ADDR=127.0.0.1:8081."))
+    } else { error })?;
     storage::initialize()?;
     let _state_lock = storage::lock()?;
     let access = Arc::new(access::Access::load()?);
     let state = Arc::new(Mutex::new(storage::load()?));
     worker::start(state.clone());
-    println!("control · http://{addr}");
+    println!("control · {} · run ./target/release/control open in another terminal to sign in", config::server_url());
     for stream in listener.incoming().flatten() {
         let state = state.clone();
         let access = access.clone();
@@ -588,6 +598,20 @@ mod responsiveness_tests {
         assert_eq!(state.lock().unwrap().runtime.notice, "committed");
     }
 
+    #[test]
+    fn public_root_never_reflects_query_html_and_bodies_need_a_valid_length() {
+        let state = State::default();
+        for view in INTERNAL_VIEWS {
+            let query = fields(&format!("view={view}&channel=%3Cscript%3Ealert(1)%3C%2Fscript%3E"));
+            assert!(!public_render(&state, &query, "none").contains("<script>alert(1)"), "{view}");
+        }
+        assert!(matches!(body_length("POST / HTTP/1.1\r\nContent-Length: 12\r\n\r\n"), Body::Length(12)));
+        assert!(matches!(body_length("GET / HTTP/1.1\r\n\r\n"), Body::Length(0)));
+        assert!(matches!(body_length("POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n"), Body::Chunked));
+        for bad in ["Content-Length: x", "Content-Length: -1", "Content-Length: 1\r\nContent-Length: 2"] {
+            assert!(matches!(body_length(&format!("POST / HTTP/1.1\r\n{bad}\r\n\r\n")), Body::Invalid), "{bad}");
+        }
+    }
     #[test]
     fn poisoned_state_returns_503_without_rendering_or_mutating() {
         let state = Mutex::new(State::default());

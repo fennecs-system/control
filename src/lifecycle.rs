@@ -124,18 +124,18 @@ fn verified_resource(
     }
     Ok(())
 }
-fn names() -> Result<Vec<(String, String)>, &'static str> {
+fn names() -> Result<Vec<(String, String, String)>, &'static str> {
     crate::runtime::docker_query(&[
         "ps",
         "--all",
         "--format",
-        "{{.Names}}|{{.Label \"dev.control.node\"}}",
+        "{{.Names}}|{{.Label \"dev.control.node\"}}|{{.Label \"dev.control.purpose\"}}",
     ])
     .and_then(|s| {
         s.lines()
             .map(|line| {
-                line.split_once('|')
-                    .map(|(name, node)| (name.to_owned(), node.to_owned()))
+                let mut parts = line.splitn(3, '|');
+                (|| Some((parts.next()?.to_owned(), parts.next()?.to_owned(), parts.next().unwrap_or("").to_owned())))()
                     .ok_or_else(|| std::io::Error::other("Invalid container listing"))
             })
             .collect()
@@ -189,6 +189,8 @@ fn stop_container(
     if !active.trim().is_empty() {
         return Err("Worker is still running; work remains fenced.");
     }
+    // Best effort: --rm usually removed it already; an exited leftover is removed by verified ID.
+    let _ = query(&["rm", &container.id]);
     Ok(())
 }
 
@@ -203,7 +205,7 @@ pub fn stop_resource(
         Ok(s) => s,
         Err(_) => {
             let listed = names()?;
-            return if listed.iter().any(|(n, _)| n == name) {
+            return if listed.iter().any(|(n, _, _)| n == name) {
                 Err("Resource ownership unavailable; work remains fenced.")
             } else {
                 Ok(())
@@ -226,7 +228,7 @@ pub fn stop_attempt(attempt: &Attempt) -> Result<(), &'static str> {
         .as_deref()
         .ok_or("Missing persisted workspace identity.")?;
     let prefix = format!("control-{id}");
-    for (name, _) in names()? {
+    for (name, _, _) in names()? {
         if name == prefix || name == format!("{prefix}-tool") || name == format!("{prefix}-probe") {
             stop_named(attempt, &name)?;
         }
@@ -234,26 +236,57 @@ pub fn stop_attempt(attempt: &Attempt) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// Containers started by `control check`, `control claude check` or login carry
+/// this label; they are supervised by their command, never by run reconciliation.
+pub const CHECK_LABEL: &str = "dev.control.purpose=check";
+/// Identity-only snapshot of every attempt (no activity), taken under the state lock.
+pub struct Owner {
+    pub active: bool,
+    pub attempts: Vec<Attempt>,
+}
+pub fn owners(runs: &[crate::runtime::Run]) -> Vec<Owner> {
+    runs.iter()
+        .filter(|r| !r.attempts.is_empty())
+        .map(|r| Owner {
+            active: ["running", "cancelling"].contains(&r.status.as_str()),
+            attempts: r.attempts.iter().map(|a| {
+                let mut identity = Attempt::new();
+                identity.backend = a.backend;
+                identity.image.clone_from(&a.image);
+                identity.node_id.clone_from(&a.node_id);
+                identity.workspace_id.clone_from(&a.workspace_id);
+                identity.started_unix = a.started_unix;
+                identity
+            }).collect(),
+        })
+        .collect()
+}
 /// Reconcile after restart outside the state lock. Active attempts belong to
-/// execution supervisors; only interrupted attempts are eligible for cleanup.
-pub fn reconcile(runs: &[crate::runtime::Run]) -> Result<(), &'static str> {
-    let node = crate::config::node_id()?;
-    for (name, owner_node) in names()? {
-        let owner = runs
+/// execution supervisors; any attempt of a finished run is eligible for cleanup.
+pub fn reconcile(owners: &[Owner]) -> Result<(), String> {
+    reconcile_with(owners, &crate::config::node_id()?, names()?, stop_named)
+}
+fn reconcile_with(
+    owners: &[Owner],
+    node: &str,
+    listed: Vec<(String, String, String)>,
+    mut stop: impl FnMut(&Attempt, &str) -> Result<(), &'static str>,
+) -> Result<(), String> {
+    for (name, owner_node, purpose) in listed {
+        if format!("dev.control.purpose={purpose}") == CHECK_LABEL {
+            continue;
+        }
+        let owner = owners
             .iter()
-            .filter_map(|r| r.attempts.last().map(|a| (r, a)))
-            .find(|(_, a)| expected(a, &name).is_ok());
+            .find_map(|o| o.attempts.iter().find(|a| expected_path(a, &name).is_ok()).map(|a| (o, a)));
         if owner.is_none() && owner_node != node {
             continue;
         }
         match owner {
-            Some((run, attempt)) if !["running", "cancelling"].contains(&run.status.as_str()) => {
-                stop_named(attempt, &name)?
-            }
-            Some((run, _)) if ["running", "cancelling"].contains(&run.status.as_str()) => {}
-            _ => {
-                return Err("Unrecognized node container requires inspection; dispatch is paused.")
-            }
+            Some((owner, attempt)) if !owner.active => stop(attempt, &name)
+                .map_err(|m| format!("{m} Container {name}: inspect it, then run `docker rm -f {name}` to resume dispatch."))?,
+            Some(_) => {}
+            None => return Err(format!("Unrecognized Control container {name} on this node; dispatch is paused. Inspect it, then run `docker rm -f {name}` to resume.")),
         }
     }
     Ok(())
@@ -333,6 +366,27 @@ mod tests {
         assert_eq!(rt.runs[0].status, "cancelling");
         a.workspace_id = Some("stale".into());
         assert!(!current(&rt.runs[0], &a));
+    }
+    #[test]
+    fn reconcile_owns_earlier_attempts_skips_checks_and_names_the_blocker() {
+        let mut rt = Runtime::default();
+        rt.enqueue("task".into(), "task", "test");
+        for n in 1..=2 {
+            let mut a = Attempt::new();
+            a.workspace_id = Some(format!("old-attempt-{n}"));
+            a.activity.push(crate::usage::Activity { id: "x".into(), kind: "command_execution".into(), text: "t".into(), output: "o".repeat(100), status: "completed".into() });
+            rt.runs[0].attempts.push(a);
+        }
+        rt.runs[0].status = "failed".into();
+        let owners = owners(&rt.runs);
+        assert!(owners[0].attempts.iter().all(|a| a.activity.is_empty()));
+        let row = |name: &str, purpose: &str| (name.to_owned(), "node".to_owned(), purpose.to_owned());
+        let mut stopped = Vec::new();
+        assert!(reconcile_with(&owners, "node", vec![row("control-old-attempt-1", "run"), row("control-auth-check-1", "check")], |_, name| { stopped.push(name.to_owned()); Ok(()) }).is_ok());
+        assert_eq!(stopped, ["control-old-attempt-1"]);
+        let blocked = reconcile_with(&owners, "node", vec![row("control-stranger", "")], |_, _| Ok(())).unwrap_err();
+        assert!(blocked.contains("control-stranger") && blocked.contains("docker rm"));
+        assert!(reconcile_with(&owners, "node", vec![("control-stranger".into(), "other-node".into(), String::new())], |_, _| Ok(())).is_ok());
     }
     #[test]
     fn ownership_checks_every_field_before_termination() {

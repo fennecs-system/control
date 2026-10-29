@@ -149,6 +149,14 @@ pub fn landing_mode(state: &State, lens: &str, topic: Option<&str>, improve: boo
     html.push_str(&format!("<div class='conversation-empty'><h1>What are we working on?</h1>{context}</div><form class='conversation-composer' id='chat-list-new' method='post' action='/chats'><textarea name='message' maxlength='2000' rows='3' aria-label='First message' placeholder='Message Control…'>{}</textarea>{}{}<div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></section>",escape(&draft),command_menu(&Actor::LocalOperator),discussion.map(|(key,_)|format!("<input type='hidden' name='design_context' value='{key}'>")).unwrap_or_default(),crate::lens_library::choices(state,&selected,"chat-list-new")));
     html
 }
+/// Re-show a rejected composer submission: escaped error above the form and the draft restored.
+pub fn rejected(page: &str, error: &str, draft: &str) -> String {
+    const OPEN: &str = "placeholder='Message Control…'>";
+    let page = page.replacen("<form class='conversation-composer'", &format!("<p class='muted' role='alert'>{}</p><form class='conversation-composer'", escape(error)), 1);
+    let Some(start) = page.find(OPEN).map(|i| i + OPEN.len()) else { return page };
+    let Some(end) = page[start..].find("</textarea>").map(|i| start + i) else { return page };
+    format!("{}{}{}", &page[..start], escape(draft), &page[end..])
+}
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 100 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
@@ -552,10 +560,11 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
     )
 }
 pub fn list(state: &State) -> Value {
+    let mut authorize = identity::authorizer();
     json!(state
         .chats
         .iter()
-        .filter(|s| valid_id(&s.id) && identity::authorize(&s.actor, Action::Task).is_ok())
+        .filter(|s| valid_id(&s.id) && authorize(&s.actor, Action::Task).is_ok())
         .map(
             |s| json!({"id":s.id,"title":s.title,"lens":s.lens,"lenses":selected_lenses(s),"revision":s.revision,"messages":s.messages.len()})
         )
@@ -612,11 +621,13 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
         .as_array()
         .unwrap()
         .iter()
-        .any(|m| ["queued", "running", "cancelling", "waiting"].contains(&m["status"].as_str().unwrap_or("")));
+        .any(|m| ["queued", "running", "cancelling"].contains(&m["status"].as_str().unwrap_or("")));
     let mut html = format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'>{}</head><body class='transcript'>",if pending {"<meta http-equiv='refresh' content='3'>"} else {""});
-    for message in data["messages"].as_array().unwrap() {
+    let messages = data["messages"].as_array().unwrap();
+    for (position, message) in messages.iter().enumerate() {
         let status = match message["status"].as_str().unwrap_or("") {
             "queued" if message["kind"] == "steering" => "Queued · next turn",
+            "queued" if state.runtime.paused.is_some() => "Queued · dispatch paused",
             "queued" => "Queued",
             "running" => "Working…",
             "waiting" => "Your decision",
@@ -631,6 +642,10 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
             String::new()
         } else {
             format!("<span class='message-status' role='status'>{status}</span>")
+        };
+        let status = match state.runtime.paused.as_deref().filter(|_| message["status"] == "queued") {
+            Some(reason) => format!("{status}<p class='message-status'>{}</p>", escape(reason)),
+            None => status,
         };
         let reply = message["reply"].as_str().unwrap_or("");
         let reply = reply.strip_prefix("Agent conversation: /chat/")
@@ -659,7 +674,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
                         let class=match control::diff::kind(line) {control::diff::Kind::Add=>"diff-add",control::diff::Kind::Remove=>"diff-remove",control::diff::Kind::Header=>"diff-header",control::diff::Kind::Context=>"diff-context"};
                         body.push_str(&format!("<span class='diff-line {class}'>{}</span>",escape(line)));
                     }
-                    html.push_str(&format!("<details class='edit-diff' open><summary>Changes · attempt {} <span>{}</span></summary><pre aria-label='File changes'>{body}</pre></details>",index+1,escape(event["text"].as_str().unwrap_or(""))));
+                    html.push_str(&format!("<details class='edit-diff'{}><summary>Changes · attempt {} <span>{}</span></summary><pre aria-label='File changes'>{body}</pre></details>",if position + 1 == messages.len() && index + 1 == attempts.len() {" open"} else {""},index+1,escape(event["text"].as_str().unwrap_or(""))));
                 }
                 let events=events.iter().filter(|event|event["kind"] != "file_change").collect::<Vec<_>>();
                 if events.is_empty() {continue;}

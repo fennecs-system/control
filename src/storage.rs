@@ -67,10 +67,35 @@ pub fn load() -> io::Result<State> {
     crate::providers::load_settings(&mut state.runtime)?;
     let mut changed = crate::knowledge::migrate(&mut state);
     changed |= interrupt_active(&mut state);
+    for run in &mut state.runtime.runs {
+        changed |= trim_finished(run);
+    }
     if changed {
         save(&state)?;
     }
     Ok(state)
+}
+/// Finished runs keep their diffs and only a short command tail. Live runs keep
+/// everything; this bounds state.json, which is rewritten on every checkpoint.
+pub fn trim_finished(run: &mut crate::runtime::Run) -> bool {
+    const KEEP: usize = 8;
+    const OUTPUT: usize = 1000;
+    if ["queued", "running", "cancelling", "waiting"].contains(&run.status.as_str()) {
+        return false;
+    }
+    let mut changed = false;
+    for attempt in &mut run.attempts {
+        let commands = attempt.activity.iter().filter(|a| a.kind != "file_change").count();
+        let mut skip = commands.saturating_sub(KEEP);
+        let before = attempt.activity.len();
+        attempt.activity.retain(|a| a.kind == "file_change" || if skip > 0 { skip -= 1; false } else { true });
+        changed |= attempt.activity.len() != before;
+        for event in attempt.activity.iter_mut().filter(|a| a.kind != "file_change" && a.output.chars().count() > OUTPUT + 20) {
+            event.output = event.output.chars().take(OUTPUT).chain("\n… output trimmed".chars()).collect();
+            changed = true;
+        }
+    }
+    changed
 }
 fn interrupt_active(state: &mut State) -> bool {
     let mut changed = false;
@@ -96,7 +121,7 @@ fn interrupt_active(state: &mut State) -> bool {
     changed
 }
 pub fn save(state: &State) -> io::Result<()> {
-    let data = serde_json::to_vec_pretty(state).map_err(io::Error::other)?;
+    let data = serde_json::to_vec(state).map_err(io::Error::other)?;
     let mut options = fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -118,6 +143,32 @@ pub fn save(state: &State) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn finished_runs_keep_diffs_and_a_short_command_tail_and_pretty_files_load() {
+        let mut state = State::initial();
+        state.runtime.enqueue("t".into(), "task", "test");
+        let run = &mut state.runtime.runs[0];
+        let mut attempt = crate::usage::Attempt::new();
+        attempt.activity.push(crate::usage::Activity { id: "workspace-diff".into(), kind: "file_change".into(), text: "1 file".into(), output: "x".repeat(5000), status: "completed".into() });
+        for i in 0..20 {
+            attempt.activity.push(crate::usage::Activity { id: i.to_string(), kind: "command_execution".into(), text: "c".into(), output: "y".repeat(3000), status: "completed".into() });
+        }
+        run.attempts.push(attempt);
+        run.status = "running".into();
+        assert!(!trim_finished(run));
+        run.status = "completed".into();
+        assert!(trim_finished(run));
+        let activity = &run.attempts[0].activity;
+        assert_eq!(activity.len(), 9);
+        assert_eq!(activity[0].output.len(), 5000);
+        assert_eq!(activity[1].id, "12");
+        assert!(activity[1].output.chars().count() < 1100);
+        assert!(!trim_finished(run));
+        let pretty = serde_json::to_vec_pretty(&state).unwrap();
+        let compact = serde_json::to_vec(&state).unwrap();
+        assert!(compact.len() < pretty.len());
+        assert_eq!(serde_json::to_vec(&serde_json::from_slice::<State>(&pretty).unwrap()).unwrap(), compact);
+    }
     #[test]
     fn restart_fences_running_and_cancelling_without_replaying_or_publishing() {
         let mut state = State::initial();

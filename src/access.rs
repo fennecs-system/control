@@ -77,7 +77,7 @@ impl Access {
                         && fs::remove_file(path).is_ok()
                 });
                 if unlocked {
-                    respond(stream,"303 See Other","text/plain","",&format!("Location: /\r\nSet-Cookie: control_operator={}; Path=/; HttpOnly; SameSite=Strict\r\n",self.session));
+                    respond(stream,"303 See Other","text/plain","",&format!("Location: /\r\nSet-Cookie: control_operator={}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict\r\n",self.session));
                     return true;
                 }
             }
@@ -85,26 +85,22 @@ impl Access {
         if self.authorized(header) {
             return false;
         }
-        respond(stream,"401 Unauthorized","text/html; charset=utf-8","<!doctype html><html lang='en'><head><title>Control / operator access</title></head><body><h1>Operator access required</h1><p>On this laptop, run <code>cargo run -- open</code> from the Control directory to open an authenticated browser session.</p><p>Discord users and worker containers cannot obtain operator access from the website.</p></body></html>","");
+        respond(stream,"401 Unauthorized","text/html; charset=utf-8","<!doctype html><html lang='en'><head><title>Control / operator access</title></head><body><h1>Operator access required</h1><p>On this laptop, run <code>./target/release/control open</code> to open an authenticated browser session.</p><p>Discord users and worker containers cannot obtain operator access from the website.</p></body></html>","");
         true
     }
 }
 fn respond(stream: &mut TcpStream, status: &str, mime: &str, body: &str, extra: &str) {
     let _=write!(stream,"HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\n{extra}Connection: close\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'none'; frame-ancestors 'none'\r\n\r\n{body}",body.len());
 }
-pub fn open(addr: &str) -> io::Result<()> {
+pub fn open() -> io::Result<()> {
     crate::storage::initialize()?;
     let unlock = random()?;
     private_file(
         &crate::config::state("operator-unlock").map_err(io::Error::other)?,
         &unlock,
     )?;
-    let port = addr
-        .parse::<std::net::SocketAddr>()
-        .map_err(io::Error::other)?
-        .port();
     // Match Discord's localhost links so browser cookies use the same host.
-    let url = format!("http://localhost:{port}/unlock/{unlock}");
+    let url = format!("{}/unlock/{unlock}", crate::config::server_url());
     #[cfg(target_os = "macos")]
     let status = Command::new("open").arg(&url).status()?;
     #[cfg(not(target_os = "macos"))]

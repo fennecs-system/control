@@ -15,7 +15,10 @@ pub enum Kind {
     Header,
 }
 pub fn kind(line: &str) -> Kind {
-    if line.starts_with('+') {
+    // File headers before hunk lines, so they are not shown as an addition/removal.
+    if ["--- a/", "--- \"a/", "--- /dev/null", "+++ b/", "+++ \"b/", "+++ /dev/null"].iter().any(|p| line.starts_with(p)) {
+        Kind::Header
+    } else if line.starts_with('+') {
         Kind::Add
     } else if line.starts_with('-') {
         Kind::Remove
@@ -235,13 +238,16 @@ pub fn between(before: &Snapshot, after: &Snapshot) -> Preview {
                 .iter()
                 .filter(|(k, _)| *k != Kind::Remove)
                 .count();
-            patch.push_str(&format!(
+            let header = |old_count: usize, new_count: usize| format!(
                 "@@ -{},{} +{},{} @@\n",
                 old_line + usize::from(old_count > 0),
                 old_count,
                 new_line + usize::from(new_count > 0),
                 new_count
-            ));
+            );
+            let header_at = patch.len();
+            patch.push_str(&header(old_count, new_count));
+            let (mut shown_old, mut shown_new) = (0, 0);
             for (kind, text) in &ops[start..end] {
                 if patch.len() + result.text.len() >= OUTPUT_BYTES || lines >= OUTPUT_LINES {
                     limited = true;
@@ -262,11 +268,16 @@ pub fn between(before: &Snapshot, after: &Snapshot) -> Preview {
                 patch.push_str(&text_clean);
                 patch.push('\n');
                 lines += 1;
+                shown_old += usize::from(*kind != Kind::Add);
+                shown_new += usize::from(*kind != Kind::Remove);
                 if !text.ends_with('\n') {
                     patch.push_str("\\ No newline at end of file\n");
                 }
             }
             if limited {
+                // A truncated hunk's header must describe only the lines shown.
+                let end = header_at + header(old_count, new_count).len();
+                patch.replace_range(header_at..end, &header(shown_old, shown_new));
                 break;
             }
             for (kind, _) in &ops[start..end] {
@@ -381,6 +392,16 @@ mod tests {
                 );
             }
         }
+    }
+    #[test]
+    fn file_headers_are_not_changes_and_truncated_hunks_count_only_shown_lines() {
+        assert_eq!(kind("--- a/src/main.rs"), Kind::Header);
+        assert_eq!(kind("+++ /dev/null"), Kind::Header);
+        assert_eq!(kind("--- SQL comment removed"), Kind::Remove);
+        let preview = between(&snapshot(&[]), &snapshot(&[("big.txt", &"line\n".repeat(OUTPUT_LINES + 50))]));
+        assert!(preview.omitted > 0);
+        let shown = preview.text.lines().filter(|l| kind(l) == Kind::Add).count();
+        assert!(preview.text.contains(&format!("@@ -0,0 +1,{shown} @@\n")), "{}", &preview.text[..200]);
     }
     #[test]
     fn unified_hunks_pass_git_apply_check() {

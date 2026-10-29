@@ -231,6 +231,24 @@ pub fn authorize(actor: &Actor, action: Action) -> Result<Workspace, &'static st
     }
     Policy::load()?.authorize(actor, action)
 }
+/// Like `authorize` for many actors, reading the policy and DM bindings at most once.
+#[allow(dead_code)] // Unused in the control-discord binary, which also compiles this file.
+pub fn authorizer() -> impl FnMut(&Actor, Action) -> Result<Workspace, &'static str> {
+    let mut policy = None;
+    let mut dms = None;
+    move |actor, action| {
+        if *actor == Actor::LocalOperator {
+            return authorize(actor, action);
+        }
+        let policy = policy.get_or_insert_with(Policy::load).as_ref().map_err(|e| *e)?;
+        let dms = if matches!(actor, Actor::DiscordDm { .. }) {
+            dms.get_or_insert_with(DmBindings::load).as_ref().map_err(|e| *e)?
+        } else {
+            &DmBindings::default()
+        };
+        policy.authorize_with_dms(actor, action, dms)
+    }
+}
 
 #[cfg(test)]
 mod tests {

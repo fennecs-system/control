@@ -21,6 +21,9 @@ pub struct Runtime {
     pub model: Option<String>,
     pub runs: Vec<Run>,
     pub notice: String,
+    // Why dispatch is paused, shown on queued chat messages; rebuilt by the next reconcile.
+    #[serde(skip)]
+    pub paused: Option<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Run {
@@ -107,7 +110,11 @@ pub(crate) fn pinned_image(s: &str) -> bool {
     digest.is_some_and(|hash| hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 pub fn engine_ready() -> bool {
-    docker_query(&["info", "--format", "{{.OSType}}"]).is_ok_and(|output| output.trim() == "linux")
+    // A cold Docker Desktop or colima engine can take well over 5 s to answer `info`.
+    engine_output(
+        Command::new("docker").args(["info", "--format", "{{.OSType}}"]),
+        std::time::Duration::from_secs(20),
+    ).is_ok_and(|output| output.trim() == "linux")
 }
 pub fn docker_query(arguments: &[&str]) -> std::io::Result<String> {
     engine_output(
@@ -243,9 +250,6 @@ impl Runtime {
             self.notice = crate::lifecycle::request_cancel(self, &id, &Actor::LocalOperator)
                 .map(|()| "Cancellation requested.".to_owned())
                 .unwrap_or_else(str::to_owned);
-        }
-        if path == "/improve" {
-            self.enqueue(field(f, "objective"), "self-improvement", "website");
         }
         if path == "/task" {
             self.enqueue(field(f, "objective"), "task", "website");
