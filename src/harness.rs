@@ -24,7 +24,7 @@ use std::{
 };
 
 const VERSION: &str = "2025-11-25";
-const CHAT_COMMANDS: [&str; 6] = ["/improve", "/improve off", "/steer", "/btw", "/spawn", "/cancel"];
+const CHAT_COMMANDS: [&str; 7] = ["/improve", "/improve off", "/steer", "/btw", "/spawn", "/cancel", "/answer"];
 
 fn command_line(text: &str) -> Line<'static> {
     let prefix = CHAT_COMMANDS.iter().rev().find(|command| text.strip_prefix(**command).is_some_and(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace)));
@@ -725,6 +725,59 @@ pub fn run() -> io::Result<()> {
 mod tests {
     use super::*;
     #[test]
+    #[ignore = "requires isolated server, authenticated container worker and two small model calls; optional pause/resume phases test server restart"]
+    fn live_design_question_pauses_and_resumes_checkpoint() {
+        let server = std::env::var("CONTROL_QA_URL").expect("Use an isolated server");
+        let mut hive = Hive::connect(&server).unwrap();
+        let fixture = crate::config::state("design-question-qa-id").unwrap();
+        let id = if std::env::var_os("CONTROL_QA_DESIGN_RESUME").is_some() {
+            fs::read_to_string(&fixture).unwrap()
+        } else {
+            let id = hive.tool("control.chat.create",json!({})).unwrap()["id"].as_str().unwrap().to_owned();
+            hive.tool("control.chat.send",json!({"id":id,"message":"Checkpoint test: first write checkpoint-proof.txt containing exactly design-before. Then use control_design_ask to ask Which output format? with options Plain text and JSON, recommended index 1. Stop after asking. When the user answers, continue this original task: verify checkpoint-proof.txt still contains design-before and write answer-proof.txt containing exactly the chosen option text. Do not ask again. Reply briefly."})).unwrap();
+            id
+        };
+        let deadline = Instant::now()+Duration::from_secs(180);
+        let paused = loop {
+            let detail = hive.tool("control.chat.read",json!({"id":id})).unwrap();
+            let status = detail["messages"][0]["status"].as_str().unwrap_or("");
+            if status == "waiting" { break detail; }
+            assert!(["queued","running"].contains(&status),"Design ask ended with {status}");
+            assert!(Instant::now()<deadline,"Design ask did not pause");
+            std::thread::sleep(Duration::from_millis(300));
+        };
+        assert_eq!(paused["messages"][0]["question"]["input"]["options"],json!(["Plain text","JSON"]));
+        let artifact = paused["messages"][0]["attempts"][0]["artifact"].as_str().unwrap();
+        let before = hive.tool("control.artifact.read",json!({"id":id,"artifact":artifact,"path":"checkpoint-proof.txt"})).unwrap();
+        assert_eq!(before["text"],"design-before");
+        let page = hive.client.get(format!("{server}/chat/{id}/transcript")).send().unwrap().text().unwrap();
+        assert!(page.contains("value='/answer") && page.contains("JSON · recommended"));
+        if std::env::var_os("CONTROL_QA_DESIGN_PAUSE_ONLY").is_some() {
+            fs::write(fixture,&id).unwrap();
+            return;
+        }
+        let question_id = paused["messages"][0]["question"]["id"].as_str().unwrap();
+        let response = hive.client.post(format!("{server}/chat/{id}/messages"))
+            .header("Origin",&server).form(&[("message",format!("/answer {question_id} 2"))]).send().unwrap();
+        assert_eq!(response.status().as_u16(),303);
+        let deadline = Instant::now()+Duration::from_secs(180);
+        loop {
+            let detail = hive.tool("control.chat.read",json!({"id":id})).unwrap();
+            assert_eq!(detail["messages"][0]["question"]["answer"],"JSON");
+            let message = &detail["messages"][1];
+            let status = message["status"].as_str().unwrap_or("");
+            if status == "completed" {
+                let artifact = message["attempts"][0]["artifact"].as_str().unwrap();
+                let after = hive.tool("control.artifact.read",json!({"id":id,"artifact":artifact,"path":"answer-proof.txt"})).unwrap();
+                assert_eq!(after["text"],"JSON");
+                break;
+            }
+            assert!(["queued","running"].contains(&status),"Design continuation ended with {status}");
+            assert!(Instant::now()<deadline,"Design answer did not complete");
+            std::thread::sleep(Duration::from_millis(300));
+        }
+    }
+    #[test]
     #[ignore = "requires isolated local server with workers disabled; no model calls"]
     fn live_harness_commands_create_children_and_cancel_without_losing_history() {
         let server = std::env::var("CONTROL_QA_URL").expect("Use an isolated server");
@@ -982,7 +1035,7 @@ mod tests {
             browser.get(&format!("/element/{input}/property/value")),
             "/improve off"
         );
-        for (draft, command) in [("/bt", "/btw"), ("/spa", "/spawn"), ("/ste", "/steer")] {
+        for (draft, command) in [("/bt", "/btw"), ("/spa", "/spawn"), ("/ste", "/steer"), ("/ans", "/answer")] {
             browser.post("/url", json!({"url":format!("{server}/chat/{chat_id}")}));
             let input = browser.input();
             browser.post(&format!("/element/{input}/value"), json!({"text":draft}));

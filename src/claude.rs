@@ -247,6 +247,7 @@ impl Stream {
                     "mcp__control__control_rust_run",
                     "mcp__control__control_room_read",
                     "mcp__control__control_room_post",
+                    "mcp__control__control_design_ask",
                     "EndConversation",
                 ];
                 if !value["tools"].as_array().is_some_and(|tools| {
@@ -389,7 +390,7 @@ pub fn execute(
         "claude", "--print", "--output-format", "stream-json", "--verbose", "--no-session-persistence",
         "--restricted", "--tools", "", "--disable-slash-commands", "--setting-sources", "", "--strict-mcp-config",
         "--mcp-config", "{\"mcpServers\":{\"control\":{\"command\":\"/bin/control-room-mcp\"}}}",
-        "--permission-mode", "dontAsk", "--allowedTools", "mcp__control__control_workspace_run,mcp__control__control_web_search,mcp__control__control_rust_run,mcp__control__control_room_read,mcp__control__control_room_post",
+        "--permission-mode", "dontAsk", "--allowedTools", "mcp__control__control_workspace_run,mcp__control__control_web_search,mcp__control__control_rust_run,mcp__control__control_room_read,mcp__control__control_room_post,mcp__control__control_design_ask",
         "--model", &attempt.model])
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command
@@ -408,13 +409,14 @@ pub fn execute(
             }
         })
     });
-    let prompt = format!("You are working on a task in Control. Your only project access is control_workspace_run: it runs commands in a separate offline Nix container at /workspace, with Rust, rg and fd. Use it to read/write task files. You cannot read the harness filesystem or credentials. Use Rust/WASM for application code. Keep replies direct; omit empty report sections. You may use public search without private text. Control node policy determines authority; tools cannot administer it. Objective:\n{objective}");
+    let prompt = format!("You are working on a task in Control. Your only project access is control_workspace_run: it runs commands in a separate offline Nix container at /workspace, with Rust, rg and fd. Use it to read/write task files. You cannot read the harness filesystem or credentials. Use Rust/WASM for application code. Work freely within the sandbox for routine edits, builds and tests. Use control_design_ask for consequential architecture, scope or behavior decisions requiring user direction: offer concrete options and a recommendation, then stop work. This is not permission escalation. Keep replies direct; omit empty report sections. You may use public search without private text. Control node policy determines authority; tools cannot administer it. Objective:\n{objective}");
     let sent = child
         .stdin
         .take()
         .is_some_and(|mut stdin| stdin.write_all(prompt.as_bytes()).is_ok());
     let start = Instant::now();
     let success = loop {
+        if crate::design::requested(bridge) { break false; }
         if crate::lifecycle::cancelled(bridge) {
             break false;
         }
@@ -427,6 +429,7 @@ pub fn execute(
             }
             crate::worker_tools::pump_at(s, r, &mailbox, workspace);
         }
+        if crate::design::requested(bridge) { break false; }
         match child.try_wait() {
             Ok(Some(status)) => break status.success(),
             Err(_) => break false,
@@ -449,6 +452,9 @@ pub fn execute(
                 "cancelled",
                 "Cancelled. The previous published workspace is unchanged.".into(),
             ));
+        }
+        if crate::design::requested(bridge) {
+            return Err(("waiting", "Waiting for a design decision.".into()));
         }
         return Err(failed("Claude stopped without success. Check its login, selected model and usage limits; credentials remain read-only."));
     }

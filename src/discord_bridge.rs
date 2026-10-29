@@ -95,6 +95,19 @@ fn load_json<T: serde::de::DeserializeOwned + Default>(path: impl AsRef<Path>) -
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default()
 }
+fn design_report(question: &Value) -> Option<String> {
+    let id = question["id"].as_str()?;
+    if id.len() > 100 || !id.bytes().all(|b|b.is_ascii_alphanumeric() || b == b'-') { return None; }
+    let title: String = question["input"]["question"].as_str()?.chars().take(500).collect();
+    let options = question["input"]["options"].as_array()?;
+    let mut report = format!("Reply /answer {id} NUMBER or /answer {id} YOUR_DIRECTION\n\n{title}\n");
+    for (index, option) in options.iter().take(4).enumerate() {
+        let label: String = option.as_str()?.chars().take(140).collect();
+        let recommended = question["input"]["recommended"].as_u64() == Some(index as u64);
+        report.push_str(&format!("\n{}. {}{}",index+1,label,if recommended {" (recommended)"} else {""}));
+    }
+    Some(report)
+}
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -552,7 +565,7 @@ impl Bridge {
                     continue;
                 }
                 let status = run["status"].as_str().unwrap_or("");
-                if !["completed", "blocked", "failed", "interrupted"].contains(&status) {
+                if !["completed", "blocked", "failed", "interrupted", "waiting"].contains(&status) {
                     continue;
                 }
                 let id = run["id"].as_str().unwrap_or("");
@@ -560,7 +573,10 @@ impl Bridge {
                 if delivered.contains(&receipt) {
                     continue;
                 }
-                let report = if action == Action::Improve && !direct {
+                let decision = (status == "waiting").then(||design_report(&run["question"])).flatten();
+                let report = if let Some(report) = decision.as_deref() {
+                    report
+                } else if action == Action::Improve && !direct {
                     "Architect report: open the authenticated operator website."
                 } else {
                     run["result"].as_str().unwrap_or("No report was produced.")
@@ -703,6 +719,14 @@ mod tests {
     use super::*;
     fn id(s: &str) -> DiscordId {
         s.parse().unwrap()
+    }
+    #[test]
+    fn design_reports_keep_answer_identity_and_all_options_within_dm_budget() {
+        let report = design_report(&json!({"id":"q-test","input":{"question":"q".repeat(1000),"options":["a".repeat(200),"b".repeat(200),"c".repeat(200),"d".repeat(200)],"recommended":3}})).unwrap();
+        assert!(report.starts_with("Reply /answer q-test"));
+        assert!(report.contains("4. ") && report.contains("(recommended)"));
+        assert!(report.chars().count() < 1500);
+        assert!(design_report(&json!({"id":"bad\nidentity"})).is_none());
     }
     #[test]
     fn dm_setup_checks_type_and_recipient() {

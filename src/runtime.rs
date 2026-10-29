@@ -25,6 +25,10 @@ pub struct Runtime {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Run {
     #[serde(default)]
+    pub question: Option<crate::design::Question>,
+    #[serde(default)]
+    pub continuation: Option<crate::design::Continuation>,
+    #[serde(default)]
     pub backend: crate::backend::Backend,
     #[serde(default)]
     pub queue_order: u64,
@@ -50,26 +54,27 @@ pub struct Run {
     pub result: String,
 }
 
-// Cancellation changes only status/result. Keep rollback proportional to pending
-// work, without cloning attempt activity or completed conversation history.
+// Pending transitions change status/result and possibly a design answer. Keep
+// rollback bounded, without cloning attempts or completed conversation history.
 pub(crate) struct RunStatusCheckpoint {
-    runs: Vec<(String, String, String)>,
+    runs: Vec<(String, String, String, Option<crate::design::Question>)>,
     notice: String,
 }
 impl RunStatusCheckpoint {
     pub(crate) fn capture(runtime: &Runtime, matches: impl Fn(&Run) -> bool) -> Self {
         Self {
             runs: runtime.runs.iter()
-                .filter(|run| ["queued", "running", "cancelling"].contains(&run.status.as_str()) && matches(run))
-                .map(|run| (run.id.clone(), run.status.clone(), run.result.clone())).collect(),
+                .filter(|run| ["queued", "running", "cancelling", "waiting"].contains(&run.status.as_str()) && matches(run))
+                .map(|run| (run.id.clone(), run.status.clone(), run.result.clone(), run.question.clone())).collect(),
             notice: runtime.notice.clone(),
         }
     }
     pub(crate) fn restore(self, runtime: &mut Runtime) {
-        for (id, status, result) in self.runs {
+        for (id, status, result, question) in self.runs {
             if let Some(run) = runtime.runs.iter_mut().find(|run| run.id == id) {
                 run.status = status;
                 run.result = result;
+                run.question = question;
             }
         }
         runtime.notice = self.notice;
@@ -204,6 +209,8 @@ impl Runtime {
             .unwrap_or_default()
             .as_nanos();
         self.runs.push(Run {
+            question: None,
+            continuation: None,
             backend: self.backend,
             queue_order: self
                 .runs
@@ -295,7 +302,7 @@ impl Runtime {
                 let mut running = self
                     .runs
                     .iter()
-                    .filter(|r| ["running", "cancelling"].contains(&r.status.as_str()))
+                    .filter(|r| ["running", "cancelling", "waiting"].contains(&r.status.as_str()))
                     .peekable();
                 if running.peek().is_none() {
                     h.push_str("<div class='empty'>No active agents.</div>");
@@ -347,7 +354,7 @@ fn run_record(run: &Run) -> String {
     if let Some(chat) = run.chat_id.as_ref().filter(|id| crate::chat::valid_id(id)) {
         html.push_str(&format!("<a href='/chat/{}'>Open chat ↗</a>", escape(chat)));
     }
-    if ["queued", "running"].contains(&run.status.as_str()) {
+    if ["queued", "running", "waiting"].contains(&run.status.as_str()) {
         html.push_str(&format!("<form method='post' action='/cancel-run'><input type='hidden' name='id' value='{}'><button>Cancel</button></form>",escape(&run.id)));
     }
     if ["blocked", "failed", "interrupted", "cancelled"].contains(&run.status.as_str()) {

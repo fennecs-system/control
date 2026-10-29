@@ -7,6 +7,7 @@ mod browser_ui;
 mod chat;
 mod claude;
 mod collective;
+mod design;
 use control::config;
 mod discord;
 mod discord_bridge;

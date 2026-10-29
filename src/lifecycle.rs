@@ -18,9 +18,10 @@ pub fn request_cancel(runtime: &mut Runtime, id: &str, actor: &Actor) -> Result<
     }
     crate::identity::authorize(actor, run.action)?;
     match run.status.as_str() {
-        "queued" => {
+        "queued" | "waiting" => {
+            let was_waiting = run.status == "waiting";
             run.status = "cancelled".into();
-            run.result = "Cancelled before execution.".into();
+            run.result = if was_waiting { "Cancelled while waiting. The previous published workspace is unchanged." } else { "Cancelled before execution." }.into();
         }
         "running" => {
             run.status = "cancelling".into();

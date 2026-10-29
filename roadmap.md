@@ -32,6 +32,14 @@ release gates remain open. Friends
 build the ordinary release binary from main with Nix; there is no separate preview
 target. A working local build does not close those reliability and provider gates.
 
+Design-decision interaction: managed Codex/Claude runs can ask a bounded structured
+question with options and a recommendation. Execution yields after verified stop
+and an immutable checkpoint; pending questions survive restart. A human answer
+queues an actor-bound continuation with the captured model/context. Only that
+chat's follow-ups wait; recommendations grant neither consent nor capabilities.
+Web, TUI and Discord share the same answer service. Routine sandbox operations
+remain autonomous; asking at the right design boundary is prompt-guided.
+
 ## 1. Make a second Mac configurable — release blocker
 
 - Keep validated node files under `~/.config/control/`, with an explicit
