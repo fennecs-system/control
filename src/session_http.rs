@@ -1,11 +1,11 @@
 use crate::{chat, storage, State};
 use serde_json::{json, Value};
-use std::{io::Write, net::TcpStream};
+use std::io::Write;
 
-fn respond(stream: &mut TcpStream, status: &str, mime: &str, body: &str, extra: &str) {
+fn respond(stream: &mut impl Write, status: &str, mime: &str, body: &str, extra: &str) {
     respond_with_policy(stream, status, mime, body, extra, "'none'");
 }
-fn respond_chat(stream: &mut TcpStream, html: &str) {
+fn respond_chat(stream: &mut impl Write, html: &str) {
     let page = html.replace(
         "</head>",
         "<script type='module' src='/tool-window/chat-bootstrap.js'></script></head>",
@@ -20,7 +20,7 @@ fn respond_chat(stream: &mut TcpStream, html: &str) {
     );
 }
 fn respond_with_policy(
-    stream: &mut TcpStream,
+    stream: &mut impl Write,
     status: &str,
     mime: &str,
     body: &str,
@@ -133,7 +133,7 @@ pub fn rpc(state: &mut State, request: &Value) -> Value {
 }
 
 pub fn handle(
-    stream: &mut TcpStream,
+    stream: &mut impl Write,
     state: &mut State,
     method: &str,
     target: &str,

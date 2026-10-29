@@ -9,6 +9,11 @@ It separates that direction from what is implemented today.
 
 Run `cargo run --locked` and visit http://127.0.0.1:8080. `nix develop` provides the Rust toolchain. Rooms, reviews, chat, and the run ledger persist in `.control/state.json`, written atomically with private file permissions. Only one service instance should use a state directory. The web service never loads `.env`.
 
+HTTP responses release shared state before socket writes; static stylesheets
+bypass that lock. Discord inbox admission runs independently of the single worker
+slot. Progress updates stay in memory until a run checkpoint/result saves them;
+a crash can lose recent progress, not an already committed task or result.
+
 The UI includes lenses, rooms, a Knowledge workspace, an authority queue, a run ledger, self-improvement proposals, and a Rust/WASM tool window. Knowledge combines a document list, Markdown editor, linked-note graph, and evidence review. The previous saved draft is preserved as Scratchpad.md; it does not edit the repository's DESIGN.md. Website chat, agent tasks, and self-improvement proposals enqueue Codex container runs. Missing prerequisites produce blocked runs; there is no host fallback.
 
 A node owns data and execution. A lens selects knowledge, tools, and instructions for a context. Effective tool access should be the intersection of lens selection, node policy, and user permissions. Lens lists describe selections; the concrete tools below execute through a separately authorized broker. Complete lens-based execution filtering remains future work.
@@ -30,6 +35,12 @@ In **Knowledge**, use **+ New note** to create a document and `[[Note name]]` to
 Build `.#worker-image` on a Linux Nix builder and load the image into the laptop's container engine. The image is assembled directly with `dockerTools.buildLayeredImage`, without a distribution base. Configure `CONTROL_WORKER_IMAGE` (or `.control/worker-image-id`) with a content-addressed `sha256:<64 hex digits>` image ID or `name@sha256:<64 hex digits>`.
 
 Sign in to Codex on the host with your ChatGPT account using `codex login`. Workers mount only the existing `auth.json` file read-only at `/home/agent/.codex/auth.json`; credentials are never copied into the image/workspace or passed through environment variables. The host control plane checks file metadata without reading its contents. The source defaults to `$CODEX_HOME/auth.json` or `~/.codex/auth.json`; `CONTROL_CODEX_AUTH_FILE` can override the non-secret path. The file must be a private regular file owned by a non-root user; symlinks and group/world permissions are rejected. If necessary, configure host Codex with `cli_auth_credentials_store = "file"` before signing in. Never print, paste, or commit the file.
+
+This node's Codex login is reserved for its credential owner. Local operator
+requests are allowed; Discord model runs require an explicitly configured owner
+ID and a confirmed DM binding. Architect access alone is insufficient. Admission,
+retry, dispatch and worker tools recheck this boundary. Other users need their
+own node/login; shared API-backed execution is not implemented yet.
 
 The container runs as the credential file's non-root UID/GID. A named Codex permission profile denies agent tools access to the entire Codex state directory and disables tool network access. Each run first tests a separate empty auth canary: direct and proc-alias reads must fail, the tool supervisor must be inside its own PID namespace, and workspace writes must succeed. Verification failure blocks the run before mounting real credentials. `cargo run --locked -- --check-worker` exercises this path and one small authenticated model/tool task, reporting only a safe success/failure message.
 
@@ -76,7 +87,19 @@ The separate `control-discord` Rust binary supports direct messages from bound D
 
 The bridge opens one-to-one DM channels only for locally bound IDs, verifies the channel type and recipient returned by Discord, and persists the confirmed mappings privately. It polls each conversation independently and replies to that same conversation. Private messages are not posted into the shared room. Recipient mappings and role policy are checked again at ingress and worker dispatch; a forged direct-message flag cannot bypass the policy. Bot/webhook messages and unexpected recipients are ignored. A plain-text task still runs in the user's isolated workspace; source access requires the architect's explicit improvement action.
 
-The only required `.env` key is `DISCORD_TOKEN`. Non-secret identity bindings live in `discord-access.json`: geodesic is the architect, vivkelly and olliev are users. A label grants no access until its numeric snowflake ID is bound. Unknown identities/channels are denied. Bind IDs locally with `cargo run -- --bind-discord <label> <ID>`, or the bridge's `--bind <label> <ID>` command, without reading `.env`. Duplicate bindings and unexpected role assignments are rejected. Legacy channel configuration and channel-setting commands are rejected; `channel_id` must remain null. Legacy environment allowlist keys are ignored.
+The only required `.env` key is `DISCORD_TOKEN`. Identity configuration lives in
+the ignored, private `.control/discord-access.json`; the repository's
+`discord-access.json` is a placeholder template. After creating `.control` with
+mode 0700, copy the template there with mode 0600 and configure labels, numeric
+IDs and `architect`/`user` roles locally. Existing installations must move their
+old policy there before starting this version. Labels are display text; only
+numeric bindings grant access. Duplicate labels/IDs and unknown actors are denied.
+Bind IDs with `cargo run -- --bind-discord <label> <ID>` or the bridge's
+`--bind <label> <ID>`, without reading `.env`. Set the credential owner's bound
+Discord ID with `cargo run -- --codex-owner <ID>`; `--codex-owner none` disables
+Discord access to that login. Built-in greetings/help/status remain available to
+other configured users, but model requests are declined. `channel_id` must remain
+null: server access and legacy environment allowlists stay disabled.
 
 Run `cargo run --bin control-discord -- --check` to verify the bot and provision recipient channels without sending messages. Run with `--enable` to listen. Either explicit flag permits only the bridge process to load `.env`; running with neither does not read it. The bridge suppresses credential-bearing errors and disables automatic mentions in replies. Queued runs retain their actor identity; messages cannot supply their own role. Legacy runs without actor provenance are denied and must be resubmitted.
 

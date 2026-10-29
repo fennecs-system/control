@@ -93,7 +93,7 @@ impl Runtime {
         actor: Actor,
         action: Action,
     ) -> Result<(), &'static str> {
-        identity::authorize(&actor, action)?;
+        identity::authorize_codex(&actor, action)?;
         if objective.is_empty() || objective.chars().count() > 2000 {
             return Err("An objective must contain 1–2000 characters.");
         }
@@ -132,6 +132,10 @@ impl Runtime {
             if let Some(run) = self.runs.iter_mut().find(|r| {
                 r.id == id && ["blocked", "failed", "interrupted"].contains(&r.status.as_str())
             }) {
+                if let Err(message) = identity::authorize_codex(&run.actor, run.action) {
+                    self.notice = message.into();
+                    return "/?view=evolution";
+                }
                 run.status = "queued".into();
                 run.result.clear();
             }
@@ -146,7 +150,7 @@ impl Runtime {
                     Ok(policy) => {
                         h.push_str("<p>DMs only. Server messages are ignored.</p>");
                         for p in policy.principals {
-                            h.push_str(&format!("<article class='record'><span class='tag'>{:?}</span><h3>@{}</h3><p>Discord ID: {}</p><p class='muted'>{}</p></article>",p.role,escape(&p.label),p.user_id.map(|id|id.to_string()).unwrap_or_else(||"not bound — no access".into()),if p.role==identity::Role::Architect {"Can request source changes for local review."}else{"Can run agents. Cannot change Control, access settings, or deploy."}));
+                            h.push_str(&format!("<article class='record'><span class='tag'>{:?}</span><h3>@{}</h3><p>Discord ID: {}</p><p class='muted'>{}</p>{}</article>",p.role,escape(&p.label),p.user_id.map(|id|id.to_string()).unwrap_or_else(||"not bound — no access".into()),if p.role==identity::Role::Architect {"Can request source changes for local review."}else{"Cannot change Control, access settings, or deploy."},if p.user_id.is_some() && p.user_id==policy.codex_owner_id {"<span class='tag'>Codex owner</span>"}else{"<p class='muted'>No access to this node’s Codex login.</p>"}));
                         }
                     }
                     Err(message) => {

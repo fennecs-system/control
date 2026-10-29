@@ -3,7 +3,6 @@ use control_context::{Definition, DocumentInput, Resolved};
 use std::{
     collections::HashMap,
     io::{self, Write},
-    net::TcpStream,
 };
 
 pub fn inputs(state: &State) -> Vec<DocumentInput> {
@@ -228,11 +227,11 @@ pub fn render(
     html.push_str("</section></div>");
     html
 }
-fn response(stream: &mut TcpStream, status: &str, body: &str, extra: &str, mime: &str) {
+fn response(stream: &mut impl Write, status: &str, body: &str, extra: &str, mime: &str) {
     let _=write!(stream,"HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\n{extra}Connection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'\r\n\r\n{body}",body.len());
 }
 pub fn handle(
-    stream: &mut TcpStream,
+    stream: &mut impl Write,
     state: &mut State,
     method: &str,
     path: &str,

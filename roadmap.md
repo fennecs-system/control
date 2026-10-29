@@ -7,6 +7,18 @@ The invited release must preserve work between turns, fail safely, recover after
 restart, and install without editing source. Selecting Claude inside Control is
 a high-priority parallel track. Full provider parity and federation come later.
 
+**Augment, don't intermediate:** people bring their own model access. Control
+adds environments, tools, knowledge and review around it. The same capabilities
+serve external MCP clients and Control-managed runs; the web, TUI and Discord
+are interfaces to those capabilities.
+
+Implementation progress (2026-10-29): HTTP socket writes now release shared state,
+stylesheets bypass it, Discord ingestion has its own thread, and individual
+progress events no longer fsync the full state. Discord principals have moved to
+private runtime configuration with arbitrary labels/roles and an explicit Codex
+owner ID; enqueue, retry, dispatch and worker tools enforce that boundary. Portable
+dotfile setup, durable workspace continuity and crash reconciliation remain open.
+
 ## 1. Make a second Mac configurable — release blocker
 
 - Introduce a validated user dotfile, proposed `~/.config/control/config.toml`,
@@ -26,6 +38,13 @@ a high-priority parallel track. Full provider parity and federation come later.
   DM-only routing, confirmed recipient/channel mappings, denial of unknown actors,
   user/architect restrictions, and checks at ingress and dispatch. A role does
   not establish ownership of a provider subscription.
+- Immediately bind subscription-backed Codex runs to the credential owner:
+  local owner access plus an explicitly configured, verified owner Discord ID.
+  Recheck at enqueue and dispatch, including queued/retried work. Other users
+  bring their own login/node or an authorized API-backed path; an architect role
+  alone grants no subscription access. OpenAI's [individual-use terms](https://openai.com/policies/terms-of-use/),
+  checked 2026-10-29, prohibit sharing credentials or making an account available
+  to others. This is a required access change, not a completed safeguard.
 - Add offline `control doctor` checks for configuration, private-file metadata,
   state permissions, engine, pinned image availability, assets and sandbox policy.
   Keep authenticated model checks explicit and separate from offline diagnostics.
@@ -83,6 +102,10 @@ inputs, one deterministic supervisor and concrete adapters; no framework migrati
   listing and invocation against captured lens selection, node policy and actor.
   Public web search is explicit egress; record bounded, privacy-conscious evidence
   without persisting secrets or raw private queries as a new audit channel.
+- Keep network writes outside the shared state lock, bound connection/read/write
+  waits, and serve static assets without waiting for a run or checkpoint. Verify
+  chat submission, navigation and Discord ingestion during a long-running worker
+  and a slow client; a healthy execution thread alone is not a responsive UX.
 - Remove panic assumptions at mutable request/worker boundaries. Validate and
   reload a known-good checkpoint, or fail closed with a restart diagnostic, after
   poisoned state; blindly accepting a poisoned mutex is not recovery. Batch
@@ -116,6 +139,14 @@ Release after phases 1–2 pass; prepare documentation and Claude connection alo
   editing and does not let users select Claude inside Control. A plugin package
   is optional. Claude documents local MCP setup
   in its [MCP guide](https://code.claude.com/docs/en/mcp).
+- Extend that quickstart with knowledge search/read and explicitly authorized
+  room posting; these are additions, not tools already present in the stdio
+  bridge. Use the shared registry below and remove checkout-dependent startup.
+- If friends need another machine's node, promote scoped remote MCP over
+  Tailscale into this cohort's work. Require per-principal revocable access and
+  tool authorization; private networking alone is not authentication. Do not
+  wait for the construction loop or federation, and do not expose the universal
+  operator session as a remote-client credential.
 - Keep a short known-limitations list and a manual feedback template: task,
   expected/actual result, build/platform, optional redacted run ID and artifact.
   Let the friend inspect anything exported. Start with direct feedback; a new
@@ -134,6 +165,8 @@ cohort to an external-MCP-only preview. Do not count MCP as provider completion.
 Develop this adapter alongside configuration and recovery, reusing phase 2's
 supervisor contracts. Its runtime release depends on those safety gates. Choose
 one minimal personal Claude path; prioritize it over federation and broad tooling.
+After extracting the Codex backend seam, Claude CLI is the first new adapter.
+Keep the seam small; broad provider parity is not a prerequisite.
 
 - First timebox an unmodified, pinned Claude Code CLI adapter for a credential
   owner's interactive work on their own node: capture selection per attempt,
@@ -152,6 +185,8 @@ one minimal personal Claude path; prioritize it over federation and broad toolin
   offline tool containers execute authorized tools. Add only the minimal bounded
   tool loop, typed transcript/tool results, streaming parser, usage normalization,
   cancellation and explicit spend limits. No Bedrock/Vertex/router requirement.
+  The native API adapter is also the intended backend for authorized shared or
+  unattended work; it is not a subscription credential workaround.
 - Official [hosting/auth conditions](https://code.claude.com/docs/en/legal-and-compliance),
   checked 2026-10-29, permit users signing into the unmodified CLI themselves,
   subject to the stated product-hosting conditions; they prohibit subscription
@@ -165,11 +200,40 @@ reaches model-readable tools. Add bounded parallel workers, richer diffs and
 independent verification next when feedback justifies them; storage/event-log
 migration, streaming polish and session rotation remain separate improvements.
 
+## 5. Shared MCP capabilities and the construction loop
+
+Build useful capabilities once, with transport-specific grants rather than three
+hand-maintained catalogues. This work can ship incrementally alongside the pilot.
+
+- Share tool definitions, schemas and policy dispatch across HTTP MCP, stdio and
+  the worker mailbox. Keep authority explicit: an external client does not
+  inherit a worker's active-run capabilities or the operator's subscription.
+- Add knowledge search/read, bounded evidence-backed claim proposals and
+  authorized room posting. Lens tools expose explicit snapshots. Proposals need
+  admission and review; chat output must not automatically become knowledge.
+- Add `control.run.submit`, `control.run.status` and `control.run.diff` on the
+  same durable run service. Submission obeys provider ownership, actor policy,
+  queue/storage bounds and attempt fencing. A diff is reviewable evidence, not
+  permission to apply a change.
+- Audit `readOnlyHint` and `openWorldHint` against actual effects and test the
+  policy boundary. MCP annotations describe behavior; authorization enforces it.
+- Follow with independent test evidence, explicit acceptance and provenance.
+  Cross-provider judging records author and reviewer identities and limits.
+  Default to one owner-initiated review per run, subject to current provider
+  terms and limits; that cap is not proof of subscription permission. Use
+  authorized API-backed paths with explicit budgets for judge fan-out, evals,
+  unattended agents and swarms.
+
+**Exit:** an external MCP client can read admitted knowledge, post only to an
+authorized room, submit an allowed job and inspect its status/diff. Transport
+parity and denial tests prevent catalogue drift and privilege escalation.
+
 ## Deferred scope and corrections to the review
 
-Other platforms, NixOS packaging, remote access, live federation/delegation,
+Other platforms, NixOS packaging, live federation/delegation,
 general tool installation, swarms, model routing and bundled inference come later.
 Keep the existing offline federation boundary and small pure Rust context core.
+Remote MCP is conditional pilot scope as above, not a federation prerequisite.
 
 The review correctly identifies fresh workspaces, serial ingestion, whole-state
 activity saves, source-fixed principals and missing crash reconciliation in current
@@ -182,6 +246,9 @@ already includes Rust/WASM behavior; no UI rewrite or Enter-to-send work belongs
 on this roadmap. Detailed Claude model names, limits and beta flags in the review
 are not requirements here; verify current primary docs when implementing.
 
-Proposed order: portable private configuration and a small Claude adapter in
-parallel → durable bounded work and safe recovery → invited macOS cohorts with
-their explicit provider gates → improvements selected from actual feedback.
+Proposed order: credential-owner restrictions and responsive ingestion/UI →
+portable private configuration and the backend seam → Claude CLI as the first
+new adapter alongside durable bounded work and safe recovery → invited macOS
+cohorts with explicit provider gates and useful MCP capabilities → improvements
+selected from actual feedback. Prepare onboarding throughout; bring scoped
+remote MCP forward when that is what lets a friend participate.

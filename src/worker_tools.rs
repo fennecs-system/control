@@ -16,7 +16,11 @@ fn rpc(state: &Arc<Mutex<State>>, run_id: &str, envelope: &Value) -> Value {
     if request["jsonrpc"] != "2.0" {
         return error("Invalid JSON-RPC request");
     }
-    let mut state = state.lock().unwrap();
+    let Ok(mut state) = state.lock() else {
+        return error(
+            "State unavailable; tools are disabled until Control is checked and restarted",
+        );
+    };
     let Some(run) = state
         .runtime
         .runs
@@ -25,7 +29,7 @@ fn rpc(state: &Arc<Mutex<State>>, run_id: &str, envelope: &Value) -> Value {
     else {
         return error("Run is not active");
     };
-    if let Err(message) = identity::authorize(&run.actor, run.action) {
+    if let Err(message) = identity::authorize_codex(&run.actor, run.action) {
         return error(message);
     }
     let has_room = state.chats.iter().any(|c| {

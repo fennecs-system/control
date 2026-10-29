@@ -269,11 +269,27 @@ fn wait(child: &mut Child, limit: Duration) -> std::io::Result<bool> {
     }
 }
 pub fn start(state: Arc<Mutex<State>>) {
+    // Inbox admission is independent of the execution slot: a model can run for
+    // minutes without preventing a new DM from becoming a durable queued turn.
+    let inbox_state = Arc::clone(&state);
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(2));
-        ingest_discord(&state);
+        if ingest_discord(&inbox_state).is_err() {
+            eprintln!(
+                "Discord ingestion stopped: state unavailable; restart Control after checking."
+            );
+            return;
+        }
+    });
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(2));
         let task = {
-            let mut s = state.lock().unwrap();
+            let Ok(mut s) = state.lock() else {
+                eprintln!(
+                    "Worker dispatch stopped: state unavailable; restart Control after checking."
+                );
+                return;
+            };
             let Some(index) = checkpoint_next(&mut s, storage::save) else {
                 continue;
             };
@@ -299,7 +315,10 @@ pub fn start(state: Arc<Mutex<State>>) {
             Some((&state, &task.0)),
         );
         attempt.elapsed_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
-        let mut s = state.lock().unwrap();
+        let Ok(mut s) = state.lock() else {
+            eprintln!("Worker result not committed: state unavailable; inspect artifacts before restarting.");
+            return;
+        };
         if let Some(r) = s.runtime.runs.iter_mut().find(|r| r.id == task.0) {
             match outcome {
                 Ok(summary) => {
@@ -376,13 +395,18 @@ fn checkpoint_next(
     Some(index)
 }
 
-fn ingest_discord(state: &Arc<Mutex<State>>) {
+fn ingest_discord(state: &Arc<Mutex<State>>) -> Result<(), ()> {
     let Ok(entries) = fs::read_dir(".control/discord-inbox") else {
-        return;
+        return Ok(());
     };
     let mut entries: Vec<_> = entries.flatten().collect();
-    let seen: std::collections::HashSet<String> =
-        state.lock().unwrap().discord_seen.iter().cloned().collect();
+    let seen: std::collections::HashSet<String> = state
+        .lock()
+        .map_err(|_| ())?
+        .discord_seen
+        .iter()
+        .cloned()
+        .collect();
     entries.sort_by_key(|entry| {
         entry
             .path()
@@ -425,7 +449,7 @@ fn ingest_discord(state: &Arc<Mutex<State>>) {
         if !valid {
             continue;
         }
-        let mut s = state.lock().unwrap();
+        let mut s = state.lock().map_err(|_| ())?;
         let message_id = message.message_id.to_string();
         if s.discord_seen.contains(&message_id) {
             continue;
@@ -460,6 +484,7 @@ fn ingest_discord(state: &Arc<Mutex<State>>) {
             let _ = fs::remove_file(path);
         }
     }
+    Ok(())
 }
 fn record_activity(state: &mut State, id: &str, event: crate::usage::Activity) -> bool {
     let Some(run) = state.runtime.runs.iter_mut().find(|r| r.id == id) else {
@@ -496,7 +521,7 @@ fn execute(
 ) -> Result<String, (&'static str, String)> {
     let blocked = |m: &str| ("blocked", m.to_owned());
     let failed = |m: &str| ("failed", m.to_owned());
-    let scope = identity::authorize(actor, action).map_err(&blocked)?;
+    let scope = identity::authorize_codex(actor, action).map_err(&blocked)?;
     let image = runtime::worker_image().ok_or_else(|| blocked("No pinned worker image. Configure CONTROL_WORKER_IMAGE or .control/worker-image-id with the Nix-built image's sha256 ID."))?;
     if !runtime::engine_ready() {
         return Err(blocked("Linux container engine unavailable. Start Docker on this laptop; Control will not fall back to host execution."));
@@ -536,7 +561,7 @@ fn execute(
     ]);
     permissions(&mut command);
     let room = bridge.and_then(|(state, run_id)| {
-        let s = state.lock().unwrap();
+        let s = state.lock().ok()?;
         let run = s.runtime.runs.iter().find(|r| r.id == run_id)?;
         s.chats
             .iter()
@@ -588,10 +613,12 @@ fn execute(
             let Some((state, id)) = &live else {
                 return;
             };
-            let mut state = state.lock().unwrap();
-            if record_activity(&mut state, id, event) && storage::save(&state).is_err() {
-                eprintln!("Could not persist worker activity.");
-            }
+            let Ok(mut state) = state.lock() else {
+                return;
+            };
+            // Progress is disposable; lifecycle/result checkpoints persist the
+            // accumulated activity. Never fsync the entire history per event.
+            record_activity(&mut state, id, event);
         })
     });
     let context = if scope == Workspace::ControlSource {
@@ -622,6 +649,9 @@ fn execute(
     let started = Instant::now();
     let result = loop {
         if let Some((state, run)) = bridge {
+            if state.is_poisoned() {
+                break Err(std::io::Error::other("Control state unavailable"));
+            }
             crate::worker_tools::pump(state, run, &absolute);
         }
         match child.try_wait() {
@@ -638,6 +668,8 @@ fn execute(
     };
     // Killing the CLI alone may leave the daemon-owned container running.
     if result.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
         remove_container(&container);
         attempt.tokens = accounting.join().unwrap_or(None);
         return Err(failed(

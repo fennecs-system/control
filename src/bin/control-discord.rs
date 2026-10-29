@@ -247,11 +247,8 @@ impl Bridge {
             .json()
             .map_err(|_| "Invalid bot server membership response.")?;
         let owner = Policy::load()?
-            .principals
-            .into_iter()
-            .find(|p| p.label == "geodesic")
-            .and_then(|p| p.user_id)
-            .ok_or("Architect identity is not bound.")?;
+            .codex_owner_id
+            .ok_or("Codex credential-owner Discord ID is not configured.")?;
         let mut shared = 0;
         let mut unknown = 0;
         for guild in &guilds {
@@ -474,6 +471,20 @@ impl Bridge {
             if let Some(message) = incoming(&row, route, self.bot_id) {
                 let actor = message.actor();
                 if identity::authorize(&actor, message.action).is_ok() {
+                    let native = if message.action == Action::Task {
+                        discord::native_reply(&actor, &message.objective)
+                    } else {
+                        None
+                    };
+                    if native.is_none() {
+                        if let Err(reason) = identity::authorize_codex(&actor, message.action) {
+                            if !self.reply(route.channel, reason) {
+                                return Ok(false);
+                            }
+                            cursors.insert(channel.clone(), id.to_string());
+                            continue;
+                        }
+                    }
                     let path = format!(".control/discord-inbox/{id}.json");
                     if !Path::new(&path).exists() {
                         checkpoint(
@@ -482,11 +493,6 @@ impl Bridge {
                                 .map_err(|_| "Could not encode Discord task.")?,
                         )?;
                     }
-                    let native = if message.action == Action::Task {
-                        discord::native_reply(&actor, &message.objective)
-                    } else {
-                        None
-                    };
                     if let Some(reply) = native {
                         if !self.reply(route.channel, &reply) {
                             return Ok(false);

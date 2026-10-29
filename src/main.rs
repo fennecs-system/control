@@ -146,6 +146,7 @@ fn render(state: &State, view: &str, lens: &str, channel: &str) -> String {
 }
 fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::Access>) {
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(3)));
+    let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(3)));
     let mut data = Vec::new();
     let mut buf = [0; 4096];
     let header_end;
@@ -251,170 +252,171 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         let _ = write!(stream,"HTTP/1.1 303 See Other\r\nLocation: {location}\r\n{}Content-Length: 0\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",lens_ui::cookie(selected));
         return;
     }
-    let mut state = state.lock().unwrap();
-    if method == "POST" && path == "/providers" {
-        let f = fields(&String::from_utf8_lossy(
-            &data[header_end..header_end + length],
-        ));
-        let result = providers::save_with(&mut state, &f, storage::save);
-        let (status, extra, body) = match result {
-            Ok(()) => (
-                "303 See Other",
-                "Location: /?view=providers#saved\r\n",
-                String::new(),
-            ),
-            Err(message) => ("400 Bad Request", "", message.to_owned()),
-        };
-        let _ = write!(stream,"HTTP/1.1 {status}\r\n{extra}Content-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",body.len());
+    if method == "GET" && serve_stylesheet(&mut stream, path) {
         return;
     }
-    if lens_library::handle(
-        &mut stream,
-        &mut state,
-        method,
-        path,
-        &query,
-        lens,
-        &data[header_end..header_end + length],
-    ) {
-        return;
-    }
-    if knowledge::handle(
-        &mut stream,
-        &mut state,
-        method,
-        path,
-        &query,
-        lens,
-        &data[header_end..header_end + length],
-    ) {
-        return;
-    }
-    if session_http::handle(
-        &mut stream,
-        &mut state,
-        method,
-        target,
-        lens,
-        &header,
-        &data[header_end..header_end + length],
-    ) {
-        return;
-    }
-    let (status, mime, body, extra) = if method == "POST" {
-        let f = fields(&String::from_utf8_lossy(
-            &data[header_end..header_end + length],
-        ));
-        let location = match path {
-            "/improve" | "/task" | "/retry-run" => state.runtime.action(path, &f),
-            "/room" | "/propose" | "/review" | "/request" | "/decide" => {
-                state.collective.action(path, &f)
-            }
-            "/chat" => {
-                if let Some(msg) = f.get("message").filter(|s| !s.trim().is_empty()) {
-                    let message: String = msg.chars().take(2000).collect();
-                    let source = format!("website-chat:{}", state.messages.len());
-                    state.runtime.enqueue(message.clone(), "chat", &source);
-                    state.messages.push(message);
-                }
-                if f.get("lens").is_some_and(|v| v == "research") {
-                    "/?lens=research"
-                } else {
-                    "/"
-                }
-            }
-            "/spawn" => {
-                if let Some(task) = f.get("objective").filter(|s| !s.trim().is_empty()) {
-                    state.agents.push(format!(
-                        "{} · {}",
-                        task.chars().take(300).collect::<String>(),
-                        f.get("provider").unwrap_or(&"Self-hosted".into())
-                    ));
-                }
-                "/?view=agents"
-            }
-            _ => "/",
-        };
-        if storage::save(&state).is_err() {
-            let _ = stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\nContent-Length: 35\r\n\r\nCould not persist the local change.");
+    state_response(&mut stream, &state, |mut stream, state| {
+        if method == "POST" && path == "/providers" {
+            let f = fields(&String::from_utf8_lossy(
+                &data[header_end..header_end + length],
+            ));
+            let result = providers::save_with(state, &f, storage::save);
+            let (status, extra, body) = match result {
+                Ok(()) => (
+                    "303 See Other",
+                    "Location: /?view=providers#saved\r\n",
+                    String::new(),
+                ),
+                Err(message) => ("400 Bad Request", "", message.to_owned()),
+            };
+            let _ = write!(stream,"HTTP/1.1 {status}\r\n{extra}Content-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",body.len());
             return;
         }
-        (
-            "303 See Other",
-            "text/plain",
-            String::new(),
-            format!("Location: {location}\r\n"),
-        )
-    } else if path == "/navigation.css" {
-        (
-            "200 OK",
-            "text/css; charset=utf-8",
-            include_str!("../assets/navigation.css").to_owned(),
-            String::new(),
-        )
-    } else if path == "/workspace.css" {
-        (
-            "200 OK",
-            "text/css",
-            include_str!("../assets/workspace.css").to_owned(),
-            String::new(),
-        )
-    } else if path == "/runtime.css" {
-        (
-            "200 OK",
-            "text/css",
-            include_str!("../assets/runtime.css").to_owned(),
-            String::new(),
-        )
-    } else if path == "/collective.css" {
-        (
-            "200 OK",
-            "text/css",
-            include_str!("../assets/collective.css").to_owned(),
-            String::new(),
-        )
-    } else if path == "/style.css" {
-        (
-            "200 OK",
-            "text/css",
-            include_str!("../assets/style.css").to_owned(),
-            String::new(),
-        )
-    } else if path == "/" {
-        (
-            "200 OK",
-            "text/html; charset=utf-8",
-            render(
-                &state,
-                query.get("view").map(String::as_str).unwrap_or("hub"),
-                lens,
-                query
-                    .get(if query.get("view").is_some_and(|v| v == "tools") {
-                        "q"
+        if lens_library::handle(
+            &mut stream,
+            state,
+            method,
+            path,
+            &query,
+            lens,
+            &data[header_end..header_end + length],
+        ) {
+            return;
+        }
+        if knowledge::handle(
+            &mut stream,
+            state,
+            method,
+            path,
+            &query,
+            lens,
+            &data[header_end..header_end + length],
+        ) {
+            return;
+        }
+        if session_http::handle(
+            &mut stream,
+            state,
+            method,
+            target,
+            lens,
+            &header,
+            &data[header_end..header_end + length],
+        ) {
+            return;
+        }
+        let (status, mime, body, extra) = if method == "POST" {
+            let f = fields(&String::from_utf8_lossy(
+                &data[header_end..header_end + length],
+            ));
+            let location = match path {
+                "/improve" | "/task" | "/retry-run" => state.runtime.action(path, &f),
+                "/room" | "/propose" | "/review" | "/request" | "/decide" => {
+                    state.collective.action(path, &f)
+                }
+                "/chat" => {
+                    if let Some(msg) = f.get("message").filter(|s| !s.trim().is_empty()) {
+                        let message: String = msg.chars().take(2000).collect();
+                        let source = format!("website-chat:{}", state.messages.len());
+                        state.runtime.enqueue(message.clone(), "chat", &source);
+                        state.messages.push(message);
+                    }
+                    if f.get("lens").is_some_and(|v| v == "research") {
+                        "/?lens=research"
                     } else {
-                        "channel"
-                    })
-                    .map(String::as_str)
-                    .unwrap_or("general"),
-            ),
-            String::new(),
-        )
-    } else {
-        (
-            "404 Not Found",
-            "text/plain",
-            "Not found".into(),
-            String::new(),
-        )
-    };
-    let preference = if method == "GET" && query.contains_key("lens") {
-        lens_ui::cookie(lens)
-    } else {
-        String::new()
-    };
-    let response = format!("HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\n{extra}{preference}Connection: close\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'\r\n\r\n{body}", body.len());
-    let _ = stream.write_all(response.as_bytes());
+                        "/"
+                    }
+                }
+                "/spawn" => {
+                    if let Some(task) = f.get("objective").filter(|s| !s.trim().is_empty()) {
+                        state.agents.push(format!(
+                            "{} · {}",
+                            task.chars().take(300).collect::<String>(),
+                            f.get("provider").unwrap_or(&"Self-hosted".into())
+                        ));
+                    }
+                    "/?view=agents"
+                }
+                _ => "/",
+            };
+            if storage::save(state).is_err() {
+                let _ = stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\nContent-Length: 35\r\n\r\nCould not persist the local change.");
+                return;
+            }
+            (
+                "303 See Other",
+                "text/plain",
+                String::new(),
+                format!("Location: {location}\r\n"),
+            )
+        } else if path == "/" {
+            (
+                "200 OK",
+                "text/html; charset=utf-8",
+                render(
+                    state,
+                    query.get("view").map(String::as_str).unwrap_or("hub"),
+                    lens,
+                    query
+                        .get(if query.get("view").is_some_and(|v| v == "tools") {
+                            "q"
+                        } else {
+                            "channel"
+                        })
+                        .map(String::as_str)
+                        .unwrap_or("general"),
+                ),
+                String::new(),
+            )
+        } else {
+            (
+                "404 Not Found",
+                "text/plain",
+                "Not found".into(),
+                String::new(),
+            )
+        };
+        let preference = if method == "GET" && query.contains_key("lens") {
+            lens_ui::cookie(lens)
+        } else {
+            String::new()
+        };
+        let response = format!("HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\n{extra}{preference}Connection: close\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'\r\n\r\n{body}", body.len());
+        let _ = stream.write_all(response.as_bytes());
+    });
 }
+
+// Render and commit while locked, then release state before touching the socket.
+// Slow readers must never prevent other clients or the supervisor from progressing.
+fn state_response(
+    stream: &mut impl Write,
+    state: &Mutex<State>,
+    respond: impl FnOnce(&mut Vec<u8>, &mut State),
+) {
+    let mut response = Vec::new();
+    match state.lock() {
+        Ok(mut state) => respond(&mut response, &mut state),
+        Err(_) => {
+            let body = "State unavailable. Restart Control after checking.";
+            let _ = write!(response, "HTTP/1.1 503 Service Unavailable\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n{body}", body.len());
+        }
+    }
+    let _ = stream.write_all(&response);
+}
+
+fn serve_stylesheet(stream: &mut impl Write, path: &str) -> bool {
+    let body = match path {
+        "/navigation.css" => include_str!("../assets/navigation.css"),
+        "/workspace.css" => include_str!("../assets/workspace.css"),
+        "/runtime.css" => include_str!("../assets/runtime.css"),
+        "/collective.css" => include_str!("../assets/collective.css"),
+        "/style.css" => include_str!("../assets/style.css"),
+        _ => return false,
+    };
+    let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/css; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\n\r\n{body}", body.len());
+    true
+}
+
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).is_some_and(|s| s == "federation") {
@@ -438,6 +440,7 @@ fn main() -> std::io::Result<()> {
     }
     if args.get(1).is_some_and(|s| s == "--help" || s == "help") {
         println!("control [serve | tui | mcp | browser | federation | open | --check-worker]\nserve (default): local web/MCP server\ntui: Rust terminal client for the local server\nmcp --root DIRECTORY: local read-only Hive tools and offline browser capture\nbrowser capture PREVIEW.html [WIDTH HEIGHT]: Nix Firefox screenshot\nfederation: signed offline lens exchange (use federation help)\nopen: sign in to the local website\n--check-worker: exercise one authenticated container task\n\nWorker execution requires the configured Linux container engine and pinned Nix worker image.");
+        println!("--bind-discord LABEL ID: bind a configured principal locally\n--codex-owner ID|none: set or disable the credential owner's Discord access");
         return Ok(());
     }
     if args
@@ -462,7 +465,7 @@ fn main() -> std::io::Result<()> {
     }
     if args
         .get(1)
-        .is_some_and(|s| s == "--bind-discord" || s == "--discord-channel")
+        .is_some_and(|s| s == "--bind-discord" || s == "--codex-owner")
     {
         let result = (|| -> Result<(), &'static str> {
             let mut policy = identity::Policy::load()?;
@@ -472,7 +475,11 @@ fn main() -> std::io::Result<()> {
                     args.get(3).ok_or("Missing Discord ID")?.parse()?,
                 )?;
             } else {
-                policy.channel_id = Some(args.get(2).ok_or("Missing channel ID")?.parse()?);
+                policy.codex_owner_id = match args.get(2).map(String::as_str) {
+                    Some("none") => None,
+                    Some(id) => Some(id.parse()?),
+                    None => return Err("Missing credential-owner Discord ID or none"),
+                };
             }
             policy.save()
         })();
@@ -490,4 +497,54 @@ fn main() -> std::io::Result<()> {
         std::thread::spawn(move || handle(stream, state, access));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod responsiveness_tests {
+    use super::*;
+
+    #[test]
+    fn socket_writes_release_state_even_when_the_client_stalls_or_disconnects() {
+        struct DisconnectedClient<'a>(&'a Mutex<State>);
+        impl Write for DisconnectedClient<'_> {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                let state = self.0.try_lock().expect("socket write held shared state");
+                assert_eq!(state.runtime.notice, "committed");
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let state = Mutex::new(State::default());
+        state_response(
+            &mut DisconnectedClient(&state),
+            &state,
+            |response, state| {
+                state.runtime.notice = "committed".into();
+                session_http::handle(response, state, "GET", "/chats", "none", "", b"");
+            },
+        );
+        assert_eq!(state.lock().unwrap().runtime.notice, "committed");
+    }
+
+    #[test]
+    fn poisoned_state_returns_503_without_rendering_or_mutating() {
+        let state = Mutex::new(State::default());
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = state.lock().unwrap();
+            panic!("simulate interrupted state mutation");
+        });
+        let mut response = Vec::new();
+        state_response(&mut response, &state, |_, _| panic!("poisoned state used"));
+        let response = String::from_utf8(response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 503 Service Unavailable\r\n"));
+        let (header, body) = response.split_once("\r\n\r\n").unwrap();
+        assert!(header.contains(&format!("Content-Length: {}\r\n", body.len())));
+        assert!(state.is_poisoned());
+        // Static UI dependencies remain available without touching mutable state.
+        let mut stylesheet = Vec::new();
+        assert!(serve_stylesheet(&mut stylesheet, "/style.css"));
+        assert!(stylesheet.starts_with(b"HTTP/1.1 200 OK\r\n"));
+    }
 }

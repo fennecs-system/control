@@ -1,5 +1,5 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::{fmt, fs, path::Path, str::FromStr};
+use std::{fmt, fs, io::Write, path::Path, str::FromStr};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DiscordId(u64);
@@ -77,6 +77,8 @@ pub struct Principal {
 #[serde(deny_unknown_fields)]
 pub struct Policy {
     pub channel_id: Option<DiscordId>,
+    #[serde(default)]
+    pub codex_owner_id: Option<DiscordId>,
     pub principals: Vec<Principal>,
 }
 #[derive(Default, Serialize, Deserialize)]
@@ -104,9 +106,20 @@ impl DmBindings {
 }
 impl Policy {
     pub fn load() -> Result<Self, &'static str> {
-        Self::read(Path::new("discord-access.json"))
+        Self::read(Path::new(".control/discord-access.json"))
     }
     fn read(path: &Path) -> Result<Self, &'static str> {
+        use std::os::unix::fs::PermissionsExt;
+        let metadata =
+            fs::symlink_metadata(path).map_err(|_| "Discord access policy unavailable")?;
+        if !metadata.is_file()
+            || metadata.permissions().mode() & 0o077 != 0
+            || metadata.len() > 65536
+        {
+            return Err(
+                "Discord access policy must be a private regular file (mode 0600, at most 64 KiB)",
+            );
+        }
         let bytes = fs::read(path).map_err(|_| "Discord access policy unavailable")?;
         let policy: Self =
             serde_json::from_slice(&bytes).map_err(|_| "Invalid Discord access policy")?;
@@ -123,13 +136,39 @@ impl Policy {
             if !labels.insert(&p.label) || p.user_id.is_some_and(|id| !ids.insert(id)) {
                 return Err("Duplicate principal label or Discord ID");
             }
-            if !["geodesic", "vivkelly", "olliev"].contains(&p.label.as_str())
-                || (p.role == Role::Architect) != (p.label == "geodesic")
+            if p.label.is_empty()
+                || p.label.len() > 64
+                || p.label.trim() != p.label
+                || p.label.chars().any(char::is_control)
             {
-                return Err("Unexpected principal or role assignment");
+                return Err("Principal labels must contain 1–64 bytes without surrounding whitespace or control characters");
             }
         }
+        if self
+            .codex_owner_id
+            .is_some_and(|owner| !ids.contains(&owner))
+        {
+            return Err("Codex credential owner must be a bound principal");
+        }
         Ok(())
+    }
+    pub fn authorize_codex_with_dms(
+        &self,
+        actor: &Actor,
+        action: Action,
+        dms: &DmBindings,
+    ) -> Result<Workspace, &'static str> {
+        self.validate()?;
+        let workspace = self.authorize_with_dms(actor, action, dms)?;
+        match actor {
+            Actor::LocalOperator => Ok(workspace),
+            Actor::DiscordDm { user_id, .. } if Some(*user_id) == self.codex_owner_id => {
+                Ok(workspace)
+            }
+            _ => Err(
+                "This Codex login is reserved for its owner. Use your own Control node and login.",
+            ),
+        }
     }
     pub fn authorize(&self, actor: &Actor, action: Action) -> Result<Workspace, &'static str> {
         let dms = if matches!(actor, Actor::DiscordDm { .. }) {
@@ -192,11 +231,29 @@ impl Policy {
         self.validate()
     }
     pub fn save(&self) -> Result<(), &'static str> {
+        self.save_in(Path::new(".control"))
+    }
+    fn save_in(&self, directory: &Path) -> Result<(), &'static str> {
         self.validate()?;
         let bytes = serde_json::to_vec_pretty(self).map_err(|_| "Could not encode policy")?;
-        fs::write("discord-access.json.tmp", bytes)
-            .and_then(|_| fs::rename("discord-access.json.tmp", "discord-access.json"))
-            .map_err(|_| "Could not save policy")
+        let temporary = directory.join(format!("discord-access.{}.tmp", std::process::id()));
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)
+            .map_err(|_| "Could not create private policy checkpoint")?;
+        let result = (|| -> std::io::Result<()> {
+            file.write_all(&bytes)?;
+            file.sync_all()?;
+            fs::rename(&temporary, directory.join("discord-access.json"))?;
+            fs::File::open(directory)?.sync_all()
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        result.map_err(|_| "Could not save private Discord policy")
     }
 }
 pub fn authorize(actor: &Actor, action: Action) -> Result<Workspace, &'static str> {
@@ -208,6 +265,21 @@ pub fn authorize(actor: &Actor, action: Action) -> Result<Workspace, &'static st
         });
     }
     Policy::load()?.authorize(actor, action)
+}
+
+// Subscription ownership is independent of role authority. Reuse this boundary
+// at admission, retry, dispatch and worker-tool invocation.
+pub fn authorize_codex(actor: &Actor, action: Action) -> Result<Workspace, &'static str> {
+    if *actor == Actor::LocalOperator {
+        return authorize(actor, action);
+    }
+    let policy = Policy::load()?;
+    let dms = if matches!(actor, Actor::DiscordDm { .. }) {
+        DmBindings::load()?
+    } else {
+        DmBindings::default()
+    };
+    policy.authorize_codex_with_dms(actor, action, &dms)
 }
 
 #[cfg(test)]
@@ -239,6 +311,104 @@ mod tests {
             serde_json::to_string(&id).unwrap(),
             "\"18446744073709551615\""
         );
+    }
+    #[test]
+    fn subscription_ownership_is_explicit_and_independent_of_roles() {
+        let mut p = policy();
+        let dms = DmBindings {
+            recipients: ["1", "2", "3"]
+                .iter()
+                .map(|id| DmBinding {
+                    user_id: id.parse().unwrap(),
+                    channel_id: "100".parse().unwrap(),
+                })
+                .collect(),
+        };
+        // Existing policies have no implicit subscription owner, even an architect.
+        assert!(p
+            .authorize_codex_with_dms(&actor("1"), Action::Task, &dms)
+            .is_err());
+        p.codex_owner_id = Some("2".parse().unwrap());
+        assert_eq!(
+            p.authorize_codex_with_dms(&actor("2"), Action::Task, &dms),
+            Ok(Workspace::User)
+        );
+        assert!(p
+            .authorize_codex_with_dms(&actor("2"), Action::Improve, &dms)
+            .is_err());
+        assert!(p
+            .authorize_codex_with_dms(&actor("1"), Action::Task, &dms)
+            .is_err());
+        assert!(p
+            .authorize_codex_with_dms(&actor("3"), Action::Task, &dms)
+            .is_err());
+        assert!(p
+            .authorize_codex_with_dms(&actor("2"), Action::Task, &DmBindings::default())
+            .is_err());
+        p.principals[1].role = Role::Architect;
+        p.principals[1].label = "another-operator".into();
+        assert_eq!(
+            p.authorize_codex_with_dms(&actor("2"), Action::Improve, &dms),
+            Ok(Workspace::ControlSource)
+        );
+        // A role or label change cannot transfer ownership to another ID.
+        assert!(p
+            .authorize_codex_with_dms(&actor("1"), Action::Improve, &dms)
+            .is_err());
+        p.codex_owner_id = None;
+        assert!(p
+            .authorize_codex_with_dms(&actor("2"), Action::Task, &dms)
+            .is_err());
+        p.codex_owner_id = Some("4".parse().unwrap());
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn arbitrary_principals_validate_but_ambiguous_labels_do_not() {
+        let mut p: Policy = serde_json::from_str(r#"{"channel_id":null,"principals":[{"label":"my operator","user_id":"9","role":"architect"},{"label":"friend","user_id":null,"role":"user"}]}"#).unwrap();
+        assert!(p.validate().is_ok());
+        for label in ["", " leading", "trailing ", "line\nbreak"] {
+            p.principals[0].label = label.into();
+            assert!(p.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn policy_checkpoints_are_private_and_do_not_overwrite_unknown_temporary_files() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let directory = std::env::temp_dir().join(format!(
+            "control-policy-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let mut p = policy();
+        p.codex_owner_id = Some("1".parse().unwrap());
+        p.save_in(&directory).unwrap();
+        let path = directory.join("discord-access.json");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            Policy::read(&path).unwrap().codex_owner_id,
+            p.codex_owner_id
+        );
+        let temporary = directory.join(format!("discord-access.{}.tmp", std::process::id()));
+        fs::write(&temporary, b"preserve evidence").unwrap();
+        p.codex_owner_id = None;
+        assert!(p.save_in(&directory).is_err());
+        assert_eq!(fs::read(&temporary).unwrap(), b"preserve evidence");
+        assert!(Policy::read(&path).unwrap().codex_owner_id.is_some());
+        let linked = directory.join("linked.json");
+        symlink(&path, &linked).unwrap();
+        assert!(Policy::read(&linked).is_err());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(Policy::read(&path).is_err());
+        fs::remove_dir_all(directory).unwrap();
     }
     #[test]
     fn roles_bound_actions_and_workspaces() {

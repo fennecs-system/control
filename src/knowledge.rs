@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeSet, HashMap},
     io::{self, Write},
-    net::TcpStream,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -321,11 +320,11 @@ pub fn render(state: &State, selection: &str, saved: Option<u64>) -> String {
         &format!("<a href='{active}' aria-current='page'>"),
     )
 }
-fn respond(stream: &mut TcpStream, status: &str, body: &str, extra: &str) {
+fn respond(stream: &mut impl Write, status: &str, body: &str, extra: &str) {
     let _=write!(stream,"HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\n{extra}Cache-Control: no-store\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'\r\n\r\n{body}",body.len());
 }
 pub fn handle(
-    stream: &mut TcpStream,
+    stream: &mut impl Write,
     state: &mut State,
     method: &str,
     path: &str,
