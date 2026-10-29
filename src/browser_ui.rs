@@ -2,7 +2,6 @@ use std::{
     fs,
     io::{self, Read, Write},
     net::TcpStream,
-    path::Path,
 };
 
 fn valid_name(name: &str) -> bool {
@@ -15,8 +14,8 @@ fn artifact(name: &str) -> io::Result<Vec<u8>> {
     if !valid_name(name) {
         return Err(io::Error::other("Invalid capture"));
     }
-    let dir = Path::new(".control/browser");
-    if fs::symlink_metadata(dir)?.file_type().is_symlink() {
+    let dir = crate::config::state("browser").map_err(io::Error::other)?;
+    if fs::symlink_metadata(&dir)?.file_type().is_symlink() {
         return Err(io::Error::other("Invalid directory"));
     }
     #[cfg(target_os = "macos")]

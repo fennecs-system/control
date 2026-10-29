@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Control: a local workspace for agents, tools and knowledge, built with Rust and Nix.">
+  <title>Control · agents, tools, knowledge</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <a class="wordmark" href="./">control<span aria-hidden="true">_</span></a>
+    <nav aria-label="Main"><a href="#setup">Setup</a><a href="https://github.com/fennecs-system/control">Source ↗</a></nav>
+  </header>
+  <main>
+    <section class="intro" aria-labelledby="title">
+      <p class="eyebrow">Rust / Nix / WASM</p>
+      <h1 id="title">A workspace for agents,<br>tools and knowledge.</h1>
+      <p>Run your own Control node. Chat on the web, in the terminal or through Discord. Give agents isolated Nix-built environments, keep their work between turns, and inspect the files they produce.</p>
+      <a class="button" href="#setup">Build Control <span aria-hidden="true">→</span></a>
+    </section>
+    <section class="features" aria-label="How it fits together">
+      <article><h2>Compose context</h2><p>Lenses are pure, composable selections of knowledge, instructions and tool descriptions. Permissions remain a separate boundary.</p></article>
+      <article><h2>Keep the work</h2><p>Chats retain history and published workspace checkpoints. The artifact explorer opens files in a read-only text viewer.</p></article>
+      <article><h2>Own your node</h2><p>Local configuration, local state and explicit roles. Control also exposes tools over MCP for other harnesses.</p></article>
+    </section>
+    <section id="setup" aria-labelledby="setup-title">
+      <p class="eyebrow">From source</p>
+      <h2 id="setup-title">Build the regular release.</h2>
+      <p>Start with macOS, Nix with flakes enabled, Git, and a running Linux Docker-compatible engine. Worker image builds need a <a href="https://nixos.org/manual/nixpkgs/stable/#sec-darwin-builder">Linux Nix builder</a>. These commands use Apple Silicon; on Intel, select <code>x86_64-linux</code> for the worker image.</p>
+      <h3>1. Build</h3>
+      <pre><code>git clone https://github.com/fennecs-system/control.git
+cd control
+nix develop
+cd web
+trunk build --release --locked
+cd ..
+cargo build --release --locked --bin control
+./target/release/control config init</code></pre>
+      <h3>2. Configure your node</h3>
+      <p>Private configuration lives in <code>~/.config/control/</code>, outside the checkout. Initialization preserves existing files. Set <code>CONTROL_CONFIG_DIR</code> to an absolute path for a different directory. Chats and outputs live separately in <code>~/.local/state/control/</code>.</p>
+      <pre><code>nix build .#packages.aarch64-linux.worker-image -o result-worker
+docker load -i result-worker
+umask 077
+docker image inspect control-worker:nix --format '{{.Id}}' &gt; "$HOME/.config/control/worker-image-id"</code></pre>
+      <p>Use your own Codex login with file-based credential storage. The worker mounts its private <code>auth.json</code> read-only; keep credentials out of source, images and chat. See the <a href="https://github.com/fennecs-system/control#codex-container-workers">authentication instructions</a> for the login command and supported paths.</p>
+      <h3>3. Start</h3>
+      <pre><code>./target/release/control doctor
+./target/release/control serve
+
+# In another terminal:
+./target/release/control open
+# Or use terminal chat:
+./target/release/control tui</code></pre>
+      <p>Ask for a small project, then a follow-up about its files. Open <strong>Artifacts</strong> to view the result. Restarting Control uses the same state.</p>
+      <p>Discord is optional. Its activated bridge reads a private <code>discord.env</code> in the configuration directory; numeric ID bindings determine access. User accounts can run tasks without architect or website operator privileges. Follow the <a href="https://github.com/fennecs-system/control#discord-bridge">Discord setup</a> before enabling it.</p>
+    </section>
+    <section class="status" aria-labelledby="status-title">
+      <h2 id="status-title">Where things stand</h2>
+      <p>Codex is the connected backend today. Claude, API and self-hosted adapters, live federation, and artifact editing are still on the roadmap. Earlier active containers block new dispatch after a restart; automatic cleanup and cancellation remain pending. Snapshot publication is bounded, but live workspaces do not yet have a hard disk quota.</p>
+      <p>Use model access according to your provider’s terms. Sharing a personal subscription with others may violate those terms and risk suspension.</p>
+    </section>
+  </main>
+  <footer><span>control_</span><a href="https://github.com/fennecs-system/control#readme">Full setup &amp; reference ↗</a><a href="https://github.com/fennecs-system/control/blob/main/roadmap.md">Roadmap ↗</a></footer>
+</body>
+</html>

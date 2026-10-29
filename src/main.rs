@@ -1,10 +1,15 @@
 mod access;
+mod artifacts;
 #[path = "../tools/browser/main.rs"]
 mod browser;
 mod browser_ui;
 mod chat;
 mod collective;
+use control::config;
 mod discord;
+mod discord_bridge;
+mod discord_permissions;
+mod doctor;
 mod federation;
 mod harness;
 mod identity;
@@ -113,7 +118,7 @@ fn render(state: &State, view: &str, lens: &str, channel: &str) -> String {
         "providers" => providers::render(&state.runtime),
         "tools" => tool_catalog::render(state, if channel == "general" { "" } else { channel }),
         "session" => chat::render(state,channel).unwrap_or_else(escape),
-        "session-list" | "browser" | "tool-page" => channel.to_owned(),
+        "session-list" | "artifact-page" | "browser" | "tool-page" => channel.to_owned(),
         "editor" | "knowledge" => knowledge::render(state,if view=="editor"{"scratchpad"}else{""},None),
         "knowledge-page" => channel.to_owned(),
         "rooms" => rooms::render(state,channel),
@@ -260,7 +265,7 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
             let f = fields(&String::from_utf8_lossy(
                 &data[header_end..header_end + length],
             ));
-            let result = providers::save_with(state, &f, storage::save);
+            let result = providers::save_with(state, &f, providers::save_settings);
             let (status, extra, body) = match result {
                 Ok(()) => (
                     "303 See Other",
@@ -419,6 +424,22 @@ fn serve_stylesheet(stream: &mut impl Write, path: &str) -> bool {
 
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).is_some_and(|s| s == "--version") {
+        println!(
+            "control {} · {}-{}",
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::ARCH,
+            std::env::consts::OS
+        );
+        return Ok(());
+    }
+    if args.get(1).is_some_and(|s| s == "doctor") {
+        return doctor::run();
+    }
+    if args.get(1).is_some_and(|s| s == "discord") {
+        discord_bridge::command(&args[1..]);
+        return Ok(());
+    }
     if args.get(1).is_some_and(|s| s == "federation") {
         return federation::run(&args[2..]);
     }
@@ -439,8 +460,28 @@ fn main() -> std::io::Result<()> {
         return harness::run();
     }
     if args.get(1).is_some_and(|s| s == "--help" || s == "help") {
-        println!("control [serve | tui | mcp | browser | federation | open | --check-worker]\nserve (default): local web/MCP server\ntui: Rust terminal client for the local server\nmcp --root DIRECTORY: local read-only Hive tools and offline browser capture\nbrowser capture PREVIEW.html [WIDTH HEIGHT]: Nix Firefox screenshot\nfederation: signed offline lens exchange (use federation help)\nopen: sign in to the local website\n--check-worker: exercise one authenticated container task\n\nWorker execution requires the configured Linux container engine and pinned Nix worker image.");
-        println!("--bind-discord LABEL ID: bind a configured principal locally\n--codex-owner ID|none: set or disable the credential owner's Discord access");
+        println!("control [serve | tui | mcp | discord | doctor | config | open | browser | federation]\nserve: local web/MCP server\ntui: Rust terminal client\nmcp [--root DIRECTORY]: local tools for an external harness\ndiscord --enable: listen to this node's configured DMs\ndoctor: offline prerequisites; no model calls\nconfig init | path: initialize or locate personal configuration\nopen: sign in to the local website\nbrowser capture FILE [WIDTH HEIGHT]: offline Nix Firefox capture\nfederation help: signed offline lens exchange\n--check-worker: one authenticated sandbox test (uses model usage)\n--version: version and platform");
+        println!("config init: create private node configuration\nconfig path: show the node configuration directory\n--bind-discord LABEL ID: bind a configured principal locally");
+        return Ok(());
+    }
+    if args.get(1).is_some_and(|s| s == "config") {
+        let directory = config::directory().map_err(std::io::Error::other)?;
+        match args.get(2).map(String::as_str) {
+            Some("path") => println!("{}", directory.display()),
+            Some("init") => {
+                config::initialize(include_bytes!("../discord-access.json"))?;
+                storage::initialize()?;
+                println!(
+                    "Private node configuration ready in {}",
+                    directory.display()
+                );
+            }
+            _ => {
+                return Err(std::io::Error::other(
+                    "Use control config init or control config path",
+                ))
+            }
+        }
         return Ok(());
     }
     if args
@@ -463,34 +504,29 @@ fn main() -> std::io::Result<()> {
     if args.get(1).is_some_and(|s| s == "open") {
         return access::open(&addr);
     }
-    if args
-        .get(1)
-        .is_some_and(|s| s == "--bind-discord" || s == "--codex-owner")
-    {
+    if args.get(1).is_some_and(|s| s == "--bind-discord") {
         let result = (|| -> Result<(), &'static str> {
             let mut policy = identity::Policy::load()?;
-            if args[1] == "--bind-discord" {
-                policy.bind(
-                    args.get(2).ok_or("Missing principal label")?,
-                    args.get(3).ok_or("Missing Discord ID")?.parse()?,
-                )?;
-            } else {
-                policy.codex_owner_id = match args.get(2).map(String::as_str) {
-                    Some("none") => None,
-                    Some(id) => Some(id.parse()?),
-                    None => return Err("Missing credential-owner Discord ID or none"),
-                };
-            }
+            policy.bind(
+                args.get(2).ok_or("Missing principal label")?,
+                args.get(3).ok_or("Missing Discord ID")?.parse()?,
+            )?;
             policy.save()
         })();
         return result.map_err(std::io::Error::other);
     }
+    if args.get(1).is_some_and(|s| s != "serve") {
+        return Err(std::io::Error::other(
+            "Unknown command. Use control --help.",
+        ));
+    }
     let listener = TcpListener::bind(&addr)?;
-    println!("CONTROL · local UI prototype · http://{addr}");
     storage::initialize()?;
+    let _state_lock = storage::lock()?;
     let access = Arc::new(access::Access::load()?);
     let state = Arc::new(Mutex::new(storage::load()?));
     worker::start(state.clone());
+    println!("control · http://{addr}");
     for stream in listener.incoming().flatten() {
         let state = state.clone();
         let access = access.clone();

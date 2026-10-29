@@ -473,7 +473,11 @@ fn value<'a>(opts: &'a [(String, String)], name: &str) -> Result<&'a str> {
 }
 fn selected(root: &str, include: bool) -> Result<Bundle> {
     // Read a snapshot only; storage::load mutates run status on startup and must not be used here.
-    let state: crate::State = match read(Path::new(".control/state.json"), STORE_BYTES, false) {
+    let state: crate::State = match read(
+        &crate::config::state("state.json").map_err(io::Error::other)?,
+        STORE_BYTES,
+        false,
+    ) {
         Ok(b) => serde_json::from_slice(&b).map_err(io::Error::other)?,
         Err(e) if e.kind() == io::ErrorKind::NotFound => crate::State::initial(),
         Err(e) => return Err(e),
@@ -522,7 +526,9 @@ pub fn run(args: &[String]) -> Result<()> {
     }
     let dir = std::env::var_os("CONTROL_FEDERATION_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(".control/federation"));
+        .map(Ok)
+        .unwrap_or_else(|| crate::config::state("federation"))
+        .map_err(io::Error::other)?;
     // Parse all external inputs before creating state where practical.
     let mut store = Store::open(&dir)?;
     match command {

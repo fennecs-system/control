@@ -22,12 +22,14 @@ fn fail(message: &str) -> io::Error {
 fn image() -> io::Result<String> {
     let image = std::env::var("CONTROL_BROWSER_IMAGE")
         .ok()
-        .or_else(|| fs::read_to_string(".control/browser-image-id").ok())
+        .or_else(|| {
+            fs::read_to_string(crate::config::directory().ok()?.join("browser-image-id")).ok()
+        })
         .unwrap_or_default()
         .trim()
         .to_owned();
     if !crate::browser::valid_image(&image) {
-        return Err(fail("No pinned browser image. Build the Nix browser-image and configure .control/browser-image-id."));
+        return Err(fail("No pinned browser image. Build the Nix browser-image and set browser-image-id in the node configuration directory."));
     }
     Ok(image)
 }
@@ -52,12 +54,12 @@ pub(crate) fn render_preview(
     height: u16,
 ) -> io::Result<crate::browser::Capture> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    let directory = Path::new(".control/browser");
-    fs::create_dir_all(directory)?;
-    if fs::symlink_metadata(directory)?.file_type().is_symlink() {
+    let directory = crate::config::state("browser").map_err(io::Error::other)?;
+    fs::create_dir_all(&directory)?;
+    if fs::symlink_metadata(&directory)?.file_type().is_symlink() {
         return Err(fail("Artifact directory must not be a symlink"));
     }
-    fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
     #[cfg(target_os = "macos")]
     let flags = 0x100 | 0x4;
     #[cfg(not(target_os = "macos"))]
@@ -76,7 +78,7 @@ pub(crate) fn render_preview(
     lock.try_lock().map_err(|_| fail("Browser tool is busy"))?;
     let mut count = 0;
     let mut bytes = 0u64;
-    for entry in fs::read_dir(directory)? {
+    for entry in fs::read_dir(&directory)? {
         let entry = entry?;
         if entry.file_name() == "lock" {
             continue;
@@ -93,7 +95,7 @@ pub(crate) fn render_preview(
             "Browser artifact quota reached. Remove old captures before retrying.",
         ));
     }
-    crate::browser::capture(&image()?, input, width, height)
+    crate::browser::capture(&image()?, input, width, height, &directory)
 }
 fn capture(root: &Path, args: &Value) -> io::Result<Value> {
     #[derive(serde::Deserialize)]
@@ -141,7 +143,11 @@ fn dispatch(connection: &mut Option<Hive>, root: &Path, request: &Value) -> Valu
                         .cloned()
                         .unwrap_or_default()
                         .into_iter()
-                        .filter(|t| READ_TOOLS.contains(&t["name"].as_str().unwrap_or("")))
+                        .filter(|t| {
+                            READ_TOOLS.contains(&t["name"].as_str().unwrap_or(""))
+                                || crate::artifacts::TOOLS
+                                    .contains(&t["name"].as_str().unwrap_or(""))
+                        })
                         .map(|mut t| {
                             t["annotations"] = json!({"readOnlyHint":true,"openWorldHint":false});
                             t
@@ -162,7 +168,7 @@ fn dispatch(connection: &mut Option<Hive>, root: &Path, request: &Value) -> Valu
                     Ok(crate::toolbox::result(crate::toolbox::call(
                         name, arguments,
                     )))
-                } else if READ_TOOLS.contains(&name) {
+                } else if READ_TOOLS.contains(&name) || crate::artifacts::TOOLS.contains(&name) {
                     hive(connection).and_then(|h| h.rpc("tools/call", request["params"].clone()))
                 } else {
                     Err(fail("Tool unavailable: this bridge exposes read-only Control access, web search, offline captures and Rust snippets"))
@@ -180,11 +186,13 @@ fn dispatch(connection: &mut Option<Hive>, root: &Path, request: &Value) -> Valu
     }
 }
 pub fn run(args: &[String]) -> io::Result<()> {
-    if args.len() != 2 || args[0] != "--root" {
-        return Err(fail("control mcp --root /absolute/control/directory"));
-    }
-    let root = fs::canonicalize(&args[1])?;
-    std::env::set_current_dir(&root)?;
+    let root = match args {
+        [] => crate::config::state_directory().map_err(io::Error::other)?,
+        [flag, directory] if flag == "--root" && Path::new(directory).is_absolute() => {
+            fs::canonicalize(directory)?
+        }
+        _ => return Err(fail("control mcp [--root /absolute/preview/directory]")),
+    };
     // Codex launches this native host application; worker containers never receive its credential.
     let mut connection = None;
     let mut input = io::stdin().lock();

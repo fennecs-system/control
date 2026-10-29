@@ -107,6 +107,8 @@ pub fn rpc(state: &mut State, request: &Value) -> Value {
             .contains(&name)
             {
                 change(state, name, arguments)
+            } else if crate::artifacts::TOOLS.contains(&name) {
+                crate::artifacts::tool(state, name, arguments)
             } else if name.starts_with("control.room") {
                 crate::rooms::tool(state, name, arguments)
             } else if name.starts_with("control.lens") {
@@ -128,6 +130,10 @@ pub fn rpc(state: &mut State, request: &Value) -> Value {
             .as_array_mut()
             .unwrap()
             .extend(crate::toolbox::definitions());
+        result["tools"]
+            .as_array_mut()
+            .unwrap()
+            .extend(crate::artifacts::definitions());
     }
     json!({"jsonrpc":"2.0","id":id,"result":result})
 }
@@ -286,6 +292,17 @@ pub fn handle(
             ),
             Err(message) => respond(stream, "400 Bad Request", "text/plain", message, ""),
         }
+    } else if method == "GET" && operation == "artifacts" {
+        match crate::artifacts::render(state, id, &crate::fields(query)) {
+            Ok(html) => respond(
+                stream,
+                "200 OK",
+                "text/html; charset=utf-8",
+                &crate::render(state, "artifact-page", lens, &html),
+                "",
+            ),
+            Err(message) => respond(stream, "404 Not Found", "text/plain", message, ""),
+        }
     } else if method == "GET" && operation == "transcript" {
         match chat::transcript(state, id) {
             Ok(html) => respond(stream, "200 OK", "text/html; charset=utf-8", &html, ""),
@@ -355,7 +372,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            13
+            15
         );
         assert_eq!(
             rpc(

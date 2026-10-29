@@ -27,7 +27,7 @@ pub fn primary(view: &str) -> String {
         "manage"
     } else {
         match view {
-            "session-list" => "session",
+            "session-list" | "artifact-page" => "session",
             "editor" | "knowledge-page" => "knowledge",
             "lens-page" => "lenses",
             "browser" | "tool-page" => "tools",

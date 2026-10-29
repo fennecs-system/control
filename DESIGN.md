@@ -288,3 +288,22 @@ with an Edit action rather than a permanent “Save model” form. Use one compa
 In the Chat composer, Enter sends the message and Shift+Enter inserts a newline.
 Keep this interaction in Rust/WASM, preserve input-method composition, and use
 the same validated form submission as the send button.
+
+I use multiple Discord accounts as a security boundary. They should be able to
+chat and run tasks on my node while retaining the user role, without access to
+the Control editor or operator privileges. Model access and architect authority
+are separate. Apply the same node-level policy to subscription-backed, API and
+self-hosted models: a Discord DM targets a particular Control node.
+
+Keep personal configuration in my home directory, outside the repository. Add a
+short provider-terms notice: using a personal subscription to serve other people
+may breach its terms and put the account at risk. Operators are responsible for
+their configuration; multiple Discord identities alone do not identify different
+people or grant elevated authority.
+
+Keep secrets out of the repository and continue until I can give a friend a
+binary. Chat artifacts should start with a basic file explorer and read-only
+text viewer. A basic editor and syntax highlighting can follow. Artifacts may
+represent other outputs later; avoid speculative features. Keep the design
+consistent with the tool/MCP architecture and its deterministic, efficient,
+reliable, functional foundations.

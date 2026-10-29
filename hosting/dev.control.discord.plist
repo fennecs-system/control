@@ -2,12 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>dev.control.discord</string>
-  <key>ProgramArguments</key><array><string>/Users/fennecs/control/target/release/control-discord</string><string>--enable</string></array>
-  <key>WorkingDirectory</key><string>/Users/fennecs/control</string>
-  <key>EnvironmentVariables</key><dict><key>PATH</key><string>/usr/bin:/bin</string></dict>
+  <key>ProgramArguments</key><array><string>@CONTROL_BINARY@</string><string>discord</string><string>--enable</string></array>
+  <key>WorkingDirectory</key><string>@CONTROL_STATE_DIR@</string>
+  <key>EnvironmentVariables</key><dict><key>CONTROL_CONFIG_DIR</key><string>@CONTROL_CONFIG_DIR@</string><key>CONTROL_STATE_DIR</key><string>@CONTROL_STATE_DIR@</string><key>PATH</key><string>@CONTROL_HOME@/.nix-profile/bin:/run/current-system/sw/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>30</integer>
-  <key>StandardOutPath</key><string>/Users/fennecs/control/.control/discord.log</string>
-  <key>StandardErrorPath</key><string>/Users/fennecs/control/.control/discord-error.log</string>
+  <key>StandardOutPath</key><string>@CONTROL_STATE_DIR@/discord.log</string>
+  <key>StandardErrorPath</key><string>@CONTROL_STATE_DIR@/discord-error.log</string>
 </dict></plist>

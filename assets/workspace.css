@@ -17,3 +17,15 @@
 .tool-search { display: flex; align-items: stretch; gap: 10px; margin-bottom: 24px; }
 .tool-search input[name=q] { flex: 1; min-width: 0; margin: 0; }
 .tool-search button { margin: 0; padding: 10px 14px; }
+/* Published files share the chat's compact, monospaced visual language. */
+.artifact-layout{display:grid;grid-template-columns:minmax(180px,28%) minmax(0,1fr);border:1px solid var(--line);min-height:50dvh}
+.artifact-files{padding:10px;border-right:1px solid var(--line);overflow:auto;max-height:70dvh}
+.artifact-files a{display:block;padding:5px 8px;overflow-wrap:anywhere;color:var(--muted)}
+.artifact-files a[aria-current],.artifact-versions a[aria-current]{color:var(--purple);background:#b5a0ff10}
+.artifact-viewer{min-width:0;padding:16px;overflow:auto}
+.artifact-viewer h3{font-size:14px;margin:0 0 12px;overflow-wrap:anywhere}
+.artifact-viewer pre{font:inherit;white-space:pre;overflow:auto;line-height:1.5}
+.artifact-versions{display:flex;gap:8px;overflow:auto;margin-bottom:12px}
+.artifact-versions a{padding:5px 8px;white-space:nowrap}
+.conversation-links{display:flex;gap:12px;margin-left:auto;white-space:nowrap}
+@media(max-width:700px){.artifact-layout{grid-template-columns:1fr}.artifact-files{max-height:220px;border-right:0;border-bottom:1px solid var(--line)}}

@@ -26,6 +26,16 @@ distributed effects correct.
 
 ## One node, distinct responsibilities
 
+A node defines its authorized identities and roles independently of its model
+backend. Several Discord IDs can represent one person, all with the user role.
+Task/chat permission never grants Control source editing, settings or an operator
+session; source improvements require architect authority. A DM addresses the
+node attached to that bot, not an implicit global model account. Subscription,
+API and self-hosted adapters share this authorization boundary. Operators remain
+responsible for provider terms; permissions cannot certify contractual compliance.
+Personal node configuration lives under `~/.config/control/` (or an explicit
+configuration directory), outside the checkout and worker source snapshots.
+
 | Boundary | Responsibility |
 | --- | --- |
 | Harness and durable state | Conversations, run/attempt identities, context provenance, task progress, recovery rules, cancellation, and usage. A conversation outlives a process or container. |
@@ -106,6 +116,19 @@ Control currently has a Rust local server and thin TUI, persisted conversations
 and attempts, composable lens snapshots, Codex-backed Nix worker containers,
 selected brokered tool integrations, and signed offline federation resource exchange. A restart marks
 in-flight runs interrupted; it does not resume individual model/tool steps.
+
+The macOS release binary embeds the UI, security profile, TUI and Discord bridge.
+Configuration and state have independent home-directory roots. Published file
+snapshots give ordinary chats workspace continuity; a state pointer advances only
+with a committed successful result. Artifact list/read is one bounded service used
+by the chat explorer/viewer and MCP. Output hashes, relative paths and attempt
+provenance describe files without making them accepted knowledge or authority.
+The first viewer executes no content and performs no edits.
+
+A state-directory lock prevents competing servers. Durable interrupted attempts
+and node labels prevent dispatch alongside earlier active containers; unknown
+containers require inspection, not guessed cleanup. Live workspace disk quotas
+and automatic container reconciliation remain open before broader unattended use.
 
 A complete packaged node, NixOS module, native multi-provider loop/router, bundled
 local inference, durable task recovery, safe child-run scheduling, and networked

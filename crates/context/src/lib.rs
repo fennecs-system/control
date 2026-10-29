@@ -8,7 +8,13 @@ pub struct Tool {
     pub surface: &'static str,
     pub available: bool,
 }
-pub const TOOLS: [Tool; 7] = [
+pub const TOOLS: [Tool; 8] = [
+    Tool {
+        name: "artifacts.read",
+        execution: "local Rust / published files",
+        surface: "chat viewer / MCP",
+        available: true,
+    },
     Tool {
         name: "context.inspect",
         execution: "pure Rust",

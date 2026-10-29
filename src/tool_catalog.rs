@@ -9,6 +9,13 @@ struct Entry {
 }
 const ENTRIES: &[Entry] = &[
     Entry {
+        id: "artifacts.read",
+        name: "Artifacts",
+        description: "Published files · read only",
+        href: "/chats",
+        aliases: "files outputs viewer control.artifacts.list control.artifact.read",
+    },
+    Entry {
         id: "search.read",
         name: "Search",
         description: "Web · DuckDuckGo / Bing",

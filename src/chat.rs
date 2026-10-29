@@ -18,6 +18,8 @@ pub struct Message {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Session {
     #[serde(default)]
+    pub workspace: Option<String>,
+    #[serde(default)]
     pub lenses: Option<Vec<String>>,
     #[serde(default)]
     pub design_context: Option<String>,
@@ -148,6 +150,7 @@ pub fn create(state: &mut State) -> String {
         .as_nanos();
     let id = format!("c-{stamp:x}-{}", state.chats.len());
     state.chats.push(Session {
+        workspace: None,
         lenses: Some(Vec::new()),
         design_context: None,
         room: None,
@@ -169,6 +172,7 @@ pub fn receive(state: &mut State, incoming: &discord::Incoming) -> Result<(), &'
     }
     if !state.chats.iter().any(|s| s.id == id) {
         state.chats.push(Session {
+            workspace: None,
             lenses: Some(Vec::new()),
             design_context: None,
             room: None,
@@ -358,7 +362,7 @@ pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
         .unwrap_or_default();
     let session = state.chats.iter().find(|s| s.id == id).unwrap();
     let lenses = selected_lenses(session);
-    Ok(format!("<section class='conversation'><div class='conversation-heading'>{}<h2>{}</h2><span>{room}</span></div><iframe class='chat-transcript' src='/chat/{id}/transcript#latest' title='Conversation'></iframe><form class='conversation-composer' id='session-message' method='post' action='/chat/{id}/messages'><textarea name='message' required maxlength='2000' rows='3' aria-label='Message' placeholder='Message Control…'></textarea><div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></section>",crate::navigation::conversation_button(state,id),escape(data["title"].as_str().unwrap_or("Chat")),crate::lens_library::choices(state,&lenses,"session-message")))
+    Ok(format!("<section class='conversation'><div class='conversation-heading'>{}<h2>{}</h2><span class='conversation-links'>{room}<a href='/chat/{id}/artifacts'>Artifacts ↗</a></span></div><iframe class='chat-transcript' src='/chat/{id}/transcript#latest' title='Conversation'></iframe><form class='conversation-composer' id='session-message' method='post' action='/chat/{id}/messages'><textarea name='message' required maxlength='2000' rows='3' aria-label='Message' placeholder='Message Control…'></textarea><div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></section>",crate::navigation::conversation_button(state,id),escape(data["title"].as_str().unwrap_or("Chat")),crate::lens_library::choices(state,&lenses,"session-message")))
 }
 pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
     let data = detail(state, id)?;

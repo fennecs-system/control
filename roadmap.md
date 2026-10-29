@@ -15,14 +15,22 @@ are interfaces to those capabilities.
 Implementation progress (2026-10-29): HTTP socket writes now release shared state,
 stylesheets bypass it, Discord ingestion has its own thread, and individual
 progress events no longer fsync the full state. Discord principals have moved to
-private runtime configuration with arbitrary labels/roles and an explicit Codex
-owner ID; enqueue, retry, dispatch and worker tools enforce that boundary. Portable
-dotfile setup, durable workspace continuity and crash reconciliation remain open.
+private configuration with arbitrary labels/roles. Node task access is independent
+of model provider and architect authority; multiple Discord IDs may be one person.
+Configuration and state now resolve under independent home-directory roots. The
+binary embeds UI assets, the security profile, TUI and Discord bridge; offline
+doctor checks and a single-writer state lock are implemented. Ordinary chats
+restore bounded published snapshots, and the artifact explorer/viewer shares
+list/read services with MCP. Interrupted attempts are persisted and earlier active
+containers block new dispatch. Hard live-workspace quotas, automatic reconciliation,
+cancellation, the Claude adapter and broader release gates remain open. Friends
+build the ordinary release binary from main with Nix; there is no separate preview
+target. A working local build does not close those reliability and provider gates.
 
 ## 1. Make a second Mac configurable — release blocker
 
-- Introduce a validated user dotfile, proposed `~/.config/control/config.toml`,
-  with an explicit config-path override and documented precedence. Keep mutable
+- Keep validated node files under `~/.config/control/`, with an explicit
+  directory override and documented precedence. Keep mutable
   state outside the checkout; resolve paths consistently regardless of cwd.
 - Configure state/artifact roots, pinned images, source root for explicit
   improvements, provider/model selection, credential references, and limits.
@@ -38,13 +46,13 @@ dotfile setup, durable workspace continuity and crash reconciliation remain open
   DM-only routing, confirmed recipient/channel mappings, denial of unknown actors,
   user/architect restrictions, and checks at ingress and dispatch. A role does
   not establish ownership of a provider subscription.
-- Immediately bind subscription-backed Codex runs to the credential owner:
-  local owner access plus an explicitly configured, verified owner Discord ID.
-  Recheck at enqueue and dispatch, including queued/retried work. Other users
-  bring their own login/node or an authorized API-backed path; an architect role
-  alone grants no subscription access. OpenAI's [individual-use terms](https://openai.com/policies/terms-of-use/),
-  checked 2026-10-29, prohibit sharing credentials or making an account available
-  to others. This is a required access change, not a completed safeguard.
+- Authorize model-backed tasks through node policy, independent of provider and
+  architect authority. Multiple Discord IDs can belong to one person and retain
+  the user role; DMs address that node. Recheck at enqueue, retry, dispatch and
+  tool calls. Do not infer distinct people or subscription ownership from Discord
+  IDs or roles. Include the provider-terms notice: making a personal account
+  available to others may breach [OpenAI's terms](https://openai.com/policies/terms-of-use/)
+  and risk suspension; operators are responsible for compliant configuration.
 - Add offline `control doctor` checks for configuration, private-file metadata,
   state permissions, engine, pinned image availability, assets and sandbox policy.
   Keep authenticated model checks explicit and separate from offline diagnostics.
@@ -173,7 +181,8 @@ Keep the seam small; broad provider parity is not a prerequisite.
   translate text/final/usage/error events, and reuse supervisor limits/cancel.
   Authenticate only through Anthropic's supported flow. Never extract OAuth
   tokens, impersonate Claude Code, or route other people's work through the
-  operator's subscription. Recheck owner authorization at enqueue and dispatch.
+  operator's subscription. Recheck node actor authorization at enqueue and dispatch;
+  several user-role identities may represent the credential owner.
 - This path ships only after a Claude-specific credential/PID isolation probe,
   safe config/hook/MCP discovery and credential refresh behavior are demonstrated
   on the supported image/engine. Codex's canary proves nothing about Claude.
@@ -194,7 +203,7 @@ Keep the seam small; broad provider parity is not a prerequisite.
   Recheck before shipping; third-party bridges do not establish permission.
 
 **Exit:** the chosen Claude path completes the same two-turn/restart task and
-passes malformed-stream, auth-expiry, cancellation and wrong-owner tests. UI
+passes malformed-stream, auth-expiry, cancellation and unauthorized-actor tests. UI
 labels distinguish subscription/API usage and unknown accounting. No secret
 reaches model-readable tools. Add bounded parallel workers, richer diffs and
 independent verification next when feedback justifies them; storage/event-log
@@ -205,6 +214,15 @@ migration, streaming polish and session rotation remain separate improvements.
 Build useful capabilities once, with transport-specific grants rather than three
 hand-maintained catalogues. This work can ship incrementally alongside the pilot.
 
+- Chat artifacts, first version: a compact file explorer and read-only text
+  viewer for completed run outputs, linked from the chat. Use an immutable,
+  bounded manifest with chat/run/attempt provenance, relative paths, sizes,
+  content types and hashes. Reject traversal, symlinks and harness/private files;
+  escape text and never execute HTML or scripts. Expose the same bounded
+  list/read service through MCP with actor checks. Files do not automatically
+  become knowledge. Basic editing and syntax highlighting follow the viewer;
+  the manifest can represent other output types without implementing them now.
+
 - Share tool definitions, schemas and policy dispatch across HTTP MCP, stdio and
   the worker mailbox. Keep authority explicit: an external client does not
   inherit a worker's active-run capabilities or the operator's subscription.
@@ -212,7 +230,7 @@ hand-maintained catalogues. This work can ship incrementally alongside the pilot
   authorized room posting. Lens tools expose explicit snapshots. Proposals need
   admission and review; chat output must not automatically become knowledge.
 - Add `control.run.submit`, `control.run.status` and `control.run.diff` on the
-  same durable run service. Submission obeys provider ownership, actor policy,
+  same durable run service. Submission obeys provider configuration, actor policy,
   queue/storage bounds and attempt fencing. A diff is reviewable evidence, not
   permission to apply a change.
 - Audit `readOnlyHint` and `openWorldHint` against actual effects and test the
@@ -246,7 +264,7 @@ already includes Rust/WASM behavior; no UI rewrite or Enter-to-send work belongs
 on this roadmap. Detailed Claude model names, limits and beta flags in the review
 are not requirements here; verify current primary docs when implementing.
 
-Proposed order: credential-owner restrictions and responsive ingestion/UI →
+Proposed order: node authorization independent of architect roles and responsive ingestion/UI →
 portable private configuration and the backend seam → Claude CLI as the first
 new adapter alongside durable bounded work and safe recovery → invited macOS
 cohorts with explicit provider gates and useful MCP capabilities → improvements

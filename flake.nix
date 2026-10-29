@@ -8,11 +8,11 @@
     in {
       devShells = eachSystem (pkgs: {
         default = pkgs.mkShell {
-          packages = [ pkgs.rustc pkgs.cargo pkgs.rustfmt pkgs.clippy pkgs.trunk pkgs.ripgrep pkgs.fd ];
+          packages = [ pkgs.rustc pkgs.cargo pkgs.rustfmt pkgs.clippy pkgs.lld pkgs.trunk pkgs.ripgrep pkgs.fd ];
         };
       });
       packages = eachSystem (pkgs:
-        if pkgs.stdenv.isLinux then {
+        if pkgs.stdenv.hostPlatform.isLinux then {
           worker-image = import ./examples/worker-image.nix { inherit pkgs; };
           browser-image = import ./tools/browser/image.nix { inherit pkgs; };
         } else { });

@@ -9,7 +9,9 @@ Build through a compatible Linux Nix builder, then load and pin the resulting im
 ```sh
 nix build .#packages.aarch64-linux.browser-image --out-link /private/tmp/control-browser-image
 docker load --input /private/tmp/control-browser-image
-docker image inspect --format '{{.Id}}' control-browser:nix > .control/browser-image-id
+control config init
+umask 077
+docker image inspect --format '{{.Id}}' control-browser:nix > "$HOME/.config/control/browser-image-id"
 ```
 
 Use `x86_64-linux` instead when appropriate. `flake.lock` pins the Nix inputs;
@@ -41,7 +43,7 @@ require runtime cleanup; this is not a remote-job reconciliation implementation.
 
 PNG output streams to the host, capped at 8 MiB; the browser never receives a
 writable host output mount. Viewports are 240–2560 pixels per side. Captures are
-private files in `.control/browser/`. An OS lock serializes captures, and admission
+private files in `~/.local/state/control/browser/`. An OS lock serializes captures, and admission
 rejects new work at 64 retained files or when an 8 MiB capture would exceed a
 256 MiB artifact budget. Remove old capture PNGs when needed; receipts/configuration
 and user source are not automatically deleted.
@@ -54,7 +56,8 @@ it is unnecessary for basic layout screenshots.
 ## Codex MCP
 
 `control mcp --root /absolute/control/checkout` is a stdio MCP server for the local
-operator. It exposes read-only chat/lens/room tools and `control.browser.capture`,
+operator. The optional `--root` bounds browser inputs; without it, the root is the
+node's state directory. It exposes read-only chat/lens/room/artifact tools and `control.browser.capture`,
 which accepts `input`, optional `width` and `height`, and returns PNG content plus
 an artifact path. It also exposes `control.web.search` and `control.rust.run`.
 It rejects tools that send messages, start agent runs or administer Control.

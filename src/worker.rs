@@ -52,6 +52,10 @@ impl Credentials {
     }
 }
 
+pub fn credentials_ready() -> Result<(), &'static str> {
+    Credentials::locate().map(|_| ())
+}
+
 fn mount_path(path: &Path) -> Result<&str, &'static str> {
     path.to_str()
         .filter(|p| path.is_absolute() && !p.contains([',', '\n', '\r']))
@@ -63,14 +67,15 @@ fn container_command(
     name: &str,
     workspace: &Path,
     auth: &Credentials,
+    policy: &Path,
+    node: &str,
 ) -> Result<Command, &'static str> {
     let mount = format!("type=bind,src={},dst=/workspace", mount_path(workspace)?);
     let credential_mount = format!(
         "type=bind,src={},dst=/home/agent/.codex/auth.json,readonly",
         mount_path(&auth.path)?
     );
-    let seccomp = fs::canonicalize("hosting/worker-seccomp.json")
-        .map_err(|_| "Worker seccomp profile is missing.")?;
+    let seccomp = fs::canonicalize(policy).map_err(|_| "Worker seccomp profile is missing.")?;
     let seccomp = format!("seccomp={}", mount_path(&seccomp)?);
     let user = format!("{}:{}", auth.uid, auth.gid);
     let home = format!(
@@ -87,6 +92,10 @@ fn container_command(
             "--pull=never",
             "--name",
             name,
+            "--label",
+            &format!("dev.control.node={node}"),
+            "--label",
+            &format!("dev.control.attempt={name}"),
             "--user",
             &user,
             "--read-only",
@@ -146,6 +155,8 @@ fn sandbox_probe(
     root: &Path,
     auth: &Credentials,
     name: &str,
+    policy: &Path,
+    node: &str,
 ) -> Result<(), &'static str> {
     let probe = root.join("sandbox-probe");
     let workspace = probe.join("workspace");
@@ -157,7 +168,7 @@ fn sandbox_probe(
         uid: auth.uid,
         gid: auth.gid,
     };
-    let mut command = container_command(image, name, &workspace, &fake)?;
+    let mut command = container_command(image, name, &workspace, &fake, policy, node)?;
     command.args(["codex", "sandbox", "-P", "control"]);
     permissions(&mut command);
     // PID 1 must be the inner execution supervisor, not the account-bearing harness.
@@ -283,6 +294,63 @@ pub fn start(state: Arc<Mutex<State>>) {
     });
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(2));
+        // Refuse overlapping launches after a crash. Labels identify this node;
+        // legacy interrupted attempts are matched by their exact persisted name.
+        // Discovery never authorizes deletion or adoption of an unknown container.
+        let legacy = {
+            let Ok(s) = state.lock() else {
+                return;
+            };
+            if !s.runtime.runs.iter().any(|r| r.status == "queued") {
+                continue;
+            }
+            s.runtime
+                .runs
+                .iter()
+                .flat_map(|run| {
+                    run.attempts
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, a)| a.status == "interrupted")
+                        .flat_map(|(index, a)| {
+                            let id = a
+                                .workspace_id
+                                .clone()
+                                .unwrap_or_else(|| format!("{}-attempt-{}", run.id, index + 1));
+                            [format!("control-{id}"), format!("control-{id}-probe")]
+                        })
+                })
+                .collect::<Vec<_>>()
+        };
+        if runtime::worker_image().is_some() {
+            match (
+                crate::config::node_id(),
+                runtime::docker_query(&[
+                    "ps",
+                    "--format",
+                    "{{.Names}}|{{.Label \"dev.control.node\"}} ",
+                ]),
+            ) {
+                (Ok(node), Ok(containers)) => {
+                    if containers
+                        .lines()
+                        .filter_map(|line| line.trim().split_once('|'))
+                        .any(|(name, owner)| owner == node || legacy.iter().any(|old| old == name))
+                    {
+                        if let Ok(mut s) = state.lock() {
+                            s.runtime.notice = "An earlier container is still active. Inspect and stop it before this node resumes queued work.".into();
+                        }
+                        continue;
+                    }
+                }
+                _ => {
+                    if let Ok(mut s) = state.lock() {
+                        s.runtime.notice = "Container ownership inspection is unavailable. Dispatch is waiting; check the engine with control doctor.".into();
+                    }
+                    continue;
+                }
+            }
+        }
         let task = {
             let Ok(mut s) = state.lock() else {
                 eprintln!(
@@ -305,8 +373,11 @@ pub fn start(state: Arc<Mutex<State>>) {
         };
         let mut attempt = task.4;
         let started = Instant::now();
-        let workspace_id = format!("{}-attempt-{}", task.0, task.5);
-        let outcome = execute(
+        let workspace_id = attempt
+            .workspace_id
+            .clone()
+            .unwrap_or_else(|| format!("{}-attempt-{}", task.0, task.5));
+        let mut outcome = execute(
             &workspace_id,
             &task.1,
             &task.2,
@@ -318,6 +389,32 @@ pub fn start(state: Arc<Mutex<State>>) {
         let Ok(mut s) = state.lock() else {
             eprintln!("Worker result not committed: state unavailable; inspect artifacts before restarting.");
             return;
+        };
+        let previous_run = s
+            .runtime
+            .runs
+            .iter()
+            .position(|r| r.id == task.0)
+            .map(|i| (i, s.runtime.runs[i].clone()));
+        let chat_id = previous_run
+            .as_ref()
+            .and_then(|(_, run)| run.chat_id.clone());
+        let previous_chat = s
+            .chats
+            .iter()
+            .position(|c| Some(&c.id) == chat_id.as_ref())
+            .map(|i| (i, s.chats[i].clone()));
+        if outcome.is_ok() && task.3 == Action::Task {
+            if let Some((_, chat)) = &previous_chat {
+                if chat.workspace != attempt.parent_artifact {
+                    outcome = Err(("interrupted", "The conversation workspace changed. Outputs were retained; start a new turn to continue from the current version.".into()));
+                }
+            }
+        }
+        let published = if outcome.is_ok() && task.3 == Action::Task {
+            attempt.artifact.clone()
+        } else {
+            None
         };
         if let Some(r) = s.runtime.runs.iter_mut().find(|r| r.id == task.0) {
             match outcome {
@@ -343,10 +440,20 @@ pub fn start(state: Arc<Mutex<State>>) {
             .find(|r| r.id == task.0)
             .and_then(|r| r.chat_id.clone());
         if let Some(session) = s.chats.iter_mut().find(|c| Some(&c.id) == chat_id.as_ref()) {
+            if let Some(published) = published {
+                session.workspace = Some(published);
+            }
             session.revision = session.revision.saturating_add(1);
         }
         if storage::save(&s).is_err() {
-            eprintln!("Could not persist worker result.");
+            if let Some((index, run)) = previous_run {
+                s.runtime.runs[index] = run;
+            }
+            if let Some((index, chat)) = previous_chat {
+                s.chats[index] = chat;
+            }
+            eprintln!("Could not persist worker result. Dispatch stopped; artifacts retained for inspection.");
+            return;
         }
     });
 }
@@ -358,12 +465,32 @@ fn checkpoint_next(
         .runtime
         .runs
         .iter()
-        .position(|r| r.status == "queued")?;
+        .enumerate()
+        .filter(|(_, r)| r.status == "queued")
+        .min_by_key(|(index, r)| (r.queue_order, *index))
+        .map(|(index, _)| index)?;
     let model = state.runtime.configured_model();
     let omitted_history = crate::chat::omitted_history(state, &state.runtime.runs[index].id);
+    let parent = if state.runtime.runs[index].action == Action::Task {
+        if let Some(previous) = state.runtime.runs[index].attempts.last() {
+            previous.parent_artifact.clone()
+        } else {
+            state
+                .chats
+                .iter()
+                .find(|c| Some(&c.id) == state.runtime.runs[index].chat_id.as_ref())
+                .and_then(|c| c.workspace.clone())
+        }
+    } else {
+        None
+    };
     let run = &mut state.runtime.runs[index];
     run.status = "running".into();
     let mut attempt = crate::usage::Attempt::new();
+    attempt.image = runtime::worker_image();
+    attempt.node_id = crate::config::node_id().ok();
+    attempt.parent_artifact = parent;
+    attempt.workspace_id = Some(format!("{}-attempt-{}", run.id, run.attempts.len() + 1));
     attempt.omitted_history = omitted_history;
     attempt.model = run.model.clone().unwrap_or(model);
     run.attempts.push(attempt);
@@ -396,7 +523,10 @@ fn checkpoint_next(
 }
 
 fn ingest_discord(state: &Arc<Mutex<State>>) -> Result<(), ()> {
-    let Ok(entries) = fs::read_dir(".control/discord-inbox") else {
+    let Ok(entries) = crate::config::state("discord-inbox")
+        .map_err(|_| ())
+        .and_then(|p| fs::read_dir(p).map_err(|_| ()))
+    else {
         return Ok(());
     };
     let mut entries: Vec<_> = entries.flatten().collect();
@@ -521,30 +651,48 @@ fn execute(
 ) -> Result<String, (&'static str, String)> {
     let blocked = |m: &str| ("blocked", m.to_owned());
     let failed = |m: &str| ("failed", m.to_owned());
-    let scope = identity::authorize_codex(actor, action).map_err(&blocked)?;
-    let image = runtime::worker_image().ok_or_else(|| blocked("No pinned worker image. Configure CONTROL_WORKER_IMAGE or .control/worker-image-id with the Nix-built image's sha256 ID."))?;
+    let scope = identity::authorize(actor, action).map_err(blocked)?;
+    let image = attempt.image.clone().or_else(runtime::worker_image).ok_or_else(|| blocked("No pinned worker image. Configure CONTROL_WORKER_IMAGE or worker-image-id in the node configuration directory with the Nix-built image's sha256 ID."))?;
+    let node = attempt
+        .node_id
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(crate::config::node_id)
+        .map_err(blocked)?;
     if !runtime::engine_ready() {
         return Err(blocked("Linux container engine unavailable. Start Docker on this laptop; Control will not fall back to host execution."));
     }
-    let auth = Credentials::locate().map_err(&blocked)?;
-    let workspace = runtime::workspace(id);
+    let auth = Credentials::locate().map_err(blocked)?;
+    let workspace = runtime::workspace(id).map_err(blocked)?;
     let baseline = workspace.parent().unwrap().join("baseline");
     if baseline.exists() || workspace.exists() {
         return Err(blocked("A source snapshot already exists for this run. Inspect its artifacts; submit a new run to avoid overwriting evidence."));
     }
     prepare_workspace(scope, &baseline, &workspace)
         .map_err(|_| failed("Could not prepare the authorized workspace."))?;
+    if scope == Workspace::User {
+        if let Some(parent) = &attempt.parent_artifact {
+            crate::artifacts::restore(parent, &workspace)
+                .map_err(|_| failed("Could not restore the previous published workspace. Its checkpoint is unchanged."))?;
+        }
+    }
     let absolute =
         fs::canonicalize(&workspace).map_err(|_| failed("Could not resolve worker workspace."))?;
+    let policy = absolute.parent().unwrap().join("worker-seccomp.json");
+    fs::write(&policy, include_bytes!("../hosting/worker-seccomp.json"))
+        .map_err(|_| failed("Could not prepare embedded worker security profile."))?;
     sandbox_probe(
         &image,
         absolute.parent().unwrap(),
         &auth,
         &format!("control-{id}-probe"),
+        &policy,
+        &node,
     )
-    .map_err(&blocked)?;
+    .map_err(blocked)?;
     let container = format!("control-{id}");
-    let mut command = container_command(&image, &container, &absolute, &auth).map_err(&blocked)?;
+    let mut command = container_command(&image, &container, &absolute, &auth, &policy, &node)
+        .map_err(blocked)?;
     command.args([
         "codex",
         "exec",
@@ -685,7 +833,10 @@ fn execute(
     let output = read_report(&workspace.join(".control-result"))
         .unwrap_or_else(|_| "Worker finished without a safe final report.".into());
     let summary: String = output.chars().take(16000).collect();
-    Ok(format!("{summary}\n\nReview workspace: {}\nBaseline: {}\nNo changes have been applied to the live source. Checks in the report are worker-reported, not independently verified.",workspace.display(),baseline.display()))
+    let manifest = crate::artifacts::publish(&workspace, id)
+        .map_err(|_| failed("Worker outputs could not be published within the artifact safety/size limits. Inspect the retained workspace; the previous checkpoint is unchanged."))?;
+    attempt.artifact = Some(manifest.id);
+    Ok(summary)
 }
 
 fn read_report(path: &Path) -> std::io::Result<String> {
@@ -717,7 +868,9 @@ pub fn check() -> std::io::Result<()> {
         "Run a shell command that writes exactly control-account-check-ok to /workspace/connection-check. Do not inspect credentials. Then reply with one short confirmation.",
         &Actor::LocalOperator, Action::Task, &mut attempt, None)
         .map_err(|(_, message)| std::io::Error::other(message))?;
-    let marker = runtime::workspace(&id).join("connection-check");
+    let marker = runtime::workspace(&id)
+        .map_err(std::io::Error::other)?
+        .join("connection-check");
     if read_report(&marker)?.trim() != "control-account-check-ok" {
         return Err(std::io::Error::other(
             "Codex returned without the expected sandbox execution artifact.",
@@ -735,7 +888,7 @@ fn prepare_workspace(
     workspace: &std::path::Path,
 ) -> std::io::Result<()> {
     if scope == Workspace::ControlSource {
-        runtime::snapshot(std::path::Path::new("."), baseline)?;
+        runtime::snapshot(&crate::config::source_root()?, baseline)?;
         runtime::snapshot(baseline, workspace)
     } else {
         fs::create_dir_all(workspace)
@@ -745,6 +898,45 @@ fn prepare_workspace(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn followups_capture_workspace_at_dispatch_and_retries_keep_their_parent() {
+        let mut state = State::default();
+        let chat = crate::chat::create(&mut state);
+        crate::chat::send(&mut state, &chat, "First", "test").unwrap();
+        crate::chat::send(&mut state, &chat, "Second", "test").unwrap();
+        assert_eq!(checkpoint_next(&mut state, |_| Ok(())), Some(0));
+        assert!(state.runtime.runs[0].attempts[0].parent_artifact.is_none());
+        state.runtime.runs[0].status = "completed".into();
+        state.chats[0].workspace = Some("first-artifact".into());
+        assert_eq!(checkpoint_next(&mut state, |_| Ok(())), Some(1));
+        assert_eq!(
+            state.runtime.runs[1].attempts[0].parent_artifact.as_deref(),
+            Some("first-artifact")
+        );
+        state.runtime.runs[1].status = "failed".into();
+        crate::chat::send(&mut state, &chat, "Third", "test").unwrap();
+        let retry = state.runtime.runs[1].id.clone();
+        state.runtime.action(
+            "/retry-run",
+            &std::collections::HashMap::from([("id".into(), retry)]),
+        );
+        assert_eq!(checkpoint_next(&mut state, |_| Ok(())), Some(2));
+        state.runtime.runs[2].status = "completed".into();
+        state.chats[0].workspace = Some("third-artifact".into());
+        let bytes = serde_json::to_vec(&state).unwrap();
+        let mut restored: State = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(checkpoint_next(&mut restored, |_| Ok(())), Some(1));
+        assert_eq!(
+            restored.runtime.runs[1].attempts[1]
+                .parent_artifact
+                .as_deref(),
+            Some("first-artifact")
+        );
+        assert_eq!(
+            restored.chats[0].workspace.as_deref(),
+            Some("third-artifact")
+        );
+    }
     #[test]
     fn activity_updates_keep_attempt_identity_and_bounded_history() {
         let mut state = State::default();
@@ -849,6 +1041,8 @@ mod tests {
             "control-test",
             Path::new("/private/workspace"),
             &auth,
+            Path::new("hosting/worker-seccomp.json"),
+            "test-node",
         )
         .unwrap();
         let args: Vec<_> = command.get_args().map(|s| s.to_str().unwrap()).collect();

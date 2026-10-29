@@ -1,0 +1,35 @@
+:root { color-scheme: dark; --bg: #121117; --panel: #1c1a24; --text: #e2dfeb; --muted: #aaa4b9; --accent: #baa4e9; --line: #34303f; }
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 2rem; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+header, main, footer { width: min(960px, calc(100% - 3rem)); margin-inline: auto; }
+header, nav, footer { display: flex; align-items: center; gap: 1.5rem; }
+header { padding-block: 1.7rem; border-bottom: 1px solid var(--line); justify-content: space-between; }
+a { color: var(--accent); text-underline-offset: .25em; }
+a:hover { color: #e0cfff; }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 5px; }
+.wordmark { font-size: 1.25rem; color: var(--text); text-decoration: none; }
+.wordmark span { color: var(--accent); }
+nav { font-size: .9rem; }
+nav a { text-decoration: none; }
+section { margin-block: 4.5rem; }
+.intro { padding-block: 1.5rem; }
+.eyebrow { color: var(--accent); font-size: .9rem; margin-bottom: 1rem; }
+h1, h2, h3 { font-weight: 500; line-height: 1.35; letter-spacing: -.025em; }
+h1 { font-size: clamp(1.8rem, 5vw, 3rem); margin: 0 0 1.5rem; }
+h2 { font-size: 1.4rem; }
+h3 { margin-top: 2.2rem; font-size: 1rem; }
+p { color: var(--muted); max-width: 76ch; }
+.intro p { max-width: 66ch; }
+.button { display: inline-flex; gap: 2rem; margin-top: 1rem; padding: .6rem 1rem; border: 1px solid var(--line); background: var(--panel); text-decoration: none; }
+.features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.8rem; padding-block: 2rem; border-block: 1px solid var(--line); }
+.features h2 { font-size: 1rem; }
+.features p { margin-bottom: 0; }
+pre { overflow-x: auto; padding: 1.2rem; background: var(--panel); border: 1px solid var(--line); line-height: 1.65; }
+code { font: inherit; color: var(--text); overflow-wrap: anywhere; }
+pre code { overflow-wrap: normal; font-size: .9rem; }
+.status { border-top: 1px solid var(--line); padding-top: 1.5rem; }
+footer { flex-wrap: wrap; border-top: 1px solid var(--line); padding-block: 1.5rem 3rem; color: var(--muted); font-size: .85rem; }
+footer span { margin-right: auto; }
+@media (max-width: 640px) { .features { grid-template-columns: 1fr; gap: 1rem; } section { margin-block: 3rem; } header, main, footer { width: calc(100% - 2rem); } nav { gap: 1rem; } }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }

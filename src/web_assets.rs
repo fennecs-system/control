@@ -1,10 +1,23 @@
-use std::{fs, io::Write, net::TcpStream, path::Path};
+use std::{io::Write, net::TcpStream, path::Path};
+
+include!(concat!(env!("OUT_DIR"), "/web_assets.rs"));
+
+pub fn ready() -> bool {
+    ASSETS.iter().any(|(name, _)| name.ends_with(".wasm")) && asset("index.html").is_some()
+}
+
+fn asset(name: &str) -> Option<&'static [u8]> {
+    ASSETS
+        .iter()
+        .find(|(key, _)| *key == name)
+        .map(|(_, bytes)| *bytes)
+}
 
 pub fn serve(stream: &mut TcpStream, path: &str) {
     if path == "/tool-window/chat-bootstrap.js" {
-        let bootstrap = fs::read_to_string("web/dist/index.html")
-            .ok()
-            .and_then(|html| generated_bootstrap(&html).map(str::to_owned));
+        let bootstrap = asset("index.html")
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+            .and_then(generated_bootstrap);
         match bootstrap {
             Some(body) => respond(stream, "200 OK", "text/javascript", body.as_bytes(), false),
             None => respond(
@@ -29,9 +42,14 @@ pub fn serve(stream: &mut TcpStream, path: &str) {
         respond(stream, "404 Not Found", "text/plain", b"Not found.", false);
         return;
     }
-    let file = Path::new("web/dist").join(name);
-    let Ok(body) = fs::read(file) else {
-        respond(stream,"503 Service Unavailable","text/html; charset=utf-8",b"<!doctype html><html lang='en'><head><title>Build pending</title></head><body><p>The Rust WASM tool window has not been built. Run Trunk in web/. The native Rust inspector remains available above.</p></body></html>",true);
+    let Some(body) = asset(name) else {
+        respond(
+            stream,
+            "404 Not Found",
+            "text/plain",
+            b"Asset not found.",
+            false,
+        );
         return;
     };
     let mime = match Path::new(name).extension().and_then(|s| s.to_str()) {
@@ -41,7 +59,7 @@ pub fn serve(stream: &mut TcpStream, path: &str) {
         Some("html") => "text/html; charset=utf-8",
         _ => "application/octet-stream",
     };
-    respond(stream, "200 OK", mime, &body, true);
+    respond(stream, "200 OK", mime, body, true);
 }
 // Reuse Trunk's generated module verbatim, served externally so chat needs no inline scripts.
 fn generated_bootstrap(html: &str) -> Option<&str> {

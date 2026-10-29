@@ -61,7 +61,13 @@ pub struct Capture {
     pub width: u16,
     pub height: u16,
 }
-pub fn capture(image: &str, input: &Path, width: u16, height: u16) -> io::Result<Capture> {
+pub fn capture(
+    image: &str,
+    input: &Path,
+    width: u16,
+    height: u16,
+    output: &Path,
+) -> io::Result<Capture> {
     viewport(width, height)?;
     if !valid_image(image) {
         return Err(fail("Browser requires a pinned sha256 image ID"));
@@ -158,8 +164,8 @@ pub fn capture(image: &str, input: &Path, width: u16, height: u16) -> io::Result
             return Err(fail("Browser capture failed or exceeded its limits"));
         }
         // A private persistent artifact, not a writable mount exposed to Firefox.
-        fs::create_dir_all(".control/browser")?;
-        let artifact = PathBuf::from(format!(".control/browser/capture-{stamp}.png"));
+        fs::create_dir_all(output)?;
+        let artifact = output.join(format!("capture-{stamp}.png"));
         private_file(&artifact, &bytes)?;
         Ok(Capture {
             path: fs::canonicalize(artifact)?,
@@ -229,12 +235,20 @@ mod tests {
     use super::*;
     #[test]
     fn invalid_authority_and_viewports_fail_before_docker() {
-        assert!(capture("control-browser:nix", Path::new("missing"), 1280, 800).is_err());
+        assert!(capture(
+            "control-browser:nix",
+            Path::new("missing"),
+            1280,
+            800,
+            Path::new("unused")
+        )
+        .is_err());
         assert!(capture(
             &format!("sha256:{}", "a".repeat(64)),
             Path::new("missing"),
             1,
-            800
+            800,
+            Path::new("unused")
         )
         .is_err());
         assert!(valid_image(&format!("sha256:{}", "a".repeat(64))));

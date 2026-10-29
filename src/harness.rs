@@ -53,8 +53,11 @@ fn local_server(value: &str) -> io::Result<Url> {
 impl Hive {
     pub(crate) fn connect(server: &str) -> io::Result<Self> {
         let url = local_server(server)?;
-        let path = std::env::var("CONTROL_OPERATOR_FILE")
-            .unwrap_or_else(|_| ".control/operator-session".into());
+        let path = std::env::var_os("CONTROL_OPERATOR_FILE")
+            .map(std::path::PathBuf::from)
+            .map(Ok)
+            .unwrap_or_else(|| crate::config::state("operator-session"))
+            .map_err(failure)?;
         let metadata = fs::symlink_metadata(&path).map_err(|_| {
             failure("Run control-harness from the Control directory after starting the server.")
         })?;
@@ -1451,5 +1454,90 @@ mod tests {
             .unwrap();
         assert!(page.contains("RIVER_CEDAR"));
         assert!(!page.contains("http-equiv='refresh'"));
+    }
+}
+#[test]
+#[ignore = "requires an isolated Control server, authenticated Nix worker image and two small model calls; reload mode uses one call"]
+fn live_artifacts_preserve_project_files_and_viewer_after_restart() {
+    let server = std::env::var("CONTROL_QA_URL").expect("Use an isolated server");
+    let mut hive = Hive::connect(&server).unwrap();
+    let reload = std::env::var_os("CONTROL_QA_VERIFY_RELOAD").is_some();
+    let chat = if reload {
+        hive.tool("control.chats.list", json!({}))
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    } else {
+        hive.tool("control.chat.create", json!({})).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let messages = if reload {
+        vec!["Read counter.txt in the existing workspace, increment its integer by one and write it back. Preserve preview.txt. Actually use a shell command to read the file. Reply briefly."]
+    } else {
+        vec!["Use shell commands to create counter.txt containing 1 and preview.txt containing exactly <script>alert(1)</script>. Do not inspect credentials. Reply briefly.",
+                "Read counter.txt in the existing workspace, increment its integer by one and write it back. Preserve preview.txt. Actually use a shell command to read the file. Reply briefly."]
+    };
+    for (index, message) in messages.iter().enumerate() {
+        hive.tool("control.chat.send", json!({"id":chat,"message":message}))
+            .unwrap();
+        let started = Instant::now();
+        loop {
+            let detail = hive.tool("control.chat.read", json!({"id":chat})).unwrap();
+            let current = detail["messages"].as_array().unwrap().last().unwrap();
+            match current["status"].as_str().unwrap() {
+                "queued" | "running" if started.elapsed() < Duration::from_secs(180) => {
+                    std::thread::sleep(Duration::from_millis(500))
+                }
+                "completed" => break,
+                status => panic!("Artifact test ended with {status}: {}", current["reply"]),
+            }
+        }
+        let listed = hive
+            .tool("control.artifacts.list", json!({"id":chat}))
+            .unwrap();
+        let artifact = listed["artifacts"][0]["id"].as_str().unwrap();
+        let read = hive
+            .tool(
+                "control.artifact.read",
+                json!({"id":chat,"artifact":artifact,"path":"counter.txt"}),
+            )
+            .unwrap();
+        let expected = if reload { 3 } else { index + 1 };
+        assert_eq!(read["text"].as_str().unwrap().trim(), expected.to_string());
+        let unsafe_path = hive.tool(
+            "control.artifact.read",
+            json!({"id":chat,"artifact":artifact,"path":"../operator-session"}),
+        );
+        assert!(unsafe_path.is_err());
+        let other = hive.tool(
+            "control.artifact.read",
+            json!({"id":chat,"artifact":"unknown-output","path":"counter.txt"}),
+        );
+        assert!(other.is_err());
+        let response = hive
+            .client
+            .get(format!(
+                "{server}/chat/{chat}/artifacts?artifact={artifact}&file=preview.txt"
+            ))
+            .send()
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        assert!(response.headers()["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .contains("script-src 'none'"));
+        let page = response.text().unwrap();
+        assert!(page.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+        assert!(!page.contains("<script>alert(1)</script>"));
+        let unauthenticated =
+            reqwest::blocking::get(format!("{server}/chat/{chat}/artifacts")).unwrap();
+        assert_eq!(unauthenticated.status().as_u16(), 401);
     }
 }

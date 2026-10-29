@@ -12,12 +12,16 @@ use std::{
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Runtime {
+    // Read old checkpoints for migration; new configuration belongs in the home directory.
+    #[serde(skip_serializing)]
     pub model: Option<String>,
     pub runs: Vec<Run>,
     pub notice: String,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Run {
+    #[serde(default)]
+    pub queue_order: u64,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
@@ -43,7 +47,9 @@ pub struct Run {
 pub fn worker_image() -> Option<String> {
     std::env::var("CONTROL_WORKER_IMAGE")
         .ok()
-        .or_else(|| fs::read_to_string(".control/worker-image-id").ok())
+        .or_else(|| {
+            fs::read_to_string(crate::config::directory().ok()?.join("worker-image-id")).ok()
+        })
         .map(|s| s.trim().to_owned())
         .filter(|s| pinned_image(s))
 }
@@ -57,10 +63,42 @@ fn pinned_image(s: &str) -> bool {
     digest.is_some_and(|hash| hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 pub fn engine_ready() -> bool {
-    Command::new("docker")
-        .args(["info", "--format", "{{.OSType}}"])
-        .output()
-        .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "linux")
+    docker_query(&["info", "--format", "{{.OSType}}"]).is_ok_and(|output| output.trim() == "linux")
+}
+pub fn docker_query(arguments: &[&str]) -> std::io::Result<String> {
+    use std::{
+        io::Read,
+        process::Stdio,
+        time::{Duration, Instant},
+    };
+    let mut child = Command::new("docker")
+        .args(arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = child.try_wait()? {
+            if !status.success() {
+                return Err(std::io::Error::other("Container engine request failed"));
+            }
+            let mut output = String::new();
+            child
+                .stdout
+                .take()
+                .ok_or_else(|| std::io::Error::other("No engine response"))?
+                .take(8192)
+                .read_to_string(&mut output)?;
+            return Ok(output);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::other("Container engine response timed out"));
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 fn field(f: &HashMap<String, String>, name: &str) -> String {
     f.get(name).map(|s| s.trim().to_owned()).unwrap_or_default()
@@ -93,7 +131,7 @@ impl Runtime {
         actor: Actor,
         action: Action,
     ) -> Result<(), &'static str> {
-        identity::authorize_codex(&actor, action)?;
+        identity::authorize(&actor, action)?;
         if objective.is_empty() || objective.chars().count() > 2000 {
             return Err("An objective must contain 1–2000 characters.");
         }
@@ -102,6 +140,13 @@ impl Runtime {
             .unwrap_or_default()
             .as_nanos();
         self.runs.push(Run {
+            queue_order: self
+                .runs
+                .iter()
+                .map(|r| r.queue_order)
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1),
             model: Some(self.configured_model()),
             context: None,
             lenses: None,
@@ -129,14 +174,22 @@ impl Runtime {
         }
         if path == "/retry-run" {
             let id = field(f, "id");
+            let order = self
+                .runs
+                .iter()
+                .map(|r| r.queue_order)
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1);
             if let Some(run) = self.runs.iter_mut().find(|r| {
                 r.id == id && ["blocked", "failed", "interrupted"].contains(&r.status.as_str())
             }) {
-                if let Err(message) = identity::authorize_codex(&run.actor, run.action) {
+                if let Err(message) = identity::authorize(&run.actor, run.action) {
                     self.notice = message.into();
                     return "/?view=evolution";
                 }
                 run.status = "queued".into();
+                run.queue_order = order;
                 run.result.clear();
             }
         }
@@ -150,7 +203,7 @@ impl Runtime {
                     Ok(policy) => {
                         h.push_str("<p>DMs only. Server messages are ignored.</p>");
                         for p in policy.principals {
-                            h.push_str(&format!("<article class='record'><span class='tag'>{:?}</span><h3>@{}</h3><p>Discord ID: {}</p><p class='muted'>{}</p>{}</article>",p.role,escape(&p.label),p.user_id.map(|id|id.to_string()).unwrap_or_else(||"not bound — no access".into()),if p.role==identity::Role::Architect {"Can request source changes for local review."}else{"Cannot change Control, access settings, or deploy."},if p.user_id.is_some() && p.user_id==policy.codex_owner_id {"<span class='tag'>Codex owner</span>"}else{"<p class='muted'>No access to this node’s Codex login.</p>"}));
+                            h.push_str(&format!("<article class='record'><span class='tag'>{:?}</span><h3>@{}</h3><p>Discord ID: {}</p><p class='muted'>{}</p></article>",p.role,escape(&p.label),p.user_id.map(|id|id.to_string()).unwrap_or_else(||"not bound — no access".into()),if p.role==identity::Role::Architect {"Can run tasks and request source changes for local review."}else{"Can run tasks. Cannot change Control, access settings, or deploy."}));
                         }
                     }
                     Err(message) => {
@@ -195,6 +248,8 @@ pub fn snapshot(source: &Path, destination: &Path) -> std::io::Result<()> {
         "examples",
         "web",
         "tools",
+        "docs",
+        "roadmap.md",
         "Cargo.toml",
         "Cargo.lock",
         "DESIGN.md",
@@ -232,12 +287,16 @@ fn copy_source(from: &Path, to: &Path) -> std::io::Result<()> {
     }
     Ok(())
 }
-pub fn workspace(id: &str) -> PathBuf {
-    Path::new(".control/runs").join(id).join("workspace")
+pub fn workspace(id: &str) -> Result<PathBuf, &'static str> {
+    if !crate::chat::valid_id(id) {
+        return Err("Invalid workspace ID");
+    }
+    Ok(crate::config::state("runs")?.join(id).join("workspace"))
 }
 fn integrations() -> String {
-    let status: serde_json::Value = fs::read(".control/discord-status.json")
+    let status: serde_json::Value = crate::config::state("discord-status.json")
         .ok()
+        .and_then(|p| fs::read(p).ok())
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default();
     let timestamp = status["updated_unix"].as_u64().unwrap_or(0);

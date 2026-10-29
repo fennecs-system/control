@@ -3,6 +3,7 @@ use std::{
     fs,
     io::{self, Read, Write},
     net::TcpStream,
+    path::Path,
     process::Command,
 };
 
@@ -14,7 +15,7 @@ fn random() -> io::Result<String> {
     fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
-fn private_file(path: &str, text: &str) -> io::Result<()> {
+fn private_file(path: &Path, text: &str) -> io::Result<()> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -37,12 +38,12 @@ fn equal(a: &str, b: &str) -> bool {
 }
 impl Access {
     pub fn load() -> io::Result<Self> {
-        let path = ".control/operator-session";
-        let session = match fs::read_to_string(path) {
+        let path = crate::config::state("operator-session").map_err(io::Error::other)?;
+        let session = match fs::read_to_string(&path) {
             Ok(s) => s,
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 let s = random()?;
-                private_file(path, &s)?;
+                private_file(&path, &s)?;
                 s
             }
             Err(e) => return Err(e),
@@ -71,9 +72,10 @@ impl Access {
                 .strip_prefix("/unlock/")
                 .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
             {
-                let unlocked = fs::read_to_string(".control/operator-unlock")
-                    .is_ok_and(|expected| equal(token, &expected))
-                    && fs::remove_file(".control/operator-unlock").is_ok();
+                let unlocked = crate::config::state("operator-unlock").is_ok_and(|path| {
+                    fs::read_to_string(&path).is_ok_and(|expected| equal(token, &expected))
+                        && fs::remove_file(path).is_ok()
+                });
                 if unlocked {
                     respond(stream,"303 See Other","text/plain","",&format!("Location: /\r\nSet-Cookie: control_operator={}; Path=/; HttpOnly; SameSite=Strict\r\n",self.session));
                     return true;
@@ -93,7 +95,10 @@ fn respond(stream: &mut TcpStream, status: &str, mime: &str, body: &str, extra: 
 pub fn open(addr: &str) -> io::Result<()> {
     crate::storage::initialize()?;
     let unlock = random()?;
-    private_file(".control/operator-unlock", &unlock)?;
+    private_file(
+        &crate::config::state("operator-unlock").map_err(io::Error::other)?,
+        &unlock,
+    )?;
     let port = addr
         .parse::<std::net::SocketAddr>()
         .map_err(io::Error::other)?

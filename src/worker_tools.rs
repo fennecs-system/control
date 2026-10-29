@@ -29,7 +29,7 @@ fn rpc(state: &Arc<Mutex<State>>, run_id: &str, envelope: &Value) -> Value {
     else {
         return error("Run is not active");
     };
-    if let Err(message) = identity::authorize_codex(&run.actor, run.action) {
+    if let Err(message) = identity::authorize(&run.actor, run.action) {
         return error(message);
     }
     let has_room = state.chats.iter().any(|c| {

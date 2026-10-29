@@ -25,6 +25,11 @@ impl Tokens {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Attempt {
+    pub image: Option<String>,
+    pub node_id: Option<String>,
+    pub parent_artifact: Option<String>,
+    pub artifact: Option<String>,
+    pub workspace_id: Option<String>,
     pub activity: Vec<Activity>,
     pub omitted_history: usize,
     pub started_unix: u64,
