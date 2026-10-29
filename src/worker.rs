@@ -169,7 +169,6 @@ fn permissions(command: &mut Command) {
     }
 }
 
-static PROBED: Mutex<std::collections::BTreeSet<String>> = Mutex::new(std::collections::BTreeSet::new());
 fn sandbox_probe(
     image: &str,
     root: &Path,
@@ -488,7 +487,6 @@ fn commit(
             attempt.activity = std::mem::take(&mut last.activity);
             *last = attempt;
         }
-        storage::trim_finished(r);
     }
     if let Some(session) = s.chats.iter_mut().find(|c| Some(&c.id) == chat_id.as_ref()) {
         if let Some(published) = published {
@@ -845,23 +843,16 @@ fn execute(
     let policy = absolute.parent().unwrap().join("worker-seccomp.json");
     fs::write(&policy, include_bytes!("../hosting/worker-seccomp.json"))
         .map_err(|_| failed("Could not prepare embedded worker security profile."))?;
-    // The probe verifies the pinned image and kernel sandbox, not the run: a success
-    // is cached per image and credential owner for this process. Failures are not.
-    let probe_key = format!("{image}|{}:{}", auth.uid, auth.gid);
-    if !PROBED.lock().is_ok_and(|p| p.contains(&probe_key)) {
-        sandbox_probe(
-            &image,
-            absolute.parent().unwrap(),
-            &auth,
-            &format!("control-{id}-probe"),
-            &policy,
-            &node,
-        )
-        .map_err(blocked)?;
-        if let Ok(mut probed) = PROBED.lock() {
-            probed.insert(probe_key);
-        }
-    }
+    // Verify each attempt before mounting real credentials; successes are not cached.
+    sandbox_probe(
+        &image,
+        absolute.parent().unwrap(),
+        &auth,
+        &format!("control-{id}-probe"),
+        &policy,
+        &node,
+    )
+    .map_err(blocked)?;
     let container = format!("control-{id}");
     let mut command =
         container_command(&image, &container, &absolute, &auth, &policy, &node).map_err(blocked)?;
