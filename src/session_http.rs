@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 use std::{io::Write, net::TcpStream};
 
 fn respond(stream: &mut TcpStream, status: &str, mime: &str, body: &str, extra: &str) {
-    let _ = write!(stream,"HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\n{extra}Connection: close\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'\r\n\r\n{body}",body.len());
+    let _ = write!(stream,"HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\n{extra}Connection: close\r\nCache-Control: no-store\r\nReferrer-Policy: same-origin\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'\r\n\r\n{body}",body.len());
 }
 
 fn change(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &'static str> {

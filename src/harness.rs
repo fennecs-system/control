@@ -842,19 +842,31 @@ mod tests {
         let server = std::env::var("CONTROL_QA_URL").expect("Use an isolated server");
         let mut hive = Hive::connect(&server).unwrap();
         let before = hive.tool("control.chats.list", json!({})).unwrap();
-        let page = hive
+        let response = hive
             .client
             .get(format!("{server}/chats?discuss=knowledge"))
             .send()
-            .unwrap()
-            .text()
             .unwrap();
+        assert_eq!(response.headers()["referrer-policy"], "same-origin");
+        let page = response.text().unwrap();
         assert!(page.contains("design of Knowledge"));
         assert!(!page.contains("right-panel"));
+        assert_eq!(hive.tool("control.chats.list", json!({})).unwrap(), before);
+        for origin in ["null", "https://foreign.example"] {
+            let rejected = hive
+                .client
+                .post(format!("{server}/chats"))
+                .header("origin", origin)
+                .form(&[("composition", "1")])
+                .send()
+                .unwrap();
+            assert_eq!(rejected.status().as_u16(), 403);
+        }
         assert_eq!(hive.tool("control.chats.list", json!({})).unwrap(), before);
         let result = hive
             .client
             .post(format!("{server}/chats"))
+            .header("origin", &server)
             .form(&[
                 ("composition", "1"),
                 ("lens_engineering", "engineering"),
@@ -866,6 +878,16 @@ mod tests {
         assert_eq!(result.status().as_u16(), 303);
         let path = result.headers()["location"].to_str().unwrap();
         let id = path.strip_prefix("/chat/").unwrap();
+        let page = hive.client.get(format!("{server}{path}")).send().unwrap();
+        assert_eq!(page.headers()["referrer-policy"], "same-origin");
+        let invalid = hive
+            .client
+            .post(format!("{server}/chat/{id}/messages"))
+            .header("origin", &server)
+            .form(&[("message", "")])
+            .send()
+            .unwrap();
+        assert_eq!(invalid.status().as_u16(), 400); // Reaches validation, not the origin rejection.
         let detail = hive.tool("control.chat.read", json!({"id":id})).unwrap();
         assert_eq!(detail["lenses"], json!(["engineering", "research"]));
         assert_eq!(detail["design_context"], "knowledge");
@@ -873,6 +895,7 @@ mod tests {
         let result = hive
             .client
             .post(format!("{server}/chat/{id}/lenses"))
+            .header("origin", &server)
             .form(&[("composition", "1")])
             .send()
             .unwrap();
