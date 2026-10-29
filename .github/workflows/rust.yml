@@ -27,6 +27,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: cachix/install-nix-action@d9186cbdca7adedf113a159fa91f725a27866771 # v31
+      - name: Check setup app
+        run: nix run .#setup -- --help
       - name: Rust tests
         run: nix develop --command cargo test --locked --workspace
       - name: Rust UI tests
