@@ -191,11 +191,10 @@ fn attach_composer(
             }
             if event.key() == "Enter" && !event.shift_key() {
                 event.prevent_default();
-                if !event.repeat() && !value.trim().is_empty() {
-                    if let Some(form) = target.input.form() {
+                if !event.repeat() && !value.trim().is_empty()
+                    && let Some(form) = target.input.form() {
                         let _ = form.request_submit();
                     }
-                }
             }
         });
     input.add_event_listener_with_callback("keydown", handler.as_ref().unchecked_ref())?;
@@ -238,17 +237,15 @@ fn attach_transcript(document: &web_sys::Document) -> Result<(), JsValue> {
             let mut details = Vec::new();
             if let Ok(nodes) = body.query_selector_all("details") {
                 for index in 0..nodes.length() {
-                    if let Some(node) = nodes.item(index).and_then(|n| n.dyn_into::<web_sys::HtmlDetailsElement>().ok()) {
-                        if let Some(key) = node.get_attribute("data-transcript-key") { details.push((key, node.open())); }
-                    }
+                    if let Some(node) = nodes.item(index).and_then(|n| n.dyn_into::<web_sys::HtmlDetailsElement>().ok())
+                        && let Some(key) = node.get_attribute("data-transcript-key") { details.push((key, node.open())); }
                 }
             }
             body.set_inner_html(&new_body.inner_html());
             if let Ok(nodes) = body.query_selector_all("details") {
                 for index in 0..nodes.length() {
-                    if let Some(node) = nodes.item(index).and_then(|n| n.dyn_into::<web_sys::HtmlDetailsElement>().ok()) {
-                        if let Some((_, open)) = node.get_attribute("data-transcript-key").and_then(|key|details.iter().find(|(saved,_)|*saved==key)) { node.set_open(*open); }
-                    }
+                    if let Some(node) = nodes.item(index).and_then(|n| n.dyn_into::<web_sys::HtmlDetailsElement>().ok())
+                        && let Some((_, open)) = node.get_attribute("data-transcript-key").and_then(|key|details.iter().find(|(saved,_)|*saved==key)) { node.set_open(*open); }
                 }
             }
             scroller.set_scroll_top(if at_end { scroller.scroll_height() } else { top });

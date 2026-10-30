@@ -17,7 +17,7 @@ let
     mkdir -p $out/bin src/browser
     cp ${./main.rs} src/browser/main.rs
     cp ${../platform-flags.rs} src/platform-flags.rs
-    rustc --edition=2021 -O src/browser/main.rs -o $out/bin/control-browser
+    rustc --edition=2024 -O src/browser/main.rs -o $out/bin/control-browser
   '';
 in pkgs.dockerTools.buildLayeredImage {
   name = "control-browser";

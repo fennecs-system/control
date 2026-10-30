@@ -569,11 +569,10 @@ impl Bridge {
                 } else if identity::authorize(&actor, Action::Task).is_ok() {
                     let _=self.reply(route.channel,"Only the architect can request Control source changes. You can still DM me a normal task in your own isolated workspace.");
                 }
-            } else if let Some(reason) = rejected(&row, route, self.bot_id) {
-                if route.recipient.and_then(|user| route.actor(user)).is_some_and(|actor| identity::authorize(&actor, Action::Task).is_ok()) {
+            } else if let Some(reason) = rejected(&row, route, self.bot_id)
+                && route.recipient.and_then(|user| route.actor(user)).is_some_and(|actor| identity::authorize(&actor, Action::Task).is_ok()) {
                     let _ = self.reply(route.channel, reason);
                 }
-            }
             cursors.insert(channel.clone(), id.to_string());
         }
         Ok(true)

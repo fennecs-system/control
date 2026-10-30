@@ -5,13 +5,13 @@ let
     mkdir -p $out/bin src/playground
     cp ${../tools/playground/main.rs} src/playground/main.rs
     cp ${../tools/platform-flags.rs} src/platform-flags.rs
-    rustc --edition=2021 -O src/playground/main.rs -o $out/bin/control-playground
+    rustc --edition=2024 -O src/playground/main.rs -o $out/bin/control-playground
   '';
   roomMcp = pkgs.runCommand "control-room-mcp" { nativeBuildInputs = [ pkgs.rustc pkgs.stdenv.cc ]; } ''
     mkdir -p $out/bin src/room-mcp
     cp ${../tools/room-mcp/main.rs} src/room-mcp/main.rs
     cp ${../tools/platform-flags.rs} src/platform-flags.rs
-    rustc --edition=2021 -O src/room-mcp/main.rs -o $out/bin/control-room-mcp
+    rustc --edition=2024 -O src/room-mcp/main.rs -o $out/bin/control-room-mcp
   '';
 in
 pkgs.dockerTools.buildLayeredImage {

@@ -135,8 +135,8 @@ fn request_with_save(
         .last()
         .and_then(|a| a.workspace_id.clone())
         .ok_or("No active attempt identity.")?;
-    if let Some(d) = &run.delegation {
-        if d.generation == generation || d.child.is_some() {
+    if let Some(d) = &run.delegation
+        && (d.generation == generation || d.child.is_some()) {
             return if d.generation == generation && d.nonce == nonce && d.input == input {
                 Ok(
                     json!({"status":"pausing","instruction":"Stop work. Control resumes you automatically after the child finishes."}),
@@ -145,7 +145,6 @@ fn request_with_save(
                 Err("This attempt already delegated work.")
             };
         }
-    }
     if run.question.as_ref().is_some_and(|q| q.answer.is_none()) {
         return Err("Answer the pending design question before delegation.");
     }

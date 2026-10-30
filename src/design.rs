@@ -103,8 +103,8 @@ fn ask_with_save(
         .last()
         .and_then(|a| a.workspace_id.clone())
         .ok_or("No active attempt identity.")?;
-    if let Some(q) = &run.question {
-        if q.generation == generation {
+    if let Some(q) = &run.question
+        && q.generation == generation {
             return if q.nonce == nonce && q.input == input {
                 Ok(
                     json!({"question_id":q.id,"status":"pausing","instruction":"Stop work. Control will resume this task when the user answers."}),
@@ -113,7 +113,6 @@ fn ask_with_save(
                 Err("This attempt already has a design question.")
             };
         }
-    }
     let digest = ring::digest::digest(
         &ring::digest::SHA256,
         format!("{generation}:{nonce}").as_bytes(),

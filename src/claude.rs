@@ -437,11 +437,10 @@ pub fn execute(
     let generation = id.to_owned();
     let output = std::thread::spawn(move || {
         capture_with(stdout, |event| {
-            if let Some((s, r)) = &live {
-                if let Ok(mut s) = s.lock() {
+            if let Some((s, r)) = &live
+                && let Ok(mut s) = s.lock() {
                     crate::worker::record_activity_for(&mut s, r, &generation, event);
                 }
-            }
         }, &flag)
     });
     let environment = crate::worker::ENVIRONMENT_GUIDANCE;
@@ -501,11 +500,10 @@ pub fn execute(
         if timed_out {
             return Err(("failed", crate::worker::timeout_message(deadline)));
         }
-        if let Err(e) = &result {
-            if e.to_string().starts_with("Claude ended with") || bad_tools.load(std::sync::atomic::Ordering::Relaxed) {
+        if let Err(e) = &result
+            && (e.to_string().starts_with("Claude ended with") || bad_tools.load(std::sync::atomic::Ordering::Relaxed)) {
                 return Err(failed(&e.to_string()));
             }
-        }
         return Err(failed(&diagnose(&stderr)));
     }
     let (text, tokens) = result.map_err(|e| failed(&format!("{e} The previous workspace checkpoint is unchanged.")))?;

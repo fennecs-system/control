@@ -842,15 +842,14 @@ pub fn panel(state: &State, chat: &str) -> String {
             && r.attempts
                 .last()
                 .is_some_and(|a| a.github_source.is_some() && a.artifact.is_some())
-    }) {
-        if !state
+    })
+        && !state
             .github_publications
             .iter()
             .any(|p| p.run == run.id && p.url.is_some())
         {
             html.push_str(&format!("<details class='project-picker' data-transcript-key='github-publication'><summary>Open pull request</summary><form method='post' target='_top' action='/chat/{chat}/github'><input type='hidden' name='run_id' value='{}'><label>Title<input name='title' value='{}' maxlength='200' required></label><label>Description<textarea name='body' maxlength='16000'></textarea></label><button>Open draft pull request</button></form></details>",crate::escape(&run.id),crate::escape(&run.objective.chars().take(160).collect::<String>())));
         }
-    }
     html
 }
 pub fn http(
