@@ -64,7 +64,7 @@ Run `./target/release/control <command>`:
 | Command | Purpose |
 | --- | --- |
 | `serve` | Start the local web and MCP server. |
-| `open` | Open an authenticated web session. |
+| `open` / `open --link` | Open an authenticated web session, or print a one-use link for another browser. |
 | `tui` | Open terminal chat. Enter sends; Alt+Enter adds a newline; Ctrl+Q quits. |
 | `doctor` | Check local prerequisites and sandbox isolation without calling a model. |
 | `config init` / `config path` | Initialize or locate private configuration. |

@@ -144,7 +144,8 @@ Replace every `@…@` placeholder with your own paths and username before loadin
 them as user services. They contain no provider or Discord credential.
 
 The website requires a local operator session. Run `control open` to open a
-single-use sign-in link; Discord access does not grant that session. Only
+single-use sign-in link. Use `control open --link` to print the link and paste it
+into a browser of your choice; the link works once. Discord access does not grant that session. Only
 loopback binding is supported. Tailscale/remote publishing is not configured.
 
 ## Discord
