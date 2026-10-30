@@ -215,6 +215,22 @@ framing/script permissions and command behavior while consolidating them.
   subscription use and node authority remain separate; operators must comply with
   provider terms. Authorized API-backed paths with budgets are the unattended path.
 
+## Next: visible multi-model review turns
+
+Expose the existing author/judge pattern in chat: named participants with explicit
+provider/model selection, isolated contexts, and visible review/handoff turns.
+Pass selected task evidence and bounded feedback between participants, rather than
+copying every participant's conversation history. Allow the user to steer the
+discussion and accept an outcome. Reuse durable delegation and authority ceilings;
+review evidence does not grant merge/deploy permission. Make this useful for
+`/improve` before adding a general autonomous discussion system.
+
+Prefer small typed lifecycle states, validated identifiers and explicit
+state/event/effect transitions with independent tests. Verify narrow invariants
+where useful; do not claim types can prove arbitrary model behavior. Keep single
+node reliability and the Minecraft/bot demonstrations ahead of distributed
+frameworks or broad rewrites.
+
 ## Later: personas as persistent bots
 
 A bot is a supervised instance using a persona, tools, state and explicit grants,
@@ -233,8 +249,9 @@ declarative-directive model; keep its configuration distinct from its chat histo
 - **Bot spawning:** give bots a tool to request children with bounded depth,
   concurrency, token/spend/storage budgets and inherited authority ceilings.
   A child cannot grant itself or its parent more access. Existing human `/spawn`
-  and bounded worker-to-worker delegation are implemented. Persistent autonomous
-  bot spawning and independent concurrency are not.
+  and bounded worker-to-worker delegation are implemented, with bounded parallel
+  model runs. Persistent autonomous bots and independent service lifetimes remain
+  planned.
 - **Human questions:** reuse durable design/approval requests and Discord delivery,
   with recipient/run identity, expiry and restart-safe answers. Important missing
   information can reach the operator away from the browser; channel messages or

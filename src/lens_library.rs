@@ -228,7 +228,7 @@ pub fn render(
     html
 }
 fn response(stream: &mut impl Write, status: &str, body: &str, extra: &str, mime: &str) {
-    let _=write!(stream,"HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\n{extra}Connection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'\r\n\r\n{body}",body.len());
+    let _ = control_http::respond(stream, status, mime, body.as_bytes(), extra, control_http::Policy::Page);
 }
 pub fn handle(
     stream: &mut impl Write,

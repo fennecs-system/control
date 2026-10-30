@@ -186,7 +186,7 @@ fn read_until(stream: &mut TcpStream, data: &mut Vec<u8>, deadline: std::time::I
 fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::Access>) {
     let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(3)));
     if shutdown::requested() {
-        let _ = stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 20\r\nConnection: close\r\n\r\nControl is stopping.");
+        let _ = control_http::respond(&mut stream, "503 Service Unavailable", "text/plain", b"Control is stopping.", "", control_http::Policy::Page);
         return;
     }
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -218,9 +218,7 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         .find(|(k, _)| k.eq_ignore_ascii_case("origin"))
         .map(|(_, v)| v.trim());
     if !local_host || origin.is_some_and(|v| v != format!("http://{host}")) {
-        let _ = stream.write_all(
-            b"HTTP/1.1 403 Forbidden\r\nContent-Length: 9\r\nConnection: close\r\n\r\nForbidden",
-        );
+        let _ = control_http::respond(&mut stream, "403 Forbidden", "text/plain", b"Forbidden", "", control_http::Policy::Page);
         return;
     }
     if access.gate(&mut stream, method, target, &header) {
@@ -229,11 +227,11 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
     let length = match body_length(&header) {
         Body::Length(length) => length,
         Body::Chunked => {
-            let _ = stream.write_all(b"HTTP/1.1 411 Length Required\r\nContent-Length: 30\r\nConnection: close\r\n\r\nSend a fixed Content-Length.\r\n");
+            let _ = control_http::respond(&mut stream, "411 Length Required", "text/plain", b"Send a fixed Content-Length.\r\n", "", control_http::Policy::Page);
             return;
         }
         Body::Invalid => {
-            let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 25\r\nConnection: close\r\n\r\nInvalid Content-Length.\r\n");
+            let _ = control_http::respond(&mut stream, "400 Bad Request", "text/plain", b"Invalid Content-Length.\r\n", "", control_http::Policy::Page);
             return;
         }
     };
@@ -247,7 +245,7 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         32768
     };
     if length > limit {
-        let _=stream.write_all(b"HTTP/1.1 413 Content Too Large\r\nContent-Length: 17\r\nConnection: close\r\n\r\nRequest too large");
+        let _ = control_http::respond(&mut stream, "413 Content Too Large", "text/plain", b"Request too large", "", control_http::Policy::Page);
         return;
     }
     if !read_until(&mut stream, &mut data, deadline, usize::MAX, |d| d.len() >= header_end + length) {
@@ -285,7 +283,7 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         ));
         let selected = lens_ui::normalize(f.get("lens").map(String::as_str).unwrap_or("none"));
         let location = lens_ui::return_to(f.get("next").map(String::as_str).unwrap_or("/"));
-        let _ = write!(stream,"HTTP/1.1 303 See Other\r\nLocation: {location}\r\n{}Content-Length: 0\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",lens_ui::cookie(selected));
+        let _ = control_http::respond(&mut stream, "303 See Other", "text/plain", b"", &format!("Location: {location}\r\n{}",lens_ui::cookie(selected)), control_http::Policy::Page);
         return;
     }
     if method == "GET" && serve_stylesheet(&mut stream, path) {
@@ -305,7 +303,7 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
                 ),
                 Err(message) => ("400 Bad Request", "", message.to_owned()),
             };
-            let _ = write!(stream,"HTTP/1.1 {status}\r\n{extra}Content-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",body.len());
+            let _ = control_http::respond(stream, status, "text/plain; charset=utf-8", body.as_bytes(), extra, control_http::Policy::Page);
             return;
         }
         if lens_library::handle(
@@ -381,7 +379,7 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
                     state.chats[index].revision = revision;
                 }
                 let body = error_page("Could not persist the local change.", location);
-                let _ = write!(stream, "HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}", body.len());
+                let _ = control_http::respond(stream, "500 Internal Server Error", "text/html; charset=utf-8", body.as_bytes(), "", control_http::Policy::Page);
                 return;
             }
             (
@@ -410,8 +408,7 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         } else {
             String::new()
         };
-        let response = format!("HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\n{extra}{preference}Connection: close\r\nCache-Control: no-store\r\nReferrer-Policy: same-origin\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'\r\n\r\n{body}", body.len());
-        let _ = stream.write_all(response.as_bytes());
+        let _ = control_http::respond(stream, status, mime, body.as_bytes(), &format!("{extra}{preference}"), control_http::Policy::Page);
     });
 }
 
@@ -427,7 +424,7 @@ fn state_response(
         Ok(mut state) => respond(&mut response, &mut state),
         Err(_) => {
             let body = "State unavailable. Restart Control after checking.";
-            let _ = write!(response, "HTTP/1.1 503 Service Unavailable\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n{body}", body.len());
+            let _ = control_http::respond(&mut response, "503 Service Unavailable", "text/plain", body.as_bytes(), "", control_http::Policy::Page);
         }
     }
     let _ = stream.write_all(&response);
@@ -442,7 +439,7 @@ fn serve_stylesheet(stream: &mut impl Write, path: &str) -> bool {
         "/style.css" => include_str!("../assets/style.css"),
         _ => return false,
     };
-    let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/css; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\n\r\n{body}", body.len());
+    let _ = control_http::respond(stream, "200 OK", "text/css; charset=utf-8", body.as_bytes(), "", control_http::Policy::Asset);
     true
 }
 

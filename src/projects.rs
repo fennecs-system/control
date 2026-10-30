@@ -649,7 +649,7 @@ pub fn http(
         .filter(|id| crate::chat::valid_id(id))
     {
         if method != "POST" {
-            let _=stream.write_all(b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            let _ = control_http::respond(stream, "405 Method Not Allowed", "text/plain", b"", "", control_http::Policy::Restricted);
             return true;
         }
         let fields = crate::fields(&String::from_utf8_lossy(body));
@@ -662,7 +662,7 @@ pub fn http(
             Ok(()) => ("303 See Other", String::new()),
             Err(error) => ("400 Bad Request", crate::escape(&error.to_string())),
         };
-        let _=write!(stream,"HTTP/1.1 {status}\r\nLocation: /chat/{id}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{text}",text.len());
+        let _ = control_http::respond(stream, status, "text/plain", text.as_bytes(), &format!("Location: /chat/{id}\r\n"), control_http::Policy::Restricted);
         return true;
     }
     let Some(id) = path
@@ -728,15 +728,15 @@ pub fn http(
     })();
     match result {
         Ok(body) if method == "GET" => {
-            let _=write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nContent-Security-Policy: default-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'self'\r\nConnection: close\r\n\r\n{body}",body.len());
+            let _ = control_http::respond(stream, "200 OK", "text/html; charset=utf-8", body.as_bytes(), "", control_http::Policy::RestrictedEmbedded);
         }
         Ok(_) => {
             let location = format!("/chat/{id}");
-            let _=write!(stream,"HTTP/1.1 303 See Other\r\nLocation: {location}\r\nContent-Length: 0\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n");
+            let _ = control_http::respond(stream, "303 See Other", "text/plain", b"", &format!("Location: {location}\r\n"), control_http::Policy::Restricted);
         }
         Err(error) => {
             let body = crate::error_page(&error.to_string(), &format!("/chat/{id}/project"));
-            let _=write!(stream,"HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nContent-Security-Policy: default-src 'none'; style-src 'self'; base-uri 'none'; frame-ancestors 'none'\r\nConnection: close\r\n\r\n{body}",body.len());
+            let _ = control_http::respond(stream, "400 Bad Request", "text/html; charset=utf-8", body.as_bytes(), "", control_http::Policy::Restricted);
         }
     }
     true

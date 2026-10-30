@@ -112,6 +112,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "control-context",
+ "control-http",
  "crossterm",
  "libc",
  "ratatui",
@@ -128,6 +129,13 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "control-http"
+version = "0.1.0"
+dependencies = [
+ "http",
 ]
 
 [[package]]

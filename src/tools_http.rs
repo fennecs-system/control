@@ -1,9 +1,9 @@
 use crate::{escape, toolbox};
 use serde_json::{json, Value};
-use std::{io::Write, net::TcpStream};
+use std::net::TcpStream;
 
 fn respond(stream: &mut TcpStream, status: &str, mime: &str, body: &str) {
-    let _ = write!(stream, "HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nReferrer-Policy: same-origin\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'\r\nConnection: close\r\n\r\n{body}", body.len());
+    let _ = control_http::respond(stream, status, mime, body.as_bytes(), "", control_http::Policy::Embedded);
 }
 pub fn handle(
     stream: &mut TcpStream,

@@ -321,7 +321,7 @@ pub fn render(state: &State, selection: &str, saved: Option<u64>) -> String {
     )
 }
 fn respond(stream: &mut impl Write, status: &str, body: &str, extra: &str) {
-    let _=write!(stream,"HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\n{extra}Cache-Control: no-store\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'\r\n\r\n{body}",body.len());
+    let _ = control_http::respond(stream, status, "text/html; charset=utf-8", body.as_bytes(), extra, control_http::Policy::Page);
 }
 pub fn handle(
     stream: &mut impl Write,
