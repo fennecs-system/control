@@ -25,12 +25,11 @@ use std::{
 
 const VERSION: &str = "2025-11-25";
 const MUTATIONS: [&str; 6] = ["control.chat.create", "control.chat.send", "control.room.post", "control.chat.lenses", "control.project.request", "control_github_open_pr"];
-const CHAT_COMMANDS: [&str; 8] = ["/improve", "/improve off", "/steer", "/btw", "/spawn", "/cancel", "/answer", "/open"];
+use control_context::commands;
 
 fn command_line(text: &str) -> Line<'static> {
-    let prefix = CHAT_COMMANDS.iter().rev().find(|command| text.strip_prefix(**command).is_some_and(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace)));
-    if let Some(command) = prefix {
-        Line::from(vec![Span::styled((*command).to_owned(), Style::default().fg(Color::Rgb(181, 160, 255))), Span::raw(text[command.len()..].to_owned())])
+    if let Some(command) = commands::parse(text).filter(|c| c.highlight.start == 0) {
+        Line::from(vec![Span::styled(text[command.highlight.clone()].to_owned(), Style::default().fg(Color::Rgb(181, 160, 255))), Span::raw(text[command.highlight.end..].to_owned())])
     } else {
         Line::from(text.to_owned())
     }
@@ -323,7 +322,7 @@ impl App {
                 self.inspector=None;self.status=format!("Future messages: {}",lens_label(&self.detail));self.follow=true;
             }
             _ if text.starts_with("/resume ") => { self.active = text[8..].trim().into(); self.inspector=None;self.refresh(hive)?; }
-            _ if text.starts_with('/') && !CHAT_COMMANDS.iter().any(|command| text.strip_prefix(command).is_some_and(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace)))=>return Err(failure("Unknown command. Use /help.")),
+            _ if text.starts_with('/') && commands::parse(&text).is_none()=>return Err(failure("Unknown command. Use /help.")),
             _ if !text.is_empty() => {
                 if text.chars().count() > 2000 { return Err(failure("Messages are limited to 2000 characters.")); }
                 if self.active.is_empty() { self.new_chat(hive)?; }
@@ -697,12 +696,12 @@ pub fn run() -> io::Result<()> {
                         app.input.pop();
                     }
                     KeyCode::Tab => {
-                        let matches: Vec<_> = CHAT_COMMANDS.iter().filter(|command| command.starts_with(&app.input)).collect();
+                        let matches: Vec<_> = commands::completions(&app.input).into_iter().map(|i|commands::DEFINITIONS[i].text).collect();
                         if let [command] = matches.as_slice() {
                             app.input = format!("{command} ");
                             app.status.clear();
                         } else if !matches.is_empty() && app.input.starts_with('/') {
-                            app.status = matches.iter().map(|command| **command).collect::<Vec<_>>().join(" · ");
+                            app.status = matches.join(" · ");
                         }
                     }
                     KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {

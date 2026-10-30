@@ -1,5 +1,6 @@
 //! Pure lens selection. Resource permissions remain outside this function.
 mod library;
+pub mod commands;
 pub use library::{valid_id, Definition, DocumentInput, LensVersion, Library, Resolved};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tool {

@@ -7,6 +7,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::{SystemTime, UNIX_EPOCH};
+use control_context::commands::{self, Kind};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Message {
@@ -170,11 +171,8 @@ fn command_menu_for(task: bool, improve: bool) -> String {
         return String::new();
     }
     let mut menu = "<div class='chat-commands' id='chat-commands' role='listbox' aria-label='Chat commands' hidden>".to_owned();
-    let mut commands = vec![("open", "/open", "Open a folder on this node"), ("steer", "/steer", "Queue a direction for the next turn"), ("btw", "/btw", "Ask in a separate conversation"), ("spawn", "/spawn", "Start an independent agent"), ("cancel", "/cancel", "Stop the current run"), ("answer", "/answer", "Answer a design question")];
-    if improve {
-        commands.splice(0..0, [("improve", "/improve", "Discuss and change Control"), ("improve-off", "/improve off", "Return to regular chat")]);
-    }
-    for (id, command, description) in commands {
+    for definition in commands::DEFINITIONS.iter().filter(|d| !d.architect || improve) {
+        let (id, command, description) = (definition.id, definition.text, definition.description);
         menu.push_str(&format!("<button type='button' role='option' id='command-{id}' data-command='{command}' aria-selected='false'><span>{command}</span><small>{description}</small></button>"));
     }
     menu.push_str("</div>");
@@ -311,7 +309,7 @@ pub fn send(state: &mut State, id: &str, text: &str, source: &str) -> Result<(),
     if crate::shutdown::requested() {
         return Err("Control is stopping; try again after restart.");
     }
-    if let Some(path) = text.trim().strip_prefix("/open").filter(|tail|tail.is_empty()||tail.starts_with(char::is_whitespace)) {
+    if let Some(path) = commands::tail(text.trim(), Kind::Open) {
         if let Some(named)=path.trim().strip_prefix("--as ") {
             let (name,path)=named.split_once(char::is_whitespace).ok_or("Use /open --as NAME /absolute/path.")?;
             crate::projects::request_named(state,id,path,Some(name))?;
@@ -321,14 +319,14 @@ pub fn send(state: &mut State, id: &str, text: &str, source: &str) -> Result<(),
         session.project.as_mut().unwrap().message_index=Some(session.messages.len()-1);
         return Ok(());
     }
-    if let Some(answer) = text.trim().strip_prefix("/answer").filter(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace)) {
+    if let Some(answer) = commands::tail(text.trim(), Kind::Answer) {
         let (question, answer) = answer.trim().split_once(char::is_whitespace).ok_or("Use /answer QUESTION_ID followed by an option number or your direction.")?;
         return crate::design::answer(state, id, Some(question), answer.trim(), source);
     }
     if !text.trim().starts_with('/') && crate::design::waiting(state,id).is_some() {
         return crate::design::answer(state,id,None,text,source);
     }
-    if let Some(target) = text.trim().strip_prefix("/cancel").filter(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace)) {
+    if let Some(target) = commands::tail(text.trim(), Kind::Cancel) {
         let session = state.chats.iter().find(|s| s.id == id).ok_or("Chat not found.")?;
         let actor = session.actor.clone();
         let target = target.trim();
@@ -349,7 +347,7 @@ pub fn send(state: &mut State, id: &str, text: &str, source: &str) -> Result<(),
         session.revision = session.revision.saturating_add(1);
         return Ok(());
     }
-    if let Some(question) = text.trim().strip_prefix("/btw").filter(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace)) {
+    if let Some(question) = commands::tail(text.trim(), Kind::Btw) {
         if question.trim().is_empty() || text.trim().chars().count() > 2000 {
             return Err("Use /btw followed by a side question (up to 2000 characters).");
         }
@@ -359,7 +357,7 @@ pub fn send(state: &mut State, id: &str, text: &str, source: &str) -> Result<(),
         session.revision = session.revision.saturating_add(1);
         return Ok(());
     }
-    if let Some(objective) = text.trim().strip_prefix("/spawn").filter(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace)) {
+    if let Some(objective) = commands::tail(text.trim(), Kind::Spawn) {
         let child = fork(state, id, objective, source)?;
         let session = state.chats.iter_mut().find(|s| s.id == id).unwrap();
         session.messages.push(Message { text: text.trim().into(), run_id: None, reply: format!("Agent conversation: /chat/{child}") });
@@ -409,7 +407,7 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
         session.revision = session.revision.saturating_add(1);
         return Ok(());
     }
-    let steering = if literal { None } else { text.trim().strip_prefix("/steer").filter(|s| s.is_empty() || s.starts_with(char::is_whitespace)) };
+    let steering = if literal { None } else { commands::tail(text.trim(), Kind::Steer) };
     if steering.is_some_and(|s| s.trim().is_empty()) {
         return Err("Use /steer followed by a direction for the next turn.");
     }
@@ -623,32 +621,10 @@ pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
     Ok(format!("<section class='conversation'><div class='conversation-heading'>{}<h2>{}</h2>{mode}<span class='conversation-links'>{room}<a href='/chat/{id}/artifacts'>Artifacts ↗</a></span></div><iframe class='chat-transcript' src='/chat/{id}/transcript#latest' title='Conversation'></iframe><form class='conversation-composer' id='session-message' method='post' action='/chat/{id}/messages'><textarea name='message' required maxlength='2000' rows='3' aria-label='Message' placeholder='Message Control…'></textarea>{}<div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></section>",crate::navigation::conversation_button(state,id),escape(&session.title),command_menu(&session.actor),crate::lens_library::choices(state,&lenses,"session-message")))
 }
 fn command_text(text: &str) -> String {
-    let trimmed = text.trim_start();
-    for command in ["/steer", "/btw", "/spawn", "/cancel", "/answer", "/open"] {
-        if let Some(rest) = trimmed.strip_prefix(command).filter(|s| s.is_empty() || s.starts_with(char::is_whitespace)) {
-            return format!("{}<span class='chat-command'>{command}</span>{}", escape(&text[..text.len() - trimmed.len()]), escape(rest));
-        }
-    }
-    if let Some(rest) = trimmed
-        .strip_prefix("/improve")
-        .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
-    {
-        let command_end = [" off", " on"]
-            .into_iter()
-            .find(|suffix| {
-                rest.strip_prefix(suffix)
-                    .is_some_and(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace))
-            })
-            .unwrap_or("");
-        format!(
-            "{}<span class='chat-command'>/improve{}</span>{}",
-            escape(&text[..text.len() - trimmed.len()]),
-            command_end,
-            escape(&rest[command_end.len()..])
-        )
-    } else {
-        escape(text)
-    }
+    if let Some(command) = commands::parse(text) {
+        let span = command.highlight;
+        format!("{}<span class='chat-command'>{}</span>{}",escape(&text[..span.start]),escape(&text[span.clone()]),escape(&text[span.end..]))
+    } else { escape(text) }
 }
 pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
     let session=state.chats.iter().find(|c|c.id==id).ok_or("Chat not found.")?;
@@ -685,7 +661,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
             Some(reason) => format!("{status}<p class='message-status'>{}</p>", escape(reason)),
             None => status,
         };
-        let folder_request=message.run_id.is_none() && message.text.trim().strip_prefix("/open").is_some_and(|tail|tail.is_empty()||tail.starts_with(char::is_whitespace));
+        let folder_request=message.run_id.is_none() && commands::tail(message.text.trim(), Kind::Open).is_some();
         let opened=session.project.as_ref().and_then(|p|p.mounts.iter().find(|m|m.message_index==Some(position)));
         let folder_reply=folder_request.then(||opened.map(|m|format!("Opened /workspace/{}",m.name)).unwrap_or_else(||"Folder request replaced by a later request.".into()));
         let reply = folder_reply.as_deref().unwrap_or(run_reply);
