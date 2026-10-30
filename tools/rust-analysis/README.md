@@ -61,6 +61,12 @@ failure returned a nonzero exit and `success:false`. Two launcher safety tests p
 
 ## Profiling next
 
+Control now exposes an optimized std-only microbenchmark through
+`control.rust.bench`, using the existing offline playground container. See
+[performance checks](../../docs/PERFORMANCE.md) for MCP inputs, limits and
+whole-project benchmark commands. This does not add MCP execution to the older
+standalone formatting launcher above.
+
 Flamegraphs need an actual workload and sampled stacks. Linux `perf` additionally
 depends on the VM kernel's performance events, host policy, and symbol support;
 macOS containers use the Linux VM, so they cannot sample native macOS processes.

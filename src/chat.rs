@@ -552,10 +552,10 @@ pub fn omitted_history(state: &State, run: &str) -> usize {
         .unwrap_or(0)
 }
 fn response<'a>(message: &'a Message, runtime: &'a Runtime) -> (&'a str, &'a str) {
-    message
-        .run_id
-        .as_deref()
-        .and_then(|id| runtime.runs.iter().find(|r| r.id == id))
+    response_from_run(message,message.run_id.as_deref().and_then(|id|runtime.runs.iter().find(|r|r.id==id)))
+}
+fn response_from_run<'a>(message:&'a Message,run:Option<&'a crate::runtime::Run>)->(&'a str,&'a str) {
+    run
         .map(|r| {
             (
                 r.status.as_str(),
@@ -567,6 +567,18 @@ fn response<'a>(message: &'a Message, runtime: &'a Runtime) -> (&'a str, &'a str
         })
         .unwrap_or(("completed", &message.reply))
 }
+fn indexed_runs<'a>(runtime:&'a Runtime,messages:&'a [Message])->std::collections::HashMap<&'a str,Option<&'a crate::runtime::Run>> {
+    // Index only the requested conversation, without cloning IDs or retaining
+    // every unrelated historical run. First match keeps the old lookup semantics.
+    let mut runs=messages.iter().filter_map(|m|m.run_id.as_deref()).map(|id|(id,None)).collect::<std::collections::HashMap<_,_>>();
+    let mut remaining=runs.len();
+    if remaining==0 {return runs;}
+    for run in &runtime.runs {
+        if let Some(slot)=runs.get_mut(run.id.as_str()).filter(|slot|slot.is_none()) {*slot=Some(run);remaining-=1;}
+        if remaining==0 {break;}
+    }
+    runs
+}
 pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
     let session = state
         .chats
@@ -574,10 +586,11 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
         .find(|s| s.id == id)
         .ok_or("Chat not found.")?;
     identity::authorize(&session.actor, Action::Task)?;
+    let runs=indexed_runs(&state.runtime,&session.messages);
     Ok(
         json!({"id":session.id,"title":session.title,"previews":state.previews.iter().filter(|p|p.chat==id && p.status!="stopped").map(|p|json!({"id":p.id,"url":p.url,"status":p.status})).collect::<Vec<_>>(),"project":session.project,"project_worktree":session.project.as_ref().and_then(|p|p.head.as_deref()).and_then(|id|crate::runtime::workspace(id).ok()),"parent_chat":session.parent_chat,"mode":if session.improve_mode {"improve"} else {"chat"},"room":session.room,"lens":session.lens,"lenses":selected_lenses(session),"design_context":session.design_context,"revision":session.revision,"messages": session.messages.iter().map(|m| {
-        let (status, reply) = response(m, &state.runtime);
-        let run = m.run_id.as_ref().and_then(|id| state.runtime.runs.iter().find(|r| &r.id == id));
+        let run = m.run_id.as_deref().and_then(|id|runs.get(id).copied().flatten());
+        let (status, reply) = response_from_run(m,run);
         json!({"text":m.text,"reply":reply,"status":status,"run_id":m.run_id,"kind":run.map(|r| &r.kind),"persona":run.and_then(|r|r.persona.as_ref()),"delegation":run.and_then(|r|r.delegation.as_ref()),"question":run.and_then(|r|r.question.as_ref()),"attempts":run.map(|r| &r.attempts)})
     }).collect::<Vec<_>>()}),
     )
@@ -639,20 +652,23 @@ fn command_text(text: &str) -> String {
     }
 }
 pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
-    let data = detail(state, id)?;
+    let session=state.chats.iter().find(|c|c.id==id).ok_or("Chat not found.")?;
+    identity::authorize(&session.actor,Action::Task)?;
+    let runs=indexed_runs(&state.runtime,&session.messages);
     let mut html = "<!doctype html><html lang='en'><head><meta charset='utf-8'><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'></head><body class='transcript'>".to_owned();
-    let session=state.chats.iter().find(|c|c.id==id).unwrap();
     let project_message=crate::projects::message_index(session);
     html.push_str(&crate::previews::links(state,id));
     html.push_str(&crate::github::panel(state,id));
-    let messages = data["messages"].as_array().unwrap();
+    let messages = &session.messages;
     for (position, message) in messages.iter().enumerate() {
-        let status = match message["status"].as_str().unwrap_or("") {
-            "queued" if message["kind"] == "steering" => "Queued · next turn",
+        let run=message.run_id.as_deref().and_then(|id|runs.get(id).copied().flatten());
+        let (run_status,run_reply)=response_from_run(message,run);
+        let status = match run_status {
+            "queued" if run.is_some_and(|r|r.kind=="steering") => "Queued · next turn",
             "queued" if state.runtime.paused.is_some() => "Queued · dispatch paused",
             "queued" => "Queued",
             "running" => "Working…",
-            "waiting" if message["delegation"].is_object() => "Delegated work",
+            "waiting" if run.is_some_and(|r|r.delegation.is_some()) => "Delegated work",
             "waiting" => "Your decision",
             "cancelling" => "Stopping…",
             "cancelled" => "Cancelled",
@@ -666,56 +682,54 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
         } else {
             format!("<span class='message-status' role='status'>{status}</span>")
         };
-        let status = match state.runtime.paused.as_deref().filter(|_| message["status"] == "queued") {
+        let status = match state.runtime.paused.as_deref().filter(|_| run_status == "queued") {
             Some(reason) => format!("{status}<p class='message-status'>{}</p>", escape(reason)),
             None => status,
         };
-        let folder_request=message["run_id"].is_null() && message["text"].as_str().is_some_and(|text|text.trim().strip_prefix("/open").is_some_and(|tail|tail.is_empty()||tail.starts_with(char::is_whitespace)));
+        let folder_request=message.run_id.is_none() && message.text.trim().strip_prefix("/open").is_some_and(|tail|tail.is_empty()||tail.starts_with(char::is_whitespace));
         let opened=session.project.as_ref().and_then(|p|p.mounts.iter().find(|m|m.message_index==Some(position)));
         let folder_reply=folder_request.then(||opened.map(|m|format!("Opened /workspace/{}",m.name)).unwrap_or_else(||"Folder request replaced by a later request.".into()));
-        let reply = folder_reply.as_deref().unwrap_or_else(||message["reply"].as_str().unwrap_or(""));
+        let reply = folder_reply.as_deref().unwrap_or(run_reply);
         let reply = reply.strip_prefix("Agent conversation: /chat/")
             .filter(|child| valid_id(child) && state.chats.iter().any(|c| c.id == *child && c.parent_chat.as_deref() == Some(id)))
             .map(|child| format!("<a href='/chat/{child}' target='_top'>Agent conversation ↗</a>"))
             .unwrap_or_else(|| escape(reply));
-        let question = message["run_id"].as_str().and_then(|id|state.runtime.runs.iter().find(|r| r.id == id))
+        let question = run
             .filter(|r| ["running","waiting","continued"].contains(&r.status.as_str()))
             .and_then(|r|r.question.as_ref().filter(|q|r.attempts.last().is_some_and(|a|a.workspace_id.as_deref() == Some(&q.generation))));
-        let body = question.map(|q|crate::design::render(q,id,message["status"] == "waiting"))
+        let body = question.map(|q|crate::design::render(q,id,run_status == "waiting"))
             .unwrap_or_else(||format!("<p class='preserve'>{reply}</p>"));
         let body = if project_message==Some(position) {format!("{}{}",if folder_request {String::new()}else{body},crate::projects::panel(state,id))}else{body};
-        html.push_str(&format!("<article class='user-message' aria-label='You'><p class='preserve'>{}</p></article><article class='assistant-message' aria-label='Control'>{status}{body}</article>", command_text(message["text"].as_str().unwrap_or(""))));
-        if let Some(child)=message["delegation"]["child"].as_str()
+        html.push_str(&format!("<article class='user-message' aria-label='You'><p class='preserve'>{}</p></article><article class='assistant-message' aria-label='Control'>{status}{body}</article>", command_text(&message.text)));
+        if let Some(child)=run.and_then(|r|r.delegation.as_ref()).and_then(|d|d.child.as_deref())
             .and_then(|run_id|state.runtime.runs.iter().find(|r|r.id==run_id))
             .and_then(|r|r.chat_id.as_deref()).filter(|child|valid_id(child)) {
             html.push_str(&format!("<p class='message-status'><a href='/chat/{}' target='_top'>Delegated conversation ↗</a></p>",escape(child)));
         }
-        if let Some(attempts) = message["attempts"].as_array() {
+        if let Some(attempts) = run.map(|r|&r.attempts) {
             for (index, attempt) in attempts.iter().enumerate() {
-                if let Some(count) = attempt["omitted_history"].as_u64().filter(|n| *n > 0) {
+                if let Some(count) = Some(attempt.omitted_history).filter(|n| *n > 0) {
                     html.push_str(&format!("<p class='message-status'>Context window · {count} earlier exchanges excluded from attempt {}. Chat history retained.</p>", index + 1));
                 }
-                let Some(events) = attempt["activity"].as_array().filter(|a| !a.is_empty()) else {
-                    continue;
-                };
-                for event in events.iter().filter(|event|event["kind"] == "file_change") {
-                    let patch=event["output"].as_str().unwrap_or("");
+                let events=&attempt.activity;
+                for event in events.iter().filter(|event|event.kind == "file_change") {
+                    let patch=&event.output;
                     if patch.is_empty() {continue;}
                     let mut body=String::new();
                     for line in patch.lines() {
                         let class=match control::diff::kind(line) {control::diff::Kind::Add=>"diff-add",control::diff::Kind::Remove=>"diff-remove",control::diff::Kind::Header=>"diff-header",control::diff::Kind::Context=>"diff-context"};
                         body.push_str(&format!("<span class='diff-line {class}'>{}</span>",escape(line)));
                     }
-                    html.push_str(&format!("<details class='edit-diff' data-transcript-key='{position}-{index}-diff-{}'{}><summary>Changes · attempt {} <span>{}</span></summary><pre aria-label='File changes'>{body}</pre></details>",escape(event["id"].as_str().unwrap_or("")),if position + 1 == messages.len() && index + 1 == attempts.len() {" open"} else {""},index+1,escape(event["text"].as_str().unwrap_or(""))));
+                    html.push_str(&format!("<details class='edit-diff' data-transcript-key='{position}-{index}-diff-{}'{}><summary>Changes · attempt {} <span>{}</span></summary><pre aria-label='File changes'>{body}</pre></details>",escape(&event.id),if position + 1 == messages.len() && index + 1 == attempts.len() {" open"} else {""},index+1,escape(&event.text)));
                 }
-                let events=events.iter().filter(|event|event["kind"] != "file_change").collect::<Vec<_>>();
-                if events.is_empty() {continue;}
+                let mut events=events.iter().filter(|event|event.kind != "file_change").enumerate().peekable();
+                if events.peek().is_none() {continue;}
                 html.push_str(&format!(
                     "<details class='run-activity' data-transcript-key='{position}-{index}-activity'{}><summary>Recent activity · attempt {}</summary>",
-                    if message["status"] == "running" && index + 1 == attempts.len() { " open" } else { "" }, index + 1
+                    if run_status == "running" && index + 1 == attempts.len() { " open" } else { "" }, index + 1
                 ));
-                for (event_index, event) in events.iter().enumerate() {
-                    html.push_str(&format!("<details class='command-activity' data-transcript-key='{position}-{index}-event-{event_index}'{}><summary><span>{}</span> <code>{}</code></summary><pre>{}</pre></details>", if event_index + 1 == events.len() {" open"} else {""}, escape(event["status"].as_str().unwrap_or("")), escape(event["text"].as_str().unwrap_or("")), escape(event["output"].as_str().unwrap_or(""))));
+                while let Some((event_index,event))=events.next() {
+                    html.push_str(&format!("<details class='command-activity' data-transcript-key='{position}-{index}-event-{event_index}'{}><summary><span>{}</span> <code>{}</code></summary><pre>{}</pre></details>", if events.peek().is_none() {" open"} else {""}, escape(&event.status), escape(&event.text), escape(&event.output)));
                 }
                 html.push_str("</details>");
             }
@@ -843,6 +857,24 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn conversation_index_preserves_first_matches_and_missing_run_replies() {
+        let mut state=State::default();let id=create(&mut state);
+        send(&mut state,&id,"Question","test").unwrap();
+        state.runtime.runs[0].status="completed".into();state.runtime.runs[0].result="First & original".into();
+        let mut duplicate=state.runtime.runs[0].clone();duplicate.result="Later duplicate".into();state.runtime.runs.push(duplicate);
+        state.chats[0].messages.push(Message{text:"Missing run".into(),run_id:Some("missing".into()),reply:"Retained reply".into()});
+        state.chats[0].messages.push(Message{text:"No run".into(),run_id:None,reply:"Local reply".into()});
+        let index=indexed_runs(&state.runtime,&state.chats[0].messages);
+        assert_eq!(index.len(),2);
+        let data=detail(&state,&id).unwrap();
+        assert_eq!(data["messages"][0]["reply"],"First & original");
+        assert_eq!(data["messages"][1]["reply"],"Retained reply");
+        assert_eq!(data["messages"][2]["reply"],"Local reply");
+        let html=transcript(&state,&id).unwrap();
+        assert!(html.contains("First &amp; original")&&html.contains("Retained reply")&&html.contains("Local reply"));
+        assert!(!html.contains("Later duplicate"));
+    }
     #[test]
     fn completed_file_diffs_are_visible_escaped_and_separate_from_command_logs() {
         let mut state=State::default();let id=create(&mut state);

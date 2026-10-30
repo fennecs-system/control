@@ -172,6 +172,21 @@ separate consumers; workers never receive the GitHub token. Publishing does not
 merge or deploy. The [threat model](THREAT-MODEL.md) records enforced boundaries
 and remaining gaps.
 
+A persistent execution environment is a broader resource than a persistent shell:
+it can retain project files, shells, build state and supervised services while
+agents attach, stop or change provider. Keep environment identity and lifetime
+separate from chat history and individual model attempts. Its declarative Nix
+base stays immutable; writable state, network grants, leases, resource limits and
+cleanup belong to the Rust supervisor. A container or microVM is an isolation
+choice, not a reason to grant the model host administration.
+
+Today Control retains file checkpoints and some preview services, and recreates
+provider containers per attempt. General persistent worker containers and Nix
+VMs remain future work. Restoring files does not restore live process state;
+restarting a lost service must follow explicit recovery semantics. Persistent
+shells may be useful tools within those environments without defining the agent
+runtime or weakening reproducibility.
+
 Backend/model selection is captured per run. The Claude adapter runs an unmodified,
 pinned CLI with built-in tools disabled and an explicit Control MCP bridge.
 Its harness sees a mailbox, while a separate offline container mounts the task

@@ -40,7 +40,10 @@ fn main() -> io::Result<()> {
         return Err(io::Error::other("Expected UTF-8 Rust source, at most 16 KiB"));
     }
     fs::write("/tmp/main.rs", code)?;
-    let (timeout, exit) = run(Command::new("rustc").args(["--edition=2024", "--color=never", "/tmp/main.rs", "-o", "/tmp/snippet"]), "/tmp/compile.log", 12)?;
+    let mut compiler=Command::new("rustc");
+    compiler.args(["--edition=2024", "--color=never", "/tmp/main.rs", "-o", "/tmp/snippet"]);
+    if std::env::args().nth(1).as_deref()==Some("--bench") {compiler.args(["-C","opt-level=3","-C","debug-assertions=no"]);}
+    let (timeout, exit) = run(&mut compiler, "/tmp/compile.log", 12)?;
     if timeout || exit != Some(0) {
         println!("compile {}", if timeout {"timeout".into()} else {exit.map_or("signal".into(), |c| c.to_string())});
         print!("{}", output("/tmp/compile.log", 8192));

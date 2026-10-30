@@ -131,7 +131,7 @@ impl Hive {
                 if method == "tools/call"
                     && matches!(
                         params["name"].as_str(),
-                        Some("control.web.search" | "control.rust.run")
+                        Some("control.web.search" | "control.rust.run" | "control.rust.bench")
                     )
                 {
                     Duration::from_secs(25)
@@ -769,6 +769,31 @@ pub fn run() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires isolated control-bench-qa server with benchmark worker image; no model calls"]
+    fn live_rust_benchmarks_use_mcp_and_compare_html_escaping() {
+        let directory=crate::config::directory().unwrap();
+        assert!(directory.parent().is_some_and(|p|p.parent()==Some(std::path::Path::new("/private/tmp"))&&p.file_name().is_some_and(|n|n.to_string_lossy().starts_with("control-bench-qa."))));
+        let server=std::env::var("CONTROL_QA_URL").unwrap();let mut hive=Hive::connect(&server).unwrap();
+        let tools=hive.rpc("tools/list",json!({})).unwrap();
+        assert!(tools["tools"].as_array().unwrap().iter().any(|t|t["name"]=="control.rust.bench"));
+        let current=include_str!("../tools/rust-analysis/escape-candidate.rs").lines().skip(1).collect::<Vec<_>>().join("\n");
+        let previous=r#"fn previous(s:&str)->String {s.replace('&',"&amp;").replace('<',"&lt;").replace('>',"&gt;").replace('"',"&quot;").replace('\'',"&#39;")}"#;
+        for (name,input) in [("plain","ordinary command output without markup\n".repeat(48)),("escaped","Synthetic output <&> λ\n".repeat(48)),("sparse",format!("{}<","x".repeat(1800))),("short","é<&>λ'🦊\"".into())] {
+            let setup=format!("{current}\n{previous}\nlet input=String::from({}); assert_eq!(escape_html(&input),previous(&input));",serde_json::to_string(&input).unwrap());
+            for implementation in ["previous","escape_html"] {
+                let result=hive.tool("control.rust.bench",json!({"setup":setup,"code":format!("{implementation}(std::hint::black_box(input.as_str()))"),"iterations":1000,"samples":9})).unwrap();
+                assert_eq!(result["success"],true,"{}",result["output"]);
+                assert_eq!(result["timings"]["samples"],9);
+                assert_eq!(result["opt_level"],3);
+                println!("{}",json!({"workload":"html_escape","case":name,"implementation":implementation,"timings":result["timings"],"image":result["image"]}));
+            }
+        }
+        for (code,status) in [("not valid Rust","compile 1"),("loop {}","run timeout")] {
+            let result=hive.tool("control.rust.bench",json!({"code":code})).unwrap();
+            assert_eq!(result["success"],false);assert_eq!(result["status"],status);assert!(result["timings"].is_null());
+        }
+    }
     #[test]
     #[ignore = "requires isolated control-selfdev-qa server, declared build image, own authenticated Codex and Claude; three or more model calls"]
     fn live_improve_build_and_independent_judge_roundtrip() {

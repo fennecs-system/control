@@ -31,6 +31,10 @@ pub struct Job {
     pub exit_code: Option<i64>,
 }
 impl Job {
+    /// Reconciliation needs ownership fields, never retained command/output buffers.
+    pub fn identity(&self)->Self {
+        Self{id:self.id.clone(),generation:self.generation.clone(),image:self.image.clone(),node:self.node.clone(),command:String::new(),read_only:self.read_only,build_environment:self.build_environment,review_source:self.review_source,deadline_unix:self.deadline_unix,container_id:self.container_id.clone(),status:self.status.clone(),output:String::new(),exit_code:self.exit_code}
+    }
     pub fn name(&self) -> String {
         format!("control-{}-job-{}", self.generation, self.id)
     }
@@ -874,9 +878,14 @@ mod tests {
             exit_code: 0,
         };
         let expected = std::path::Path::new("/fixture");
-        assert!(verify_identity(&job, &inspection, expected).is_ok());
+        let mut retained=job.clone();retained.output="diagnostic".repeat(2000);
+        let identity=retained.identity();
+        assert!(identity.command.is_empty()&&identity.output.is_empty());
+        assert_eq!(identity.command.capacity()+identity.output.capacity(),0);
+        assert!(verify_identity(&identity, &inspection, expected).is_ok());
         let mut changed = inspection.clone();
         changed.id = "a".repeat(64);
+        assert!(verify_identity(&identity,&changed,expected).is_err());
         assert!(verify_identity(&job, &changed, expected).is_err());
         let mut changed = inspection.clone();
         changed.source = "/host".into();

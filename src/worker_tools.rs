@@ -72,7 +72,7 @@ fn rpc_at(
             tools.extend(crate::command_jobs::definitions());
             tools.push(crate::delegated_results::definition());
             if judge {
-                tools.retain(|tool|matches!(tool["name"].as_str(),Some("control.web.search"|"control.rust.run"|"control_agent_result"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel")));
+                tools.retain(|tool|matches!(tool["name"].as_str(),Some("control.web.search"|"control.rust.run"|"control.rust.bench"|"control_agent_result"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel")));
             }
             if claude {
                 tools.push(crate::claude::definition());
@@ -85,6 +85,7 @@ fn rpc_at(
                 tool["name"] = json!(match tool["name"].as_str().unwrap() {
                     "control.web.search" => "control_web_search",
                     "control.rust.run" => "control_rust_run",
+                    "control.rust.bench" => "control_rust_bench",
                     other => other,
                 });
             }
@@ -97,7 +98,7 @@ fn rpc_at(
             json!({"tools":tools})
         }
         "tools/call" => {
-            if judge && !matches!(request["params"]["name"].as_str(),Some("control_workspace_run"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_web_search"|"control_rust_run"|"control_room_read"|"control_room_post"|"control_agent_result")) {
+            if judge && !matches!(request["params"]["name"].as_str(),Some("control_workspace_run"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_web_search"|"control_rust_run"|"control_rust_bench"|"control_room_read"|"control_room_post"|"control_agent_result")) {
                 return error("Judge policy permits read-only source inspection, isolated verification and room collaboration only.");
             }
             if crate::delegation::pausing(run) && request["params"]["name"]!="control_agent_delegate" {
@@ -288,6 +289,7 @@ fn rpc_at(
             let name = match request["params"]["name"].as_str().unwrap_or("") {
                 "control_web_search" => "control.web.search",
                 "control_rust_run" => "control.rust.run",
+                "control_rust_bench" => "control.rust.bench",
                 other => other,
             };
             if crate::toolbox::known(name) {

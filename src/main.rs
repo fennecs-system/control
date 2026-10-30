@@ -26,11 +26,14 @@ mod lens_ui;
 mod lifecycle;
 mod mcp_stdio;
 mod navigation;
+#[cfg(test)]
+mod performance;
 mod providers;
 mod projects;
 mod previews;
 mod rooms;
 mod runtime;
+mod rust_bench;
 mod scheduler;
 mod session_http;
 mod shutdown;
