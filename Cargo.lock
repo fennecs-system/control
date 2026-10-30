@@ -111,6 +111,7 @@ name = "control"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "control-ai",
  "control-context",
  "control-http",
  "crossterm",
@@ -119,6 +120,14 @@ dependencies = [
  "reqwest",
  "ring",
  "scraper",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "control-ai"
+version = "0.1.0"
+dependencies = [
  "serde",
  "serde_json",
 ]
