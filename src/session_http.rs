@@ -35,7 +35,8 @@ fn respond_with_policy(
     extra: &str,
     scripts: &str,
 ) {
-    let _ = write!(stream,"HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\n{extra}Connection: close\r\nCache-Control: no-store\r\nReferrer-Policy: same-origin\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; script-src {scripts}; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'\r\n\r\n{body}",body.len());
+    let policy = if scripts == "'none'" {control_http::Policy::Embedded} else {control_http::Policy::Chat};
+    let _ = control_http::respond(stream, status, mime, body.as_bytes(), extra, policy);
 }
 
 fn change(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &'static str> {

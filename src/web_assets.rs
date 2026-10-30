@@ -1,4 +1,4 @@
-use std::{io::Write, net::TcpStream, path::Path};
+use std::{net::TcpStream, path::Path};
 
 include!(concat!(env!("OUT_DIR"), "/web_assets.rs"));
 
@@ -67,13 +67,6 @@ fn generated_bootstrap(html: &str) -> Option<&str> {
     rest.split_once("</script>").map(|(body, _)| body)
 }
 fn respond(stream: &mut TcpStream, status: &str, mime: &str, body: &[u8], scripts: bool) {
-    // Only the isolated, compiler-generated tool window needs bootstrap scripts.
-    let policy = if scripts {
-        "default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self'; connect-src 'self'; frame-ancestors 'self'; form-action 'none'; base-uri 'none'"
-    } else {
-        "default-src 'none'; frame-ancestors 'self'"
-    };
-    let header = format!("HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nContent-Security-Policy: {policy}\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",body.len());
-    let _ = stream.write_all(header.as_bytes());
-    let _ = stream.write_all(body);
+    let policy = if scripts {control_http::Policy::ToolWindow} else {control_http::Policy::Asset};
+    let _ = control_http::respond(stream, status, mime, body, "", policy);
 }

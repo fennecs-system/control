@@ -8,6 +8,7 @@ default-run = "control"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 control-context = { path = "crates/context" }
+control-http = { path = "crates/http" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 ratatui = { version = "=0.29.0", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
 crossterm = "0.28"
@@ -18,5 +19,5 @@ libc = "0.2"
 
 
 [workspace]
-members = ["crates/context"]
+members = ["crates/context", "crates/http"]
 exclude = ["web"]

@@ -90,7 +90,7 @@ impl Access {
     }
 }
 fn respond(stream: &mut TcpStream, status: &str, mime: &str, body: &str, extra: &str) {
-    let _=write!(stream,"HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\n{extra}Connection: close\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'none'; frame-ancestors 'none'\r\n\r\n{body}",body.len());
+    let _ = control_http::respond(stream, status, mime, body.as_bytes(), extra, control_http::Policy::Access);
 }
 fn sign_in_link() -> io::Result<String> {
     crate::storage::initialize()?;
