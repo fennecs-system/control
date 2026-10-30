@@ -620,12 +620,7 @@ fn command_text(text: &str) -> String {
 }
 pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
     let data = detail(state, id)?;
-    let pending = data["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|m| ["queued", "running", "cancelling"].contains(&m["status"].as_str().unwrap_or("")));
-    let mut html = format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'>{}</head><body class='transcript'>",if pending {"<meta http-equiv='refresh' content='3'>"} else {""});
+    let mut html = "<!doctype html><html lang='en'><head><meta charset='utf-8'><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'></head><body class='transcript'>".to_owned();
     let messages = data["messages"].as_array().unwrap();
     for (position, message) in messages.iter().enumerate() {
         let status = match message["status"].as_str().unwrap_or("") {
@@ -677,16 +672,16 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
                         let class=match control::diff::kind(line) {control::diff::Kind::Add=>"diff-add",control::diff::Kind::Remove=>"diff-remove",control::diff::Kind::Header=>"diff-header",control::diff::Kind::Context=>"diff-context"};
                         body.push_str(&format!("<span class='diff-line {class}'>{}</span>",escape(line)));
                     }
-                    html.push_str(&format!("<details class='edit-diff'{}><summary>Changes · attempt {} <span>{}</span></summary><pre aria-label='File changes'>{body}</pre></details>",if position + 1 == messages.len() && index + 1 == attempts.len() {" open"} else {""},index+1,escape(event["text"].as_str().unwrap_or(""))));
+                    html.push_str(&format!("<details class='edit-diff' data-transcript-key='{position}-{index}-diff-{}'{}><summary>Changes · attempt {} <span>{}</span></summary><pre aria-label='File changes'>{body}</pre></details>",escape(event["id"].as_str().unwrap_or("")),if position + 1 == messages.len() && index + 1 == attempts.len() {" open"} else {""},index+1,escape(event["text"].as_str().unwrap_or(""))));
                 }
                 let events=events.iter().filter(|event|event["kind"] != "file_change").collect::<Vec<_>>();
                 if events.is_empty() {continue;}
                 html.push_str(&format!(
-                    "<details class='run-activity'{}><summary>Recent activity · attempt {}</summary>",
+                    "<details class='run-activity' data-transcript-key='{position}-{index}-activity'{}><summary>Recent activity · attempt {}</summary>",
                     if message["status"] == "running" && index + 1 == attempts.len() { " open" } else { "" }, index + 1
                 ));
                 for (event_index, event) in events.iter().enumerate() {
-                    html.push_str(&format!("<details class='command-activity'{}><summary><span>{}</span> <code>{}</code></summary><pre>{}</pre></details>", if event_index + 1 == events.len() {" open"} else {""}, escape(event["status"].as_str().unwrap_or("")), escape(event["text"].as_str().unwrap_or("")), escape(event["output"].as_str().unwrap_or(""))));
+                    html.push_str(&format!("<details class='command-activity' data-transcript-key='{position}-{index}-event-{event_index}'{}><summary><span>{}</span> <code>{}</code></summary><pre>{}</pre></details>", if event_index + 1 == events.len() {" open"} else {""}, escape(event["status"].as_str().unwrap_or("")), escape(event["text"].as_str().unwrap_or("")), escape(event["output"].as_str().unwrap_or(""))));
                 }
                 html.push_str("</details>");
             }
@@ -844,7 +839,7 @@ mod tests {
         assert_eq!(state.runtime.runs[2].status, "queued");
         assert!(state.chats[0].revision > revision);
         let html = transcript(&state, &parent).unwrap();
-        assert!(html.contains("Stopping…") && html.contains("http-equiv='refresh'"));
+        assert!(html.contains("Stopping…") && !html.contains("http-equiv='refresh'"));
         let queued = state.runtime.runs[1].id.clone();
         send(&mut state, &parent, &format!("/cancel {queued}"), "test").unwrap();
         assert_eq!(state.runtime.runs[1].status, "cancelled");
@@ -1275,7 +1270,7 @@ mod tests {
         send(&mut state, &id, "/improve refine the UI", "test").unwrap();
         assert_eq!(state.runtime.runs[0].action, Action::Improve);
         assert_eq!(detail(&state, &id).unwrap()["revision"], 1);
-        assert!(transcript(&state, &id)
+        assert!(!transcript(&state, &id)
             .unwrap()
             .contains("http-equiv='refresh'"));
     }
