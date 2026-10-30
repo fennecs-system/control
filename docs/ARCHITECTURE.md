@@ -158,7 +158,7 @@ separately. Agents shows current execution and the queue, while Runs keeps histo
 Long commands are durable broker jobs in credential-free offline containers,
 separate from provider execution. An operator-installed Nix build image supplies
 immutable vendored dependencies; output and scratch are private to the task.
-Delegation checkpoints the parent, releases the serial execution slot, runs a
+Delegation checkpoints the parent, releases its bounded execution slot, runs a
 bounded child and resumes with scoped retained feedback. Different-provider judges
 have read-only source and cannot publish or advance a workspace. Deterministic
 admission, scheduling and publication fences remain Rust supervisor duties.

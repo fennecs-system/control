@@ -37,7 +37,8 @@ published workspace for each new turn. Filesystem continuity does not depend on
 resuming a provider CLI conversation. Model context includes up to 20,000
 characters of earlier exchanges; excluded exchanges remain in chat history.
 
-There is one execution slot and a FIFO queue capped at 32 pending runs.
+There are two model execution slots by default, with one writer per chat and a
+queue capped at 32 pending runs. See [execution limits](EXECUTION.md).
 `/steer` adds a next-turn follow-up. `/btw` and `/spawn` create linked chats with
 captured actor/model/context and separate copies of the last published task
 checkpoint. They do not share a running writable workspace or inherit Control
