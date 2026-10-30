@@ -8,6 +8,7 @@ mod chat;
 mod claude;
 mod collective;
 mod design;
+mod delegation;
 use control::config;
 mod discord;
 mod discord_bridge;

@@ -56,6 +56,7 @@ fn rpc_at(
         Some(&c.id) == run.chat_id.as_ref() && c.room.as_deref().is_some_and(rooms::valid)
     });
     let claude = run.backend == crate::backend::Backend::Claude;
+    let judge = crate::delegation::is_judge(run);
     let result = match request["method"].as_str().unwrap_or("") {
         "initialize" => {
             json!({"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"control-worker","version":"0.1"}})
@@ -67,8 +68,16 @@ fn rpc_at(
             tools.push(crate::projects::definition(true));
             tools.extend(crate::previews::definitions());
             if run.action == identity::Action::Improve {tools.push(crate::github::definition());}
+            tools.push(crate::delegation::definition());
+            if judge {
+                tools.retain(|tool|matches!(tool["name"].as_str(),Some("control.web.search"|"control.rust.run")));
+            }
             if claude {
                 tools.push(crate::claude::definition());
+                if judge { let tool=tools.last_mut().unwrap();
+                    tool["description"]=json!("Inspect source and run verification in a credential-free offline container. /workspace is read-only; use /tmp for scratch outputs. Bounded output and 25-second deadline.");
+                    tool["annotations"]["destructiveHint"]=json!(false);
+                }
             }
             for tool in &mut tools {
                 tool["name"] = json!(match tool["name"].as_str().unwrap() {
@@ -86,8 +95,22 @@ fn rpc_at(
             json!({"tools":tools})
         }
         "tools/call" => {
+            if judge && !matches!(request["params"]["name"].as_str(),Some("control_workspace_run"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_web_search"|"control_rust_run"|"control_room_read"|"control_room_post")) {
+                return error("Judge policy permits read-only source inspection, isolated verification and room collaboration only.");
+            }
+            if crate::delegation::pausing(run) && request["params"]["name"]!="control_agent_delegate" {
+                return error("This attempt is pausing for delegated work; no more tools may run.");
+            }
+            if request["params"]["name"]=="control_agent_delegate" {
+                let Some(nonce)=envelope["nonce"].as_str() else {return error("Missing request identity");};
+                let Ok(input)=serde_json::from_value(request["params"]["arguments"].clone()) else{return error("Expected a delegation objective and role");};
+                return match crate::delegation::request(&mut state,run_id,nonce,input) {
+                    Ok(value)=>json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":value.to_string()}],"isError":false}}),
+                    Err(message)=>error(message),
+                };
+            }
+            if request["params"]["name"]!="control_design_ask" && run.question.as_ref().is_some_and(|q|q.answer.is_none()&&run.attempts.last().is_some_and(|a|a.workspace_id.as_deref()==Some(&q.generation))) {return error("This attempt is pausing for a design answer; no more tools may run.");}
             if request["params"]["name"]=="control_github_open_pr" {
-                if run.question.as_ref().is_some_and(|q|q.answer.is_none()) {return error("Answer the pending design question before publishing");}
                 if run.action != identity::Action::Improve {return error("GitHub publication requires an improvement run");}
                 let chat=run.chat_id.clone().unwrap_or_default();
                 let input=serde_json::from_value::<crate::github::Input>(request["params"]["arguments"].clone());
@@ -97,7 +120,6 @@ fn rpc_at(
                     Err(message)=>error(&message.to_string()),
                 };
             }
-            if request["params"]["name"]!="control_design_ask" && run.question.as_ref().is_some_and(|q|q.answer.is_none()&&run.attempts.last().is_some_and(|a|a.workspace_id.as_deref()==Some(&q.generation))) {return error("This attempt is pausing for a design answer; no more tools may run.");}
             if request["params"]["name"]=="control_preview_start" || request["params"]["name"]=="control_preview_stop" {
                 let stopping=request["params"]["name"]=="control_preview_stop";
                 let chat=run.chat_id.clone().unwrap_or_default();
@@ -155,6 +177,7 @@ fn rpc_at(
                     return error("Attempt workspace is unavailable");
                 };
                 let image = image.clone();
+                let review_only = attempt.review_only;
                 let node = node.clone();
                 let generation = attempt.workspace_id.clone().unwrap_or_default();
                 let name = format!(
@@ -208,8 +231,8 @@ fn rpc_at(
                     return error("Run is not active");
                 }
                 drop(state);
-                let result = crate::claude::shell(&image, &name, &node, workspace, &input.command);
-                crate::worker::observe_workspace_diff(shared,run_id,&generation,workspace,"observed");
+                let result = crate::claude::shell_scoped(&image, &name, &node, workspace, &input.command, review_only);
+                if !review_only {crate::worker::observe_workspace_diff(shared,run_id,&generation,workspace,"observed");}
                 if let Ok(mut state) = shared.lock() {
                     crate::worker::record_activity_for(
                         &mut state,
@@ -281,6 +304,22 @@ pub fn pump_at(state: &Arc<Mutex<State>>, run: &str, mailbox: &Path, workspace: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn judge_tools_are_enforced_even_when_unadvertised_names_are_forged() {
+        let mut s=State::default();let chat=crate::chat::create(&mut s);
+        crate::chat::send(&mut s,&chat,"Review this","test").unwrap();
+        let run=&mut s.runtime.runs[0];let id=run.id.clone();run.status="running".into();run.backend=crate::backend::Backend::Claude;
+        run.persona=Some(crate::delegation::Persona{role:crate::delegation::Role::Judge,root:"root".into(),depth:1,parent:Some("parent".into())});
+        let shared=Arc::new(Mutex::new(s));
+        let listed=rpc_at(&shared,&id,&json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/list"}}),None);
+        let names=listed["result"]["tools"].as_array().unwrap().iter().map(|t|t["name"].as_str().unwrap()).collect::<Vec<_>>();
+        assert!(names.contains(&"control_workspace_run"));assert!(!names.contains(&"control_agent_delegate"));
+        for name in ["control_agent_delegate","control_project_request","control_design_ask","control_preview_start","control_preview_stop","control_github_pr"] {
+            let denied=rpc_at(&shared,&id,&json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":{}}}}),None);
+            assert!(denied["error"]["message"].as_str().unwrap().contains("Judge policy"));
+        }
+        assert_eq!(shared.lock().unwrap().runtime.runs.len(),1);
+    }
     #[test]
     fn every_advertised_worker_tool_has_ui_registration() {
         for backend in [crate::backend::Backend::Codex, crate::backend::Backend::Claude] {
@@ -376,7 +415,7 @@ mod tests {
             &run,
             &json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/list"}}),
         );
-        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 6);
+        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 7);
         let forbidden = rpc(
             &state,
             &run,

@@ -30,6 +30,11 @@ pub fn request_cancel(runtime: &mut Runtime, id: &str, actor: &Actor) -> Result<
         "cancelling" | "cancelled" => {}
         _ => return Err("Run is already finished."),
     }
+    // Cancelling a paused supervisor also cancels its bounded descendants;
+    // independent human-created chats are not part of this lineage.
+    let children:Vec<_>=runtime.runs.iter().filter(|r|r.persona.as_ref().is_some_and(|p|p.parent.as_deref()==Some(id))
+        && matches!(r.status.as_str(),"queued"|"waiting"|"running"|"cancelling")).map(|r|r.id.clone()).collect();
+    for child in children {request_cancel(runtime,&child,actor)?;}
     Ok(())
 }
 

@@ -26,6 +26,7 @@ impl Tokens {
 #[serde(default)]
 pub struct Attempt {
     pub github_source: Option<crate::github::Source>,
+    pub review_only: bool,
     pub project: Option<String>,
     pub project_parent: Option<String>,
     pub project_base: Option<String>,

@@ -28,6 +28,10 @@ pub struct Runtime {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Run {
     #[serde(default)]
+    pub persona: Option<crate::delegation::Persona>,
+    #[serde(default)]
+    pub delegation: Option<crate::delegation::Delegation>,
+    #[serde(default)]
     pub question: Option<crate::design::Question>,
     #[serde(default)]
     pub continuation: Option<crate::design::Continuation>,
@@ -65,9 +69,19 @@ pub(crate) struct RunStatusCheckpoint {
 }
 impl RunStatusCheckpoint {
     pub(crate) fn capture(runtime: &Runtime, matches: impl Fn(&Run) -> bool) -> Self {
+        let mut selected=runtime.runs.iter().filter(|r|matches(r)).map(|r|r.id.as_str()).collect::<std::collections::HashSet<_>>();
+        loop {
+            let before=selected.len();
+            for run in &runtime.runs {
+                if run.persona.as_ref().and_then(|p|p.parent.as_deref()).is_some_and(|parent|selected.contains(parent)) {
+                    selected.insert(run.id.as_str());
+                }
+            }
+            if before==selected.len(){break;}
+        }
         Self {
             runs: runtime.runs.iter()
-                .filter(|run| ["queued", "running", "cancelling", "waiting"].contains(&run.status.as_str()) && matches(run))
+                .filter(|run| ["queued", "running", "cancelling", "waiting"].contains(&run.status.as_str()) && selected.contains(run.id.as_str()))
                 .map(|run| (run.id.clone(), run.status.clone(), run.result.clone(), run.question.clone())).collect(),
             notice: runtime.notice.clone(),
         }
@@ -216,6 +230,8 @@ impl Runtime {
             .unwrap_or_default()
             .as_nanos();
         self.runs.push(Run {
+            persona: None,
+            delegation: None,
             question: None,
             continuation: None,
             backend: self.backend,
@@ -349,6 +365,9 @@ impl Runtime {
 
 fn run_record(run: &Run) -> String {
     let mut html = format!("<article class='record'><span class='tag'>{}</span><span class='eyebrow'>{} / {}</span><h3>{}</h3><p class='muted tiny'>run {} · {}{}</p>", escape(&run.status), escape(&run.kind), escape(&run.source), escape(&run.objective), escape(&run.id), escape(run.backend.label()), run.model.as_ref().map(|m| format!(" · {}", escape(m))).unwrap_or_default());
+    if let Some(persona)=&run.persona {
+        html.push_str(&format!("<span class='tag'>{} · depth {}</span>",if persona.role==crate::delegation::Role::Judge{"judge · read only"}else{"worker"},persona.depth));
+    }
     if !run.result.is_empty() {
         html.push_str(&format!(
             "<pre class='run-result'>{}</pre>",

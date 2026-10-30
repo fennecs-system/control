@@ -40,12 +40,12 @@ pub fn requested(bridge: Option<(&Arc<Mutex<State>>, &str)>) -> bool {
             s.runtime.runs.iter().any(|r| {
                 r.id == id
                     && r.status == "running"
-                    && r.question.as_ref().is_some_and(|q| {
+                    && (crate::delegation::pausing(r) || r.question.as_ref().is_some_and(|q| {
                         q.answer.is_none()
                             && r.attempts
                                 .last()
                                 .is_some_and(|a| a.workspace_id.as_deref() == Some(&q.generation))
-                    })
+                    }))
             })
         })
     })
@@ -257,6 +257,7 @@ pub fn answer(
     }
     let next = state.runtime.runs.last_mut().unwrap();
     next.backend = run.backend;
+    next.persona = run.persona;
     next.model = run.model;
     next.context = run.context;
     next.lenses = run.lenses;

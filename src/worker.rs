@@ -89,6 +89,11 @@ fn container_command(
     policy: &Path,
     node: &str,
 ) -> Result<Command, &'static str> {
+    container_command_scoped(image,name,workspace,auth,policy,node,None)
+}
+fn container_command_scoped(
+    image:&str,name:&str,workspace:&Path,auth:&Credentials,policy:&Path,node:&str,review:Option<&Path>,
+) -> Result<Command,&'static str> {
     let mount = format!("type=bind,src={},dst=/workspace", mount_path(workspace)?);
     let credential_mount = format!(
         "type=bind,src={},dst=/home/agent/.codex/auth.json,readonly",
@@ -146,9 +151,12 @@ fn container_command(
             "HOME=/home/agent",
             "--env",
             "CODEX_HOME=/home/agent/.codex",
-            image,
         ])
         .env_clear();
+    if let Some(source)=review {
+        command.args(["--mount",&format!("type=bind,src={},dst=/review,readonly",mount_path(source)?)]);
+    }
+    command.arg(image);
     for name in [
         "PATH",
         "HOME",
@@ -364,6 +372,9 @@ pub fn start(state: Arc<Mutex<State>>) -> Threads {
                 );
                 return;
             };
+            if let Err(message) = crate::delegation::reconcile(&mut s, storage::save) {
+                s.runtime.notice = message.into();
+            }
             let Some(index) = checkpoint_next(&mut s, storage::save) else {
                 continue;
             };
@@ -391,9 +402,9 @@ pub fn start(state: Arc<Mutex<State>>) -> Threads {
             &mut attempt,
             Some((&state, &task.0)),
         );
-        if let Ok(workspace) = runtime::workspace(&workspace_id) {
+        if !attempt.review_only { if let Ok(workspace) = runtime::workspace(&workspace_id) {
             observe_workspace_diff(&state,&task.0,&workspace_id,&workspace,if outcome.is_ok() {"completed"} else {"observed"});
-        }
+        } }
         if !crate::shutdown::requested() && matches!(&outcome, Err(("waiting", _))) {
             outcome = match runtime::workspace(&workspace_id).map_err(std::io::Error::other)
                 .and_then(|workspace| crate::projects::publish(&mut attempt, &workspace, &workspace_id)) {
@@ -492,8 +503,8 @@ fn commit(
             }
         }
     }
-    let published_project=if outcome.is_ok() {attempt.project_checkpoint.clone()}else{None};
-    let published = if outcome.is_ok() {
+    let published_project=if outcome.is_ok() && !attempt.review_only {attempt.project_checkpoint.clone()}else{None};
+    let published = if outcome.is_ok() && !attempt.review_only {
         attempt.artifact.clone()
     } else {
         None
@@ -609,6 +620,7 @@ fn checkpoint_next(
     run.status = "running".into();
     let mut attempt = crate::usage::Attempt::new();
     attempt.github_source = github_source;
+    attempt.review_only = crate::delegation::is_judge(run);
     attempt.project=project.as_ref().and_then(|p|p.grant.clone());
     attempt.project_parent=project_parent;
     attempt.project_base=project_base;
@@ -834,6 +846,9 @@ pub(crate) fn record_activity_for(
 }
 
 pub(crate) fn observe_workspace_diff(state: &Arc<Mutex<State>>, run: &str, generation: &str, workspace: &Path, status: &str) {
+    // Judge /workspace may be scratch transport, not the read-only source.
+    // Never present its scratch files as a patch to the reviewed project.
+    if state.lock().map_or(true,|s|s.runtime.runs.iter().find(|r|r.id==run).is_none_or(crate::delegation::is_judge)) {return;}
     // File reads and diff computation never hold the control-plane state lock.
     let Some(baseline)=workspace.parent().map(|p|p.join("baseline")) else {return;};
     let (Ok(before),Ok(after))=(crate::artifacts::diff_snapshot(&baseline),crate::artifacts::diff_snapshot(workspace)) else {return;};
@@ -895,8 +910,9 @@ fn execute(
     if attempt.backend == crate::backend::Backend::Claude {
         let output =
             crate::claude::execute(id, objective, attempt, bridge, &absolute, &image, &node)?;
-        crate::projects::publish(attempt,&workspace, id)
+        if !attempt.review_only { crate::projects::publish(attempt,&workspace, id)
             .map_err(|e| failed(&format!("Claude outputs could not be published: {e} The previous checkpoint is unchanged.")))?;
+        }
         return Ok(output);
     }
     let auth = auth.ok_or_else(|| blocked("Codex credentials were not checked."))?;
@@ -914,8 +930,15 @@ fn execute(
     )
     .map_err(blocked)?;
     let container = format!("control-{id}");
+    // Codex transport and final report need writable scratch. Its review source
+    // is a distinct immutable mount, never the writable mailbox at /workspace.
+    let review_source = absolute.parent().unwrap().join("review-source");
+    if attempt.review_only {
+        fs::rename(&absolute, &review_source).map_err(|_|failed("Could not isolate judge source."))?;
+        fs::create_dir(&absolute).map_err(|_|failed("Could not prepare judge scratch."))?;
+    }
     let mut command =
-        container_command(&image, &container, &absolute, &auth, &policy, &node).map_err(blocked)?;
+        container_command_scoped(&image, &container, &absolute, &auth, &policy, &node,attempt.review_only.then_some(review_source.as_path())).map_err(blocked)?;
     command.args([
         "codex",
         "exec",
@@ -957,7 +980,7 @@ fn execute(
             "-c",
             "mcp_servers.control_rooms.required=true",
             "-c",
-            "mcp_servers.control_rooms.enabled_tools=[\"control_room_read\",\"control_room_post\",\"control_web_search\",\"control_rust_run\",\"control_design_ask\",\"control_project_request\",\"control_preview_start\",\"control_preview_stop\",\"control_github_open_pr\"]",
+            "mcp_servers.control_rooms.enabled_tools=[\"control_room_read\",\"control_room_post\",\"control_web_search\",\"control_rust_run\",\"control_design_ask\",\"control_agent_delegate\",\"control_project_request\",\"control_preview_start\",\"control_preview_stop\",\"control_github_open_pr\"]",
             "-c",
             "mcp_servers.control_rooms.tools.control_room_read.approval_mode=\"approve\"",
             "-c",
@@ -968,6 +991,8 @@ fn execute(
             "mcp_servers.control_rooms.tools.control_rust_run.approval_mode=\"approve\"",
             "-c",
             "mcp_servers.control_rooms.tools.control_design_ask.approval_mode=\"approve\"",
+            "-c",
+            "mcp_servers.control_rooms.tools.control_agent_delegate.approval_mode=\"approve\"",
         ]);
     }
     command.arg("-");
@@ -986,18 +1011,20 @@ fn execute(
     let live = bridge.map(|(state, run)| (Arc::clone(state), run.to_owned()));
     let generation = id.to_owned();
     let diff_workspace = absolute.clone();
+    let review_only=attempt.review_only;
     let accounting = std::thread::spawn(move || {
         crate::usage::capture_with(stdout, |event| {
             let Some((state, id)) = &live else {
                 return;
             };
             if event.kind == "file_change" {
+                if review_only {return;}
                 if !["running","in_progress"].contains(&event.status.as_str()) {
                     observe_workspace_diff(state,id,&generation,&diff_workspace,"observed");
                 }
                 return;
             }
-            if event.kind == "command_execution" && event.status == "completed" {
+            if !review_only && event.kind == "command_execution" && event.status == "completed" {
                 observe_workspace_diff(state,id,&generation,&diff_workspace,"observed");
             }
             let Ok(mut state) = state.lock() else {
@@ -1093,8 +1120,9 @@ fn execute(
     let output = read_report(&workspace.join(".control-result"))
         .unwrap_or_else(|_| "Worker finished without a safe final report.".into());
     let summary: String = output.chars().take(16000).collect();
-    crate::projects::publish(attempt,&workspace, id)
+    if !attempt.review_only { crate::projects::publish(attempt,&workspace, id)
         .map_err(|e| failed(&format!("Worker outputs could not be published: {e} The previous checkpoint is unchanged.")))?;
+    }
     Ok(summary)
 }
 
@@ -1549,6 +1577,50 @@ mod tests {
             None,
         );
         assert!(matches!(result, Err(("blocked", _))));
+    }
+
+    #[test]
+    fn judge_dispatch_captures_readonly_policy_and_cannot_publish_a_development_head() {
+        let mut state=State::default();let id=crate::chat::create(&mut state);
+        crate::chat::send(&mut state,&id,"Review this source","test").unwrap();
+        let root=state.runtime.runs[0].id.clone();
+        state.runtime.runs[0].persona=Some(crate::delegation::Persona{role:crate::delegation::Role::Judge,root:root.clone(),depth:1,parent:Some("parent".into())});
+        state.chats[0].workspace=Some("immutable-source".into());
+        let index=checkpoint_next(&mut state, |_|Ok(())).unwrap();
+        let mut attempt=state.runtime.runs[index].attempts[0].clone();
+        assert!(attempt.review_only);assert_eq!(attempt.parent_artifact.as_deref(),Some("immutable-source"));
+        // A successful review has no published source output.
+        attempt.artifact=Some("must-not-publish".into());
+        commit(&mut state,&root,Action::Task,attempt,Ok("Review evidence".into()),false, |_|Ok(())).unwrap();
+        assert_eq!(state.chats[0].workspace.as_deref(),Some("immutable-source"));
+        assert!(state.chats[0].improve_workspace.is_none());
+    }
+
+    #[test]
+    #[ignore = "requires a locally pinned worker image and Linux container engine; no model calls"]
+    fn live_judge_source_is_readonly_in_both_execution_adapters() {
+        use std::os::unix::fs::MetadataExt;
+        let image=std::env::var("CONTROL_QA_IMAGE").expect("Set CONTROL_QA_IMAGE to a pinned image ID");
+        assert!(runtime::pinned_image(&image));
+        let root=std::env::temp_dir().join(format!("control-judge-qa-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let source=root.join("source");let scratch=root.join("scratch");
+        fs::create_dir_all(&source).unwrap();fs::create_dir(&scratch).unwrap();
+        fs::write(source.join("code.txt"),"immutable-source").unwrap();
+        let meta=fs::metadata(&root).unwrap();
+        let auth=Credentials{path:root.join("synthetic-auth.json"),uid:meta.uid(),gid:meta.gid()};
+        fs::write(&auth.path,b"{}").unwrap();
+        let policy=root.join("seccomp.json");fs::write(&policy,include_bytes!("../hosting/worker-seccomp.json")).unwrap();
+        let name=format!("control-judge-codex-qa-{}",std::process::id());
+        let mut command=container_command_scoped(&image,&name,&scratch,&auth,&policy,"synthetic-qa-node",Some(&source)).unwrap();
+        command.args(["codex","sandbox","-P","control"]);permissions(&mut command);
+        command.args(["--","bash","-c","set -eu; test \"$(cat /review/code.txt)\" = immutable-source; if printf poisoned > /review/code.txt 2>/dev/null; then exit 42; fi; printf scratch-ok > /workspace/result; printf tmp-ok > /tmp/result"]);
+        let output=command.output().unwrap();assert!(output.status.success(),"Synthetic judge mount probe failed: {}",String::from_utf8_lossy(&output.stderr));
+        assert_eq!(fs::read_to_string(source.join("code.txt")).unwrap(),"immutable-source");
+        assert_eq!(fs::read_to_string(scratch.join("result")).unwrap(),"scratch-ok");
+        let result=crate::claude::shell_scoped(&image,&format!("control-judge-claude-qa-{}",std::process::id()),"synthetic-qa-node",&source,"set -eu; if printf poisoned > /workspace/code.txt 2>/dev/null; then exit 42; fi; printf tmp-ok > /tmp/result; cat /workspace/code.txt",true).unwrap();
+        assert_eq!(result["exit_code"],0);assert_eq!(result["stdout"],"immutable-source");
+        assert_eq!(fs::read_to_string(source.join("code.txt")).unwrap(),"immutable-source");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
