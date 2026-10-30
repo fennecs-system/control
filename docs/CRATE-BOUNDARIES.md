@@ -1,0 +1,64 @@
+# Library boundaries
+
+Keep the application understandable through small interfaces and independently
+tested libraries. Extract an existing responsibility when the boundary removes
+coupling or repeated work; moving files alone does not create that boundary.
+
+Current libraries:
+
+- `control-context`: deterministic captured context, lens composition and shared
+  command definitions, independent of mutable application state.
+- `control-http`: typed HTTP response construction and security/header policies.
+- `control-ai` (separate extraction PR): provider record decoding, normalized
+  activity, usage and final results. No credentials, networking, containers or UI.
+- The `control` library currently shares configuration, identity, diff rendering
+  and the Discord adapter between executables. Discord is compiled once rather
+  than included as source in two binaries. It consumes a typed delivery projection
+  instead of retaining the entire application's JSON tree. Authorization and DM
+  binding are rechecked at delivery; the projection never grants authority.
+
+The next useful splits are `control-tui` for the existing MCP client and terminal
+interface, and `control-web` for HTTP/UI adapters. Their dependency should be a
+small application interface, not direct access to every mutable runtime field.
+The TUI is already close to this boundary; web routing and rendering still need
+their state projection and authorization calls made explicit.
+
+`control-core` should contain durable run transitions, admission, resource
+ownership and lifecycle rules. It should not become a catch-all for provider
+protocols, web rendering, Discord delivery or tool implementations. Concrete
+process/container executors interpret effects; adapters present results. Provider
+selection and normalized events do not grant filesystem, network or tool access.
+Future direct model APIs and local endpoints should use explicit adapters, rather
+than pretending a Codex/Claude CLI harness is the same protocol as a model API.
+
+Keep these as incremental extractions with persistence/authorization regressions.
+Measure targeted rebuilds before claiming compile-time improvements. Avoid an
+umbrella plugin runtime, cyclic dependencies and a crate for every source file.
+
+## Delivery reader measurement
+
+An ignored, credential-free benchmark compares the old full JSON-tree reader,
+a streaming typed reader, and the chosen typed slice decoder. Run:
+
+```sh
+nix develop --command cargo test --release --locked --lib \
+  discord::delivery::tests::profile_delivery_projection -- --ignored --exact --nocapture
+```
+
+On the development Mac, three fresh-process trials of ten decodes each on a
+10,253,422-byte synthetic ledger (250 runs, 750 attempts, 7,500 activities):
+
+| Reader | Median elapsed / 10 decodes | Peak process RSS |
+| --- | --- | --- |
+| Previous full JSON tree | 52.9 ms | 30,240 KiB |
+| Typed streaming | 222.1 ms | about 3,520 KiB |
+| Typed slice, size-reserved buffer | 29.7 ms | 13,488 KiB |
+
+The selected reader uses about 44% less decode time and 55% less peak RSS in this
+fixture. Its temporary byte buffer is released after decoding; only delivery
+fields, the latest attempt and its last relevant file change are retained.
+Unchanged polls reuse the cached projection. The validated file reader reserves
+the already-checked descriptor size once, avoiding repeated growth/copies.
+Streaming consumed less memory but cost substantially more parsing time here.
+These are warm-file synthetic cache-miss measurements, not end-to-end latency or
+a guarantee for every ledger. The benchmark remains available to check the tradeoff.

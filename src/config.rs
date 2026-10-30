@@ -32,7 +32,9 @@ pub fn read_regular(path: &Path, limit: usize, private: bool) -> io::Result<Vec<
             "Expected a bounded regular file with appropriate permissions",
         ));
     }
-    let mut bytes = Vec::new();
+    // The descriptor's size has already passed the caller's bound. Reserve once
+    // instead of repeatedly growing and copying a large state-file buffer.
+    let mut bytes = Vec::with_capacity(meta.len() as usize);
     file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
     if bytes.len() > limit {
         return Err(io::Error::other("File exceeds size limit"));
