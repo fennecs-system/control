@@ -24,7 +24,6 @@ use std::{
 };
 
 const VERSION: &str = "2025-11-25";
-const MUTATIONS: [&str; 6] = ["control.chat.create", "control.chat.send", "control.room.post", "control.chat.lenses", "control.project.request", "control_github_open_pr"];
 use control_context::commands;
 
 fn command_line(text: &str) -> Line<'static> {
@@ -127,14 +126,10 @@ impl Hive {
             .client
             .post(&self.endpoint)
             .timeout(
-                if method == "tools/call"
-                    && matches!(
-                        params["name"].as_str(),
-                        Some("control.web.search" | "control.rust.run" | "control.rust.bench")
-                    )
+                if method == "tools/call" && control_context::tool_policy::lookup(params["name"].as_str().unwrap_or("")).is_some_and(|tool|tool.route==control_context::tool_policy::Route::Toolbox)
                 {
                     Duration::from_secs(25)
-                } else if method == "tools/call" && MUTATIONS.contains(&params["name"].as_str().unwrap_or("")) {
+                } else if method == "tools/call" && control_context::tool_policy::checkpoint(params["name"].as_str().unwrap_or("")) {
                     // A slow checkpoint must not look like a failure after the server committed it.
                     Duration::from_secs(30)
                 } else {

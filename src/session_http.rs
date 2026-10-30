@@ -48,9 +48,9 @@ fn change_with_save(
     arguments: &Value,
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Result<Value, &'static str> {
-    transact(state, arguments["id"].as_str(), |state| if name=="control.project.request" {
+    transact(state, arguments["id"].as_str(), |state| if crate::tool_registry::lookup(name).is_some_and(|tool|tool.route==crate::tool_registry::Route::Project) {
         crate::projects::request_named(state,arguments["id"].as_str().unwrap_or(""),arguments["path"].as_str().unwrap_or(""),arguments["name"].as_str())
-    } else if name.starts_with("control.room") {
+    } else if crate::tool_registry::lookup(name).is_some_and(|tool|tool.route==crate::tool_registry::Route::Room) {
         crate::rooms::tool(state, name, arguments)
     } else {
         chat::tool(state, name, arguments)
@@ -95,7 +95,7 @@ pub fn rpc(state: &mut State, request: &Value) -> Value {
     if request["jsonrpc"] != "2.0" || !request.is_object() {
         return error(-32600, "Invalid request.");
     }
-    let mut result = match request["method"].as_str().unwrap_or("") {
+    let result = match request["method"].as_str().unwrap_or("") {
         "initialize" => {
             let version = match request["params"]["protocolVersion"].as_str() {
                 Some("2025-03-26") => "2025-03-26",
@@ -104,40 +104,20 @@ pub fn rpc(state: &mut State, request: &Value) -> Value {
             json!({"protocolVersion":version,"capabilities":{"tools":{}},"serverInfo":{"name":"control","version":env!("CARGO_PKG_VERSION")}})
         }
         "ping" => json!({}),
-        "tools/list" => json!({"tools":[
-            {"name":"control.chats.list","description":"List local chats.","inputSchema":{"type":"object","properties":{}}},
-            {"name":"control.chat.create","description":"Create a local operator chat with lenses, optional room/design topic and chat or architect-only improve mode.","inputSchema":{"type":"object","properties":{"mode":{"type":"string","enum":["chat","improve"]},"room":{"type":"string","enum":["general","engineering","research"]},"lens":{"type":"string"},"lenses":{"type":"array","items":{"type":"string"}},"design_context":{"type":"string"}}}},
-            {"name":"control.chat.lenses","description":"Set lenses from the library for future messages. Existing runs retain their resolved context.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"lenses":{"type":"array","items":{"type":"string"}}},"required":["id","lenses"]}},
-            {"name":"control.lenses.list","description":"List current declarative lens definitions.","inputSchema":{"type":"object","properties":{}}},
-            {"name":"control.lens.read","description":"Read a lens definition and its current revision.","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}},
-            {"name":"control.lenses.resolve","description":"Resolve nested lenses against explicit local document snapshots. Does not grant tool authority.","inputSchema":{"type":"object","properties":{"lenses":{"type":"array","items":{"type":"string"}}},"required":["lenses"]}},
-            {"name":"control.rooms.list","description":"List collaboration rooms.","inputSchema":{"type":"object","properties":{}}},
-            {"name":"control.room.read","description":"Read recent room posts and linked chats.","inputSchema":{"type":"object","properties":{"room":{"type":"string"}},"required":["room"]}},
-            {"name":"control.room.post","description":"Post a concise shared update. This does not send a chat prompt or grant authority.","inputSchema":{"type":"object","properties":{"room":{"type":"string"},"message":{"type":"string","minLength":1,"maxLength":2000}},"required":["room","message"]}},
-            {"name":"control.chat.read","description":"Read a chat and its run status.","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}},
-            {"name":"control.chat.send","description":"Send as the chat's original actor. Optional mode changes persist; improve requires architect access.","inputSchema":{"type":"object","properties":{"mode":{"type":"string","enum":["chat","improve"]},"id":{"type":"string"},"message":{"type":"string","minLength":1,"maxLength":2000}},"required":["id","message"]}}
-        ]}),
+        "tools/list" => json!({"tools":crate::tool_registry::http_definitions()}),
         "tools/call" => {
             let name = request["params"]["name"].as_str().unwrap_or("");
             let arguments = &request["params"]["arguments"];
-            let result = if [
-                "control.chat.create",
-                "control.chat.send",
-                "control.room.post",
-                "control.chat.lenses",
-                "control.project.request",
-            ]
-            .contains(&name)
+            let result = if crate::tool_registry::checkpoint(name)
             {
                 change(state, name, arguments)
-            } else if crate::artifacts::TOOLS.contains(&name) {
-                crate::artifacts::tool(state, name, arguments)
-            } else if name.starts_with("control.room") {
-                crate::rooms::tool(state, name, arguments)
-            } else if name.starts_with("control.lens") {
-                crate::lens_library::tool(state, name, arguments)
             } else {
-                chat::tool(state, name, arguments)
+                match crate::tool_registry::lookup(name).map(|tool|tool.route) {
+                    Some(crate::tool_registry::Route::Artifacts) => crate::artifacts::tool(state, name, arguments),
+                    Some(crate::tool_registry::Route::Room) => crate::rooms::tool(state, name, arguments),
+                    Some(crate::tool_registry::Route::Lens) => crate::lens_library::tool(state, name, arguments),
+                    _ => chat::tool(state, name, arguments),
+                }
             };
             match result {
                 Ok(value) => {
@@ -148,18 +128,6 @@ pub fn rpc(state: &mut State, request: &Value) -> Value {
         }
         _ => return error(-32601, "Method not found."),
     };
-    if request["method"] == "tools/list" {
-        result["tools"].as_array_mut().unwrap().push(crate::projects::definition(false));
-        result["tools"].as_array_mut().unwrap().push(crate::github::definition());
-        result["tools"]
-            .as_array_mut()
-            .unwrap()
-            .extend(crate::toolbox::definitions());
-        result["tools"]
-            .as_array_mut()
-            .unwrap()
-            .extend(crate::artifacts::definitions());
-    }
     json!({"jsonrpc":"2.0","id":id,"result":result})
 }
 
