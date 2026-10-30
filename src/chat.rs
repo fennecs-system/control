@@ -710,7 +710,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
             }
         }
     }
-    if project_message.is_none() {html.push_str(&crate::projects::panel(state,id));}
+    if project_message.is_none() && session.project.is_some() {html.push_str(&crate::projects::panel(state,id));}
     html.push_str("<div id='latest'></div></body></html>");
     Ok(html)
 }
