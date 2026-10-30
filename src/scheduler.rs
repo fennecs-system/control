@@ -1,9 +1,11 @@
 //! Bounded node execution with deterministic per-conversation ownership.
 use crate::runtime::Runtime;
-use std::{collections::HashSet, io};
+use std::io;
+use control_core::scheduling::{self, AttemptStamp, Capacity, Phase};
 
-pub const MAX_PENDING: usize = 32;
-pub const MAX_PARALLEL: usize = 8;
+#[cfg(test)]
+pub use control_core::scheduling::MAX_PENDING;
+pub use control_core::scheduling::MAX_PARALLEL;
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Limits {
@@ -53,58 +55,50 @@ fn load_limits_in(
     limits.validate()
 }
 
-pub fn admit(runtime: &Runtime) -> Result<(), &'static str> {
-    if runtime
-        .runs
-        .iter()
-        .filter(|r| {
-            matches!(
-                r.status.as_str(),
-                "queued" | "running" | "cancelling" | "waiting"
-            )
-        })
-        .count()
-        >= MAX_PENDING
-    {
-        Err("Run queue is full (32 pending tasks). Wait for work to finish or cancel a task.")
-    } else {
-        Ok(())
+#[inline]
+pub(crate) fn phase(run: &crate::runtime::Run) -> Phase {
+    match run.status.as_str() {
+        "queued" => Phase::Queued,
+        "running" => Phase::Running,
+        "cancelling" => Phase::Cancelling,
+        "waiting" => Phase::Waiting {reserves_chat:run.delegation.is_some() || run.question.as_ref().is_some_and(|q|q.answer.is_none())},
+        _ => Phase::Inactive,
     }
+}
+#[inline]
+pub(crate) fn stamp(attempt: &crate::usage::Attempt) -> AttemptStamp<'_> {
+    AttemptStamp {workspace:attempt.workspace_id.as_deref(),started_unix:attempt.started_unix}
+}
+#[inline]
+pub fn admit(runtime: &Runtime) -> Result<(), &'static str> {
+    if scheduling::has_capacity(runtime.runs.iter()) { Ok(()) }
+    else { Err("Run queue is full (32 pending tasks). Wait for work to finish or cancel a task.") }
+}
+#[inline]
+pub fn next(runtime: &Runtime) -> Option<usize> {
+    let capacity=Capacity::new(runtime.execution.max_parallel_runs.min(MAX_PARALLEL))?;
+    scheduling::next(runtime.runs.iter(),capacity,runtime.paused.is_some())
+}
+impl scheduling::RunView for crate::runtime::Run {
+    #[inline]
+    fn phase(&self) -> Phase { phase(self) }
+    #[inline]
+    fn chat(&self) -> Option<&str> { self.chat_id.as_deref() }
+    #[inline]
+    fn queue_order(&self) -> u64 { self.queue_order }
+    #[inline]
+    fn occupies_slot(&self) -> bool { matches!(self.status.as_str(), "running"|"cancelling") }
+    #[inline]
+    fn is_queued(&self) -> bool { self.status == "queued" }
+    #[inline]
+    fn is_pending(&self) -> bool { matches!(self.status.as_str(),"queued"|"running"|"cancelling"|"waiting") }
+    #[inline]
+    fn reserves_chat(&self) -> bool { self.occupies_slot() || (self.status=="waiting" && (self.delegation.is_some() || self.question.as_ref().is_some_and(|q|q.answer.is_none()))) }
 }
 
-pub fn next(runtime: &Runtime) -> Option<usize> {
-    let active = runtime
-        .runs
-        .iter()
-        .filter(|r| matches!(r.status.as_str(), "running" | "cancelling"))
-        .count();
-    if runtime.paused.is_some() || active >= runtime.execution.max_parallel_runs.min(MAX_PARALLEL) {
-        return None;
-    }
-    let blocked = runtime
-        .runs
-        .iter()
-        .filter(|r| {
-            matches!(r.status.as_str(), "running" | "cancelling")
-                || (r.status == "waiting"
-                    && (r.delegation.is_some()
-                        || r.question.as_ref().is_some_and(|q| q.answer.is_none())))
-        })
-        .filter_map(|r| r.chat_id.as_deref())
-        .collect::<HashSet<_>>();
-    runtime
-        .runs
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| r.status == "queued")
-        .filter(|(_, r)| {
-            r.chat_id
-                .as_deref()
-                .is_none_or(|chat| !blocked.contains(chat))
-        })
-        .min_by_key(|(index, r)| (r.queue_order, *index))
-        .map(|(index, _)| index)
-}
+#[cfg(test)]
+#[path = "scheduler_qa.rs"]
+mod qa;
 
 #[cfg(test)]
 mod tests {

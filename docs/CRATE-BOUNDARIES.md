@@ -11,6 +11,11 @@ Current libraries:
 - `control-http`: typed HTTP response construction and security/header policies.
 - `control-ai`: provider record decoding, normalized
   activity, usage and final results. No credentials, networking, containers or UI.
+- `control-core`: borrowed scheduling inputs, validated slot capacity and pure
+  admission/dispatch/attempt-generation predicates. This is the first extraction;
+  full application commands and durable resource supervision are still in the app.
+  Core has no dependencies. Configuration loading and concrete effects remain in
+  adapters, and saved-state types/format are unchanged.
 - The `control` library currently shares configuration, identity, diff rendering
   and the Discord adapter between executables. Discord is compiled once rather
   than included as source in two binaries. It consumes a typed delivery projection
@@ -27,6 +32,19 @@ These are proposed boundaries, not completed extractions: the terminal currently
 includes `src/harness.rs` in two binaries, and most server state, routing and
 rendering are still declared by `src/main.rs`. The Rust/WASM package under `web/`
 is the browser client, not yet a `control-web` server adapter.
+
+MCP is another adapter, not core business logic. A future `control-mcp` should
+own JSON-RPC/protocol negotiation, tool discovery schemas and protocol error
+mapping, calling the same application operations as web and terminal clients.
+The shared tool catalogue already exists; do not implement a second tool system.
+Extract that crate after the application interface is real rather than exporting
+the whole state to an otherwise cosmetic protocol crate. HTTP and stdio can share
+its protocol logic while retaining their own framing and authentication.
+
+Use `control-web` for the server-side web adapter and `control-web-ui` if/when
+renaming the existing Rust/WASM browser client is useful. These components can
+run in one binary and call each other directly; separate crates do not require
+separate processes, network hops, a message bus or repeated JSON serialization.
 
 The application interface should expose typed commands and bounded queries:
 create/send/steer a conversation, request a project, cancel a run, inspect a run,

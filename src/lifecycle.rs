@@ -50,10 +50,7 @@ pub fn cancelled(bridge: Option<(&Arc<Mutex<State>>, &str)>) -> bool {
 }
 
 pub fn current(run: &crate::runtime::Run, attempt: &Attempt) -> bool {
-    ["running", "cancelling"].contains(&run.status.as_str())
-        && run.attempts.last().is_some_and(|last| {
-            last.workspace_id == attempt.workspace_id && last.started_unix == attempt.started_unix
-        })
+    control_core::scheduling::current_attempt(crate::scheduler::phase(run), run.attempts.last().map(crate::scheduler::stamp), crate::scheduler::stamp(attempt))
 }
 
 #[derive(Deserialize)]
