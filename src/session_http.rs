@@ -47,7 +47,9 @@ fn change_with_save(
     arguments: &Value,
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Result<Value, &'static str> {
-    transact(state, arguments["id"].as_str(), |state| if name.starts_with("control.room") {
+    transact(state, arguments["id"].as_str(), |state| if name=="control.project.request" {
+        crate::projects::request(state,arguments["id"].as_str().unwrap_or(""),arguments["path"].as_str().unwrap_or(""))
+    } else if name.starts_with("control.room") {
         crate::rooms::tool(state, name, arguments)
     } else {
         chat::tool(state, name, arguments)
@@ -122,6 +124,7 @@ pub fn rpc(state: &mut State, request: &Value) -> Value {
                 "control.chat.send",
                 "control.room.post",
                 "control.chat.lenses",
+                "control.project.request",
             ]
             .contains(&name)
             {
@@ -145,6 +148,7 @@ pub fn rpc(state: &mut State, request: &Value) -> Value {
         _ => return error(-32601, "Method not found."),
     };
     if request["method"] == "tools/list" {
+        result["tools"].as_array_mut().unwrap().push(crate::projects::definition(false));
         result["tools"]
             .as_array_mut()
             .unwrap()
@@ -420,6 +424,13 @@ mod tests {
         b.post("/timeouts",json!({"implicit":5000,"pageLoad":15000}));
         b.post("/url",json!({"url":format!("{server}/chat/{chat}")}));
         let input=b.element("textarea[data-enter-sends=true]");
+        b.post(&format!("/element/{input}/value"),json!({"text":"/op"}));
+        let option=b.element("#command-open");
+        assert_eq!(b.get(&format!("/element/{option}/displayed")),true);
+        b.post(&format!("/element/{option}/click"),json!({}));
+        assert_eq!(b.get(&format!("/element/{input}/property/value")),"/open");
+        assert_eq!(b.text(".composer-highlight .chat-command"),"/open");
+        b.post(&format!("/element/{input}/clear"),json!({}));
         b.post(&format!("/element/{input}/value"),json!({"text":"Keep this unfinished draft"}));
         let frame=b.element("iframe.chat-transcript");
         b.post("/frame",json!({"id":{"element-6066-11e4-a52e-4f735466cecf":frame}}));
@@ -541,7 +552,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            15
+            16
         );
         assert_eq!(
             rpc(

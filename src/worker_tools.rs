@@ -64,6 +64,8 @@ fn rpc_at(
         "tools/list" => {
             let mut tools = crate::toolbox::definitions();
             tools.push(crate::design::definition());
+            tools.push(crate::projects::definition(true));
+            tools.extend(crate::previews::definitions());
             if claude {
                 tools.push(crate::claude::definition());
             }
@@ -83,6 +85,27 @@ fn rpc_at(
             json!({"tools":tools})
         }
         "tools/call" => {
+            if request["params"]["name"]!="control_design_ask" && run.question.as_ref().is_some_and(|q|q.answer.is_none()&&run.attempts.last().is_some_and(|a|a.workspace_id.as_deref()==Some(&q.generation))) {return error("This attempt is pausing for a design answer; no more tools may run.");}
+            if request["params"]["name"]=="control_preview_start" || request["params"]["name"]=="control_preview_stop" {
+                let stopping=request["params"]["name"]=="control_preview_stop";
+                let chat=run.chat_id.clone().unwrap_or_default();
+                let preview_id=run.attempts.last().and_then(|a|a.workspace_id.as_deref()).map(|id|format!("control-{id}-preview")).unwrap_or_default();
+                let input=serde_json::from_value::<crate::previews::Input>(request["params"]["arguments"].clone());
+                drop(state);
+                let result=if stopping {crate::previews::stop(shared,&chat,&preview_id).map(|_|json!({"stopped":true}))}
+                    else {input.map_err(|_|std::io::Error::other("Expected a preview command and port")).and_then(|input|crate::previews::start(shared,run_id,input))};
+                return match result {Ok(value)=>json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":value.to_string()}],"isError":false}}),Err(message)=>error(&message.to_string())};
+            }
+            if request["params"]["name"]=="control_project_request" {
+                let chat=run.chat_id.clone().unwrap_or_default();
+                let previous=state.chats.clone();
+                let result=crate::projects::request(&mut state,&chat,request["params"]["arguments"]["path"].as_str().unwrap_or(""));
+                return match result {
+                    Ok(value) if crate::storage::save(&state).is_ok()=>json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":value.to_string()}],"isError":false}}),
+                    Ok(_)=>{state.chats=previous;error("Could not save project request")},
+                    Err(message)=>error(message),
+                };
+            }
             if request["params"]["name"] == "control_design_ask" {
                 let Some(nonce) = envelope["nonce"].as_str() else { return error("Missing request identity"); };
                 let input = match serde_json::from_value(request["params"]["arguments"].clone()) {
@@ -341,7 +364,7 @@ mod tests {
             &run,
             &json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/list"}}),
         );
-        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 3);
+        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 6);
         let forbidden = rpc(
             &state,
             &run,

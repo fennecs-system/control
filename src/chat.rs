@@ -18,6 +18,8 @@ pub struct Message {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Session {
     #[serde(default)]
+    pub project: Option<crate::projects::Project>,
+    #[serde(default)]
     pub parent_chat: Option<String>,
     #[serde(default)]
     pub fork_context: Option<String>,
@@ -168,7 +170,7 @@ fn command_menu_for(task: bool, improve: bool) -> String {
         return String::new();
     }
     let mut menu = "<div class='chat-commands' id='chat-commands' role='listbox' aria-label='Chat commands' hidden>".to_owned();
-    let mut commands = vec![("steer", "/steer", "Queue a direction for the next turn"), ("btw", "/btw", "Ask in a separate conversation"), ("spawn", "/spawn", "Start an independent agent"), ("cancel", "/cancel", "Stop the current run"), ("answer", "/answer", "Answer a design question")];
+    let mut commands = vec![("open", "/open", "Open a folder on this node"), ("steer", "/steer", "Queue a direction for the next turn"), ("btw", "/btw", "Ask in a separate conversation"), ("spawn", "/spawn", "Start an independent agent"), ("cancel", "/cancel", "Stop the current run"), ("answer", "/answer", "Answer a design question")];
     if improve {
         commands.splice(0..0, [("improve", "/improve", "Discuss and change Control"), ("improve-off", "/improve off", "Return to regular chat")]);
     }
@@ -200,6 +202,7 @@ pub fn create(state: &mut State) -> String {
         .as_nanos();
     let id = format!("c-{stamp:x}-{}", state.chats.len());
     state.chats.push(Session {
+        project: None,
         parent_chat: None,
         fork_context: None,
         improve_mode: false,
@@ -226,6 +229,7 @@ pub fn receive(state: &mut State, incoming: &discord::Incoming) -> Result<(), &'
     }
     if !state.chats.iter().any(|s| s.id == id) {
         state.chats.push(Session {
+            project: None,
             parent_chat: None,
             fork_context: None,
             improve_mode: false,
@@ -270,6 +274,7 @@ pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -
     let session = state.chats.last_mut().unwrap();
     session.actor = parent.actor;
     session.workspace = parent.workspace;
+    session.project = parent.project.filter(|p|p.grant.is_some());
     session.parent_chat = Some(parent_id.into());
     session.fork_context = Some(context);
     session.lenses = parent.lenses;
@@ -305,6 +310,12 @@ pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -
 pub fn send(state: &mut State, id: &str, text: &str, source: &str) -> Result<(), &'static str> {
     if crate::shutdown::requested() {
         return Err("Control is stopping; try again after restart.");
+    }
+    if let Some(path) = text.trim().strip_prefix("/open").filter(|tail|tail.is_empty()||tail.starts_with(char::is_whitespace)) {
+        crate::projects::request(state,id,path)?;
+        let session = state.chats.iter_mut().find(|s| s.id == id).unwrap();
+        session.messages.push(Message { text: text.trim().into(), run_id: None, reply: format!("Review and approve folder access: /chat/{id}/project") });
+        return Ok(());
     }
     if let Some(answer) = text.trim().strip_prefix("/answer").filter(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace)) {
         let (question, answer) = answer.trim().split_once(char::is_whitespace).ok_or("Use /answer QUESTION_ID followed by an option number or your direction.")?;
@@ -555,7 +566,7 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
         .ok_or("Chat not found.")?;
     identity::authorize(&session.actor, Action::Task)?;
     Ok(
-        json!({"id":session.id,"title":session.title,"parent_chat":session.parent_chat,"mode":if session.improve_mode {"improve"} else {"chat"},"room":session.room,"lens":session.lens,"lenses":selected_lenses(session),"design_context":session.design_context,"revision":session.revision,"messages": session.messages.iter().map(|m| {
+        json!({"id":session.id,"title":session.title,"previews":state.previews.iter().filter(|p|p.chat==id && p.status!="stopped").map(|p|json!({"id":p.id,"url":p.url,"status":p.status})).collect::<Vec<_>>(),"project":session.project,"project_worktree":session.project.as_ref().and_then(|p|p.head.as_deref()).and_then(|id|crate::runtime::workspace(id).ok()),"parent_chat":session.parent_chat,"mode":if session.improve_mode {"improve"} else {"chat"},"room":session.room,"lens":session.lens,"lenses":selected_lenses(session),"design_context":session.design_context,"revision":session.revision,"messages": session.messages.iter().map(|m| {
         let (status, reply) = response(m, &state.runtime);
         let run = m.run_id.as_ref().and_then(|id| state.runtime.runs.iter().find(|r| &r.id == id));
         json!({"text":m.text,"reply":reply,"status":status,"run_id":m.run_id,"kind":run.map(|r| &r.kind),"question":run.and_then(|r|r.question.as_ref()),"attempts":run.map(|r| &r.attempts)})
@@ -592,7 +603,7 @@ pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
 }
 fn command_text(text: &str) -> String {
     let trimmed = text.trim_start();
-    for command in ["/steer", "/btw", "/spawn", "/cancel", "/answer"] {
+    for command in ["/steer", "/btw", "/spawn", "/cancel", "/answer", "/open"] {
         if let Some(rest) = trimmed.strip_prefix(command).filter(|s| s.is_empty() || s.starts_with(char::is_whitespace)) {
             return format!("{}<span class='chat-command'>{command}</span>{}", escape(&text[..text.len() - trimmed.len()]), escape(rest));
         }
@@ -621,6 +632,8 @@ fn command_text(text: &str) -> String {
 pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
     let data = detail(state, id)?;
     let mut html = "<!doctype html><html lang='en'><head><meta charset='utf-8'><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'></head><body class='transcript'>".to_owned();
+    html.push_str(&crate::projects::panel(state,id));
+    html.push_str(&crate::previews::links(state,id));
     let messages = data["messages"].as_array().unwrap();
     for (position, message) in messages.iter().enumerate() {
         let status = match message["status"].as_str().unwrap_or("") {

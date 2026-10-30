@@ -24,8 +24,8 @@ use std::{
 };
 
 const VERSION: &str = "2025-11-25";
-const MUTATIONS: [&str; 4] = ["control.chat.create", "control.chat.send", "control.room.post", "control.chat.lenses"];
-const CHAT_COMMANDS: [&str; 7] = ["/improve", "/improve off", "/steer", "/btw", "/spawn", "/cancel", "/answer"];
+const MUTATIONS: [&str; 5] = ["control.chat.create", "control.chat.send", "control.room.post", "control.chat.lenses", "control.project.request"];
+const CHAT_COMMANDS: [&str; 8] = ["/improve", "/improve off", "/steer", "/btw", "/spawn", "/cancel", "/answer", "/open"];
 
 fn command_line(text: &str) -> Line<'static> {
     let prefix = CHAT_COMMANDS.iter().rev().find(|command| text.strip_prefix(**command).is_some_and(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace)));
@@ -275,6 +275,15 @@ impl App {
         let text = self.input.trim().to_owned();
         self.menu = None;
         match text.as_str() {
+            _ if text.starts_with("/trust ")=>{
+                let request=text[7..].trim();
+                if request!=self.detail["project"]["request"].as_str().unwrap_or("") || self.detail["project"]["grant"].is_string() {return Err(failure("Project request changed. Use /open to review it."));}
+                let url=hive.endpoint.trim_end_matches("/mcp");
+                let response=hive.client.post(format!("{url}/chat/{}/project",self.active)).timeout(Duration::from_secs(120))
+                    .header("Origin",url).form(&[("approve","yes"),("request",request)]).send().map_err(|_|failure("Project approval did not finish; refresh before retrying."))?;
+                if response.status().as_u16()!=303 {return Err(failure("Could not open the project. Review its project page in the web UI."));}
+                self.refresh(hive)?;self.inspector=None;self.status="Project ready · isolated worktree".into();
+            }
             "/quit" => return Ok(true),
             "/new" => self.new_chat(hive)?,
             "/chats" => {
@@ -391,6 +400,16 @@ impl App {
             );
         }
         let mut lines = Vec::new();
+        if let Some(previews)=self.detail["previews"].as_array() {for preview in previews {if let Some(url)=preview["url"].as_str(){lines.push(Line::styled(format!("Preview · {}",clean(url)),Style::default().fg(Color::Rgb(181,160,255))));}}}
+        if let Some(path)=self.detail["project_worktree"].as_str(){lines.push(Line::from(format!("Worktree · {}",clean(path))));}
+        if let Some(project)=self.detail["project"].as_object() {
+            let path=clean(project.get("path").and_then(Value::as_str).unwrap_or(""));
+            lines.push(Line::styled(format!("Project · {path}"),Style::default().fg(Color::Rgb(181,160,255))));
+            if project.get("grant").is_none_or(Value::is_null) {
+                lines.push(Line::from("Trust this folder’s code and allow local previews? An isolated worktree keeps the original unchanged; previews have read-only project access and no external network."));
+                lines.push(Line::from(format!("/trust {}",project.get("request").and_then(Value::as_str).unwrap_or(""))));
+            }
+        }
         if let Some(messages) = self.detail["messages"].as_array() {
             for message in messages {
                 lines.push(Line::styled(
@@ -467,7 +486,7 @@ impl Drop for Restore {
 pub fn run() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|s| s == "--help") {
-        println!("control tui [--server {}] [--session ID] [--check]\nAlso available as control-harness. Rust TUI for the local Control server (CONTROL_ADDR sets the default).\n\n/lenses · /use ID ID · /use none · /context · /chat · /help", crate::config::server_url());
+        println!("control tui [--server {}] [--session ID] [--directory PATH] [--check]\nAlso available as control-harness. Rust TUI for the local Control server (CONTROL_ADDR sets the default).\n\n/open /absolute/path · /trust REQUEST · /lenses · /use ID ID · /use none · /context · /chat · /help", crate::config::server_url());
         return Ok(());
     }
     let option = |name: &str| {
@@ -484,6 +503,13 @@ pub fn run() -> io::Result<()> {
         ..App::default()
     };
     app.refresh(&mut hive)?;
+    if let Some(directory)=option("--directory") {
+        let path=std::path::PathBuf::from(directory);
+        let path=if path.is_absolute(){path}else{std::env::current_dir()?.join(path)};
+        if option("--session").is_none(){app.new_chat(&mut hive)?;}
+        app.detail=hive.tool("control.project.request",json!({"id":app.active,"path":path.to_string_lossy()}))?;
+        app.refresh(&mut hive)?;
+    }
     if args.iter().any(|s| s == "--check") {
         println!(
             "Connected to Control MCP. {} chats available.",

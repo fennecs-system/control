@@ -84,6 +84,7 @@ fn expected_path(attempt: &Attempt, name: &str) -> Result<PathBuf, &'static str>
     if name == format!("{main}-tool") {
         return Ok(workspace);
     }
+    if name==format!("{main}-preview") && attempt.project.is_some() {return Ok(workspace);}
     if name == format!("{main}-probe") {
         return Ok(workspace.parent().unwrap().join(
             if attempt.backend == crate::backend::Backend::Claude {
@@ -200,6 +201,16 @@ pub fn stop_resource(
     image: &str,
     workspace: &std::path::Path,
 ) -> Result<(), &'static str> {
+    stop_resource_id(name, node, image, workspace, None)
+}
+
+pub fn stop_resource_id(
+    name: &str,
+    node: &str,
+    image: &str,
+    workspace: &std::path::Path,
+    expected_id: Option<&str>,
+) -> Result<(), &'static str> {
     let text = crate::runtime::docker_query(&["inspect", "--format", INSPECT, name]);
     let text = match text {
         Ok(s) => s,
@@ -215,6 +226,9 @@ pub fn stop_resource(
     let container: Container =
         serde_json::from_str(text.trim()).map_err(|_| "Invalid resource inspection.")?;
     verified_resource(&container, Some(node), Some(image), workspace, name)?;
+    if expected_id.is_some_and(|id| container.id != id) {
+        return Err("Resource identity changed; replacement was not stopped.");
+    }
     stop_container(&container, crate::runtime::docker_query)
 }
 
@@ -256,6 +270,7 @@ pub fn owners(runs: &[crate::runtime::Run]) -> Vec<Owner> {
                 identity.node_id.clone_from(&a.node_id);
                 identity.workspace_id.clone_from(&a.workspace_id);
                 identity.started_unix = a.started_unix;
+                identity.project.clone_from(&a.project);
                 identity
             }).collect(),
         })
@@ -283,6 +298,7 @@ fn reconcile_with(
             continue;
         }
         match owner {
+            Some((_,attempt)) if purpose=="preview"=>crate::previews::verify(&name,attempt).map_err(|_|format!("Preview {name} does not match its persisted attempt; inspect it before resuming."))?,
             Some((owner, attempt)) if !owner.active => stop(attempt, &name)
                 .map_err(|m| format!("{m} Container {name}: inspect it, then run `docker rm -f {name}` to resume dispatch."))?,
             Some(_) => {}

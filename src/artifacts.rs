@@ -151,7 +151,7 @@ pub(crate) fn diff_snapshot(root: &Path) -> io::Result<control::diff::Snapshot> 
     Ok(snapshot)
 }
 
-fn diff_open_child(directory: &fs::File, name: &std::ffi::OsStr) -> io::Result<fs::File> {
+pub(crate) fn diff_open_child(directory: &fs::File, name: &std::ffi::OsStr) -> io::Result<fs::File> {
     use std::os::{fd::{AsRawFd,FromRawFd},unix::ffi::OsStrExt};
     let name=std::ffi::CString::new(name.as_bytes()).map_err(|_|fail("Invalid diff filename"))?;
     // One relative component and a pinned parent descriptor: no intermediate
@@ -160,7 +160,7 @@ fn diff_open_child(directory: &fs::File, name: &std::ffi::OsStr) -> io::Result<f
     if fd<0 {return Err(io::Error::last_os_error());}
     Ok(unsafe{fs::File::from_raw_fd(fd)})
 }
-fn diff_directory_names(directory: &fs::File) -> io::Result<Vec<std::ffi::OsString>> {
+pub(crate) fn diff_directory_names(directory: &fs::File) -> io::Result<Vec<std::ffi::OsString>> {
     use std::os::{fd::IntoRawFd,unix::ffi::OsStrExt};
     let fd=directory.try_clone()?.into_raw_fd();
     // fdopendir owns the duplicated descriptor only on success.
@@ -342,7 +342,7 @@ fn publish_in(root: &Path, source: &Path, id: &str) -> io::Result<Manifest> {
     fs::File::open(root)?.sync_all()?;
     Ok(manifest)
 }
-fn sync_tree(directory: &Path) -> io::Result<()> {
+pub(crate) fn sync_tree(directory: &Path) -> io::Result<()> {
     #[cfg(target_os = "linux")]
     {
         // One filesystem-wide flush instead of an fsync per file.

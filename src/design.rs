@@ -24,6 +24,8 @@ pub struct Question {
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Continuation {
+    #[serde(default)]
+    pub project_base: Option<String>,
     pub checkpoint: String,
     pub published_parent: Option<String>,
     pub objective: String,
@@ -214,9 +216,12 @@ pub fn answer(
         })
         .ok_or("Paused attempt is unavailable.")?;
     let checkpoint = attempt
-        .artifact
-        .clone()
+        .project_checkpoint.as_ref().or(attempt.artifact.as_ref())
+        .cloned()
         .ok_or("The paused workspace has no verified checkpoint.")?;
+    if attempt.project.is_some() && state.chats[session_index].project.as_ref().and_then(|p|p.head.as_ref())!=attempt.project_base.as_ref() {
+        return Err("The project changed; cancel this question and start a new turn.");
+    }
     let current = if run.action == identity::Action::Improve {
         &state.chats[session_index].improve_workspace
     } else {
@@ -263,6 +268,7 @@ pub fn answer(
         .map(|c| c.objective.clone())
         .unwrap_or(run.objective);
     next.continuation = Some(Continuation {
+        project_base: attempt.project_base.clone(),
         checkpoint,
         published_parent: baseline.clone(),
         objective,
