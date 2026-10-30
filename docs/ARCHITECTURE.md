@@ -187,6 +187,13 @@ restarting a lost service must follow explicit recovery semantics. Persistent
 shells may be useful tools within those environments without defining the agent
 runtime or weakening reproducibility.
 
+For example, an ephemeral model attempt can request a long-running Minecraft
+server through a tool and receive its service identity, logs and endpoint. The
+attempt may finish while the server and its durable world remain available for
+later agents. Service lifetime, data lifetime and model-attempt lifetime are
+independent. Minecraft is an example tool workload, not a special case in core
+scheduling; resource and port grants still apply.
+
 Backend/model selection is captured per run. The Claude adapter runs an unmodified,
 pinned CLI with built-in tools disabled and an explicit Control MCP bridge.
 Its harness sees a mailbox, while a separate offline container mounts the task
