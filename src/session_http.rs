@@ -286,6 +286,13 @@ pub fn handle(
         }
     } else if method == "POST" && operation == "messages" {
         let fields = crate::fields(&String::from_utf8_lossy(body));
+        if fields.get("message").is_some_and(|message| message.trim() == "/open") {
+            match chat::detail(state, id) {
+                Ok(_) => respond(stream, "303 See Other", "text/plain", "", &format!("Location: /chat/{id}/project\r\n")),
+                Err(message) => respond_chat_status(stream, "400 Bad Request", &chat_page(state, lens, id, message, "/open")),
+            }
+            return true;
+        }
         let mut arguments =
             json!({"id":id,"message":fields.get("message").map(String::as_str).unwrap_or("")});
         if fields.contains_key("composition") {
@@ -337,6 +344,27 @@ pub fn handle(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn web_folder_picker_is_opt_in_and_bare_open_only_navigates() {
+        let mut state = State::default();
+        let id = chat::create(&mut state);
+        assert!(!chat::transcript(&state, &id).unwrap().contains("project-picker"));
+        chat::send(&mut state, &id, "Discuss the design", "test").unwrap();
+        assert!(!chat::transcript(&state, &id).unwrap().contains("project-picker"));
+        let before = serde_json::to_vec(&state).unwrap();
+        let mut response = Vec::new();
+        assert!(handle(&mut response, &mut state, "POST", &format!("/chat/{id}/messages"), "", "engineering", b"message=%2Fopen"));
+        let response = String::from_utf8(response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 303 See Other\r\n"));
+        assert!(response.lines().filter_map(|line|line.split_once(':')).any(|(name,value)|name.eq_ignore_ascii_case("location") && value.trim()==format!("/chat/{id}/project")));
+        assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+        // An explicit path still produces an approval next to its own message.
+        chat::send(&mut state, &id, "/open /fixture/source", "test").unwrap();
+        let transcript = chat::transcript(&state, &id).unwrap();
+        assert_eq!(transcript.matches("project-picker").count(), 1);
+        assert!(transcript.contains("Trust folder and open"));
+        assert!(state.chats[0].project.as_ref().unwrap().grant.is_none());
+    }
     use super::*;
     use reqwest::blocking::Client;
     use std::time::{Duration, Instant};

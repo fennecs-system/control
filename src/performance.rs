@@ -67,7 +67,7 @@ fn fingerprint(text: &str) -> String {
         .collect()
 }
 #[test]
-fn transcript_output_matches_the_pre_optimization_fixtures() {
+fn transcript_fixtures_only_change_by_removing_the_unsolicited_folder_picker() {
     for (messages, unrelated, expected) in [
         (
             10,
@@ -85,12 +85,13 @@ fn transcript_output_matches_the_pre_optimization_fixtures() {
             "f9e21edf6e6e78b585b4d29d3bba6d6ca01bd19905f53cd9599d58afc1fece37",
         ),
     ] {
-        assert_eq!(
-            fingerprint(
-                &chat::transcript(&fixture(messages, unrelated), "benchmark-chat").unwrap()
-            ),
-            expected
-        );
+        let state = fixture(messages, unrelated);
+        let html = chat::transcript(&state, "benchmark-chat").unwrap();
+        assert!(!html.contains("project-picker"));
+        // Restore only the intentionally removed picker to compare every other
+        // byte against the original performance regression fixtures.
+        let previous = html.replace("<div id='latest'>", &format!("{}<div id='latest'>", crate::projects::panel(&state, "benchmark-chat")));
+        assert_eq!(fingerprint(&previous), expected);
     }
 }
 #[test]
