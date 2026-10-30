@@ -63,14 +63,7 @@ fn rpc_at(
         }
         "ping" => json!({}),
         "tools/list" => {
-            let mut tools = crate::toolbox::definitions();
-            tools.push(crate::design::definition());
-            tools.push(crate::projects::definition(true));
-            tools.extend(crate::previews::definitions());
-            if run.action == identity::Action::Improve {tools.push(crate::github::definition());}
-            tools.push(crate::delegation::definition());
-            tools.extend(crate::command_jobs::definitions());
-            tools.push(crate::delegated_results::definition());
+            let mut tools = crate::tool_registry::worker_definitions(run.action == identity::Action::Improve);
             if judge {
                 tools.retain(|tool|matches!(tool["name"].as_str(),Some("control.web.search"|"control.rust.run"|"control.rust.bench"|"control_agent_result"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel")));
             }

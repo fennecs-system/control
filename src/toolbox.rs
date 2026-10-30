@@ -22,7 +22,7 @@ pub fn definitions() -> Vec<Value> {
     ]
 }
 pub fn known(name: &str) -> bool {
-    ["control.web.search", "control.rust.run", "control.rust.bench"].contains(&name)
+    crate::tool_registry::lookup(name).is_some_and(|tool|tool.route==crate::tool_registry::Route::Toolbox)
 }
 pub fn call(name: &str, args: &Value) -> io::Result<Value> {
     match name {

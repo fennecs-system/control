@@ -191,13 +191,13 @@ Finish these before increasing fan-out further, unattended operation or spending
 The code-quality fixes preserve document literals, fence failed preview launches,
 retain UTF-8 report prefixes, narrow rollback snapshots and share bounded private
 reads/atomic writes. Preview proxies use stop flags rather than polling state.
-Follow-ups: conditional transcript rendering with complete invalidation, shared
-HTTP response policy and a shared slash-command parser. Preserve route-specific
-framing/script permissions and command behavior while consolidating them.
+The shared HTTP response crate and chat command parser are implemented.
+Conditional transcript rendering still needs complete invalidation.
 
-- Share tool schemas/discovery/policy dispatch across HTTP MCP, stdio and worker
-  mailboxes. Registration checks catch omissions today; they do not replace one
-  registry. Audit MCP effect annotations against actual behavior.
+- Shared MCP schemas and typed transport/checkpoint metadata drive HTTP discovery,
+  stdio filtering, native-client timeouts and broker dispatch. Worker discovery
+  reuses the schema builders; per-run room, backend, judge and authority filters
+  remain explicit. Registration tests cover policy, schema and UI completeness.
 - Add admitted knowledge search/read and bounded claim proposals, authorized room
   posting in the external bridge, and `control.run.submit/status/diff` using the
   same durable run service. External callers inherit no worker/operator authority.

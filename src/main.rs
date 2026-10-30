@@ -41,6 +41,7 @@ mod storage;
 mod tool_catalog;
 mod toolbox;
 mod tools_http;
+mod tool_registry;
 mod usage;
 mod web_assets;
 mod worker;

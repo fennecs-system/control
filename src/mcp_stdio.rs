@@ -7,15 +7,6 @@ use std::{
     io::{self, BufRead, Read, Write},
     path::{Path, PathBuf},
 };
-const READ_TOOLS: &[&str] = &[
-    "control.chats.list",
-    "control.chat.read",
-    "control.lenses.list",
-    "control.lens.read",
-    "control.lenses.resolve",
-    "control.rooms.list",
-    "control.room.read",
-];
 fn fail(message: &str) -> io::Error {
     io::Error::other(message)
 }
@@ -120,13 +111,7 @@ fn hive(connection: &mut Option<Hive>) -> io::Result<&mut Hive> {
     }
     Ok(connection.as_mut().unwrap())
 }
-pub(crate) fn local_definitions() -> Vec<Value> {
-    let mut tools = vec![json!({"name":"control.browser.capture","description":"Render a self-contained HTML preview inside the configured root using offline Nix Firefox. Returns a PNG artifact. No network or host browser profile. Requires the pinned browser image.","inputSchema":{"type":"object","properties":{"input":{"type":"string"},"width":{"type":"integer","minimum":240,"maximum":2560},"height":{"type":"integer","minimum":240,"maximum":2560}},"required":["input"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})];
-    tools.extend(crate::toolbox::definitions());
-    tools.push(crate::projects::definition(false));
-    tools.push(crate::github::definition());
-    tools
-}
+pub(crate) fn local_definitions() -> Vec<Value> {crate::tool_registry::local_definitions()}
 fn dispatch(connection: &mut Option<Hive>, root: &Path, request: &Value) -> Value {
     let id = request.get("id").cloned().unwrap_or(Value::Null);
     let result = (|| -> io::Result<Value> {
@@ -147,9 +132,7 @@ fn dispatch(connection: &mut Option<Hive>, root: &Path, request: &Value) -> Valu
                         .unwrap_or_default()
                         .into_iter()
                         .filter(|t| {
-                            READ_TOOLS.contains(&t["name"].as_str().unwrap_or(""))
-                                || crate::artifacts::TOOLS
-                                    .contains(&t["name"].as_str().unwrap_or(""))
+                            crate::tool_registry::bridge_read(t["name"].as_str().unwrap_or(""))
                         })
                         .map(|mut t| {
                             t["annotations"] = json!({"readOnlyHint":true,"openWorldHint":false});
@@ -170,7 +153,7 @@ fn dispatch(connection: &mut Option<Hive>, root: &Path, request: &Value) -> Valu
                     Ok(crate::toolbox::result(crate::toolbox::call(
                         name, arguments,
                     )))
-                } else if name=="control.project.request" || name=="control_github_open_pr" || READ_TOOLS.contains(&name) || crate::artifacts::TOOLS.contains(&name) {
+                } else if crate::tool_registry::bridge_forward(name) {
                     hive(connection).and_then(|h| h.rpc("tools/call", request["params"].clone()))
                 } else {
                     Err(fail("Tool unavailable: this bridge exposes read-only Control access, web search, offline captures and Rust snippets"))
