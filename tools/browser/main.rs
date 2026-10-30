@@ -1,4 +1,6 @@
 //! Nix-built, offline Firefox screenshot tool. No browser profile or host directory is shared.
+#[path = "../platform-flags.rs"]
+mod platform_flags;
 use std::{
     fs,
     io::{self, Read, Write},
@@ -23,13 +25,9 @@ fn viewport(width: u16, height: u16) -> io::Result<()> {
 }
 fn read_input(path: &Path) -> io::Result<Vec<u8>> {
     use std::os::unix::fs::OpenOptionsExt;
-    #[cfg(target_os = "macos")]
-    let flags = 0x100 | 0x4;
-    #[cfg(not(target_os = "macos"))]
-    let flags = 0x20000 | 0x800;
     let f = fs::OpenOptions::new()
         .read(true)
-        .custom_flags(flags)
+        .custom_flags(platform_flags::SAFE_READ)
         .open(path)?;
     if !f.metadata()?.is_file() || f.metadata()?.len() > HTML_LIMIT as u64 {
         return Err(fail("Expected a regular HTML file of at most 4 MiB"));

@@ -1,4 +1,6 @@
 //! PID 1 for a credential-free, network-free Rust snippet container.
+#[path = "../platform-flags.rs"]
+mod platform_flags;
 use std::{fs, io::{self, Read, Write}, process::{Command, Stdio}, time::{Duration, Instant}};
 
 fn log(path: &str) -> io::Result<fs::File> {
@@ -7,7 +9,7 @@ fn log(path: &str) -> io::Result<fs::File> {
 fn output(path: &str, limit: usize) -> String {
     use std::os::unix::fs::OpenOptionsExt;
     let read = || -> io::Result<Vec<u8>> {
-        let f = fs::OpenOptions::new().read(true).custom_flags(0x20000 | 0x800).open(path)?;
+        let f = fs::OpenOptions::new().read(true).custom_flags(platform_flags::SAFE_READ).open(path)?;
         if !f.metadata()?.is_file() { return Err(io::Error::other("Invalid log")); }
         let mut bytes = Vec::new();
         f.take(limit as u64 + 1).read_to_end(&mut bytes)?;

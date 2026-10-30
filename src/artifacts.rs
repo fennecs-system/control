@@ -90,10 +90,7 @@ fn safe_read(root: &Path, relative: &str, limit: u64) -> io::Result<Vec<u8>> {
         }
     }
     path.push(components.last().unwrap().as_os_str());
-    #[cfg(target_os = "macos")]
-    let flags = 0x100 | 0x4;
-    #[cfg(not(target_os = "macos"))]
-    let flags = 0x20000 | 0x800;
+    let flags = libc::O_NOFOLLOW | libc::O_NONBLOCK;
     let file = fs::OpenOptions::new()
         .read(true)
         .custom_flags(flags)

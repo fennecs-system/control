@@ -38,10 +38,7 @@ pub fn initialize() -> io::Result<()> {
 }
 pub fn lock() -> io::Result<fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
-    #[cfg(target_os = "macos")]
-    let flags = 0x100;
-    #[cfg(not(target_os = "macos"))]
-    let flags = 0x20000;
+    let flags = libc::O_NOFOLLOW;
     let file = fs::OpenOptions::new()
         .read(true)
         .write(true)

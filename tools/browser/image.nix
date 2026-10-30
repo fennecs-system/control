@@ -14,8 +14,10 @@ let
     EOF
   '';
   runner = pkgs.runCommand "control-browser" { nativeBuildInputs = [ pkgs.rustc pkgs.stdenv.cc ]; } ''
-    mkdir -p $out/bin
-    rustc --edition=2021 -O ${./main.rs} -o $out/bin/control-browser
+    mkdir -p $out/bin src/browser
+    cp ${./main.rs} src/browser/main.rs
+    cp ${../platform-flags.rs} src/platform-flags.rs
+    rustc --edition=2021 -O src/browser/main.rs -o $out/bin/control-browser
   '';
 in pkgs.dockerTools.buildLayeredImage {
   name = "control-browser";

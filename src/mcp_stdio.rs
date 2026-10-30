@@ -59,10 +59,7 @@ pub(crate) fn render_preview(
         return Err(fail("Artifact directory must not be a symlink"));
     }
     fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
-    #[cfg(target_os = "macos")]
-    let flags = 0x100 | 0x4;
-    #[cfg(not(target_os = "macos"))]
-    let flags = 0x20000 | 0x800;
+    let flags = libc::O_NOFOLLOW | libc::O_NONBLOCK;
     let lock = fs::OpenOptions::new()
         .read(true)
         .write(true)
