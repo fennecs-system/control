@@ -853,7 +853,7 @@ fn execute(
             .map_err(|_| failed("Could not restore the previous published workspace. Its checkpoint is unchanged."))?;
     } else {
         prepare_workspace(scope, &baseline, &workspace)
-            .map_err(|_| failed("Could not prepare the authorized workspace."))?;
+            .map_err(|error| blocked(&format!("Could not prepare the authorized workspace: {error}")))?;
     }
     let absolute =
         fs::canonicalize(&workspace).map_err(|_| failed("Could not resolve worker workspace."))?;
@@ -1116,12 +1116,16 @@ fn prepare_workspace(
     workspace: &std::path::Path,
 ) -> std::io::Result<()> {
     if scope == Workspace::ControlSource {
-        runtime::snapshot(&crate::config::source_root()?, baseline)?;
-        runtime::snapshot(baseline, workspace)
+        prepare_source_workspace(&crate::config::source_root()?, baseline, workspace)
     } else {
         fs::create_dir_all(baseline)?;
         fs::create_dir_all(workspace)
     }
+}
+
+fn prepare_source_workspace(source: &Path, baseline: &Path, workspace: &Path) -> std::io::Result<()> {
+    runtime::snapshot(source, baseline).map_err(|e| std::io::Error::other(format!("Could not snapshot the configured Control checkout: {e}. Check source readability and free space in CONTROL_STATE_DIR. Retained run files have not been overwritten.")))?;
+    runtime::snapshot(baseline, workspace).map_err(|e| std::io::Error::other(format!("Could not copy the source snapshot into the workspace: {e}. Check free space and permissions in CONTROL_STATE_DIR. Retained run files have not been overwritten.")))
 }
 
 #[cfg(test)]
@@ -1470,6 +1474,35 @@ mod tests {
         prepare_workspace(Workspace::User, &baseline, &workspace).unwrap();
         assert_eq!(fs::read_dir(&baseline).unwrap().count(), 0);
         assert_eq!(fs::read_dir(&workspace).unwrap().count(), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn source_workspace_snapshots_required_build_inputs_and_explains_failures() {
+        let root = std::env::temp_dir().join(format!("control-source-workspace-{}", std::process::id()));
+        let source = root.join("source");
+        fs::create_dir_all(source.join("src")).unwrap();
+        fs::create_dir_all(source.join("hosting")).unwrap();
+        fs::write(source.join("src/main.rs"), "fn main() {}").unwrap();
+        fs::write(source.join("build.rs"), "fn main() {}").unwrap();
+        fs::write(source.join("hosting/worker-seccomp.json"), "{}").unwrap();
+        fs::write(source.join("hosting/.env"), "fake-secret").unwrap();
+        fs::write(source.join(".env"), "fake-secret").unwrap();
+        let baseline = root.join("baseline");
+        let workspace = root.join("workspace");
+        prepare_source_workspace(&source, &baseline, &workspace).unwrap();
+        for directory in [&baseline, &workspace] {
+            assert!(directory.join("src/main.rs").is_file());
+            assert!(directory.join("build.rs").is_file());
+            assert!(directory.join("hosting/worker-seccomp.json").is_file());
+            assert!(!directory.join(".env").exists());
+            assert!(!directory.join("hosting/.env").exists());
+        }
+        let blocked = root.join("blocked");
+        fs::write(&blocked, "preserve me").unwrap();
+        assert!(prepare_source_workspace(&source, &blocked, &root.join("never-created")).unwrap_err().to_string().contains("snapshot the configured Control checkout"));
+        assert!(!root.join("never-created").exists());
+        assert_eq!(fs::read(&blocked).unwrap(), b"preserve me");
+        assert!(prepare_source_workspace(&source, &root.join("second-baseline"), &blocked).unwrap_err().to_string().contains("copy the source snapshot"));
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
