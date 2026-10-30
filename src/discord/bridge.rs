@@ -1,5 +1,6 @@
 use crate::identity::{Action, Actor, DiscordId, DmBinding, DmBindings, Policy};
-use crate::{config, discord, discord_permissions, identity};
+use crate::{config, discord, identity};
+use super::{permissions as discord_permissions, delivery::{Snapshot, Run}};
 use reqwest::{
     blocking::Client,
     header::{HeaderMap, HeaderValue, AUTHORIZATION},
@@ -37,17 +38,22 @@ struct Bridge {
     bot_name: String,
     state: std::cell::RefCell<StateCache>,
 }
-/// state.json is re-parsed only when its size or modification time changes.
+/// Cache only delivery fields; reload on size, modification time or inode changes.
 #[derive(Default)]
 struct StateCache {
-    stamp: Option<(SystemTime, u64)>,
-    value: std::rc::Rc<Value>,
+    stamp: Option<(SystemTime, u64, u64)>,
+    value: std::rc::Rc<Snapshot>,
 }
 impl StateCache {
-    fn load(&mut self, path: &Path) -> std::rc::Rc<Value> {
-        let stamp = fs::metadata(path).ok().map(|m| (m.modified().unwrap_or(UNIX_EPOCH), m.len()));
+    fn load(&mut self, path: &Path) -> std::rc::Rc<Snapshot> {
+        use std::os::unix::fs::MetadataExt;
+        let stamp = fs::symlink_metadata(path).ok().filter(|m| m.is_file()).map(|m| (m.modified().unwrap_or(UNIX_EPOCH), m.len(), m.ino()));
         if stamp.is_none() || stamp != self.stamp {
-            self.value = std::rc::Rc::new(load_json(path));
+            self.value = std::rc::Rc::new(
+                config::read_regular(path, isize::MAX as usize, false).ok()
+                    .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                    .unwrap_or_default()
+            );
             self.stamp = stamp;
         }
         std::rc::Rc::clone(&self.value)
@@ -113,22 +119,19 @@ fn design_report(question: &Value) -> Option<String> {
     }
     Some(report)
 }
-fn delivery_message(run: &Value, status: &str, link: &str, report: &str) -> String {
+fn delivery_message(run: &Run, status: &str, link: &str, report: &str) -> String {
     let prefix=format!("Control: {status}.\nContinue on this laptop: {link}\n\n");
-    let edits=if status=="waiting" {None}else{run["attempts"].as_array().and_then(|a|a.last())
-        .and_then(|a|a["activity"].as_array()).and_then(|events|events.iter().rev().find(|event|event["kind"]=="file_change" && event["output"].as_str().is_some_and(|s|!s.is_empty())))};
-    let suffix=edits.map(|event|format!("\n\nChanges · {}\n{}",event["text"].as_str().unwrap_or("").chars().take(100).collect::<String>(),control::diff::discord_preview(event["output"].as_str().unwrap_or("")))).unwrap_or_default();
+    let edits = if status == "waiting" { None } else { run.latest.as_ref().and_then(|a| a.change.as_ref()) };
+    let suffix=edits.map(|event|format!("\n\nChanges · {}\n{}",event.text.chars().take(100).collect::<String>(),crate::diff::discord_preview(&event.output))).unwrap_or_default();
     let budget=1800usize.saturating_sub(prefix.chars().count()+suffix.chars().count());
     let body=if report.chars().count()>budget {
         format!("{}\n… Full reply in chat.",report.chars().take(budget.saturating_sub(23)).collect::<String>())
     }else{report.to_owned()};
     format!("{prefix}{body}{suffix}")
 }
-fn cancelled_receipts(state: &Value) -> Vec<String> {
-    state["runtime"]["runs"].as_array().into_iter().flatten()
-        .filter(|run| run["status"] == "cancelled")
-        .filter_map(|run| Some(format!("{}:cancelled", run["id"].as_str()?)))
-        .collect()
+fn cancelled_receipts(state: &Snapshot) -> Vec<String> {
+    state.runtime.runs.iter().filter(|run| run.status == "cancelled")
+        .map(|run| format!("{}:cancelled", run.id)).collect()
 }
 fn now() -> u64 {
     SystemTime::now()
@@ -432,7 +435,7 @@ impl Bridge {
     fn reply(&self, channel: DiscordId, content: &str) -> bool {
         self.send(channel, content).is_ok()
     }
-    fn snapshot(&self) -> Result<std::rc::Rc<Value>, &'static str> {
+    fn snapshot(&self) -> Result<std::rc::Rc<Snapshot>, &'static str> {
         Ok(self.state.borrow_mut().load(&config::state("state.json")?))
     }
     fn send(&self, channel: DiscordId, content: &str) -> Sent {
@@ -543,7 +546,7 @@ impl Bridge {
                     };
                     let path = config::state("discord-inbox")?.join(format!("{id}.json"));
                     // Already written or ingested before the cursor checkpoint: do not acknowledge twice.
-                    let duplicate = Path::new(&path).exists() || self.snapshot()?["discord_seen"].as_array().is_some_and(|seen| seen.iter().any(|s| s.as_str() == Some(&id.to_string())));
+                    let duplicate = Path::new(&path).exists() || self.snapshot()?.discord_seen.contains(&id.to_string());
                     if !duplicate {
                         checkpoint(
                             &path,
@@ -607,25 +610,19 @@ impl Bridge {
     fn deliver(&self, routes: &[Route], outbound: &mut Outbound) -> Result<(), &'static str> {
         let state = self.snapshot()?;
         let mut authorize = identity::authorizer();
-        if let Some(runs) = state["runtime"]["runs"].as_array() {
-            for run in runs {
-                if !run["source"]
-                    .as_str()
-                    .is_some_and(|s| s.starts_with("discord:"))
-                    && run["chat_id"].is_null()
+        {
+            for run in &state.runtime.runs {
+                if !run.source.starts_with("discord:") && run.chat_id.is_none()
                 {
                     continue;
                 }
-                let Ok(actor) = serde_json::from_value::<Actor>(run["actor"].clone()) else {
-                    continue;
-                };
-                let action =
-                    serde_json::from_value::<Action>(run["action"].clone()).unwrap_or_default();
-                if authorize(&actor, action).is_err() {
+                let actor = &run.actor;
+                let action = run.action;
+                if authorize(actor, action).is_err() {
                     continue;
                 }
                 let (channel, direct) = match actor {
-                    Actor::DiscordDm { channel_id, .. } => (channel_id, true),
+                    Actor::DiscordDm { channel_id, .. } => (*channel_id, true),
                     _ => continue,
                 };
                 if !routes
@@ -634,24 +631,24 @@ impl Bridge {
                 {
                     continue;
                 }
-                let status = run["status"].as_str().unwrap_or("");
+                let status = run.status.as_str();
                 if !["completed", "blocked", "failed", "interrupted", "waiting", "cancelled"].contains(&status) {
                     continue;
                 }
-                let id = run["id"].as_str().unwrap_or("");
+                let id = run.id.as_str();
                 let receipt = format!("{id}:{status}");
                 if outbound.delivered.contains(&receipt) {
                     continue;
                 }
-                let decision = (status == "waiting").then(||design_report(&run["question"])).flatten();
+                let decision = (status == "waiting").then(||design_report(&run.question)).flatten();
                 let report = if let Some(report) = decision.as_deref() {
                     report
                 } else if action == Action::Improve && !direct {
                     "Architect report: open the authenticated operator website."
                 } else {
-                    run["result"].as_str().unwrap_or("No report was produced.")
+                    run.result.as_deref().unwrap_or("No report was produced.")
                 };
-                let link = discord::session_link(&actor, run["chat_id"].as_str()).unwrap_or_default();
+                let link = discord::session_link(actor, run.chat_id.as_deref()).unwrap_or_default();
                 if self.attempt(&receipt, channel, &delivery_message(run,status,&link,report), outbound) {
                     outbound.delivered.insert(receipt);
                     checkpoint(
@@ -845,7 +842,7 @@ mod tests {
     }
     #[test]
     fn delivery_reserves_space_for_actual_changes_without_greening_or_losing_link() {
-        let run=json!({"attempts":[{"activity":[{"kind":"file_change","text":"1 file · +1 −1","output":"@@ -1 +1 @@\n-old\n+new\n"}]}]});
+        let run: Run=serde_json::from_value(json!({"attempts":[{"activity":[{"kind":"file_change","text":"1 file · +1 −1","output":"@@ -1 +1 @@\n-old\n+new\n"}]}]})).unwrap();
         let message=delivery_message(&run,"completed","http://localhost/chat/test",&"reply ".repeat(1000));
         assert!(message.chars().count()<=1800);
         assert!(message.contains("http://localhost/chat/test") && message.contains("```text\n"));
@@ -902,20 +899,40 @@ mod tests {
         row["author"]["id"] = json!("3");
         assert!(rejected(&row, &route, id("99")).is_none());
         let state = json!({"runtime":{"runs":[{"id":"r1","status":"cancelled"},{"id":"r2","status":"completed"}]}});
-        assert_eq!(cancelled_receipts(&state), ["r1:cancelled"]);
+        assert_eq!(cancelled_receipts(&serde_json::from_value(state).unwrap()), ["r1:cancelled"]);
     }
     #[test]
     fn state_cache_reparses_only_after_the_file_changes() {
         let path = std::env::temp_dir().join(format!("control-bridge-cache-{}.json", std::process::id()));
-        fs::write(&path, br#"{"a":1}"#).unwrap();
+        fs::write(&path, br#"{"discord_seen":["1"]}"#).unwrap();
         let mut cache = StateCache::default();
         let first = cache.load(&path);
-        assert_eq!(first["a"], 1);
+        assert!(first.discord_seen.contains("1"));
         assert!(std::rc::Rc::ptr_eq(&first, &cache.load(&path)));
-        fs::write(&path, br#"{"a":22}"#).unwrap();
-        assert_eq!(cache.load(&path)["a"], 22);
+        fs::write(&path, br#"{"discord_seen":["22"]}"#).unwrap();
+        assert!(cache.load(&path).discord_seen.contains("22"));
         fs::remove_file(&path).unwrap();
-        assert!(cache.load(&path).is_null());
+        assert!(cache.load(&path).discord_seen.is_empty());
+    }
+    #[test]
+    fn state_cache_detects_atomic_replacement_and_refuses_symlinks() {
+        let root = std::env::temp_dir().join(format!("control-bridge-replace-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("state.json");
+        let replacement = root.join("replacement.json");
+        fs::write(&path, br#"{"discord_seen":["1"]}"#).unwrap();
+        let stamp = fs::metadata(&path).unwrap().modified().unwrap();
+        let mut cache = StateCache::default();
+        assert!(cache.load(&path).discord_seen.contains("1"));
+        fs::write(&replacement, br#"{"discord_seen":["2"]}"#).unwrap();
+        fs::File::options().write(true).open(&replacement).unwrap()
+            .set_times(fs::FileTimes::new().set_modified(stamp)).unwrap();
+        fs::rename(&replacement, &path).unwrap();
+        assert!(cache.load(&path).discord_seen.contains("2"));
+        fs::rename(&path, &replacement).unwrap();
+        std::os::unix::fs::symlink(&replacement, &path).unwrap();
+        assert!(cache.load(&path).discord_seen.is_empty());
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn server_messages_are_rejected_even_with_a_prefix() {
