@@ -113,6 +113,7 @@ dependencies = [
  "base64 0.22.1",
  "control-ai",
  "control-context",
+ "control-core",
  "control-http",
  "crossterm",
  "libc",
@@ -139,6 +140,10 @@ dependencies = [
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "control-core"
+version = "0.1.0"
 
 [[package]]
 name = "control-http"

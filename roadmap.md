@@ -179,6 +179,14 @@ separate crates yet. Keep `main` buildable throughout small reviewed slices.
    change only when it preserves behavior and has a useful boundary or measured
    efficiency gain; do not claim moving files alone makes execution faster.
 
+First slice: `control-core` now owns pure scheduling and attempt-generation
+predicates over borrowed inputs, with independent tests and no dependencies.
+The application adapter retains config I/O and the persisted runtime. Compatibility
+checks compare it with the previous scheduler over mixed saved states. This does
+not yet extract the full command/query service, web adapter or terminal client.
+MCP should become a protocol adapter over that service, preserving today's shared
+tool catalogue rather than introducing a separate tool implementation.
+
 Do not expose the full state mutex as the interface, clone complete histories,
 introduce a distributed framework or make every tool its own crate. This improves
 the seam for later remote execution; authentication, resource ownership and stale

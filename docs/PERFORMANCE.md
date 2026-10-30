@@ -1,5 +1,44 @@
 # Performance checks
 
+## Core scheduling extraction
+
+The initial `control-core` scheduling boundary uses borrowed, statically
+dispatched views and retains the original FIFO, chat ownership, capacity and
+attempt-fencing behavior. The application tests compare it with the original
+scheduler over 2,000 deterministic mixed ledger states, including unknown saved
+statuses, tied order, missing chat IDs, answered questions and delegation.
+
+Reproduce the old/new release comparison without credentials or model calls:
+
+```sh
+nix develop --command cargo test --release --locked --bin control \
+  scheduler::qa::scheduling_profile -- --ignored --exact --nocapture
+```
+
+Observed development Mac medians across three invocations; each invocation uses
+nine batches of 200 calls per implementation. Long ledgers contain 5,032 runs:
+
+| Workload | Previous | Core |
+| --- | ---: | ---: |
+| Open, 32 runs | 266 ns | 76 ns |
+| Open, long ledger | 9.09 µs | 8.25 µs |
+| One occupied slot, long ledger | 8.91 µs | 8.74 µs |
+| Waiting chats, long ledger | 9.09 µs | 9.15 µs |
+| Paused, long ledger | 2.95 µs | 3 ns |
+| Full slots, long ledger | 2.92 µs | 2.89 µs |
+| Full admission, long ledger | 3.91 µs | 3.90 µs |
+| Available admission, long ledger | 3.63 µs | 3.65 µs |
+
+Ordinary long-ledger cases are neutral within observed sampling variation;
+waiting-chat samples ranged 8.96–9.16 µs before and 9.02–9.19 µs after. These
+microbenchmarks do not establish an end-to-end model throughput improvement.
+No additional history buffers or persistent indexes are introduced. Paused
+selection now returns before examining history. Eager record projections and
+early-exit counting variants were rejected after they slowed ordinary queues;
+the selected implementation retains compiler-friendly full reductions.
+
+## Rust microbenchmark tool
+
 Use synthetic state and explicit workloads before changing execution policy.
 Benchmarks never load personal chat history or call a model. Timing is evidence,
 not a test assertion; correctness and publication fences remain separate checks.
