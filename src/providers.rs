@@ -8,6 +8,13 @@ pub struct Model {
     model: String,
 }
 
+/// Judges use an explicitly configured alternate provider, never an implicit
+/// credential discovery or fallback to the development model.
+pub fn review_model(runtime: &crate::runtime::Runtime, development: crate::backend::Backend) -> Option<(crate::backend::Backend, String)> {
+    runtime.models.iter().find(|entry| entry.backend != development)
+        .map(|entry| (entry.backend, entry.model.clone()))
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Settings {

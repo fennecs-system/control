@@ -2,12 +2,16 @@
 { pkgs, backend ? "codex" }:
 let
   playground = pkgs.runCommand "control-playground" { nativeBuildInputs = [ pkgs.rustc pkgs.stdenv.cc ]; } ''
-    mkdir -p $out/bin
-    rustc --edition=2021 -O ${../tools/playground/main.rs} -o $out/bin/control-playground
+    mkdir -p $out/bin src/playground
+    cp ${../tools/playground/main.rs} src/playground/main.rs
+    cp ${../tools/platform-flags.rs} src/platform-flags.rs
+    rustc --edition=2021 -O src/playground/main.rs -o $out/bin/control-playground
   '';
   roomMcp = pkgs.runCommand "control-room-mcp" { nativeBuildInputs = [ pkgs.rustc pkgs.stdenv.cc ]; } ''
-    mkdir -p $out/bin
-    rustc --edition=2021 -O ${../tools/room-mcp/main.rs} -o $out/bin/control-room-mcp
+    mkdir -p $out/bin src/room-mcp
+    cp ${../tools/room-mcp/main.rs} src/room-mcp/main.rs
+    cp ${../tools/platform-flags.rs} src/platform-flags.rs
+    rustc --edition=2021 -O src/room-mcp/main.rs -o $out/bin/control-room-mcp
   '';
 in
 pkgs.dockerTools.buildLayeredImage {

@@ -38,10 +38,7 @@ pub fn initialize() -> io::Result<()> {
 }
 pub fn lock() -> io::Result<fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
-    #[cfg(target_os = "macos")]
-    let flags = 0x100;
-    #[cfg(not(target_os = "macos"))]
-    let flags = 0x20000;
+    let flags = libc::O_NOFOLLOW;
     let file = fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -83,6 +80,12 @@ fn interrupt_active(state: &mut State) -> bool {
                     .into();
             if let Some(attempt) = run.attempts.last_mut() {
                 attempt.status = "interrupted".into();
+                for job in &mut attempt.command_jobs {
+                    if ["preparing","running","stopping"].contains(&job.status.as_str()) {
+                        job.status="interrupted".into();
+                        if let Some(activity)=attempt.activity.iter_mut().find(|a|a.id==format!("job-{}",job.id)) {activity.status="interrupted".into();}
+                    }
+                }
             }
             if let Some(session) = state
                 .chats

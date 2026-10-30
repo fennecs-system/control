@@ -13,7 +13,23 @@ pub struct Tool {
     pub aliases: &'static str,
     pub mcp_names: &'static [&'static str],
 }
-pub const TOOLS: [Tool; 15] = [
+pub const TOOLS: [Tool; 18] = [
+    Tool {
+        name: "github.pull_request", title: "GitHub pull request", description: "Completed improvement · scoped repository",
+        href: "/chats", aliases: "github git pull request draft publish review",
+        mcp_names: &["control_github_open_pr"], execution: "Rust credential broker / GitHub API", surface: "improve chat / MCP", available: true,
+    },
+    Tool {
+        name:"agent.delegate",title:"Delegate agent",description:"Isolated workers · independent cross-provider judge",
+        href:"/chats",aliases:"persona review judge subagent spawn delegation",
+        mcp_names:&["control_agent_delegate", "control_agent_result"],execution:"local Rust / durable bounded task queue",surface:"chat / worker MCP",available:true,
+    },
+    Tool {
+        name: "workspace.commands", title: "Workspace commands", description: "Offline jobs · live output",
+        href: "/chats", aliases: "shell terminal build test logs cancel environment",
+        mcp_names: &["control_workspace_start", "control_workspace_status", "control_workspace_cancel"],
+        execution: "credential-free Nix container", surface: "chat / TUI", available: true,
+    },
     Tool {
         name: "preview.serve", title: "Local preview", description: "Nix service · private localhost origin",
         href: "/chats", aliases: "ports proxy service browser preview tunnel",
@@ -190,6 +206,11 @@ pub const TOOLS: [Tool; 15] = [
         available: true,
     },
 ];
+/// Managed-adapter tool names; advertising a name never grants execution authority.
+pub fn worker_mcp_names() -> Vec<&'static str> {
+    TOOLS.iter().filter(|tool|tool.available).flat_map(|tool|tool.mcp_names.iter().copied())
+        .filter(|name|name.starts_with("control_")).collect::<std::collections::BTreeSet<_>>().into_iter().collect()
+}
 /// UI discovery metadata only; protocol schemas and execution authority remain with their adapters.
 pub fn tool_for_mcp(name: &str) -> Option<&'static Tool> {
     TOOLS

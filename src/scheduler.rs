@@ -17,7 +17,7 @@ pub fn next(runtime: &Runtime) -> Option<usize> {
         return None;
     }
     runtime.runs.iter().enumerate().filter(|(_, r)| r.status == "queued")
-        .filter(|(_, r)| !runtime.runs.iter().any(|paused| paused.status == "waiting" && paused.chat_id.is_some() && paused.chat_id == r.chat_id && paused.question.as_ref().is_some_and(|q| q.answer.is_none())))
+        .filter(|(_, r)| !runtime.runs.iter().any(|paused| paused.status == "waiting" && paused.chat_id.is_some() && paused.chat_id == r.chat_id && (paused.delegation.is_some() || paused.question.as_ref().is_some_and(|q| q.answer.is_none()))))
         .min_by_key(|(index, r)| (r.queue_order, *index)).map(|(index, _)| index)
 }
 

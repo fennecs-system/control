@@ -24,7 +24,7 @@ use std::{
 };
 
 const VERSION: &str = "2025-11-25";
-const MUTATIONS: [&str; 5] = ["control.chat.create", "control.chat.send", "control.room.post", "control.chat.lenses", "control.project.request"];
+const MUTATIONS: [&str; 6] = ["control.chat.create", "control.chat.send", "control.room.post", "control.chat.lenses", "control.project.request", "control_github_open_pr"];
 const CHAT_COMMANDS: [&str; 8] = ["/improve", "/improve off", "/steer", "/btw", "/spawn", "/cancel", "/answer", "/open"];
 
 fn command_line(text: &str) -> Line<'static> {
@@ -277,12 +277,14 @@ impl App {
         match text.as_str() {
             _ if text.starts_with("/trust ")=>{
                 let request=text[7..].trim();
-                if request!=self.detail["project"]["request"].as_str().unwrap_or("") || self.detail["project"]["grant"].is_string() {return Err(failure("Project request changed. Use /open to review it."));}
+                if request!=self.detail["project"]["request"].as_str().unwrap_or("") || (self.detail["project"]["grant"].is_string()&&self.detail["project"]["pending"]!=true) {return Err(failure("Project request changed. Use /open to review it."));}
                 let url=hive.endpoint.trim_end_matches("/mcp");
                 let response=hive.client.post(format!("{url}/chat/{}/project",self.active)).timeout(Duration::from_secs(120))
                     .header("Origin",url).form(&[("approve","yes"),("request",request)]).send().map_err(|_|failure("Project approval did not finish; refresh before retrying."))?;
                 if response.status().as_u16()!=303 {return Err(failure("Could not open the project. Review its project page in the web UI."));}
-                self.refresh(hive)?;self.inspector=None;self.status="Project ready · isolated worktree".into();
+                self.refresh(hive)?;
+                if self.detail["project"]["pending"]==true||!self.detail["project"]["grant"].is_string() {return Err(failure(self.detail["project"]["error"].as_str().unwrap_or("Folder was not opened; review the request.")));}
+                self.inspector=None;self.status="Folder ready · isolated worktree".into();
             }
             "/quit" => return Ok(true),
             "/new" => self.new_chat(hive)?,
@@ -405,9 +407,10 @@ impl App {
         if let Some(project)=self.detail["project"].as_object() {
             let path=clean(project.get("path").and_then(Value::as_str).unwrap_or(""));
             lines.push(Line::styled(format!("Project · {path}"),Style::default().fg(Color::Rgb(181,160,255))));
-            if project.get("grant").is_none_or(Value::is_null) {
+            if project.get("grant").is_none_or(Value::is_null)||project.get("pending")==Some(&json!(true)) {
                 lines.push(Line::from("Trust this folder’s code and allow local previews? An isolated worktree keeps the original unchanged; previews have read-only project access and no external network."));
                 lines.push(Line::from(format!("/trust {}",project.get("request").and_then(Value::as_str).unwrap_or(""))));
+                if let Some(error)=project.get("error").and_then(Value::as_str) {lines.push(Line::from(clean(error)));}
             }
         }
         if let Some(messages) = self.detail["messages"].as_array() {
@@ -766,6 +769,40 @@ pub fn run() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires isolated control-selfdev-qa server, declared build image, own authenticated Codex and Claude; three or more model calls"]
+    fn live_improve_build_and_independent_judge_roundtrip() {
+        let state_dir=crate::config::state_directory().unwrap();
+        assert!(state_dir.parent().is_some_and(|p|p.parent()==Some(std::path::Path::new("/private/tmp")) && p.file_name().is_some_and(|s|s.to_string_lossy().starts_with("control-selfdev-qa."))));
+        let server=std::env::var("CONTROL_QA_URL").expect("Use an isolated self-development server");
+        let mut hive=Hive::connect(&server).unwrap();
+        let chat=hive.tool("control.chat.create",json!({"mode":"improve"})).unwrap()["id"].as_str().unwrap().to_owned();
+        let submitted=hive.tool("control.chat.send",json!({"id":chat,"message":"Implement this small self-development verification task in the isolated Control source. Create docs/self-development-proof.md containing exactly: Control self-development verified. Do not change any other source file. Then use control_workspace_start with environment build and timeout_seconds 1800 to run cargo test --locked --bin control github::tests. Use the status tool until the job completes and verify exit code zero. Next call control_agent_delegate with role judge and objective: Review docs/self-development-proof.md against the requested exact text Control self-development verified. Inspect the actual file in the read-only source; report findings and do not modify files. Stop after delegation acknowledgement. When Control resumes you with the judge feedback, use control_agent_result section summary to inspect its full report, verify the proof file remains correct and finish briefly. Do not publish a PR, deploy, inspect credentials or modify the host checkout."})).unwrap();
+        let root=submitted["messages"][0]["run_id"].as_str().unwrap().to_owned();
+        let started=Instant::now();
+        loop {
+            let detail=hive.tool("control.chat.read",json!({"id":chat})).unwrap();
+            let last=detail["messages"].as_array().unwrap().last().unwrap();
+            let status=last["status"].as_str().unwrap();
+            if status=="completed" {break;}
+            assert!(["queued","running","waiting","continued"].contains(&status),"Self-development run ended with {status}: {}",last["reply"]);
+            assert!(started.elapsed()<Duration::from_secs(900),"Self-development workflow timed out");
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        let saved:Value=serde_json::from_slice(&fs::read(state_dir.join("state.json")).unwrap()).unwrap();
+        let runs=saved["runtime"]["runs"].as_array().unwrap();
+        let parent=runs.iter().find(|r|r["id"]==root).unwrap();
+        assert_eq!(parent["status"],"continued","The developer must actually delegate, not merely describe a review");
+        let judge=runs.iter().find(|r|r["persona"]["role"]=="judge"&&r["persona"]["root"]==root).expect("No independent judge was run");
+        assert_ne!(judge["backend"],parent["backend"]);assert_eq!(judge["status"],"completed");
+        assert!(judge["attempts"].as_array().unwrap().iter().all(|a|a["review_only"]==true&&a["artifact"].is_null()));
+        assert!(runs.iter().filter(|r|r["chat_id"]==chat).flat_map(|r|r["attempts"].as_array().unwrap()).flat_map(|a|a["command_jobs"].as_array().into_iter().flatten()).any(|job|job["build_environment"]==true&&job["exit_code"]==0&&job["status"]=="completed"),"A real declared build job must pass");
+        let final_run=runs.iter().rev().find(|r|r["chat_id"]==chat&&r["status"]=="completed").unwrap();
+        let artifact=final_run["attempts"].as_array().unwrap().last().unwrap()["artifact"].as_str().unwrap();
+        let proof=hive.tool("control.artifact.read",json!({"id":chat,"artifact":artifact,"path":"docs/self-development-proof.md"})).unwrap();
+        assert_eq!(proof["text"].as_str().unwrap().trim(),"Control self-development verified.");
+        assert!(!crate::config::source_root().unwrap().join("docs/self-development-proof.md").exists(),"The original checkout must remain unchanged");
+    }
     #[test]
     #[ignore = "requires isolated server and authenticated worker; two small model calls, optional reload mode makes no calls"]
     fn live_workspace_diff_tracks_real_edits_and_persists() {

@@ -48,7 +48,7 @@ fn change_with_save(
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Result<Value, &'static str> {
     transact(state, arguments["id"].as_str(), |state| if name=="control.project.request" {
-        crate::projects::request(state,arguments["id"].as_str().unwrap_or(""),arguments["path"].as_str().unwrap_or(""))
+        crate::projects::request_named(state,arguments["id"].as_str().unwrap_or(""),arguments["path"].as_str().unwrap_or(""),arguments["name"].as_str())
     } else if name.starts_with("control.room") {
         crate::rooms::tool(state, name, arguments)
     } else {
@@ -149,6 +149,7 @@ pub fn rpc(state: &mut State, request: &Value) -> Value {
     };
     if request["method"] == "tools/list" {
         result["tools"].as_array_mut().unwrap().push(crate::projects::definition(false));
+        result["tools"].as_array_mut().unwrap().push(crate::github::definition());
         result["tools"]
             .as_array_mut()
             .unwrap()
@@ -379,6 +380,7 @@ mod tests {
         let question = initial.runtime.runs[0].question.take().unwrap();
         initial.runtime.runs[0].status = "running".into();
         initial.runtime.runs[0].result.clear();
+        crate::projects::request(&mut initial,&chat,"/fixture/project").unwrap();
         let state = Arc::new(Mutex::new(initial));
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let server = format!("http://{}", listener.local_addr().unwrap());
@@ -435,6 +437,17 @@ mod tests {
         let frame=b.element("iframe.chat-transcript");
         b.post("/frame",json!({"id":{"element-6066-11e4-a52e-4f735466cecf":frame}}));
         let body=b.element("body");
+        let approval=b.element(".project-picker button[name=approve]");
+        let approval_color=b.get(&format!("/element/{approval}/css/background-color"));
+        assert!(approval_color=="rgb(181, 160, 255)"||approval_color=="rgba(181, 160, 255, 1)","Approval must use the theme purple: {approval_color}");
+        assert_eq!(b.get(&format!("/element/{approval}/css/border-radius")),"0px");
+        let previous_project=b.element(".project-picker > summary");
+        b.post(&format!("/element/{previous_project}/click"),json!({}));
+        {crate::chat::send(&mut state.lock().unwrap(),&chat,"/open /fixture/replacement","test").unwrap();}
+        b.wait("/fixture/replacement");
+        let replacement=b.element(".assistant-message .project-picker");
+        assert_eq!(b.get(&format!("/element/{replacement}/property/open")),true,"A new request must not inherit the old collapsed state");
+        assert_eq!(b.get(&format!("/element/{body}/name")),"body");
         {let mut state=state.lock().unwrap();state.runtime.runs[0].attempts[0].activity.push(crate::usage::Activity{id:"command-1".into(),kind:"command_execution".into(),text:"cargo test".into(),output:"Streaming output alpha".into(),status:"running".into()});}
         b.wait("Streaming output alpha");
         let details=b.element(".run-activity > summary");
@@ -447,8 +460,13 @@ mod tests {
         { let mut state=state.lock().unwrap(); let run=&mut state.runtime.runs[0]; run.status="completed".into();run.result="Finished without another user message".into();run.attempts[0].activity.push(crate::usage::Activity{id:"workspace-diff".into(),kind:"file_change".into(),text:"1 file · +1 −1".into(),output:"--- a/demo.rs\n+++ b/demo.rs\n@@ -1 +1 @@\n-old\n+new".into(),status:"completed".into()}); }
         failed.store(false,Ordering::Relaxed);
         b.wait("Finished without another user message");
+        let diff=b.element(".edit-diff > summary");
+        b.post(&format!("/element/{diff}/click"),json!({}));
         assert_eq!(b.text(".diff-add"),"+new");
         assert_eq!(b.text(".diff-remove"),"-old");
+        b.post("/frame",json!({"id":null}));
+        b.post(&format!("/element/{input}/click"),json!({}));
+        b.post("/frame",json!({"id":{"element-6066-11e4-a52e-4f735466cecf":frame}}));
         let details=b.element(".run-activity");
         assert_eq!(b.get(&format!("/element/{details}/property/open")),false);
         assert_eq!(b.get(&format!("/element/{body}/name")),"body","The iframe must never navigate");
@@ -544,16 +562,14 @@ mod tests {
             &json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}),
         );
         assert_eq!(init["result"]["protocolVersion"], "2025-11-25");
-        assert_eq!(
-            rpc(
+        let catalogue = rpc(
                 &mut state,
                 &json!({"jsonrpc":"2.0","id":2,"method":"tools/list"})
-            )["result"]["tools"]
-                .as_array()
-                .unwrap()
-                .len(),
-            16
-        );
+            );
+        let tools=catalogue["result"]["tools"].as_array().unwrap();
+        let names:std::collections::BTreeSet<_>=tools.iter().filter_map(|t|t["name"].as_str()).collect();
+        assert_eq!(names.len(),tools.len(),"MCP tools must have unique names");
+        for expected in ["control.chat.create","control.room.read","control.project.request","control_github_open_pr"] {assert!(names.contains(expected));}
         assert_eq!(
             rpc(
                 &mut state,

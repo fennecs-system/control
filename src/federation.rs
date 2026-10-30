@@ -63,10 +63,7 @@ fn options() -> Result<OpenOptions> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        #[cfg(target_os = "macos")]
-        o.custom_flags(0x100 | 0x4);
-        #[cfg(target_os = "linux")]
-        o.custom_flags(0x20000 | 0x800);
+        o.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         return Err(fail("Safe file IO unsupported on this platform"));
         o.mode(0o600);

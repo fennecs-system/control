@@ -12,7 +12,8 @@ build its matching images locally; the invited setup currently targets macOS.
 
 `nix run .#setup` builds the embedded Rust/WASM UI, the release binary and the
 Codex worker image. It loads the image and saves its immutable ID. Add `--claude`
-or `--browser` after `--` for optional images:
+or `--browser` after `--` for optional images. Add `--build-environment` for the
+[offline Rust/WASM build tool](BUILD-ENVIRONMENTS.md) used by self-improvement:
 
 ```sh
 nix run .#setup -- --claude --browser
@@ -89,6 +90,7 @@ These options preserve existing source and model choices.
 | `CONTROL_STATE_DIR` | Absolute state-directory override. |
 | `worker-image-id` | Immutable Codex worker image ID. |
 | `claude-image-id` / `browser-image-id` | Optional image IDs. |
+| `build-image-id` / `CONTROL_BUILD_IMAGE` | Optional immutable offline build-tool image. |
 | `model.json` | Saved models and default; managed by the web UI. |
 | `source-root` / `CONTROL_SOURCE_ROOT` | Absolute source path for explicit improvements. |
 | `worker-timeout-secs` / `CONTROL_WORKER_TIMEOUT_SECS` | Run deadline; default 600 s, clamped to 60 s–24 h. |

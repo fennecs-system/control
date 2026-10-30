@@ -18,10 +18,7 @@ fn artifact(name: &str) -> io::Result<Vec<u8>> {
     if fs::symlink_metadata(&dir)?.file_type().is_symlink() {
         return Err(io::Error::other("Invalid directory"));
     }
-    #[cfg(target_os = "macos")]
-    let flags = 0x100 | 0x4;
-    #[cfg(not(target_os = "macos"))]
-    let flags = 0x20000 | 0x800;
+    let flags = libc::O_NOFOLLOW | libc::O_NONBLOCK;
     let file = fs::OpenOptions::new()
         .read(true)
         .custom_flags(flags)

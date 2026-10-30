@@ -59,10 +59,7 @@ pub(crate) fn render_preview(
         return Err(fail("Artifact directory must not be a symlink"));
     }
     fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
-    #[cfg(target_os = "macos")]
-    let flags = 0x100 | 0x4;
-    #[cfg(not(target_os = "macos"))]
-    let flags = 0x20000 | 0x800;
+    let flags = libc::O_NOFOLLOW | libc::O_NONBLOCK;
     let lock = fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -127,6 +124,7 @@ pub(crate) fn local_definitions() -> Vec<Value> {
     let mut tools = vec![json!({"name":"control.browser.capture","description":"Render a self-contained HTML preview inside the configured root using offline Nix Firefox. Returns a PNG artifact. No network or host browser profile. Requires the pinned browser image.","inputSchema":{"type":"object","properties":{"input":{"type":"string"},"width":{"type":"integer","minimum":240,"maximum":2560},"height":{"type":"integer","minimum":240,"maximum":2560}},"required":["input"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})];
     tools.extend(crate::toolbox::definitions());
     tools.push(crate::projects::definition(false));
+    tools.push(crate::github::definition());
     tools
 }
 fn dispatch(connection: &mut Option<Hive>, root: &Path, request: &Value) -> Value {
@@ -172,7 +170,7 @@ fn dispatch(connection: &mut Option<Hive>, root: &Path, request: &Value) -> Valu
                     Ok(crate::toolbox::result(crate::toolbox::call(
                         name, arguments,
                     )))
-                } else if name=="control.project.request" || READ_TOOLS.contains(&name) || crate::artifacts::TOOLS.contains(&name) {
+                } else if name=="control.project.request" || name=="control_github_open_pr" || READ_TOOLS.contains(&name) || crate::artifacts::TOOLS.contains(&name) {
                     hive(connection).and_then(|h| h.rpc("tools/call", request["params"].clone()))
                 } else {
                     Err(fail("Tool unavailable: this bridge exposes read-only Control access, web search, offline captures and Rust snippets"))

@@ -155,6 +155,23 @@ the original actor. Discussion behavior is instructed through the prompt;
 filesystem isolation and the lack of live application/deployment are enforced
 separately. Agents shows current execution and the queue, while Runs keeps history.
 
+Long commands are durable broker jobs in credential-free offline containers,
+separate from provider execution. An operator-installed Nix build image supplies
+immutable vendored dependencies; output and scratch are private to the task.
+Delegation checkpoints the parent, releases the serial execution slot, runs a
+bounded child and resumes with scoped retained feedback. Different-provider judges
+have read-only source and cannot publish or advance a workspace. Deterministic
+admission, scheduling and publication fences remain Rust supervisor duties.
+See [command jobs](COMMAND-JOBS.md), [build environments](BUILD-ENVIRONMENTS.md)
+and [delegation](DELEGATION.md).
+
+The optional [GitHub broker](GITHUB.md) binds publication to private node
+configuration, checks captured source against the remote base and opens draft PRs
+from completed improvements. Provider credentials and GitHub credentials have
+separate consumers; workers never receive the GitHub token. Publishing does not
+merge or deploy. The [threat model](THREAT-MODEL.md) records enforced boundaries
+and remaining gaps.
+
 Backend/model selection is captured per run. The Claude adapter runs an unmodified,
 pinned CLI with built-in tools disabled and an explicit Control MCP bridge.
 Its harness sees a mailbox, while a separate offline container mounts the task

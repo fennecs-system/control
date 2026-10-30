@@ -13,6 +13,14 @@ Requests alone do not read or mount files. An agent can request access with
 `control_project_request`; it cannot approve its own request. External MCP clients
 can use `control.project.request` with a chat ID.
 
+Each approved folder appears as `/workspace/<folder-name>`. Repeat `/open` to add
+another folder to the same chat; approvals stay beside the corresponding request.
+Use `/open --as api2 /another/path/api` for duplicate names, or edit the workspace
+name in the approval form. MCP requests accept an optional `name`. Each folder
+has its own Git metadata. Pending or failed additions keep already-approved
+folders and their edits; an import error appears beside its request for retry.
+Existing single-folder chats retain their layout until another folder is approved.
+
 Control imports the current files, including uncommitted edits, into a private
 Git worktree. The original checkout and its Git metadata remain unchanged.
 Each attempt and child conversation gets independent writable files and Git
@@ -21,8 +29,9 @@ container's private clone. No automatic host merge, push or deployment occurs.
 The completed worktree's local path is shown in the chat and TUI for review.
 
 Git needs relative-worktree support; the Nix development environment provides it.
-Plain folders get a private initial Git baseline. This first version rejects
-symlinks and special files rather than following them into other host folders.
+Plain folders get a private initial Git baseline. Symlinks, including dangling
+links and links into the Nix store, are skipped without following their targets.
+Special files are rejected.
 Control configuration/state, known credential files, environment files and common
 generated directories are excluded from the file import. Git history is retained,
 so only trust repositories whose history you intend to expose. An import is bounded to 1 GiB, 100,000

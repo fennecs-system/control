@@ -25,6 +25,9 @@ impl Tokens {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Attempt {
+    pub github_source: Option<crate::github::Source>,
+    pub command_jobs: Vec<crate::command_jobs::Job>,
+    pub review_only: bool,
     pub project: Option<String>,
     pub project_parent: Option<String>,
     pub project_base: Option<String>,

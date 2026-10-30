@@ -41,6 +41,7 @@
           worker-image = import ./examples/worker-image.nix { inherit pkgs; };
           claude-image = import ./examples/worker-image.nix { inherit pkgs; backend = "claude"; };
           browser-image = import ./tools/browser/image.nix { inherit pkgs; };
+          build-image = import ./tools/build/image.nix { inherit pkgs; };
         } else { });
     };
 }

@@ -1,4 +1,6 @@
 //! Credential-free stdio MCP transport. The host authorizes every request.
+#[path = "../platform-flags.rs"]
+mod platform_flags;
 use std::{
     fs,
     io::{self, BufRead, Read, Write},
@@ -7,13 +9,9 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 fn response(path: &Path) -> io::Result<String> {
-    #[cfg(target_os = "macos")]
-    let flags = 0x100 | 0x4;
-    #[cfg(not(target_os = "macos"))]
-    let flags = 0x20000 | 0x800;
     let file = fs::OpenOptions::new()
         .read(true)
-        .custom_flags(flags)
+        .custom_flags(platform_flags::SAFE_READ)
         .open(path)?;
     if !file.metadata()?.is_file() {
         return Err(io::Error::other("Not a regular response"));

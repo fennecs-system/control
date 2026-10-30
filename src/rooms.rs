@@ -184,10 +184,7 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
 /// Never follow agent-controlled links or block on a FIFO on the host.
 pub(crate) fn read_request(path: &Path) -> std::io::Result<Value> {
     use std::os::unix::fs::OpenOptionsExt;
-    #[cfg(target_os = "macos")]
-    let flags = 0x100 | 0x4; // O_NOFOLLOW | O_NONBLOCK
-    #[cfg(not(target_os = "macos"))]
-    let flags = 0x20000 | 0x800;
+    let flags = libc::O_NOFOLLOW | libc::O_NONBLOCK;
     let file = fs::OpenOptions::new()
         .read(true)
         .custom_flags(flags)

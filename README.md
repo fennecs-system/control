@@ -62,6 +62,12 @@ approval. Add `--browser` to setup for the browser image.
 See [Claude setup and authentication](docs/CLAUDE.md) for both integration paths.
 Use your own model access according to your provider's terms.
 
+For self-development, a scoped [GitHub tool](docs/GITHUB.md) can publish completed
+improvements as draft pull requests using a private node credential reference.
+Add `--build-environment` to setup for offline Rust/WASM checks. Workers can
+[delegate tasks or request a read-only judge](docs/DELEGATION.md) using another
+configured provider; execution remains serial.
+
 ## Commands
 
 Run `./target/release/control <command>`:
@@ -85,7 +91,7 @@ These chat commands work on the web, in the TUI and in authorized Discord DMs:
 | `/steer direction` | Queue a direction for the next turn. |
 | `/btw question` | Ask in a linked side conversation. |
 | `/spawn task` | Start a linked agent conversation. |
-| `/open /absolute/path` | Request a folder; approve before importing an isolated Git worktree. [Workspaces →](docs/WORKSPACES.md) |
+| `/open /absolute/path` | Add an approved folder at `/workspace/<name>`; use `--as NAME` for duplicate names. [Workspaces →](docs/WORKSPACES.md) |
 | `/cancel` | Stop the active or oldest queued task in this chat. |
 | `/answer QUESTION_ID answer` | Answer an agent's pending design question. |
 | `/improve` / `/improve off` | Enter or leave architect-only Control improvement mode. |

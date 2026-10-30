@@ -90,10 +90,7 @@ fn safe_read(root: &Path, relative: &str, limit: u64) -> io::Result<Vec<u8>> {
         }
     }
     path.push(components.last().unwrap().as_os_str());
-    #[cfg(target_os = "macos")]
-    let flags = 0x100 | 0x4;
-    #[cfg(not(target_os = "macos"))]
-    let flags = 0x20000 | 0x800;
+    let flags = libc::O_NOFOLLOW | libc::O_NONBLOCK;
     let file = fs::OpenOptions::new()
         .read(true)
         .custom_flags(flags)
@@ -292,7 +289,7 @@ fn walk(
     }
     Ok(())
 }
-fn publish_in(root: &Path, source: &Path, id: &str) -> io::Result<Manifest> {
+pub(crate) fn publish_in(root: &Path, source: &Path, id: &str) -> io::Result<Manifest> {
     if !valid_id(id) {
         return Err(fail("Invalid artifact ID"));
     }
@@ -369,7 +366,7 @@ pub fn publish(source: &Path, id: &str) -> io::Result<Manifest> {
 pub fn manifest(id: &str) -> io::Result<Manifest> {
     manifest_in(&root()?, id)
 }
-fn manifest_in(root: &Path, id: &str) -> io::Result<Manifest> {
+pub(crate) fn manifest_in(root: &Path, id: &str) -> io::Result<Manifest> {
     if !valid_id(id) {
         return Err(fail("Invalid artifact ID"));
     }
@@ -400,7 +397,7 @@ fn manifest_in(root: &Path, id: &str) -> io::Result<Manifest> {
 pub fn read(manifest: &Manifest, path: &str) -> io::Result<Vec<u8>> {
     read_in(&root()?, manifest, path)
 }
-fn read_in(root: &Path, manifest: &Manifest, path: &str) -> io::Result<Vec<u8>> {
+pub(crate) fn read_in(root: &Path, manifest: &Manifest, path: &str) -> io::Result<Vec<u8>> {
     let entry = manifest
         .files
         .iter()
