@@ -815,7 +815,8 @@ mod tests {
         state.runtime.runs[0].status="completed".into();
         state.runtime.runs[0].attempts.push(crate::usage::Attempt{activity:vec![crate::usage::Activity{id:"workspace-diff".into(),kind:"file_change".into(),text:"1 file · +1 −1".into(),output:"@@ -1 +1 @@\n-old\n+<script>\n".into(),status:"completed".into()}],..crate::usage::Attempt::default()});
         let html=transcript(&state,&id).unwrap();
-        assert!(html.contains("class='edit-diff' open"));
+        let diff = html.split("<details ").find(|tag| tag.starts_with("class='edit-diff'")).unwrap().split('>').next().unwrap();
+        assert!(diff.split_ascii_whitespace().any(|attribute| attribute == "open"));
         assert!(html.contains("diff-line diff-add'>+&lt;script&gt;"));
         assert!(html.contains("diff-line diff-remove'>-old"));
         assert!(!html.contains("<script>"));
