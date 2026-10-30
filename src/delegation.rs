@@ -1,4 +1,4 @@
-//! Durable, bounded delegation. A parent releases the serial worker before its
+//! Durable, bounded delegation. A parent releases its model slot before its
 //! child is admitted. Results are feedback, never an implicit merge or grant.
 use crate::{chat, identity, runtime, State};
 use serde::{Deserialize, Serialize};
@@ -53,7 +53,7 @@ pub fn pausing(run: &runtime::Run) -> bool {
     })
 }
 pub fn definition() -> Value {
-    json!({"name":"control_agent_delegate","description":"Delegate a bounded task to an isolated worker, or request one independent judge review using a configured different provider. This checkpoints your files, pauses you, releases the worker, then automatically resumes you with the child's result. Stop immediately after acknowledgement; never poll or wait inside a command. Children share your actor and authority ceiling, not writable files. Review feedback never applies or merges changes. Limits: depth 2, 8 children and one judge per root task; execution is serial.","inputSchema":{"type":"object","properties":{"objective":{"type":"string","minLength":1,"maxLength":2000},"role":{"type":"string","enum":["worker","judge"]}},"required":["objective","role"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
+    json!({"name":"control_agent_delegate","description":"Delegate a bounded task to an isolated worker, or request one independent judge review using a configured different provider. This checkpoints your files, pauses you, releases the worker, then automatically resumes you with the child's result. Stop immediately after acknowledgement; never poll or wait inside a command. Children share your actor and authority ceiling, not writable files. Review feedback never applies or merges changes. Limits: depth 2, 8 children and one judge per root task; execution uses bounded node slots.","inputSchema":{"type":"object","properties":{"objective":{"type":"string","minLength":1,"maxLength":2000},"role":{"type":"string","enum":["worker","judge"]}},"required":["objective","role"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
 }
 
 fn lineage(run: &runtime::Run) -> Persona {

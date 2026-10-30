@@ -4,7 +4,8 @@ Workers can call `control_agent_delegate` with an `objective` and `role`:
 `worker` or `judge`. Control checkpoints the current files, releases the worker,
 runs the child, and resumes the parent with bounded feedback. The web transcript
 links to the child conversation; Agents shows its execution and queue status.
-Execution is serial for now. A model must stop after delegation acknowledgement,
+Independent chats can run concurrently within the [node limit](EXECUTION.md).
+A model must stop after delegation acknowledgement,
 rather than poll or hold a command open waiting for a child.
 
 Each child has the same actor, captured lenses and authority ceiling. Its files

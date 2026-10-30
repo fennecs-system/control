@@ -30,6 +30,11 @@ pub fn run() -> io::Result<()> {
         "run ./target/release/control config init; state directory mode must be 0700",
     );
     check(
+        "execution limits",
+        crate::scheduler::load_limits().is_ok(),
+        "execution.json must be private valid JSON; max_parallel_runs must be 1–8",
+    );
+    check(
         "node identity",
         crate::config::node_id().is_ok(),
         "run ./target/release/control config init or inspect the node-id file",

@@ -91,7 +91,7 @@ a separate maintainer action.
   caches. See [build environments](docs/BUILD-ENVIRONMENTS.md).
 - Workers can delegate bounded child tasks and resume with retained results.
   A judge uses a configured different provider and enforced read-only source.
-  Child changes require explicit acceptance; execution remains serial.
+  Child changes require explicit acceptance; execution uses bounded node slots.
   See [delegation](docs/DELEGATION.md).
 - A repository-bound GitHub broker publishes completed improvements as draft
   PRs with captured source provenance and retry reconciliation. Live publication
@@ -127,7 +127,7 @@ Non-Rust third-party tooling is allowed only inside tool/agent containers.
 Control and authored integrations remain Rust/Haskell/Lean/WASM/Nix; Mineflayer
 can be an isolated upstream dependency behind a Rust adapter.
 
-## Performance pass — feature branch
+## ✓ Performance pass
 
 `performance/rust-hot-paths` borrows typed transcript data, scopes run indexes to
 the requested conversation, and avoids discarded log allocations during ownership
@@ -135,7 +135,15 @@ snapshots. A bounded offline Rust microbenchmark tool is exposed through MCP.
 See [measurements and reproduction](docs/PERFORMANCE.md). Execution policy is
 unchanged; this does not add parallel model runs.
 
-## Next: bounded concurrent execution
+## ✓ Bounded concurrent model execution
+
+Two model slots by default, configurable from 1–8 through private node settings.
+Independent chats overlap; each chat retains FIFO ordering and one writer.
+Dispatch is durable before thread launch, supervised and joined on shutdown.
+Tests cover ordering, cancellation, shutdown, save rollback across chats and
+untrusted saved settings. See [execution](docs/EXECUTION.md).
+
+## Next: persistent worker/tool environments
 
 Add persistent worker/tool environments for long-running tools and services.
 Agents attach to an explicit environment identity; model attempts do not own its
@@ -145,16 +153,15 @@ policies. Keep provider credentials out of tool containers. Existing checkpoint
 barriers still quiesce source writers; persistent services need declared read/write
 scope and recovery semantics rather than silently bypassing those barriers.
 
-Replace the single node-wide execution slot with bounded slots while retaining
-per-chat FIFO ordering, isolated workspaces and captured provider/model selection.
-Parent/child waits release slots. Preserve exact resource ownership, cancellation
-cascades, stale-result fences and restart reconciliation under overlapping runs.
-Define node resource budgets and test failure cases before enabling fan-out;
+Keep bounded slots, per-chat FIFO ordering, isolated workspaces and captured
+provider/model selection. Preserve exact resource ownership, cancellation cascades,
+stale-result fences and restart reconciliation as service lifetimes expand.
+Add aggregate node resource budgets before increasing fan-out further;
 deterministic Rust supervision remains responsible for scheduling.
 
 ## Next: reliability and real-user feedback
 
-Finish these before increasing concurrency, unattended operation or spending.
+Finish these before increasing fan-out further, unattended operation or spending.
 
 - **Storage bounds:** enforce hard writable workspace/scratch limits on the
   supported macOS engine, plus retained checkpoint/artifact budgets and admission

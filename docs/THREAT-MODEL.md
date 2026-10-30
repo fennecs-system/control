@@ -53,7 +53,7 @@ arbitrary downloaded code safe.
 
 - **Delegation and judges.** Admission checks actor, attempt and lineage; depth
   is limited to two, with eight children and one judge per root task. Delegation
-  checkpoints files and releases the serial execution slot. Judges use a
+  checkpoints files and releases its bounded execution slot. Judges use a
   configured different provider, receive read-only source and cannot delegate,
   publish or advance a development head. They can report findings and collaborate
   in rooms. Descendant result reads follow actual delegation/continuation edges,

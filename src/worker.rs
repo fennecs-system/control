@@ -303,7 +303,58 @@ fn wait(child: &mut Child, limit: Duration) -> std::io::Result<bool> {
         std::thread::sleep(Duration::from_millis(250));
     }
 }
+static DISPATCH_WAKE: Mutex<Option<std::sync::mpsc::SyncSender<()>>> = Mutex::new(None);
+pub fn wake() {
+    if let Ok(sender) = DISPATCH_WAKE.lock() {
+        if let Some(sender) = sender.as_ref() {
+            let _ = sender.try_send(());
+        }
+    }
+}
+struct Finished(std::sync::mpsc::SyncSender<()>);
+impl Drop for Finished {
+    fn drop(&mut self) {
+        let _ = self.0.try_send(());
+    }
+}
+struct RunningWorkers {
+    handles: Vec<std::thread::JoinHandle<()>>,
+    failed: Arc<std::sync::atomic::AtomicBool>,
+}
+impl RunningWorkers {
+    fn reap(&mut self) -> Result<bool, ()> {
+        let mut progressed = false;
+        for index in (0..self.handles.len()).rev() {
+            if self.handles[index].is_finished() {
+                progressed = true;
+                if self.handles.swap_remove(index).join().is_err() {
+                    self.failed
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                    crate::shutdown::request();
+                    return Err(());
+                }
+            }
+        }
+        Ok(progressed)
+    }
+}
+impl Drop for RunningWorkers {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            crate::shutdown::request();
+        }
+        for worker in self.handles.drain(..) {
+            if worker.join().is_err() {
+                self.failed
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                crate::shutdown::request();
+            }
+        }
+    }
+}
+type Task = (String, String, Actor, Action, crate::usage::Attempt, usize);
 pub struct Threads {
+    failed: Arc<std::sync::atomic::AtomicBool>,
     inbox: std::thread::JoinHandle<()>,
     dispatcher: std::thread::JoinHandle<()>,
 }
@@ -311,144 +362,261 @@ impl Threads {
     pub fn join(self) -> std::io::Result<()> {
         let inbox = self.inbox.join();
         let dispatcher = self.dispatcher.join();
-        if inbox.is_err() || dispatcher.is_err() {
-            return Err(std::io::Error::other("A worker thread stopped unexpectedly; inspect retained attempts before retrying."));
+        if inbox.is_err()
+            || dispatcher.is_err()
+            || self.failed.load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(std::io::Error::other(
+                "A worker thread stopped unexpectedly; inspect retained attempts before retrying.",
+            ));
         }
         Ok(())
     }
 }
 pub fn start(state: Arc<Mutex<State>>) -> Threads {
+    start_with(state, run_task)
+}
+fn start_with(state: Arc<Mutex<State>>, execute: fn(Arc<Mutex<State>>, Task)) -> Threads {
     // Inbox admission is independent of the execution slot: a model can run for
     // minutes without preventing a new DM from becoming a durable queued turn.
     let inbox_state = Arc::clone(&state);
     let mut notified = std::collections::HashSet::new();
-    let inbox = std::thread::spawn(move || loop {
-        if crate::shutdown::pause(Duration::from_secs(2)) { return; }
-        if ingest_discord(&inbox_state, &mut notified).is_err() {
-            eprintln!(
-                "Discord ingestion stopped: state unavailable; restart Control after checking."
-            );
-            return;
+    let inbox = std::thread::spawn(move || {
+        loop {
+            if crate::shutdown::pause(Duration::from_secs(2)) {
+                return;
+            }
+            if ingest_discord(&inbox_state, &mut notified).is_err() {
+                eprintln!(
+                    "Discord ingestion stopped: state unavailable; restart Control after checking."
+                );
+                return;
+            }
         }
     });
+    let (finished, awakened) = std::sync::mpsc::sync_channel(1);
+    if let Ok(mut wake) = DISPATCH_WAKE.lock() {
+        *wake = Some(finished.clone());
+    }
+    let failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let execution_failed = failed.clone();
     let dispatcher = std::thread::spawn(move || {
-    let mut fenced: Option<String> = None;
-    loop {
-        if crate::shutdown::pause(Duration::from_secs(2)) { return; }
-        if crate::backend::Backend::Codex.image().is_some()
-            || crate::backend::Backend::Claude.image().is_some()
-        {
-            // Only attempt identities cross the lock; activity and transcripts stay put.
-            let owners = {
-                let Ok(s) = state.lock() else {
-                    return;
-                };
-                crate::lifecycle::owners(&s.runtime.runs)
-            };
-            let reconciled = crate::lifecycle::reconcile(&owners);
-            if let Ok(mut s) = state.lock() {
-                match &reconciled {
-                    Err(message) => {
-                        s.runtime.notice.clone_from(message);
-                        s.runtime.paused = Some(message.clone());
-                        fenced = Some(message.clone());
-                    }
-                    Ok(()) => {
-                        s.runtime.paused = None;
-                        if fenced.take().is_some_and(|m| m == s.runtime.notice) {
-                            s.runtime.notice.clear();
+        let mut workers = RunningWorkers {
+            handles: Vec::new(),
+            failed: execution_failed,
+        };
+        let mut fenced: Option<String> = None;
+        let mut last_reconcile: Option<Instant> = None;
+        let mut triggered = true;
+        'supervisor: loop {
+            if crate::shutdown::requested() {
+                break;
+            }
+            match workers.reap() {
+                Ok(progressed) => triggered |= progressed,
+                Err(()) => {
+                    eprintln!(
+                        "Worker thread failed; stopping Control and retaining its attempt intent."
+                    );
+                    break;
+                }
+            }
+            if last_reconcile.is_none_or(|t| t.elapsed() >= Duration::from_secs(2)) {
+                last_reconcile = Some(Instant::now());
+                triggered = true;
+                if crate::backend::Backend::Codex.image().is_some()
+                    || crate::backend::Backend::Claude.image().is_some()
+                {
+                    // Only attempt identities cross the lock; activity and transcripts stay put.
+                    let owners = {
+                        let Ok(s) = state.lock() else {
+                            crate::shutdown::request();
+                            break;
+                        };
+                        crate::lifecycle::owners(&s.runtime.runs)
+                    };
+                    let reconciled = crate::lifecycle::reconcile(&owners);
+                    if let Ok(mut s) = state.lock() {
+                        match &reconciled {
+                            Err(message) => {
+                                s.runtime.notice.clone_from(message);
+                                s.runtime.paused = Some(message.clone());
+                                fenced = Some(message.clone());
+                            }
+                            Ok(()) => {
+                                s.runtime.paused = None;
+                                if fenced.take().is_some_and(|m| m == s.runtime.notice) {
+                                    s.runtime.notice.clear();
+                                }
+                            }
                         }
                     }
                 }
             }
-            if reconciled.is_err() {
-                continue;
+            if triggered {
+                loop {
+                    if crate::shutdown::requested() {
+                        break 'supervisor;
+                    }
+                    let task = {
+                        let Ok(mut s) = state.lock() else {
+                            eprintln!(
+                                "Worker dispatch stopped: state unavailable; restart Control after checking."
+                            );
+                            crate::shutdown::request();
+                            break 'supervisor;
+                        };
+                        if workers.handles.len()
+                            >= s.runtime
+                                .execution
+                                .max_parallel_runs
+                                .min(crate::scheduler::MAX_PARALLEL)
+                        {
+                            break;
+                        }
+                        if let Err(message) = crate::delegation::reconcile(&mut s, storage::save) {
+                            s.runtime.notice = message.into();
+                        }
+                        let Some(index) = checkpoint_next(&mut s, storage::save) else {
+                            break;
+                        };
+                        let run = &s.runtime.runs[index];
+                        (
+                            run.id.clone(),
+                            crate::chat::prompt(&s, &run.id)
+                                .unwrap_or_else(|| run.objective.clone()),
+                            run.actor.clone(),
+                            run.action,
+                            run.attempts.last().unwrap().clone(),
+                            run.attempts.len(),
+                        )
+                    };
+                    let run = task.0.clone();
+                    let shared = state.clone();
+                    let finished = finished.clone();
+                    match std::thread::Builder::new()
+                        .name(format!("control-run-{run}"))
+                        .spawn(move || {
+                            let _finished = Finished(finished);
+                            execute(shared, task);
+                        }) {
+                        Ok(worker) => workers.handles.push(worker),
+                        Err(_) => {
+                            workers
+                                .failed
+                                .store(true, std::sync::atomic::Ordering::Relaxed);
+                            if let Ok(mut s) = state.lock() {
+                                if let Some(run) = s.runtime.runs.iter_mut().find(|r| r.id == run) {
+                                    run.status = "blocked".into();
+                                    run.result="Could not start execution thread; restart Control after checking resources.".into();
+                                    if let Some(attempt) = run.attempts.last_mut() {
+                                        attempt.status = "blocked".into();
+                                    }
+                                }
+                                let _ = storage::save(&s);
+                            }
+                            crate::shutdown::request();
+                            break 'supervisor;
+                        }
+                    }
+                }
             }
+            triggered = awakened.recv_timeout(Duration::from_millis(200)).is_ok();
         }
-        let task = {
-            let Ok(mut s) = state.lock() else {
-                eprintln!(
-                    "Worker dispatch stopped: state unavailable; restart Control after checking."
-                );
-                return;
-            };
-            if let Err(message) = crate::delegation::reconcile(&mut s, storage::save) {
-                s.runtime.notice = message.into();
-            }
-            let Some(index) = checkpoint_next(&mut s, storage::save) else {
-                continue;
-            };
-            let run = &s.runtime.runs[index];
-            (
-                run.id.clone(),
-                crate::chat::prompt(&s, &run.id).unwrap_or_else(|| run.objective.clone()),
-                run.actor.clone(),
-                run.action,
-                run.attempts.last().unwrap().clone(),
-                run.attempts.len(),
-            )
-        };
-        let mut attempt = task.4;
-        let started = Instant::now();
-        let workspace_id = attempt
-            .workspace_id
-            .clone()
-            .unwrap_or_else(|| format!("{}-attempt-{}", task.0, task.5));
-        let mut outcome = execute(
-            &workspace_id,
-            &task.1,
-            &task.2,
-            task.3,
-            &mut attempt,
-            Some((&state, &task.0)),
-        );
-        if let Err(error)=crate::command_jobs::quiesce(&state,&task.0,&workspace_id) {
-            outcome=Err(("interrupted",error.to_string()));
+    });
+    Threads {
+        inbox,
+        dispatcher,
+        failed,
+    }
+}
+fn run_task(state: Arc<Mutex<State>>, task: Task) {
+    let mut attempt = task.4;
+    let started = Instant::now();
+    let workspace_id = attempt
+        .workspace_id
+        .clone()
+        .unwrap_or_else(|| format!("{}-attempt-{}", task.0, task.5));
+    let mut outcome = execute(
+        &workspace_id,
+        &task.1,
+        &task.2,
+        task.3,
+        &mut attempt,
+        Some((&state, &task.0)),
+    );
+    if let Err(error) = crate::command_jobs::quiesce(&state, &task.0, &workspace_id) {
+        outcome = Err(("interrupted", error.to_string()));
+    }
+    if !attempt.review_only {
+        if let Ok(workspace) = runtime::workspace(&workspace_id) {
+            observe_workspace_diff(
+                &state,
+                &task.0,
+                &workspace_id,
+                &workspace,
+                if outcome.is_ok() {
+                    "completed"
+                } else {
+                    "observed"
+                },
+            );
         }
-        if !attempt.review_only { if let Ok(workspace) = runtime::workspace(&workspace_id) {
-            observe_workspace_diff(&state,&task.0,&workspace_id,&workspace,if outcome.is_ok() {"completed"} else {"observed"});
-        } }
-        if !crate::shutdown::requested() && matches!(&outcome, Err(("waiting", _))) {
-            outcome = match runtime::workspace(&workspace_id).map_err(std::io::Error::other)
+    }
+    if !crate::shutdown::requested() && matches!(&outcome, Err(("waiting", _))) {
+        outcome = match runtime::workspace(&workspace_id).map_err(std::io::Error::other)
                 .and_then(|workspace| crate::projects::publish(&mut attempt, &workspace, &workspace_id)) {
                 Ok(()) => {
                     Err(("waiting", "Waiting for a design decision.".into()))
                 }
                 Err(_) => Err(("failed", "Could not checkpoint the paused workspace. The previous published checkpoint is unchanged.".into())),
             };
-        }
-        attempt.elapsed_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
-        // A failed checkpoint must not strand the run or stop dispatch: keep the
-        // result in memory, tell the operator, and retry. Cancellation still applies.
-        let mut delay = 2;
-        loop {
-            let Ok(mut s) = state.lock() else {
-                eprintln!("Worker result not committed: state unavailable; inspect artifacts before restarting.");
-                return;
-            };
-            match commit(&mut s, &task.0, task.3, attempt.clone(), outcome.clone(), crate::shutdown::requested(), storage::save) {
-                Ok(()) => {
-                    if s.runtime.notice.starts_with(SAVE_NOTICE) {
-                        s.runtime.notice.clear();
-                    }
-                    break;
-                }
-                Err(()) => {
-                    if crate::shutdown::requested() {
-                        eprintln!("Could not persist the stopped attempt; its durable running intent and workspace are retained for restart inspection.");
-                        return;
-                    }
-                    s.runtime.notice = format!("{SAVE_NOTICE} free disk space or fix the state directory; retrying in {delay} s.");
-                    eprintln!("Could not persist worker result; retrying in {delay} s. Artifacts are retained.");
-                }
-            }
-            drop(s);
-            crate::shutdown::pause(Duration::from_secs(delay));
-            delay = (delay * 2).min(60);
-        }
     }
-    });
-    Threads { inbox, dispatcher }
+    attempt.elapsed_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+    // A failed checkpoint must not strand the run or stop dispatch: keep the
+    // result in memory, tell the operator, and retry. Cancellation still applies.
+    let mut delay = 2;
+    loop {
+        let Ok(mut s) = state.lock() else {
+            eprintln!(
+                "Worker result not committed: state unavailable; inspect artifacts before restarting."
+            );
+            return;
+        };
+        match commit(
+            &mut s,
+            &task.0,
+            task.3,
+            attempt.clone(),
+            outcome.clone(),
+            crate::shutdown::requested(),
+            storage::save,
+        ) {
+            Ok(()) => {
+                if s.runtime.notice.starts_with(SAVE_NOTICE) {
+                    s.runtime.notice.clear();
+                }
+                break;
+            }
+            Err(()) => {
+                if crate::shutdown::requested() {
+                    eprintln!(
+                        "Could not persist the stopped attempt; its durable running intent and workspace are retained for restart inspection."
+                    );
+                    return;
+                }
+                s.runtime.notice = format!(
+                    "{SAVE_NOTICE} free disk space or fix the state directory; retrying in {delay} s."
+                );
+                eprintln!(
+                    "Could not persist worker result; retrying in {delay} s. Artifacts are retained."
+                );
+            }
+        }
+        drop(s);
+        crate::shutdown::pause(Duration::from_secs(delay));
+        delay = (delay * 2).min(60);
+    }
 }
 const SAVE_NOTICE: &str = "Could not save a run result:";
 /// Apply one finished attempt to state and persist it. On a failed save the
@@ -1188,8 +1356,137 @@ fn prepare_source_workspace(source: &Path, baseline: &Path, workspace: &Path) ->
 mod tests {
     use super::*;
     #[test]
+    #[ignore = "run alone with isolated CONTROL_STATE_DIR and CONTROL_CONFIG_DIR; requests process-wide shutdown"]
+    fn isolated_supervisor_retains_intent_after_worker_panic() {
+        fn panic_worker(_: Arc<Mutex<State>>, _: Task) { panic!("Injected worker failure"); }
+        assert!(std::env::var("CONTROL_STATE_DIR").unwrap().contains("control-execution-qa"));
+        assert!(crate::backend::Backend::Codex.image().is_none());
+        assert!(crate::backend::Backend::Claude.image().is_none());
+        storage::initialize().unwrap();
+        let mut initial = State::default();
+        let chat = crate::chat::create(&mut initial);
+        crate::chat::send(&mut initial, &chat, "Work", "test").unwrap();
+        storage::save(&initial).unwrap();
+        let state = Arc::new(Mutex::new(initial));
+        let threads = start_with(state, panic_worker);
+        let start = Instant::now();
+        while !crate::shutdown::requested() {
+            assert!(start.elapsed() < Duration::from_secs(10), "Panic was not supervised");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(threads.join().is_err());
+        let saved: State = serde_json::from_slice(&fs::read(crate::config::state("state.json").unwrap()).unwrap()).unwrap();
+        assert_eq!(saved.runtime.runs[0].status, "running");
+        assert_eq!(saved.runtime.runs[0].attempts.len(), 1);
+    }
+    #[test]
+    fn overlapping_commits_rollback_only_their_own_conversation() {
+        let mut state = State::default();
+        for _ in 0..2 {
+            let chat = crate::chat::create(&mut state);
+            crate::chat::send(&mut state, &chat, "Work", "test").unwrap();
+        }
+        assert_eq!(checkpoint_next(&mut state, |_| Ok(())), Some(0));
+        assert_eq!(checkpoint_next(&mut state, |_| Ok(())), Some(1));
+        let mut attempts: Vec<_> = state.runtime.runs.iter().map(|r| r.attempts[0].clone()).collect();
+        attempts[0].artifact = Some("output-a".into());
+        attempts[1].artifact = Some("output-b".into());
+        let ids: Vec<_> = state.runtime.runs.iter().map(|r| r.id.clone()).collect();
+        commit(&mut state, &ids[1], Action::Task, attempts[1].clone(), Ok("B".into()), false, |_| Ok(())).unwrap();
+        assert!(commit(&mut state, &ids[0], Action::Task, attempts[0].clone(), Ok("A".into()), false, |_| Err(std::io::Error::other("disk full"))).is_err());
+        assert_eq!(state.chats[1].workspace.as_deref(), Some("output-b"));
+        assert_eq!(state.runtime.runs[1].status, "completed");
+        assert!(state.chats[0].workspace.is_none());
+        assert_eq!(state.runtime.runs[0].status, "running");
+        commit(&mut state, &ids[0], Action::Task, attempts[0].clone(), Ok("A".into()), false, |_| Ok(())).unwrap();
+        assert_eq!(state.chats[0].workspace.as_deref(), Some("output-a"));
+        assert_eq!(state.chats[1].workspace.as_deref(), Some("output-b"));
+    }
+
+    #[test]
+    #[ignore = "run alone with isolated CONTROL_STATE_DIR and CONTROL_CONFIG_DIR; requests process-wide shutdown"]
+    fn isolated_supervisor_overlaps_cancels_orders_and_joins() {
+        // The real dispatcher, durable checkpoints and commit path, without model calls.
+        fn execute(state: Arc<Mutex<State>>, task: Task) {
+            {
+                let mut s = state.lock().unwrap();
+                s.runtime.runs.iter_mut().find(|r| r.id == task.0).unwrap().result = "entered".into();
+                storage::save(&s).unwrap();
+            }
+            let marker = crate::config::state(&format!("release-{}", task.0)).unwrap();
+            let started = Instant::now();
+            while !marker.exists() && !crate::lifecycle::cancelled(Some((&state, &task.0))) {
+                assert!(started.elapsed() < Duration::from_secs(20), "Test worker timed out");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            commit(&mut state.lock().unwrap(), &task.0, task.3, task.4,
+                Ok("done".into()), crate::shutdown::requested(), storage::save).unwrap();
+        }
+        struct Stop;
+        impl Drop for Stop { fn drop(&mut self) { crate::shutdown::request(); } }
+        let _stop = Stop;
+        assert!(std::env::var("CONTROL_STATE_DIR").unwrap().contains("control-execution-qa"));
+        assert!(crate::backend::Backend::Codex.image().is_none());
+        assert!(crate::backend::Backend::Claude.image().is_none());
+        storage::initialize().unwrap();
+        let mut initial = State::default();
+        let a = crate::chat::create(&mut initial);
+        let b = crate::chat::create(&mut initial);
+        let c = crate::chat::create(&mut initial);
+        for chat in [&a, &a, &b, &c] { crate::chat::send(&mut initial, chat, "Work", "test").unwrap(); }
+        storage::save(&initial).unwrap();
+        let ids: Vec<_> = initial.runtime.runs.iter().map(|r| r.id.clone()).collect();
+        let state = Arc::new(Mutex::new(initial));
+        let threads = start_with(state.clone(), execute);
+        let wait = |expected: &[(usize, &str, Option<&str>)]| {
+            let start = Instant::now();
+            loop {
+                let s = state.lock().unwrap();
+                assert!(s.runtime.runs.iter().filter(|r| matches!(r.status.as_str(), "running" | "cancelling")).count() <= 2);
+                if expected.iter().all(|(i, status, result)| s.runtime.runs[*i].status == *status && result.is_none_or(|r| s.runtime.runs[*i].result == r)) { break; }
+                drop(s);
+                assert!(start.elapsed() < Duration::from_secs(10), "Dispatcher did not progress");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        wait(&[(0,"running",Some("entered")),(1,"queued",None),(2,"running",Some("entered")),(3,"queued",None)]);
+        {
+            let mut s = state.lock().unwrap();
+            crate::lifecycle::request_cancel(&mut s.runtime, &ids[2], &Actor::LocalOperator).unwrap();
+            storage::save(&s).unwrap();
+        }
+        wake();
+        wait(&[(0,"running",Some("entered")),(1,"queued",None),(2,"cancelled",None),(3,"running",Some("entered"))]);
+        fs::write(crate::config::state(&format!("release-{}", ids[0])).unwrap(), "release").unwrap();
+        wait(&[(0,"completed",None),(1,"running",Some("entered")),(3,"running",Some("entered"))]);
+        {
+            let mut s = state.lock().unwrap();
+            crate::chat::send(&mut s, &a, "Keep queued", "test").unwrap();
+            storage::save(&s).unwrap();
+        }
+        crate::shutdown::request();
+        threads.join().unwrap();
+        let s = state.lock().unwrap();
+        assert_eq!(s.runtime.runs[1].status, "interrupted");
+        assert_eq!(s.runtime.runs[3].status, "interrupted");
+        assert_eq!(s.runtime.runs[4].status, "queued");
+        let attempts: std::collections::HashSet<_> = s.runtime.runs.iter().flat_map(|r| &r.attempts).map(|a| &a.workspace_id).collect();
+        assert_eq!(attempts.len(), 4);
+        let saved: State = serde_json::from_slice(&fs::read(crate::config::state("state.json").unwrap()).unwrap()).unwrap();
+        assert_eq!(saved.runtime.runs[4].status, "queued");
+        assert!(saved.runtime.runs.iter().all(|r| !matches!(r.status.as_str(), "running" | "cancelling")));
+    }
+    #[test]
     #[ignore = "starts an isolated server and one authenticated model task; requires pinned images and CONTROL_QA_URL/CONTROL_QA_SERVER_BIN"]
     fn live_signal_stops_active_worker_and_preserves_queued_turn() {
+        live_shutdown(false);
+    }
+    #[test]
+    #[ignore = "starts an isolated server and two authenticated model tasks; requires pinned images and CONTROL_QA_URL/CONTROL_QA_SERVER_BIN"]
+    fn live_parallel_workers_cancel_independently_and_shutdown_cleanly() {
+        live_shutdown(true);
+    }
+    fn live_shutdown(parallel: bool) {
         use serde_json::json;
         struct Server(std::process::Child);
         impl Drop for Server {
@@ -1247,6 +1544,38 @@ mod tests {
             assert!(["queued", "running"].contains(&message["status"].as_str().unwrap_or("")), "QA worker did not remain active");
             assert!(started.elapsed() < Duration::from_secs(120), "model did not start the requested command");
             std::thread::sleep(Duration::from_millis(100));
+        }
+        if parallel {
+            let sibling = tool("control.chat.create", json!({}))["id"].as_str().unwrap().to_owned();
+            tool("control.chat.send", json!({"id":sibling,"message":"Use one workspace shell command to run exactly: printf overlap-proof > overlap-proof.txt; sleep 90. Do not change other files or inspect credentials. Wait for the command."}));
+            let started = Instant::now();
+            loop {
+                let detail = tool("control.chat.read", json!({"id":sibling}));
+                let message = &detail["messages"][0];
+                let marker = message["attempts"].as_array().and_then(|a| a.last())
+                    .and_then(|a| a["workspace_id"].as_str())
+                    .and_then(|id| runtime::workspace(id).ok())
+                    .is_some_and(|workspace| workspace.join("overlap-proof.txt").is_file());
+                assert_eq!(tool("control.chat.read", json!({"id":chat}))["messages"][0]["status"], "running", "First worker finished before overlap was established");
+                if marker && message["status"] == "running" { break; }
+                assert!(["queued", "running"].contains(&message["status"].as_str().unwrap_or("")), "Sibling worker failed");
+                assert!(started.elapsed() < Duration::from_secs(60), "Workers did not overlap");
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            tool("control.chat.send", json!({"id":sibling,"message":"/cancel"}));
+            let started = Instant::now();
+            loop {
+                let detail = tool("control.chat.read", json!({"id":sibling}));
+                if detail["messages"][0]["status"] == "cancelled" {
+                    let id = detail["messages"][0]["attempts"].as_array().unwrap().last().unwrap()["workspace_id"].as_str().unwrap();
+                    let names = runtime::docker_query(&["ps", "--all", "--format", "{{.Names}}", "--filter", &format!("name=control-{id}")]).unwrap();
+                    assert!(names.trim().is_empty(), "Cancelled sibling still has a container");
+                    break;
+                }
+                assert!(started.elapsed() < Duration::from_secs(30), "Sibling cancellation timed out");
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            assert_eq!(tool("control.chat.read", json!({"id":chat}))["messages"][0]["status"], "running");
         }
         tool("control.chat.send", json!({"id":chat,"message":"Follow up after this task."}));
         assert_eq!(unsafe { libc::kill(server.0.id() as libc::pid_t, libc::SIGTERM) }, 0);

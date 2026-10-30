@@ -86,7 +86,8 @@ CPU contention, allocators and VM scheduling affect results.
 
 ## Execution model next
 
-The dispatcher still runs one model at a time node-wide. This pass does not change
+At the time of this performance pass, the dispatcher ran one model at a time
+node-wide. The pass did not change
 admission, ordering, cancellation, mounts, durable saves or provider access.
 Durable full-ledger saves and synchronous filesystem work remain deliberate
 correctness boundaries; changing them needs separate crash/recovery evidence.
@@ -96,3 +97,6 @@ independent writable workspaces. Parent/child waits must release slots. Exact
 attempt/resource ownership, stale-result fences and shutdown recovery must hold
 under overlapping execution. Set resource budgets before increasing fan-out;
 do not substitute model judgment for deterministic scheduling.
+
+The subsequent [bounded execution implementation](EXECUTION.md) changes admission
+and supervision separately from these rendering measurements.

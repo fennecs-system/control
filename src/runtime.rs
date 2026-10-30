@@ -13,6 +13,8 @@ use std::{
 #[serde(default)]
 pub struct Runtime {
     #[serde(skip)]
+    pub execution: crate::scheduler::Limits,
+    #[serde(skip)]
     pub models: Vec<crate::providers::Model>,
     #[serde(skip)]
     pub backend: crate::backend::Backend,
@@ -257,6 +259,7 @@ impl Runtime {
             result: String::new(),
         });
         self.notice = "Run queued.".into();
+        crate::worker::wake();
         Ok(())
     }
     pub fn action(&mut self, path: &str, f: &HashMap<String, String>) -> &'static str {

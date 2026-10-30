@@ -62,6 +62,7 @@ pub fn load() -> io::Result<State> {
         State::initial()
     };
     crate::providers::load_settings(&mut state.runtime)?;
+    state.runtime.execution = crate::scheduler::load_limits()?;
     let mut changed = crate::knowledge::migrate(&mut state);
     changed |= interrupt_active(&mut state);
     if changed {
