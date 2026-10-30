@@ -1,9 +1,6 @@
 //! Bounded node execution with deterministic per-conversation ownership.
 use crate::runtime::Runtime;
-use std::{
-    collections::HashSet,
-    io::{self, Read},
-};
+use std::{collections::HashSet, io};
 
 pub const MAX_PENDING: usize = 32;
 pub const MAX_PARALLEL: usize = 8;
@@ -41,27 +38,9 @@ fn load_limits_in(
     path: &std::path::Path,
     override_limit: Option<std::ffi::OsString>,
 ) -> io::Result<Limits> {
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    let mut limits = match std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
-        .open(path)
-    {
-        Ok(file) => {
-            let meta = file.metadata()?;
-            if !meta.is_file() || meta.permissions().mode() & 0o077 != 0 || meta.len() > 4096 {
-                return Err(io::Error::other(
-                    "execution.json must be a private regular file of at most 4096 bytes",
-                ));
-            }
-            let mut bytes = Vec::new();
-            file.take(4097).read_to_end(&mut bytes)?;
-            if bytes.len() > 4096 {
-                return Err(io::Error::other("execution.json is too large"));
-            }
-            serde_json::from_slice::<Limits>(&bytes)
-                .map_err(|_| io::Error::other("Invalid execution.json"))?
-        }
+    let mut limits = match crate::config::read_regular(path, 4096, true) {
+        Ok(bytes) => serde_json::from_slice::<Limits>(&bytes)
+            .map_err(|_| io::Error::other("Invalid execution.json"))?,
         Err(error) if error.kind() == io::ErrorKind::NotFound => Limits::default(),
         Err(error) => return Err(error),
     };

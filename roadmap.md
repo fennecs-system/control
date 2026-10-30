@@ -188,6 +188,13 @@ Finish these before increasing fan-out further, unattended operation or spending
 
 ## Next: consistent tool capabilities
 
+The code-quality fixes preserve document literals, fence failed preview launches,
+retain UTF-8 report prefixes, narrow rollback snapshots and share bounded private
+reads/atomic writes. Preview proxies use stop flags rather than polling state.
+Follow-ups: conditional transcript rendering with complete invalidation, shared
+HTTP response policy and a shared slash-command parser. Preserve route-specific
+framing/script permissions and command behavior while consolidating them.
+
 - Share tool schemas/discovery/policy dispatch across HTTP MCP, stdio and worker
   mailboxes. Registration checks catch omissions today; they do not replace one
   registry. Audit MCP effect annotations against actual behavior.

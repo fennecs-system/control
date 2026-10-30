@@ -85,7 +85,7 @@ pub fn request_named(state: &mut State, id: &str, path: &str, name:Option<&str>)
     if !valid_name(name) {return Err("Folder names must use letters, numbers, dots, dashes or underscores, without a leading dot. Use /open --as NAME /absolute/path.");}
     let mut mounts=chat.project.as_ref().map(|p|p.mounts.clone()).unwrap_or_default();
     if let Some(previous)=chat.project.as_ref().filter(|p|p.grant.is_some()&&!p.named&&p.mounts.is_empty()) {
-        let name=Path::new(&previous.path).file_name().and_then(|s|s.to_str()).filter(|s|!s.starts_with('.')&&!skip(s,false)&&s.bytes().all(|c|c.is_ascii_alphanumeric()||b"-_.".contains(&c))).unwrap_or("project");
+        let name=Path::new(&previous.path).file_name().and_then(|s|s.to_str()).filter(|s|valid_name(s)).unwrap_or("project");
         mounts.push(Mount{name:name.into(),path:previous.path.clone(),message_index:previous.message_index});
     }
     if mounts.len()>=16 {return Err("This chat already has 16 open folders.");}
@@ -705,7 +705,8 @@ pub fn http(
             }
         } else {
             let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
-            let previous = state.chats.clone();
+            let index = state.chats.iter().position(|c| c.id == id).ok_or_else(|| fail("Chat not found"))?;
+            let previous = state.chats[index].clone();
             let command=match fields.get("name").filter(|name|!name.is_empty()) {
                 Some(name) if valid_name(name)=>format!("/open --as {name} {}",fields.get("path").map(String::as_str).unwrap_or("")),
                 Some(_)=>return Err(fail("Choose a simple workspace name without spaces or path separators")),
@@ -719,7 +720,7 @@ pub fn http(
             )
             .map_err(fail)?;
             if crate::storage::save(&state).is_err() {
-                state.chats = previous;
+                state.chats[index] = previous;
                 return Err(fail("Could not save project request"));
             }
         }
@@ -748,10 +749,12 @@ mod tests {
     struct Fixture(PathBuf);
     impl Fixture {
         fn new() -> Self {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
             let path = std::env::temp_dir().join(format!(
-                "control-project-test-{}-{}",
+                "control-project-test-{}-{}-{}",
                 std::process::id(),
-                nonce()
+                nonce(),
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             ));
             fs::create_dir(&path).unwrap();
             Self(path)

@@ -107,7 +107,7 @@ fn container_command_scoped(
         auth.uid, auth.gid
     );
     let codex_home = home.replacen("/home/agent:", "/home/agent/.codex:", 1);
-    let mut command = Command::new("docker");
+    let mut command = crate::claude::docker();
     command
         .args([
             "run",
@@ -151,25 +151,11 @@ fn container_command_scoped(
             "HOME=/home/agent",
             "--env",
             "CODEX_HOME=/home/agent/.codex",
-        ])
-        .env_clear();
+        ]);
     if let Some(source)=review {
         command.args(["--mount",&format!("type=bind,src={},dst=/review,readonly",mount_path(source)?)]);
     }
     command.arg(image);
-    for name in [
-        "PATH",
-        "HOME",
-        "DOCKER_HOST",
-        "DOCKER_CONTEXT",
-        "DOCKER_CONFIG",
-        "DOCKER_CERT_PATH",
-        "DOCKER_TLS_VERIFY",
-    ] {
-        if let Some(value) = std::env::var_os(name) {
-            command.env(name, value);
-        }
-    }
     Ok(command)
 }
 
@@ -424,6 +410,7 @@ fn start_with(state: Arc<Mutex<State>>, execute: fn(Arc<Mutex<State>>, Task)) ->
             if last_reconcile.is_none_or(|t| t.elapsed() >= Duration::from_secs(2)) {
                 last_reconcile = Some(Instant::now());
                 triggered = true;
+                crate::github::refresh_availability();
                 if crate::backend::Backend::Codex.image().is_some()
                     || crate::backend::Backend::Claude.image().is_some()
                 {
@@ -644,62 +631,85 @@ fn commit(
             "Cancelled. The previous published workspace is unchanged.".into(),
         ));
     }
-    let previous_run = s
-        .runtime
-        .runs
-        .iter()
-        .position(|r| r.id == id)
-        .map(|i| (i, s.runtime.runs[i].clone()));
-    let chat_id = previous_run
-        .as_ref()
-        .and_then(|(_, run)| run.chat_id.clone());
-    let previous_chat = s
-        .chats
-        .iter()
-        .position(|c| Some(&c.id) == chat_id.as_ref())
-        .map(|i| (i, s.chats[i].clone()));
+    let run_index = s.runtime.runs.iter().position(|r| r.id == id).unwrap();
+    let chat_id = run.chat_id.clone();
+    let chat_index = s.chats.iter().position(|c| Some(&c.id) == chat_id.as_ref());
     if outcome.is_ok() {
-        if let (Some((_, chat)), Some((_, run))) = (&previous_chat, &previous_run) {
+        if let Some(index) = chat_index {
+            let chat = &s.chats[index];
             let current = if action == Action::Improve {
                 &chat.improve_workspace
             } else {
                 &chat.workspace
             };
-            let baseline = run.continuation.as_ref().map(|c| &c.published_parent).unwrap_or(&attempt.parent_artifact);
+            let baseline = run
+                .continuation
+                .as_ref()
+                .map(|c| &c.published_parent)
+                .unwrap_or(&attempt.parent_artifact);
             if current != baseline {
                 outcome = Err(("interrupted", "The conversation workspace changed. Outputs were retained; start a new turn to continue from the current version.".into()));
             }
-            if attempt.project.is_some() && (chat.project.as_ref().and_then(|p|p.head.as_ref())!=attempt.project_base.as_ref()||chat.project.as_ref().and_then(|p|p.grant.as_ref())!=attempt.project.as_ref()) {
-                outcome=Err(("interrupted","The project checkpoint changed. Outputs were retained; start a new turn.".into()));
+            if attempt.project.is_some()
+                && (chat.project.as_ref().and_then(|p| p.head.as_ref())
+                    != attempt.project_base.as_ref()
+                    || chat.project.as_ref().and_then(|p| p.grant.as_ref())
+                        != attempt.project.as_ref())
+            {
+                outcome = Err((
+                    "interrupted",
+                    "The project checkpoint changed. Outputs were retained; start a new turn."
+                        .into(),
+                ));
             }
         }
     }
-    let published_project=if outcome.is_ok() && !attempt.review_only {attempt.project_checkpoint.clone()}else{None};
+    let published_project = if outcome.is_ok() && !attempt.review_only {
+        attempt.project_checkpoint.clone()
+    } else {
+        None
+    };
     let published = if outcome.is_ok() && !attempt.review_only {
         attempt.artifact.clone()
     } else {
         None
     };
-    if let Some(r) = s.runtime.runs.iter_mut().find(|r| r.id == id) {
-        match outcome {
-            Ok(summary) => {
-                r.status = "completed".into();
-                r.result = summary;
-            }
-            Err((status, message)) => {
-                r.status = status.into();
-                r.result = if status == "waiting" { r.question.as_ref().map(crate::design::summary).unwrap_or(message) } else { message };
-            }
-        }
-        attempt.status.clone_from(&r.status);
-        if let Some(last) = r.attempts.last_mut() {
-            attempt.activity = std::mem::take(&mut last.activity);
-            attempt.command_jobs = std::mem::take(&mut last.command_jobs);
-            *last = attempt;
-        }
-    }
+    let r = &mut s.runtime.runs[run_index];
+    let (status, result) = match outcome {
+        Ok(summary) => ("completed", summary),
+        Err((status, message)) => (
+            status,
+            if status == "waiting" {
+                r.question
+                    .as_ref()
+                    .map(crate::design::summary)
+                    .unwrap_or(message)
+            } else {
+                message
+            },
+        ),
+    };
+    let previous_status = std::mem::replace(&mut r.status, status.into());
+    let previous_result = std::mem::replace(&mut r.result, result);
+    attempt.status.clone_from(&r.status);
+    let previous_attempt = r.attempts.last_mut().map(|last| {
+        attempt.activity = std::mem::take(&mut last.activity);
+        attempt.command_jobs = std::mem::take(&mut last.command_jobs);
+        std::mem::replace(last, attempt)
+    });
+    let previous_chat = chat_index.map(|index| {
+        let chat = &s.chats[index];
+        (
+            chat.workspace.clone(),
+            chat.improve_workspace.clone(),
+            chat.project.as_ref().and_then(|p| p.head.clone()),
+            chat.revision,
+        )
+    });
     if let Some(session) = s.chats.iter_mut().find(|c| Some(&c.id) == chat_id.as_ref()) {
-        if let (Some(project),Some(checkpoint))=(&mut session.project,published_project) {project.head=Some(checkpoint);}
+        if let (Some(project), Some(checkpoint)) = (&mut session.project, published_project) {
+            project.head = Some(checkpoint);
+        }
         if let Some(published) = published {
             if action == Action::Improve {
                 session.improve_workspace = Some(published);
@@ -710,11 +720,23 @@ fn commit(
         session.revision = session.revision.saturating_add(1);
     }
     if save(s).is_err() {
-        if let Some((index, run)) = previous_run {
-            s.runtime.runs[index] = run;
+        let run = &mut s.runtime.runs[run_index];
+        run.status = previous_status;
+        run.result = previous_result;
+        if let (Some(last), Some(mut previous)) = (run.attempts.last_mut(), previous_attempt) {
+            previous.activity = std::mem::take(&mut last.activity);
+            previous.command_jobs = std::mem::take(&mut last.command_jobs);
+            *last = previous;
         }
-        if let Some((index, chat)) = previous_chat {
-            s.chats[index] = chat;
+        if let (Some(index), Some((workspace, improve_workspace, head, revision))) =
+            (chat_index, previous_chat)
+        {
+            let chat = &mut s.chats[index];
+            (chat.workspace, chat.improve_workspace, chat.revision) =
+                (workspace, improve_workspace, revision);
+            if let Some(project) = &mut chat.project {
+                project.head = head;
+            }
         }
         return Err(());
     }
@@ -1290,18 +1312,29 @@ fn execute(
 }
 
 fn read_report(path: &Path) -> std::io::Result<String> {
-    use std::io::Read;
+    use std::{io::Read, os::unix::fs::OpenOptionsExt};
     // The container has exited: reject agent-created symlinks before any host read.
-    if !fs::symlink_metadata(path)?.is_file() {
+    let file = fs::OpenOptions::new().read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC).open(path)?;
+    if !file.metadata()?.is_file() {
         return Err(std::io::Error::other(
             "Worker report must be a regular file.",
         ));
     }
-    let mut output = String::new();
-    fs::File::open(path)?
-        .take(64000)
-        .read_to_string(&mut output)?;
-    Ok(output)
+    let mut output = Vec::new();
+    file
+        .take(64001)
+        .read_to_end(&mut output)?;
+    let truncated = output.len() > 64000;
+    output.truncate(64000);
+    match std::str::from_utf8(&output) {
+        Ok(text) => Ok(text.to_owned()),
+        Err(error) if truncated && error.error_len().is_none() => {
+            output.truncate(error.valid_up_to());
+            String::from_utf8(output).map_err(std::io::Error::other)
+        }
+        Err(error) => Err(std::io::Error::other(error)),
+    }
 }
 
 /// Exercise the real worker path without printing account information or model output.
@@ -1355,6 +1388,48 @@ fn prepare_source_workspace(source: &Path, baseline: &Path, workspace: &Path) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn result_rollback_preserves_attempt_history_and_live_diagnostics() {
+        let mut state = State::default();
+        let chat = crate::chat::create(&mut state);
+        crate::chat::send(&mut state, &chat, "Work", "test").unwrap();
+        let historical = crate::usage::Attempt {status:"failed".into(), workspace_id:Some("historical".into()), ..Default::default()};
+        state.runtime.runs[0].attempts.push(historical.clone());
+        checkpoint_next(&mut state, |_|Ok(())).unwrap();
+        let id = state.runtime.runs[0].id.clone();
+        record_activity(&mut state, &id, crate::usage::Activity {id:"command".into(), kind:"command_execution".into(), text:"cargo test".into(), output:"retained diagnostics".into(), status:"completed".into()});
+        let mut attempt = state.runtime.runs[0].attempts.last().unwrap().clone();
+        attempt.artifact = Some("published".into());
+        let before = serde_json::to_vec(&state).unwrap();
+        assert!(commit(&mut state, &id, Action::Task, attempt.clone(), Ok("done".into()), false, |_|Err(std::io::Error::other("disk full"))).is_err());
+        assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+        commit(&mut state, &id, Action::Task, attempt, Ok("done".into()), false, |_|Ok(())).unwrap();
+        assert_eq!(serde_json::to_value(&state.runtime.runs[0].attempts[0]).unwrap(), serde_json::to_value(historical).unwrap());
+        assert_eq!(state.runtime.runs[0].attempts[1].activity[0].output, "retained diagnostics");
+        assert_eq!(state.chats[0].workspace.as_deref(), Some("published"));
+    }
+    #[test]
+    fn reports_keep_valid_utf8_prefixes_but_reject_malformed_files_and_links() {
+        let root = std::env::temp_dir().join(format!("control-report-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("report");
+        for character in ["é", "猫", "🐶"] {
+            for cut in 1..character.len() {
+                let prefix = "a".repeat(64000-cut);
+                fs::write(&path, format!("{prefix}{character}tail")).unwrap();
+                assert_eq!(read_report(&path).unwrap(), prefix);
+            }
+        }
+        fs::write(&path, "é".repeat(32001)).unwrap();
+        assert_eq!(read_report(&path).unwrap(), "é".repeat(32000));
+        for bytes in [vec![0xff], vec![0xc3], {let mut bytes=vec![b'a';63999];bytes.push(0xc3);bytes}] {
+            fs::write(&path, bytes).unwrap();
+            assert!(read_report(&path).is_err());
+        }
+        std::os::unix::fs::symlink(&path, root.join("link")).unwrap();
+        assert!(read_report(&root.join("link")).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     #[ignore = "run alone with isolated CONTROL_STATE_DIR and CONTROL_CONFIG_DIR; requests process-wide shutdown"]
     fn isolated_supervisor_retains_intent_after_worker_panic() {

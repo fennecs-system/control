@@ -1,5 +1,5 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::{fmt, fs, path::Path, str::FromStr};
+use std::{fmt, path::Path, str::FromStr};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DiscordId(u64);
@@ -95,7 +95,7 @@ pub struct DmBinding {
 }
 impl DmBindings {
     pub fn load() -> Result<Self, &'static str> {
-        let bytes = fs::read(crate::config::state("discord-dm-bindings.json")?)
+        let bytes = crate::config::read_regular(&crate::config::state("discord-dm-bindings.json")?, 1024 * 1024, true)
             .map_err(|_| "DM channel bindings unavailable")?;
         serde_json::from_slice(&bytes).map_err(|_| "Invalid DM channel bindings")
     }
@@ -110,18 +110,8 @@ impl Policy {
         Self::read(&crate::config::directory()?.join("discord-access.json"))
     }
     fn read(path: &Path) -> Result<Self, &'static str> {
-        use std::os::unix::fs::PermissionsExt;
-        let metadata =
-            fs::symlink_metadata(path).map_err(|_| "Discord access policy unavailable")?;
-        if !metadata.is_file()
-            || metadata.permissions().mode() & 0o077 != 0
-            || metadata.len() > 65536
-        {
-            return Err(
-                "Discord access policy must be a private regular file (mode 0600, at most 64 KiB)",
-            );
-        }
-        let bytes = fs::read(path).map_err(|_| "Discord access policy unavailable")?;
+        let bytes = crate::config::read_regular(path, 65536, true)
+            .map_err(|_| "Discord access policy must be a private regular file (mode 0600, at most 64 KiB)")?;
         let policy: Self =
             serde_json::from_slice(&bytes).map_err(|_| "Invalid Discord access policy")?;
         policy.validate()?;
@@ -253,6 +243,7 @@ pub fn authorizer() -> impl FnMut(&Actor, Action) -> Result<Workspace, &'static 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     fn policy() -> Policy {
         serde_json::from_str(r#"{"channel_id":null,"principals":[{"label":"geodesic","user_id":"1","role":"architect"},{"label":"vivkelly","user_id":"2","role":"user"},{"label":"olliev","user_id":"3","role":"user"}]}"#).unwrap()
     }
