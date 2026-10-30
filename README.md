@@ -91,7 +91,7 @@ These chat commands work on the web, in the TUI and in authorized Discord DMs:
 | `/steer direction` | Queue a direction for the next turn. |
 | `/btw question` | Ask in a linked side conversation. |
 | `/spawn task` | Start a linked agent conversation. |
-| `/open /absolute/path` | Request a folder; approve before importing an isolated Git worktree. [Workspaces →](docs/WORKSPACES.md) |
+| `/open /absolute/path` | Add an approved folder at `/workspace/<name>`; use `--as NAME` for duplicate names. [Workspaces →](docs/WORKSPACES.md) |
 | `/cancel` | Stop the active or oldest queued task in this chat. |
 | `/answer QUESTION_ID answer` | Answer an agent's pending design question. |
 | `/improve` / `/improve off` | Enter or leave architect-only Control improvement mode. |

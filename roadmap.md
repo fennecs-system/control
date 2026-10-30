@@ -82,6 +82,9 @@ a separate maintainer action.
 
 Implemented on `feature/self-development`; deployment follows maintainer review.
 
+- Folder approvals follow their chat request, with inline errors and replaceable
+  pending paths. Multiple approved folders compose under `/workspace/<name>`;
+  imports skip symlinks and preserve each folder's isolated Git metadata and edits.
 - Durable long-running command jobs stream bounded output, support cancellation
   and deadlines, and fence checkpoint publication until writers stop. Restart
   reconciliation verifies immutable container identity.

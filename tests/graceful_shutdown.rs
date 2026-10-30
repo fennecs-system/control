@@ -319,7 +319,8 @@ fn project_access_requires_operator_confirmation_and_survives_restart() {
         .0
         .join("state/projects/grants")
         .join(grant)
-        .join("seed");
+        .join("seed")
+        .join(source.file_name().unwrap());
     assert_eq!(fs::read(seed.join("code.rs")).unwrap(), b"fn main() {}\n");
     assert!(!seed.join(".env").exists());
     assert!(!source.join(".git").exists());
@@ -335,7 +336,7 @@ fn project_access_requires_operator_confirmation_and_survives_restart() {
         .send()
         .unwrap();
     assert_eq!(page.status(), 200);
-    assert!(page.text().unwrap().contains("Project · isolated worktree"));
+    assert!(page.text().unwrap().contains("Folder opened"));
     assert_eq!(
         unsafe { libc::kill(server.0.id() as i32, libc::SIGTERM) },
         0

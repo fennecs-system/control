@@ -14,7 +14,7 @@ arbitrary downloaded code safe.
   recorded DM bindings, independently of model text or display names. Worker
   requests cannot supply operator identity. Opening a host directory records an
   intent; a separate authenticated operator action approves an isolated import.
-  Imports reject symlinks, exclude known credential/generated paths and isolate
+  Imports skip symlinks without following targets, exclude known credential/generated paths and isolate
   Git metadata from the original checkout. Lenses compose context and tools;
   they do not grant authority. Evidence:
   [identity.rs](../src/identity.rs),
@@ -22,7 +22,7 @@ arbitrary downloaded code safe.
   `direct_messages_need_matching_recipient_bindings_and_keep_roles`;
   [projects.rs](../src/projects.rs),
   `project_request_is_only_intent_and_cannot_replace_an_approved_grant`,
-  `import_rejects_symlinks_without_following_them_or_publishing_a_grant`.
+  `import_ignores_links_to_files_directories_missing_paths_and_cycles`.
 
 - **Credentials and executable code.** Codex credentials are read-only mounts
   into its account-bearing harness. Its inner execution sandbox denies credential

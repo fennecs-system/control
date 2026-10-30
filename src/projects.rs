@@ -13,11 +13,43 @@ use std::{
 };
 
 #[derive(Clone, Default, Serialize, Deserialize)]
+pub struct Mount {
+    pub name: String,
+    pub path: String,
+    pub message_index: Option<usize>,
+}
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Project {
     pub request: String,
     pub path: String,
     pub grant: Option<String>,
     pub head: Option<String>,
+    #[serde(default)]
+    pub message_index: Option<usize>,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub pending: bool,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub mounts: Vec<Mount>,
+    #[serde(default)]
+    pub named: bool,
+}
+impl Project {
+    fn needs_approval(&self)->bool {self.pending||self.grant.is_none()}
+    pub fn approved(&self)->Option<Self> {
+        self.grant.as_ref()?;
+        let mut inherited=self.clone();
+        inherited.pending=false;inherited.error=None;inherited.message_index=None;
+        if let Some(mount)=inherited.mounts.last() {inherited.path=mount.path.clone();inherited.name=mount.name.clone();}
+        for mount in &mut inherited.mounts {mount.message_index=None;}
+        Some(inherited)
+    }
+}
+fn valid_name(name:&str)->bool {
+    !name.is_empty()&&name.len()<=128&&!name.starts_with('.')&&!skip(name,false)&&name.bytes().all(|c|c.is_ascii_alphanumeric()||b"-_.".contains(&c))
 }
 fn fail(message: impl Into<String>) -> io::Error {
     io::Error::other(message.into())
@@ -35,6 +67,9 @@ fn nonce() -> String {
     )
 }
 pub fn request(state: &mut State, id: &str, path: &str) -> Result<Value, &'static str> {
+    request_named(state,id,path,None)
+}
+pub fn request_named(state: &mut State, id: &str, path: &str, name:Option<&str>) -> Result<Value, &'static str> {
     let path = path.trim();
     if path.len() > 4096 || !Path::new(path).is_absolute() || path.contains(['\n', '\r', '\0', ','])
     {
@@ -46,17 +81,27 @@ pub fn request(state: &mut State, id: &str, path: &str) -> Result<Value, &'stati
         .find(|c| c.id == id)
         .ok_or("Chat not found.")?;
     crate::identity::authorize(&chat.actor, Action::Task)?;
-    if chat.project.as_ref().is_some_and(|p| p.grant.is_some()) {
-        return Err(
-            "Start a new chat to open another project; this chat keeps its existing workspace.",
-        );
+    let name=name.filter(|s|!s.is_empty()).or_else(||Path::new(path).file_name().and_then(|s|s.to_str())).ok_or("Choose a named project folder.")?;
+    if !valid_name(name) {return Err("Folder names must use letters, numbers, dots, dashes or underscores, without a leading dot. Use /open --as NAME /absolute/path.");}
+    let mut mounts=chat.project.as_ref().map(|p|p.mounts.clone()).unwrap_or_default();
+    if let Some(previous)=chat.project.as_ref().filter(|p|p.grant.is_some()&&!p.named&&p.mounts.is_empty()) {
+        let name=Path::new(&previous.path).file_name().and_then(|s|s.to_str()).filter(|s|!s.starts_with('.')&&!skip(s,false)&&s.bytes().all(|c|c.is_ascii_alphanumeric()||b"-_.".contains(&c))).unwrap_or("project");
+        mounts.push(Mount{name:name.into(),path:previous.path.clone(),message_index:previous.message_index});
     }
+    if mounts.len()>=16 {return Err("This chat already has 16 open folders.");}
     let project = Project {
         request: nonce(),
         path: path.into(),
+        message_index: chat.messages.len().checked_sub(1),
+        pending:true,
+        name:name.into(),
+        grant:chat.project.as_ref().and_then(|p|p.grant.clone()),
+        head:chat.project.as_ref().and_then(|p|p.head.clone()),
+        mounts,
+        named:chat.project.as_ref().is_some_and(|p|p.named),
         ..Project::default()
     };
-    let result = json!({"approval_required":true,"request":project.request,"path":project.path,"url":format!("/chat/{id}/project")});
+    let result = json!({"approval_required":true,"request":project.request,"path":project.path,"mount":format!("/workspace/{}",project.name),"url":format!("/chat/{id}/project")});
     let chat = state.chats.iter_mut().find(|c| c.id == id).unwrap();
     if chat.messages.is_empty() {
         chat.title = Path::new(path)
@@ -70,7 +115,7 @@ pub fn request(state: &mut State, id: &str, path: &str) -> Result<Value, &'stati
     Ok(result)
 }
 pub fn definition(worker: bool) -> Value {
-    json!({"name":if worker {"control_project_request"} else {"control.project.request"},"description":"Request an operator-approved project directory on this Control node. Does not read, mount or authorize the path; the operator must confirm in Control.","annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false},"inputSchema":{"type":"object","properties":{"id":{"type":"string"},"path":{"type":"string","maxLength":4096}},"required":if worker {json!(["path"])}else{json!(["id","path"])},"additionalProperties":false}})
+    json!({"name":if worker {"control_project_request"} else {"control.project.request"},"description":"Request an operator-approved folder at /workspace/name on this node. Existing approved folders remain available. Does not read or authorize the path; the operator must confirm in Control. Supply name to resolve duplicate folder names.","annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false},"inputSchema":{"type":"object","properties":{"id":{"type":"string"},"path":{"type":"string","maxLength":4096},"name":{"type":"string","maxLength":128}},"required":if worker {json!(["path"])}else{json!(["id","path"])},"additionalProperties":false}})
 }
 pub fn panel(state: &State, id: &str) -> String {
     let Some(chat) = state.chats.iter().find(|c| c.id == id) else {
@@ -78,14 +123,16 @@ pub fn panel(state: &State, id: &str) -> String {
     };
     let path = chat.project.as_ref().map(|p| p.path.as_str()).unwrap_or("");
     let mut html = format!(
-        "<details class='project-picker' data-transcript-key='project'{}><summary>{}</summary>",
-        if chat.project.as_ref().is_some_and(|p| p.grant.is_none()) {
+        "<details class='project-picker' data-transcript-key='project-{}-{}'{}><summary>{}</summary>",
+        chat.project.as_ref().map(|p|p.request.as_str()).unwrap_or("new"),
+        if chat.project.as_ref().is_some_and(|p|!p.needs_approval()) {"approved"}else{"pending"},
+        if chat.project.as_ref().is_some_and(|p| p.needs_approval()) {
             " open"
         } else {
             ""
         },
-        if chat.project.as_ref().is_some_and(|p| p.grant.is_some()) {
-            "Project · isolated worktree"
+        if chat.project.as_ref().is_some_and(|p| !p.needs_approval()) {
+            "Folder opened"
         } else {
             "Open folder"
         }
@@ -95,7 +142,8 @@ pub fn panel(state: &State, id: &str) -> String {
             "<p><code>{}</code></p>",
             crate::escape(&project.path)
         ));
-        if project.grant.is_some() {
+        if let Some(error)=&project.error {html.push_str(&format!("<p role='alert'>{}</p>",crate::escape(error)));}
+        if !project.needs_approval() {
             html.push_str("<p class='muted'>Changes stay in this chat’s worktree. The original folder is unchanged.</p>");
             if let Some(workspace) = project
                 .head
@@ -108,13 +156,19 @@ pub fn panel(state: &State, id: &str) -> String {
                 ));
             }
         } else {
-            html.push_str(&format!("<form method='post' action='/chat/{id}/project' target='_top'><input type='hidden' name='request' value='{}'><p>Trust this folder’s code for this chat and allow local previews? Control will copy its files into an isolated worktree. Credentials and generated directories are excluded. Preview containers have read-only project access, loopback ingress and no external network. The folder is on the machine running Control.</p><button name='approve' value='yes'>Trust folder and open</button></form>",crate::escape(&project.request)));
+            html.push_str(&format!("<p>Open as <code>/workspace/{}</code></p><form method='post' action='/chat/{id}/project' target='_top'><input type='hidden' name='request' value='{}'><p>Trust this folder’s code for this chat and allow local previews? Control will copy its files into an isolated worktree. Credentials, generated directories and symlinks are excluded. The original folder stays unchanged.</p><button name='approve' value='yes'>Trust folder and open</button></form><form method='post' action='/chat/{id}/project' target='_top'><label>Folder on this node<input name='path' value='{}' required></label><label>Workspace name<input name='name' value='{}' required></label><button>Change folder</button></form>",crate::escape(&project.name),crate::escape(&project.request),crate::escape(&project.path),crate::escape(&project.name)));
         }
     } else {
         html.push_str(&format!("<form method='post' action='/chat/{id}/project' target='_top'><label>Folder on this node<input name='path' value='{}' placeholder='/absolute/path' required></label><button>Continue</button></form>",crate::escape(path)));
     }
     html.push_str("</details>");
     html
+}
+pub fn message_index(chat: &crate::chat::Session) -> Option<usize> {
+    let project=chat.project.as_ref()?;
+    project.message_index.filter(|index|*index<chat.messages.len()).or_else(||
+        chat.messages.iter().rposition(|m|m.text.trim().strip_prefix("/open").is_some_and(|p|p.trim()==project.path))
+    ).or_else(||chat.messages.len().checked_sub(1))
 }
 fn git(args: &[&std::ffi::OsStr]) -> io::Result<()> {
     let mut command = Command::new("git");
@@ -215,8 +269,13 @@ fn copy_tree(source: &Path, destination: &Path, metadata: bool) -> io::Result<()
             if counts.0 > 100_000 {
                 return Err(fail("Project exceeds 100000 entries"));
             }
-            let mut input=crate::artifacts::diff_open_child(source,&name)
-                .map_err(|_|fail(format!("Project entry {label} is unreadable or a symlink. Symlinks require a separate scoped mount and are not imported.")))?;
+            let mut input=match crate::artifacts::diff_open_child(source,&name) {
+                Ok(input)=>input,
+                // openat is relative to the pinned parent and never follows links.
+                // Both dangling and directory links return ELOOP on supported hosts.
+                Err(error) if error.raw_os_error()==Some(libc::ELOOP)=>continue,
+                Err(_)=>return Err(fail(format!("Project entry {label} is unreadable"))),
+            };
             let info = input.metadata()?;
             let target = destination.join(&name);
             if info.is_dir() {
@@ -319,7 +378,7 @@ fn seed(source: &Path, destination: &Path) -> io::Result<()> {
     copy_tree(&source, destination, false)?;
     let metadata = destination.parent().unwrap().join("repository.git");
     let git_source = source.join(".git");
-    if git_source.exists() {
+    if fs::symlink_metadata(&git_source).is_ok_and(|meta|!meta.file_type().is_symlink()) {
         git(&[
             "clone".as_ref(),
             "--bare".as_ref(),
@@ -430,8 +489,38 @@ fn prepare_in(
         Some(_) => return Err(fail("Invalid project checkpoint")),
         None => root.join("grants").join(grant).join("seed"),
     };
+    for destination in [baseline,workspace] {
+        fs::create_dir_all(destination.parent().ok_or_else(||fail("Missing project workspace parent"))?)?;
+    }
     copy_tree(&source, baseline, true)?;
     copy_tree(&source, workspace, true)
+}
+fn compose(root: &Path, project: &Project, directory: &Path) -> io::Result<()> {
+    if !valid_name(&project.name) {return Err(fail("Invalid workspace folder name"));}
+    if project.mounts.iter().any(|m|m.name==project.name) {return Err(fail("That workspace name is already open. Change the name below and try again."));}
+    let combined=directory.join("combined");
+    if let Some(grant)=&project.grant {
+        if !crate::chat::valid_id(grant) {return Err(fail("Invalid project grant"));}
+        let source=match &project.head {
+            Some(head) if crate::chat::valid_id(head)=>root.join("checkpoints").join(head),
+            Some(_)=>return Err(fail("Invalid project checkpoint")),
+            None=>root.join("grants").join(grant).join("seed"),
+        };
+        if project.named {copy_tree(&source,&combined,true)?;}else{
+            let name=&project.mounts.first().ok_or_else(||fail("Missing existing folder identity"))?.name;
+            if !valid_name(name) {return Err(fail("Invalid existing folder name"));}
+            fs::create_dir(&combined)?;copy_tree(&source,&combined.join(name),true)?;
+        }
+    }else{fs::create_dir(&combined)?;}
+    let incoming=directory.join("incoming");fs::create_dir(&incoming)?;
+    seed(Path::new(&project.path),&incoming.join("project"))?;
+    // Refuse collisions with scratch files as well as previously opened folders.
+    if combined.join(&project.name).try_exists()? {return Err(fail("That name is already used in the workspace. Choose another name."));}
+    fs::rename(incoming.join("project"),combined.join(&project.name))?;
+    // Reapply the aggregate checkpoint limits before granting the new workspace.
+    copy_tree(&combined,&directory.join("seed"),true)?;
+    fs::remove_dir_all(combined)?;fs::remove_dir_all(incoming)?;
+    Ok(())
 }
 pub fn publish(attempt: &mut crate::usage::Attempt, workspace: &Path, id: &str) -> io::Result<()> {
     publish_with(&root()?, attempt, workspace, id, || {
@@ -484,7 +573,7 @@ pub fn approve(shared: &Arc<Mutex<State>>, id: &str, request: &str) -> io::Resul
         let project = chat
             .project
             .clone()
-            .filter(|p| p.request == request && p.grant.is_none())
+            .filter(|p| p.request == request && p.needs_approval())
             .ok_or_else(|| fail("Project request changed; review the current request"))?;
         if state.runtime.runs.iter().any(|r| {
             r.chat_id.as_deref() == Some(id)
@@ -501,7 +590,10 @@ pub fn approve(shared: &Arc<Mutex<State>>, id: &str, request: &str) -> io::Resul
     let directory = root()?.join("grants").join(&grant);
     fs::create_dir_all(directory.parent().unwrap())?;
     fs::create_dir(&directory)?;
-    seed(Path::new(&project.path), &directory.join("seed"))?;
+    struct PendingGrant(Option<PathBuf>);
+    impl Drop for PendingGrant {fn drop(&mut self){if let Some(path)=&self.0 {let _=fs::remove_dir_all(path);}}}
+    let mut pending=PendingGrant(Some(directory.clone()));
+    compose(&root()?, &project, &directory)?;
     let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
     if crate::shutdown::requested() {
         return Err(fail(
@@ -522,13 +614,17 @@ pub fn approve(shared: &Arc<Mutex<State>>, id: &str, request: &str) -> io::Resul
     if !chat
         .project
         .as_ref()
-        .is_some_and(|p| p.request == request && p.grant.is_none())
+        .is_some_and(|p| p.request == request && p.needs_approval() && p.grant==project.grant && p.head==project.head)
     {
         return Err(fail("Project request changed during approval"));
     }
     let previous = chat.clone();
     crate::identity::authorize(&chat.actor, Action::Task).map_err(fail)?;
     chat.project.as_mut().unwrap().grant = Some(grant);
+    chat.project.as_mut().unwrap().error = None;
+    let approved=chat.project.as_mut().unwrap();
+    approved.head=None;approved.pending=false;approved.named=true;
+    approved.mounts.push(Mount{name:approved.name.clone(),path:approved.path.clone(),message_index:approved.message_index});
     chat.workspace = None;
     chat.improve_mode = false;
     chat.revision = chat.revision.saturating_add(1);
@@ -536,6 +632,7 @@ pub fn approve(shared: &Arc<Mutex<State>>, id: &str, request: &str) -> io::Resul
         *state.chats.iter_mut().find(|c| c.id == id).unwrap() = previous;
         return Err(fail("Could not save project approval"));
     }
+    pending.0=None;
     Ok(())
 }
 
@@ -581,25 +678,44 @@ pub fn http(
             if !state.chats.iter().any(|c| c.id == id) {
                 return Err(fail("Chat not found"));
             }
-            return Ok(format!("<!doctype html><html lang='en'><head><title>Open project</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/workspace.css'></head><body><main>{}<a href='/chat/{id}'>Back to chat</a></main></body></html>",panel(&state,id).replace("data-transcript-key='project'>","data-transcript-key='project' open>")));
+            return Ok(format!("<!doctype html><html lang='en'><head><title>Open project</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/workspace.css'></head><body><main>{}<a href='/chat/{id}'>Back to chat</a></main></body></html>",panel(&state,id)));
         }
         if method != "POST" {
             return Err(fail("Use GET or POST"));
         }
         let fields = crate::fields(&String::from_utf8_lossy(body));
         if fields.get("approve").is_some_and(|v| v == "yes") {
-            approve(
+            let request=fields.get("request").map(String::as_str).unwrap_or("");
+            if let Err(error)=approve(
                 shared,
                 id,
-                fields.get("request").map(String::as_str).unwrap_or(""),
-            )?;
+                request,
+            ) {
+                let mut state=shared.lock().map_err(|_|fail("State unavailable"))?;
+                let chat=state.chats.iter_mut().find(|c|c.id==id).ok_or_else(||fail("Chat not found"))?;
+                if chat.project.as_ref().is_some_and(|p|p.request==request&&p.needs_approval()) {
+                    let previous=chat.clone();
+                    chat.project.as_mut().unwrap().error=Some(error.to_string());
+                    chat.revision=chat.revision.saturating_add(1);
+                    if crate::storage::save(&state).is_err() {
+                        *state.chats.iter_mut().find(|c|c.id==id).unwrap()=previous;
+                        return Err(fail("Could not save folder error; access was not granted"));
+                    }
+                } else {return Err(error);}
+            }
         } else {
             let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
             let previous = state.chats.clone();
-            request(
+            let command=match fields.get("name").filter(|name|!name.is_empty()) {
+                Some(name) if valid_name(name)=>format!("/open --as {name} {}",fields.get("path").map(String::as_str).unwrap_or("")),
+                Some(_)=>return Err(fail("Choose a simple workspace name without spaces or path separators")),
+                None=>format!("/open {}",fields.get("path").map(String::as_str).unwrap_or("")),
+            };
+            crate::chat::send(
                 &mut state,
                 id,
-                fields.get("path").map(String::as_str).unwrap_or(""),
+                &command,
+                "website",
             )
             .map_err(fail)?;
             if crate::storage::save(&state).is_err() {
@@ -614,17 +730,7 @@ pub fn http(
             let _=write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nContent-Security-Policy: default-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'self'\r\nConnection: close\r\n\r\n{body}",body.len());
         }
         Ok(_) => {
-            let location = if shared.lock().is_ok_and(|s| {
-                s.chats
-                    .iter()
-                    .find(|c| c.id == id)
-                    .and_then(|c| c.project.as_ref())
-                    .is_some_and(|p| p.grant.is_some())
-            }) {
-                format!("/chat/{id}")
-            } else {
-                format!("/chat/{id}/project")
-            };
+            let location = format!("/chat/{id}");
             let _=write!(stream,"HTTP/1.1 303 See Other\r\nLocation: {location}\r\nContent-Length: 0\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n");
         }
         Err(error) => {
@@ -701,7 +807,13 @@ mod tests {
         );
         assert_eq!(serde_json::to_vec(&state).unwrap(), before);
         state.chats[0].project.as_mut().unwrap().grant = Some("approved".into());
-        assert!(request(&mut state, &id, "/another").is_err());
+        request(&mut state, &id, "/another").unwrap();
+        assert_eq!(state.chats[0].project.as_ref().unwrap().grant.as_deref(),Some("approved"));
+        assert!(state.chats[0].project.as_ref().unwrap().needs_approval());
+        let child=state.chats[0].project.as_ref().unwrap().approved().unwrap();
+        assert!(!child.pending);assert_eq!(child.grant.as_deref(),Some("approved"));
+        assert_eq!(child.path,"/a/nonexistent/project");
+        assert!(child.mounts.iter().all(|m|m.message_index.is_none()));
     }
     #[test]
     fn git_worktree_preserves_dirty_files_deletions_history_and_executable_modes() {
@@ -844,15 +956,158 @@ mod tests {
         .is_err());
     }
     #[test]
-    fn import_rejects_symlinks_without_following_them_or_publishing_a_grant() {
+    fn import_ignores_links_to_files_directories_missing_paths_and_cycles() {
         let fixture = Fixture::new();
         let source = fixture.source();
         let outside = fixture.0.join("outside");
         fs::create_dir(&outside).unwrap();
         fs::write(outside.join("private.txt"), "synthetic private file").unwrap();
         std::os::unix::fs::symlink(&outside, source.join("escape")).unwrap();
-        assert!(copy_tree(&source, &fixture.0.join("copy"), false).is_err());
-        assert!(!fixture.0.join("copy/escape/private.txt").exists());
+        fs::create_dir(source.join(".clickhouse")).unwrap();
+        std::os::unix::fs::symlink("/nix/store/synthetic-missing/bin/clickhouse",source.join(".clickhouse/clickhouse")).unwrap();
+        std::os::unix::fs::symlink(outside.join("private.txt"),source.join("linked-file")).unwrap();
+        std::os::unix::fs::symlink(&source,source.join("cycle")).unwrap();
+        std::os::unix::fs::symlink(&outside,source.join(".git")).unwrap();
+        fs::write(source.join("code.txt"),"keep me").unwrap();
+        let copied=fixture.0.join("copy");
+        copy_tree(&source, &copied, false).unwrap();
+        assert_eq!(fs::read_to_string(copied.join("code.txt")).unwrap(),"keep me");
+        for link in ["escape",".clickhouse/clickhouse","linked-file","cycle"] {
+            assert!(fs::symlink_metadata(copied.join(link)).is_err(),"Must skip {link}");
+        }
+        // This also applies to subsequent checkpoints, including agent-created links.
+        copy_tree(&source,&fixture.0.join("checkpoint"),true).unwrap();
+        assert!(!fixture.0.join("checkpoint/escape").exists());
+        seed(&source,&fixture.0.join("seed")).unwrap();
+        command(&fixture.0.join("seed"),&["status","--porcelain"]);
+    }
+    #[test]
+    fn plain_folder_first_turn_and_next_checkpoint_create_fresh_run_directories() {
+        let fixture=Fixture::new();let source=fixture.source();
+        fs::write(source.join("code.txt"),"original").unwrap();
+        let root=fixture.0.join("projects");
+        let grant=root.join("grants/grant");fs::create_dir_all(&grant).unwrap();
+        seed(&source,&grant.join("seed")).unwrap();
+        let mut attempt=crate::usage::Attempt{project:Some("grant".into()),..Default::default()};
+        let first=fixture.0.join("runs/first");
+        prepare_in(&root,&attempt,&first.join("baseline"),&first.join("workspace")).unwrap();
+        assert_eq!(fs::read_to_string(first.join("workspace/code.txt")).unwrap(),"original");
+        command(&first.join("workspace"),&["status","--porcelain"]);
+        fs::write(first.join("workspace/code.txt"),"edited").unwrap();
+        publish_with(&root,&mut attempt,&first.join("workspace"),"first",||Ok("fixture-artifact".into())).unwrap();
+        attempt.project_parent=attempt.project_checkpoint.clone();
+        let second=fixture.0.join("runs/second");
+        prepare_in(&root,&attempt,&second.join("baseline"),&second.join("workspace")).unwrap();
+        assert_eq!(fs::read_to_string(second.join("workspace/code.txt")).unwrap(),"edited");
+        command(&second.join("workspace"),&["status","--porcelain"]);
+        assert_eq!(fs::read_to_string(source.join("code.txt")).unwrap(),"original");
+        assert!(!source.join(".git").exists());
+    }
+    #[test]
+    fn adding_a_folder_migrates_a_legacy_root_without_reimporting_its_host_files() {
+        let fixture=Fixture::new();let source=fixture.source();fs::write(source.join("code.txt"),"host original").unwrap();
+        let root=fixture.0.join("projects");let original=root.join("grants/original");fs::create_dir_all(&original).unwrap();
+        seed(&source,&original.join("seed")).unwrap();
+        fs::write(original.join("seed/code.txt"),"private edit").unwrap();
+        let second=fixture.0.join("web");fs::create_dir(&second).unwrap();fs::write(second.join("page.txt"),"page").unwrap();
+        let mut state=State::default();let id=crate::chat::create(&mut state);
+        state.chats[0].project=Some(Project{path:source.display().to_string(),grant:Some("original".into()),..Default::default()});
+        request(&mut state,&id,second.to_str().unwrap()).unwrap();
+        let stage=root.join("grants/combined");fs::create_dir_all(&stage).unwrap();
+        compose(&root,state.chats[0].project.as_ref().unwrap(),&stage).unwrap();
+        assert_eq!(fs::read_to_string(stage.join("seed/source/code.txt")).unwrap(),"private edit");
+        assert_eq!(fs::read_to_string(stage.join("seed/web/page.txt")).unwrap(),"page");
+        assert_eq!(fs::read_to_string(source.join("code.txt")).unwrap(),"host original");
+        for name in ["..","../escape",".git","target","a/b","a b"] {
+            assert!(request_named(&mut state,&id,second.to_str().unwrap(),Some(name)).is_err());
+        }
+    }
+    #[test]
+    fn repeated_folder_requests_render_at_their_own_message_and_replace_stale_approval() {
+        let mut state=State::default();let id=crate::chat::create(&mut state);
+        crate::chat::send(&mut state,&id,"Discuss first","test").unwrap();
+        crate::chat::send(&mut state,&id,"/open /first","test").unwrap();
+        let first=state.chats[0].project.clone().unwrap();
+        state.chats[0].project.as_mut().unwrap().error=Some("Synthetic import failure".into());
+        let failed=crate::chat::transcript(&state,&id).unwrap();
+        assert!(failed.contains("role='alert'>Synthetic import failure"));
+        crate::chat::send(&mut state,&id,"/open /second","test").unwrap();
+        let project=state.chats[0].project.as_ref().unwrap();
+        assert_ne!(first.request,project.request);assert_eq!(project.path,"/second");
+        assert!(project.error.is_none());assert_eq!(message_index(&state.chats[0]),Some(2));
+        let rendered=crate::chat::transcript(&state,&id).unwrap();
+        assert!(rendered.find("/open</span> /second").unwrap()<rendered.find("Trust folder and open").unwrap());
+        assert_eq!(rendered.matches("Trust folder and open").count(),1);
+        assert!(rendered.contains("Folder request replaced by a later request."));
+        assert!(!rendered.contains(&format!("value='{}'",first.request)));
+        assert!(!rendered.contains("Synthetic import failure"));
+        // Old state still binds a request to its matching command, not later chat.
+        state.chats[0].project.as_mut().unwrap().message_index=None;
+        state.chats[0].messages.push(crate::chat::Message{text:"Later message".into(),run_id:None,reply:"Later response".into()});
+        assert_eq!(message_index(&state.chats[0]),Some(2));
+        let restored:State=serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        assert_eq!(message_index(&restored.chats[0]),Some(2));
+    }
+    #[test]
+    #[ignore = "requires isolated CONTROL_STATE_DIR and CONTROL_CONFIG_DIR under /private/tmp/control-project-qa; no credentials or models"]
+    fn live_folder_approval_errors_and_multiple_named_worktrees() {
+        let state_dir=crate::config::state_directory().unwrap();
+        assert!(state_dir.parent().is_some_and(|p|p.parent()==Some(Path::new("/private/tmp"))&&p.file_name().is_some_and(|s|s.to_string_lossy().starts_with("control-project-qa."))));
+        crate::config::initialize(include_bytes!("../assets/discord-access.example.json")).unwrap();
+        crate::storage::initialize().unwrap();
+        let fixture=Fixture::new();let first=fixture.0.join("one/api");let second=fixture.0.join("two/api");
+        fs::create_dir_all(&first).unwrap();fs::create_dir_all(&second).unwrap();
+        fs::write(first.join("code.txt"),"first").unwrap();fs::write(second.join("code.txt"),"second").unwrap();
+        std::os::unix::fs::symlink("/nix/store/synthetic-missing",first.join("binary")).unwrap();
+        command(&second,&["init"]);command(&second,&["add","--all"]);
+        command(&second,&["-c","user.name=Fixture","-c","user.email=fixture@localhost","commit","-m","baseline"]);
+        let mut initial=State::default();let id=crate::chat::create(&mut initial);
+        let shared=Arc::new(Mutex::new(initial));
+        let open=|path:&str,name:Option<&str>|{
+            let mut state=shared.lock().unwrap();
+            let text=match name {Some(name)=>format!("/open --as {name} {path}"),None=>format!("/open {path}")};
+            crate::chat::send(&mut state,&id,&text,"test").unwrap();
+        };
+        let approve=||{
+            let request=shared.lock().unwrap().chats[0].project.as_ref().unwrap().request.clone();
+            let mut response=Vec::new();
+            assert!(http(&mut response,&shared,"POST",&format!("/chat/{id}/project"),format!("request={request}&approve=yes").as_bytes()));
+            let response=String::from_utf8(response).unwrap();
+            assert!(response.starts_with("HTTP/1.1 303"),"{response}");
+            assert!(response.contains(&format!("Location: /chat/{id}\r\n")));
+        };
+        open(&fixture.0.join("missing").display().to_string(),None);approve();
+        {let state=shared.lock().unwrap();let project=state.chats[0].project.as_ref().unwrap();assert!(project.error.is_some());assert!(project.grant.is_none());assert!(crate::chat::transcript(&state,&id).unwrap().contains("role='alert'"));}
+        open(&first.display().to_string(),None);approve();
+        let original=shared.lock().unwrap().chats[0].project.clone().unwrap();
+        assert!(!original.pending);assert_eq!(original.mounts[0].name,"api");
+        let mut attempt=crate::usage::Attempt{project:original.grant.clone(),..Default::default()};
+        let first_run=state_dir.join("runs/first");
+        prepare(&attempt,&first_run.join("baseline"),&first_run.join("workspace")).unwrap();
+        assert_eq!(fs::read_to_string(first_run.join("workspace/api/code.txt")).unwrap(),"first");
+        assert!(!first_run.join("workspace/api/binary").exists());
+        fs::write(first_run.join("workspace/api/code.txt"),"edited first").unwrap();
+        publish_with(&root().unwrap(),&mut attempt,&first_run.join("workspace"),"first-checkpoint",||Ok("fixture-artifact".into())).unwrap();
+        shared.lock().unwrap().chats[0].project.as_mut().unwrap().head=attempt.project_checkpoint.clone();
+        open(&second.display().to_string(),None);approve();
+        {let state=shared.lock().unwrap();let project=state.chats[0].project.as_ref().unwrap();assert_eq!(project.grant,original.grant);assert_eq!(project.head,attempt.project_checkpoint);assert!(project.pending);assert!(project.error.as_deref().unwrap().contains("already open"));}
+        open(&second.display().to_string(),Some("api2"));approve();
+        let updated=shared.lock().unwrap().chats[0].project.clone().unwrap();
+        assert!(!updated.pending);assert!(updated.error.is_none());assert_eq!(updated.mounts.len(),2);assert_ne!(updated.grant,original.grant);
+        let attempt=crate::usage::Attempt{project:updated.grant,..Default::default()};
+        let second_run=state_dir.join("runs/second");
+        prepare(&attempt,&second_run.join("baseline"),&second_run.join("workspace")).unwrap();
+        assert_eq!(fs::read_to_string(second_run.join("workspace/api/code.txt")).unwrap(),"edited first");
+        assert_eq!(fs::read_to_string(second_run.join("workspace/api2/code.txt")).unwrap(),"second");
+        command(&second_run.join("workspace/api"),&["status","--porcelain"]);
+        command(&second_run.join("workspace/api2"),&["status","--porcelain"]);
+        assert_eq!(fs::read_to_string(first.join("code.txt")).unwrap(),"first");
+        assert!(!first.join(".git").exists());
+        let state=shared.lock().unwrap();let transcript=crate::chat::transcript(&state,&id).unwrap();
+        assert!(transcript.contains("Opened /workspace/api"));
+        assert!(!transcript.contains("Trust folder and open"));
+        let saved:State=serde_json::from_slice(&fs::read(state_dir.join("state.json")).unwrap()).unwrap();
+        assert_eq!(saved.chats[0].project.as_ref().unwrap().mounts.len(),2);
     }
     #[test]
     #[ignore = "requires CONTROL_QA_IMAGE pinned Nix image and local engine; no credentials or model calls"]

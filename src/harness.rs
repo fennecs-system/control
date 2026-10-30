@@ -277,12 +277,14 @@ impl App {
         match text.as_str() {
             _ if text.starts_with("/trust ")=>{
                 let request=text[7..].trim();
-                if request!=self.detail["project"]["request"].as_str().unwrap_or("") || self.detail["project"]["grant"].is_string() {return Err(failure("Project request changed. Use /open to review it."));}
+                if request!=self.detail["project"]["request"].as_str().unwrap_or("") || (self.detail["project"]["grant"].is_string()&&self.detail["project"]["pending"]!=true) {return Err(failure("Project request changed. Use /open to review it."));}
                 let url=hive.endpoint.trim_end_matches("/mcp");
                 let response=hive.client.post(format!("{url}/chat/{}/project",self.active)).timeout(Duration::from_secs(120))
                     .header("Origin",url).form(&[("approve","yes"),("request",request)]).send().map_err(|_|failure("Project approval did not finish; refresh before retrying."))?;
                 if response.status().as_u16()!=303 {return Err(failure("Could not open the project. Review its project page in the web UI."));}
-                self.refresh(hive)?;self.inspector=None;self.status="Project ready · isolated worktree".into();
+                self.refresh(hive)?;
+                if self.detail["project"]["pending"]==true||!self.detail["project"]["grant"].is_string() {return Err(failure(self.detail["project"]["error"].as_str().unwrap_or("Folder was not opened; review the request.")));}
+                self.inspector=None;self.status="Folder ready · isolated worktree".into();
             }
             "/quit" => return Ok(true),
             "/new" => self.new_chat(hive)?,
@@ -405,9 +407,10 @@ impl App {
         if let Some(project)=self.detail["project"].as_object() {
             let path=clean(project.get("path").and_then(Value::as_str).unwrap_or(""));
             lines.push(Line::styled(format!("Project · {path}"),Style::default().fg(Color::Rgb(181,160,255))));
-            if project.get("grant").is_none_or(Value::is_null) {
+            if project.get("grant").is_none_or(Value::is_null)||project.get("pending")==Some(&json!(true)) {
                 lines.push(Line::from("Trust this folder’s code and allow local previews? An isolated worktree keeps the original unchanged; previews have read-only project access and no external network."));
                 lines.push(Line::from(format!("/trust {}",project.get("request").and_then(Value::as_str).unwrap_or(""))));
+                if let Some(error)=project.get("error").and_then(Value::as_str) {lines.push(Line::from(clean(error)));}
             }
         }
         if let Some(messages) = self.detail["messages"].as_array() {

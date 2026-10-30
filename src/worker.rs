@@ -501,7 +501,7 @@ fn commit(
             if current != baseline {
                 outcome = Err(("interrupted", "The conversation workspace changed. Outputs were retained; start a new turn to continue from the current version.".into()));
             }
-            if attempt.project.is_some() && chat.project.as_ref().and_then(|p|p.head.as_ref())!=attempt.project_base.as_ref() {
+            if attempt.project.is_some() && (chat.project.as_ref().and_then(|p|p.head.as_ref())!=attempt.project_base.as_ref()||chat.project.as_ref().and_then(|p|p.grant.as_ref())!=attempt.project.as_ref()) {
                 outcome=Err(("interrupted","The project checkpoint changed. Outputs were retained; start a new turn.".into()));
             }
         }
@@ -611,7 +611,7 @@ fn checkpoint_next(
     let project_base=state.runtime.runs[index].attempts.last().map(|a|a.project_base.clone())
         .or_else(||state.runtime.runs[index].continuation.as_ref().map(|c|c.project_base.clone()))
         .unwrap_or_else(||project.as_ref().and_then(|p|p.head.clone()));
-    if project.is_some() && project.as_ref().and_then(|p|p.head.clone())!=project_base {
+    if project.is_some() && (project.as_ref().and_then(|p|p.head.clone())!=project_base || state.runtime.runs[index].attempts.last().is_some_and(|a|a.project!=project.as_ref().and_then(|p|p.grant.clone()))) {
         let previous=state.runtime.runs[index].clone();
         state.runtime.runs[index].status="blocked".into();
         state.runtime.runs[index].result="A later turn changed this project's files. Send a new message instead of retrying its older checkpoint.".into();
@@ -1391,6 +1391,18 @@ mod tests {
         assert_eq!(state.runtime.runs[0].action, Action::Task);
         assert_eq!(state.chats[0].workspace.as_deref(), Some("later-parent-output"));
         assert!(state.chats[1].improve_workspace.is_none());
+    }
+    #[test]
+    fn retry_cannot_rebind_to_an_added_folder_when_both_checkpoint_heads_are_empty() {
+        let mut state=State::default();let chat=crate::chat::create(&mut state);
+        state.chats[0].project=Some(crate::projects::Project{grant:Some("old-grant".into()),..Default::default()});
+        crate::chat::send(&mut state,&chat,"List files","test").unwrap();
+        checkpoint_next(&mut state, |_|Ok(())).unwrap();
+        state.runtime.runs[0].status="queued".into();
+        state.chats[0].project.as_mut().unwrap().grant=Some("new-grant".into());
+        assert!(checkpoint_next(&mut state, |_|Ok(())).is_none());
+        assert_eq!(state.runtime.runs[0].status,"blocked");
+        assert_eq!(state.runtime.runs[0].attempts[0].project.as_deref(),Some("old-grant"));
     }
     #[test]
     fn followups_capture_workspace_at_dispatch_and_retries_keep_their_parent() {

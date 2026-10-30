@@ -325,7 +325,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
         child_chat.lenses = parent.lenses.clone();
         child_chat.room = chat.room.clone();
         child_chat.title = d.input.objective.chars().take(60).collect();
-        child_chat.project = chat.project.clone().filter(|p| p.grant.is_some());
+        child_chat.project = chat.project.as_ref().and_then(|p|p.approved());
         if let Some(project) = &mut child_chat.project {
             project.head = Some(checkpoint.clone());
         }
@@ -660,6 +660,7 @@ mod tests {
             path: "/synthetic/project".into(),
             grant: Some("grant".into()),
             head: Some("project-before".into()),
+            ..Default::default()
         });
         s.runtime.runs[0].attempts[0].project = Some("grant".into());
         s.runtime.runs[0].attempts[0].project_base = Some("project-before".into());
