@@ -143,6 +143,47 @@ Dispatch is durable before thread launch, supervised and joined on shutdown.
 Tests cover ordering, cancellation, shutdown, save rollback across chats and
 untrusted saved settings. See [execution](docs/EXECUTION.md).
 
+## ✓ Shared libraries and measured delivery projections
+
+Rust 2024 is used by application packages, WASM and standalone Rust tools.
+`control-ai` shares bounded Codex/Claude record decoding, normalized activity and
+usage without application state or credentials. MCP schemas and typed transport
+metadata are shared across discovery and dispatch. Discord is compiled once as
+a library adapter and retains typed delivery fields rather than a full JSON tree.
+The synthetic delivery-reader comparison measured about 44% less decode time and
+55% lower peak process RSS; this is not an end-to-end latency claim.
+Web folder access is opt-in through `/open`, with separate approved named folders.
+See [library boundaries and measurements](docs/CRATE-BOUNDARIES.md).
+
+## Next: core, web and terminal boundaries
+
+Prioritize this bounded reorganization before expanding persistent services.
+The existing server still combines mutable application state, routing, rendering
+and execution assembly; `control-tui`, `control-web` and `control-core` are not
+separate crates yet. Keep `main` buildable throughout small reviewed slices.
+
+1. Establish typed application commands and bounded queries used by web handlers
+   and MCP. Keep authorization, durable acceptance, cancellation and stale-result
+   fences behind that interface. Preserve saved-state compatibility and ordering.
+2. Extract `control-core` for conversation/run transitions, scheduler admission,
+   resource ownership and supervision contracts. Provider decoders remain in
+   `control-ai`; concrete tool/container executors implement effects. Core must
+   not depend on HTTP, HTML, terminal rendering or Discord.
+3. Extract the existing MCP client and terminal presentation into `control-tui`,
+   removing duplicated source inclusion. Extract `control-web` for web routing,
+   rendering and assets over the same application interface. Browser WASM remains
+   a client; in-process web calls need not serialize through loopback HTTP.
+4. Move rendering outside the mutable-state lock using bounded projections, then
+   add conditional transcript updates with complete invalidation. Measure fixed
+   render/lock/allocation fixtures and targeted rebuilds before/after. Retain a
+   change only when it preserves behavior and has a useful boundary or measured
+   efficiency gain; do not claim moving files alone makes execution faster.
+
+Do not expose the full state mutex as the interface, clone complete histories,
+introduce a distributed framework or make every tool its own crate. This improves
+the seam for later remote execution; authentication, resource ownership and stale
+execution fences still need their own implementation and tests.
+
 ## Next: persistent worker/tool environments
 
 Add persistent worker/tool environments for long-running tools and services.
