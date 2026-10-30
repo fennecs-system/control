@@ -1,7 +1,7 @@
 use std::{cell::{Cell, RefCell}, rc::Rc};
 use wasm_bindgen::{closure::Closure, JsCast, JsValue};
 
-const COMMANDS: [&str; 7] = ["/improve", "/improve off", "/steer", "/btw", "/spawn", "/cancel", "/answer"];
+const COMMANDS: [&str; 8] = ["/improve", "/improve off", "/steer", "/btw", "/spawn", "/cancel", "/answer", "/open"];
 
 fn completions(value: &str) -> Vec<usize> {
     if !value.starts_with('/') || value.contains('\n') {
@@ -15,7 +15,7 @@ fn completions(value: &str) -> Vec<usize> {
 }
 
 fn command_length(value: &str) -> usize {
-    for command in ["/steer", "/btw", "/spawn", "/cancel", "/answer"] {
+    for command in ["/steer", "/btw", "/spawn", "/cancel", "/answer", "/open"] {
         if value.strip_prefix(command).is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace)) {
             return command.len();
         }
@@ -126,9 +126,9 @@ fn attach_composer(
     wrapper.append_child(&mirror)?;
     wrapper.append_child(&input)?;
     let menu = document.get_element_by_id("chat-commands");
-    let options = ["command-improve", "command-improve-off", "command-steer", "command-btw", "command-spawn", "command-cancel", "command-answer"]
-        .into_iter()
-        .map(|id| document.get_element_by_id(id).map(Ok).unwrap_or_else(|| document.create_element("button")))
+    let options = COMMANDS.iter()
+        .map(|command| format!("command-{}", command.trim_start_matches('/').replace(' ', "-")))
+        .map(|id| document.get_element_by_id(&id).map(Ok).unwrap_or_else(|| document.create_element("button")))
         .collect::<Result<Vec<_>, _>>()?;
     if menu.is_some() {
         input.set_attribute("aria-autocomplete", "list")?;
@@ -338,7 +338,10 @@ mod tests {
     use super::*;
     #[test]
     fn completion_and_highlighting_keep_arguments_and_regular_chat_distinct() {
-        assert_eq!(completions("/"), vec![0, 1, 2, 3, 4, 5, 6]);
+        assert_eq!(completions("/"), vec![0, 1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(completions("/op"), vec![7]);
+        assert_eq!(command_length("/open /a/project"), 5);
+        assert_eq!(command_length("/opened"), 0);
         assert_eq!(completions("/imp"), vec![0, 1]);
         assert_eq!(completions("/improve o"), vec![1]);
         assert!(completions("/improve change the UI").is_empty());

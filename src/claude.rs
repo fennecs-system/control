@@ -61,7 +61,7 @@ fn mount(path: &Path, target: &str, readonly: bool) -> io::Result<String> {
         if readonly { ",readonly" } else { "" }
     ))
 }
-fn docker() -> Command {
+pub(crate) fn docker() -> Command {
     let mut command = Command::new("docker");
     command.env_clear();
     for name in [
@@ -263,6 +263,9 @@ impl Stream {
                     "mcp__control__control_room_read",
                     "mcp__control__control_room_post",
                     "mcp__control__control_design_ask",
+                    "mcp__control__control_project_request",
+                    "mcp__control__control_preview_start",
+                    "mcp__control__control_preview_stop",
                     "EndConversation",
                 ];
                 if !value["tools"].as_array().is_some_and(|tools| {
@@ -424,7 +427,7 @@ pub fn execute(
         "claude", "--print", "--output-format", "stream-json", "--verbose", "--no-session-persistence",
         "--restricted", "--tools", "", "--disable-slash-commands", "--setting-sources", "", "--strict-mcp-config",
         "--mcp-config", "{\"mcpServers\":{\"control\":{\"command\":\"/bin/control-room-mcp\"}}}",
-        "--permission-mode", "dontAsk", "--allowedTools", "mcp__control__control_workspace_run,mcp__control__control_web_search,mcp__control__control_rust_run,mcp__control__control_room_read,mcp__control__control_room_post,mcp__control__control_design_ask",
+        "--permission-mode", "dontAsk", "--allowedTools", "mcp__control__control_workspace_run,mcp__control__control_web_search,mcp__control__control_rust_run,mcp__control__control_room_read,mcp__control__control_room_post,mcp__control__control_design_ask,mcp__control__control_project_request,mcp__control__control_preview_start,mcp__control__control_preview_stop",
         "--model", &attempt.model])
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     if crate::lifecycle::cancelled(bridge) {
@@ -448,7 +451,8 @@ pub fn execute(
             }
         }, &flag)
     });
-    let prompt = format!("You are working on a task in Control. Your only project access is control_workspace_run: it runs commands in a separate offline Nix container at /workspace, with Rust, rg and fd. Use it to read/write task files. You cannot read the harness filesystem or credentials. Use Rust/WASM for application code. Work freely within the sandbox for routine edits, builds and tests. Use control_design_ask for consequential architecture, scope or behavior decisions requiring user direction: offer concrete options and a recommendation, then stop work. This is not permission escalation. Keep replies direct; omit empty report sections. You may use public search without private text. Control node policy determines authority; tools cannot administer it. Objective:\n{objective}");
+    let environment = crate::worker::ENVIRONMENT_GUIDANCE;
+    let prompt = format!("You are working on a task in Control. Your only project access is control_workspace_run: it runs commands in a separate offline Nix container at /workspace, with Rust, rg and fd. Use it to read/write task files. {environment} You cannot read the harness filesystem or credentials. Use Rust/WASM for application code. Work freely within the sandbox for routine edits, builds and tests. Use control_design_ask for consequential architecture, scope or behavior decisions requiring user direction: offer concrete options and a recommendation, then stop work. This is not permission escalation. Keep replies direct; omit empty report sections. You may use public search without private text. Control node policy determines authority; tools cannot administer it. Objective:\n{objective}");
     let sent = child
         .stdin
         .take()

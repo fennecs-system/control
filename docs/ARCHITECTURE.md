@@ -26,6 +26,22 @@ distributed effects correct.
 
 ## One node, distinct responsibilities
 
+A future persistent bot binds a versioned persona, composable lenses, policy,
+resource grants, limits and conversations. Its identity outlives any run or
+container. Declarative event/callback definitions reuse the deterministic
+supervisor; child bots inherit authority ceilings and budgets. Human questions
+reuse the bridge, while capability grants and consequential external actions
+remain separate authorization decisions. See the [roadmap](../roadmap.md) and
+[inspiration review](BOT-INSPIRATIONS.md); this is direction, not implemented
+unattended automation.
+
+Project grants, isolated worktrees and local preview services are described in
+[Projects and previews](WORKSPACES.md). Resource intent and authorization belong
+to the node; agents invoke tools against those captured resources. Base images
+stay immutable. Environment changes belong in private worker state or separate
+tool containers. Nix package acquisition and shared cache publication are
+distinct capabilities, not implicit consequences of being inside a sandbox.
+
 A node defines its authorized identities and roles independently of its model
 backend. Several Discord IDs can represent one person, all with the user role.
 Task/chat permission never grants Control source editing, settings or an operator

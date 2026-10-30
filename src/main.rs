@@ -23,6 +23,8 @@ mod lifecycle;
 mod mcp_stdio;
 mod navigation;
 mod providers;
+mod projects;
+mod previews;
 mod rooms;
 mod runtime;
 mod scheduler;
@@ -46,6 +48,7 @@ use std::{
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 struct State {
+    previews: Vec<previews::Preview>,
     chats: Vec<chat::Session>,
     discord_seen: Vec<String>,
     runtime: runtime::Runtime,
@@ -266,6 +269,7 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         return;
     }
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    if projects::http(&mut stream,&state,method,path,&data[header_end..header_end+length]) {return;}
     if tools_http::handle(
         &mut stream,
         method,
@@ -574,6 +578,8 @@ fn main() -> std::io::Result<()> {
     let state = Arc::new(Mutex::new(storage::load()?));
     listener.set_nonblocking(true)?;
     shutdown::install()?;
+    let preview_state=state.clone();
+    let preview_restore=std::thread::spawn(move||previews::restore(preview_state));
     let workers = worker::start(state.clone());
     println!("control · {} · run ./target/release/control open in another terminal to sign in", config::server_url());
     let mut listener_error = None;
@@ -601,6 +607,7 @@ fn main() -> std::io::Result<()> {
     drop(listener);
     eprintln!("Control is stopping; waiting for owned workers and saving state.");
     let stopped = workers.join();
+    let _=preview_restore.join();
     // Already-admitted HTTP tool calls have their own bounded waits. Let those
     // handlers finish too before the final state save and process exit.
     let mut request_failed = false;

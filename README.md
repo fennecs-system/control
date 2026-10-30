@@ -25,7 +25,8 @@ nix run .#codex -- -c 'cli_auth_credentials_store="file"' login
 ```
 
 In another terminal, run `./target/release/control open` for the web UI, or
-`./target/release/control tui` for terminal chat. Try a small task, then a
+`./target/release/control tui` for terminal chat. Add `--directory /path/to/project`
+to request an isolated project workspace. Try a small task, then a
 follow-up about the same files. Open **Artifacts** to inspect the result.
 
 Configuration lives in `~/.config/control/`; chats and outputs live in
@@ -56,7 +57,8 @@ nix run .#codex -- mcp add control -- "$PWD/target/release/control" mcp
 ```
 
 This bridge provides read-only chat, lens, room and artifact access, plus search,
-Rust snippets and browser capture. Add `--browser` to setup for the browser image.
+Rust snippets, browser capture and project access requests requiring operator
+approval. Add `--browser` to setup for the browser image.
 See [Claude setup and authentication](docs/CLAUDE.md) for both integration paths.
 Use your own model access according to your provider's terms.
 
@@ -83,6 +85,7 @@ These chat commands work on the web, in the TUI and in authorized Discord DMs:
 | `/steer direction` | Queue a direction for the next turn. |
 | `/btw question` | Ask in a linked side conversation. |
 | `/spawn task` | Start a linked agent conversation. |
+| `/open /absolute/path` | Request a folder; approve before importing an isolated Git worktree. [Workspaces →](docs/WORKSPACES.md) |
 | `/cancel` | Stop the active or oldest queued task in this chat. |
 | `/answer QUESTION_ID answer` | Answer an agent's pending design question. |
 | `/improve` / `/improve off` | Enter or leave architect-only Control improvement mode. |

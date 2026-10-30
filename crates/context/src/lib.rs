@@ -13,7 +13,23 @@ pub struct Tool {
     pub aliases: &'static str,
     pub mcp_names: &'static [&'static str],
 }
-pub const TOOLS: [Tool; 13] = [
+pub const TOOLS: [Tool; 15] = [
+    Tool {
+        name: "preview.serve", title: "Local preview", description: "Nix service · private localhost origin",
+        href: "/chats", aliases: "ports proxy service browser preview tunnel",
+        mcp_names: &["control_preview_start", "control_preview_stop"], execution: "credential-free Nix container", surface: "chat / browser", available: true,
+    },
+    Tool {
+        name: "project.request",
+        title: "Open project",
+        description: "Operator-approved folder · isolated worktree",
+        href: "/chats",
+        aliases: "open directory code workspace trust mount",
+        mcp_names: &["control.project.request", "control_project_request"],
+        execution: "local Rust / explicit operator approval",
+        surface: "chat / TUI / MCP",
+        available: true,
+    },
     Tool {
         name: "design.ask",
         title: "Design decision",
