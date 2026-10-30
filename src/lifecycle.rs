@@ -280,10 +280,7 @@ pub fn owners(runs: &[crate::runtime::Run]) -> Vec<Owner> {
                 identity.workspace_id.clone_from(&a.workspace_id);
                 identity.started_unix = a.started_unix;
                 identity.project.clone_from(&a.project);
-                identity.command_jobs=a.command_jobs.iter().map(|job| {
-                    let mut identity=job.clone();
-                    identity.command.clear(); identity.output.clear(); identity
-                }).collect();
+                identity.command_jobs=a.command_jobs.iter().map(crate::command_jobs::Job::identity).collect();
                 identity
             }).collect(),
         })

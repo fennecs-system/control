@@ -78,9 +78,7 @@ Native file pickers, in-place host edits, Jujutsu and remote publishing are not
 part of this implementation. This work is merged into main; deployment remains
 a separate maintainer action.
 
-## ✓ Self-development tools — feature branch
-
-Implemented on `feature/self-development`; deployment follows maintainer review.
+## ✓ Self-development tools
 
 - Folder approvals follow their chat request, with inline errors and replaceable
   pending paths. Multiple approved folders compose under `/workspace/<name>`;
@@ -128,6 +126,31 @@ work. A small website does not need to wait for autonomous bots.
 Non-Rust third-party tooling is allowed only inside tool/agent containers.
 Control and authored integrations remain Rust/Haskell/Lean/WASM/Nix; Mineflayer
 can be an isolated upstream dependency behind a Rust adapter.
+
+## Performance pass — feature branch
+
+`performance/rust-hot-paths` borrows typed transcript data, scopes run indexes to
+the requested conversation, and avoids discarded log allocations during ownership
+snapshots. A bounded offline Rust microbenchmark tool is exposed through MCP.
+See [measurements and reproduction](docs/PERFORMANCE.md). Execution policy is
+unchanged; this does not add parallel model runs.
+
+## Next: bounded concurrent execution
+
+Add persistent worker/tool environments for long-running tools and services.
+Agents attach to an explicit environment identity; model attempts do not own its
+entire lifetime. Reuse command-job and preview supervision, with immutable Nix
+bases, private writable state, resource leases and explicit stop/restart/expiry
+policies. Keep provider credentials out of tool containers. Existing checkpoint
+barriers still quiesce source writers; persistent services need declared read/write
+scope and recovery semantics rather than silently bypassing those barriers.
+
+Replace the single node-wide execution slot with bounded slots while retaining
+per-chat FIFO ordering, isolated workspaces and captured provider/model selection.
+Parent/child waits release slots. Preserve exact resource ownership, cancellation
+cascades, stale-result fences and restart reconciliation under overlapping runs.
+Define node resource budgets and test failure cases before enabling fan-out;
+deterministic Rust supervision remains responsible for scheduling.
 
 ## Next: reliability and real-user feedback
 

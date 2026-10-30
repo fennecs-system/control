@@ -108,6 +108,7 @@ These chat commands work on the web, in the TUI and in authorized Discord DMs:
   graph and review evidence-backed claims.
 - **Tools.** Search the catalogue by tool name, MCP name or `lens:engineering`.
   Search, Rust playground and offline Firefox capture have dedicated views.
+  MCP also offers [optimized Rust microbenchmarks](docs/PERFORMANCE.md).
 - **Design decisions.** Agents can pause for a choice or your own direction,
   then continue from the saved workspace when you answer.
 - **Discord.** DM your node through a bot with explicit numeric-ID bindings.
