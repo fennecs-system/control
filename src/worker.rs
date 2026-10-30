@@ -985,7 +985,7 @@ fn execute(
             "-c",
             "mcp_servers.control_rooms.required=true",
             "-c",
-            "mcp_servers.control_rooms.enabled_tools=[\"control_room_read\",\"control_room_post\",\"control_web_search\",\"control_rust_run\",\"control_design_ask\",\"control_agent_delegate\",\"control_project_request\",\"control_preview_start\",\"control_preview_stop\",\"control_github_open_pr\",\"control_workspace_start\",\"control_workspace_status\",\"control_workspace_cancel\"]",
+            "mcp_servers.control_rooms.enabled_tools=[\"control_room_read\",\"control_room_post\",\"control_web_search\",\"control_rust_run\",\"control_design_ask\",\"control_agent_delegate\",\"control_agent_result\",\"control_project_request\",\"control_preview_start\",\"control_preview_stop\",\"control_github_open_pr\",\"control_workspace_start\",\"control_workspace_status\",\"control_workspace_cancel\"]",
             "-c", "mcp_servers.control_rooms.tools.control_workspace_start.approval_mode=\"approve\"",
             "-c", "mcp_servers.control_rooms.tools.control_workspace_status.approval_mode=\"approve\"",
             "-c", "mcp_servers.control_rooms.tools.control_workspace_cancel.approval_mode=\"approve\"",
@@ -1001,6 +1001,8 @@ fn execute(
             "mcp_servers.control_rooms.tools.control_design_ask.approval_mode=\"approve\"",
             "-c",
             "mcp_servers.control_rooms.tools.control_agent_delegate.approval_mode=\"approve\"",
+            "-c",
+            "mcp_servers.control_rooms.tools.control_agent_result.approval_mode=\"approve\"",
         ]);
     }
     command.arg("-");

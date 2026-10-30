@@ -70,8 +70,9 @@ fn rpc_at(
             if run.action == identity::Action::Improve {tools.push(crate::github::definition());}
             tools.push(crate::delegation::definition());
             tools.extend(crate::command_jobs::definitions());
+            tools.push(crate::delegated_results::definition());
             if judge {
-                tools.retain(|tool|matches!(tool["name"].as_str(),Some("control.web.search"|"control.rust.run"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel")));
+                tools.retain(|tool|matches!(tool["name"].as_str(),Some("control.web.search"|"control.rust.run"|"control_agent_result"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel")));
             }
             if claude {
                 tools.push(crate::claude::definition());
@@ -96,7 +97,7 @@ fn rpc_at(
             json!({"tools":tools})
         }
         "tools/call" => {
-            if judge && !matches!(request["params"]["name"].as_str(),Some("control_workspace_run"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_web_search"|"control_rust_run"|"control_room_read"|"control_room_post")) {
+            if judge && !matches!(request["params"]["name"].as_str(),Some("control_workspace_run"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_web_search"|"control_rust_run"|"control_room_read"|"control_room_post"|"control_agent_result")) {
                 return error("Judge policy permits read-only source inspection, isolated verification and room collaboration only.");
             }
             if crate::delegation::pausing(run) && request["params"]["name"]!="control_agent_delegate" {
@@ -161,6 +162,16 @@ fn rpc_at(
             }
             if run.question.as_ref().is_some_and(|q| q.answer.is_none() && run.attempts.last().is_some_and(|a| a.workspace_id.as_deref() == Some(&q.generation))) {
                 return error("This attempt is pausing for a design answer; no more tools may run.");
+            }
+            if request["params"]["name"] == "control_agent_result" {
+                let plan=match crate::delegated_results::prepare(&state,run_id,request["params"]["arguments"].clone()) {
+                    Ok(plan)=>plan,Err(message)=>return error(message),
+                };
+                drop(state);
+                return match crate::delegated_results::execute(plan) {
+                    Ok(value)=>json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":value.to_string()}],"isError":false}}),
+                    Err(message)=>error(message),
+                };
             }
             if request["params"]["name"] == "control_workspace_run" {
                 if !claude {
@@ -316,6 +327,16 @@ pub fn pump_at(state: &Arc<Mutex<State>>, run: &str, mailbox: &Path, workspace: 
 mod tests {
     use super::*;
     #[test]
+    fn completed_child_summary_is_available_through_the_worker_broker() {
+        let shared=Arc::new(Mutex::new(crate::delegated_results::tests::fixture()));
+        let response=rpc_at(&shared,"resumed",&json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_agent_result","arguments":{"child":"child","section":"summary","limit":10}}}}),None);
+        let text=response["result"]["content"][0]["text"].as_str().unwrap();
+        let value:Value=serde_json::from_str(text).unwrap();
+        assert_eq!(value["summary"]["text"],"All reques");
+        assert_eq!(value["summary"]["next_offset"],10);
+        assert_eq!(shared.lock().unwrap().runtime.runs.len(),3);
+    }
+    #[test]
     fn judge_tools_are_enforced_even_when_unadvertised_names_are_forged() {
         let mut s=State::default();let chat=crate::chat::create(&mut s);
         crate::chat::send(&mut s,&chat,"Review this","test").unwrap();
@@ -324,7 +345,7 @@ mod tests {
         let shared=Arc::new(Mutex::new(s));
         let listed=rpc_at(&shared,&id,&json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/list"}}),None);
         let names=listed["result"]["tools"].as_array().unwrap().iter().map(|t|t["name"].as_str().unwrap()).collect::<Vec<_>>();
-        assert!(names.contains(&"control_workspace_run"));assert!(!names.contains(&"control_agent_delegate"));
+        assert!(names.contains(&"control_workspace_run"));assert!(!names.contains(&"control_agent_delegate"));assert!(names.contains(&"control_agent_result"));
         for name in ["control_agent_delegate","control_project_request","control_design_ask","control_preview_start","control_preview_stop","control_github_pr"] {
             let denied=rpc_at(&shared,&id,&json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":{}}}}),None);
             assert!(denied["error"]["message"].as_str().unwrap().contains("Judge policy"));
@@ -427,7 +448,7 @@ mod tests {
             &json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/list"}}),
         );
         let names:std::collections::BTreeSet<_>=list["result"]["tools"].as_array().unwrap().iter().filter_map(|t|t["name"].as_str()).collect();
-        for name in ["control_agent_delegate","control_workspace_start","control_project_request"] {assert!(names.contains(name));}
+        for name in ["control_agent_delegate","control_agent_result","control_workspace_start","control_project_request"] {assert!(names.contains(name));}
         assert!(!names.contains("control_github_open_pr"),"Ordinary tasks have no publication grant");
         let forbidden = rpc(
             &state,

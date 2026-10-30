@@ -289,7 +289,7 @@ fn walk(
     }
     Ok(())
 }
-fn publish_in(root: &Path, source: &Path, id: &str) -> io::Result<Manifest> {
+pub(crate) fn publish_in(root: &Path, source: &Path, id: &str) -> io::Result<Manifest> {
     if !valid_id(id) {
         return Err(fail("Invalid artifact ID"));
     }
@@ -366,7 +366,7 @@ pub fn publish(source: &Path, id: &str) -> io::Result<Manifest> {
 pub fn manifest(id: &str) -> io::Result<Manifest> {
     manifest_in(&root()?, id)
 }
-fn manifest_in(root: &Path, id: &str) -> io::Result<Manifest> {
+pub(crate) fn manifest_in(root: &Path, id: &str) -> io::Result<Manifest> {
     if !valid_id(id) {
         return Err(fail("Invalid artifact ID"));
     }
@@ -397,7 +397,7 @@ fn manifest_in(root: &Path, id: &str) -> io::Result<Manifest> {
 pub fn read(manifest: &Manifest, path: &str) -> io::Result<Vec<u8>> {
     read_in(&root()?, manifest, path)
 }
-fn read_in(root: &Path, manifest: &Manifest, path: &str) -> io::Result<Vec<u8>> {
+pub(crate) fn read_in(root: &Path, manifest: &Manifest, path: &str) -> io::Result<Vec<u8>> {
     let entry = manifest
         .files
         .iter()

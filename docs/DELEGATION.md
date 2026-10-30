@@ -13,6 +13,16 @@ Improve mode. Children get independent writable workspaces; edits never merge
 automatically. Feedback includes a bounded diff excerpt and a link to retained
 results. The parent can use the feedback to make its own changes.
 
+Use `control_agent_result` with the delegated child ID and `section` set to
+`summary`, `files`, or `file` to retrieve larger outputs. Follow `next_offset`
+until it is null; text offsets count Unicode characters. File pages include
+hashes and change/deletion metadata when a scoped baseline is available. Reads
+follow the child's recorded continuations and verify published artifact hashes.
+Only the requesting parent's actual delegated descendants are available; sharing
+a root or actor does not grant access to unrelated chats or sibling agents.
+The tool never reads live workspaces. If no viewer artifact was published, it
+reports that explicitly; existing artifact size and file-type limits still apply.
+
 Personas currently capture a role and enforced policy, not persistent autonomous
 bots. A worker may delegate to depth two; a root task permits eight children in
 total and one independent judge review. A judge uses the first configured model

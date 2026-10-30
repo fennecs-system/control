@@ -10,6 +10,7 @@ mod command_jobs;
 mod collective;
 mod design;
 mod delegation;
+mod delegated_results;
 use control::config;
 mod discord;
 mod discord_bridge;

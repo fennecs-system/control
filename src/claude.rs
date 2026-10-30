@@ -270,6 +270,7 @@ impl Stream {
                     "mcp__control__control_room_post",
                     "mcp__control__control_design_ask",
                     "mcp__control__control_agent_delegate",
+                    "mcp__control__control_agent_result",
                     "mcp__control__control_project_request",
                     "mcp__control__control_preview_start",
                     "mcp__control__control_preview_stop",
@@ -435,7 +436,7 @@ pub fn execute(
         "claude", "--print", "--output-format", "stream-json", "--verbose", "--no-session-persistence",
         "--restricted", "--tools", "", "--disable-slash-commands", "--setting-sources", "", "--strict-mcp-config",
         "--mcp-config", "{\"mcpServers\":{\"control\":{\"command\":\"/bin/control-room-mcp\"}}}",
-        "--permission-mode", "dontAsk", "--allowedTools", "mcp__control__control_workspace_run,mcp__control__control_workspace_start,mcp__control__control_workspace_status,mcp__control__control_workspace_cancel,mcp__control__control_web_search,mcp__control__control_rust_run,mcp__control__control_room_read,mcp__control__control_room_post,mcp__control__control_design_ask,mcp__control__control_agent_delegate,mcp__control__control_project_request,mcp__control__control_preview_start,mcp__control__control_preview_stop,mcp__control__control_github_open_pr",
+        "--permission-mode", "dontAsk", "--allowedTools", "mcp__control__control_workspace_run,mcp__control__control_workspace_start,mcp__control__control_workspace_status,mcp__control__control_workspace_cancel,mcp__control__control_web_search,mcp__control__control_rust_run,mcp__control__control_room_read,mcp__control__control_room_post,mcp__control__control_design_ask,mcp__control__control_agent_delegate,mcp__control__control_agent_result,mcp__control__control_project_request,mcp__control__control_preview_start,mcp__control__control_preview_stop,mcp__control__control_github_open_pr",
         "--model", &attempt.model])
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     if crate::lifecycle::cancelled(bridge) {
