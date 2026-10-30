@@ -186,10 +186,27 @@ fn term_and_interrupt_save_state_and_release_the_single_writer_lock() {
     fs::create_dir(&fixture.0).unwrap();
     assert!(fixture
         .command()
-        .args(["config", "init"])
+        .args([
+            "config",
+            "init",
+            "--provider",
+            "claude",
+            "--source-root",
+            env!("CARGO_MANIFEST_DIR")
+        ])
         .status()
         .unwrap()
         .success());
+    // Setup's sole Claude selection must survive both reruns and server startup.
+    let model_path = fixture.0.join("config/model.json");
+    let original = fs::read(&model_path).unwrap();
+    assert!(fixture
+        .command()
+        .args(["config", "init", "--provider", "codex"])
+        .status()
+        .unwrap()
+        .success());
+    assert_eq!(fs::read(&model_path).unwrap(), original);
     // Restart the same node after each signal: the second start must acquire its state lock.
     for signal in [libc::SIGTERM, libc::SIGINT] {
         let reservation = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -215,6 +232,56 @@ fn term_and_interrupt_save_state_and_release_the_single_writer_lock() {
             );
             std::thread::sleep(Duration::from_millis(25));
         }
+        // Check the running UI, rather than state.json: provider choices are private
+        // configuration and intentionally omitted from shared runtime snapshots.
+        let output = fixture
+            .command()
+            .args(["open", "--link"])
+            .env("CONTROL_ADDR", addr.to_string())
+            .stdout(Stdio::piped())
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let link = String::from_utf8(output.stdout).unwrap();
+        let client = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .resolve("localhost", addr)
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let response = client
+            .get(link.trim())
+            .send()
+            .unwrap_or_else(|_| panic!("sign-in failed"));
+        assert_eq!(response.status(), reqwest::StatusCode::SEE_OTHER);
+        let cookie = response.headers()[reqwest::header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap();
+        let page = client
+            .get(format!("http://localhost:{}/?view=providers", addr.port()))
+            .header(reqwest::header::COOKIE, cookie)
+            .send()
+            .unwrap()
+            .text()
+            .unwrap();
+        let rows = page
+            .split("<section class='model-row'>")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows.len(),
+            2,
+            "the running UI should list exactly one configured model"
+        );
+        let selected = rows[1].split("</section>").next().unwrap();
+        assert!(
+            selected.contains("aria-pressed='true'")
+                && selected.contains("value='claude'")
+                && selected.contains("value='sonnet'")
+        );
         assert_eq!(
             unsafe { libc::kill(server.0.id() as libc::pid_t, signal) },
             0
