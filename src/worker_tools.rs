@@ -69,8 +69,9 @@ fn rpc_at(
             tools.extend(crate::previews::definitions());
             if run.action == identity::Action::Improve {tools.push(crate::github::definition());}
             tools.push(crate::delegation::definition());
+            tools.extend(crate::command_jobs::definitions());
             if judge {
-                tools.retain(|tool|matches!(tool["name"].as_str(),Some("control.web.search"|"control.rust.run")));
+                tools.retain(|tool|matches!(tool["name"].as_str(),Some("control.web.search"|"control.rust.run"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel")));
             }
             if claude {
                 tools.push(crate::claude::definition());
@@ -108,6 +109,13 @@ fn rpc_at(
                     Ok(value)=>json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":value.to_string()}],"isError":false}}),
                     Err(message)=>error(message),
                 };
+            }
+            if request["params"]["name"]!="control_design_ask" && run.question.as_ref().is_some_and(|q|q.answer.is_none()&&run.attempts.last().is_some_and(|a|a.workspace_id.as_deref()==Some(&q.generation))) {return error("This attempt is pausing for a design answer; no more tools may run.");}
+            if crate::command_jobs::known(request["params"]["name"].as_str().unwrap_or("")) {
+                let generation=run.attempts.last().and_then(|a|a.workspace_id.clone()).unwrap_or_default();
+                let nonce=envelope["nonce"].as_str().unwrap_or("").to_owned();
+                drop(state);
+                return json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(crate::command_jobs::call(shared,run_id,&generation,&nonce,request["params"]["name"].as_str().unwrap(),&request["params"]["arguments"]))});
             }
             if request["params"]["name"]!="control_design_ask" && run.question.as_ref().is_some_and(|q|q.answer.is_none()&&run.attempts.last().is_some_and(|a|a.workspace_id.as_deref()==Some(&q.generation))) {return error("This attempt is pausing for a design answer; no more tools may run.");}
             if request["params"]["name"]=="control_github_open_pr" {
@@ -171,6 +179,9 @@ fn rpc_at(
                 let Some(attempt) = run.attempts.last() else {
                     return error("No active attempt");
                 };
+                if attempt.command_jobs.iter().any(|job|["preparing","running","stopping"].contains(&job.status.as_str())) {
+                    return error("An asynchronous workspace command owns this attempt; await or cancel it before running another command");
+                }
                 let (Some(image), Some(node), Some(workspace)) =
                     (&attempt.image, &attempt.node_id, workspace)
                 else {
@@ -415,7 +426,9 @@ mod tests {
             &run,
             &json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/list"}}),
         );
-        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 7);
+        let names:std::collections::BTreeSet<_>=list["result"]["tools"].as_array().unwrap().iter().filter_map(|t|t["name"].as_str()).collect();
+        for name in ["control_agent_delegate","control_workspace_start","control_project_request"] {assert!(names.contains(name));}
+        assert!(!names.contains("control_github_open_pr"),"Ordinary tasks have no publication grant");
         let forbidden = rpc(
             &state,
             &run,

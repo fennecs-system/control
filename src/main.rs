@@ -6,6 +6,7 @@ mod browser;
 mod browser_ui;
 mod chat;
 mod claude;
+mod command_jobs;
 mod collective;
 mod design;
 mod delegation;

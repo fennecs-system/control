@@ -83,6 +83,12 @@ fn interrupt_active(state: &mut State) -> bool {
                     .into();
             if let Some(attempt) = run.attempts.last_mut() {
                 attempt.status = "interrupted".into();
+                for job in &mut attempt.command_jobs {
+                    if ["preparing","running","stopping"].contains(&job.status.as_str()) {
+                        job.status="interrupted".into();
+                        if let Some(activity)=attempt.activity.iter_mut().find(|a|a.id==format!("job-{}",job.id)) {activity.status="interrupted".into();}
+                    }
+                }
             }
             if let Some(session) = state
                 .chats

@@ -13,7 +13,7 @@ pub struct Tool {
     pub aliases: &'static str,
     pub mcp_names: &'static [&'static str],
 }
-pub const TOOLS: [Tool; 17] = [
+pub const TOOLS: [Tool; 18] = [
     Tool {
         name: "github.pull_request", title: "GitHub pull request", description: "Completed improvement · scoped repository",
         href: "/chats", aliases: "github git pull request draft publish review",
@@ -23,6 +23,12 @@ pub const TOOLS: [Tool; 17] = [
         name:"agent.delegate",title:"Delegate agent",description:"Isolated workers · independent cross-provider judge",
         href:"/chats",aliases:"persona review judge subagent spawn delegation",
         mcp_names:&["control_agent_delegate"],execution:"local Rust / durable bounded task queue",surface:"chat / worker MCP",available:true,
+    },
+    Tool {
+        name: "workspace.commands", title: "Workspace commands", description: "Offline jobs · live output",
+        href: "/chats", aliases: "shell terminal build test logs cancel environment",
+        mcp_names: &["control_workspace_start", "control_workspace_status", "control_workspace_cancel"],
+        execution: "credential-free Nix container", surface: "chat / TUI", available: true,
     },
     Tool {
         name: "preview.serve", title: "Local preview", description: "Nix service · private localhost origin",

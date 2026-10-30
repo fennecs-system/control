@@ -200,7 +200,7 @@ pub fn shell_scoped(image:&str,name:&str,node:&str,workspace:&Path,command:&str,
 }
 
 pub fn definition() -> Value {
-    json!({"name":"control_workspace_run","description":"Run a shell command in this task's offline Nix workspace. Use rg/fd, read and edit project files, and run Rust tools. No credentials, Control host files or network. 25 second deadline; bounded output. Commands may change task files.","inputSchema":{"type":"object","properties":{"command":{"type":"string","minLength":1,"maxLength":16000}},"required":["command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":false}})
+    json!({"name":"control_workspace_run","description":"Run a short shell command in this task's offline Nix workspace. Use rg/fd, read and edit project files, and run Rust tools. No credentials, Control host files or network. 25 second deadline; bounded output. Use control_workspace_start/status/cancel for longer commands and build environments. Commands may change task files.","inputSchema":{"type":"object","properties":{"command":{"type":"string","minLength":1,"maxLength":16000}},"required":["command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":false}})
 }
 
 pub fn claim(workspace: &Path, nonce: &str) -> io::Result<()> {
@@ -261,6 +261,9 @@ impl Stream {
                 self.initialized = true;
                 let allowed = [
                     "mcp__control__control_workspace_run",
+                    "mcp__control__control_workspace_start",
+                    "mcp__control__control_workspace_status",
+                    "mcp__control__control_workspace_cancel",
                     "mcp__control__control_web_search",
                     "mcp__control__control_rust_run",
                     "mcp__control__control_room_read",
@@ -432,7 +435,7 @@ pub fn execute(
         "claude", "--print", "--output-format", "stream-json", "--verbose", "--no-session-persistence",
         "--restricted", "--tools", "", "--disable-slash-commands", "--setting-sources", "", "--strict-mcp-config",
         "--mcp-config", "{\"mcpServers\":{\"control\":{\"command\":\"/bin/control-room-mcp\"}}}",
-        "--permission-mode", "dontAsk", "--allowedTools", "mcp__control__control_workspace_run,mcp__control__control_web_search,mcp__control__control_rust_run,mcp__control__control_room_read,mcp__control__control_room_post,mcp__control__control_design_ask,mcp__control__control_agent_delegate,mcp__control__control_project_request,mcp__control__control_preview_start,mcp__control__control_preview_stop,mcp__control__control_github_open_pr",
+        "--permission-mode", "dontAsk", "--allowedTools", "mcp__control__control_workspace_run,mcp__control__control_workspace_start,mcp__control__control_workspace_status,mcp__control__control_workspace_cancel,mcp__control__control_web_search,mcp__control__control_rust_run,mcp__control__control_room_read,mcp__control__control_room_post,mcp__control__control_design_ask,mcp__control__control_agent_delegate,mcp__control__control_project_request,mcp__control__control_preview_start,mcp__control__control_preview_stop,mcp__control__control_github_open_pr",
         "--model", &attempt.model])
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     if crate::lifecycle::cancelled(bridge) {
@@ -458,7 +461,7 @@ pub fn execute(
     });
     let environment = crate::worker::ENVIRONMENT_GUIDANCE;
     let access=if attempt.review_only {"Source is read-only. Inspect files and verify findings, using /tmp for disposable outputs. Report defects and evidence; no source changes or publication."} else {"Use it to read/write task files. Work freely within the sandbox for routine edits, builds and tests. Use control_agent_delegate to delegate bounded work or request independent cross-provider review; stop after acknowledgement and Control resumes you. Use control_design_ask for consequential architecture, scope or behavior decisions requiring user direction: offer concrete options and a recommendation, then stop work."};
-    let prompt = format!("You are working on a task in Control. Your only project access is control_workspace_run: it runs commands in a separate offline Nix container at /workspace, with Rust, rg and fd. {access} {environment} You cannot read the harness filesystem or credentials. Use Rust/WASM for application code. This is not permission escalation. Keep replies direct; omit empty report sections. You may use public search without private text. Control node policy determines authority; tools cannot administer it. Objective:\n{objective}");
+    let prompt = format!("You are working on a task in Control. Project access uses credential-free offline workspace tools at /workspace, with Rust, rg and fd. Use control_workspace_run for short commands, or control_workspace_start with status/cancel for longer builds and declared build environments. Await job completion before finishing; outstanding jobs are cancelled before checkpoint publication. {access} {environment} You cannot read the harness filesystem or credentials. Use Rust/WASM for application code. This is not permission escalation. Keep replies direct; omit empty report sections. You may use public search without private text. Control node policy determines authority; tools cannot administer it. Objective:\n{objective}");
     let sent = child
         .stdin
         .take()

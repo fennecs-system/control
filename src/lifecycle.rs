@@ -79,6 +79,7 @@ fn expected_path(attempt: &Attempt, name: &str) -> Result<PathBuf, &'static str>
         .ok_or("Missing persisted workspace identity.")?;
     let main = format!("control-{id}");
     let workspace = crate::runtime::workspace(id)?;
+    if let Some(job)=attempt.command_jobs.iter().find(|job|job.name()==name) {return job.workspace().map_err(|_|"Missing command workspace");}
     if name == main {
         return Ok(if attempt.backend == crate::backend::Backend::Claude {
             workspace.parent().unwrap().join("claude-mailbox")
@@ -149,6 +150,9 @@ fn names() -> Result<Vec<(String, String, String)>, &'static str> {
     .map_err(|_| "Container inspection unavailable; affected work remains fenced.")
 }
 fn stop_named(attempt: &Attempt, name: &str) -> Result<(), &'static str> {
+    if let Some(job)=attempt.command_jobs.iter().find(|job|job.name()==name) {
+        return crate::command_jobs::stop(job).map_err(|_|"Could not stop exact command job; work remains fenced.");
+    }
     stop_named_with(attempt, name, crate::runtime::docker_query)
 }
 fn stop_named_with(
@@ -248,7 +252,7 @@ pub fn stop_attempt(attempt: &Attempt) -> Result<(), &'static str> {
         .ok_or("Missing persisted workspace identity.")?;
     let prefix = format!("control-{id}");
     for (name, _, _) in names()? {
-        if name == prefix || name == format!("{prefix}-tool") || name == format!("{prefix}-probe") {
+        if name == prefix || name == format!("{prefix}-tool") || name == format!("{prefix}-probe") || attempt.command_jobs.iter().any(|job|job.name()==name) {
             stop_named(attempt, &name)?;
         }
     }
@@ -276,6 +280,10 @@ pub fn owners(runs: &[crate::runtime::Run]) -> Vec<Owner> {
                 identity.workspace_id.clone_from(&a.workspace_id);
                 identity.started_unix = a.started_unix;
                 identity.project.clone_from(&a.project);
+                identity.command_jobs=a.command_jobs.iter().map(|job| {
+                    let mut identity=job.clone();
+                    identity.command.clear(); identity.output.clear(); identity
+                }).collect();
                 identity
             }).collect(),
         })
