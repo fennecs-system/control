@@ -312,3 +312,36 @@ reliable, functional foundations.
 Improve should allow an ongoing discussion: an `/improve` mode in chat rather
 than a separate window. Keep an Agents tab for active agents, and keep the run
 history separate. Integrations should include Claude agents alongside Codex.
+
+### Seamless workspaces and environments
+
+Editing existing code is a blocker for real users. Let me open a directory in
+the TUI or web chat, or with `/open`. Agents can request folders through a tool,
+but host access needs explicit operator approval. Once approved, agents can work
+freely inside their isolated workspace. Use independent Git worktrees by default
+so agents do not interfere with each other or the original checkout.
+
+Agents and tools should be able to serve artifacts through scoped local previews.
+Keep service identity separate from transport, so SSH, Tailscale or another tunnel
+can be added later. Containers should feel seamless.
+
+Prefer tooling to hardcoded approaches. Agents should know which environment
+tools they have and be able to request additional Nix packages or environments.
+Keep base images immutable: changes belong to private worker state or separate
+tool containers, never to a shared base image. Shared caches need their own
+policy; running Nix does not implicitly grant host access or network access.
+
+### Persistent persona bots
+
+Personas could also be persistent bots, with a programmable, declarative control
+system and callbacks. Bots should be able to spawn other bots within their
+permissions and budgets, and ask me for important information through Discord
+or another bridge.
+
+The browser tool could become a full browser with a harness for code-driven
+interaction. Look at OpenClaw, Grok Bot and Muse for useful ideas without copying
+their runtime. Persistent personas and judges could react to events: notice a
+new release, prepare a patch, or watch for a Qantas sale and help book a ticket.
+Keep consequential external actions explicitly authorized. Harden containers for
+malicious code, downloads and websites; do not rely on Nix alone for isolation.
+These are future roadmap items, after the current workspace and reliability work.

@@ -1,340 +1,201 @@
-# Proposed roadmap — for review
+# Control roadmap
 
-2026-10-29. Ship a useful macOS-with-Nix build to a few friends and learn from
-their actual work. Each runs their own node with their own model access.
+Reviewed 2026-10-30 against the implementation and feedback from the first users.
+Keep the normal macOS/Nix release useful to friends; improve reliability before
+adding autonomous operation. Each node supplies its own configuration and model
+access. Federation remains lower priority.
 
-The invited release must preserve work between turns, fail safely, recover after
-restart, and install without editing source. Selecting Claude inside Control is
-a high-priority parallel track. Full provider parity and federation come later.
+**Augment, don't intermediate.** Control supplies tools, isolated environments,
+knowledge and review around a person's model access. Web, TUI, Discord and MCP
+are interfaces to shared capabilities. Tool availability, resource grants and
+transport are separate. Lenses are pure, composable context/tool selections;
+personas describe behavior and policy, not additional authority.
 
-**Augment, don't intermediate:** people bring their own model access. Control
-adds environments, tools, knowledge and review around it. The same capabilities
-serve external MCP clients and Control-managed runs; the web, TUI and Discord
-are interfaces to those capabilities.
+A ✓ in a title means the described implementation exists. It does not close
+unperformed release checks. Branch-only work is identified separately.
 
-Implementation progress (2026-10-29): HTTP socket writes now release shared state,
-stylesheets bypass it, Discord ingestion has its own thread, and individual
-progress events no longer fsync the full state. Discord principals have moved to
-private configuration with arbitrary labels/roles. Node task access is independent
-of model provider and architect authority; multiple Discord IDs may be one person.
-Configuration and state now resolve under independent home-directory roots. The
-binary embeds UI assets, the security profile, TUI and Discord bridge; offline
-doctor checks and a single-writer state lock are implemented. Ordinary chats
-restore bounded published snapshots, and the artifact explorer/viewer shares
-list/read services with MCP. Cancellation and restart reconciliation now validate
-known resource ownership and confirm exit; unknown or mismatched resources block
-dispatch. Completion fencing preserves the last published checkpoint. Explicit
-`/steer` follow-ups wait for the next turn; `/btw` and `/spawn` create linked,
-independent task workspaces from published checkpoints, with one execution slot
-and at most 32 pending runs. SIGINT/SIGTERM now stop dispatch, join worker
-supervisors and persist interrupted attempts without promoting partial work;
-queued turns and diagnostics remain. Hard live-workspace quotas, persisted daemon IDs at
-launch, Claude refresh/fault verification and broader
-release gates remain open. Friends
-build the ordinary release binary from main with Nix; there is no separate preview
-target. A working local build does not close those reliability and provider gates.
+## ✓ Implemented on main
 
-Design-decision interaction: managed Codex/Claude runs can ask a bounded structured
-question with options and a recommendation. Execution yields after verified stop
-and an immutable checkpoint; pending questions survive restart. A human answer
-queues an actor-bound continuation with the captured model/context. Only that
-chat's follow-ups wait; recommendations grant neither consent nor capabilities.
-Web, TUI and Discord share the same answer service. Routine sandbox operations
-remain autonomous; asking at the right design boundary is prompt-guided.
+### ✓ Private configuration and setup
 
-## 1. Make a second Mac configurable — release blocker
+- Home-directory configuration/state roots, explicit overrides and precedence;
+  no author-specific credentials or Discord identities in source defaults.
+- Numeric Discord ID bindings with separate user/architect roles, DM-only
+  ingestion, recipient checks and node-level task authorization across providers.
+- Embedded UI/security assets, repeatable Nix setup, offline `doctor`, a short
+  README and setup documentation. Friends build the ordinary release from main.
+- `control open` opens the default browser; `control open --link` prints a private,
+  single-use link for another local browser.
 
-- Keep validated node files under `~/.config/control/`, with an explicit
-  directory override and documented precedence. Keep mutable
-  state outside the checkout; resolve paths consistently regardless of cwd.
-- Configure state/artifact roots, pinned images, source root for explicit
-  improvements, provider/model selection, credential references, and limits.
-  Locate packaged WASM assets and seccomp policy without author-specific paths.
-- Store only opaque credential references: a private file path or named
-  environment input consumed by its supported trusted adapter. No literal
-  credentials in config examples, source, state, logs, prompts, images or the Nix
-  store. Do not inherit the host environment into workers. Preserve Codex's
-  metadata-only host check and read-only credential mount; do not convert it to
-  an environment-secret path. Discord secrets belong only to the activated bridge.
-- Replace source-fixed Discord labels/roles with explicit numeric-ID bindings
-  and display labels in private configuration. No real IDs as defaults. Preserve
-  DM-only routing, confirmed recipient/channel mappings, denial of unknown actors,
-  user/architect restrictions, and checks at ingress and dispatch. A role does
-  not establish ownership of a provider subscription.
-- Authorize model-backed tasks through node policy, independent of provider and
-  architect authority. Multiple Discord IDs can belong to one person and retain
-  the user role; DMs address that node. Recheck at enqueue, retry, dispatch and
-  tool calls. Do not infer distinct people or subscription ownership from Discord
-  IDs or roles. Include the provider-terms notice: making a personal account
-  available to others may breach [OpenAI's terms](https://openai.com/policies/terms-of-use/)
-  and risk suspension; operators are responsible for compliant configuration.
-- Add offline `control doctor` checks for configuration, private-file metadata,
-  state permissions, engine, pinned image availability, assets and sandbox policy.
-  Keep authenticated model checks explicit and separate from offline diagnostics.
+### ✓ Stateful chats and basic harness interaction
 
-**Exit:** a clean second macOS account starts from documented commands and a
-placeholder-only config; starting from another directory opens the same state.
-Missing prerequisites explain a fix and never launch a host worker. Discord
-policy tests pass with arbitrary fixture IDs and existing DM isolation intact.
+- Published workspace checkpoints between turns, separate Control improvement
+  snapshots, cancellation, graceful shutdown and restart reconciliation.
+- Attempt fencing, ordered per-chat work, explicit retry, retained diagnostics
+  and progress events without a full durable save for every event.
+- `/steer` queues next-turn direction; `/btw` and `/spawn` create linked independent
+  conversations. One execution slot and at most 32 pending runs bound admission.
+- Web/TUI command activity and purple/red diff previews; bounded-context omission
+  is visible. Artifact explorer and read-only text viewer share MCP list/read.
+- Structured design questions with options or free-form steering; actor-bound
+  answers and paused checkpoints survive restart across web, TUI and Discord.
 
-## 2. Preserve work and make interruption safe — release blocker
+### ✓ Claude and Codex integration
 
-Depend on phase 1. Keep a small Rust core: typed transitions, immutable attempt
-inputs, one deterministic supervisor and concrete adapters; no framework migration.
+- Per-run saved backend/model selection, pinned CLI adapters, supported login,
+  bounded stream parsing and provider-reported usage/cache accounting.
+- Claude executes commands through separate offline, credential-free workspace
+  containers. Built-in harness tools stay disabled.
+- Fresh Claude setup selects `sonnet`; saved model rows select the default.
+  Browser chat refresh and authorized improvement-workspace setup fixes are merged.
+- External clients can use `control mcp` independently of managed CLI runs.
+  Its advertised surface remains narrower than the full node interface.
 
-- Capture durable intent before dispatch: actor, action, conversation revision,
-  resolved context/tools, provider/model, image digest, source/baseline identity,
-  limits and credential-owner reference. Retrying records a new attempt without
-  silently changing these inputs; changed inputs require an explicit new revision.
-- Give each conversation a durable workspace lineage, separate from its
-  transcript and provider continuation token. Seed a fresh attempt from the
-  last published workspace checkpoint; publish by an atomic version change only
-  after a matching attempt finishes and artifacts pass validation. Serialize
-  writers per conversation: queued follow-ups wait in submission order and capture
-  the preceding result/workspace when dispatched; steering must be explicit.
-  Preserve failed/interrupted artifacts for inspection;
-  never silently promote partial work or overwrite the previous good checkpoint.
-- Keep ordinary workspaces separate from authorized Control source snapshots.
-  Exclude harness mailbox/results/configuration from copy-forward; reject unsafe
-  paths, symlinks and oversized exports. Retain durable conversation history and
-  show when the model's bounded context omits older turns. Filesystem continuity
-  does not depend on resuming a vendor CLI session.
-- Enforce a hard writable-storage bound on the supported macOS engine, including
-  scratch, artifacts and export staging. Prototype one quota-backed persistent
-  store or bounded scratch plus durable checkpoint scheme; verify actual engine
-  enforcement and crash behavior. Plain bind mounts, directory polling and a
-  Docker volume name alone do not enforce a quota. Bound retained node storage
-  and stop admission when its budget is exhausted; cleanup preserves references.
-- Persist stable node/attempt identity and exact daemon container IDs around
-  launch. Acquire a single-writer state-directory lock. On startup reconcile
-  durable intent against inspected node/run/attempt ownership, mounts and image;
-  stop or adopt only verified owned containers. Handle a crash between container
-  creation and recording its ID. Unknown or mismatched resources block affected
-  work for inspection; never delete every labeled container or unrelated jobs.
-- Fence completions and mailbox requests by active attempt/generation. Persist
-  external-effect intent and deduplication keys before acknowledgements. Reuse
-  room/Discord deduplication where available; ambiguous remote effects require
-  inspection rather than automatic replay. Container termination cannot undo a
-  posted message. Do not promise exactly-once execution.
-- Add cancel and graceful shutdown to the shared run service; stop the exact
-  owned container and confirm its exit before releasing its workspace or retrying.
-  Preserve interrupted status when outcome or cleanup remains uncertain.
-- Keep DM ingestion and request handling responsive while a worker runs. Start
-  with one execution slot and a visible bounded queue; broader worker concurrency
-  can follow safe workspace serialization and recovery. Enforce broker tools at
-  listing and invocation against captured lens selection, node policy and actor.
-  Public web search is explicit egress; record bounded, privacy-conscious evidence
-  without persisting secrets or raw private queries as a new audit channel.
-- Keep network writes outside the shared state lock, bound connection/read/write
-  waits, and serve static assets without waiting for a run or checkpoint. Verify
-  chat submission, navigation and Discord ingestion during a long-running worker
-  and a slow client; a healthy execution thread alone is not a responsive UX.
-- Remove panic assumptions at mutable request/worker boundaries. Validate and
-  reload a known-good checkpoint, or fail closed with a restart diagnostic, after
-  poisoned state; blindly accepting a poisoned mutex is not recovery. Batch
-  disposable progress updates separately from durable lifecycle/effect commits.
-  Preserve write ordering, atomic replacement and directory durability; disk-full
-  errors must not acknowledge uncommitted state or lose the previous checkpoint.
+### ✓ Core context and collaboration surfaces
 
-**Exit:** scripted tests create a project, add tests in a second turn, restart,
-and continue with the same files/context provenance. Inject termination before
-and after launch/checkpoint/result publication, cancellation, stale completions,
-duplicate tool requests and disk-full errors. No competing workspace writer,
-duplicate acknowledged room effect, false success or unrelated-container cleanup
-occurs. A real supported-engine quota test fails writes at the configured bound;
-the Codex credential/PID canary still gates real credential mounting.
+- Composable lens library, linked rooms and worker room tools, knowledge notes
+  and graph, searchable tool catalogue and registration checks.
+- Public web search, offline Rust playground and offline browser capture.
+  Browser capture is not an interactive internet browser.
+- Local Rust tests/build checks in CI and documented local contribution checks.
 
-## 3. Invite friends, with a useful Claude entry point
+## ✓ Implemented on feature/project-workspaces — awaiting review and merge
 
-Release after phases 1–2 pass; prepare documentation and Claude connection alongside.
+- `/open`, TUI `--directory` and a compact web folder control request node-local
+  access; only explicit operator confirmation imports files. Agents have a
+  request tool, never an approval tool.
+- Independent private Git worktrees preserve current files and history while
+  leaving the original checkout unchanged. Full project checkpoints are separate
+  from bounded artifact previews; successful matching attempts advance the head.
+- Local preview start/stop tools run credential-free, offline services against a
+  read-only project mount. Loopback ingress uses a separate browser origin;
+  durable identity is verified before restart rebinding or cleanup.
+- Base filesystems remain read-only. Agents receive factual environment guidance:
+  current images are Nix-built but do not include the `nix` command.
 
-- Rewrite README onboarding for another Mac: supported host/engine prerequisites,
-  Nix setup, repeatable build/install commands, pinned worker image acquisition,
-  config template, own-account login, doctor, first two-turn task, restart/cancel,
-  artifact review and optional Discord setup. Remove author paths, real IDs and
-  credentials from onboarding/service examples. Provide a reproducible supported
-  image path; publishing a cache is useful if local Linux-image building dominates
-  setup time, but a registry architecture is not itself a release gate.
-- Verify the existing `control mcp` stdio bridge with the user's own Claude Code
-  as an optional complementary workflow. Document its read-only Hive chat,
-  lens/room tools, `control.web.search`, `control.rust.run`, offline browser capture,
-  prerequisites and failures. It supplies no generic worker file/shell/source
-  editing and does not let users select Claude inside Control. A plugin package
-  is optional. Claude documents local MCP setup
-  in its [MCP guide](https://code.claude.com/docs/en/mcp).
-- Extend that quickstart with knowledge search/read and explicitly authorized
-  room posting; these are additions, not tools already present in the stdio
-  bridge. Use the shared registry below and remove checkout-dependent startup.
-- If friends need another machine's node, promote scoped remote MCP over
-  Tailscale into this cohort's work. Require per-principal revocable access and
-  tool authorization; private networking alone is not authentication. Do not
-  wait for the construction loop or federation, and do not expose the universal
-  operator session as a remote-client credential.
-- Keep a short known-limitations list and a manual feedback template: task,
-  expected/actual result, build/platform, optional redacted run ID and artifact.
-  Let the friend inspect anything exported. Start with direct feedback; a new
-  feedback room, command and telemetry system are not prerequisites.
+See [projects and previews](docs/WORKSPACES.md) for limits and tested boundaries.
+Native file pickers, in-place host edits, Jujutsu and remote publishing are not
+part of this implementation. Merge/deployment is a separate maintainer action.
 
-**Exit:** two friends independently install from README, complete a two-turn
-construction task and restart it; one verifies the Claude MCP workflow. Record
-setup blockers, lost-work incidents and useful/missing behaviors, then triage
-feedback before adding scope. No week-long soak prerequisite. A Codex-only pilot
-may start sooner. **Release decision for review:** require the in-Control Claude
-adapter gate below for the first Claude-user cohort, or explicitly invite that
-cohort to an external-MCP-only preview. Do not count MCP as provider completion.
+## Next: reliability and real-user feedback
 
-## 4. Parallel priority: Claude inside Control
+Finish these before increasing concurrency, unattended operation or spending.
 
-Implementation update: backend/model selection is now captured per run, with
-backward-compatible Codex defaults. The pinned Claude Code container adapter,
-explicit login, bounded stream parsing and cache accounting are implemented.
-Built-in Claude tools are disabled; workspace commands use separate offline,
-credential-free containers and durable command admission. Its offline isolation
-and workspace-continuity tests pass. Authenticated Claude two-turn work, restart
-continuation and artifact viewing now pass on this Mac. Refresh and cancellation
-fault tests remain open; do not count this as phase completion.
-The external `control mcp` direction remains available independently.
+- **Storage bounds:** enforce hard writable workspace/scratch limits on the
+  supported macOS engine, plus retained checkpoint/artifact budgets and admission
+  backpressure. Bind mounts and polling are not quotas. Test disk-full and crash
+  behavior without losing the previous good checkpoint.
+- **Recovery:** persist exact daemon container IDs around worker launch, including
+  the creation-to-recording crash window. Reconcile node/attempt/image/mounts;
+  ambiguous resources fence work rather than being adopted or broadly deleted.
+  Keep preview and worker resource handling consistent.
+- **Fault tests:** inject termination around launch, checkpoint and result
+  publication; auth expiry/refresh, cancellation, stale completions, duplicate
+  requests, slow clients and poisoned state. Preserve diagnostics and fail closed
+  without a false acknowledgement or a second workspace writer.
+- **Provider verification:** complete Claude refresh and cancellation fault gates;
+  demonstrate its credential/PID and discovery boundaries independently of Codex.
+  Keep model checks explicit rather than calling providers from offline doctor.
+- **Second-machine evidence:** record verified engines and two independent friend
+  installs with a two-turn task, restart and artifact inspection. Recheck default
+  model availability for their accounts; record useful feedback and setup blockers.
+- **Hardening:** add a concise threat model linking claims to tests. Include
+  malicious downloaded repositories/packages, browser content, prompt injection,
+  secret discovery, mount escapes and resource exhaustion. Read-only images alone
+  are insufficient. Keep credentials, host sockets and policy outside agent reach.
 
-Develop this adapter alongside configuration and recovery, reusing phase 2's
-supervisor contracts. Its runtime release depends on those safety gates. Choose
-one minimal personal Claude path; prioritize it over federation and broad tooling.
-After extracting the Codex backend seam, Claude CLI is the first new adapter.
-Keep the seam small; broad provider parity is not a prerequisite.
+## Next: consistent tool capabilities
 
-- First timebox an unmodified, pinned Claude Code CLI adapter for a credential
-  owner's interactive work on their own node: capture selection per attempt,
-  translate text/final/usage/error events, and reuse supervisor limits/cancel.
-  Authenticate only through Anthropic's supported flow. Never extract OAuth
-  tokens, impersonate Claude Code, or route other people's work through the
-  operator's subscription. Recheck node actor authorization at enqueue and dispatch;
-  several user-role identities may represent the credential owner.
-- This path ships only after a Claude-specific credential/PID isolation probe,
-  safe config/hook/MCP discovery and credential refresh behavior are demonstrated
-  on the supported image/engine. Codex's canary proves nothing about Claude.
-  `--bare` does not use subscription login, per the official
-  [CLI guide](https://code.claude.com/docs/en/headless); do not combine those claims.
-- If that safety gate cannot be met promptly, keep Claude CLI external via MCP
-  and implement one native Anthropic API-key adapter instead: a trusted host
-  adapter resolves a private file/environment reference, while credential-free,
-  offline tool containers execute authorized tools. Add only the minimal bounded
-  tool loop, typed transcript/tool results, streaming parser, usage normalization,
-  cancellation and explicit spend limits. No Bedrock/Vertex/router requirement.
-  The native API adapter is also the intended backend for authorized shared or
-  unattended work; it is not a subscription credential workaround.
-- Official [hosting/auth conditions](https://code.claude.com/docs/en/legal-and-compliance),
-  checked 2026-10-29, permit users signing into the unmodified CLI themselves,
-  subject to the stated product-hosting conditions; they prohibit subscription
-  credential intermediation. Native API keys have a different billing/auth boundary.
-  Recheck before shipping; third-party bridges do not establish permission.
+- Share tool schemas/discovery/policy dispatch across HTTP MCP, stdio and worker
+  mailboxes. Registration checks catch omissions today; they do not replace one
+  registry. Audit MCP effect annotations against actual behavior.
+- Add admitted knowledge search/read and bounded claim proposals, authorized room
+  posting in the external bridge, and `control.run.submit/status/diff` using the
+  same durable run service. External callers inherit no worker/operator authority.
+- Expose useful bounded preview diagnostics; keep service identity and ingress
+  transport separate. Add scoped, revocable remote MCP or preview transport over
+  Tailscale/SSH when a real user needs it. Private networking is not authentication.
+- Provide declarative Nix environment/tool requests. Use pinned inputs and private
+  writable stores/profiles/build state, with bounded resources. Agents can use
+  advertised environment tools freely within their grant; package fetching is an
+  explicit network capability. Never expose the host daemon or engine socket.
+- Keep shared images immutable. Cache reads and publication are separate policies;
+  never promote a worker's filesystem or generated output into a shared base/cache
+  automatically. Defer caching complexity until measured reuse justifies it.
+- Add API/self-hosted adapters through the same bounded executor contracts. Personal
+  subscription use and node authority remain separate; operators must comply with
+  provider terms. Authorized API-backed paths with budgets are the unattended path.
 
-**Exit:** the chosen Claude path completes the same two-turn/restart task and
-passes malformed-stream, auth-expiry, cancellation and unauthorized-actor tests. UI
-labels distinguish subscription/API usage and unknown accounting. No secret
-reaches model-readable tools. Add bounded parallel workers, richer diffs and
-independent verification next when feedback justifies them; storage/event-log
-migration, streaming polish and session rotation remain separate improvements.
+## Later: personas as persistent bots
 
-## 5. Shared MCP capabilities and the construction loop
+A bot is a supervised instance using a persona, tools, state and explicit grants,
+not a second agent runtime. Preserve the original personality + policy +
+declarative-directive model; keep its configuration distinct from its chat history.
 
-Build useful capabilities once, with transport-specific grants rather than three
-hand-maintained catalogues. This work can ship incrementally alongside the pilot.
+- **Persona definitions:** declarative personality, behavior directives, lens
+  composition, model selection and limits. Validate structure and enforceable
+  policy before launch. Clearly separate mechanically enforced constraints from
+  natural-language preferences; do not claim to verify arbitrary model behavior.
+- **Durable callbacks:** a small declarative workflow/event interface with typed
+  inputs, timers/subscriptions, bounded retries, deadlines and explicit transitions.
+  The Rust supervisor handles scheduling, deduplication, leases/fencing, restart
+  and cancellation; a model decides only where judgment is needed. No generic
+  programming framework until concrete workflows require it.
+- **Bot spawning:** give bots a tool to request children with bounded depth,
+  concurrency, token/spend/storage budgets and inherited authority ceilings.
+  A child cannot grant itself or its parent more access. Existing human `/spawn`
+  is implemented; autonomous bot-to-bot spawning is not.
+- **Human questions:** reuse durable design/approval requests and Discord delivery,
+  with recipient/run identity, expiry and restart-safe answers. Important missing
+  information can reach the operator away from the browser; channel messages or
+  callback payloads never grant architect authority.
+- **Persistent judges:** independently selected author/reviewer models, bounded
+  evidence and explicit acceptance criteria. Limit reviews and fan-out; use
+  authorized API/self-hosted access for unattended work. A review is evidence,
+  not permission to merge, deploy or purchase.
+- **First workflow:** watch an explicitly selected release/source, propose a patch
+  in an approved isolated project, run deterministic checks, request independent
+  review and notify the owner. Merge/deploy remains an explicit grant.
+- **Later external actions:** a travel watcher could report a Qantas sale and
+  prepare a booking proposal. Buying requires explicit, scoped authorization for
+  the concrete itinerary, passenger, price/budget and action; broad chat intent,
+  website text or persona instructions are not payment authority. Retain effect
+  intent, receipts and ambiguous-outcome handling; do not blindly retry purchases.
 
-- Chat artifacts, first version: a compact file explorer and read-only text
-  viewer for completed run outputs, linked from the chat. Use an immutable,
-  bounded manifest with chat/run/attempt provenance, relative paths, sizes,
-  content types and hashes. Reject traversal, symlinks and harness/private files;
-  escape text and never execute HTML or scripts. Expose the same bounded
-  list/read service through MCP with actor checks. Files do not automatically
-  become knowledge. Basic editing and syntax highlighting follow the viewer;
-  the manifest can represent other output types without implementing them now.
+## Later: interactive browser as a tool
 
-- Share tool definitions, schemas and policy dispatch across HTTP MCP, stdio and
-  the worker mailbox. Keep authority explicit: an external client does not
-  inherit a worker's active-run capabilities or the operator's subscription.
-- Add knowledge search/read, bounded evidence-backed claim proposals and
-  authorized room posting. Lens tools expose explicit snapshots. Proposals need
-  admission and review; chat output must not automatically become knowledge.
-- Add `control.run.submit`, `control.run.status` and `control.run.diff` on the
-  same durable run service. Submission obeys provider configuration, actor policy,
-  queue/storage bounds and attempt fencing. A diff is reviewable evidence, not
-  permission to apply a change.
-- Audit `readOnlyHint` and `openWorldHint` against actual effects and test the
-  policy boundary. MCP annotations describe behavior; authorization enforces it.
-- Follow with independent test evidence, explicit acceptance and provenance.
-  Cross-provider judging records author and reviewer identities and limits.
-  Default to one owner-initiated review per run, subject to current provider
-  terms and limits; that cap is not proof of subscription permission. Use
-  authorized API-backed paths with explicit budgets for judge fan-out, evals,
-  unattended agents and swarms.
+Extend capture into a sandboxed browser session only when the execution and
+permission boundaries are ready. Keep the session lifecycle, browser profile,
+network grant and artifacts explicit; tools/lenses select it without granting
+accounts or host access.
 
-**Exit:** an external MCP client can read admitted knowledge, post only to an
-authorized room, submit an allowed job and inspect its status/diff. Transport
-parity and denial tests prevent catalogue drift and privilege escalation.
+- Support navigation, observation and actions through a narrow browser harness;
+  code-driven automation can use a Rust client over a suitable browser protocol.
+  Take interaction ideas from Playwright-like tools without introducing an
+  authored JavaScript/Node application layer.
+- Bound session lifetime, downloads, output, tabs and resource use. Keep profiles
+  and downloads isolated, base images immutable, and any accounts scoped to the
+  task. Filter private-network/metadata access unless explicitly granted.
+- Treat pages, scripts, downloads and their instructions as untrusted. Keep
+  consequential actions, credentials and payment confirmation outside page control.
+  Start with reproducible read/observe tasks before logged-in transactions.
 
-## Deferred scope and corrections to the review
+The [OpenClaw, Grok Bot and Muse review](docs/BOT-INSPIRATIONS.md) records the
+primary sources and useful contracts. Borrow those contracts rather than their
+runtimes or an entire feature list.
 
-Other platforms, NixOS packaging, live federation/delegation,
-general tool installation, swarms, model routing and bundled inference come later.
-Keep the existing offline federation boundary and small pure Rust context core.
-Remote MCP is conditional pilot scope as above, not a federation prerequisite.
+## Deferred
 
-The review correctly identifies fresh workspaces, serial ingestion, whole-state
-activity saves, source-fixed principals and missing crash reconciliation in current
-source. Its fixes understate their coupling: poison recovery needs invariant
-validation, labels alone cannot establish cleanup ownership, and tmpfs alone is
-not durable storage. Its credential-free vision is future work: today's trusted
-Codex harness does read a mounted credential, outside its sandboxed agent tools.
-The stdio bridge is narrower than the proposed Claude plugin catalogue. The UI
-already includes Rust/WASM behavior; no UI rewrite or Enter-to-send work belongs
-on this roadmap. Detailed Claude model names, limits and beta flags in the review
-are not requirements here; verify current primary docs when implementing.
+Live federation/delegation, other host platforms/NixOS packaging, GPU/microVM
+tiers, bundled inference and model routing follow demonstrated local needs.
+Keep the pure Rust context core and offline federation boundary.
 
-Proposed order: node authorization independent of architect roles and responsive ingestion/UI →
-portable private configuration and the backend seam → Claude CLI as the first
-new adapter alongside durable bounded work and safe recovery → invited macOS
-cohorts with explicit provider gates and useful MCP capabilities → improvements
-selected from actual feedback. Prepare onboarding throughout; bring scoped
-remote MCP forward when that is what lets a friend participate.
+Broader work can include a typed run state machine, deterministic supervisor
+simulation, parser fuzzing, scoped capability tokens/session expiry, a transactional
+store when JSON costs warrant it, artifact editing/highlighting and removal of
+remaining simulated UI. A Nix `packages.control` derivation is still future work;
+Nix setup and image builds already exist.
 
-## Later — carried from the review (not release blockers)
-
-Pick these up when feedback or the phases above need them.
-
-- **Execution core:** a typed `RunStatus` state machine and immutable
-  manifest; a SQLite (WAL) store plus an append-only event log with replay
-  tests, replacing whole-state JSON rewrites; deterministic simulation tests
-  for the supervisor (fake engine, fake clock, injected crashes); per-actor
-  concurrency once workspace serialization is safe.
-- **Backends:** a Control-owned tool loop with a credential-free tool-executor
-  container, a typed append-only transcript (needed for prompt caching and
-  preserved thinking), an OpenAI-compatible adapter (vLLM, llama.cpp, Ollama),
-  per-run and per-actor spend budgets, and live text streaming to web/TUI.
-- **Identity and security:** per-principal revocable capability tokens (e.g.
-  Biscuit), MCP OAuth for remote clients, operator-session rotation and expiry,
-  0600 and atomic writes for the policy file and `.control` logs, one response
-  helper with uniform security headers, typed HTML templating, and a
-  `docs/THREAT-MODEL.md` that links each claim to its test.
-- **Quality:** `proptest`/`cargo-fuzz` targets for the HTTP, SSE, mailbox and
-  federation parsers; an eval suite of 15–20 checkable tasks run before and
-  after self-improvement; a flake `packages.control` and CI that runs it.
-- **Product:** user-created rooms; lens export as Claude Code skills or
-  `AGENTS.md`/`CLAUDE.md` fragments; removal of demo/simulated views (`agents`,
-  `nodes` and the `/spawn` demo in `main.rs`).
-- **Future design goals (after the pilot):** declarative Nix tool containers
-  requested by agents, which never touch the Docker socket; tool windows on a
-  separate origin; a microVM tier and GPU as explicit capabilities; persistent
-  supervised agents with leases, fencing and inherited authority ceilings; live
-  federation transport, scoped peer trust, federated rooms and delegated jobs;
-  an optional model router and bundled local inference in a packaged node.
-- **Guardrails for every phase:** something a new user can try at the end of
-  each phase; every security claim links to a test; scheduling, authorization,
-  retries and cleanup stay deterministic and out of the model; prefer small
-  closed sets (enums, data files) to plugin frameworks; the UI never shows
-  simulated work as real.
-
-## Open checks before inviting
-
-- Confirm the default Codex model (`gpt-6.1-sol`, `src/usage.rs:117`) is available
-  on ordinary ChatGPT plans, and that testers can access the clone URL.
-- Run the new doctor sandbox probe and a real two-turn run on a second engine
-  (Docker Desktop, OrbStack or Colima), then name the verified engines in the README.
+Every step should leave something useful to try. Keep tools and UI concise,
+knowledge admission selective, and routine scheduling/authorization/retries out
+of model token budgets. Measure before adding infrastructure.
