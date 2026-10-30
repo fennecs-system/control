@@ -122,19 +122,13 @@ fn render(state: &State, view: &str, lens: &str, channel: &str) -> String {
     let view = if view == "manage" { "nodes" } else { view };
     let lens = lens_ui::normalize(lens);
     let chat_navigation = matches!(view, "session" | "session-list");
-    let title = lens_ui::title(lens);
     let mut page = include_str!("../assets/index.html")
         .replace("</head>", "<link rel='stylesheet' href='/collective.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'><link rel='stylesheet' href='/navigation.css'></head>")
-        .replace("{{title}}", title)
         .replace("{{page_discussion}}", &chat::discussion_link(view))
         .replace("{{navigation}}", &navigation::primary(view))
         .replace("{{section_navigation}}", &navigation::secondary(view))
         .replace("{{layout_class}}", if chat_navigation { "chat-workspace" } else if navigation::managed(view) { "with-section-nav" } else { "" })
-        .replace("{{page_title}}", &navigation::heading(view))
-        .replace(
-            "{{lens}}",
-            lens,
-        );
+        .replace("{{page_title}}", &navigation::heading(view));
     let content = (if view == "monitor" { Some(usage::render(&state.runtime)) } else { state.runtime.render(view,lens) }).or_else(|| state.collective.render(view, channel)).unwrap_or_else(|| match view {
         "providers" => providers::render(&state.runtime),
         "tools" => tool_catalog::render(state, if channel == "general" { "" } else { channel }),
@@ -150,24 +144,7 @@ fn render(state: &State, view: &str, lens: &str, channel: &str) -> String {
         _ => lens_ui::overview(state,lens),
     });
     page = page.replace("{{content}}", &content);
-    let category = lens;
-    let tools = control_context::lens(category, &control_context::TOOLS)
-        .iter()
-        .map(|tool| {
-            format!(
-                "<li>{} <span>{}</span></li>",
-                tool.name,
-                if tool.available {
-                    "local"
-                } else {
-                    "not connected"
-                }
-            )
-        })
-        .collect::<String>();
-    page.replace("{{tools}}", &tools)
-        .replace("DEMO AGENTS", "RUNS")
-        .replace("3 sources · 2 tools", "3 sources · 3 tools")
+    page
 }
 /// Views whose `channel` is trusted, pre-rendered HTML from internal routes only.
 const INTERNAL_VIEWS: [&str; 6] = ["session-list", "artifact-page", "browser", "tool-page", "knowledge-page", "lens-page"];
@@ -433,7 +410,7 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         } else {
             String::new()
         };
-        let response = format!("HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\n{extra}{preference}Connection: close\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'\r\n\r\n{body}", body.len());
+        let response = format!("HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\n{extra}{preference}Connection: close\r\nCache-Control: no-store\r\nReferrer-Policy: same-origin\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'\r\n\r\n{body}", body.len());
         let _ = stream.write_all(response.as_bytes());
     });
 }
@@ -635,6 +612,16 @@ fn main() -> std::io::Result<()> {
 #[cfg(test)]
 mod responsiveness_tests {
     use super::*;
+
+    #[test]
+    fn page_assembly_preserves_literal_template_and_demo_text_in_documents() {
+        let text = "{{tools}} DEMO AGENTS 3 sources · 2 tools {{title}} {{lens}} {{content}}";
+        let mut state = State {note: text.into(), ..Default::default()};
+        knowledge::migrate(&mut state);
+        let page = render(&state, "editor", "engineering", "general");
+        assert!(page.contains(text), "Document text was rewritten by page assembly");
+        assert_eq!(state.documents[0].body, text);
+    }
 
     #[test]
     fn socket_writes_release_state_even_when_the_client_stalls_or_disconnects() {

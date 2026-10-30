@@ -62,13 +62,8 @@ fn credential() -> Result<String, &'static str> {
     // Only this explicitly activated process consumes the private credential file.
     // It is never discovered from the checkout or logged.
     let path = config::directory()?.join("discord.env");
-    use std::os::unix::fs::PermissionsExt;
-    let metadata =
-        fs::symlink_metadata(&path).map_err(|_| "Discord credential file unavailable")?;
-    if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 || metadata.len() > 16384 {
-        return Err("discord.env must be a private regular file (mode 0600, at most 16 KiB)");
-    }
-    let contents = fs::read_to_string(path)
+    let contents = String::from_utf8(config::read_regular(&path, 16384, true)
+        .map_err(|_| "discord.env must be a private regular file (mode 0600, at most 16 KiB)")?)
         .map_err(|_| "Could not load Discord configuration from discord.env.")?;
     for line in contents.lines().map(str::trim) {
         let line = line.strip_prefix("export ").unwrap_or(line);
@@ -93,22 +88,10 @@ fn credential() -> Result<String, &'static str> {
     Err("Missing DISCORD_TOKEN.")
 }
 fn checkpoint(path: impl AsRef<Path>, bytes: &[u8]) -> Result<(), &'static str> {
-    use std::io::Write;
     let path = path.as_ref();
-    let tmp = path.with_extension("json.tmp");
-    let mut options = fs::OpenOptions::new();
-    options.create(true).truncate(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(&tmp)
-        .map_err(|_| "Could not save bridge progress.")?;
-    file.write_all(bytes)
-        .and_then(|_| file.sync_all())
-        .and_then(|_| fs::rename(tmp, path))
+    let directory = path.parent().ok_or("Invalid bridge progress path")?;
+    let name = path.file_name().and_then(|n| n.to_str()).ok_or("Invalid bridge progress path")?;
+    config::write_in(directory, name, bytes)
         .map_err(|_| "Could not save bridge progress.")
 }
 fn load_json<T: serde::de::DeserializeOwned + Default>(path: impl AsRef<Path>) -> T {
@@ -454,10 +437,11 @@ impl Bridge {
     }
     fn send(&self, channel: DiscordId, content: &str) -> Sent {
         let bindings = DmBindings::load().map_err(|_| Some(Duration::from_secs(5)))?;
+        let mut authorize = identity::authorizer();
         let allowed = {
             bindings.recipients.iter().any(|r| {
                 r.channel_id == channel
-                    && identity::authorize(
+                    && authorize(
                         &Actor::DiscordDm {
                             user_id: r.user_id,
                             channel_id: channel,
@@ -623,6 +607,7 @@ impl Bridge {
     }
     fn deliver(&self, routes: &[Route], outbound: &mut Outbound) -> Result<(), &'static str> {
         let state = self.snapshot()?;
+        let mut authorize = identity::authorizer();
         if let Some(runs) = state["runtime"]["runs"].as_array() {
             for run in runs {
                 if !run["source"]
@@ -637,7 +622,7 @@ impl Bridge {
                 };
                 let action =
                     serde_json::from_value::<Action>(run["action"].clone()).unwrap_or_default();
-                if identity::authorize(&actor, action).is_err() {
+                if authorize(&actor, action).is_err() {
                     continue;
                 }
                 let (channel, direct) = match actor {
@@ -841,6 +826,21 @@ pub fn command(args: &[String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bridge_checkpoint_preserves_existing_progress_on_temporary_file_conflict() {
+        let root = std::env::temp_dir().join(format!("control-bridge-write-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("progress.json");
+        checkpoint(&path, b"old").unwrap();
+        let temporary = root.join(format!("progress.json.{}.tmp",std::process::id()));
+        std::os::unix::fs::symlink(&path,&temporary).unwrap();
+        assert!(checkpoint(&path, b"new").is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"old");
+        fs::remove_file(temporary).unwrap();
+        checkpoint(&path, b"new").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+        fs::remove_dir_all(root).unwrap();
+    }
     fn id(s: &str) -> DiscordId {
         s.parse().unwrap()
     }

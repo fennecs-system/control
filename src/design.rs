@@ -183,8 +183,7 @@ pub fn answer(
     source: &str,
 ) -> Result<(), &'static str> {
     let run = waiting(state, chat_id)
-        .ok_or("No design question is ready for an answer in this chat.")?
-        .clone();
+        .ok_or("No design question is ready for an answer in this chat.")?;
     let question = run.question.as_ref().unwrap();
     if question_id.is_some_and(|id| id != question.id) {
         return Err("That design question is no longer pending.");
@@ -241,6 +240,20 @@ pub fn answer(
         .iter()
         .position(|r| r.id == run.id)
         .unwrap();
+    // Capture continuation inputs, not diagnostic histories or previous attempts.
+    let actor = run.actor.clone();
+    let action = run.action;
+    let backend = run.backend;
+    let persona = run.persona.clone();
+    let model = run.model.clone();
+    let context = run.context.clone();
+    let lenses = run.lenses.clone();
+    let queue_order = run.queue_order;
+    let objective = run.continuation.as_ref().map(|c|c.objective.clone()).unwrap_or_else(||run.objective.clone());
+    let continuation = Continuation {
+        project_base: attempt.project_base.clone(), checkpoint,
+        published_parent: baseline.clone(), objective, decision: question.input.clone(),
+    };
     // Replacing the waiting run with its continuation keeps admission bounded.
     state.runtime.runs[index].status = "continued".into();
     let notice = state.runtime.notice.clone();
@@ -248,33 +261,22 @@ pub fn answer(
         answer.clone(),
         "design-answer",
         source,
-        run.actor.clone(),
-        run.action,
+        actor,
+        action,
     ) {
         state.runtime.runs[index].status = "waiting".into();
         state.runtime.notice = notice;
         return Err(error);
     }
     let next = state.runtime.runs.last_mut().unwrap();
-    next.backend = run.backend;
-    next.persona = run.persona;
-    next.model = run.model;
-    next.context = run.context;
-    next.lenses = run.lenses;
+    next.backend = backend;
+    next.persona = persona;
+    next.model = model;
+    next.context = context;
+    next.lenses = lenses;
     next.chat_id = Some(chat_id.into());
-    next.queue_order = run.queue_order;
-    let objective = run
-        .continuation
-        .as_ref()
-        .map(|c| c.objective.clone())
-        .unwrap_or(run.objective);
-    next.continuation = Some(Continuation {
-        project_base: attempt.project_base.clone(),
-        checkpoint,
-        published_parent: baseline.clone(),
-        objective,
-        decision: question.input.clone(),
-    });
+    next.queue_order = queue_order;
+    next.continuation = Some(continuation);
     let next_id = next.id.clone();
     let question = state.runtime.runs[index].question.as_mut().unwrap();
     question.answer = Some(answer.clone());

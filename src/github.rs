@@ -88,25 +88,8 @@ fn branch(value: &str) -> bool {
         && !value.contains(' ')
 }
 fn read_private(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
-    use std::os::unix::fs::OpenOptionsExt;
-    use std::os::unix::fs::PermissionsExt;
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
-        .open(path)
-        .map_err(|_| fail("Private GitHub configuration or credential is unavailable"))?;
-    let meta = file.metadata()?;
-    if !meta.is_file() || meta.len() > limit || meta.permissions().mode() & 0o077 != 0 {
-        return Err(fail(
-            "GitHub configuration and credentials must be private regular files",
-        ));
-    }
-    let mut bytes = Vec::new();
-    file.take(limit + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > limit {
-        return Err(fail("GitHub configuration or credential exceeds its limit"));
-    }
-    Ok(bytes)
+    crate::config::read_regular(path, usize::try_from(limit).map_err(|_| fail("Invalid file limit"))?, true)
+        .map_err(|_| fail("GitHub configuration and credentials must be bounded private regular files"))
 }
 fn configuration() -> io::Result<Option<Configuration>> {
     let path = crate::config::directory()
@@ -570,6 +553,7 @@ fn create_tree(
     let tree = object_sha(&commit["tree"], "sha")?;
     // Inspect each changed path, never infer deletion from a truncated recursive listing.
     let mut entries = Vec::new();
+    let mut trees = std::collections::HashMap::new();
     for change in changes {
         let path = change
             .path
@@ -602,11 +586,13 @@ fn create_tree(
             let components: Vec<_> = change.path.split('/').collect();
             let mut found = None;
             for (index, name) in components.iter().enumerate() {
-                let listing = api.request(
-                    "GET",
-                    &request_path(repo, &format!("git/trees/{current}")),
-                    None,
-                )?;
+                if !trees.contains_key(&current) {
+                    // Bound retained API responses even for changes spanning many directories.
+                    if trees.len() == 32 { trees.clear(); }
+                    let listing = api.request("GET", &request_path(repo, &format!("git/trees/{current}")), None)?;
+                    trees.insert(current.clone(), listing);
+                }
+                let listing = &trees[&current];
                 if listing["truncated"] == true {
                     return Err(fail("GitHub tree listing is truncated"));
                 }
@@ -824,6 +810,12 @@ pub fn open(shared: &Arc<Mutex<State>>, chat: &str, input: Input) -> io::Result<
         Err(error) => Err(error),
     }
 }
+static CONFIGURED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// UI availability only. Publication still revalidates configuration and authority.
+/// Called by supervision outside the global state lock, including after config changes.
+pub fn refresh_availability() {
+    CONFIGURED.store(configuration().ok().flatten().is_some(), std::sync::atomic::Ordering::Relaxed);
+}
 pub fn panel(state: &State, chat: &str) -> String {
     let mut html = String::new();
     for publication in state.github_publications.iter().filter(|p| {
@@ -840,7 +832,7 @@ pub fn panel(state: &State, chat: &str) -> String {
             ));
         }
     }
-    if configuration().ok().flatten().is_none() {
+    if !CONFIGURED.load(std::sync::atomic::Ordering::Relaxed) {
         return html;
     }
     if let Some(run) = state.runtime.runs.iter().rev().find(|r| {
@@ -958,6 +950,7 @@ mod tests {
         fail: RefCell<Option<&'static str>>,
         old: Vec<u8>,
         base: String,
+        tree_entries: Vec<Value>,
     }
     impl Mock {
         fn new() -> Self {
@@ -968,6 +961,7 @@ mod tests {
                 fail: RefCell::new(None),
                 old: b"old\n".to_vec(),
                 base: BASE.into(),
+                tree_entries: vec![json!({"path":"script.sh","sha":git_blob(b"old\n"),"mode":"100755"})],
             }
         }
     }
@@ -986,7 +980,7 @@ mod tests {
             } else if method == "GET" && path.contains("contents/") {
                 json!({"type":"file","sha":git_blob(&self.old)})
             } else if method == "GET" && path.contains("git/trees/") {
-                json!({"tree":[{"path":"script.sh","sha":git_blob(&self.old),"mode":"100755"}],"truncated":false})
+                json!({"tree":self.tree_entries,"truncated":false})
             } else if method == "POST" && path.ends_with("git/trees") {
                 json!({"sha":NEW_TREE})
             } else if method == "POST" && path.ends_with("git/commits") {
@@ -1047,6 +1041,19 @@ mod tests {
             old: Some(b"old\n".to_vec()),
             new: Some(b"new\n".to_vec()),
         }]
+    }
+    #[test]
+    fn tree_cache_reuses_listings_and_preserves_each_files_mode() {
+        let mut api = Mock::new();
+        api.tree_entries.push(json!({"path":"module.rs","sha":git_blob(&api.old),"mode":"100644"}));
+        let mut changes = edit();
+        changes.push(Change {path:"module.rs".into(), old:Some(api.old.clone()), new:Some(b"updated".to_vec())});
+        create_tree(&api, &publication(), &changes).unwrap();
+        let requests = api.requests.borrow();
+        assert_eq!(requests.iter().filter(|(path,_)| path.contains("GET /repos/example/project/git/trees/")).count(), 1);
+        let body = requests.iter().find(|(path,_)|path == "POST /repos/example/project/git/trees").unwrap().1.as_ref().unwrap();
+        assert_eq!(body["tree"][0]["mode"], "100755");
+        assert_eq!(body["tree"][1]["mode"], "100644");
     }
     #[test]
     fn github_objects_and_refs_are_scoped_and_unambiguous() {

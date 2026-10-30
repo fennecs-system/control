@@ -607,13 +607,12 @@ pub fn list(state: &State) -> Value {
         .collect::<Vec<_>>())
 }
 pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
-    let data = detail(state, id)?;
-    let room = data["room"]
-        .as_str()
+    let session = state.chats.iter().find(|s| s.id == id).ok_or("Chat not found.")?;
+    identity::authorize(&session.actor, Action::Task)?;
+    let room = session.room.as_deref()
         .filter(|r| crate::rooms::valid(r))
         .map(|r| format!(" · <a href='/?view=rooms&channel={r}'>#{r} ↗</a>"))
         .unwrap_or_default();
-    let session = state.chats.iter().find(|s| s.id == id).unwrap();
     let lenses = selected_lenses(session);
     let room = format!("{room}{}", session.parent_chat.as_deref().filter(|parent| valid_id(parent)).map(|parent| format!("<a href='/chat/{parent}'>Parent chat ↗</a>")).unwrap_or_default());
     let mode = if session.improve_mode {
@@ -621,7 +620,7 @@ pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
     } else {
         ""
     };
-    Ok(format!("<section class='conversation'><div class='conversation-heading'>{}<h2>{}</h2>{mode}<span class='conversation-links'>{room}<a href='/chat/{id}/artifacts'>Artifacts ↗</a></span></div><iframe class='chat-transcript' src='/chat/{id}/transcript#latest' title='Conversation'></iframe><form class='conversation-composer' id='session-message' method='post' action='/chat/{id}/messages'><textarea name='message' required maxlength='2000' rows='3' aria-label='Message' placeholder='Message Control…'></textarea>{}<div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></section>",crate::navigation::conversation_button(state,id),escape(data["title"].as_str().unwrap_or("Chat")),command_menu(&session.actor),crate::lens_library::choices(state,&lenses,"session-message")))
+    Ok(format!("<section class='conversation'><div class='conversation-heading'>{}<h2>{}</h2>{mode}<span class='conversation-links'>{room}<a href='/chat/{id}/artifacts'>Artifacts ↗</a></span></div><iframe class='chat-transcript' src='/chat/{id}/transcript#latest' title='Conversation'></iframe><form class='conversation-composer' id='session-message' method='post' action='/chat/{id}/messages'><textarea name='message' required maxlength='2000' rows='3' aria-label='Message' placeholder='Message Control…'></textarea>{}<div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></section>",crate::navigation::conversation_button(state,id),escape(&session.title),command_menu(&session.actor),crate::lens_library::choices(state,&lenses,"session-message")))
 }
 fn command_text(text: &str) -> String {
     let trimmed = text.trim_start();
@@ -819,15 +818,15 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
         "control.chat.send" => {
             let id = id()?;
             let text = arguments["message"].as_str().ok_or("Missing message.")?;
-            let previous = state
+            let index = state
                 .chats
                 .iter()
                 .position(|c| c.id == id)
-                .map(|i| (i, state.chats[i].clone()))
                 .ok_or("Chat not found.")?;
-            let improve = parse_mode(arguments.get("mode"), previous.1.improve_mode)?;
+            let previous = (state.chats[index].lens.clone(), state.chats[index].lenses.clone(), state.chats[index].improve_mode);
+            let improve = parse_mode(arguments.get("mode"), previous.2)?;
             identity::authorize(
-                &previous.1.actor,
+                &state.chats[index].actor,
                 if improve {
                     Action::Improve
                 } else {
@@ -836,16 +835,16 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
             )?;
             if arguments.get("lenses").is_some() {
                 let lenses = parse_lenses(arguments, state)?;
-                state.chats[previous.0].lens = if lenses.len() == 1 {
+                state.chats[index].lens = if lenses.len() == 1 {
                     Some(lenses[0].clone())
                 } else {
                     None
                 };
-                state.chats[previous.0].lenses = Some(lenses);
+                state.chats[index].lenses = Some(lenses);
             }
-            state.chats[previous.0].improve_mode = improve;
+            state.chats[index].improve_mode = improve;
             if let Err(error) = send(state, id, text, "session-chat") {
-                state.chats[previous.0] = previous.1;
+                (state.chats[index].lens, state.chats[index].lenses, state.chats[index].improve_mode) = previous;
                 return Err(error);
             }
             detail(state, id)

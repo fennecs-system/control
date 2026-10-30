@@ -141,11 +141,12 @@ fn rpc_at(
             }
             if request["params"]["name"]=="control_project_request" {
                 let chat=run.chat_id.clone().unwrap_or_default();
-                let previous=state.chats.clone();
+                let Some(index)=state.chats.iter().position(|c|c.id==chat) else {return error("Chat not found");};
+                let previous=state.chats[index].clone();
                 let result=crate::projects::request_named(&mut state,&chat,request["params"]["arguments"]["path"].as_str().unwrap_or(""),request["params"]["arguments"]["name"].as_str());
                 return match result {
                     Ok(value) if crate::storage::save(&state).is_ok()=>json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":value.to_string()}],"isError":false}}),
-                    Ok(_)=>{state.chats=previous;error("Could not save project request")},
+                    Ok(_)=>{state.chats[index]=previous;error("Could not save project request")},
                     Err(message)=>error(message),
                 };
             }
@@ -159,9 +160,6 @@ fn rpc_at(
                     Ok(value) => json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":value.to_string()}],"isError":false}}),
                     Err(message) => error(message),
                 };
-            }
-            if run.question.as_ref().is_some_and(|q| q.answer.is_none() && run.attempts.last().is_some_and(|a| a.workspace_id.as_deref() == Some(&q.generation))) {
-                return error("This attempt is pausing for a design answer; no more tools may run.");
             }
             if request["params"]["name"] == "control_agent_result" {
                 let plan=match crate::delegated_results::prepare(&state,run_id,request["params"]["arguments"].clone()) {

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
     fs::{self, File, OpenOptions},
-    io::{self, Read, Write},
+    io::{self, Write},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -87,17 +87,7 @@ fn regular(f: &File, private: bool) -> Result<()> {
     Ok(())
 }
 fn read(path: &Path, limit: usize, private: bool) -> Result<Vec<u8>> {
-    let f = options()?.read(true).open(path)?;
-    regular(&f, private)?;
-    if f.metadata()?.len() > limit as u64 {
-        return Err(fail("File exceeds size limit"));
-    }
-    let mut bytes = Vec::new();
-    f.take(limit as u64 + 1).read_to_end(&mut bytes)?;
-    if bytes.len() > limit {
-        return Err(fail("File exceeds size limit"));
-    }
-    Ok(bytes)
+    crate::config::read_regular(path, limit, private)
 }
 fn create(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut f = options()?.write(true).create_new(true).open(path)?;
