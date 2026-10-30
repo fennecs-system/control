@@ -80,13 +80,56 @@ fn deadline_secs(configured: Option<&str>) -> u64 {
 }
 
 pub fn source_root() -> io::Result<PathBuf> {
-    let path = std::env::var_os("CONTROL_SOURCE_ROOT").map(PathBuf::from)
-        .or_else(|| fs::read_to_string(directory().ok()?.join("source-root")).ok().map(|p| PathBuf::from(p.trim())))
-        .ok_or_else(|| io::Error::other("Set CONTROL_SOURCE_ROOT or source-root in the node configuration for source improvements"))?;
+    source_root_in(std::env::var_os("CONTROL_SOURCE_ROOT"), &directory().map_err(io::Error::other)?)
+}
+
+fn source_root_in(explicit: Option<OsString>, directory: &Path) -> io::Result<PathBuf> {
+    let path = match explicit {
+        Some(path) => PathBuf::from(path),
+        None => match fs::read_to_string(directory.join("source-root")) {
+            Ok(path) => PathBuf::from(path.trim()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(io::Error::other(
+                "Control source is not configured. From your Control checkout, run control config init --source-root \"$(pwd -P)\", or set CONTROL_SOURCE_ROOT to its absolute path.")),
+            Err(error) => return Err(io::Error::other(format!("Could not read source-root in the node configuration: {error}"))),
+        },
+    };
+    validate_source_root(&path)
+}
+
+fn validate_source_root(path: &Path) -> io::Result<PathBuf> {
     if !path.is_absolute() {
-        return Err(io::Error::other("Control source root must be absolute"));
+        return Err(io::Error::other("Control source root must be absolute. Set CONTROL_SOURCE_ROOT or source-root to your Control checkout."));
     }
-    fs::canonicalize(path)
+    let path = fs::canonicalize(path).map_err(|e| io::Error::other(format!("Control source checkout is unavailable: {e}. Check CONTROL_SOURCE_ROOT or source-root in the node configuration.")))?;
+    for name in ["Cargo.toml", "src/main.rs", "web/Trunk.toml", "flake.nix"] {
+        if !fs::symlink_metadata(path.join(name)).is_ok_and(|m| m.is_file()) {
+            return Err(io::Error::other(format!("Control source must be a Control checkout (missing regular {name}). Set CONTROL_SOURCE_ROOT or source-root to the checkout root.")));
+        }
+    }
+    Ok(path)
+}
+
+/// Setup explicitly authorizes its checkout for improvement; runtime never infers
+/// source access from the current directory. An existing choice is never replaced.
+pub fn initialize_source_root(path: &Path) -> io::Result<()> {
+    initialize_source_root_in(&directory().map_err(io::Error::other)?, path)
+}
+
+fn initialize_source_root_in(directory: &Path, source: &Path) -> io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let target = directory.join("source-root");
+    match fs::symlink_metadata(&target) {
+        Ok(metadata) if metadata.is_file() => return Ok(()),
+        Ok(_) => return Err(io::Error::other("Existing source-root must be a regular file, not a symlink; existing configuration was preserved")),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+        Err(error) => return Err(error),
+    }
+    let source = validate_source_root(source)?;
+    let source = source.to_str().filter(|s| !s.contains(['\n', '\r'])).ok_or_else(|| io::Error::other("Control source path must be UTF-8 without line breaks"))?;
+    let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(target)?;
+    writeln!(file, "{source}")?;
+    file.sync_all()?;
+    fs::File::open(directory)?.sync_all()
 }
 
 pub fn write_private(name: &str, bytes: &[u8]) -> io::Result<()> {
@@ -175,6 +218,31 @@ fn resolve(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn source_setup_preserves_choice_and_requires_explicit_checkout() {
+        let root = std::env::temp_dir().join(format!("control-source-config-{}", std::process::id()));
+        let config = root.join("config");
+        fs::create_dir_all(&config).unwrap();
+        let source = root.join("checkout");
+        fs::create_dir_all(source.join("src")).unwrap();
+        fs::create_dir_all(source.join("web")).unwrap();
+        for name in ["Cargo.toml", "src/main.rs", "web/Trunk.toml", "flake.nix"] {
+            fs::write(source.join(name), "fixture").unwrap();
+        }
+        assert!(source_root_in(None, &config).unwrap_err().to_string().contains("config init --source-root"));
+        assert!(initialize_source_root_in(&config, &root).is_err());
+        initialize_source_root_in(&config, &source).unwrap();
+        assert_eq!(source_root_in(None, &config).unwrap(), fs::canonicalize(&source).unwrap());
+        // Re-running setup from another checkout cannot switch source authority.
+        initialize_source_root_in(&config, &root.join("missing")).unwrap();
+        assert_eq!(source_root_in(None, &config).unwrap(), fs::canonicalize(&source).unwrap());
+        assert!(source_root_in(Some(OsString::from("relative")), &config).is_err());
+        assert!(source_root_in(Some(root.join("missing").into_os_string()), &config).unwrap_err().to_string().contains("unavailable"));
+        fs::remove_file(config.join("source-root")).unwrap();
+        std::os::unix::fs::symlink(source.join("Cargo.toml"), config.join("source-root")).unwrap();
+        assert!(initialize_source_root_in(&config, &source).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn worker_deadline_defaults_and_clamps() {
         assert_eq!(deadline_secs(None), 600);

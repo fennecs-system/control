@@ -364,6 +364,96 @@ pub fn handle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use reqwest::blocking::Client;
+    use std::time::{Duration, Instant};
+    #[test]
+    #[ignore = "requires built WASM and a local Chrome or Firefox WebDriver; isolated in-memory fixture, no credentials or models"]
+    fn live_transcript_updates_without_navigation() {
+        use std::io::{BufRead, Write};
+        use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
+        let (mut initial, chat) = crate::design::tests::paused();
+        let question = initial.runtime.runs[0].question.take().unwrap();
+        initial.runtime.runs[0].status = "running".into();
+        initial.runtime.runs[0].result.clear();
+        let state = Arc::new(Mutex::new(initial));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let server = format!("http://{}", listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let failed = Arc::new(AtomicBool::new(false));
+        let served = state.clone(); let stopped = stop.clone(); let fail = failed.clone();
+        let thread = std::thread::spawn(move || {
+            while !stopped.load(Ordering::Relaxed) {
+                let Ok((mut stream, _)) = listener.accept() else { std::thread::sleep(Duration::from_millis(10)); continue; };
+                stream.set_nonblocking(false).unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new(); if reader.read_line(&mut line).unwrap_or(0)==0 {continue;}
+                let path = line.split_whitespace().nth(1).unwrap_or("/").to_owned();
+                loop { let mut header=String::new(); if reader.read_line(&mut header).unwrap_or(0)==0 || header=="\r\n" {break;} }
+                if path.starts_with("/tool-window/") { crate::web_assets::serve(&mut stream, &path); }
+                else if crate::serve_stylesheet(&mut stream, &path) {}
+                else if path.contains("/transcript") && fail.load(Ordering::Relaxed) { let _=stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); }
+                else { crate::session_http::handle(&mut stream, &mut served.lock().unwrap(), "GET", &path, "engineering", "", &[]); }
+            }
+        });
+        struct Fixture { stop: Arc<AtomicBool>, thread: Option<std::thread::JoinHandle<()>> }
+        impl Drop for Fixture { fn drop(&mut self) { self.stop.store(true,Ordering::Relaxed); let _=self.thread.take().unwrap().join(); } }
+        let _fixture = Fixture {stop, thread:Some(thread)};
+        let driver=std::env::var("CONTROL_WEBDRIVER_URL").expect("local WebDriver URL");
+        let chrome=std::env::var("CONTROL_QA_BROWSER").is_ok_and(|s|s=="chrome");
+        let capabilities=if chrome {json!({"browserName":"chrome","goog:chromeOptions":{"binary":"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome","args":["--headless=new","--no-first-run","--no-default-browser-check"]}})} else {json!({"browserName":"firefox","moz:firefoxOptions":{"binary":"/Applications/Firefox.app/Contents/MacOS/firefox","args":["-headless"]}})};
+        let client=Client::builder().timeout(Duration::from_secs(20)).build().unwrap();
+        let session:Value=client.post(format!("{driver}/session")).json(&json!({"capabilities":{"alwaysMatch":capabilities}})).send().unwrap().json().unwrap();
+        let id=session["value"]["sessionId"].as_str().expect("Browser session failed");
+        struct Browser { client:Client, url:String }
+        impl Browser {
+            fn request(&self, method:reqwest::Method, path:&str, args:Value)->Value {let mut r=self.client.request(method.clone(),format!("{}{path}",self.url));if method==reqwest::Method::POST {r=r.json(&args);} let response=r.send().unwrap();let status=response.status();let value:Value=response.json().unwrap(); assert!(status.is_success(),"WebDriver {path}: {}",value["value"]["error"]);value["value"].clone()}
+            fn post(&self,path:&str,args:Value)->Value {self.request(reqwest::Method::POST,path,args)}
+            fn get(&self,path:&str)->Value {self.request(reqwest::Method::GET,path,Value::Null)}
+            fn element(&self,selector:&str)->String {self.post("/element",json!({"using":"css selector","value":selector}))["element-6066-11e4-a52e-4f735466cecf"].as_str().unwrap().to_owned()}
+            fn text(&self,selector:&str)->String {let id=self.element(selector);self.get(&format!("/element/{id}/text")).as_str().unwrap().to_owned()}
+            fn wait(&self,text:&str) {let start=Instant::now(); loop {if self.text("body").contains(text) {break;} assert!(start.elapsed()<Duration::from_secs(12),"Transcript never displayed {text}"); std::thread::sleep(Duration::from_millis(100));}}
+        }
+        impl Drop for Browser {fn drop(&mut self){let _=self.client.delete(&self.url).send();}}
+        let b=Browser{client,url:format!("{driver}/session/{id}")};
+        b.post("/timeouts",json!({"implicit":5000,"pageLoad":15000}));
+        b.post("/url",json!({"url":format!("{server}/chat/{chat}")}));
+        let input=b.element("textarea[data-enter-sends=true]");
+        b.post(&format!("/element/{input}/value"),json!({"text":"Keep this unfinished draft"}));
+        let frame=b.element("iframe.chat-transcript");
+        b.post("/frame",json!({"id":{"element-6066-11e4-a52e-4f735466cecf":frame}}));
+        let body=b.element("body");
+        {let mut state=state.lock().unwrap();state.runtime.runs[0].attempts[0].activity.push(crate::usage::Activity{id:"command-1".into(),kind:"command_execution".into(),text:"cargo test".into(),output:"Streaming output alpha".into(),status:"running".into()});}
+        b.wait("Streaming output alpha");
+        let details=b.element(".run-activity > summary");
+        b.post(&format!("/element/{details}/click"),json!({}));
+        b.post("/frame",json!({"id":null}));
+        b.post(&format!("/element/{input}/click"),json!({}));
+        b.post("/frame",json!({"id":{"element-6066-11e4-a52e-4f735466cecf":frame}}));
+        failed.store(true,Ordering::Relaxed);
+        std::thread::sleep(Duration::from_millis(1600));
+        { let mut state=state.lock().unwrap(); let run=&mut state.runtime.runs[0]; run.status="completed".into();run.result="Finished without another user message".into();run.attempts[0].activity.push(crate::usage::Activity{id:"workspace-diff".into(),kind:"file_change".into(),text:"1 file · +1 −1".into(),output:"--- a/demo.rs\n+++ b/demo.rs\n@@ -1 +1 @@\n-old\n+new".into(),status:"completed".into()}); }
+        failed.store(false,Ordering::Relaxed);
+        b.wait("Finished without another user message");
+        assert_eq!(b.text(".diff-add"),"+new");
+        assert_eq!(b.text(".diff-remove"),"-old");
+        let details=b.element(".run-activity");
+        assert_eq!(b.get(&format!("/element/{details}/property/open")),false);
+        assert_eq!(b.get(&format!("/element/{body}/name")),"body","The iframe must never navigate");
+        let article=b.element(".assistant-message");
+        std::thread::sleep(Duration::from_millis(2200));
+        assert_eq!(b.get(&format!("/element/{article}/name")),"article","Unchanged polls must retain DOM nodes");
+        {let mut state=state.lock().unwrap();let run=&mut state.runtime.runs[0];run.status="waiting".into();run.question=Some(question);}
+        b.wait("Which format?");
+        assert!(b.text("body").contains("Plain text"));
+        let answer=b.element("form");
+        assert_eq!(b.get(&format!("/element/{answer}/attribute/target")),"_top");
+        b.post("/frame",json!({"id":null}));
+        assert_eq!(b.get(&format!("/element/{input}/property/value")),"Keep this unfinished draft");
+        assert_eq!(b.get("/element/active")["element-6066-11e4-a52e-4f735466cecf"],input);
+    }
+
     #[test]
     fn failed_design_answer_checkpoint_restores_question_and_does_not_resume() {
         let (mut state,id) = crate::design::tests::paused();

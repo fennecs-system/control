@@ -1,4 +1,4 @@
-//! Real server-process signal checks, with isolated placeholder-only configuration.
+//! Real server-process checks, with isolated placeholder-only configuration.
 use std::{
     fs,
     io::{Read, Write},
@@ -60,6 +60,121 @@ fn healthy(addr: SocketAddr) -> bool {
 }
 
 #[test]
+fn printed_browser_link_is_private_single_use_and_needs_no_browser_opener() {
+    use std::os::unix::fs::PermissionsExt;
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let fixture =
+        Fixture(std::env::temp_dir().join(format!("control-open-{}-{stamp}", std::process::id())));
+    fs::create_dir(&fixture.0).unwrap();
+    assert!(fixture
+        .command()
+        .args(["config", "init"])
+        .status()
+        .unwrap()
+        .success());
+    for args in [
+        ["open", "--help"].as_slice(),
+        ["open", "--link", "extra"].as_slice(),
+    ] {
+        let output = fixture.command().args(args).output().unwrap();
+        assert_eq!(output.status.success(), args.contains(&"--help"));
+        assert!(!fixture.0.join("state/operator-unlock").exists());
+    }
+    let reservation = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = reservation.local_addr().unwrap();
+    drop(reservation);
+    let link = || {
+        let output = fixture
+            .command()
+            .args(["open", "--link"])
+            .env("CONTROL_ADDR", addr.to_string())
+            .env("PATH", fixture.0.join("no-browser"))
+            .stdout(Stdio::piped())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "link generation failed");
+        let text = String::from_utf8(output.stdout).unwrap();
+        let url = reqwest::Url::parse(text.trim()).expect("link must be a URL");
+        assert!(
+            url.scheme() == "http"
+                && url.host_str() == Some("localhost")
+                && url.port() == Some(addr.port())
+        );
+        let token = url.path().strip_prefix("/unlock/").expect("unlock path");
+        assert!(token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit()));
+        url
+    };
+    let first = link();
+    let unlock_path = fixture.0.join("state/operator-unlock");
+    assert_eq!(
+        fs::metadata(&unlock_path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(!fixture.0.join("state/operator-session").exists());
+    let mut server = Server(
+        fixture
+            .command()
+            .arg("serve")
+            .env("CONTROL_ADDR", addr.to_string())
+            .spawn()
+            .unwrap(),
+    );
+    let start = Instant::now();
+    while !healthy(addr) {
+        assert!(
+            server.0.try_wait().unwrap().is_none(),
+            "server exited before becoming healthy"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "server did not become healthy"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let client = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .resolve("localhost", addr)
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap();
+    // Never include the one-use URL or cookie contents in test diagnostics.
+    let redeem = |url| {
+        client
+            .get(url)
+            .send()
+            .unwrap_or_else(|_| panic!("unlock request failed"))
+    };
+    let response = redeem(first.clone());
+    assert_eq!(response.status(), reqwest::StatusCode::SEE_OTHER);
+    let cookie = response
+        .headers()
+        .get(reqwest::header::SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(
+        cookie.starts_with("control_operator=")
+            && cookie.contains("HttpOnly")
+            && cookie.contains("SameSite=Strict")
+    );
+    assert!(!unlock_path.exists());
+    assert_eq!(
+        redeem(first.clone()).status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+    let second = link();
+    assert!(
+        first != second,
+        "each invocation must generate a fresh link"
+    );
+    assert_eq!(redeem(second).status(), reqwest::StatusCode::SEE_OTHER);
+}
+
+#[test]
 fn term_and_interrupt_save_state_and_release_the_single_writer_lock() {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -71,10 +186,27 @@ fn term_and_interrupt_save_state_and_release_the_single_writer_lock() {
     fs::create_dir(&fixture.0).unwrap();
     assert!(fixture
         .command()
-        .args(["config", "init"])
+        .args([
+            "config",
+            "init",
+            "--provider",
+            "claude",
+            "--source-root",
+            env!("CARGO_MANIFEST_DIR")
+        ])
         .status()
         .unwrap()
         .success());
+    // Setup's sole Claude selection must survive both reruns and server startup.
+    let model_path = fixture.0.join("config/model.json");
+    let original = fs::read(&model_path).unwrap();
+    assert!(fixture
+        .command()
+        .args(["config", "init", "--provider", "codex"])
+        .status()
+        .unwrap()
+        .success());
+    assert_eq!(fs::read(&model_path).unwrap(), original);
     // Restart the same node after each signal: the second start must acquire its state lock.
     for signal in [libc::SIGTERM, libc::SIGINT] {
         let reservation = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -100,6 +232,56 @@ fn term_and_interrupt_save_state_and_release_the_single_writer_lock() {
             );
             std::thread::sleep(Duration::from_millis(25));
         }
+        // Check the running UI, rather than state.json: provider choices are private
+        // configuration and intentionally omitted from shared runtime snapshots.
+        let output = fixture
+            .command()
+            .args(["open", "--link"])
+            .env("CONTROL_ADDR", addr.to_string())
+            .stdout(Stdio::piped())
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let link = String::from_utf8(output.stdout).unwrap();
+        let client = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .resolve("localhost", addr)
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let response = client
+            .get(link.trim())
+            .send()
+            .unwrap_or_else(|_| panic!("sign-in failed"));
+        assert_eq!(response.status(), reqwest::StatusCode::SEE_OTHER);
+        let cookie = response.headers()[reqwest::header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap();
+        let page = client
+            .get(format!("http://localhost:{}/?view=providers", addr.port()))
+            .header(reqwest::header::COOKIE, cookie)
+            .send()
+            .unwrap()
+            .text()
+            .unwrap();
+        let rows = page
+            .split("<section class='model-row'>")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows.len(),
+            2,
+            "the running UI should list exactly one configured model"
+        );
+        let selected = rows[1].split("</section>").next().unwrap();
+        assert!(
+            selected.contains("aria-pressed='true'")
+                && selected.contains("value='claude'")
+                && selected.contains("value='sonnet'")
+        );
         assert_eq!(
             unsafe { libc::kill(server.0.id() as libc::pid_t, signal) },
             0

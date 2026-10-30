@@ -34,12 +34,15 @@ rebuild after pulling updates. [Configuration and background services →](docs/
 
 ## Claude and Codex
 
-Codex is the default. To add Claude inside Control:
+Codex is the default. To start with Claude inside Control:
 
 ```sh
 nix run .#setup -- --claude
 ./target/release/control claude login
 ```
+
+On a fresh node, `--claude` selects Claude's `sonnet` model. Rerunning setup
+preserves your saved models and selection.
 
 Choose a saved model under **Manage → Models & providers**. **+ New model** adds
 another model; clicking its row selects it for new runs.
@@ -64,7 +67,7 @@ Run `./target/release/control <command>`:
 | Command | Purpose |
 | --- | --- |
 | `serve` | Start the local web and MCP server. |
-| `open` | Open an authenticated web session. |
+| `open` / `open --link` | Open an authenticated web session, or print a one-use link for another browser. |
 | `tui` | Open terminal chat. Enter sends; Alt+Enter adds a newline; Ctrl+Q quits. |
 | `doctor` | Check local prerequisites and sandbox isolation without calling a model. |
 | `config init` / `config path` | Initialize or locate private configuration. |

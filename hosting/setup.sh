@@ -1,8 +1,9 @@
 # Executed by the pinned tools in `nix run .#setup`, from the checkout root.
 images=(worker)
+provider=codex
 while [ "$#" -ne 0 ]; do
   case "$1" in
-    --claude) images+=(claude) ;;
+    --claude) images+=(claude); provider=claude ;;
     --browser) images+=(browser) ;;
     --help|-h)
       printf '%s\n' 'Usage: nix run .#setup [-- --claude] [--browser]' \
@@ -73,6 +74,7 @@ save_pin() {
   pin_temp=''
 }
 for image in "${images[@]}"; do save_pin "${image}-image-id" "${image_id[$image]}"; done
+./target/release/control config init --provider "$provider" --source-root "$(pwd -P)"
 
 printf '%s\n' 'Setup complete. Checking prerequisites (no model call or credential contents read)…' \
   'Before you sign in, a provider credential failure below is expected.'

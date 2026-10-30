@@ -92,7 +92,7 @@ impl Access {
 fn respond(stream: &mut TcpStream, status: &str, mime: &str, body: &str, extra: &str) {
     let _=write!(stream,"HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\n{extra}Connection: close\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'none'; frame-ancestors 'none'\r\n\r\n{body}",body.len());
 }
-pub fn open() -> io::Result<()> {
+fn sign_in_link() -> io::Result<String> {
     crate::storage::initialize()?;
     let unlock = random()?;
     private_file(
@@ -100,7 +100,36 @@ pub fn open() -> io::Result<()> {
         &unlock,
     )?;
     // Match Discord's localhost links so browser cookies use the same host.
-    let url = format!("{}/unlock/{unlock}", crate::config::server_url());
+    Ok(format!("{}/unlock/{unlock}", crate::config::server_url()))
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum OpenMode {
+    Browser,
+    Link,
+    Help,
+}
+fn open_mode(args: &[String]) -> io::Result<OpenMode> {
+    match args {
+        [] => Ok(OpenMode::Browser),
+        [flag] if flag == "--link" => Ok(OpenMode::Link),
+        [flag] if matches!(flag.as_str(), "--help" | "-h") => Ok(OpenMode::Help),
+        _ => Err(io::Error::other("Use control open [--link]")),
+    }
+}
+pub fn command(args: &[String]) -> io::Result<()> {
+    let mode = open_mode(args)?;
+    if mode == OpenMode::Help {
+        println!("control open: open a local sign-in link in the default browser\ncontrol open --link: print a one-use local sign-in link without opening a browser");
+        return Ok(());
+    }
+    let url = sign_in_link()?;
+    if mode == OpenMode::Link {
+        // Only the explicitly requested one-use link is printed, never the
+        // persistent operator credential. Ordinary open keeps its output quiet.
+        writeln!(io::stdout().lock(), "{url}")?;
+        return Ok(());
+    }
     #[cfg(target_os = "macos")]
     let status = Command::new("open").arg(&url).status()?;
     #[cfg(not(target_os = "macos"))]
@@ -113,6 +142,14 @@ pub fn open() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn open_options_preserve_default_browser_and_reject_ambiguous_flags() {
+        assert_eq!(open_mode(&[]).unwrap(), OpenMode::Browser);
+        assert_eq!(open_mode(&["--link".into()]).unwrap(), OpenMode::Link);
+        assert_eq!(open_mode(&["--help".into()]).unwrap(), OpenMode::Help);
+        assert!(open_mode(&["--link".into(), "extra".into()]).is_err());
+        assert!(open_mode(&["--unknown".into()]).is_err());
+    }
     #[test]
     fn operator_access_cannot_be_claimed_by_host_header_or_role() {
         let a = Access {

@@ -380,17 +380,23 @@ pub fn snapshot(source: &Path, destination: &Path) -> std::io::Result<()> {
         "web",
         "tools",
         "docs",
+        "hosting",
         "roadmap.md",
         "Cargo.toml",
         "Cargo.lock",
+        "build.rs",
+        "AGENTS.md",
+        "CONTRIBUTING.md",
         "DESIGN.md",
         "README.md",
         "flake.nix",
         "flake.lock",
     ] {
         let from = source.join(name);
-        if from.exists() {
-            copy_source(&from, &destination.join(name))?;
+        match fs::symlink_metadata(&from) {
+            Ok(_) => copy_source(&from, &destination.join(name))?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            Err(error) => return Err(error),
         }
     }
     Ok(())
