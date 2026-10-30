@@ -196,21 +196,48 @@ pub fn prepare(attempt: &mut Attempt, baseline: &Path) -> io::Result<()> {
     let Some(config) = configuration()? else {
         return Ok(());
     };
+    let id = format!(
+        "github-base-{}",
+        attempt
+            .workspace_id
+            .as_deref()
+            .ok_or_else(|| fail("Missing attempt identity"))?
+    );
+    let manifest = crate::artifacts::publish(baseline, &id)?;
+    let paths: Vec<_> = manifest
+        .files
+        .iter()
+        .map(|entry| entry.path.as_str())
+        .collect();
+    let commit = verify_source(&config.source_root, &paths, |path| {
+        crate::artifacts::read(&manifest, path)
+    })?;
+    attempt.github_source = Some(Source {
+        repository: config.repository,
+        source_root: config.source_root,
+        commit,
+        baseline: id,
+    });
+    Ok(())
+}
+// This Git process only inspects the operator-bound checkout, never agent files.
+fn source_git(root: &Path, args: &[&str]) -> io::Result<Vec<u8>> {
+    const LIMIT: u64 = 2 * 1024 * 1024;
     let mut command = std::process::Command::new("git");
     command
         .env_clear()
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .args([
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "core.fsmonitor=false",
             "-C",
-            config
-                .source_root
-                .to_str()
-                .ok_or_else(|| fail("Source path must be UTF-8"))?,
-            "rev-parse",
-            "--verify",
-            "HEAD",
         ])
+        .arg(root)
+        .args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
@@ -220,6 +247,17 @@ pub fn prepare(attempt: &mut Attempt, baseline: &Path) -> io::Result<()> {
     let mut child = command
         .spawn()
         .map_err(|_| fail("Cannot capture the source Git revision"))?;
+    let reader = child
+        .stdout
+        .take()
+        .ok_or_else(|| fail("Missing Git output"))?;
+    let output = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        reader
+            .take(LIMIT + 1)
+            .read_to_end(&mut bytes)
+            .map(|_| bytes)
+    });
     let started = std::time::Instant::now();
     let status = loop {
         match child.try_wait()? {
@@ -230,36 +268,73 @@ pub fn prepare(attempt: &mut Attempt, baseline: &Path) -> io::Result<()> {
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
+                let _ = output.join();
                 return Err(fail("Source revision lookup timed out"));
             }
         }
     };
-    let mut commit = String::new();
-    child
-        .stdout
-        .take()
-        .ok_or_else(|| fail("Missing Git output"))?
-        .take(100)
-        .read_to_string(&mut commit)?;
-    let commit = commit.trim();
-    if !status.success() || !sha(commit) {
+    let bytes = output
+        .join()
+        .map_err(|_| fail("Git output reader stopped"))??;
+    if !status.success() || bytes.len() as u64 > LIMIT {
+        return Err(fail("Source Git inspection failed or exceeded its bound"));
+    }
+    Ok(bytes)
+}
+fn verify_source(
+    root: &Path,
+    paths: &[&str],
+    mut read: impl FnMut(&str) -> io::Result<Vec<u8>>,
+) -> io::Result<String> {
+    let head = source_git(root, &["rev-parse", "--verify", "HEAD"])?;
+    let commit = std::str::from_utf8(&head).unwrap_or("").trim();
+    if !sha(commit) {
         return Err(fail("Source must have a committed Git baseline"));
     }
-    let id = format!(
-        "github-base-{}",
-        attempt
-            .workspace_id
-            .as_deref()
-            .ok_or_else(|| fail("Missing attempt identity"))?
-    );
-    crate::artifacts::publish(baseline, &id)?;
-    attempt.github_source = Some(Source {
-        repository: config.repository,
-        source_root: config.source_root,
-        commit: commit.into(),
-        baseline: id,
-    });
-    Ok(())
+    let clean = || -> io::Result<()> {
+        if !source_git(
+            root,
+            &["status", "--porcelain=v1", "--untracked-files=normal"],
+        )?
+        .is_empty()
+        {
+            return Err(fail("GitHub publication requires a clean committed source checkout; commit or move local changes, then start a fresh improvement"));
+        }
+        Ok(())
+    };
+    clean()?;
+    let listing = source_git(root, &["ls-tree", "-rz", "--full-tree", commit])?;
+    let mut objects = BTreeMap::new();
+    for record in listing.split(|b| *b == 0).filter(|r| !r.is_empty()) {
+        let record =
+            std::str::from_utf8(record).map_err(|_| fail("Source Git paths must be UTF-8"))?;
+        let (metadata, path) = record
+            .split_once('\t')
+            .ok_or_else(|| fail("Invalid Git tree"))?;
+        let fields: Vec<_> = metadata.split_whitespace().collect();
+        if fields.len() != 3 {
+            return Err(fail("Invalid Git tree"));
+        }
+        objects.insert(path, (fields[0], fields[1], fields[2]));
+    }
+    // Status omits ignored files. Verify every included snapshot file against
+    // the pinned Git object instead of silently trusting ignored dependencies.
+    for path in paths {
+        let Some((mode, kind, hash)) = objects.get(path) else {
+            return Err(fail("Source baseline contains an uncommitted or ignored input; commit it or exclude it before starting an improvement"));
+        };
+        let bytes = read(path)?;
+        if !matches!(*mode, "100644" | "100755") || *kind != "blob" || git_blob(&bytes) != *hash {
+            return Err(fail("Source baseline differs from its committed Git objects; refresh the checkout and start a fresh improvement"));
+        }
+    }
+    clean()?;
+    if source_git(root, &["rev-parse", "--verify", "HEAD"])? != head {
+        return Err(fail(
+            "Source revision changed during capture; start a fresh improvement",
+        ));
+    }
+    Ok(commit.into())
 }
 pub fn definition() -> Value {
     json!({"name":"control_github_open_pr","description":"Publish a completed successful improvement checkpoint to the operator-bound GitHub repository and open a draft pull request. Uses private broker credentials; never merges, force-pushes, edits the host checkout or accepts arbitrary destinations. Select a previous completed improvement run in this chat.","inputSchema":{"type":"object","properties":{"run_id":{"type":"string"},"title":{"type":"string","maxLength":200},"body":{"type":"string","maxLength":16000}},"required":["run_id","title"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":true}})
@@ -297,7 +372,10 @@ fn selected(state: &State, chat: &str, input: &Input) -> io::Result<(Attempt, Ac
                 && r.status == "completed"
         })
         .ok_or_else(|| fail("Select a completed improvement in this chat"))?;
-    let attempt=run.attempts.last().filter(|a|a.status=="completed"&&a.github_source.is_some()&&a.artifact.is_some()).ok_or_else(||fail("This run has no captured GitHub source/checkpoint; configure GitHub and start a new improvement"))?;
+    if crate::delegation::is_judge(run) {
+        return Err(fail("Judge runs cannot publish improvements"));
+    }
+    let attempt=run.attempts.last().filter(|a|a.status=="completed"&&!a.review_only&&a.github_source.is_some()&&a.artifact.is_some()).ok_or_else(||fail("This run has no captured GitHub source/checkpoint; configure GitHub and start a new improvement"))?;
     Ok((attempt.clone(), run.actor.clone()))
 }
 #[derive(Clone)]
@@ -579,6 +657,17 @@ fn finish(
         || publication.commit.as_ref().is_some_and(|s| !sha(s))
     {
         return Err(fail("Invalid captured publication identity"));
+    }
+    let base = api.request(
+        "GET",
+        &request_path(
+            &publication.repository,
+            &format!("git/ref/heads/{}", encoded(&publication.base)),
+        ),
+        None,
+    )?;
+    if base["object"]["sha"].as_str() != Some(&publication.base_commit) {
+        return Err(fail("Configured GitHub base differs from the captured source revision; refresh the clean source checkout from that base and start a fresh improvement"));
     }
     if publication.tree.is_none() {
         publication.tree = Some(create_tree(api, publication, changes)?);
@@ -868,6 +957,7 @@ mod tests {
         pull: RefCell<Option<Value>>,
         fail: RefCell<Option<&'static str>>,
         old: Vec<u8>,
+        base: String,
     }
     impl Mock {
         fn new() -> Self {
@@ -877,6 +967,7 @@ mod tests {
                 pull: RefCell::new(None),
                 fail: RefCell::new(None),
                 old: b"old\n".to_vec(),
+                base: BASE.into(),
             }
         }
     }
@@ -900,6 +991,8 @@ mod tests {
                 json!({"sha":NEW_TREE})
             } else if method == "POST" && path.ends_with("git/commits") {
                 json!({"sha":COMMIT})
+            } else if method == "GET" && path.ends_with("git/ref/heads/main") {
+                json!({"object":{"sha":self.base}})
             } else if method == "GET" && path.contains("git/ref/") {
                 self.reference
                     .borrow()
@@ -1072,6 +1165,111 @@ mod tests {
         assert!(api.pull.borrow().is_none());
     }
     #[test]
+    fn diverged_remote_base_prevents_every_external_write() {
+        let mut api = Mock::new();
+        api.base = "5555555555555555555555555555555555555555".into();
+        let mut publication = publication();
+        assert!(finish(&api, &mut publication, &edit(), |_| Ok(()))
+            .unwrap_err()
+            .to_string()
+            .contains("base differs"));
+        assert!(api
+            .requests
+            .borrow()
+            .iter()
+            .all(|(method, _)| method.starts_with("GET")));
+        assert!(publication.tree.is_none());
+        assert!(api.reference.borrow().is_none());
+        assert!(api.pull.borrow().is_none());
+    }
+    #[test]
+    fn cumulative_turn_keeps_original_source_without_recapturing_host() {
+        let source = Source {
+            repository: "example/project".into(),
+            source_root: "/operator-source".into(),
+            commit: BASE.into(),
+            baseline: "original-verified-baseline".into(),
+        };
+        let mut attempt = Attempt {
+            github_source: Some(source.clone()),
+            ..Default::default()
+        };
+        prepare(
+            &mut attempt,
+            Path::new("/deliberately-unavailable-later-baseline"),
+        )
+        .unwrap();
+        assert_eq!(attempt.github_source, Some(source));
+    }
+    #[test]
+    fn source_capture_rejects_dirty_untracked_ignored_and_stale_snapshot_inputs() {
+        let root = std::env::temp_dir().join(format!(
+            "control-github-source-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&root).unwrap();
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(root.clone());
+        source_git(&root, &["init", "--quiet"]).unwrap();
+        fs::write(root.join("file.txt"), b"committed\n").unwrap();
+        fs::write(root.join(".gitignore"), b"ignored.txt\n").unwrap();
+        source_git(&root, &["add", "--", "file.txt", ".gitignore"]).unwrap();
+        source_git(
+            &root,
+            &[
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "--quiet",
+                "-m",
+                "Fixture",
+            ],
+        )
+        .unwrap();
+        let read = |path: &str| fs::read(root.join(path));
+        assert!(verify_source(&root, &["file.txt"], read).is_ok());
+        fs::write(root.join("file.txt"), b"dirty\n").unwrap();
+        assert!(verify_source(&root, &["file.txt"], read)
+            .unwrap_err()
+            .to_string()
+            .contains("clean committed"));
+        fs::write(root.join("file.txt"), b"committed\n").unwrap();
+        fs::write(root.join("untracked.txt"), b"untracked\n").unwrap();
+        assert!(verify_source(&root, &["file.txt"], read)
+            .unwrap_err()
+            .to_string()
+            .contains("clean committed"));
+        fs::remove_file(root.join("untracked.txt")).unwrap();
+        fs::write(root.join("ignored.txt"), b"ignored dependency\n").unwrap();
+        assert!(source_git(
+            &root,
+            &["status", "--porcelain=v1", "--untracked-files=normal"]
+        )
+        .unwrap()
+        .is_empty());
+        assert!(verify_source(&root, &["file.txt", "ignored.txt"], read)
+            .unwrap_err()
+            .to_string()
+            .contains("ignored input"));
+        assert!(
+            verify_source(&root, &["file.txt"], |_| Ok(b"stale snapshot\n".to_vec()))
+                .unwrap_err()
+                .to_string()
+                .contains("committed Git objects")
+        );
+    }
+    #[test]
     fn disk_failure_prevents_a_reachable_branch_or_pull_request() {
         let api = Mock::new();
         let mut publication = publication();
@@ -1106,6 +1304,17 @@ mod tests {
             body: String::new(),
         };
         assert!(selected(&state, &chat, &input).is_ok());
+        state.runtime.runs[0].attempts[0].review_only = true;
+        assert!(selected(&state, &chat, &input).is_err());
+        state.runtime.runs[0].attempts[0].review_only = false;
+        state.runtime.runs[0].persona = Some(crate::delegation::Persona {
+            role: crate::delegation::Role::Judge,
+            root: "fixture".into(),
+            depth: 1,
+            parent: Some("parent".into()),
+        });
+        assert!(selected(&state, &chat, &input).is_err());
+        state.runtime.runs[0].persona = None;
         let other = crate::chat::create(&mut state);
         assert!(selected(&state, &other, &input).is_err());
         state.runtime.runs[0].action = Action::Task;

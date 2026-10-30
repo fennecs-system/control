@@ -21,6 +21,15 @@ binding before starting a fresh `/improve` conversation so its original Git
 revision and source checkpoint are captured. Existing conversations without that
 provenance cannot publish retroactively.
 
+Start from a clean committed checkout of the configured base. Capture rejects
+local changes and untracked files, and checks every included snapshot file
+against its committed Git object, including files ignored by Git. Before any
+GitHub write, the broker requires the remote base tip to match that captured
+revision. If the base advances, refresh the checkout and start a fresh improvement.
+This prevents unrelated feature commits or unpublished local dependencies from
+changing what the pull request contains. Follow-up turns retain the original
+verified baseline so publication includes their cumulative edits.
+
 After a successful improvement, expand **Open pull request** in web chat, or use
 `control_github_open_pr` through MCP with `run_id`, `title` and optional `body`.
 A managed agent can publish a previous completed improvement in its own chat;
