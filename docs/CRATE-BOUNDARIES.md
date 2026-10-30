@@ -9,7 +9,7 @@ Current libraries:
 - `control-context`: deterministic captured context, lens composition and shared
   command definitions, independent of mutable application state.
 - `control-http`: typed HTTP response construction and security/header policies.
-- `control-ai` (separate extraction PR): provider record decoding, normalized
+- `control-ai`: provider record decoding, normalized
   activity, usage and final results. No credentials, networking, containers or UI.
 - The `control` library currently shares configuration, identity, diff rendering
   and the Discord adapter between executables. Discord is compiled once rather
@@ -23,6 +23,26 @@ small application interface, not direct access to every mutable runtime field.
 The TUI is already close to this boundary; web routing and rendering still need
 their state projection and authorization calls made explicit.
 
+These are proposed boundaries, not completed extractions: the terminal currently
+includes `src/harness.rs` in two binaries, and most server state, routing and
+rendering are still declared by `src/main.rs`. The Rust/WASM package under `web/`
+is the browser client, not yet a `control-web` server adapter.
+
+The application interface should expose typed commands and bounded queries:
+create/send/steer a conversation, request a project, cancel a run, inspect a run,
+and read conversation updates. HTTP/MCP and local web handlers must invoke the
+same authorization and durable application operations. The TUI remains an MCP
+client. An in-process web adapter should call that application interface directly;
+it does not need loopback HTTP, JSON serialization or copied history to act like
+a client. Remote clients can serialize those same contracts through an admitted
+transport. Credentials and authority are checked on the serving node.
+
+Keep render-only work outside the mutable-state lock where possible. Use borrowed
+views within a request and bounded owned snapshots when crossing a task/thread
+boundary; do not export `Arc<Mutex<State>>` as the public core API. Preserve the
+existing checkpoint ordering and result fences during extraction. Full transcript
+clones or a new event bus are not prerequisites for this separation.
+
 `control-core` should contain durable run transitions, admission, resource
 ownership and lifecycle rules. It should not become a catch-all for provider
 protocols, web rendering, Discord delivery or tool implementations. Concrete
@@ -34,6 +54,10 @@ than pretending a Codex/Claude CLI harness is the same protocol as a model API.
 Keep these as incremental extractions with persistence/authorization regressions.
 Measure targeted rebuilds before claiming compile-time improvements. Avoid an
 umbrella plugin runtime, cyclic dependencies and a crate for every source file.
+Record warm targeted check/rebuild times, transcript render time, lock-held work
+and allocations/peak memory on fixed fixtures before and after each slice. A
+crate split alone does not improve scheduling capacity or establish remote-node
+ownership, authenticated transport, replay protection or distributed consistency.
 
 ## Delivery reader measurement
 
