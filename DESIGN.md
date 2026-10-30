@@ -345,3 +345,21 @@ new release, prepare a patch, or watch for a Qantas sale and help book a ticket.
 Keep consequential external actions explicitly authorized. Harden containers for
 malicious code, downloads and websites; do not rely on Nix alone for isolation.
 These are future roadmap items, after the current workspace and reliability work.
+
+### Demonstrating the breadth of Control
+
+Other concrete goals: build a non-trivial website; have agents browse different
+websites to collect phone prices and build a tool that renders their history in
+Control; and run five Sol agents together in Minecraft, inspired by the YC games
+experiment. They should join the world, write and share tools, share useful
+knowledge and coordinate through chat.
+
+I want to join their world and steer them to build a castle. They should be able
+to ask me important questions through Discord, such as whether to use stone brick
+or cobblestone, and continue with my answer.
+
+Non-Rust third-party tooling is allowed only inside a tool or agent container.
+Control and the integrations we write must remain Rust, Haskell, Lean, WASM or
+Nix. Use these demonstrations to exercise reusable capabilities rather than
+hardcoding the examples into the core. Acceptance scenarios are recorded in
+[Demonstration goals](docs/DEMONSTRATIONS.md).

@@ -59,7 +59,7 @@ unperformed release checks. Branch-only work is identified separately.
   Browser capture is not an interactive internet browser.
 - Local Rust tests/build checks in CI and documented local contribution checks.
 
-## ✓ Implemented on feature/project-workspaces — awaiting review and merge
+## ✓ Approved project workspaces and local previews
 
 - `/open`, TUI `--directory` and a compact web folder control request node-local
   access; only explicit operator confirmation imports files. Agents have a
@@ -75,7 +75,36 @@ unperformed release checks. Branch-only work is identified separately.
 
 See [projects and previews](docs/WORKSPACES.md) for limits and tested boundaries.
 Native file pickers, in-place host edits, Jujutsu and remote publishing are not
-part of this implementation. Merge/deployment is a separate maintainer action.
+part of this implementation. This work is merged into main; deployment remains
+a separate maintainer action.
+
+## Demonstration goals
+
+Use [four concrete demonstrations](docs/DEMONSTRATIONS.md) to test Control's
+breadth, after the self-development build/test loop. These are planned goals,
+not completed features or additional special cases in the core.
+
+1. **Non-trivial website:** build, test, serve and revise a useful multi-view
+   website with persisted data through Control.
+2. **Browser research and a tool view:** agents collect comparable phone prices
+   from different sites; a Rust/WASM tool view in Control shows observations over
+   time, evidence, missing data and failures.
+3. **Minecraft collective:** five configurable Sol-backed agents join one world,
+   coordinate through chat, share admitted knowledge and versioned tools, and
+   work on a common goal. Keep game connections alive independently of model runs.
+4. **Human participation:** the owner joins the agents' world, directs a castle
+   build, receives a stone-brick-versus-cobblestone question through Discord and
+   steers the same task without restarting the team.
+
+Implement the shared prerequisites incrementally: declared build environments
+and long-running commands → interactive browser and structured observations →
+bounded parallel/persistent workers and shared tools → game adapter and bridge
+handoff. Storage, recovery and hardening checks below gate the corresponding
+work. A small website does not need to wait for autonomous bots.
+
+Non-Rust third-party tooling is allowed only inside tool/agent containers.
+Control and authored integrations remain Rust/Haskell/Lean/WASM/Nix; Mineflayer
+can be an isolated upstream dependency behind a Rust adapter.
 
 ## Next: reliability and real-user feedback
 

@@ -8,6 +8,9 @@ for the local validation commands and check scope.
 
 Application code is Rust/WASM. Nix builds environments and tools; shell is for
 setup infrastructure. Do not introduce authored JavaScript or Python.
+Non-Rust third-party tooling is allowed only inside tool/agent containers;
+Control and authored integrations remain Rust/Haskell/Lean/WASM/Nix. An upstream
+container dependency does not authorize a host Node service or JavaScript adapter.
 
 Personal node configuration and credentials belong outside the checkout under
 the configured home-directory roots. Never read or print credential contents.
