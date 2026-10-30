@@ -13,7 +13,12 @@ pub struct Tool {
     pub aliases: &'static str,
     pub mcp_names: &'static [&'static str],
 }
-pub const TOOLS: [Tool; 15] = [
+pub const TOOLS: [Tool; 16] = [
+    Tool {
+        name: "github.pull_request", title: "GitHub pull request", description: "Completed improvement · scoped repository",
+        href: "/chats", aliases: "github git pull request draft publish review",
+        mcp_names: &["control_github_open_pr"], execution: "Rust credential broker / GitHub API", surface: "improve chat / MCP", available: true,
+    },
     Tool {
         name: "preview.serve", title: "Local preview", description: "Nix service · private localhost origin",
         href: "/chats", aliases: "ports proxy service browser preview tunnel",

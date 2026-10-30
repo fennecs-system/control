@@ -78,7 +78,7 @@ pub fn panel(state: &State, id: &str) -> String {
     };
     let path = chat.project.as_ref().map(|p| p.path.as_str()).unwrap_or("");
     let mut html = format!(
-        "<details class='project-picker'{}><summary>{}</summary>",
+        "<details class='project-picker' data-transcript-key='project'{}><summary>{}</summary>",
         if chat.project.as_ref().is_some_and(|p| p.grant.is_none()) {
             " open"
         } else {
@@ -581,7 +581,7 @@ pub fn http(
             if !state.chats.iter().any(|c| c.id == id) {
                 return Err(fail("Chat not found"));
             }
-            return Ok(format!("<!doctype html><html lang='en'><head><title>Open project</title><link rel='stylesheet' href='/style.css'></head><body><main>{}<a href='/chat/{id}'>Back to chat</a></main></body></html>",panel(&state,id).replace("<details class='project-picker'>","<details class='project-picker' open>")));
+            return Ok(format!("<!doctype html><html lang='en'><head><title>Open project</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/workspace.css'></head><body><main>{}<a href='/chat/{id}'>Back to chat</a></main></body></html>",panel(&state,id).replace("data-transcript-key='project'>","data-transcript-key='project' open>")));
         }
         if method != "POST" {
             return Err(fail("Use GET or POST"));

@@ -603,9 +603,12 @@ fn checkpoint_next(
         if save(state).is_err(){state.runtime.runs[index]=previous;}
         return None;
     }
+    let github_source = state.runtime.runs[index].attempts.last().and_then(|a|a.github_source.clone())
+        .or_else(||crate::github::inherit(state,parent.as_deref()));
     let run = &mut state.runtime.runs[index];
     run.status = "running".into();
     let mut attempt = crate::usage::Attempt::new();
+    attempt.github_source = github_source;
     attempt.project=project.as_ref().and_then(|p|p.grant.clone());
     attempt.project_parent=project_parent;
     attempt.project_base=project_base;
@@ -883,6 +886,10 @@ fn execute(
         prepare_workspace(scope, &baseline, &workspace)
             .map_err(|error| blocked(&format!("Could not prepare the authorized workspace: {error}")))?;
     }
+    if scope == Workspace::ControlSource {
+        crate::github::prepare(attempt, &baseline)
+            .map_err(|_|blocked("Could not capture the configured GitHub source baseline; inspect the node binding before retrying."))?;
+    }
     let absolute =
         fs::canonicalize(&workspace).map_err(|_| failed("Could not resolve worker workspace."))?;
     if attempt.backend == crate::backend::Backend::Claude {
@@ -950,7 +957,7 @@ fn execute(
             "-c",
             "mcp_servers.control_rooms.required=true",
             "-c",
-            "mcp_servers.control_rooms.enabled_tools=[\"control_room_read\",\"control_room_post\",\"control_web_search\",\"control_rust_run\",\"control_design_ask\"]",
+            "mcp_servers.control_rooms.enabled_tools=[\"control_room_read\",\"control_room_post\",\"control_web_search\",\"control_rust_run\",\"control_design_ask\",\"control_project_request\",\"control_preview_start\",\"control_preview_stop\",\"control_github_open_pr\"]",
             "-c",
             "mcp_servers.control_rooms.tools.control_room_read.approval_mode=\"approve\"",
             "-c",

@@ -149,6 +149,7 @@ pub fn rpc(state: &mut State, request: &Value) -> Value {
     };
     if request["method"] == "tools/list" {
         result["tools"].as_array_mut().unwrap().push(crate::projects::definition(false));
+        result["tools"].as_array_mut().unwrap().push(crate::github::definition());
         result["tools"]
             .as_array_mut()
             .unwrap()
@@ -379,6 +380,7 @@ mod tests {
         let question = initial.runtime.runs[0].question.take().unwrap();
         initial.runtime.runs[0].status = "running".into();
         initial.runtime.runs[0].result.clear();
+        crate::projects::request(&mut initial,&chat,"/fixture/project").unwrap();
         let state = Arc::new(Mutex::new(initial));
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let server = format!("http://{}", listener.local_addr().unwrap());
@@ -435,6 +437,9 @@ mod tests {
         let frame=b.element("iframe.chat-transcript");
         b.post("/frame",json!({"id":{"element-6066-11e4-a52e-4f735466cecf":frame}}));
         let body=b.element("body");
+        let approval=b.element(".project-picker button[name=approve]");
+        assert_eq!(b.get(&format!("/element/{approval}/css/background-color")),"rgb(181, 160, 255)");
+        assert_eq!(b.get(&format!("/element/{approval}/css/border-radius")),"0px");
         {let mut state=state.lock().unwrap();state.runtime.runs[0].attempts[0].activity.push(crate::usage::Activity{id:"command-1".into(),kind:"command_execution".into(),text:"cargo test".into(),output:"Streaming output alpha".into(),status:"running".into()});}
         b.wait("Streaming output alpha");
         let details=b.element(".run-activity > summary");
@@ -544,16 +549,14 @@ mod tests {
             &json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}),
         );
         assert_eq!(init["result"]["protocolVersion"], "2025-11-25");
-        assert_eq!(
-            rpc(
+        let catalogue = rpc(
                 &mut state,
                 &json!({"jsonrpc":"2.0","id":2,"method":"tools/list"})
-            )["result"]["tools"]
-                .as_array()
-                .unwrap()
-                .len(),
-            16
-        );
+            );
+        let tools=catalogue["result"]["tools"].as_array().unwrap();
+        let names:std::collections::BTreeSet<_>=tools.iter().filter_map(|t|t["name"].as_str()).collect();
+        assert_eq!(names.len(),tools.len(),"MCP tools must have unique names");
+        for expected in ["control.chat.create","control.room.read","control.project.request","control_github_open_pr"] {assert!(names.contains(expected));}
         assert_eq!(
             rpc(
                 &mut state,

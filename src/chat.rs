@@ -634,6 +634,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
     let mut html = "<!doctype html><html lang='en'><head><meta charset='utf-8'><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'></head><body class='transcript'>".to_owned();
     html.push_str(&crate::projects::panel(state,id));
     html.push_str(&crate::previews::links(state,id));
+    html.push_str(&crate::github::panel(state,id));
     let messages = data["messages"].as_array().unwrap();
     for (position, message) in messages.iter().enumerate() {
         let status = match message["status"].as_str().unwrap_or("") {

@@ -14,6 +14,7 @@ mod discord_bridge;
 mod discord_permissions;
 mod doctor;
 mod federation;
+mod github;
 mod harness;
 mod identity;
 mod knowledge;
@@ -48,6 +49,7 @@ use std::{
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 struct State {
+    github_publications: Vec<github::Publication>,
     previews: Vec<previews::Preview>,
     chats: Vec<chat::Session>,
     discord_seen: Vec<String>,
@@ -269,6 +271,7 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         return;
     }
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    if github::http(&mut stream,&state,method,path,&data[header_end..header_end+length]) {return;}
     if projects::http(&mut stream,&state,method,path,&data[header_end..header_end+length]) {return;}
     if tools_http::handle(
         &mut stream,
@@ -490,10 +493,14 @@ fn main() -> std::io::Result<()> {
     if args.get(1).is_some_and(|s| s == "browser") {
         return mcp_stdio::browser_cli(&args[2..]);
     }
+    if args.get(1).is_some_and(|s| s == "github") {
+        return github::cli(&args[2..]);
+    }
     if args.get(1).is_some_and(|s| s == "--help" || s == "help") {
         println!("control [serve | tui | mcp | discord | doctor | config | open | browser | federation]\nserve: local web/MCP server on CONTROL_ADDR (default 127.0.0.1:8080)\ntui: Rust terminal client\nmcp [--root DIRECTORY]: local tools for an external harness\ndiscord --enable: listen to this node's configured DMs\ndoctor: offline prerequisites; no model calls\nconfig init | path: initialize or locate personal configuration\nopen: sign in to the local website\nbrowser capture FILE [WIDTH HEIGHT]: offline Nix Firefox capture\nfederation help: signed offline lens exchange\n--check-worker: one authenticated sandbox test (uses model usage)\n--version: version and platform");
         println!("claude login | check: container login or offline tool isolation check\nconfig init [--provider codex|claude] [--source-root PATH]: initialize private configuration without replacing saved choices\nconfig path: show the node configuration directory\n--bind-discord LABEL ID: bind a configured principal locally");
         println!("open --link: print a one-use local browser sign-in link");
+        println!("github configure: bind improvement PR publication to a repository and private credential reference");
         return Ok(());
     }
     let addr = config::server_addr();

@@ -374,6 +374,8 @@ pub fn snapshot(source: &Path, destination: &Path) -> std::io::Result<()> {
     fs::create_dir_all(destination)?;
     for name in [
         "src",
+        "tests",
+        ".github",
         "assets",
         "crates",
         "examples",
@@ -557,6 +559,10 @@ mod tests {
         fs::create_dir_all(source.join("src")).unwrap();
         fs::write(source.join(".env"), "fake-secret").unwrap();
         fs::write(source.join("src/main.rs"), "fn main() {}").unwrap();
+        fs::create_dir_all(source.join("tests")).unwrap();
+        fs::create_dir_all(source.join(".github/workflows")).unwrap();
+        fs::write(source.join("tests/integration.rs"), "#[test] fn fixture() {}").unwrap();
+        fs::write(source.join(".github/workflows/rust.yml"), "name: fixture").unwrap();
         fs::create_dir_all(source.join("tools/playground")).unwrap();
         fs::write(source.join("tools/playground/main.rs"), "fn main() {}").unwrap();
         fs::write(source.join("tools/.env"), "nested-secret").unwrap();
@@ -565,6 +571,8 @@ mod tests {
         std::os::unix::fs::symlink(source.join(".env"), source.join("src/linked.rs")).unwrap();
         snapshot(&source, &dest).unwrap();
         assert!(dest.join("src/main.rs").exists());
+        assert!(dest.join("tests/integration.rs").exists());
+        assert!(dest.join(".github/workflows/rust.yml").exists());
         assert!(dest.join("tools/playground/main.rs").exists());
         assert!(!dest.join("tools/.env").exists());
         assert!(!dest.join(".env").exists());

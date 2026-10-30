@@ -66,6 +66,7 @@ fn rpc_at(
             tools.push(crate::design::definition());
             tools.push(crate::projects::definition(true));
             tools.extend(crate::previews::definitions());
+            if run.action == identity::Action::Improve {tools.push(crate::github::definition());}
             if claude {
                 tools.push(crate::claude::definition());
             }
@@ -85,6 +86,17 @@ fn rpc_at(
             json!({"tools":tools})
         }
         "tools/call" => {
+            if request["params"]["name"]=="control_github_open_pr" {
+                if run.question.as_ref().is_some_and(|q|q.answer.is_none()) {return error("Answer the pending design question before publishing");}
+                if run.action != identity::Action::Improve {return error("GitHub publication requires an improvement run");}
+                let chat=run.chat_id.clone().unwrap_or_default();
+                let input=serde_json::from_value::<crate::github::Input>(request["params"]["arguments"].clone());
+                drop(state);
+                return match input.map_err(|_|std::io::Error::other("Expected run_id, title and optional body")).and_then(|input|crate::github::open(shared,&chat,input)) {
+                    Ok(value)=>json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":value.to_string()}],"isError":false}}),
+                    Err(message)=>error(&message.to_string()),
+                };
+            }
             if request["params"]["name"]!="control_design_ask" && run.question.as_ref().is_some_and(|q|q.answer.is_none()&&run.attempts.last().is_some_and(|a|a.workspace_id.as_deref()==Some(&q.generation))) {return error("This attempt is pausing for a design answer; no more tools may run.");}
             if request["params"]["name"]=="control_preview_start" || request["params"]["name"]=="control_preview_stop" {
                 let stopping=request["params"]["name"]=="control_preview_stop";

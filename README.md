@@ -62,6 +62,9 @@ approval. Add `--browser` to setup for the browser image.
 See [Claude setup and authentication](docs/CLAUDE.md) for both integration paths.
 Use your own model access according to your provider's terms.
 
+For self-development, a scoped [GitHub tool](docs/GITHUB.md) can publish completed
+improvements as draft pull requests using a private node credential reference.
+
 ## Commands
 
 Run `./target/release/control <command>`:

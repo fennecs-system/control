@@ -24,7 +24,7 @@ use std::{
 };
 
 const VERSION: &str = "2025-11-25";
-const MUTATIONS: [&str; 5] = ["control.chat.create", "control.chat.send", "control.room.post", "control.chat.lenses", "control.project.request"];
+const MUTATIONS: [&str; 6] = ["control.chat.create", "control.chat.send", "control.room.post", "control.chat.lenses", "control.project.request", "control_github_open_pr"];
 const CHAT_COMMANDS: [&str; 8] = ["/improve", "/improve off", "/steer", "/btw", "/spawn", "/cancel", "/answer", "/open"];
 
 fn command_line(text: &str) -> Line<'static> {
