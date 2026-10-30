@@ -64,6 +64,9 @@ Use your own model access according to your provider's terms.
 
 For self-development, a scoped [GitHub tool](docs/GITHUB.md) can publish completed
 improvements as draft pull requests using a private node credential reference.
+Add `--build-environment` to setup for offline Rust/WASM checks. Workers can
+[delegate tasks or request a read-only judge](docs/DELEGATION.md) using another
+configured provider; execution remains serial.
 
 ## Commands
 

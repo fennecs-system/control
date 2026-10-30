@@ -207,6 +207,10 @@ pub const TOOLS: [Tool; 18] = [
     },
 ];
 /// UI discovery metadata only; protocol schemas and execution authority remain with their adapters.
+pub fn worker_mcp_names() -> Vec<&'static str> {
+    TOOLS.iter().filter(|tool|tool.available).flat_map(|tool|tool.mcp_names.iter().copied())
+        .filter(|name|name.starts_with("control_")).collect::<std::collections::BTreeSet<_>>().into_iter().collect()
+}
 pub fn tool_for_mcp(name: &str) -> Option<&'static Tool> {
     TOOLS
         .iter()

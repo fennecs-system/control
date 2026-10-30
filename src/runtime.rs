@@ -576,6 +576,9 @@ mod tests {
         let source = root.join("source");
         let dest = root.join("dest");
         fs::create_dir_all(source.join("src")).unwrap();
+        fs::create_dir_all(source.join("assets")).unwrap();
+        fs::write(source.join("assets/discord-access.example.json"), include_bytes!("../assets/discord-access.example.json")).unwrap();
+        fs::write(source.join("discord-access.json"), "private-node-config").unwrap();
         fs::write(source.join(".env"), "fake-secret").unwrap();
         fs::write(source.join("src/main.rs"), "fn main() {}").unwrap();
         fs::create_dir_all(source.join("tests")).unwrap();
@@ -590,6 +593,8 @@ mod tests {
         std::os::unix::fs::symlink(source.join(".env"), source.join("src/linked.rs")).unwrap();
         snapshot(&source, &dest).unwrap();
         assert!(dest.join("src/main.rs").exists());
+        assert_eq!(fs::read(dest.join("assets/discord-access.example.json")).unwrap(), include_bytes!("../assets/discord-access.example.json"));
+        assert!(!dest.join("discord-access.json").exists());
         assert!(dest.join("tests/integration.rs").exists());
         assert!(dest.join(".github/workflows/rust.yml").exists());
         assert!(dest.join("tools/playground/main.rs").exists());

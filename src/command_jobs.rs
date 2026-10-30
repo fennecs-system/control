@@ -110,6 +110,7 @@ fn current<'a>(state: &'a mut State, run: &str, generation: &str) -> io::Result<
         .find(|r| r.id == run && r.status == "running")
         .ok_or_else(|| fail("Run is not active"))?;
     crate::identity::authorize(&run.actor, run.action).map_err(fail)?;
+    if crate::delegation::pausing(run) {return Err(fail("Attempt is pausing for delegated work"));}
     if run.question.as_ref().is_some_and(|q| q.answer.is_none()) {
         return Err(fail("Attempt is pausing for an answer"));
     }

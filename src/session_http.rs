@@ -438,7 +438,8 @@ mod tests {
         b.post("/frame",json!({"id":{"element-6066-11e4-a52e-4f735466cecf":frame}}));
         let body=b.element("body");
         let approval=b.element(".project-picker button[name=approve]");
-        assert_eq!(b.get(&format!("/element/{approval}/css/background-color")),"rgb(181, 160, 255)");
+        let approval_color=b.get(&format!("/element/{approval}/css/background-color"));
+        assert!(approval_color=="rgb(181, 160, 255)"||approval_color=="rgba(181, 160, 255, 1)","Approval must use the theme purple: {approval_color}");
         assert_eq!(b.get(&format!("/element/{approval}/css/border-radius")),"0px");
         {let mut state=state.lock().unwrap();state.runtime.runs[0].attempts[0].activity.push(crate::usage::Activity{id:"command-1".into(),kind:"command_execution".into(),text:"cargo test".into(),output:"Streaming output alpha".into(),status:"running".into()});}
         b.wait("Streaming output alpha");

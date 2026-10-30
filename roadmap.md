@@ -78,6 +78,26 @@ Native file pickers, in-place host edits, Jujutsu and remote publishing are not
 part of this implementation. This work is merged into main; deployment remains
 a separate maintainer action.
 
+## ✓ Self-development tools — feature branch
+
+Implemented on `feature/self-development`; deployment follows maintainer review.
+
+- Durable long-running command jobs stream bounded output, support cancellation
+  and deadlines, and fence checkpoint publication until writers stop. Restart
+  reconciliation verifies immutable container identity.
+- An optional declared Rust/WASM build image vendors the pinned dependencies for
+  offline tests and builds, without credentials, host sockets or shared writable
+  caches. See [build environments](docs/BUILD-ENVIRONMENTS.md).
+- Workers can delegate bounded child tasks and resume with retained results.
+  A judge uses a configured different provider and enforced read-only source.
+  Child changes require explicit acceptance; execution remains serial.
+  See [delegation](docs/DELEGATION.md).
+- A repository-bound GitHub broker publishes completed improvements as draft
+  PRs with captured source provenance and retry reconciliation. Live publication
+  needs the operator's private credential-file reference. See [GitHub](docs/GITHUB.md).
+- The [threat model](docs/THREAT-MODEL.md) links enforced boundaries to tests and
+  distinguishes guidance from policy. Hard disk quotas remain open.
+
 ## Demonstration goals
 
 Use [four concrete demonstrations](docs/DEMONSTRATIONS.md) to test Control's
@@ -128,10 +148,10 @@ Finish these before increasing concurrency, unattended operation or spending.
 - **Second-machine evidence:** record verified engines and two independent friend
   installs with a two-turn task, restart and artifact inspection. Recheck default
   model availability for their accounts; record useful feedback and setup blockers.
-- **Hardening:** add a concise threat model linking claims to tests. Include
-  malicious downloaded repositories/packages, browser content, prompt injection,
-  secret discovery, mount escapes and resource exhaustion. Read-only images alone
-  are insufficient. Keep credentials, host sockets and policy outside agent reach.
+- **Hardening:** maintain the threat model and close its recorded gaps, including
+  malicious project code, prompt injection and resource exhaustion. Read-only
+  images alone are insufficient. Keep credentials, host sockets and policy
+  outside agent reach.
 
 ## Next: consistent tool capabilities
 
@@ -173,7 +193,8 @@ declarative-directive model; keep its configuration distinct from its chat histo
 - **Bot spawning:** give bots a tool to request children with bounded depth,
   concurrency, token/spend/storage budgets and inherited authority ceilings.
   A child cannot grant itself or its parent more access. Existing human `/spawn`
-  is implemented; autonomous bot-to-bot spawning is not.
+  and bounded worker-to-worker delegation are implemented. Persistent autonomous
+  bot spawning and independent concurrency are not.
 - **Human questions:** reuse durable design/approval requests and Discord delivery,
   with recipient/run identity, expiry and restart-safe answers. Important missing
   information can reach the operator away from the browser; channel messages or
@@ -215,7 +236,7 @@ runtimes or an entire feature list.
 
 ## Deferred
 
-Live federation/delegation, other host platforms/NixOS packaging, GPU/microVM
+Live federation and remote delegation, other host platforms/NixOS packaging, GPU/microVM
 tiers, bundled inference and model routing follow demonstrated local needs.
 Keep the pure Rust context core and offline federation boundary.
 

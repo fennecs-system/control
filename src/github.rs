@@ -900,7 +900,7 @@ pub fn http(
         };
         let value = match result {
             Ok(value) => {
-                json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":value.to_string()}],"isError":false}})
+                json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":value.to_string()}],"structuredContent":{"data":value},"isError":false}})
             }
             Err(error) => {
                 json!({"jsonrpc":"2.0","id":id,"error":{"code":-32602,"message":error.to_string()}})

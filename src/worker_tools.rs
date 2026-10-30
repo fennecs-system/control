@@ -118,7 +118,6 @@ fn rpc_at(
                 drop(state);
                 return json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(crate::command_jobs::call(shared,run_id,&generation,&nonce,request["params"]["name"].as_str().unwrap(),&request["params"]["arguments"]))});
             }
-            if request["params"]["name"]!="control_design_ask" && run.question.as_ref().is_some_and(|q|q.answer.is_none()&&run.attempts.last().is_some_and(|a|a.workspace_id.as_deref()==Some(&q.generation))) {return error("This attempt is pausing for a design answer; no more tools may run.");}
             if request["params"]["name"]=="control_github_open_pr" {
                 if run.action != identity::Action::Improve {return error("GitHub publication requires an improvement run");}
                 let chat=run.chat_id.clone().unwrap_or_default();
@@ -373,6 +372,22 @@ mod tests {
                 }
             }
         }
+    }
+    #[test]
+    fn delegated_pause_fences_command_writers_and_github_before_dispatch() {
+        let mut state=State::default();let chat=crate::chat::create(&mut state);
+        crate::chat::send(&mut state,&chat,"/improve Check a fixture","test").unwrap();
+        let run=&mut state.runtime.runs[0];run.status="running".into();
+        run.attempts.push(crate::usage::Attempt{workspace_id:Some("pause-generation".into()),..Default::default()});
+        run.delegation=Some(crate::delegation::Delegation{input:crate::delegation::Input{objective:"Inspect".into(),role:crate::delegation::Role::Worker},nonce:"delegate-fixture".into(),generation:"pause-generation".into(),backend:run.backend,model:"fixture".into(),child:None,continuation:None});
+        let id=run.id.clone();let shared=Arc::new(Mutex::new(state));
+        for (name,args) in [("control_workspace_start",json!({"command":"true"})),("control_github_open_pr",json!({"run_id":"r-other","title":"Must not publish"}))] {
+            let response=rpc(&shared,&id,&json!({"nonce":"request-fixture","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":args}}}));
+            assert!(response["error"]["message"].as_str().unwrap().contains("pausing for delegated"));
+        }
+        let response=crate::command_jobs::call(&shared,&id,"pause-generation","request-fixture","control_workspace_start",&json!({"command":"true"}));
+        assert!(response.unwrap_err().to_string().contains("pausing for delegated"));
+        let state=shared.lock().unwrap();assert!(state.runtime.runs[0].attempts[0].command_jobs.is_empty());assert!(state.github_publications.is_empty());
     }
     #[test]
     fn design_pause_blocks_further_tool_effects_until_user_answers() {

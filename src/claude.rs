@@ -259,28 +259,11 @@ impl Stream {
         match value["type"].as_str()? {
             "system" if value["subtype"] == "init" => {
                 self.initialized = true;
-                let allowed = [
-                    "mcp__control__control_workspace_run",
-                    "mcp__control__control_workspace_start",
-                    "mcp__control__control_workspace_status",
-                    "mcp__control__control_workspace_cancel",
-                    "mcp__control__control_web_search",
-                    "mcp__control__control_rust_run",
-                    "mcp__control__control_room_read",
-                    "mcp__control__control_room_post",
-                    "mcp__control__control_design_ask",
-                    "mcp__control__control_agent_delegate",
-                    "mcp__control__control_agent_result",
-                    "mcp__control__control_project_request",
-                    "mcp__control__control_preview_start",
-                    "mcp__control__control_preview_stop",
-                    "mcp__control__control_github_open_pr",
-                    "EndConversation",
-                ];
+                let allowed = control_context::worker_mcp_names();
                 if !value["tools"].as_array().is_some_and(|tools| {
                     tools
                         .iter()
-                        .all(|t| t.as_str().is_some_and(|s| allowed.contains(&s)))
+                        .all(|t| t.as_str().is_some_and(|s| s=="EndConversation" || s.strip_prefix("mcp__control__").is_some_and(|name|allowed.contains(&name))))
                 }) {
                     self.invalid = true;
                     self.bad_tools = true;
@@ -431,12 +414,13 @@ pub fn execute(
     fs::create_dir_all(&mailbox).map_err(|_| failed("Cannot prepare Claude mailbox"))?;
     let name = format!("control-{id}");
     let mut command = base(&name, node, meta.uid(), meta.gid());
+    let tools=control_context::worker_mcp_names().into_iter().map(|name|format!("mcp__control__{name}")).collect::<Vec<_>>().join(",");
     command.args(["--interactive", "--tmpfs", &format!("/home/agent/.claude:rw,nosuid,uid={},gid={},size=32m", meta.uid(), meta.gid()), "--mount", &mount(&auth, "/home/agent/.claude/.credentials.json", true).map_err(|_| blocked("Invalid Claude credential path"))?,
         "--mount", &mount(&mailbox, "/workspace", false).map_err(|_| blocked("Invalid Claude mailbox path"))?, image,
         "claude", "--print", "--output-format", "stream-json", "--verbose", "--no-session-persistence",
         "--restricted", "--tools", "", "--disable-slash-commands", "--setting-sources", "", "--strict-mcp-config",
         "--mcp-config", "{\"mcpServers\":{\"control\":{\"command\":\"/bin/control-room-mcp\"}}}",
-        "--permission-mode", "dontAsk", "--allowedTools", "mcp__control__control_workspace_run,mcp__control__control_workspace_start,mcp__control__control_workspace_status,mcp__control__control_workspace_cancel,mcp__control__control_web_search,mcp__control__control_rust_run,mcp__control__control_room_read,mcp__control__control_room_post,mcp__control__control_design_ask,mcp__control__control_agent_delegate,mcp__control__control_agent_result,mcp__control__control_project_request,mcp__control__control_preview_start,mcp__control__control_preview_stop,mcp__control__control_github_open_pr",
+        "--permission-mode", "dontAsk", "--allowedTools", &tools,
         "--model", &attempt.model])
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     if crate::lifecycle::cancelled(bridge) {

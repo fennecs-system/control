@@ -522,7 +522,7 @@ fn main() -> std::io::Result<()> {
             Some("path") => println!("{}", directory.display()),
             Some("init") => {
                 let (provider, source_root) = providers::initialization_options(&args[3..])?;
-                config::initialize(include_bytes!("../discord-access.json"))?;
+                config::initialize(include_bytes!("../assets/discord-access.example.json"))?;
                 storage::initialize()?;
                 if let Some(source_root) = source_root {
                     config::initialize_source_root(&source_root)?;
