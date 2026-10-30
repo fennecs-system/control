@@ -22,6 +22,9 @@ Existing configuration, state and model choices are preserved. Image pins change
 only after every requested image builds and loads. Setup does not sign in, call
 a model or start services. Repeat it after pulling source changes.
 
+On a fresh node, `--claude` selects Claude `sonnet`; otherwise setup selects
+Codex. Setup also registers this checkout for explicit `/improve` requests.
+
 ## Linux builder on macOS
 
 Keep using an existing compatible Linux Nix builder if you have one. Otherwise:
@@ -72,6 +75,11 @@ Claude Code to Control's MCP tools. The README also has the Codex MCP command.
 template without overwriting existing files. `control config path` prints the
 resolved directory. In this guide, `control` means the built
 `./target/release/control` or an installed copy.
+
+For manual builds or older nodes missing the improvement source path, run
+`control config init --source-root "$(pwd -P)"` from the Control checkout.
+`--provider claude` can initialize a fresh model library with `sonnet`.
+These options preserve existing source and model choices.
 
 | Location or setting | Purpose |
 | --- | --- |
