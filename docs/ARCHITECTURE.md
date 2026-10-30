@@ -19,10 +19,16 @@ tokens on scheduling, permission checks, retries, or cleanup.
 Rust, functional programming, and Nix are foundations. Use typed data and explicit
 state transitions, keep the context core pure, and isolate effects behind small
 contracts. Nix declares reproducible dependencies and deployments; Rust supplies
-the native server, harness, and tools; WASM provides browser components. No Node
-runtime or authored JavaScript/Python application layer is part of this direction.
+the native server, harness, and tools; WASM provides browser components. Control's
+application and integration layers have no Node runtime or authored JavaScript/Python.
 These choices rule out classes of mistakes; they do not prove model behavior or
 distributed effects correct.
+
+Non-Rust third-party tooling may run inside tool or agent containers. Control
+and authored integrations remain Rust/Haskell/Lean/WASM/Nix; an upstream runtime
+inside an isolated tool is not a host integration runtime. The
+[demonstration goals](DEMONSTRATIONS.md) exercise website construction, browser
+research with a tool view, and coordinated Minecraft bots using these boundaries.
 
 ## One node, distinct responsibilities
 
