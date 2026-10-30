@@ -1,40 +1,11 @@
 use std::{cell::{Cell, RefCell}, rc::Rc};
 use wasm_bindgen::{closure::Closure, JsCast, JsValue};
 
-const COMMANDS: [&str; 8] = ["/improve", "/improve off", "/steer", "/btw", "/spawn", "/cancel", "/answer", "/open"];
+use control_context::commands::{self, DEFINITIONS as COMMANDS};
 
-fn completions(value: &str) -> Vec<usize> {
-    if !value.starts_with('/') || value.contains('\n') {
-        return Vec::new();
-    }
-    COMMANDS
-        .iter()
-        .enumerate()
-        .filter_map(|(index, command)| command.starts_with(value).then_some(index))
-        .collect()
-}
-
+fn completions(value: &str) -> Vec<usize> { commands::completions(value) }
 fn command_length(value: &str) -> usize {
-    for command in ["/steer", "/btw", "/spawn", "/cancel", "/answer", "/open"] {
-        if value.strip_prefix(command).is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace)) {
-            return command.len();
-        }
-    }
-    let Some(rest) = value.strip_prefix("/improve") else {
-        return 0;
-    };
-    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
-        return 0;
-    }
-    for suffix in [" off", " on"] {
-        if rest
-            .strip_prefix(suffix)
-            .is_some_and(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace))
-        {
-            return "/improve".len() + suffix.len();
-        }
-    }
-    "/improve".len()
+    commands::parse(value).filter(|c|c.highlight.start==0).map_or(0,|c|c.highlight.end)
 }
 
 struct Composer {
@@ -96,7 +67,7 @@ impl Composer {
     }
 
     fn complete(&self, index: usize) {
-        self.input.set_value(COMMANDS[index]);
+        self.input.set_value(COMMANDS[index].text);
         self.selected.set(None);
         self.dismissed.set(true);
         let _ = self.input.focus();
@@ -127,7 +98,7 @@ fn attach_composer(
     wrapper.append_child(&input)?;
     let menu = document.get_element_by_id("chat-commands");
     let options = COMMANDS.iter()
-        .map(|command| format!("command-{}", command.trim_start_matches('/').replace(' ', "-")))
+        .map(|command| format!("command-{}", command.id))
         .map(|id| document.get_element_by_id(&id).map(Ok).unwrap_or_else(|| document.create_element("button")))
         .collect::<Result<Vec<_>, _>>()?;
     if menu.is_some() {
@@ -209,7 +180,7 @@ fn attach_composer(
                     "Tab" | "Enter"
                         if event.key() == "Tab"
                             || target.selected.get().is_some()
-                            || !COMMANDS.contains(&value.trim_end()) =>
+                            || !COMMANDS.iter().any(|command|command.text == value.trim_end()) =>
                     {
                         event.prevent_default();
                         target.complete(target.selected.get().unwrap_or(matches[0]));
