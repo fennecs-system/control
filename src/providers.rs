@@ -15,7 +15,87 @@ struct Settings {
     models: Vec<Model>,
     #[serde(default)]
     backend: crate::backend::Backend,
+    #[serde(default)]
     model: String,
+}
+
+pub fn initialization_options(
+    args: &[String],
+) -> std::io::Result<(Option<crate::backend::Backend>, Option<std::path::PathBuf>)> {
+    let mut provider = None;
+    let mut source = None;
+    let (options, remainder) = args.as_chunks::<2>();
+    for pair in options {
+        match pair[0].as_str() {
+            "--provider" if provider.is_none() => {
+                provider = Some(match pair[1].as_str() {
+                    "codex" => crate::backend::Backend::Codex,
+                    "claude" => crate::backend::Backend::Claude,
+                    _ => return Err(std::io::Error::other("Provider must be codex or claude")),
+                });
+            }
+            "--source-root" if source.is_none() && std::path::Path::new(&pair[1]).is_absolute() => {
+                source = Some(std::path::PathBuf::from(&pair[1]))
+            }
+            _ => {
+                return Err(std::io::Error::other(
+                    "Use config init [--provider codex|claude] [--source-root /absolute/checkout]",
+                ))
+            }
+        }
+    }
+    if !remainder.is_empty() {
+        return Err(std::io::Error::other(
+            "Configuration option requires a value",
+        ));
+    }
+    Ok((provider, source))
+}
+
+/// Setup chooses the first provider explicitly, without replacing a saved library.
+pub fn initialize(backend: crate::backend::Backend) -> std::io::Result<()> {
+    initialize_in(
+        &crate::config::directory().map_err(std::io::Error::other)?,
+        backend,
+    )
+}
+
+fn initialize_in(
+    directory: &std::path::Path,
+    backend: crate::backend::Backend,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = directory.join("model.json");
+    let settings = Settings {
+        models: vec![Model {
+            backend,
+            model: backend.default_model(),
+        }],
+        backend,
+        model: backend.default_model(),
+    };
+    if path.try_exists()? || std::fs::symlink_metadata(&path).is_ok() {
+        return Ok(());
+    }
+    let temporary = directory.join(format!(".model-init.{}.tmp", std::process::id()));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temporary)?;
+    let result = (|| {
+        file.write_all(&serde_json::to_vec_pretty(&settings).map_err(std::io::Error::other)?)?;
+        file.sync_all()?;
+        // Publish only complete settings, without replacing a racing setup or operator save.
+        match std::fs::hard_link(&temporary, &path) {
+            Ok(()) => std::fs::File::open(directory)?.sync_all(),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+            Err(error) => Err(error),
+        }
+    })();
+    let cleanup = std::fs::remove_file(temporary);
+    result.and(cleanup)
 }
 
 pub fn save_settings(state: &crate::State) -> std::io::Result<()> {
@@ -76,6 +156,12 @@ fn migrate(
     mut settings: Settings,
     installed: &[crate::backend::Backend],
 ) -> std::io::Result<Settings> {
+    // A library with one entry needs no separate selection. Multiple entries do:
+    // never guess over an explicit choice or silently reroute an invalid selection.
+    if settings.model.is_empty() && settings.models.len() == 1 {
+        settings.backend = settings.models[0].backend;
+        settings.model = settings.models[0].model.clone();
+    }
     let selected = Model {
         backend: settings.backend,
         model: settings.model.clone(),
@@ -137,7 +223,17 @@ pub fn render(runtime: &crate::runtime::Runtime) -> String {
         };
         html.push_str(&format!("<section class='model-row'><form method='post' action='/providers'><input type='hidden' name='action' value='select'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='model' value='{model}'><button class='model-choice' aria-pressed='{selected}'><span class='model-dot' aria-hidden='true'></span><span class='model-name'>{model}<span class='model-provider'>{label}</span></span>{marker}</button></form><details class='model-edit'><summary>Edit</summary><form method='post' action='/providers'><input type='hidden' name='action' value='edit'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='old_model' value='{model}'><label>Model<input name='model' required maxlength='100' value='{model}' spellcheck='false' autocapitalize='none'></label><button>Save</button></form></details></section>"));
     }
-    html.push_str("</div><details class='model-add'><summary>+ New model</summary><form method='post' action='/providers'><input type='hidden' name='action' value='add'><fieldset><legend>Provider</legend><label><input type='radio' name='provider' value='codex' checked>Codex</label><label><input type='radio' name='provider' value='claude'>Claude Code</label></fieldset><label>Model<input name='model' required maxlength='100' spellcheck='false' autocapitalize='none'></label><button>Add model</button></form></details>");
+    html.push_str("</div><details class='model-add'><summary>+ New model</summary>");
+    for backend in [
+        crate::backend::Backend::Codex,
+        crate::backend::Backend::Claude,
+    ] {
+        let id = backend.id();
+        let label = backend.label();
+        let default = crate::escape(&backend.default_model());
+        html.push_str(&format!("<form method='post' action='/providers'><input type='hidden' name='action' value='add'><input type='hidden' name='provider' value='{id}'><label>{label}<input name='model' required maxlength='100' value='{default}' spellcheck='false' autocapitalize='none'></label><button>Add model</button></form>"));
+    }
+    html.push_str("</details>");
     html
 }
 pub fn save_with(
@@ -220,6 +316,98 @@ pub fn save_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fresh_claude_setup_selects_sonnet_and_reruns_preserve_the_library() {
+        use crate::backend::Backend;
+        use std::os::unix::fs::PermissionsExt;
+        let directory =
+            std::env::temp_dir().join(format!("control-model-init-{}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        initialize_in(&directory, Backend::Claude).unwrap();
+        let path = directory.join("model.json");
+        let original = std::fs::read(&path).unwrap();
+        let settings = migrate(
+            serde_json::from_slice(&original).unwrap(),
+            &[Backend::Codex, Backend::Claude],
+        )
+        .unwrap();
+        assert_eq!(settings.backend, Backend::Claude);
+        assert_eq!(settings.model, "sonnet");
+        assert_eq!(
+            settings.models,
+            vec![Model {
+                backend: Backend::Claude,
+                model: "sonnet".into()
+            }]
+        );
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        initialize_in(&directory, Backend::Codex).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        // An existing explicit custom/default library is equally immutable to setup.
+        let custom = br#"{"models":[{"backend":"codex","model":"custom"}],"backend":"codex","model":"custom"}"#;
+        std::fs::write(&path, custom).unwrap();
+        initialize_in(&directory, Backend::Claude).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), custom);
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn sole_configured_model_is_selected_without_an_explicit_default() {
+        use crate::backend::Backend;
+        let settings = migrate(
+            serde_json::from_str(r#"{"models":[{"backend":"claude","model":"sonnet"}]}"#).unwrap(),
+            &[Backend::Codex, Backend::Claude],
+        )
+        .unwrap();
+        assert_eq!(settings.backend, Backend::Claude);
+        assert_eq!(settings.model, "sonnet");
+        assert_eq!(settings.models.len(), 1);
+        let ambiguous = r#"{"models":[{"backend":"claude","model":"sonnet"},{"backend":"claude","model":"opus"}]}"#;
+        assert!(migrate(serde_json::from_str(ambiguous).unwrap(), &[]).is_err());
+        let explicit_wrong = r#"{"models":[{"backend":"claude","model":"sonnet"}],"backend":"codex","model":"custom"}"#;
+        assert!(migrate(serde_json::from_str(explicit_wrong).unwrap(), &[]).is_err());
+    }
+    #[test]
+    fn provider_forms_have_bound_prefilled_defaults() {
+        let html = render(&crate::runtime::Runtime::default());
+        let forms = html.split("<details class='model-add'>").nth(1).unwrap();
+        let claude = forms
+            .split("name='provider' value='claude'")
+            .nth(1)
+            .unwrap();
+        assert!(claude.contains("value='sonnet'"));
+        assert!(forms.contains(&format!(
+            "value='{}'",
+            crate::backend::Backend::Codex.default_model()
+        )));
+        assert!(!forms.contains("type='radio'"));
+    }
+    #[test]
+    fn init_options_are_explicit_and_reject_invalid_or_repeated_flags() {
+        let parse = |args: &[&str]| {
+            initialization_options(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+        };
+        assert_eq!(parse(&[]).unwrap(), (None, None));
+        assert_eq!(
+            parse(&["--provider", "claude", "--source-root", "/checkout"]).unwrap(),
+            (
+                Some(crate::backend::Backend::Claude),
+                Some("/checkout".into())
+            )
+        );
+        for args in [
+            vec!["--provider"],
+            vec!["--provider", "other"],
+            vec!["--source-root", "relative"],
+            vec!["--provider", "claude", "--provider", "codex"],
+            vec!["--unknown", "value"],
+        ] {
+            assert!(parse(&args).is_err());
+        }
+    }
     #[test]
     fn legacy_selection_migrates_and_saved_libraries_roundtrip_without_reseeding() {
         use crate::backend::Backend;

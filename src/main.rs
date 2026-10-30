@@ -488,7 +488,7 @@ fn main() -> std::io::Result<()> {
     }
     if args.get(1).is_some_and(|s| s == "--help" || s == "help") {
         println!("control [serve | tui | mcp | discord | doctor | config | open | browser | federation]\nserve: local web/MCP server on CONTROL_ADDR (default 127.0.0.1:8080)\ntui: Rust terminal client\nmcp [--root DIRECTORY]: local tools for an external harness\ndiscord --enable: listen to this node's configured DMs\ndoctor: offline prerequisites; no model calls\nconfig init | path: initialize or locate personal configuration\nopen: sign in to the local website\nbrowser capture FILE [WIDTH HEIGHT]: offline Nix Firefox capture\nfederation help: signed offline lens exchange\n--check-worker: one authenticated sandbox test (uses model usage)\n--version: version and platform");
-        println!("claude login | check: container login or offline tool isolation check\nconfig init: create private node configuration\nconfig path: show the node configuration directory\n--bind-discord LABEL ID: bind a configured principal locally");
+        println!("claude login | check: container login or offline tool isolation check\nconfig init [--provider codex|claude] [--source-root PATH]: initialize private configuration without replacing saved choices\nconfig path: show the node configuration directory\n--bind-discord LABEL ID: bind a configured principal locally");
         println!("open --link: print a one-use local browser sign-in link");
         return Ok(());
     }
@@ -507,8 +507,15 @@ fn main() -> std::io::Result<()> {
         match args.get(2).map(String::as_str) {
             Some("path") => println!("{}", directory.display()),
             Some("init") => {
+                let (provider, source_root) = providers::initialization_options(&args[3..])?;
                 config::initialize(include_bytes!("../discord-access.json"))?;
                 storage::initialize()?;
+                if let Some(source_root) = source_root {
+                    config::initialize_source_root(&source_root)?;
+                }
+                if let Some(provider) = provider {
+                    providers::initialize(provider)?;
+                }
                 println!(
                     "Private node configuration ready in {}",
                     directory.display()

@@ -34,12 +34,15 @@ rebuild after pulling updates. [Configuration and background services →](docs/
 
 ## Claude and Codex
 
-Codex is the default. To add Claude inside Control:
+Codex is the default. To start with Claude inside Control:
 
 ```sh
 nix run .#setup -- --claude
 ./target/release/control claude login
 ```
+
+On a fresh node, `--claude` selects Claude's `sonnet` model. Rerunning setup
+preserves your saved models and selection.
 
 Choose a saved model under **Manage → Models & providers**. **+ New model** adds
 another model; clicking its row selects it for new runs.
