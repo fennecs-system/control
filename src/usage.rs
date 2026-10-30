@@ -6,21 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub struct Tokens {
-    pub input_tokens: u64,
-    pub cached_input_tokens: u64,
-    pub output_tokens: u64,
-}
-impl Tokens {
-    fn add(&mut self, other: Self) {
-        self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
-        self.cached_input_tokens = self
-            .cached_input_tokens
-            .saturating_add(other.cached_input_tokens);
-        self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
-    }
-}
+pub use control_ai::{Activity, Tokens};
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
@@ -46,54 +32,6 @@ pub struct Attempt {
     pub model: String,
     pub status: String,
     pub tokens: Option<Tokens>,
-}
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Activity {
-    pub id: String,
-    pub kind: String,
-    pub text: String,
-    pub output: String,
-    pub status: String,
-}
-pub fn activity(value: &serde_json::Value) -> Option<Activity> {
-    let event = value["type"].as_str()?;
-    if !["item.started", "item.updated", "item.completed"].contains(&event) {
-        return None;
-    }
-    let item = &value["item"];
-    let kind = item["type"].as_str()?;
-    let text = match kind {
-        "command_execution" => item["command"].as_str()?,
-        "mcp_tool_call" => item["tool"].as_str()?,
-        "file_change" => "File changes",
-        _ => return None,
-    };
-    Some(Activity {
-        id: item["id"].as_str()?.chars().take(100).collect(),
-        kind: kind.into(),
-        text: text
-            .chars()
-            .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
-            .take(2000)
-            .collect(),
-        output: item["aggregated_output"]
-            .as_str()
-            .unwrap_or("")
-            .chars()
-            .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
-            .take(4000)
-            .collect(),
-        status: item["status"]
-            .as_str()
-            .unwrap_or(if event == "item.completed" {
-                "completed"
-            } else {
-                "running"
-            })
-            .chars()
-            .take(40)
-            .collect(),
-    })
 }
 impl Attempt {
     pub fn new() -> Self {
@@ -129,64 +67,10 @@ pub fn default_model() -> String {
 pub fn capture(reader: impl Read) -> Option<Tokens> {
     capture_with(reader, |_| {})
 }
-pub fn capture_with(mut reader: impl Read, mut update: impl FnMut(Activity)) -> Option<Tokens> {
-    let mut total = None;
-    let mut line = Vec::new();
-    let mut oversized = false;
-    let mut chunk = [0; 8192];
-    while let Ok(length) = reader.read(&mut chunk) {
-        if length == 0 {
-            break;
-        }
-        for &byte in &chunk[..length] {
-            if byte == b'\n' {
-                if !oversized
-                    && let Ok(value) = serde_json::from_slice(&line) {
-                        record(&value, &mut total);
-                        if let Some(event) = activity(&value) {
-                            update(event);
-                        }
-                    }
-                line.clear();
-                oversized = false;
-            } else if line.len() < 1_048_576 && !oversized {
-                line.push(byte);
-            } else {
-                oversized = true;
-                line.clear();
-            }
-        }
-    }
-    if !oversized
-        && let Ok(value) = serde_json::from_slice(&line) {
-            record(&value, &mut total);
-            if let Some(event) = activity(&value) {
-                update(event);
-            }
-        }
-    total
-}
-
-fn record(value: &serde_json::Value, total: &mut Option<Tokens>) {
-    if value["type"] != "turn.completed" {
-        return;
-    }
-    let usage = &value["usage"];
-    let (Some(input_tokens), Some(cached_input_tokens), Some(output_tokens)) = (
-        usage["input_tokens"].as_u64(),
-        usage["cached_input_tokens"].as_u64(),
-        usage["output_tokens"].as_u64(),
-    ) else {
-        return;
-    };
-    if cached_input_tokens > input_tokens {
-        return;
-    }
-    total.get_or_insert_with(Tokens::default).add(Tokens {
-        input_tokens,
-        cached_input_tokens,
-        output_tokens,
-    });
+pub fn capture_with(reader: impl Read, mut update: impl FnMut(Activity)) -> Option<Tokens> {
+    control_ai::json_lines(reader, control_ai::codex::Codex::default(), |event| {
+        if let control_ai::Event::Activity(activity) = event { update(activity); }
+    }).ok().and_then(|output| output.tokens)
 }
 
 #[derive(Default)]
@@ -321,7 +205,7 @@ mod tests {
         assert_eq!(activity[0].text, "cargo check");
         assert_eq!(activity[1].output.chars().count(), 4000);
         assert!(!activity[1].output.contains('\u{1b}'));
-        assert!(super::activity(&serde_json::json!({"type":"item.completed","item":{"id":"secret","type":"agent_message","text":"not tool output"}})).is_none());
+        assert!(control_ai::codex::activity(&serde_json::json!({"type":"item.completed","item":{"id":"secret","type":"agent_message","text":"not tool output"}})).is_none());
     }
     #[test]
     fn aggregates_retries_preserves_legacy_runs_and_escapes_content() {

@@ -243,151 +243,21 @@ fn probe_named(image: &str, node: &str, root: &Path, name: &str) -> io::Result<(
     Ok(())
 }
 
-#[derive(Default)]
-pub struct Stream {
-    pub tokens: Option<Tokens>,
-    pub result: Option<String>,
-    invalid: bool,
-    initialized: bool,
-    /// Set as soon as the init event lists a tool outside the allow-list.
-    bad_tools: bool,
-    /// Subtype and error text of an unsuccessful result event, for the user.
-    failure: Option<String>,
-}
-impl Stream {
-    fn event(&mut self, value: &Value) -> Option<Activity> {
-        match value["type"].as_str()? {
-            "system" if value["subtype"] == "init" => {
-                self.initialized = true;
-                let allowed = control_context::worker_mcp_names();
-                if !value["tools"].as_array().is_some_and(|tools| {
-                    tools
-                        .iter()
-                        .all(|t| t.as_str().is_some_and(|s| s=="EndConversation" || s.strip_prefix("mcp__control__").is_some_and(|name|allowed.contains(&name))))
-                }) {
-                    self.invalid = true;
-                    self.bad_tools = true;
-                }
-            }
-            "result" => {
-                if value["is_error"] != false || value["subtype"] != "success" {
-                    let detail: String = value["result"].as_str().or(value["error"].as_str()).unwrap_or("").chars().filter(|c| !c.is_control()).take(300).collect();
-                    self.failure = Some(format!("Claude ended with {}{}{}", value["subtype"].as_str().unwrap_or("an error").chars().take(40).collect::<String>(), if detail.is_empty() { "" } else { ": " }, detail));
-                }
-                if self.result.is_some()
-                    || value["is_error"] != false
-                    || value["subtype"] != "success"
-                    || !self.initialized
-                {
-                    self.invalid = true;
-                    return None;
-                }
-                let Some(text) = value["result"].as_str() else {
-                    self.invalid = true;
-                    return None;
-                };
-                self.result = Some(text.chars().take(16000).collect());
-                let usage = &value["usage"];
-                if let (Some(input), Some(output)) = (
-                    usage["input_tokens"].as_u64(),
-                    usage["output_tokens"].as_u64(),
-                ) {
-                    let cached = usage["cache_read_input_tokens"].as_u64().unwrap_or(0);
-                    let created = usage["cache_creation_input_tokens"].as_u64().unwrap_or(0);
-                    self.tokens = Some(Tokens {
-                        input_tokens: input.saturating_add(cached).saturating_add(created),
-                        cached_input_tokens: cached,
-                        output_tokens: output,
-                    });
-                }
-            }
-            "assistant" => {
-                let text = value["message"]["content"]
-                    .as_array()?
-                    .iter()
-                    .filter_map(|b| b["text"].as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                if !text.is_empty() {
-                    return Some(Activity {
-                        id: "claude-response".into(),
-                        kind: "message".into(),
-                        text: text.chars().take(4000).collect(),
-                        output: String::new(),
-                        status: "running".into(),
-                    });
-                }
-            }
-            _ => {}
-        }
-        None
-    }
-    fn finish(self) -> io::Result<(String, Option<Tokens>)> {
-        if let Some(failure) = &self.failure {
-            return Err(fail(&format!("{failure}.")));
-        }
-        if self.bad_tools {
-            return Err(fail("Claude started with an unexpected tool configuration and was stopped before doing work."));
-        }
-        if self.invalid {
-            return Err(fail(
-                "Claude returned an invalid result or unexpected tool configuration",
-            ));
-        }
-        self.result.map(|text| (text, self.tokens)).ok_or_else(|| {
-            fail("Claude did not return a successful final result; check login or usage limits")
-        })
-    }
-}
 #[cfg(test)]
 fn capture(reader: impl Read, update: impl FnMut(Activity)) -> io::Result<(String, Option<Tokens>)> {
     capture_with(reader, update, &std::sync::atomic::AtomicBool::new(false))
 }
 fn capture_with(
-    mut reader: impl Read,
+    reader: impl Read,
     mut update: impl FnMut(Activity),
     bad_tools: &std::sync::atomic::AtomicBool,
 ) -> io::Result<(String, Option<Tokens>)> {
-    let mut stream = Stream::default();
-    let mut line = Vec::new();
-    let mut oversized = false;
-    let mut bytes = [0; 8192];
-    loop {
-        let n = reader.read(&mut bytes)?;
-        if n == 0 {
-            break;
-        }
-        for &b in &bytes[..n] {
-            if b == b'\n' {
-                if oversized {
-                    stream.invalid = true;
-                } else if !line.is_empty() {
-                    match serde_json::from_slice(&line) {
-                        Ok(value) => {
-                            if let Some(event) = stream.event(&value) {
-                                update(event);
-                            }
-                            if stream.bad_tools {
-                                bad_tools.store(true, std::sync::atomic::Ordering::Relaxed);
-                            }
-                        }
-                        Err(_) => stream.invalid = true,
-                    }
-                }
-                line.clear();
-                oversized = false;
-            } else if line.len() < 1_048_576 && !oversized {
-                line.push(b);
-            } else {
-                oversized = true;
-                line.clear();
-            }
-        }
-    }
-    if !line.is_empty() || oversized {
-        stream.invalid = true;
-    }
-    stream.finish()
+    let allowed = control_context::worker_mcp_names();
+    let output = control_ai::json_lines(reader, control_ai::claude::Claude::new(&allowed), |event| match event {
+        control_ai::Event::Activity(activity) => update(activity),
+        control_ai::Event::RejectedTools => bad_tools.store(true, std::sync::atomic::Ordering::Relaxed),
+    })?;
+    Ok((output.text.ok_or_else(|| fail("Claude did not return a final result"))?, output.tokens))
 }
 
 pub fn execute(
