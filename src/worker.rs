@@ -291,11 +291,10 @@ fn wait(child: &mut Child, limit: Duration) -> std::io::Result<bool> {
 }
 static DISPATCH_WAKE: Mutex<Option<std::sync::mpsc::SyncSender<()>>> = Mutex::new(None);
 pub fn wake() {
-    if let Ok(sender) = DISPATCH_WAKE.lock() {
-        if let Some(sender) = sender.as_ref() {
+    if let Ok(sender) = DISPATCH_WAKE.lock()
+        && let Some(sender) = sender.as_ref() {
             let _ = sender.try_send(());
         }
-    }
 }
 struct Finished(std::sync::mpsc::SyncSender<()>);
 impl Drop for Finished {
@@ -535,8 +534,8 @@ fn run_task(state: Arc<Mutex<State>>, task: Task) {
     if let Err(error) = crate::command_jobs::quiesce(&state, &task.0, &workspace_id) {
         outcome = Err(("interrupted", error.to_string()));
     }
-    if !attempt.review_only {
-        if let Ok(workspace) = runtime::workspace(&workspace_id) {
+    if !attempt.review_only
+        && let Ok(workspace) = runtime::workspace(&workspace_id) {
             observe_workspace_diff(
                 &state,
                 &task.0,
@@ -549,7 +548,6 @@ fn run_task(state: Arc<Mutex<State>>, task: Task) {
                 },
             );
         }
-    }
     if !crate::shutdown::requested() && matches!(&outcome, Err(("waiting", _))) {
         outcome = match runtime::workspace(&workspace_id).map_err(std::io::Error::other)
                 .and_then(|workspace| crate::projects::publish(&mut attempt, &workspace, &workspace_id)) {
@@ -634,8 +632,8 @@ fn commit(
     let run_index = s.runtime.runs.iter().position(|r| r.id == id).unwrap();
     let chat_id = run.chat_id.clone();
     let chat_index = s.chats.iter().position(|c| Some(&c.id) == chat_id.as_ref());
-    if outcome.is_ok() {
-        if let Some(index) = chat_index {
+    if outcome.is_ok()
+        && let Some(index) = chat_index {
             let chat = &s.chats[index];
             let current = if action == Action::Improve {
                 &chat.improve_workspace
@@ -663,7 +661,6 @@ fn commit(
                 ));
             }
         }
-    }
     let published_project = if outcome.is_ok() && !attempt.review_only {
         attempt.project_checkpoint.clone()
     } else {

@@ -365,13 +365,12 @@ fn seed(source: &Path, destination: &Path) -> io::Result<()> {
         crate::config::directory().map_err(fail)?,
         crate::config::state_directory().map_err(fail)?,
     ] {
-        if let Ok(private) = private.canonicalize() {
-            if source.starts_with(&private) || private.starts_with(&source) {
+        if let Ok(private) = private.canonicalize()
+            && (source.starts_with(&private) || private.starts_with(&source)) {
                 return Err(fail(
                     "Control configuration and state cannot be opened as a project",
                 ));
             }
-        }
     }
     // Start with the current files, including uncommitted edits. Reading is an
     // explicit operator action, and no source Git metadata is ever mounted.
@@ -1141,7 +1140,8 @@ mod tests {
                 "type=bind,src={},dst=/workspace",
                 root.canonicalize().unwrap().display()
             );
-            let output = crate::runtime::docker_query(&[
+
+            crate::runtime::docker_query(&[
                 "run",
                 "--rm",
                 "--pull=never",
@@ -1166,8 +1166,7 @@ mod tests {
                 "-c",
                 script,
             ])
-            .unwrap();
-            output
+            .unwrap()
         };
         assert!(run(&workspace,"set -eu; test ! -e /home/agent/.codex/auth.json; test ! -S /var/run/docker.sock; git status --porcelain; printf edited > code.txt; git add --all; git -c user.name=Fixture -c user.email=fixture@localhost commit -m edited; git worktree list --porcelain").contains("worktree /workspace\n"));
         let copy = fixture.0.join("restored");

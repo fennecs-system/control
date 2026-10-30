@@ -109,13 +109,12 @@ fn save_with(
                 .ok_or("Note not found.")?,
         )
     };
-    if let Some(index) = previous {
-        if fields.get("revision").and_then(|r| r.parse::<u64>().ok())
+    if let Some(index) = previous
+        && fields.get("revision").and_then(|r| r.parse::<u64>().ok())
             != Some(state.documents[index].revision)
         {
             return Err("This note changed in another tab. Your text is below; open the current note before merging your changes.");
         }
-    }
     let old = previous.map(|i| (i, state.documents[i].clone()));
     let new_id = if id.is_empty() {
         format!(
@@ -267,11 +266,10 @@ pub fn render(state: &State, selection: &str, saved: Option<u64>) -> String {
                 .unwrap_or_default(),
         );
     } else if selection == "new" || doc.is_some() || state.documents.is_empty() {
-        if let Some(doc) = doc {
-            if saved == Some(doc.revision) {
+        if let Some(doc) = doc
+            && saved == Some(doc.revision) {
                 html.push_str(&format!("<div id='saved' class='save-confirmation' role='status'>✓ Saved {} · revision {}</div>",escape(&doc.title),doc.revision));
             }
-        }
         html.push_str(&editor(doc, None));
         if let Some(doc) = doc {
             let outgoing = links(&doc.body);

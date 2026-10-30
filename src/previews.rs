@@ -72,7 +72,7 @@ fn launch(preview: &Preview, command: &str, workspace: &Path) -> io::Result<Stri
         .as_deref()
         .ok_or_else(|| fail("Missing pinned image"))?;
     let result = (|| {
-        let wrapper=format!("set -eu\nexec 2>&1\ncat > /tmp/control-port-forward.rs <<'CONTROL_FORWARD_SOURCE'\n{}\nCONTROL_FORWARD_SOURCE\nrustc --edition=2021 /tmp/control-port-forward.rs -o /tmp/control-port-forward\nexec bash -c \"$1\"",include_str!("../tools/port-forward/main.rs"));
+        let wrapper=format!("set -eu\nexec 2>&1\ncat > /tmp/control-port-forward.rs <<'CONTROL_FORWARD_SOURCE'\n{}\nCONTROL_FORWARD_SOURCE\nrustc --edition=2024 /tmp/control-port-forward.rs -o /tmp/control-port-forward\nexec bash -c \"$1\"",include_str!("../tools/port-forward/main.rs"));
         let id = query(&[
             "run",
             "--detach",
@@ -379,8 +379,8 @@ fn fence_launch(shared: &Arc<Mutex<State>>, preview: &Preview) {
     } else {
         "failed"
     };
-    if let Ok(mut state) = shared.lock() {
-        if let Some(record) = state
+    if let Ok(mut state) = shared.lock()
+        && let Some(record) = state
             .previews
             .iter_mut()
             .find(|p| p.id == preview.id && Arc::ptr_eq(&p.stopped, &preview.stopped))
@@ -389,7 +389,6 @@ fn fence_launch(shared: &Arc<Mutex<State>>, preview: &Preview) {
             record.stopped.store(true, Ordering::Relaxed);
             let _ = crate::storage::save(&state);
         }
-    }
 }
 fn forward(mut stream: TcpStream, preview: &Preview) -> io::Result<()> {
     // macOS inherits the listener's nonblocking flag on accepted sockets.
@@ -449,11 +448,10 @@ fn forward(mut stream: TcpStream, preview: &Preview) -> io::Result<()> {
     let writer = std::thread::spawn(move || {
         let result = io::copy(&mut reader, &mut input);
         drop(input);
-        if result.is_err() {
-            if let Ok(mut child) = writing.lock() {
+        if result.is_err()
+            && let Ok(mut child) = writing.lock() {
                 let _ = child.kill();
             }
-        }
     });
     let _ = io::copy(&mut output, &mut stream);
     let _ = stream.shutdown(Shutdown::Both);
@@ -559,8 +557,8 @@ pub fn restore(shared: Arc<Mutex<State>>) {
             ))?;
             proxy(shared.clone(), preview.clone(), listener)
         })();
-        if result.is_err() {
-            if let Ok(mut state) = shared.lock() {
+        if result.is_err()
+            && let Ok(mut state) = shared.lock() {
                 if let Some(record) = state.previews.iter_mut().find(|p| {
                     p.id == preview.id
                         && p.status == "running"
@@ -571,7 +569,6 @@ pub fn restore(shared: Arc<Mutex<State>>) {
                 }
                 let _ = crate::storage::save(&state);
             }
-        }
     }
 }
 pub fn stop(shared: &Arc<Mutex<State>>, chat: &str, id: &str) -> io::Result<()> {
@@ -745,7 +742,7 @@ mod tests {
             }
         }
         let _cleanup = Cleanup(state.clone());
-        let command="set -eu; test ! -e /home/agent/.codex/auth.json; test ! -e /home/agent/.claude/.credentials.json; test ! -S /var/run/docker.sock; test ! -S /nix/var/nix/daemon-socket/socket; for path in /workspace/forbidden-write /bin/forbidden-write /nix/store/forbidden-write; do if touch \"$path\" 2>/dev/null; then exit 42; fi; done; if timeout 1 bash -c 'exec 3<>/dev/tcp/1.1.1.1/443' 2>/dev/null; then exit 43; fi; rustc /workspace/server.rs -o /tmp/server; exec /tmp/server";
+        let command="set -eu; test ! -e /home/agent/.codex/auth.json; test ! -e /home/agent/.claude/.credentials.json; test ! -S /var/run/docker.sock; test ! -S /nix/var/nix/daemon-socket/socket; for path in /workspace/forbidden-write /bin/forbidden-write /nix/store/forbidden-write; do if touch \"$path\" 2>/dev/null; then exit 42; fi; done; if timeout 1 bash -c 'exec 3<>/dev/tcp/1.1.1.1/443' 2>/dev/null; then exit 43; fi; rustc --edition=2024 /workspace/server.rs -o /tmp/server; exec /tmp/server";
         let result = start(
             &state,
             &run_id,

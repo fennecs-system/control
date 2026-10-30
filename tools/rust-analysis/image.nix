@@ -3,7 +3,7 @@
 let
   runner = pkgs.runCommand "control-analyze" { nativeBuildInputs = [ pkgs.rustc pkgs.stdenv.cc ]; } ''
     mkdir -p $out/bin
-    rustc --edition=2021 -C opt-level=2 ${./main.rs} -o $out/bin/control-analyze
+    rustc --edition=2024 -C opt-level=2 ${./main.rs} -o $out/bin/control-analyze
   '';
 in pkgs.dockerTools.buildLayeredImage {
   name = "control-analysis";

@@ -140,14 +140,13 @@ pub fn capture_with(mut reader: impl Read, mut update: impl FnMut(Activity)) -> 
         }
         for &byte in &chunk[..length] {
             if byte == b'\n' {
-                if !oversized {
-                    if let Ok(value) = serde_json::from_slice(&line) {
+                if !oversized
+                    && let Ok(value) = serde_json::from_slice(&line) {
                         record(&value, &mut total);
                         if let Some(event) = activity(&value) {
                             update(event);
                         }
                     }
-                }
                 line.clear();
                 oversized = false;
             } else if line.len() < 1_048_576 && !oversized {
@@ -158,14 +157,13 @@ pub fn capture_with(mut reader: impl Read, mut update: impl FnMut(Activity)) -> 
             }
         }
     }
-    if !oversized {
-        if let Ok(value) = serde_json::from_slice(&line) {
+    if !oversized
+        && let Ok(value) = serde_json::from_slice(&line) {
             record(&value, &mut total);
             if let Some(event) = activity(&value) {
                 update(event);
             }
         }
-    }
     total
 }
 

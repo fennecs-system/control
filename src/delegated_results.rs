@@ -178,8 +178,8 @@ fn scope<'a>(
             descendants.insert(child.id.as_str());
             queue.push_back(child.id.as_str());
         }
-        if descendants.contains(id) {
-            if let Some(to) = next(from) {
+        if descendants.contains(id)
+            && let Some(to) = next(from) {
                 let to = state
                     .runtime
                     .runs
@@ -192,7 +192,6 @@ fn scope<'a>(
                 descendants.insert(to.id.as_str());
                 queue.push_back(to.id.as_str());
             }
-        }
     }
     Ok((family, descendants))
 }

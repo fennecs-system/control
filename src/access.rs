@@ -67,8 +67,8 @@ impl Access {
             respond(stream, "200 OK", "text/plain", "Control is running.", "");
             return true;
         }
-        if method == "GET" {
-            if let Some(token) = target
+        if method == "GET"
+            && let Some(token) = target
                 .strip_prefix("/unlock/")
                 .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
             {
@@ -81,7 +81,6 @@ impl Access {
                     return true;
                 }
             }
-        }
         if self.authorized(header) {
             return false;
         }

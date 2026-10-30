@@ -8,7 +8,7 @@ ledger integration remain future work.
 Build the launcher on the host:
 
 ```sh
-rustc --edition=2021 -C opt-level=2 tools/rust-analysis/main.rs -o /tmp/control-analyze
+rustc --edition=2024 -C opt-level=2 tools/rust-analysis/main.rs -o /tmp/control-analyze
 ```
 
 From the checkout root, build through a Linux Nix builder, then load the image:

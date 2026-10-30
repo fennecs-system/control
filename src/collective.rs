@@ -100,13 +100,11 @@ impl Collective {
                     .parse::<usize>()
                     .ok()
                     .and_then(|id| self.proposals.get_mut(id))
-                {
-                    if p.status == "pending"
+                    && p.status == "pending"
                         && ["accepted", "rejected"].contains(&decision.as_str())
                     {
                         p.status = decision;
                     }
-                }
                 "/?view=knowledge"
             }
             "/request" => {
@@ -136,12 +134,10 @@ impl Collective {
                     .parse::<usize>()
                     .ok()
                     .and_then(|id| self.requests.get_mut(id))
-                {
-                    if r.status == "pending" && ["approved", "denied"].contains(&decision.as_str())
+                    && r.status == "pending" && ["approved", "denied"].contains(&decision.as_str())
                     {
                         r.status = decision;
                     }
-                }
                 "/?view=authority"
             }
             _ => "/",
