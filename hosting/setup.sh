@@ -5,9 +5,10 @@ while [ "$#" -ne 0 ]; do
   case "$1" in
     --claude) images+=(claude); provider=claude ;;
     --browser) images+=(browser) ;;
+    --build-environment) images+=(build) ;;
     --help|-h)
-      printf '%s\n' 'Usage: nix run .#setup [-- --claude] [--browser]' \
-        'Build the release UI/binary and Codex worker; optionally add Claude Code and the browser-capture image.' \
+      printf '%s\n' 'Usage: nix run .#setup [-- --claude] [--browser] [--build-environment]' \
+        'Build the release UI/binary and Codex worker; optionally add Claude Code, browser capture and offline Rust/WASM build environments.' \
         'Requires a running Docker-compatible engine and a Linux Nix builder.' \
         'Preserves private configuration and state. Does not sign in or start services.'
       exit 0 ;;
