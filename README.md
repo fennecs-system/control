@@ -33,6 +33,13 @@ Configuration lives in `~/.config/control/`; chats and outputs live in
 `~/.local/state/control/`. Setup preserves both. Repeat `nix run .#setup` to
 rebuild after pulling updates. [Configuration and background services →](docs/setup.md)
 
+The default **lite** worker includes Rust tools. For Nix, Node/npm, a headless
+JDK, Python and curl inside worker containers, use `nix run .#setup -- --full`
+(add `--claude` for Claude). Credential-free workspace tools and new persistent
+services get a private writable Nix store/database; the pinned base and model
+CLI container remain read-only. Local Nix builds work offline; remote packages
+still need separate scoped network access. See [worker profiles](docs/WORKER-PROFILES.md).
+
 ## Claude and Codex
 
 Codex is the default. To start with Claude inside Control:

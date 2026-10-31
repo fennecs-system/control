@@ -51,6 +51,7 @@ mod usage;
 mod web_assets;
 mod worker;
 mod worker_tools;
+mod worker_profile;
 use std::{
     collections::HashMap,
     io::{Read, Write},

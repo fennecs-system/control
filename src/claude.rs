@@ -158,6 +158,11 @@ pub fn shell_scoped(image:&str,name:&str,node:&str,workspace:&Path,command:&str,
         return Err(fail("Workspace is not a directory"));
     }
     let mut child = base(name, node, meta.uid(), meta.gid());
+    if !crate::worker_profile::Profile::inspect(image)?.readonly_root() {
+        // Explicitly override base's immutable-root default only for this
+        // credential-free command. No login/model container uses this override.
+        child.arg("--read-only=false");
+    }
     child
         .args([
             "--network=none",

@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(crate) const ENVIRONMENT_GUIDANCE: &str = "The pinned Nix-built base image is immutable. Edit task files in /workspace and use /tmp for scratch builds. The current image does not provide the nix command or access to the host Nix daemon. Use advertised tools for additional capabilities; do not assume packages or network access. Never modify or publish shared images or caches.";
+pub(crate) const ENVIRONMENT_GUIDANCE: &str = "The pinned Nix-built base image is immutable. Edit task files in /workspace and use /tmp for scratch builds. Lite workers provide Rust tools. If the operator selected the full profile, credential-free workspace tools and persistent services additionally provide Nix, Node/npm, Java, Python and curl. Use control_workspace_start or workspace command tools for private Nix builds; the model CLI container remains read-only. Full has pinned local nixpkgs and a private single-user store; cached/local builds work offline. Network access is separately scoped, so remote packages are not automatically reachable. Never modify or publish shared images or caches; there is no host Nix daemon access.";
 
 const PERMISSIONS: [&str; 6] = [
     "default_permissions=\"control\"",

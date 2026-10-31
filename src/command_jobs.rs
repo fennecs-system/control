@@ -24,6 +24,8 @@ pub struct Job {
     pub read_only: bool,
     pub build_environment: bool,
     pub review_source: bool,
+    #[serde(default, skip_serializing_if = "crate::worker_profile::Profile::is_lite")]
+    pub profile: crate::worker_profile::Profile,
     pub deadline_unix: u64,
     pub container_id: Option<String>,
     pub status: String,
@@ -33,7 +35,7 @@ pub struct Job {
 impl Job {
     /// Reconciliation needs ownership fields, never retained command/output buffers.
     pub fn identity(&self)->Self {
-        Self{id:self.id.clone(),generation:self.generation.clone(),image:self.image.clone(),node:self.node.clone(),command:String::new(),read_only:self.read_only,build_environment:self.build_environment,review_source:self.review_source,deadline_unix:self.deadline_unix,container_id:self.container_id.clone(),status:self.status.clone(),output:String::new(),exit_code:self.exit_code}
+        Self{id:self.id.clone(),generation:self.generation.clone(),image:self.image.clone(),node:self.node.clone(),command:String::new(),read_only:self.read_only,build_environment:self.build_environment,review_source:self.review_source,profile:self.profile,deadline_unix:self.deadline_unix,container_id:self.container_id.clone(),status:self.status.clone(),output:String::new(),exit_code:self.exit_code}
     }
     pub fn name(&self) -> String {
         format!("control-{}-job-{}", self.generation, self.id)
@@ -197,8 +199,16 @@ fn start(
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
+    let image = {
+        let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
+        let attempt = current(&mut state, run, generation)?;
+        if let Some(job) = attempt.command_jobs.iter().find(|j| j.id == id) { return Ok(job.summary()); }
+        environment_image(attempt, &input.environment)?
+    };
+    let profile = if input.environment == "build" { crate::worker_profile::Profile::Lite } else { crate::worker_profile::Profile::inspect(&image)? };
     let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
     let attempt = current(&mut state, run, generation)?;
+    if environment_image(attempt, &input.environment)? != image { return Err(fail("Captured command image changed")); }
     if let Some(job) = attempt.command_jobs.iter().find(|j| j.id == id) {
         return Ok(job.summary());
     }
@@ -215,7 +225,7 @@ fn start(
     let job = Job {
         id,
         generation: generation.into(),
-        image: environment_image(attempt, &input.environment)?,
+        image,
         node: attempt
             .node_id
             .clone()
@@ -224,6 +234,7 @@ fn start(
         read_only: attempt.review_only,
         build_environment: input.environment == "build",
         review_source: attempt.review_only && attempt.backend == crate::backend::Backend::Codex,
+        profile,
         deadline_unix: now().saturating_add(input.timeout_seconds),
         container_id: None,
         status: "preparing".into(),
@@ -276,7 +287,6 @@ fn create(job: &Job) -> io::Result<String> {
         "dev.control.purpose=command",
         "--user",
         &format!("{}:{}", meta.uid(), meta.gid()),
-        "--read-only",
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges",
         if job.build_environment {
@@ -325,6 +335,7 @@ fn create(job: &Job) -> io::Result<String> {
     .into_iter()
     .map(str::to_owned)
     .collect();
+    if job.profile.readonly_root() { arguments.push("--read-only".into()); }
     if job.read_only {
         use std::os::unix::fs::DirBuilderExt;
         let scratch = crate::runtime::workspace(&job.generation)
@@ -413,7 +424,7 @@ fn verify_identity(
         || std::path::Path::new(&inspection.source) != workspace
         || inspection.writable == job.read_only
         || inspection.network != "none"
-        || !inspection.readonly_root
+        || inspection.readonly_root != job.profile.readonly_root()
     {
         return Err(fail(
             "Command container identity changed; replacement was not adopted",
@@ -831,6 +842,7 @@ mod tests {
             read_only: false,
             build_environment: false,
             review_source: false,
+            profile: crate::worker_profile::Profile::Lite,
             deadline_unix: now() + 100,
             container_id: None,
             status: "preparing".into(),
@@ -858,6 +870,7 @@ mod tests {
             read_only: true,
             build_environment: false,
             review_source: false,
+            profile: crate::worker_profile::Profile::Lite,
             deadline_unix: 0,
             container_id: Some("b".repeat(64)),
             status: "running".into(),
@@ -902,6 +915,14 @@ mod tests {
         let mut changed = inspection.clone();
         changed.readonly_root = false;
         assert!(verify_identity(&job, &changed, expected).is_err());
+        assert!(serde_json::to_value(&job).unwrap().get("profile").is_none());
+        let mut full = job.clone();
+        full.profile = crate::worker_profile::Profile::Full;
+        assert!(verify_identity(&full, &changed, expected).is_ok());
+        assert!(verify_identity(&full, &inspection, expected).is_err());
+        let restored: Job = serde_json::from_value(serde_json::to_value(&full).unwrap()).unwrap();
+        assert_eq!(restored.identity().profile, crate::worker_profile::Profile::Full);
+        assert!(verify_identity(&restored, &changed, expected).is_ok());
     }
     #[test]
     #[ignore = "requires isolated CONTROL_STATE_DIR/CONTROL_CONFIG_DIR under /private/tmp/control-command-qa and CONTROL_QA_IMAGE; no credentials/model calls"]

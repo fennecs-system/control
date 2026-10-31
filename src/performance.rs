@@ -129,6 +129,7 @@ fn ownership_snapshots() {
             read_only: false,
             build_environment: true,
             review_source: false,
+            profile: crate::worker_profile::Profile::Lite,
             deadline_unix: 0,
             container_id: Some("synthetic-container".into()),
             status: "completed".into(),

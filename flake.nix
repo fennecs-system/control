@@ -39,7 +39,9 @@
       packages = eachSystem (pkgs:
         if pkgs.stdenv.hostPlatform.isLinux then {
           worker-image = import ./examples/worker-image.nix { inherit pkgs; };
+          worker-full-image = import ./examples/worker-image.nix { inherit pkgs; profile = "full"; };
           claude-image = import ./examples/worker-image.nix { inherit pkgs; backend = "claude"; };
+          claude-full-image = import ./examples/worker-image.nix { inherit pkgs; backend = "claude"; profile = "full"; };
           browser-image = import ./tools/browser/image.nix { inherit pkgs; };
           build-image = import ./tools/build/image.nix { inherit pkgs; };
         } else { });
