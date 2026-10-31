@@ -1574,6 +1574,7 @@ fn main(){
         service.resource.phase = Phase::Requested;
         service.resource.lease = control_core::resources::Lease::new(now(), 180).unwrap();
         let mut value = serde_json::to_value(&*service).unwrap();
+        value["profile"] = json!(crate::worker_profile::Profile::inspect(&image).unwrap());
         value["workspace_exec"] = json!(true);
         value["command"] = json!(format!(
             "cat > /tmp/fixture.rs <<'CONTROL_RUST'\n{PROGRAM}\nCONTROL_RUST\nrustc --edition=2024 -O /tmp/fixture.rs -o /workspace/fixture\nexec /workspace/fixture"
