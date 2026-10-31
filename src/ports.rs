@@ -694,6 +694,8 @@ struct Relay {
     input: Arc<Mutex<std::process::ChildStdin>>,
     alive: Arc<AtomicBool>,
     heartbeat: Option<JoinHandle<()>>,
+    credit: Arc<protocol::Credit>,
+    may_receive: Arc<AtomicBool>,
 }
 impl Relay {
     fn new(mut child: Child) -> io::Result<Self> {
@@ -704,6 +706,15 @@ impl Relay {
                 .ok_or_else(|| fail("Relay input unavailable"))?,
         ));
         let alive = Arc::new(AtomicBool::new(true));
+        if let Err(error) = protocol::write(
+            &mut *input.lock().map_err(|_| fail("Relay unavailable"))?,
+            protocol::Kind::Credit,
+            &[],
+        ) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
         let writer = input.clone();
         let signal = alive.clone();
         let heartbeat = thread::spawn(move || {
@@ -725,6 +736,8 @@ impl Relay {
             input,
             alive,
             heartbeat: Some(heartbeat),
+            credit: Arc::new(protocol::Credit::default()),
+            may_receive: Arc::new(AtomicBool::new(true)),
         })
     }
 }
@@ -764,6 +777,8 @@ fn bridge(
     let mut reading = socket.try_clone()?;
     let closing = socket.try_clone()?;
     let input = child.input.clone();
+    let credit = child.credit.clone();
+    let alive = child.alive.clone();
     let done_write = Arc::new(AtomicBool::new(false));
     let done_read = Arc::new(AtomicBool::new(false));
     let failed = Arc::new(AtomicBool::new(false));
@@ -775,10 +790,16 @@ fn bridge(
         if port_direction == Direction::Ingress {
             match ingress_guard::first_chunk(&mut reading) {
                 Ok(bytes) if !bytes.is_empty() => {
-                    if input
-                        .lock()
-                        .map_err(|_| fail("Relay unavailable"))
-                        .and_then(|mut w| protocol::write(&mut *w, protocol::Kind::Data, &bytes))
+                    if credit
+                        .take(&alive)
+                        .and_then(|()| {
+                            input
+                                .lock()
+                                .map_err(|_| fail("Relay unavailable"))
+                                .and_then(|mut w| {
+                                    protocol::write(&mut *w, protocol::Kind::Data, &bytes)
+                                })
+                        })
                         .is_err()
                     {
                         failure.store(true, Ordering::Release);
@@ -793,6 +814,10 @@ fn bridge(
             }
         }
         loop {
+            if credit.take(&alive).is_err() {
+                failure.store(true, Ordering::Release);
+                break;
+            }
             let (kind, size) = match reading.read(&mut buffer) {
                 Ok(0) => (protocol::Kind::Fin, 0),
                 Ok(n) => (protocol::Kind::Data, n),
@@ -818,38 +843,92 @@ fn bridge(
     });
     let b = done_read.clone();
     let failure = failed.clone();
-    let reader = thread::spawn(move || {
-        let mut buffer = [0; protocol::LIMIT];
-        loop {
-            match protocol::read(&mut output, &mut buffer) {
-                Ok((protocol::Kind::Data, n)) => {
-                    if socket.write_all(&buffer[..n]).is_err() {
+    let input = child.input.clone();
+    let permission = child.may_receive.clone();
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Option<Vec<u8>>>(1);
+    let delivery = thread::spawn(move || {
+        for data in rx {
+            match data {
+                Some(data) => {
+                    if socket.write_all(&data).is_err() {
+                        failure.store(true, Ordering::Release);
+                        break;
+                    }
+                    permission.store(true, Ordering::Release);
+                    if input
+                        .lock()
+                        .map_err(|_| fail("Relay unavailable"))
+                        .and_then(|mut w| protocol::write(&mut *w, protocol::Kind::Credit, &[]))
+                        .is_err()
+                    {
                         failure.store(true, Ordering::Release);
                         break;
                     }
                 }
-                Ok((protocol::Kind::Fin, _)) => {
+                None => {
                     let _ = socket.shutdown(Shutdown::Write);
                     b.store(true, Ordering::Release);
                     break;
                 }
+            }
+        }
+    });
+    let failure = failed.clone();
+    let credit = child.credit.clone();
+    let permission = child.may_receive.clone();
+    let output_closed = Arc::new(AtomicBool::new(false));
+    let closed = output_closed.clone();
+    let reader = thread::spawn(move || {
+        let mut buffer = [0; protocol::LIMIT];
+        let mut fin = false;
+        loop {
+            match protocol::read(&mut output, &mut buffer) {
+                Ok((protocol::Kind::Credit, _)) => {
+                    if credit.grant().is_err() {
+                        failure.store(true, Ordering::Release);
+                        break;
+                    }
+                }
+                Ok((protocol::Kind::Data, n))
+                    if !fin && permission.swap(false, Ordering::AcqRel) =>
+                {
+                    if tx.try_send(Some(buffer[..n].to_vec())).is_err() {
+                        failure.store(true, Ordering::Release);
+                        break;
+                    }
+                }
+                Ok((protocol::Kind::Fin, _))
+                    if !fin && permission.swap(false, Ordering::AcqRel) =>
+                {
+                    fin = true;
+                    if tx.try_send(None).is_err() {
+                        failure.store(true, Ordering::Release);
+                        break;
+                    }
+                }
+                Err(error) if fin && error.kind() == io::ErrorKind::UnexpectedEof => break,
                 _ => {
                     failure.store(true, Ordering::Release);
                     break;
                 }
             }
         }
+        closed.store(true, Ordering::Release);
     });
     while !(done_read.load(Ordering::Acquire) && done_write.load(Ordering::Acquire))
         && !failed.load(Ordering::Acquire)
         && live_service(shared, port, cancel).is_ok()
     {
+        if output_closed.load(Ordering::Acquire) && done_read.load(Ordering::Acquire) {
+            let _ = closing.shutdown(Shutdown::Read);
+        }
         thread::sleep(Duration::from_millis(50));
     }
     let _ = closing.shutdown(Shutdown::Both);
     drop(child);
     let _ = writer.join();
     let _ = reader.join();
+    let _ = delivery.join();
     Ok(())
 }
 fn connect_relay(
@@ -867,7 +946,7 @@ fn connect_relay(
     )?)?;
     let output = handshake(
         &mut child,
-        b"CONTROL_RELAY_READY\n",
+        b"CONTROL_RELAY_V2_READY\n",
         Duration::from_secs(3),
         shared,
         port,
@@ -945,7 +1024,7 @@ fn egress(shared: Arc<Mutex<State>>, port: Port, cancel: Arc<AtomicBool>) -> io:
             )?)?;
             let output = handshake(
                 &mut child,
-                b"CONTROL_RELAY_READY\n",
+                b"CONTROL_RELAY_V2_READY\n",
                 Duration::from_secs(3),
                 &shared,
                 &port,
@@ -955,7 +1034,7 @@ fn egress(shared: Arc<Mutex<State>>, port: Port, cancel: Arc<AtomicBool>) -> io:
             receipt(&shared, &port, true, "");
             let output = handshake(
                 &mut child,
-                b"CONTROL_RELAY_CONNECTED\n",
+                b"CONTROL_RELAY_V2_CONNECTED\n",
                 Duration::from_secs(approval.expires.saturating_sub(now())),
                 &shared,
                 &port,
@@ -1444,7 +1523,7 @@ fn main(){
    let mut body=Vec::new();let _=s.read_to_end(&mut body);std::fs::write("/workspace/inbound-size",body.len().to_string()).unwrap();
    let _=s.write_all(b"service:");let _=s.write_all(&body);let _=s.shutdown(Shutdown::Write);
  });});
- thread::spawn(||{let listener=TcpListener::bind("127.0.0.1:33003").unwrap();for stream in listener.incoming(){thread::spawn(move||{let _socket=stream.unwrap();thread::sleep(Duration::from_secs(180));});}});
+ thread::spawn(||{let listener=TcpListener::bind("127.0.0.1:33003").unwrap();for stream in listener.incoming(){thread::spawn(move||{let mut socket=stream.unwrap();thread::sleep(Duration::from_secs(7));let mut buffer=[0;8192];let(mut count,mut sum)=(0u64,0u64);loop{match socket.read(&mut buffer){Ok(0)=>break,Ok(n)=>{count+=n as u64;sum+=buffer[..n].iter().map(|b|u64::from(*b)).sum::<u64>();},Err(_)=>return}}let _=write!(socket,"received:{count}:{sum}");let _=socket.shutdown(Shutdown::Write);});}});
  thread::spawn(||{let listener=TcpListener::bind("127.0.0.1:33005").unwrap();for stream in listener.incoming(){let mut s=stream.unwrap();thread::spawn(move||{s.write_all(b"banner\n").unwrap();let mut body=Vec::new();let _=s.read_to_end(&mut body);let _=s.write_all(b"after:");let _=s.write_all(&body);let _=s.shutdown(Shutdown::Write);});}});
  let mut first=true;loop{if let Ok(mut s)=TcpStream::connect("127.0.0.1:33002"){if first{s.write_all(b"outbound").unwrap();s.shutdown(Shutdown::Write).unwrap();let mut reply=Vec::new();s.read_to_end(&mut reply).unwrap();if reply==b"host:outbound"{std::fs::write("/workspace/outbound-result",b"half-close-ok").unwrap();first=false;}}else{let _=s.write_all(b"hold");let mut reply=Vec::new();let _=s.read_to_end(&mut reply);}}thread::sleep(Duration::from_millis(100));}
 }"#;
@@ -1842,29 +1921,62 @@ fn main(){
         let stalled =
             TcpStream::connect(("127.0.0.1", named("stall").approval.unwrap().host_port)).unwrap();
         stalled
-            .set_read_timeout(Some(Duration::from_secs(9)))
+            .set_read_timeout(Some(Duration::from_secs(25)))
             .unwrap();
         let mut sending = stalled.try_clone().unwrap();
         sending
-            .set_write_timeout(Some(Duration::from_secs(9)))
+            .set_write_timeout(Some(Duration::from_secs(25)))
             .unwrap();
         let writer = thread::spawn(move || {
+            let data: [u8; 65536] = std::array::from_fn(|i| i as u8);
+            for _ in 0..256 {
+                sending.write_all(&data)?;
+            }
+            sending.shutdown(Shutdown::Write)
+        });
+        let mut stalled = stalled;
+        let stall = Instant::now();
+        let mut response = String::new();
+        stalled.read_to_string(&mut response).unwrap();
+        writer.join().unwrap().unwrap();
+        assert_eq!(
+            response,
+            format!(
+                "received:{}:{}",
+                65536u64 * 256,
+                (0..65536).map(|i| u64::from(i as u8)).sum::<u64>() * 256
+            )
+        );
+        assert!(stall.elapsed() > Duration::from_secs(5));
+        println!(
+            "Healthy slow reader resumed with exact payload after {:?}",
+            stall.elapsed()
+        );
+        let mut held =
+            TcpStream::connect(("127.0.0.1", named("stall").approval.unwrap().host_port)).unwrap();
+        held.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut sending = held.try_clone().unwrap();
+        sending
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let blocked = thread::spawn(move || {
             let data = [0; 65536];
-            for _ in 0..1024 {
+            for _ in 0..256 {
                 if sending.write_all(&data).is_err() {
                     break;
                 }
             }
         });
-        let mut stalled = stalled;
-        let stall = Instant::now();
-        assert_closed(stalled.read(&mut buffer));
-        let _ = writer.join();
-        println!(
-            "Backpressure watchdog closed stalled connection: {:?}",
-            stall.elapsed()
-        );
+        thread::sleep(Duration::from_secs(1));
+        let revoked = Instant::now();
         post(named("stall").id.as_str(), "revoke=yes");
+        assert_closed(held.read(&mut buffer));
+        let _ = blocked.join();
+        assert!(revoked.elapsed() < Duration::from_secs(5));
+        println!(
+            "Revocation closed a backpressured connection after {:?}",
+            revoked.elapsed()
+        );
         post(named("death").id.as_str(), "seconds=30");
         wait(
             || {

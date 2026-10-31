@@ -1,12 +1,12 @@
 //! Trusted lease/heartbeat-bounded relay inside an offline service.
 mod protocol;
-use protocol::{Kind, LIMIT};
+use protocol::{Credit, Kind, LIMIT};
 use std::{
     io::{self, Read, Write},
     net::{Shutdown, TcpListener, TcpStream},
     process::ExitCode,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -14,6 +14,9 @@ use std::{
 #[cfg(target_os = "linux")]
 unsafe extern "C" {
     fn prctl(option: i32, ...) -> i32;
+}
+fn abort() -> ! {
+    std::process::exit(125)
 }
 fn run() -> io::Result<()> {
     #[cfg(target_os = "linux")]
@@ -55,80 +58,109 @@ fn run() -> io::Result<()> {
             std::thread::sleep(Duration::from_millis(100));
         }
     });
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let credit = Arc::new(Credit::default());
+    let outgoing = credit.clone();
+    let may_receive = Arc::new(AtomicBool::new(false));
+    let permission = may_receive.clone();
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Option<Vec<u8>>>(1);
+    // Parsing never performs TCP writes or blocks on the application queue.
+    // One advertised credit permits exactly one Data or FIN frame.
     std::thread::spawn(move || {
         let mut input = io::stdin().lock();
         let mut buffer = [0; LIMIT];
         let mut fin = false;
         loop {
             match protocol::read(&mut input, &mut buffer) {
-                Ok((Kind::Ping, _)) => {}
-                Ok((Kind::Data, n)) if !fin => {
-                    if tx.send(Some(buffer[..n].to_vec())).is_err() {
-                        std::process::exit(125);
+                Ok((Kind::Ping, _)) => {
+                    heartbeat.store(start.elapsed().as_millis() as u64, Ordering::Release)
+                }
+                Ok((Kind::Credit, _)) => {
+                    if outgoing.grant().is_err() {
+                        abort();
                     }
                 }
-                Ok((Kind::Fin, _)) if !fin => {
+                Ok((Kind::Data, n)) if !fin && permission.swap(false, Ordering::AcqRel) => {
+                    if tx.try_send(Some(buffer[..n].to_vec())).is_err() {
+                        abort();
+                    }
+                }
+                Ok((Kind::Fin, _)) if !fin && permission.swap(false, Ordering::AcqRel) => {
                     fin = true;
-                    if tx.send(None).is_err() {
-                        std::process::exit(125);
+                    if tx.try_send(None).is_err() {
+                        abort();
                     }
                 }
-                _ => std::process::exit(125),
+                _ => abort(),
             }
-            heartbeat.store(start.elapsed().as_millis() as u64, Ordering::Release);
         }
     });
     let stream = match args[0].as_str() {
         "connect" => {
-            let s =
+            let stream =
                 TcpStream::connect_timeout(&([127, 0, 0, 1], port).into(), Duration::from_secs(2))?;
-            println!("CONTROL_RELAY_READY");
+            println!("CONTROL_RELAY_V2_READY");
             io::stdout().flush()?;
-            s
+            stream
         }
         "listen" => {
             let listener = TcpListener::bind(("127.0.0.1", port))?;
             listener.set_nonblocking(true)?;
-            println!("CONTROL_RELAY_READY");
+            println!("CONTROL_RELAY_V2_READY");
             io::stdout().flush()?;
             loop {
                 match listener.accept() {
-                    Ok((s, _)) => {
-                        println!("CONTROL_RELAY_CONNECTED");
+                    Ok((stream, _)) => {
+                        println!("CONTROL_RELAY_V2_CONNECTED");
                         io::stdout().flush()?;
-                        break s;
+                        break stream;
                     }
-                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                         std::thread::sleep(Duration::from_millis(25))
                     }
-                    Err(e) => return Err(e),
+                    Err(error) => return Err(error),
                 }
             }
         }
         _ => return Err(io::Error::other("Invalid mode")),
     };
     stream.set_nodelay(true)?;
+    let output = Arc::new(Mutex::new(io::stdout()));
+    may_receive.store(true, Ordering::Release);
+    protocol::write(
+        &mut *output
+            .lock()
+            .map_err(|_| io::Error::other("Relay output unavailable"))?,
+        Kind::Credit,
+        &[],
+    )?;
     let done_read = Arc::new(AtomicBool::new(false));
     let done_write = Arc::new(AtomicBool::new(false));
     let mut reading = stream.try_clone()?;
     let a = done_read.clone();
+    let writer = output.clone();
     std::thread::spawn(move || {
-        let mut output = io::stdout().lock();
         let mut buffer = [0; LIMIT];
+        let alive = AtomicBool::new(true);
         loop {
-            match reading.read(&mut buffer) {
-                Ok(0) => {
-                    let _ = protocol::write(&mut output, Kind::Fin, &[]);
-                    a.store(true, Ordering::Release);
-                    break;
-                }
-                Ok(n) => {
-                    if protocol::write(&mut output, Kind::Data, &buffer[..n]).is_err() {
-                        std::process::exit(125);
-                    }
-                }
-                Err(_) => std::process::exit(125),
+            if credit.take(&alive).is_err() {
+                abort();
+            }
+            let (kind, n) = match reading.read(&mut buffer) {
+                Ok(0) => (Kind::Fin, 0),
+                Ok(n) => (Kind::Data, n),
+                Err(_) => abort(),
+            };
+            if writer
+                .lock()
+                .map_err(|_| io::Error::other("Relay output unavailable"))
+                .and_then(|mut out| protocol::write(&mut *out, kind, &buffer[..n]))
+                .is_err()
+            {
+                abort();
+            }
+            if kind == Kind::Fin {
+                a.store(true, Ordering::Release);
+                break;
             }
         }
     });
@@ -139,7 +171,16 @@ fn run() -> io::Result<()> {
             match data {
                 Some(data) => {
                     if stream.write_all(&data).is_err() {
-                        std::process::exit(125);
+                        abort();
+                    }
+                    may_receive.store(true, Ordering::Release);
+                    if output
+                        .lock()
+                        .map_err(|_| io::Error::other("Relay output unavailable"))
+                        .and_then(|mut out| protocol::write(&mut *out, Kind::Credit, &[]))
+                        .is_err()
+                    {
+                        abort();
                     }
                 }
                 None => {

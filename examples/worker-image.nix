@@ -40,7 +40,7 @@ pkgs.dockerTools.buildLayeredImage {
     chmod 0777 home/agent workspace
   '';
   config = {
-    Labels = { "dev.control.service-runner" = "1"; "dev.control.tcp-relay" = "1"; };
+    Labels = { "dev.control.service-runner" = "1"; "dev.control.tcp-relay" = "2"; };
     WorkingDir = "/workspace";
     Env = [
       "HOME=/home/agent"

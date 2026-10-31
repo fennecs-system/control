@@ -79,15 +79,20 @@ A chat cannot request or manage another chat's ports; judges cannot manage ports
   before forwarding. Engine inspection has the existing bounded Docker deadline.
   Externally observed TCP closure can be EOF or reset; it is not promised graceful.
 - The helper is nondumpable, runs as the service's non-root user in the verified
-  offline container, and enforces its own monotonic lease. Missing control traffic
-  or sustained backpressure terminates it after five seconds. This bounds orphan
-  listeners after an abrupt host failure; it is also an explicit stalled-transfer
-  limit, not only a host-loss detector.
+  offline container, and enforces its own monotonic lease. Missing host heartbeats
+  terminate it after five seconds, bounding orphan listeners after an abrupt host
+  failure. A slow TCP reader does not suppress heartbeats or shorten the lease;
+  data waits under bounded backpressure until the application reads, access is
+  revoked, or the approved lease ends.
 - The shared std-only Rust framing preserves TCP write-half-close separately from
   transport EOF. Frames are at most 16 KiB, the helper's queue holds one data
-  frame, and heartbeat/control messages cannot carry commands or destinations.
-  Both directions can finish independently. A normal helper exit drains final
-  data/FIN frames before host teardown.
+  frame. Each direction advertises one credit and returns it only after delivering
+  the entire frame to its TCP socket. Parsers use nonblocking bounded queue sends
+  and process heartbeats/credits independently of TCP writers. Duplicate credits
+  or uncredited data fail closed. Heartbeat/control messages cannot carry commands
+  or destinations. Both directions can finish independently. A normal helper exit
+  drains final data/FIN frames before host teardown. The v2 immutable image marker
+  and versioned handshake reject incompatible helpers, including on restoration.
 - Control's state lock is released before Docker/network I/O. There is no polling
   Docker work when no ports are approved. Endpoints receive bytes only after
   approval; a service's normal offline execution boundary is unchanged.
@@ -110,6 +115,7 @@ test uses an isolated Control server, a Nix-built Rust echo service and a local
 host endpoint. It checks both half-close directions, server-first banners,
 fragmented HTTP/TLS rejection without forwarding browser bytes, active and idle
 helper recovery after killing the host server, stable ingress addresses,
-operator approval/revocation, lease expiry, sustained backpressure and service
-death. It makes no model calls or external network requests. Supply
+operator approval/revocation, lease expiry, a reader stalled for seven seconds
+which then receives an exact 16 MiB payload, revocation of a backpressured stream,
+and service death. It makes no model calls or external network requests. Supply
 `CONTROL_QA_SERVICE_IMAGE` (immutable image ID) and `CONTROL_QA_CONTROL_BIN`.
