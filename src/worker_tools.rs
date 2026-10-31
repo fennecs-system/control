@@ -97,6 +97,13 @@ fn rpc_at(
             if crate::delegation::pausing(run) && request["params"]["name"]!="control_agent_delegate" {
                 return error("This attempt is pausing for delegated work; no more tools may run.");
             }
+            if matches!(request["params"]["name"].as_str(),Some("control_agent_spawn_status"|"control_agent_spawn_cancel")) {
+                if run.question.as_ref().is_some_and(|q|q.answer.is_none()) {return error("This attempt is pausing for a design answer.");}
+                return match crate::spawning::manage(&mut state,run_id,request["params"]["name"].as_str().unwrap(),&request["params"]["arguments"],crate::storage::save) {
+                    Ok(value)=>json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(Ok(value))}),
+                    Err(message)=>error(message),
+                };
+            }
             if request["params"]["name"]=="control_agent_spawn" {
                 let Some(generation)=run.attempts.last().and_then(|a|a.workspace_id.clone()) else {return error("Missing attempt identity");};
                 let Some(nonce)=envelope["nonce"].as_str() else {return error("Missing request identity");};

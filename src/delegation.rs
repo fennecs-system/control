@@ -4,7 +4,6 @@ use crate::{chat, identity, runtime, State};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-pub const MAX_CHILDREN: usize = 8;
 pub const MAX_DEPTH: u8 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,7 +52,7 @@ pub fn pausing(run: &runtime::Run) -> bool {
     })
 }
 pub fn definition() -> Value {
-    json!({"name":"control_agent_delegate","description":"Delegate a bounded task to an isolated worker, or request one isolated, read-only judge review using your captured provider and model. This checkpoints your files, pauses you, releases the worker, then automatically resumes you with the child's result. Stop immediately after acknowledgement; never poll or wait inside a command. Children share your actor and authority ceiling, not writable files. Review feedback never applies or merges changes. Limits: depth 2, 8 children and one judge per root task; execution uses bounded node slots.","inputSchema":{"type":"object","properties":{"objective":{"type":"string","minLength":1,"maxLength":2000},"role":{"type":"string","enum":["worker","judge"]}},"required":["objective","role"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
+    json!({"name":"control_agent_delegate","description":"Delegate a bounded task to an isolated worker, or request one isolated, read-only judge review using your captured provider and model. This checkpoints your files, pauses you, releases the worker, then automatically resumes you with the child's result. Stop immediately after acknowledgement; never poll or wait inside a command. Children share your actor and authority ceiling, not writable files. Review feedback never applies or merges changes. Limits: depth 2, configured per-root team budget shared with spawn batches, and one judge per root task; execution uses bounded node slots.","inputSchema":{"type":"object","properties":{"objective":{"type":"string","minLength":1,"maxLength":2000},"role":{"type":"string","enum":["worker","judge"]}},"required":["objective","role"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
 }
 
 pub(crate) fn lineage(run: &runtime::Run) -> Persona {
@@ -64,7 +63,11 @@ pub(crate) fn lineage(run: &runtime::Run) -> Persona {
         parent: None,
     })
 }
+fn root(run:&runtime::Run)->&str {run.persona.as_ref().map_or(run.id.as_str(),|persona|persona.root.as_str())}
 pub(crate) fn budget(state: &State, run: &runtime::Run, role: Role) -> Result<(), &'static str> {
+    budget_for(state,run,role,1,false)
+}
+pub(crate) fn budget_for(state: &State, run: &runtime::Run, role: Role, additional:usize, reserved:bool) -> Result<(), &'static str> {
     let persona = lineage(run);
     if persona.role == Role::Judge {
         return Err("Judges cannot delegate or acquire additional authority.");
@@ -80,10 +83,12 @@ pub(crate) fn budget(state: &State, run: &runtime::Run, role: Role) -> Result<()
             matches!(r.kind.as_str(), "delegated" | "spawned") && r.persona.as_ref().is_some_and(|p| p.root == persona.root)
         })
         .collect();
-    if children.len() >= MAX_CHILDREN {
-        return Err("Delegation budget exhausted (8 children per root task).");
+    let reservations=state.runtime.runs.iter().filter(|candidate|root(candidate)==persona.root).map(|candidate|candidate.spawns.iter().map(|batch|batch.reserved()).sum::<usize>() + usize::from(candidate.delegation.as_ref().is_some_and(|d|d.child.is_none()))).sum::<usize>();
+    let delegated=children.iter().filter(|child|child.kind=="delegated").count();
+    if delegated.saturating_add(reservations).saturating_add(additional)>state.runtime.execution.max_agents_per_root {
+        return Err("Configured per-root agent budget exhausted.");
     }
-    if role == Role::Judge && children.iter().any(|r| is_judge(r)) {
+    if role == Role::Judge && (children.iter().any(|r| is_judge(r)) || state.runtime.runs.iter().any(|candidate|root(candidate)==persona.root && (!reserved || candidate.id!=run.id) && candidate.delegation.as_ref().is_some_and(|d|d.child.is_none()&&d.input.role==Role::Judge))) {
         return Err("One judge review is allowed per root task.");
     }
     Ok(())
@@ -306,7 +311,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
         });
         session.revision = session.revision.saturating_add(1);
     } else {
-        budget(state, &parent, d.input.role)?;
+        budget_for(state, &parent, d.input.role, 0, true)?;
         crate::scheduler::admit(&state.runtime)?;
         let id = chat::create(state);
         let child_chat = state.chats.last_mut().unwrap();
@@ -616,7 +621,7 @@ mod tests {
                 .contains("depth")
         );
         s.runtime.runs[0].persona = None;
-        for _ in 0..MAX_CHILDREN {
+        for _ in 0..s.runtime.execution.max_agents_per_root {
             let mut child = s.runtime.runs[0].clone();
             child.kind = "delegated".into();
             child.persona = Some(Persona {

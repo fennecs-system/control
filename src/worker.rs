@@ -466,6 +466,9 @@ fn start_with(state: Arc<Mutex<State>>, execute: fn(Arc<Mutex<State>>, Task)) ->
                         if let Err(message) = crate::rooms::reconcile(&mut s, storage::save) {
                             s.runtime.notice = message.into();
                         }
+                        if let Err(message) = crate::spawning::reconcile(&mut s, storage::save) {
+                            s.runtime.notice = message.into();
+                        }
                         let Some(index) = checkpoint_next(&mut s, storage::save) else {
                             break;
                         };

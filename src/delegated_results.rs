@@ -99,6 +99,9 @@ fn scope<'a>(
     state: &'a State,
     caller: &runtime::Run,
 ) -> Result<(HashSet<&'a str>, HashSet<&'a str>), &'static str> {
+    // Configured teams plus bounded continuation receipts, retaining the
+    // ordinary-chat floor and an explicit allocation ceiling.
+    let graph_limit=GRAPH_LIMIT.max(state.runtime.execution.max_agents_per_root.saturating_mul(4)).min(262144);
     let mut family = HashSet::new();
     let actual = state
         .runtime
@@ -131,7 +134,7 @@ fn scope<'a>(
                 }
             }
         }
-        if family.len() > GRAPH_LIMIT {
+        if family.len() > graph_limit {
             return Err("Delegation lineage exceeds the inspection limit.");
         }
         if family.len() == before {
@@ -145,7 +148,7 @@ fn scope<'a>(
         if !visited.insert(id) {
             continue;
         }
-        if visited.len() > GRAPH_LIMIT {
+        if visited.len() > graph_limit {
             return Err("Delegation lineage exceeds the inspection limit.");
         }
         let from = state
