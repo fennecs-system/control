@@ -6,6 +6,11 @@ request. The maintainer merges after its Rust checks pass; coding agents do not
 merge pull requests. Deploy the merged revision when requested. Fix a failing
 main build before starting another feature.
 
+After a successful deployment and health checks, follow the cleanup rule in
+[AGENTS.md](AGENTS.md): remove obsolete clean worktrees, verified merged branches
+and their old scratch files. Preserve unrelated or unmerged work and current
+diagnostics. Do not perform this cleanup before deployment succeeds.
+
 ```sh
 git switch main
 git pull --ff-only

@@ -39,7 +39,7 @@ unperformed release checks. Branch-only work is identified separately.
 - Attempt fencing, ordered per-chat work, explicit retry, retained diagnostics
   and progress events without a full durable save for every event.
 - `/steer` queues next-turn direction; `/btw` and `/spawn` create linked independent
-  conversations. One execution slot and at most 32 pending runs bound admission.
+  conversations. Bounded model slots and at most 32 pending runs bound admission.
 - Web/TUI command activity and purple/red diff previews; bounded-context omission
   is visible. Artifact explorer and read-only text viewer share MCP list/read.
 - Structured design questions with options or free-form steering; actor-bound
@@ -123,11 +123,11 @@ not completed features or additional special cases in the core.
    build, receives a stone-brick-versus-cobblestone question through Discord and
    steers the same task without restarting the team.
 
-Implement the shared prerequisites incrementally: declared build environments
-and long-running commands → interactive browser and structured observations →
-bounded parallel/persistent workers and shared tools → game adapter and bridge
-handoff. Storage, recovery and hardening checks below gate the corresponding
-work. A small website does not need to wait for autonomous bots.
+For Minecraft, prioritize persistent tool lifetimes → scoped egress → a small
+team and game adapter, with shared knowledge and room notifications completing
+coordination. Interactive browsing is a separate demonstration, not a prerequisite
+for the game. Storage, recovery and hardening checks below gate the corresponding
+work. Website and research demonstrations can progress independently.
 
 Non-Rust third-party tooling is allowed only inside tool/agent containers.
 Control and authored integrations remain Rust/Haskell/Lean/WASM/Nix; Mineflayer
@@ -163,10 +163,13 @@ See [library boundaries and measurements](docs/CRATE-BOUNDARIES.md).
 
 ## Next: core, web and terminal boundaries
 
-Prioritize this bounded reorganization before expanding persistent services.
+Let the persistent-tool slice below drive the next bounded extraction. Extract
+the lifecycle/ownership rules and narrow application operations it needs; the
+complete web/TUI split is not a prerequisite for that first service.
 The existing server still combines mutable application state, routing, rendering
-and execution assembly; `control-tui`, `control-web` and `control-core` are not
-separate crates yet. Keep `main` buildable throughout small reviewed slices.
+and execution assembly. `control-core` contains the first pure rules; the full
+application service and separate `control-tui`/`control-web` adapters remain
+incomplete. Keep `main` buildable throughout small reviewed slices.
 
 1. Establish typed application commands and bounded queries used by web handlers
    and MCP. Keep authorization, durable acceptance, cancellation and stale-result
@@ -213,6 +216,46 @@ provider/model selection. Preserve exact resource ownership, cancellation cascad
 stale-result fences and restart reconciliation as service lifetimes expand.
 Add aggregate node resource budgets before increasing fan-out further;
 deterministic Rust supervision remains responsible for scheduling.
+
+### First slice and Minecraft prerequisites
+
+1. **Persistent tool lifecycle first.** Start/status/attach/stop through the shared
+   tool surface. Give the resource a durable identity, actor/grant, pinned image,
+   private state, lease and resource limits independent of a model attempt.
+   Detaching or completing a turn does not stop it; explicit stop, expiry or
+   revocation does. Keep attempt workspace writers under the existing checkpoint
+   barrier; a persistent service must not retain a writable mount to an old
+   attempt. Test two turns attaching to the same service, server restart,
+   cancellation, expiry and stale/ambiguous container identities. Extract the
+   pure lifecycle/ownership decisions into `control-core` while implementing this.
+2. **Scoped egress next.** An operator-approved grant names the tool resource,
+   destination, protocol/port and lifetime. Enforce it at the network boundary,
+   including revocation, destination resolution and denial tests; a prompt or
+   unrestricted Docker bridge is insufficient. Keep ordinary workers offline.
+   The game connection needs a suitable egress transport, separate from preview
+   HTTP ingress. Codex command isolation is not an existing general destination
+   allowlist proxy. Begin with an explicitly approved game-server endpoint.
+3. **A small team, then scale.** Start with five persistent bot connections.
+   Keep service/resource budgets separate from concurrent model-turn slots.
+   Introduce nonblocking peer/team spawning with an inherited team budget rather
+   than raising delegation-tree limits or keeping parent model calls waiting.
+   Preserve the current bounded scheduler; larger teams follow measured resource
+   use and the storage/recovery gates below.
+4. **Shared evidence and coordination.** Add authorized knowledge search/read and
+   bounded proposals with provenance and admission, not unrestricted wiki writes.
+   Rooms already support worker read/post; add bounded notifications with durable
+   cursors so relevant messages can schedule a turn without continuous model
+   polling. Reuse existing human questions and Discord delivery for steering.
+5. **Game tool and first demonstration.** A pinned tool container and Rust adapter
+   expose connect/observe/act/cancel. Any upstream Mineflayer runtime stays inside
+   the container and must fit the integration language policy. Use a curated wiki
+   snapshot composed into a lens initially; general page fetch and interactive
+   browsing are useful later, not prerequisites for a castle-building demo.
+
+Keep these as small, usable increments. Measure lifecycle/attach overhead and
+bounded status projections alongside existing command-job behavior; do not claim
+an extraction improves performance without evidence. Full web/TUI extraction can
+continue where it reduces coupling, without delaying this first persistent tool.
 
 ## Next: reliability and real-user feedback
 

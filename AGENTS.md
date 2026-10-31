@@ -6,6 +6,13 @@ agents must not merge PRs. Keep `main` buildable; fix a failed main check before
 starting another feature. Deploy a merged revision when requested. See [CONTRIBUTING.md](CONTRIBUTING.md)
 for the local validation commands and check scope.
 
+Only after the merged application has redeployed successfully and health checks
+pass, clean up obsolete clean worktrees, verified merged branches and scratch files
+from that work, then prune stale refs. Check branch tips before deleting them.
+Preserve dirty worktrees, unmerged work, active resources, credentials, required
+helpers and current verification/deployment logs. If deployment fails, retain the
+worktrees and artifacts needed to diagnose or recover it.
+
 Application code is Rust/WASM. Nix builds environments and tools; shell is for
 setup infrastructure. Do not introduce authored JavaScript or Python.
 Non-Rust third-party tooling is allowed only inside tool/agent containers;
