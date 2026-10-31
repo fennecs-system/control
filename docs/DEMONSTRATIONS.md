@@ -22,6 +22,24 @@ special-purpose framework.
 
 ## 1. Build a non-trivial website
 
+Start with a basic page to exercise the tools before the full scenario:
+
+> Build a small three-page reading-list website in Rust and HTML with inline
+> CSS, mono type and the purple Control palette. Save the source, compile and
+> test the Rust server using the workspace command tools, then start a local
+> preview. Use control_browser_capture on the self-contained HTML, inspect the
+> screenshot and revise any layout problems. Give me the preview and screenshot
+> links and a concise account of what was tested. Use no remote assets or host
+> commands.
+
+The worker capture accepts up to 16,000 bytes of HTML and uses the pinned offline
+Firefox image. It visually checks that HTML; it does not navigate the running
+preview. Rust tests or HTTP checks inside the sandbox cover server behavior.
+Use the normal project/artifact checkpoint and preview tools rather than adding a
+website builder to Control. This basic flow needs no internet grant; public-page
+research can use [scoped HTTP access](WEB-ACCESS.md) when explicitly approved.
+It is a first exercise, not completion of the persisted-data scenario below.
+
 An agent builds a useful website with multiple routes/views, persisted data,
 input validation and tests. The owner opens a running preview, requests a
 meaningful change and inspects the resulting diff and verification. Reconnect to
@@ -58,57 +76,37 @@ and a tool-provided interactive view; it is not another hardcoded dashboard tab.
 - Publish the generated tool/view through the normal tool and artifact/resource
   contracts, with the appropriate browser-origin isolation and bounded output.
 
-Gaps: interactive network-granted browser sessions, bounded agent delegation and
-parallelism, durable collection triggers, a shared observation store, and a
+Gaps: interactive network-granted browser sessions, durable collection triggers,
+a shared observation store, and a
 versioned tool/view publication contract. Demonstrate manual collection rounds
 before introducing unattended schedules.
 
-## 3. Five agents build together in Minecraft
+## 3. Cooperating agents in Minecraft
 
-Start a private test world with five separately identified Sol-backed agents;
-model choice remains configurable rather than fixed into the integration. Each
-has its own persona, tool environment and bounded budget. They can join, observe,
-act, write helper tools, and coordinate through an authorized room. Shared tools
-are versioned proposals with explicit publication/adoption; one agent cannot
-silently replace another's trusted tool. Stable discoveries can become admitted
-knowledge, while ordinary chatter stays in the room.
+An agent starts a server in a tool container and publishes its approved TCP port.
+Another agent creates a compatible client inside its own tool container; the
+owner connects too. Scale from one client to a small team, using room updates,
+admitted knowledge and independent model turns. Connections outlive model turns;
+cancellation and grant revocation close the affected resources.
 
-Separate the persistent game connection from replaceable model runs. Put movement,
-pathfinding, observation filtering and action cancellation in deterministic tools;
-do not spend a model turn on every game tick or placed block. Capture completed,
-failed and uncertain actions distinctly. World observations are authoritative for
-game state; a chat claim alone does not prove a delivery or completed structure.
+The target demonstration uses an offline-mode Minecraft server and five agents
+with Mineflayer clients. Agents create their own adapters and share useful tools
+and knowledge. These are user-created workloads outside this repository; the
+Control implementation remains generic.
 
-Progress from one connected bot, to two coordinating a small task, to all five
-building a common structure. Restart one worker, cancel an action and demonstrate
-that peers keep their identities and project context. The server/world is a
-separate granted resource; a game command grants no host, operator or Discord
-authority. Use the same bounded supervisor rather than a second game runtime.
-
-The [YC experiment](https://labs.ycombinator.com/projects/games/index.html#minecraft)
-uses a Pi-based harness and Mineflayer tools. Its
-[open-source harness](https://github.com/yc-software/minecraft-agent-harness)
-is a useful reference for observation/action and communication boundaries.
-[Mineflayer](https://github.com/PrismarineJS/mineflayer) is a JavaScript/Node library:
-under the container exception it can be pinned as an upstream tool dependency,
-while Control's adapter and tool protocol remain Rust. Reusing that dependency
-does not require adopting Pi or writing a JavaScript Control integration.
+Server packages, protocol libraries and agent-written adapters belong to the
+user's tool environments, not Control's source or a domain-specific scheduler.
+Generated Node/Python programs may execute inside explicitly granted containers;
+Control and its maintained integrations remain Rust/WASM/Nix. Runtime provisioning
+and persistent bot identity remain separate from port access and task spawning.
 
 ## 4. The owner joins and steers the team
 
-The owner joins the same world and asks the team to build a castle. An agent asks
-through the existing durable question service: stone brick or cobblestone? The
-question reaches the owner's confirmed Discord DM with a task link. An answer
-returns to the exact question/task, updates the team's shared plan and lets work
-continue; unrelated agents need not pause. Important decisions can originate from
-the game task without creating a separate Discord-only conversation.
+The owner joins the same world and asks the team to build a castle. Agents can
+ask whether to use stone brick or cobblestone, then continue with the answer.
 
-Demonstrate steering the plan midway through construction, a delayed answer,
-duplicate delivery and a bridge/server restart. Pending answers remain pending;
-in-game messages cannot impersonate the owner's Discord identity. Keep questions
-selective: the team should handle ordinary execution details itself.
-
-Gaps: persistent bot/task identity, event delivery to active agents, bounded
-parallel execution, a Minecraft tool adapter and owner-to-task routing. Existing
-rooms, human `/spawn` and structured Discord questions supply parts of this, but
-do not yet constitute the complete demonstration.
+An agent asks a consequential design question through the existing durable
+question service and confirmed Discord route. The owner answers that exact task,
+steers its plan and lets peers continue. Test delayed/duplicate delivery and a
+bridge/server restart. External-environment messages cannot impersonate an
+operator or grant authority. Parent-chat question aggregation remains open.

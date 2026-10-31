@@ -65,8 +65,8 @@ Use your own model access according to your provider's terms.
 For self-development, a scoped [GitHub tool](docs/GITHUB.md) can publish completed
 improvements as draft pull requests using a private node credential reference.
 Add `--build-environment` to setup for offline Rust/WASM checks. Workers can
-[delegate tasks or request a read-only judge](docs/DELEGATION.md) using another
-configured provider. Independent chats run within bounded node execution slots.
+[spawn N tasks or request a read-only judge](docs/DELEGATION.md) using the captured
+provider/model. Team budgets and execution concurrency are configured separately.
 
 ## Commands
 
@@ -101,13 +101,18 @@ These chat commands work on the web, in the TUI and in authorized Discord DMs:
 - **Chat and artifacts.** Persistent conversations, live command activity and
   purple/red diff previews. Browse published files in a read-only viewer.
 - **Agents and runs.** See active tasks, the queue and execution history. Cancel
-  work or explicitly retry an interrupted attempt.
+  work, retry an interrupted attempt, or spawn a nonblocking batch with paged status.
 - **Lenses.** Compose knowledge, instructions and tool selections per chat.
   Engineering and Research are built from smaller reusable lenses.
 - **Knowledge.** Write Markdown notes, connect them with `[[links]]`, explore the
-  graph and review evidence-backed claims.
+  graph and [review agent-proposed claims](docs/KNOWLEDGE-TOOLS.md).
+- **Rooms.** Shared updates, durable inboxes and an optional bounded
+  [follow-up turn](docs/ROOM-NOTIFICATIONS.md).
+- **Services.** Persistent Nix tool containers with separately approved,
+  [scoped TCP ports](docs/PORTS.md).
 - **Tools.** Search the catalogue by tool name, MCP name or `lens:engineering`.
-  Search, Rust playground and offline Firefox capture have dedicated views.
+  [Approved web fetch and offline Firefox capture](docs/WEB-ACCESS.md), search
+  and Rust playground have dedicated views.
   MCP also offers [optimized Rust microbenchmarks](docs/PERFORMANCE.md).
 - **Design decisions.** Agents can pause for a choice or your own direction,
   then continue from the saved workspace when you answer.

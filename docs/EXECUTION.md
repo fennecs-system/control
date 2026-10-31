@@ -31,11 +31,16 @@ node-wide CPU/memory reservation. Hard writable storage quotas remain open; size
 the limit for the machine and workloads. Recovery interrupts unfinished attempts
 and retains their workspaces; it does not silently replay model requests.
 
-Model attempt lifetime and service lifetime are separate concepts. Persistent
-generic tool/worker environments remain the next execution slice. They need
-independent identities, private writable state, explicit leases and stop/restart
-policy. This change does not keep command jobs alive past their checkpoint barrier
-or provide a persistent game server. Immutable Nix bases remain unchanged.
+Model attempts and tool services have separate lifetimes. [Persistent offline
+services](PERSISTENT-TOOLS.md) have independent identities, private tmpfs, resource
+limits and leases; model completion does not stop them. Attempt-bound command
+jobs still stop before checkpoints. Immutable Nix bases remain unchanged.
+
+[Nonblocking agent batches](DELEGATION.md) reserve a configurable root budget
+(default 64) and node pending-intent capacity (default 256). The existing queue
+materializes tasks as space frees, while model slots independently bound how many
+execute. A large accepted batch is not a request to run that many model calls at
+once. Batch status/cancel and receipt recovery use the same durable scheduler.
 
 The isolated supervisor test exercises real admission, saves and commits with
 controlled workers, without provider calls. Run it alone because it requests

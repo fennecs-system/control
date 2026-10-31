@@ -1,6 +1,6 @@
 # Control roadmap
 
-Reviewed 2026-10-30 against the implementation and feedback from the first users.
+Reviewed 2026-11-01 against the implementation and feedback from the first users.
 Keep the normal macOS/Nix release useful to friends; improve reliability before
 adding autonomous operation. Each node supplies its own configuration and model
 access. Federation remains lower priority.
@@ -107,6 +107,13 @@ a separate maintainer action.
 
 ## Demonstration goals
 
+The basic generated-page exercise is now documented in
+[demonstration goal 1](docs/DEMONSTRATIONS.md): save/build a Rust-served page,
+start a preview, capture self-contained HTML in offline Firefox, inspect and
+revise it. The new worker capture was verified with a real Nix Firefox image.
+This is the first usability exercise; the full persisted-data website and
+interactive browser scenarios below still need end-to-end evidence.
+
 Use [four concrete demonstrations](docs/DEMONSTRATIONS.md) to test Control's
 breadth, after the self-development build/test loop. These are planned goals,
 not completed features or additional special cases in the core.
@@ -116,22 +123,25 @@ not completed features or additional special cases in the core.
 2. **Browser research and a tool view:** agents collect comparable phone prices
    from different sites; a Rust/WASM tool view in Control shows observations over
    time, evidence, missing data and failures.
-3. **Minecraft collective:** five configurable Sol-backed agents join one world,
-   coordinate through chat, share admitted knowledge and versioned tools, and
-   work on a common goal. Keep game connections alive independently of model runs.
-4. **Human participation:** the owner joins the agents' world, directs a castle
-   build, receives a stone-brick-versus-cobblestone question through Discord and
-   steers the same task without restarting the team.
+3. **Minecraft team:** start an offline-mode server in a tool container, expose
+   its approved port, then have five configurable agents join using Mineflayer
+   inside their own tool containers. Agents can write and share tools, coordinate
+   through rooms and share admitted knowledge. Connections outlive model runs.
+4. **Play and steer:** the owner joins the same Minecraft world, asks the team
+   to build a castle and answers a design question through Discord, such as
+   stone brick versus cobblestone. The answer steers the same task.
 
-For Minecraft, prioritize persistent tool lifetimes → scoped egress → a small
-team and game adapter, with shared knowledge and room notifications completing
-coordination. Interactive browsing is a separate demonstration, not a prerequisite
-for the game. Storage, recovery and hardening checks below gate the corresponding
+For multi-agent demonstrations, prioritize persistent tool lifetimes → scoped
+ports → a small team using its own tool runtime, with shared knowledge and room
+notifications for coordination. Interactive browsing is a separate demonstration.
+Storage, recovery and hardening checks below gate the corresponding
 work. Website and research demonstrations can progress independently.
 
 Non-Rust third-party tooling is allowed only inside tool/agent containers.
-Control and authored integrations remain Rust/Haskell/Lean/WASM/Nix; Mineflayer
-can be an isolated upstream dependency behind a Rust adapter.
+Control and maintained integrations remain Rust/Haskell/Lean/WASM/Nix.
+Agents may write task-specific programs in other languages inside granted tool
+containers. Their server packages, adapters and configuration stay outside this
+repository; Control provides generic resources, ports and tool contracts.
 
 ## ✓ Performance pass
 
@@ -161,11 +171,11 @@ The synthetic delivery-reader comparison measured about 44% less decode time and
 Web folder access is opt-in through `/open`, with separate approved named folders.
 See [library boundaries and measurements](docs/CRATE-BOUNDARIES.md).
 
-## Next: core, web and terminal boundaries
+## Later: core, web and terminal boundaries
 
-Let the persistent-tool slice below drive the next bounded extraction. Extract
-the lifecycle/ownership rules and narrow application operations it needs; the
-complete web/TUI split is not a prerequisite for that first service.
+Build on the persistent-tool lifecycle/ownership rules already extracted below.
+Extract narrow application operations where they remove coupling; keep usable
+tools and demonstrations ahead of the complete web/TUI split.
 The existing server still combines mutable application state, routing, rendering
 and execution assembly. `control-core` contains the first pure rules; the full
 application service and separate `control-tui`/`control-web` adapters remain
@@ -188,8 +198,9 @@ incomplete. Keep `main` buildable throughout small reviewed slices.
    change only when it preserves behavior and has a useful boundary or measured
    efficiency gain; do not claim moving files alone makes execution faster.
 
-First slice: `control-core` now owns pure scheduling and attempt-generation
-predicates over borrowed inputs, with independent tests and no dependencies.
+Implemented slices: `control-core` owns pure scheduling, attempt-generation
+predicates and typed resource transitions, with independent tests and a
+dependency-free default build. Persistence uses optional validated Serde support.
 The application adapter retains config I/O and the persisted runtime. Compatibility
 checks compare it with the previous scheduler over mixed saved states. This does
 not yet extract the full command/query service, web adapter or terminal client.
@@ -198,18 +209,17 @@ tool catalogue rather than introducing a separate tool implementation.
 
 Do not expose the full state mutex as the interface, clone complete histories,
 introduce a distributed framework or make every tool its own crate. This improves
-the seam for later remote execution; authentication, resource ownership and stale
-execution fences still need their own implementation and tests.
+the seam for later remote execution; remote authentication, resource ownership
+and stale-execution fences still need their own implementation and tests.
 
-## Next: persistent worker/tool environments
+## ✓ Persistent offline tool foundation
 
-Add persistent worker/tool environments for long-running tools and services.
-Agents attach to an explicit environment identity; model attempts do not own its
-entire lifetime. Reuse command-job and preview supervision, with immutable Nix
-bases, private writable state, resource leases and explicit stop/restart/expiry
-policies. Keep provider credentials out of tool containers. Existing checkpoint
-barriers still quiesce source writers; persistent services need declared read/write
-scope and recovery semantics rather than silently bypassing those barriers.
+Merged and locally deployed in #33: chat/actor/node ownership, typed lifecycle
+decisions in `control-core`, durable start/status/attach/stop handles, captured
+immutable Nix images, private tmpfs, resource limits and bounded leases. A trusted
+Rust watchdog enforces expiry while Control is offline. Model turns attach to a
+resource rather than owning its lifetime. Live restart and missing-receipt tests
+passed. See [persistent tools](docs/PERSISTENT-TOOLS.md).
 
 Keep bounded slots, per-chat FIFO ordering, isolated workspaces and captured
 provider/model selection. Preserve exact resource ownership, cancellation cascades,
@@ -217,54 +227,79 @@ stale-result fences and restart reconciliation as service lifetimes expand.
 Add aggregate node resource budgets before increasing fan-out further;
 deterministic Rust supervision remains responsible for scheduling.
 
-### First slice and Minecraft prerequisites
+### Shared tool prerequisites
 
-The persistent-tool foundation branch implements the first offline slice:
-chat/actor/node ownership, typed lifecycle and explicit effects in `control-core`,
-durable handles, bounded private state, verified container reconciliation and a
-Rust watchdog that enforces expiry without Control running. Worker MCP tools and
-UI discovery share the existing catalogue. This is not yet networked bots,
-durable disk storage or an interactive service API. See
-[the implemented contract and checks](docs/PERSISTENT-TOOLS.md). Mark the first
-slice complete after merge; scoped egress remains the next implementation step.
-
-1. **Persistent tool lifecycle first.** Start/status/attach/stop through the shared
-   tool surface. Give the resource a durable identity, actor/grant, pinned image,
-   private state, lease and resource limits independent of a model attempt.
-   Detaching or completing a turn does not stop it; explicit stop, expiry or
-   revocation does. Keep attempt workspace writers under the existing checkpoint
-   barrier; a persistent service must not retain a writable mount to an old
-   attempt. Test two turns attaching to the same service, server restart,
-   cancellation, expiry and stale/ambiguous container identities. Extract the
-   pure lifecycle/ownership decisions into `control-core` while implementing this.
-2. **Scoped egress next.** An operator-approved grant names the tool resource,
-   destination, protocol/port and lifetime. Enforce it at the network boundary,
-   including revocation, destination resolution and denial tests; a prompt or
-   unrestricted Docker bridge is insufficient. Keep ordinary workers offline.
-   The game connection needs a suitable egress transport, separate from preview
-   HTTP ingress. Codex command isolation is not an existing general destination
-   allowlist proxy. Begin with an explicitly approved game-server endpoint.
-3. **A small team, then scale.** Start with five persistent bot connections.
+1. **✓ Offline lifecycle.** Merged/deployed as above. No service may retain a
+   writable attempt mount across its checkpoint barrier. Tmpfs is not durable
+   disk, and attachment currently reads metadata/logs rather than exposing exec.
+2. **✓ Scoped TCP ports.** Operator-approved ingress and pinned-destination egress
+   bind to a verified service, owner, node, generation and finite lease. Containers
+   remain on `--network=none`; trusted relays close on revocation, expiry or loss
+   of their host connection. Raw ingress rejects browser HTTP/TLS before sending
+   client bytes to the service; websites use the guarded preview tool. See
+   [port tools and limits](docs/PORTS.md). HTTP page grants remain separate.
+3. **A small team, then scale.** Start with a few persistent tool connections.
    Keep service/resource budgets separate from concurrent model-turn slots.
-   Introduce nonblocking peer/team spawning with an inherited team budget rather
-   than raising delegation-tree limits or keeping parent model calls waiting.
-   Preserve the current bounded scheduler; larger teams follow measured resource
-   use and the storage/recovery gates below.
-4. **Shared evidence and coordination.** Add authorized knowledge search/read and
-   bounded proposals with provenance and admission, not unrestricted wiki writes.
-   Rooms already support worker read/post; add bounded notifications with durable
-   cursors so relevant messages can schedule a turn without continuous model
-   polling. Reuse existing human questions and Discord delivery for steering.
-5. **Game tool and first demonstration.** A pinned tool container and Rust adapter
-   expose connect/observe/act/cancel. Any upstream Mineflayer runtime stays inside
-   the container and must fit the integration language policy. Use a curated wiki
-   snapshot composed into a lens initially; general page fetch and interactive
-   browsing are useful later, not prerequisites for a castle-building demo.
+   Nonblocking task batches are implemented below; they are not persistent bot
+   identities or tool connections. Preserve the bounded
+   scheduler and measure resource use before increasing concurrency.
+4. **Shared evidence and coordination.** Knowledge admission and durable room
+   inboxes/one-shot follow-ups are implemented below.
+   Persistent bot wake policies and team event subscriptions still need explicit
+   finite budgets; reuse existing human questions and Discord delivery for steering.
+5. **Tool construction and first demonstration.** Agents request/select a pinned
+   tool runtime, write their own task-specific code and coordinate through normal
+   tools and rooms. Runtime/image requests and persistent bot identity need their
+   own contracts; generic ports alone do not supply an arbitrary runtime image.
+   Keep domain-specific adapters and server setup outside Control's source.
 
 Keep these as small, usable increments. Measure lifecycle/attach overhead and
 bounded status projections alongside existing command-job behavior; do not claim
 an extraction improves performance without evidence. Full web/TUI extraction can
-continue where it reduces coupling, without delaying this first persistent tool.
+continue where it reduces coupling, without delaying usable tool workloads.
+
+Before longer-running demonstrations, add explicit renewal of both service and
+port leases without restarting connections. Preserve the approved owner, scope,
+endpoint and resource limits. Add bounded concurrent egress connections per
+endpoint and keep the listener available during reconnects; connection limits
+remain separate from model-turn slots. The first slice has a one-hour maximum
+and one active connection per egress port.
+
+## ✓ Scoped web and collective tools
+
+Merged in #34 after local checks. Rebuild the pinned worker/browser images before
+using the new tools.
+Existing shared tool discovery, authority checks and scheduler remain
+the entry points. No authored JavaScript/Python or new orchestration framework.
+
+- **Scoped HTTP:** operator-approved exact origins per chat/actor with expiry,
+  DNS pinning, public-address checks, redirect revalidation and revocation gates.
+  GET-only bounded text/evidence; ordinary workers/services stay offline.
+  [Web access](docs/WEB-ACCESS.md) describes in-flight request limits and why
+  this is not TCP egress or authenticated/interactive browsing.
+- **Worker browser evidence:** self-contained HTML capture in offline Nix Firefox,
+  bounded PNG artifacts and inline model images. It checks supplied HTML, not a
+  running preview's behavior or remote assets. Preview navigation/interaction
+  remains a separate scoped browser capability.
+- **Knowledge:** captured-document search/read, shared admitted claims and concise
+  idempotent proposals with provenance. The operator admits proposals through
+  Knowledge Review; agents cannot rewrite accepted facts. [Contract](docs/KNOWLEDGE-TOOLS.md).
+- **Room notifications:** durable scoped inbox cursors, ordered paged reads,
+  explicit acknowledgement and one optional idle follow-up per human task.
+  Restart-safe receipts and rearm guards prevent automatic reply loops; follow-ups
+  retain their original team budget. Watches survive authorized delegation and
+  design-question continuations. [Contract](docs/ROOM-NOTIFICATIONS.md).
+- **Nonblocking N-agent tasks:** durable batches reserve a configurable root
+  budget, with a separate node backlog limit and existing model-slot/32-pending-run
+  limits. Defaults are 64 agents per root and 256 pending intents. Admission
+  materializes children as capacity frees; status is paged, cancellation fences
+  backlog and descendants, and retries/restarts retain exact receipts. A 50-agent
+  admission/restart test passes without model calls. [Contract](docs/DELEGATION.md).
+
+Next usability checks: run the basic page task through a real model, then a
+meaningful revision/reconnect. Roll child design questions into the parent chat's
+pending-question view; today they remain in their own chats, with actor-bound
+Discord question delivery. A parent agent cannot grant itself additional access.
 
 ## Next: reliability and real-user feedback
 
@@ -305,8 +340,9 @@ Conditional transcript rendering still needs complete invalidation.
   stdio filtering, native-client timeouts and broker dispatch. Worker discovery
   reuses the schema builders; per-run room, backend, judge and authority filters
   remain explicit. Registration tests cover policy, schema and UI completeness.
-- Add admitted knowledge search/read and bounded claim proposals, authorized room
-  posting in the external bridge, and `control.run.submit/status/diff` using the
+- Knowledge search/read and bounded proposals are implemented above. Add
+  authorized room posting in the external bridge and
+  `control.run.submit/status/diff` using the
   same durable run service. External callers inherit no worker/operator authority.
 - Expose useful bounded preview diagnostics; keep service identity and ingress
   transport separate. Add scoped, revocable remote MCP or preview transport over
@@ -339,7 +375,7 @@ review evidence does not grant merge/deploy permission. Make this useful for
 Prefer small typed lifecycle states, validated identifiers and explicit
 state/event/effect transitions with independent tests. Verify narrow invariants
 where useful; do not claim types can prove arbitrary model behavior. Keep single
-node reliability and the Minecraft/bot demonstrations ahead of distributed
+node reliability and the tool/bot demonstrations ahead of distributed
 frameworks or broad rewrites.
 
 ## Later: personas as persistent bots
@@ -366,8 +402,9 @@ declarative-directive model; keep its configuration distinct from its chat histo
   concurrency, token/spend/storage budgets and inherited authority ceilings.
   A child cannot grant itself or its parent more access. Existing human `/spawn`
   and bounded worker-to-worker delegation are implemented, with bounded parallel
-  model runs. Persistent autonomous bots and independent service lifetimes remain
-  planned.
+  model runs. Independent service lifetimes are implemented; nonblocking task
+  batches are implemented above. Persistent autonomous bot identities
+  and their event/resource policies remain planned.
 - **Human questions:** reuse durable design/approval requests and Discord delivery,
   with recipient/run identity, expiry and restart-safe answers. Important missing
   information can reach the operator away from the browser; channel messages or

@@ -28,7 +28,10 @@ Non-Rust third-party tooling may run inside tool or agent containers. Control
 and authored integrations remain Rust/Haskell/Lean/WASM/Nix; an upstream runtime
 inside an isolated tool is not a host integration runtime. The
 [demonstration goals](DEMONSTRATIONS.md) exercise website construction, browser
-research with a tool view, and coordinated Minecraft bots using these boundaries.
+research with a tool view, and coordinated agents using these boundaries.
+Agent-generated programs can use tool-specific languages inside granted
+containers. Their server packages and adapters belong to those private tool
+environments, not Control's maintained source or a host integration runtime.
 
 ## One node, distinct responsibilities
 
@@ -180,19 +183,15 @@ base stays immutable; writable state, network grants, leases, resource limits an
 cleanup belong to the Rust supervisor. A container or microVM is an isolation
 choice, not a reason to grant the model host administration.
 
-Today Control retains file checkpoints and some preview services, and recreates
-provider containers per attempt. General persistent worker containers and Nix
-VMs remain future work. Restoring files does not restore live process state;
-restarting a lost service must follow explicit recovery semantics. Persistent
-shells may be useful tools within those environments without defining the agent
-runtime or weakening reproducibility.
-
-For example, an ephemeral model attempt can request a long-running Minecraft
-server through a tool and receive its service identity, logs and endpoint. The
-attempt may finish while the server and its durable world remain available for
-later agents. Service lifetime, data lifetime and model-attempt lifetime are
-independent. Minecraft is an example tool workload, not a special case in core
-scheduling; resource and port grants still apply.
+Control retains file checkpoints, preview services and leased offline tool
+containers, while provider containers are recreated per attempt. Tool tmpfs
+survives Control process restarts while its container remains alive; it is not
+durable disk. Restoring files does not restore live process state. Explicit
+service restart policy, durable tool storage and Nix VMs remain future work.
+Service lifetime, data lifetime and model-attempt lifetime are independent.
+Task-specific protocols are tool workloads, not special cases in core scheduling.
+Separate [scoped TCP grants](PORTS.md) connect verified services through trusted
+relays while their Docker network remains disabled.
 
 Backend/model selection is captured per run. The Claude adapter runs an unmodified,
 pinned CLI with built-in tools disabled and an explicit Control MCP bridge.
@@ -205,9 +204,10 @@ to a user's independently run Claude Code. See [both paths](CLAUDE.md).
 A state-directory lock prevents competing servers. Durable interrupted attempts
 and node labels prevent dispatch alongside earlier active containers; unknown
 containers require inspection, not guessed cleanup. Live workspace disk quotas
-and automatic container reconciliation remain open before broader unattended use.
+and the remaining ambiguous-creation recovery cases still gate broader unattended use.
 
 A complete packaged node, NixOS module, native multi-provider loop/router, bundled
-local inference, durable task recovery, safe child-run scheduling, and networked
-federation remain future work. The existing browser transcript refresh and TUI
+local inference, automatic effect-safe task resumption and networked federation
+remain future work. Bounded child scheduling and durable spawn backlog admission
+are implemented. The existing browser transcript refresh and TUI
 revision polling are not a durable incremental event subscription API.

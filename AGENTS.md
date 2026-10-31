@@ -18,6 +18,10 @@ setup infrastructure. Do not introduce authored JavaScript or Python.
 Non-Rust third-party tooling is allowed only inside tool/agent containers;
 Control and authored integrations remain Rust/Haskell/Lean/WASM/Nix. An upstream
 container dependency does not authorize a host Node service or JavaScript adapter.
+Agent-generated programs outside this repository may use other languages inside
+explicitly granted tool containers. Keep task-specific servers, game adapters
+and their configuration out of Control's maintained source; provide generic
+resource, transport and tool capabilities instead.
 
 Personal node configuration and credentials belong outside the checkout under
 the configured home-directory roots. Never read or print credential contents.

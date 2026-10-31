@@ -5,7 +5,7 @@ language commitment. No runtime changes, authenticated calls or credential reads
 
 ## Recommendation
 
-Ship persistent tools, scoped egress and five Minecraft peers before a language.
+Ship persistent tools, scoped ports and a small cooperating team before a language.
 The first bot definition should be ordinary versioned configuration: persona,
 model, composed lenses, named tool resources, event subscriptions and limits.
 Use a small deterministic Rust supervisor to turn admitted events into bounded
@@ -37,7 +37,11 @@ this style without putting a parser, plugin loader or dynamic interpreter in cor
 Existing delegation remains bounded parent/child model work. A persistent game
 connection is a resource; a bot is a supervised identity that can request model
 turns; a model attempt is one execution. These lifetimes must remain distinct.
-Room worker read/post already exists; durable room wake subscriptions are planned.
+Room worker read/post exists; the subsequent implementation adds durable inboxes
+and a bounded one-shot wake. Persistent bot event subscriptions remain future
+work: a persona listens across turns and restarts for selected room or tool
+events, with explicit cancellation and budgets. This does not keep a model
+running continuously.
 Do not create competing chat or human-question systems for bots.
 
 ## What to borrow
@@ -49,7 +53,7 @@ Do not create competing chat or human-question systems for bots.
 | [Grok Bot routines](https://docs.x.ai/grok-bot/skills-routines-and-automations) | Named bot ownership, separate instructions and triggers, testable routines, narrow event subscriptions, stale-data/failure policies. | Keep instructions easy to edit, but compile concrete selectors and budgets into validated data. Avoid waking a model on every game tick or room message. |
 | [Grok Bot approvals](https://docs.x.ai/grok-bot/approvals-security-and-privacy) | Approval shows the concrete operation, distinguishes requester identity and external text, and separates cloud from local access. | Its automated review is model-based and documentation says it complements least privilege. A judge in Control must never replace deterministic capability checks. |
 | [Meta Muse safety design](https://research.meta.ai/blog/security-and-safety-for-ai-agents-our-approach-with-muse) | A separate authority evaluates proposed actions; scoped approvals, brokered connectors and enforced egress remain outside the agent runtime. | Borrow separation of proposal from authority. Do not require its larger eBPF/taint architecture to ship the first allowlisted game connection. This is the personal-agent Muse, not Microsoft's similarly named gameplay world model. |
-| [YC Minecraft harness](https://github.com/yc-software/minecraft-agent-harness) | Persistent sessions, a configured team, DMs and Mineflayer game tools are sufficient for a working multi-agent demonstration. | Use as evidence that a new language is unnecessary. Its host Node runtime, authored JS integration and local-folder shell fallback do not meet Control's language/sandbox rules. Third-party Mineflayer stays inside a pinned tool container, behind an authored Rust adapter. |
+| [YC agent harness](https://github.com/yc-software/minecraft-agent-harness) | Persistent sessions, a configured team, DMs and task-specific tools are sufficient for a working multi-agent demonstration. | Use as evidence that a new language is unnecessary. Domain packages and agent-written adapters belong in isolated tool containers, not Control's maintained source or a host Node runtime. |
 
 These are primary documentation claims, not independent audits of the products.
 Recommendations below are design inferences for Control.
