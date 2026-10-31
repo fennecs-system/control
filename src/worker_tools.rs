@@ -140,6 +140,12 @@ fn rpc_at(
                 drop(state);
                 return json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(crate::services::call(shared,run_id,&generation,&nonce,request["params"]["name"].as_str().unwrap(),&request["params"]["arguments"]))});
             }
+            if crate::ports::known(request["params"]["name"].as_str().unwrap_or("")) {
+                let generation=run.attempts.last().and_then(|a|a.workspace_id.clone()).unwrap_or_default();
+                let nonce=envelope["nonce"].as_str().unwrap_or("").to_owned();
+                drop(state);
+                return json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(crate::ports::call(shared,run_id,&generation,&nonce,request["params"]["name"].as_str().unwrap(),&request["params"]["arguments"]))});
+            }
             if request["params"]["name"]=="control_github_open_pr" {
                 if run.action != identity::Action::Improve {return error("GitHub publication requires an improvement run");}
                 let chat=run.chat_id.clone().unwrap_or_default();

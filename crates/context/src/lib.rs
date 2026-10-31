@@ -15,7 +15,12 @@ pub struct Tool {
     pub aliases: &'static str,
     pub mcp_names: &'static [&'static str],
 }
-pub const TOOLS: [Tool; 19] = [
+pub const TOOLS: [Tool; 20] = [
+    Tool {
+        name:"service.ports",title:"TCP ports",description:"Scoped service connections · operator approval",
+        href:"/tools/ports",aliases:"network tcp port ingress egress loopback proxy relay",
+        mcp_names:&["control_port_request","control_port_status","control_port_stop"],execution:"Rust capability broker / offline service relay",surface:"chat / local TCP",available:true,
+    },
     Tool {
         name: "service.persistent", title: "Persistent service", description: "Private offline tools · leased lifetime",
         href: "/chats", aliases: "bot persistent container lifecycle attach stop service",
