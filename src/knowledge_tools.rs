@@ -129,8 +129,12 @@ pub fn read(
             {
                 return Err("Use a query of 1–200 characters and limit of 1–10");
             }
-            let query = input.query.trim().to_lowercase();
-            let results=records(state,run).filter(|record|record.title.to_lowercase().contains(&query)||record.body.to_lowercase().contains(&query)).take(limit).map(|record|json!({"id":record.id,"title":record.title.chars().take(280).collect::<String>(),"excerpt":record.body.chars().take(180).collect::<String>(),"revision":record.revision,"admitted":record.admitted})).collect::<Vec<_>>();
+            let query = input.query.to_lowercase();
+            let terms=query.split_whitespace().collect::<Vec<_>>();
+            let results=records(state,run).filter(|record| {
+                let title=record.title.to_lowercase();let body=record.body.to_lowercase();
+                terms.iter().all(|term|title.contains(term)||body.contains(term))
+            }).take(limit).map(|record|json!({"id":record.id,"title":record.title.chars().take(280).collect::<String>(),"excerpt":record.body.chars().take(180).collect::<String>(),"revision":record.revision,"admitted":record.admitted})).collect::<Vec<_>>();
             Ok(json!({"results":results}))
         }
         "control.knowledge.read" => {
@@ -674,6 +678,16 @@ mod tests {
             response["result"]["structuredContent"]["data"]["body"],
             "New live body"
         );
+    }
+    #[test]
+    fn multiword_search_is_order_independent_and_requires_every_term() {
+        let (mut state,_)=fixture();
+        state.documents[0].title="Signal repeater.md".into();state.documents[0].body="The delay of a repeater is configurable. CAFÉ".into();
+        for query in ["repeater delay","delay repeater","  REPEATER   delay  ","café repeater"] {
+            let value=read(&state,None,"control.knowledge.search",&json!({"query":query})).unwrap();
+            assert_eq!(value["results"].as_array().unwrap().len(),1,"{query}");assert_eq!(value["results"][0]["id"],"document:selected");
+        }
+        let missing=read(&state,None,"control.knowledge.search",&json!({"query":"repeater missing"})).unwrap();assert!(missing["results"].as_array().unwrap().is_empty());
     }
     #[test]
     fn search_result_count_and_proposal_storage_are_bounded() {

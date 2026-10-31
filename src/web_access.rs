@@ -34,8 +34,8 @@ impl TryFrom<String> for Origin {
     fn try_from(value: String) -> Result<Self, Self::Error> {
         let url = checked_url(&value)
             .map_err(|_| "Expected a public HTTP(S) origin, e.g. https://example.com")?;
-        if url.path() != "/" || url.query().is_some() || url.fragment().is_some() {
-            return Err("An origin cannot contain a path, query or fragment");
+        if url.path() != "/" || url.query().is_some() {
+            return Err("An origin cannot contain a path or query");
         }
         Ok(Self(url.origin().ascii_serialization()))
     }
@@ -69,16 +69,16 @@ fn checked_url(value: &str) -> io::Result<Url> {
     if value.len() > 2048 || value.chars().any(char::is_control) {
         return Err(fail("Invalid URL"));
     }
-    let url = Url::parse(value).map_err(|_| fail("Invalid URL"))?;
+    let mut url = Url::parse(value).map_err(|_| fail("Invalid URL"))?;
     if !matches!(url.scheme(), "http" | "https")
         || url.host_str().is_none()
         || !url.username().is_empty()
         || url.password().is_some()
-        || url.fragment().is_some()
         || url.port_or_known_default().is_none()
     {
         return Err(fail("Only credential-free HTTP(S) URLs are allowed"));
     }
+    url.set_fragment(None);
     Ok(url)
 }
 /// Conservative public unicast predicate. Reject special-use, mapped, local and transition ranges.
@@ -122,20 +122,20 @@ fn addresses(url: &Url, resolved: Vec<SocketAddr>) -> io::Result<Vec<SocketAddr>
 }
 static DNS_ACTIVE: AtomicUsize = AtomicUsize::new(0);
 static FETCH_ACTIVE: AtomicUsize = AtomicUsize::new(0);
-struct FetchSlot;
-impl FetchSlot {
-    fn acquire() -> io::Result<Self> {
-        FETCH_ACTIVE
+struct FetchSlot<'a>(&'a AtomicUsize);
+impl<'a> FetchSlot<'a> {
+    fn acquire(counter: &'a AtomicUsize) -> io::Result<Self> {
+        counter
             .try_update(Ordering::AcqRel, Ordering::Relaxed, |n| {
                 (n < 4).then_some(n + 1)
             })
-            .map(|_| Self)
+            .map(|_| Self(counter))
             .map_err(|_| fail("Web fetch is busy; retry later"))
     }
 }
-impl Drop for FetchSlot {
+impl Drop for FetchSlot<'_> {
     fn drop(&mut self) {
-        FETCH_ACTIVE.fetch_sub(1, Ordering::Release);
+        self.0.fetch_sub(1, Ordering::Release);
     }
 }
 fn resolve(url: &Url) -> io::Result<Vec<SocketAddr>> {
@@ -241,6 +241,7 @@ struct Page {
     status: u16,
     mime: String,
     body: String,
+    truncated: bool,
 }
 trait Transport {
     fn resolve(&mut self, url: &Url) -> io::Result<Vec<SocketAddr>>;
@@ -302,20 +303,11 @@ impl Transport for Http {
         ) {
             return Err(fail("Only HTML and plain text pages are supported"));
         }
-        if response
-            .content_length()
-            .is_some_and(|n| n > BODY_LIMIT as u64)
-        {
-            return Err(fail("Page exceeds 1 MiB"));
-        }
         let mut body = Vec::new();
         response
             .by_ref()
             .take(BODY_LIMIT as u64 + 1)
             .read_to_end(&mut body)?;
-        if body.len() > BODY_LIMIT {
-            return Err(fail("Page exceeds 1 MiB"));
-        }
         Ok((status, mime, location, body))
     }
 }
@@ -351,20 +343,31 @@ fn fetch(
             if !(200..300).contains(&status) {
                 return Err(fail("Remote page returned a non-success status"));
             }
-            if body.len() > BODY_LIMIT
-                || !matches!(
-                    mime.as_str(),
-                    "text/html" | "text/plain" | "application/xhtml+xml"
-                )
-            {
-                return Err(fail("Expected HTML/plain text of at most 1 MiB"));
+            if !matches!(
+                mime.as_str(),
+                "text/html" | "text/plain" | "application/xhtml+xml"
+            ) {
+                return Err(fail("Expected HTML/plain text"));
             }
-            let body = String::from_utf8(body).map_err(|_| fail("Page must be UTF-8"))?;
+            let truncated = body.len() > BODY_LIMIT;
+            let mut body = body;
+            body.truncate(BODY_LIMIT);
+            let body = match String::from_utf8(body) {
+                Ok(body) => body,
+                Err(error) if truncated && error.utf8_error().error_len().is_none() => {
+                    let valid = error.utf8_error().valid_up_to();
+                    let mut bytes = error.into_bytes();
+                    bytes.truncate(valid);
+                    String::from_utf8(bytes).map_err(|_| fail("Page must be UTF-8"))?
+                }
+                Err(_) => return Err(fail("Page must be UTF-8")),
+            };
             return Ok(Page {
                 url,
                 status,
                 mime,
                 body,
+                truncated,
             });
         }
     }
@@ -388,7 +391,6 @@ fn permitted(state: &State, chat: &str, actor: &Actor, url: &Url, time: u64) -> 
     Ok(())
 }
 pub fn worker(shared: &Arc<Mutex<State>>, run_id: &str, args: &Value) -> io::Result<Value> {
-    let _slot = FetchSlot::acquire()?;
     let input: Input = serde_json::from_value(args.clone())
         .map_err(|_| fail("Expected URL and optional capture"))?;
     let (chat, actor, generation) = {
@@ -419,9 +421,22 @@ pub fn worker(shared: &Arc<Mutex<State>>, run_id: &str, args: &Value) -> io::Res
         }
         permitted(&state, &chat, &actor, url, now())
     };
-    let page = fetch(&mut Http, &input.url, authorize)?;
+    fetch_evidence(&mut Http, &input, &FETCH_ACTIVE, authorize, evidence)
+}
+fn fetch_evidence(
+    transport: &mut impl Transport,
+    input: &Input,
+    counter: &AtomicUsize,
+    mut authorize: impl FnMut(&Url) -> io::Result<()>,
+    render: impl FnOnce(Page, bool) -> io::Result<Value>,
+) -> io::Result<Value> {
+    let slot = FetchSlot::acquire(counter)?;
+    let page = fetch(transport, &input.url, &mut authorize)?;
     let final_url = page.url.clone();
-    let result = evidence(page, input.capture)?;
+    // HTTP/DNS capacity protects network work only. Offline Firefox owns its
+    // existing separate capture lock/quota and must not reserve a fetch slot.
+    drop(slot);
+    let result = render(page, input.capture)?;
     authorize(&final_url)?;
     Ok(result)
 }
@@ -429,9 +444,8 @@ fn evidence(page: Page, capture: bool) -> io::Result<Value> {
     let document = Html::parse_document(&page.body);
     let normalize = |text: String, limit| {
         text.split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-            .chars()
+            .enumerate()
+            .flat_map(|(index, word)| (index > 0).then_some(' ').into_iter().chain(word.chars()))
             .take(limit)
             .collect::<String>()
     };
@@ -441,8 +455,8 @@ fn evidence(page: Page, capture: bool) -> io::Result<Value> {
         .map(|e| normalize(e.text().collect(), 300))
         .unwrap_or_default();
     // Exclude script/style content rather than presenting it as source evidence.
-    let text = if page.mime == "text/plain" {
-        normalize(page.body.clone(), TEXT_LIMIT)
+    let mut text = if page.mime == "text/plain" {
+        normalize(page.body.clone(), TEXT_LIMIT + 1)
     } else {
         normalize(
             document
@@ -462,8 +476,14 @@ fn evidence(page: Page, capture: bool) -> io::Result<Value> {
                 })
                 .collect::<Vec<_>>()
                 .join(" "),
-            TEXT_LIMIT,
+            TEXT_LIMIT + 1,
         )
+    };
+    let text_truncated = if let Some((boundary, _)) = text.char_indices().nth(TEXT_LIMIT) {
+        text.truncate(boundary);
+        true
+    } else {
+        false
     };
     let links = document
         .select(&Selector::parse("a[href]").unwrap())
@@ -474,7 +494,7 @@ fn evidence(page: Page, capture: bool) -> io::Result<Value> {
         })
         .take(20)
         .collect::<Vec<_>>();
-    let mut result = json!({"url":page.url.as_str(),"status":page.status,"title":title,"text":text,"links":links,"untrusted":true,"body_bytes":page.body.len(),"text_limit":TEXT_LIMIT,"remote_assets_loaded":false});
+    let mut result = json!({"url":page.url.as_str(),"status":page.status,"title":title,"text":text,"links":links,"untrusted":true,"body_bytes":page.body.len(),"body_limit":BODY_LIMIT,"body_truncated":page.truncated,"text_truncated":text_truncated,"truncated":page.truncated||text_truncated,"text_limit":TEXT_LIMIT,"remote_assets_loaded":false});
     if capture {
         let rendering = if page.mime == "text/plain" {
             capture_html(
@@ -661,11 +681,14 @@ mod tests {
             "https://user:password@example.com",
             "https://example.com/path",
             "https://example.com?token=x",
-            "https://example.com#frag",
         ] {
             assert!(Origin::try_from(origin.to_owned()).is_err());
         }
         assert!(serde_json::from_str::<Origin>("\"file:///etc/passwd\"").is_err());
+        assert_eq!(
+            Origin::try_from("https://example.com#frag".to_owned()).unwrap(),
+            g.origin
+        );
     }
     #[test]
     fn special_addresses_and_mixed_dns_answers_are_denied() {
@@ -846,6 +869,7 @@ mod tests {
             status: 200,
             mime: "text/plain".into(),
             body: "x".repeat(TEXT_LIMIT * 2),
+            truncated: false,
         };
         assert_eq!(
             evidence(page, false).unwrap()["text"]
@@ -854,6 +878,132 @@ mod tests {
                 .len(),
             TEXT_LIMIT
         );
+    }
+    #[test]
+    fn fragments_are_removed_from_requests_redirects_and_evidence_links() {
+        let mut transport = Fixture::new(vec![
+            redirect("/guide#section"),
+            html(
+                "<a href='#next'>Here</a><a href='/other#end'>Other</a><a href='https://user:secret@example.com/#x'>denied</a>",
+            ),
+        ]);
+        let page = fetch(&mut transport, "https://example.com/#start", |url| {
+            assert!(url.fragment().is_none());
+            Ok(())
+        })
+        .unwrap();
+        let result = evidence(page, false).unwrap();
+        assert_eq!(
+            transport.requests,
+            vec!["https://example.com/", "https://example.com/guide"]
+        );
+        assert_eq!(result["url"], "https://example.com/guide");
+        assert_eq!(result["links"].as_array().unwrap().len(), 2);
+        assert_eq!(result["links"][0]["url"], "https://example.com/guide");
+        assert_eq!(result["links"][1]["url"], "https://example.com/other");
+        for url in [
+            "https://user@example.com/#fragment",
+            "https://user:secret@example.com/#fragment",
+            "file:///etc/hosts#x",
+        ] {
+            assert!(checked_url(url).is_err());
+        }
+    }
+    #[test]
+    fn oversized_prefix_is_explicit_and_never_fabricates_a_partial_utf8_character() {
+        let mut body = vec![b'x'; BODY_LIMIT - 1];
+        body.extend_from_slice("🐾trailing".as_bytes());
+        body.truncate(BODY_LIMIT + 1);
+        let mut transport = Fixture::new(vec![(200, "text/plain".into(), None, body)]);
+        let page = fetch(&mut transport, "https://example.com/", |_| Ok(())).unwrap();
+        assert_eq!(page.body.len(), BODY_LIMIT - 1);
+        assert!(page.truncated);
+        let result = evidence(page, false).unwrap();
+        assert_eq!(result["body_truncated"], true);
+        assert_eq!(result["text_truncated"], true);
+        assert_eq!(result["truncated"], true);
+        assert_eq!(result["body_limit"], BODY_LIMIT);
+        let mut bad = vec![b'x'; BODY_LIMIT + 1];
+        bad[42] = 0xff;
+        for bytes in [bad, vec![0xf0, 0x9f]] {
+            let mut transport = Fixture::new(vec![(200, "text/plain".into(), None, bytes)]);
+            assert!(fetch(&mut transport, "https://example.com/", |_| Ok(())).is_err());
+        }
+        let mut transport = Fixture::new(vec![(
+            200,
+            "text/plain".into(),
+            None,
+            vec![b'x'; BODY_LIMIT],
+        )]);
+        let page = fetch(&mut transport, "https://example.com/", |_| Ok(())).unwrap();
+        assert!(!page.truncated);
+    }
+    #[test]
+    fn truncated_html_keeps_script_text_excluded() {
+        let mut body = b"<p>Useful text</p>".to_vec();
+        body.resize(BODY_LIMIT - 100, b' ');
+        body.extend_from_slice(b"<script>");
+        body.extend_from_slice(&[b'x'; 200]);
+        body.truncate(BODY_LIMIT + 1);
+        let mut transport = Fixture::new(vec![(200, "text/html".into(), None, body)]);
+        let page = fetch(&mut transport, "https://example.com/", |_| Ok(())).unwrap();
+        let result = evidence(page, false).unwrap();
+        assert_eq!(result["text"], "Useful text");
+        assert_eq!(result["body_truncated"], true);
+        assert_eq!(result["text_truncated"], false);
+        assert_eq!(result["truncated"], true);
+    }
+    #[test]
+    fn offline_render_does_not_reserve_http_capacity_and_rechecks_authority() {
+        use std::cell::Cell;
+        let counter = AtomicUsize::new(0);
+        let revoked = Cell::new(false);
+        let mut transport = Fixture::new(vec![html("<p>Useful</p>")]);
+        let input = Input {
+            url: "https://example.com/#fragment".into(),
+            capture: true,
+        };
+        let result = fetch_evidence(
+            &mut transport,
+            &input,
+            &counter,
+            |_| {
+                if revoked.get() {
+                    Err(fail("revoked"))
+                } else {
+                    Ok(())
+                }
+            },
+            |page, capture| {
+                assert!(capture);
+                assert_eq!(counter.load(Ordering::Acquire), 0);
+                let slots = (0..4)
+                    .map(|_| FetchSlot::acquire(&counter).unwrap())
+                    .collect::<Vec<_>>();
+                assert!(FetchSlot::acquire(&counter).is_err());
+                drop(slots);
+                revoked.set(true);
+                evidence(page, false)
+            },
+        );
+        assert!(result.unwrap_err().to_string().contains("revoked"));
+        assert_eq!(counter.load(Ordering::Acquire), 0);
+        let mut transport = Fixture::new(vec![html("unused")]);
+        let slots = (0..4)
+            .map(|_| FetchSlot::acquire(&counter).unwrap())
+            .collect::<Vec<_>>();
+        assert!(
+            fetch_evidence(
+                &mut transport,
+                &input,
+                &counter,
+                |_| Ok(()),
+                |_, _| panic!("Busy requests must not render")
+            )
+            .is_err()
+        );
+        assert!(transport.requests.is_empty());
+        drop(slots);
     }
     #[test]
     fn actual_http_transport_is_pinned_bounded_and_does_not_follow_redirects() {
@@ -879,6 +1029,34 @@ mod tests {
         let response = Http.get(&url, &[addr], Duration::from_secs(2)).unwrap();
         assert_eq!(response.0, 302);
         assert_eq!(response.2.as_deref(), Some("http://127.0.0.1/private"));
+        thread.join().unwrap();
+    }
+    #[test]
+    fn actual_http_transport_reads_only_the_bounded_prefix_of_a_large_page() {
+        use std::{io::Write, net::TcpListener};
+        let server = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = server.local_addr().unwrap();
+        let thread = std::thread::spawn(move || {
+            let (mut stream, _) = server.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            stream
+                .set_write_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = [0; 4096];
+            let count=stream.read(&mut request).unwrap();
+            assert!(count>0);
+            write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",BODY_LIMIT*10).unwrap();
+            // Intentionally do not complete the advertised body: the reader
+            // must stop after its bounded probe, without draining the response.
+            let _ = stream.write_all(&vec![b'x'; BODY_LIMIT * 2]);
+        });
+        let url = Url::parse(&format!("http://fixture.invalid:{}/", address.port())).unwrap();
+        let response = Http.get(&url, &[address], Duration::from_secs(2)).unwrap();
+        assert_eq!(response.0, 200);
+        assert_eq!(response.3.len(), BODY_LIMIT + 1);
+        assert!(response.3.iter().all(|&byte| byte == b'x'));
         thread.join().unwrap();
     }
 }
@@ -953,12 +1131,9 @@ mod integration_tests {
                 Ok((200, "text/html".into(), None, vec![b'x'; BODY_LIMIT + 1]))
             }
         }
-        assert!(
-            fetch(&mut TooLarge, "https://example.com/", |_| Ok(()))
-                .unwrap_err()
-                .to_string()
-                .contains("1 MiB")
-        );
+        let page = fetch(&mut TooLarge, "https://example.com/", |_| Ok(())).unwrap();
+        assert_eq!(page.body.len(), BODY_LIMIT);
+        assert!(page.truncated);
     }
     #[test]
     #[ignore = "requires a pinned Nix Firefox image and isolated CONTROL_CONFIG_DIR/CONTROL_STATE_DIR; no network or model calls"]

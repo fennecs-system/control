@@ -1,7 +1,9 @@
 # Shared knowledge
 
-`control.knowledge.search` returns at most ten concise matches. Use the returned
-ID with `control.knowledge.read` for text in pages of at most 4,000 Unicode
+`control.knowledge.search` returns at most ten concise matches. Query words match
+independently of their order, ignoring case; every whitespace-separated word must
+occur somewhere in the title or body. Results retain stable document/claim order.
+Use the returned ID with `control.knowledge.read` for pages of at most 4,000 Unicode
 characters. Workers use the underscore aliases `control_knowledge_search` and
 `control_knowledge_read`.
 
