@@ -54,7 +54,10 @@
 .session-view .conversation-toggle:not([open])>.conversation-navigation{display:none}
 .conversation-navigation nav{min-height:0;overflow:auto;flex:1;scrollbar-width:thin;scrollbar-color:#393340 transparent}
 .conversation-navigation nav a{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.conversation-navigation nav a:first-child{margin-bottom:12px;color:var(--purple)}
+.conversation-navigation nav>a:first-child{margin-bottom:12px;color:var(--purple)}
+.conversation-branch>summary{cursor:pointer;color:var(--purple);list-style-position:inside;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.conversation-branch>summary>a{display:inline;padding-left:4px}
+.conversation-children{margin-left:10px;padding-left:6px;border-left:1px solid var(--line)}
 .session-view .chat-workspace>main{height:100%;min-height:0;margin:0 auto}
 .conversation-heading h2{max-width:100%}
 @media(max-width:930px){

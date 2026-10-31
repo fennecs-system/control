@@ -308,6 +308,13 @@ pub fn handle(
             ),
             Err(message) => respond_chat_status(stream, "400 Bad Request", &chat_page(state, lens, id, message, fields.get("message").map(String::as_str).unwrap_or(""))),
         }
+    } else if method == "GET" && operation == "conversations" {
+        let allowed=state.chats.iter().find(|chat|chat.id==id).ok_or("Chat not found.")
+            .and_then(|chat|crate::identity::authorize(&chat.actor,crate::identity::Action::Task).map(|_|()));
+        match allowed {
+            Ok(_) => respond(stream,"200 OK","text/html; charset=utf-8",&crate::navigation::conversations(state,id),""),
+            Err(message) => respond(stream,"404 Not Found","text/plain",message,""),
+        }
     } else if method == "GET" && operation == "artifacts" {
         match crate::artifacts::render(state, id, &crate::fields(query)) {
             Ok(html) => respond(

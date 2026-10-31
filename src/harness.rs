@@ -233,7 +233,6 @@ impl App {
             .as_array()
             .cloned()
             .unwrap_or_default();
-        self.chats.reverse();
         if self.active.is_empty() {
             self.active = self
                 .chats
@@ -284,7 +283,7 @@ impl App {
             "/new" => self.new_chat(hive)?,
             "/chats" => {
                 self.refresh(hive)?;
-                self.menu=Some(Menu {entries:self.chats.iter().map(|c| (c["title"].as_str().unwrap_or("Chat").into(),c["lenses"].as_array().map(|a|a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" + ")).unwrap_or_default(),c["id"].as_str().unwrap_or("").into())).collect(),selected:0,multiple:false,checked:Vec::new()});
+                self.menu=Some(Menu {entries:self.chats.iter().map(|c| (format!("{}{}", "  ".repeat(c["depth"].as_u64().unwrap_or(0).min(8) as usize),c["title"].as_str().unwrap_or("Chat")),c["lenses"].as_array().map(|a|a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" + ")).unwrap_or_default(),c["id"].as_str().unwrap_or("").into())).collect(),selected:0,multiple:false,checked:Vec::new()});
                 let lines=self.chats.iter().map(|c|format!("{}\n  /resume {}",c["title"].as_str().unwrap_or("Chat"),c["id"].as_str().unwrap_or(""))).collect::<Vec<_>>().join("\n\n");
                 self.inspector=Some(("Conversations".into(),lines));self.scroll=0;self.follow=false;self.status="↑ ↓ choose · Enter open · Esc back".into();
             }

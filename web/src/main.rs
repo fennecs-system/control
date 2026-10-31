@@ -260,6 +260,49 @@ fn attach_transcript(document: &web_sys::Document) -> Result<(), JsValue> {
     Ok(())
 }
 
+// Refresh only the disclosed picker; keep its scroll and expanded branches.
+fn attach_navigation(document:&web_sys::Document)->Result<(),JsValue> {
+    let Some(toggle)=document.query_selector(".conversation-toggle")? else{return Ok(());};
+    let Some(frame)=document.query_selector("iframe.chat-transcript")? else{return Ok(());};
+    let source=frame.get_attribute("src").unwrap_or_default();
+    let Some(chat)=source.split('/').nth(2) else{return Ok(());};
+    let url=format!("/chat/{chat}/conversations");
+    let busy=Rc::new(Cell::new(false));let previous=Rc::new(RefCell::new(String::new()));
+    let target=toggle.clone();
+    let poll=Rc::new(Closure::<dyn FnMut()>::new(move || {
+        if !target.has_attribute("open")||busy.replace(true) {return;}
+        let Ok(request)=web_sys::XmlHttpRequest::new() else{busy.set(false);return;};
+        if request.open("GET",&url).is_err(){busy.set(false);return;}
+        request.set_timeout(10000);
+        let response=request.clone();let target=target.clone();let completed=busy.clone();let previous=previous.clone();
+        let done=Closure::<dyn FnMut(web_sys::Event)>::once(move |_| {
+            completed.set(false);
+            if response.status().ok()!=Some(200){return;}
+            let Some(text)=response.response_text().ok().flatten() else{return;};
+            if *previous.borrow()==text{return;}
+            let Ok(Some(aside))=target.query_selector(".conversation-navigation") else{return;};
+            let old_scroll=aside.query_selector("nav").ok().flatten().map_or(0,|nav|nav.scroll_top());
+            let mut expanded=std::collections::HashMap::new();
+            if let Ok(nodes)=aside.query_selector_all("details[data-chat-branch]") {for index in 0..nodes.length(){if let Some(node)=nodes.item(index).and_then(|n|n.dyn_into::<web_sys::HtmlDetailsElement>().ok()) && let Some(id)=node.get_attribute("data-chat-branch"){expanded.insert(id,node.open());}}}
+            let Ok(parser)=web_sys::DomParser::new() else{return;};
+            let Ok(parsed)=parser.parse_from_string(&text,web_sys::SupportedType::TextHtml) else{return;};
+            let Ok(Some(new_aside))=parsed.query_selector(".conversation-navigation") else{return;};
+            aside.set_inner_html(&new_aside.inner_html());
+            if let Ok(nodes)=aside.query_selector_all("details[data-chat-branch]"){for index in 0..nodes.length(){if let Some(node)=nodes.item(index).and_then(|n|n.dyn_into::<web_sys::HtmlDetailsElement>().ok()) && let Some(open)=node.get_attribute("data-chat-branch").and_then(|id|expanded.get(&id)){node.set_open(*open);}}}
+            if let Ok(Some(nav))=aside.query_selector("nav"){nav.set_scroll_top(old_scroll);}
+            *previous.borrow_mut()=text;
+        });
+        request.set_onloadend(Some(done.as_ref().unchecked_ref()));
+        if request.send().is_err(){busy.set(false);}
+        done.forget();
+    }));
+    // Both interval and toggle dispatch the same Rust callback.
+    toggle.add_event_listener_with_callback("toggle",poll.as_ref().as_ref().unchecked_ref())?;
+    web_sys::window().unwrap().set_interval_with_callback_and_timeout_and_arguments_0(poll.as_ref().as_ref().unchecked_ref(),2000)?;
+    std::mem::forget(poll);
+    Ok(())
+}
+
 fn main() -> Result<(), JsValue> {
     let document = web_sys::window()
         .and_then(|w| w.document())
@@ -267,6 +310,7 @@ fn main() -> Result<(), JsValue> {
     if let Some(input) = document.query_selector(".conversation-composer textarea[name=message]")? {
         attach_composer(&document, input.dyn_into()?)?;
         attach_transcript(&document)?;
+        attach_navigation(&document)?;
         return Ok(());
     }
     let output = document

@@ -701,6 +701,7 @@ fn commit(
             chat.improve_workspace.clone(),
             chat.project.as_ref().and_then(|p| p.head.clone()),
             chat.revision,
+            chat.activity_order,
         )
     });
     if let Some(session) = s.chats.iter_mut().find(|c| Some(&c.id) == chat_id.as_ref()) {
@@ -716,6 +717,7 @@ fn commit(
         }
         session.revision = session.revision.saturating_add(1);
     }
+    if let Some(id)=chat_id.as_deref() {crate::chat::touch(s,id);}
     if save(s).is_err() {
         let run = &mut s.runtime.runs[run_index];
         run.status = previous_status;
@@ -725,10 +727,11 @@ fn commit(
             previous.command_jobs = std::mem::take(&mut last.command_jobs);
             *last = previous;
         }
-        if let (Some(index), Some((workspace, improve_workspace, head, revision))) =
+        if let (Some(index), Some((workspace, improve_workspace, head, revision, activity_order))) =
             (chat_index, previous_chat)
         {
             let chat = &mut s.chats[index];
+            chat.activity_order=activity_order;
             (chat.workspace, chat.improve_workspace, chat.revision) =
                 (workspace, improve_workspace, revision);
             if let Some(project) = &mut chat.project {
