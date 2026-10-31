@@ -53,7 +53,7 @@ pub fn pausing(run: &runtime::Run) -> bool {
     })
 }
 pub fn definition() -> Value {
-    json!({"name":"control_agent_delegate","description":"Delegate a bounded task to an isolated worker, or request one independent judge review using a configured different provider. This checkpoints your files, pauses you, releases the worker, then automatically resumes you with the child's result. Stop immediately after acknowledgement; never poll or wait inside a command. Children share your actor and authority ceiling, not writable files. Review feedback never applies or merges changes. Limits: depth 2, 8 children and one judge per root task; execution uses bounded node slots.","inputSchema":{"type":"object","properties":{"objective":{"type":"string","minLength":1,"maxLength":2000},"role":{"type":"string","enum":["worker","judge"]}},"required":["objective","role"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
+    json!({"name":"control_agent_delegate","description":"Delegate a bounded task to an isolated worker, or request one isolated, read-only judge review using your captured provider and model. This checkpoints your files, pauses you, releases the worker, then automatically resumes you with the child's result. Stop immediately after acknowledgement; never poll or wait inside a command. Children share your actor and authority ceiling, not writable files. Review feedback never applies or merges changes. Limits: depth 2, 8 children and one judge per root task; execution uses bounded node slots.","inputSchema":{"type":"object","properties":{"objective":{"type":"string","minLength":1,"maxLength":2000},"role":{"type":"string","enum":["worker","judge"]}},"required":["objective","role"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
 }
 
 fn lineage(run: &runtime::Run) -> Persona {
@@ -149,17 +149,8 @@ fn request_with_save(
         return Err("Answer the pending design question before delegation.");
     }
     budget(state, run, input.role)?;
-    let (backend, model) = if input.role == Role::Judge {
-        crate::providers::review_model(&state.runtime, run.backend)
-            .ok_or("Configure a model from a different provider before requesting a judge.")?
-    } else {
-        (
-            run.backend,
-            run.model
-                .clone()
-                .unwrap_or_else(|| run.backend.default_model()),
-        )
-    };
+    let backend = run.backend;
+    let model = run.model.clone().unwrap_or_else(|| run.backend.default_model());
     let previous = state.runtime.runs[index].delegation.clone();
     state.runtime.runs[index].delegation = Some(Delegation {
         input,
@@ -555,14 +546,8 @@ mod tests {
         assert_eq!(s.runtime.runs.len(), 3);
     }
     #[test]
-    fn judge_requires_configured_alternate_provider_and_has_task_ceiling() {
+    fn judge_inherits_captured_model_and_has_task_ceiling() {
         let mut s = active(Action::Improve);
-        let id = s.runtime.runs[0].id.clone();
-        assert!(
-            request_with_save(&mut s, &id, "n", input(Role::Judge), |_| Ok(()))
-                .unwrap_err()
-                .contains("different provider")
-        );
         s.runtime.models = serde_json::from_value(
             json!([{"backend":"codex","model":"other-dev"},{"backend":"claude","model":"sonnet"}]),
         )
@@ -571,8 +556,8 @@ mod tests {
         reconcile(&mut s, |_| Ok(())).unwrap();
         let child = &s.runtime.runs[1];
         assert!(is_judge(child));
-        assert_eq!(child.backend, Backend::Claude);
-        assert_eq!(child.model.as_deref(), Some("sonnet"));
+        assert_eq!(child.backend, Backend::Codex);
+        assert_eq!(child.model.as_deref(), Some("dev-model"));
         assert_eq!(child.action, Action::Task);
         assert_eq!(
             s.chats[1].workspace.as_deref(),
@@ -583,6 +568,31 @@ mod tests {
         assert!(budget(&s, &s.runtime.runs[0], Role::Judge)
             .unwrap_err()
             .contains("One judge"));
+    }
+    #[test]
+    fn all_children_keep_parent_selection_and_failures_resume_the_parent() {
+        for backend in [Backend::Codex, Backend::Claude] {
+            for role in [Role::Worker, Role::Judge] {
+                let mut s=active(Action::Task);
+                s.runtime.models=serde_json::from_value(json!([{"backend":"codex","model":"unrelated"},{"backend":"claude","model":"expired-alternate"}])).unwrap();
+                s.runtime.runs[0].backend=backend;
+                s.runtime.runs[0].model=Some("captured-parent-model".into());
+                pause(&mut s,role);
+                s.runtime.backend=if backend==Backend::Codex {Backend::Claude}else{Backend::Codex};
+                s.runtime.model=Some("changed-default".into());
+                reconcile(&mut s, |_| Ok(())).unwrap();
+                assert_eq!(s.runtime.runs[1].backend,backend);
+                assert_eq!(s.runtime.runs[1].model.as_deref(),Some("captured-parent-model"));
+                s.runtime.runs[1].status="failed".into();
+                s.runtime.runs[1].result="Synthetic authentication failure; refresh the parent provider login".into();
+                reconcile(&mut s, |_| Ok(())).unwrap();
+                assert_eq!(s.runtime.runs[0].status,"continued");
+                let resumed=&s.runtime.runs[2];
+                assert_eq!(resumed.backend,backend);
+                assert_eq!(resumed.model.as_deref(),Some("captured-parent-model"));
+                assert!(resumed.continuation.as_ref().unwrap().decision.question.contains("Synthetic authentication failure"));
+            }
+        }
     }
     #[test]
     fn denied_identity_mismatched_actor_depth_and_total_budget_are_enforced() {

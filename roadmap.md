@@ -90,7 +90,8 @@ a separate maintainer action.
   offline tests and builds, without credentials, host sockets or shared writable
   caches. See [build environments](docs/BUILD-ENVIRONMENTS.md).
 - Workers can delegate bounded child tasks and resume with retained results.
-  A judge uses a configured different provider and enforced read-only source.
+  Workers and judges inherit the captured parent model; judges have enforced
+  read-only source. Explicit cross-model review needs an availability-aware flow.
   Child changes require explicit acceptance; execution uses bounded node slots.
   See [delegation](docs/DELEGATION.md).
 - A repository-bound GitHub broker publishes completed improvements as draft
@@ -265,6 +266,10 @@ Conditional transcript rendering still needs complete invalidation.
   provider terms. Authorized API-backed paths with budgets are the unattended path.
 
 ## Next: visible multi-model review turns
+
+Keep delegation on the captured parent model until explicit model selection,
+availability/authentication checks and actionable failure recovery are present.
+Being saved in the model library does not establish a working login.
 
 Expose the existing author/judge pattern in chat: named participants with explicit
 provider/model selection, isolated contexts, and visible review/handoff turns.

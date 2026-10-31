@@ -26,9 +26,10 @@ reports that explicitly; existing artifact size and file-type limits still apply
 
 Personas currently capture a role and enforced policy, not persistent autonomous
 bots. A worker may delegate to depth two; a root task permits eight children in
-total and one independent judge review. A judge uses the first configured model
-from a different provider. Configure both providers in Models & providers first;
-missing configuration fails explicitly rather than reviewing with the same model.
+total and one independent judge review. Workers and judges inherit the parent's
+captured provider and model. A configured alternate provider is not evidence of
+available credentials. Explicit cross-model selection with availability checks
+is a later feature; judge context and source access remain isolated now.
 
 Judges have read-only project mounts and no delegation, project-access requests,
 preview publishing, or administration tools. They can inspect source, use isolated

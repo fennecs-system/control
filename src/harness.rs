@@ -789,7 +789,7 @@ mod tests {
         }
     }
     #[test]
-    #[ignore = "requires isolated control-selfdev-qa server, declared build image, own authenticated Codex and Claude; three or more model calls"]
+    #[ignore = "requires isolated control-selfdev-qa server, declared build image, own authenticated development model; three or more model calls"]
     fn live_improve_build_and_independent_judge_roundtrip() {
         let state_dir=crate::config::state_directory().unwrap();
         assert!(state_dir.parent().is_some_and(|p|p.parent()==Some(std::path::Path::new("/private/tmp")) && p.file_name().is_some_and(|s|s.to_string_lossy().starts_with("control-selfdev-qa."))));
@@ -813,7 +813,7 @@ mod tests {
         let parent=runs.iter().find(|r|r["id"]==root).unwrap();
         assert_eq!(parent["status"],"continued","The developer must actually delegate, not merely describe a review");
         let judge=runs.iter().find(|r|r["persona"]["role"]=="judge"&&r["persona"]["root"]==root).expect("No independent judge was run");
-        assert_ne!(judge["backend"],parent["backend"]);assert_eq!(judge["status"],"completed");
+        assert_eq!(judge["backend"],parent["backend"]);assert_eq!(judge["model"],parent["model"]);assert_eq!(judge["status"],"completed");
         assert!(judge["attempts"].as_array().unwrap().iter().all(|a|a["review_only"]==true&&a["artifact"].is_null()));
         assert!(runs.iter().filter(|r|r["chat_id"]==chat).flat_map(|r|r["attempts"].as_array().unwrap()).flat_map(|a|a["command_jobs"].as_array().into_iter().flatten()).any(|job|job["build_environment"]==true&&job["exit_code"]==0&&job["status"]=="completed"),"A real declared build job must pass");
         let final_run=runs.iter().rev().find(|r|r["chat_id"]==chat&&r["status"]=="completed").unwrap();

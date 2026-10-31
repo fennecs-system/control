@@ -54,14 +54,14 @@ arbitrary downloaded code safe.
 - **Delegation and judges.** Admission checks actor, attempt and lineage; depth
   is limited to two, with eight children and one judge per root task. Delegation
   checkpoints files and releases its bounded execution slot. Judges use a
-  configured different provider, receive read-only source and cannot delegate,
+  captured parent provider/model, receive read-only source and cannot delegate,
   publish or advance a development head. They can report findings and collaborate
   in rooms. Descendant result reads follow actual delegation/continuation edges,
   enforce actor/root scope and use immutable published artifacts, never live host
   workspaces. Feedback does not automatically apply changes. Evidence:
   [delegation.rs](../src/delegation.rs),
   `denied_identity_mismatched_actor_depth_and_total_budget_are_enforced`,
-  `judge_requires_configured_alternate_provider_and_has_task_ceiling`;
+  `judge_inherits_captured_model_and_has_task_ceiling`;
   [worker_tools.rs](../src/worker_tools.rs),
   `judge_tools_are_enforced_even_when_unadvertised_names_are_forged`;
   [worker.rs](../src/worker.rs),
