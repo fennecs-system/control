@@ -243,7 +243,7 @@ pub fn answer(
     let actor = run.actor.clone();
     let action = run.action;
     let backend = run.backend;
-    let persona = run.persona.clone();
+    let persona = crate::delegation::lineage(run);
     let model = run.model.clone();
     let context = run.context.clone();
     let lenses = run.lenses.clone();
@@ -269,7 +269,7 @@ pub fn answer(
     }
     let next = state.runtime.runs.last_mut().unwrap();
     next.backend = backend;
-    next.persona = persona;
+    next.persona = Some(persona);
     next.model = model;
     next.context = context;
     next.lenses = lenses;
@@ -444,6 +444,51 @@ pub(crate) mod tests {
             .unwrap()
             .contains("Original task:\nBuild the parser"));
         assert!(answer(&mut state, &chat, Some(&question), "1", "test").is_err());
+    }
+
+    #[test]
+    fn answering_a_design_question_preserves_the_existing_team_budget() {
+        let (mut state, chat) = paused();
+        state.runtime.execution.max_agents_per_root = 1;
+        let root = state.runtime.runs[0].id.clone();
+        let mut used = state.runtime.runs[0].clone();
+        used.id = "already-delegated".into();
+        used.kind = "delegated".into();
+        used.status = "completed".into();
+        used.question = None;
+        used.persona = Some(crate::delegation::Persona {
+            role: crate::delegation::Role::Worker,
+            root: root.clone(), depth: 1, parent: Some(root.clone()),
+        });
+        state.runtime.runs.push(used);
+        answer(&mut state, &chat, None, "1", "test").unwrap();
+        let next = state.runtime.runs.last_mut().unwrap();
+        next.status = "running".into();
+        next.attempts.push(crate::usage::Attempt {
+            workspace_id: Some("design-resume".into()), ..Default::default()
+        });
+        assert_eq!(next.persona.as_ref().unwrap().root, root);
+        let next_id = next.id.clone();
+        assert_eq!(crate::delegation::budget(
+            &state, state.runtime.runs.last().unwrap(), crate::delegation::Role::Worker,
+        ), Err("Configured per-root agent budget exhausted."));
+        assert_eq!(crate::spawning::request(
+            &mut state, &next_id, "design-resume", "spawn-after-design",
+            serde_json::from_value(serde_json::json!({"objectives":["A new task"]})).unwrap(),
+            |_| panic!("design continuation must not allocate a fresh team"),
+        ), Err("Configured per-root agent budget exhausted."));
+    }
+
+    #[test]
+    fn answering_preserves_an_existing_judge_persona_exactly() {
+        let (mut state, chat) = paused();
+        let persona = crate::delegation::Persona {
+            role: crate::delegation::Role::Judge,
+            root: "existing-team".into(), depth: 1, parent: Some("parent".into()),
+        };
+        state.runtime.runs[0].persona = Some(persona.clone());
+        answer(&mut state, &chat, None, "1", "test").unwrap();
+        assert_eq!(state.runtime.runs.last().unwrap().persona.as_ref(), Some(&persona));
     }
     #[test]
     fn own_direction_is_not_permission_escalation_and_cancel_removes_wait() {

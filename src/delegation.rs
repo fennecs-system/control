@@ -13,7 +13,7 @@ pub enum Role {
     Judge,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Persona {
     pub role: Role,
     pub root: String,
