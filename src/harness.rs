@@ -233,14 +233,6 @@ impl App {
             .as_array()
             .cloned()
             .unwrap_or_default();
-        if self.active.is_empty() {
-            self.active = self
-                .chats
-                .first()
-                .and_then(|s| s["id"].as_str())
-                .unwrap_or("")
-                .into();
-        }
         let revision = self
             .chats
             .iter()
@@ -281,7 +273,7 @@ impl App {
             }
             "/quit" => return Ok(true),
             "/new" => self.new_chat(hive)?,
-            "/chats" => {
+            "/chats" | "/resume" => {
                 self.refresh(hive)?;
                 self.menu=Some(Menu {entries:self.chats.iter().map(|c| (format!("{}{}", "  ".repeat(c["depth"].as_u64().unwrap_or(0).min(8) as usize),c["title"].as_str().unwrap_or("Chat")),c["lenses"].as_array().map(|a|a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" + ")).unwrap_or_default(),c["id"].as_str().unwrap_or("").into())).collect(),selected:0,multiple:false,checked:Vec::new()});
                 let lines=self.chats.iter().map(|c|format!("{}\n  /resume {}",c["title"].as_str().unwrap_or("Chat"),c["id"].as_str().unwrap_or(""))).collect::<Vec<_>>().join("\n\n");
@@ -479,10 +471,20 @@ impl Drop for Restore {
         let _ = execute!(io::stdout(), crossterm::cursor::Show, LeaveAlternateScreen);
     }
 }
+fn resume_selection(args:&[String])->io::Result<Option<&str>> {
+    let mut selected=None;
+    for (index,arg) in args.iter().enumerate() {
+        if arg=="--session"||arg=="--resume" {
+            if selected.is_some(){return Err(failure("Choose one --resume ID or --session ID."));}
+            selected=Some(args.get(index+1).filter(|value|!value.is_empty()&&!value.starts_with('-')).ok_or_else(||failure("Use --resume ID to select a conversation."))?.as_str());
+        }
+    }
+    Ok(selected)
+}
 pub fn run() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|s| s == "--help") {
-        println!("control tui [--server {}] [--session ID] [--directory PATH] [--check]\nAlso available as control-harness. Rust TUI for the local Control server (CONTROL_ADDR sets the default).\n\n/open /absolute/path · /trust REQUEST · /lenses · /use ID ID · /use none · /context · /chat · /help", crate::config::server_url());
+        println!("control tui [--server {}] [--resume ID] [--directory PATH] [--check]\nAlso available as control-harness. Starts a fresh chat; --resume ID (or --session ID) explicitly resumes one. CONTROL_ADDR sets the default server.\n\n/resume · /open /absolute/path · /trust REQUEST · /lenses · /use ID ID · /use none · /context · /chat · /help", crate::config::server_url());
         return Ok(());
     }
     let option = |name: &str| {
@@ -491,18 +493,19 @@ pub fn run() -> io::Result<()> {
             .and_then(|i| args.get(i + 1))
             .map(String::as_str)
     };
+    let selected=resume_selection(&args)?;
     let default = crate::config::server_url();
     let mut hive = Hive::connect(option("--server").unwrap_or(&default))?;
     let mut app = App {
         follow: true,
-        active: option("--session").unwrap_or("").into(),
+        active: selected.unwrap_or("").into(),
         ..App::default()
     };
     app.refresh(&mut hive)?;
     if let Some(directory)=option("--directory") {
         let path=std::path::PathBuf::from(directory);
         let path=if path.is_absolute(){path}else{std::env::current_dir()?.join(path)};
-        if option("--session").is_none(){app.new_chat(&mut hive)?;}
+        if app.active.is_empty(){app.new_chat(&mut hive)?;}
         app.detail=hive.tool("control.project.request",json!({"id":app.active,"path":path.to_string_lossy()}))?;
         app.refresh(&mut hive)?;
     }
@@ -761,6 +764,48 @@ pub fn run() -> io::Result<()> {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn startup_only_resumes_an_explicit_selection() {
+        let args=|values:&[&str]|values.iter().map(|s|s.to_string()).collect::<Vec<_>>();
+        assert_eq!(resume_selection(&args(&["control","tui"])).unwrap(),None);
+        for option in ["--resume","--session"] {
+            assert_eq!(resume_selection(&args(&["control",option,"c-selected"])).unwrap(),Some("c-selected"));
+            assert!(resume_selection(&args(&["control",option])).is_err());
+            assert!(resume_selection(&args(&["control",option,"--check"])).is_err());
+        }
+        assert!(resume_selection(&args(&["control","--resume","c-a","--session","c-b"])).is_err());
+    }
+    #[test]
+    fn refresh_keeps_a_new_chat_blank_and_preserves_explicit_resume() {
+        use std::io::{BufRead,Read};
+        let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();let addr=listener.local_addr().unwrap();
+        let server=std::thread::spawn(move || {
+            let mut calls=Vec::new();
+            for _ in 0..5 {
+                let (mut stream,_)=listener.accept().unwrap();stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut reader=io::BufReader::new(stream.try_clone().unwrap());let mut line=String::new();reader.read_line(&mut line).unwrap();let mut length=0;
+                loop {line.clear();reader.read_line(&mut line).unwrap();if line=="\r\n"{break;}
+                    if let Some((name,value))=line.split_once(':') && name.eq_ignore_ascii_case("content-length"){length=value.trim().parse::<usize>().unwrap();}
+                }
+                let mut bytes=vec![0;length];reader.read_exact(&mut bytes).unwrap();let request:Value=serde_json::from_slice(&bytes).unwrap();
+                let tool=request["params"]["name"].as_str().unwrap();calls.push(tool.to_owned());
+                let value=match tool {
+                    "control.chats.list"=>json!([{"id":"c-existing","title":"Existing","revision":7}]),
+                    "control.chat.read"=>json!({"id":"c-existing","title":"Existing","revision":7}),
+                    _=>panic!("Refreshing must not create or send chats"),
+                };
+                let response=json!({"jsonrpc":"2.0","id":request["id"],"result":{"isError":false,"structuredContent":{"data":value}}});
+                control_http::respond(&mut stream,"200 OK","application/json",response.to_string().as_bytes(),"",control_http::Policy::Embedded).unwrap();
+            }
+            calls
+        });
+        let mut hive=Hive{client:Client::builder().timeout(Duration::from_secs(3)).build().unwrap(),endpoint:format!("http://{addr}/mcp"),next:0,operator_cookie:HeaderValue::from_static("fixture")};
+        let mut app=App::default();app.refresh(&mut hive).unwrap();app.refresh(&mut hive).unwrap();
+        assert!(app.active.is_empty());assert!(app.detail.is_null());assert_eq!(app.chats.len(),1);
+        app.active="c-existing".into();app.refresh(&mut hive).unwrap();app.refresh(&mut hive).unwrap();
+        assert_eq!(app.active,"c-existing");assert_eq!(app.detail["title"],"Existing");
+        assert_eq!(server.join().unwrap(),["control.chats.list","control.chats.list","control.chats.list","control.chat.read","control.chats.list"]);
+    }
     use super::*;
     #[test]
     #[ignore = "requires isolated control-bench-qa server with benchmark worker image; no model calls"]
