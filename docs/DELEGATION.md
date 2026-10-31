@@ -1,5 +1,56 @@
 # Delegated agents and judges
 
+Use `control_agent_spawn` with an `objectives` array for nonblocking work: accept
+N tasks as a durable batch while the parent keeps working. The entire request
+reserves the shared root budget immediately, including tasks still in the backlog.
+As space becomes available in the existing 32-pending-task execution queue, Control
+materializes children from the captured source. The model-slot limit independently
+controls execution concurrency. Accepting 50 tasks does not start 50 model calls.
+
+Private `~/.config/control/execution.json` (mode 0600) configures these separate
+limits; omitted fields retain their defaults:
+
+```json
+{"max_parallel_runs":2,"max_agents_per_root":64,"max_pending_agent_intents":256}
+```
+
+Agent budgets must be positive integers up to 65,536. An objectives array has at
+most 24,000 UTF-8 bytes of objective text, with 1–2,000 characters per objective;
+the MCP transport's input-size limit also applies. Node pending-intent capacity is
+shared across roots; root reservations include spawned and delegated descendants,
+and are counted once rather than once again when each child materializes. Root
+reservations remain consumed for that root even after completion or cancellation.
+Depth remains a separate limit of two. Invalid configuration fails closed.
+
+The response contains a `batch` ID, requested/materialized/pending counts, and the
+first ten handles. `control_agent_spawn_status` accepts that ID and optional
+`offset` and `limit` (at most 20); follow `next_offset`. Repeat a page later to see
+newly materialized handles. A later turn in the originating chat can inspect or
+cancel the batch with `control_agent_spawn_cancel`, even after its original parent
+completed. Other chats and sibling agents cannot manage it. Cancellation fences
+unmaterialized tasks and stops active descendants; completed results remain.
+Management preserves the originating task/improve authority boundary. Result
+inspection allows at least 1,024 lineage records, scales with four times the
+configured root budget, and remains capped at 262,144 records including
+continuations; oversized graphs fail explicitly rather than dropping provenance.
+
+Spawned children inherit the captured provider/model, lenses, actor and immutable
+baseline from the parent's active attempt. They never read its live edits or
+share its writable directory. Use ordinary delegation below when current edits
+need a checkpoint first; a first Improve turn without a published baseline must
+delegate. Source modifications and child outputs are never automatically merged.
+Use `control_agent_result` with `section=status` to inspect queued/running/failed
+children, and the output sections below after successful completion. Later turns
+in the originating chat can inspect its recorded spawn receipts; siblings and
+unrelated chats cannot. Cancellation of an active parent cascades to its children.
+Room watches deliver information to existing chats and are a separate mechanism.
+Batch receipts, source inputs and child IDs are checkpointed atomically. Restart
+and ambiguous-acknowledgement retries do not create duplicate children. Failed
+checkpoints roll back admissions/cancellation, and a full queue retains accepted
+backlog without repeated state writes. Actor revocation, source grant changes and
+ancestor cancellation fence future materialization. No extra model calls or
+independent scheduler are used for backlog admission.
+
 Workers can call `control_agent_delegate` with an `objective` and `role`:
 `worker` or `judge`. Control checkpoints the current files, releases the worker,
 runs the child, and resumes the parent with bounded feedback. The web transcript
@@ -25,8 +76,8 @@ The tool never reads live workspaces. If no viewer artifact was published, it
 reports that explicitly; existing artifact size and file-type limits still apply.
 
 Personas currently capture a role and enforced policy, not persistent autonomous
-bots. A worker may delegate to depth two; a root task permits eight children in
-total and one independent judge review. Workers and judges inherit the parent's
+bots. A worker may delegate to depth two; a root task uses its configured total
+agent budget and permits one independent judge review. Workers and judges inherit the parent's
 captured provider and model. A configured alternate provider is not evidence of
 available credentials. Explicit cross-model selection with availability checks
 is a later feature; judge context and source access remain isolated now.

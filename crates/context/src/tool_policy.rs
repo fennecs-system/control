@@ -4,6 +4,7 @@
 pub enum Route {
     Chat,
     Lens,
+    Knowledge,
     Room,
     Artifacts,
     Project,
@@ -40,6 +41,9 @@ policies! {
     "control.lenses.list" => (Lens,false,Read,true),
     "control.lens.read" => (Lens,false,Read,true),
     "control.lenses.resolve" => (Lens,false,Read,true),
+    "control.knowledge.search" => (Knowledge,false,Read,true),
+    "control.knowledge.read" => (Knowledge,false,Read,true),
+    "control.knowledge.propose" => (Knowledge,true,Forward,true),
     "control.rooms.list" => (Room,false,Read,true),
     "control.room.read" => (Room,false,Read,true),
     "control.room.post" => (Room,true,Hidden,true),

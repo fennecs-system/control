@@ -6,17 +6,20 @@ use std::collections::HashMap;
 pub struct Collective {
     pub room: Vec<(String, String)>,
     pub posts: Vec<crate::rooms::Post>,
-    proposals: Vec<Knowledge>,
+    pub room_watches: Vec<crate::rooms::Watch>,
+    pub(crate) proposals: Vec<Knowledge>,
     requests: Vec<Request>,
     pub notice: String,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
-struct Knowledge {
-    claim: String,
-    evidence: String,
-    scope: String,
-    validity: String,
-    status: String,
+pub(crate) struct Knowledge {
+    pub claim: String,
+    pub evidence: String,
+    pub scope: String,
+    pub validity: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<crate::knowledge_tools::Source>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Request {
@@ -74,8 +77,12 @@ impl Collective {
                 if claim.is_empty()
                     || claim.chars().count() > 280
                     || evidence.is_empty()
+                    || evidence.chars().count() > 1000
                     || scope.is_empty()
+                    || scope.chars().count() > 300
                     || validity.is_empty()
+                    || validity.chars().count() > 300
+                    || self.proposals.len() >= crate::knowledge_tools::MAX_PROPOSALS
                 {
                     self.notice = "A proposal needs a claim of at most 280 characters, evidence, scope, and a recheck condition.".into();
                 } else if self.proposals.iter().any(|p| {
@@ -90,6 +97,7 @@ impl Collective {
                         scope,
                         validity,
                         status: "pending".into(),
+                        source: None,
                     });
                 }
                 "/?view=knowledge"
@@ -156,6 +164,9 @@ impl Collective {
                 }
                 for (id, p) in self.proposals.iter().enumerate() {
                     h.push_str(&format!("<article class='record'><span class='tag'>{}</span><h3>{}</h3><dl><dt>Evidence</dt><dd>{}</dd><dt>Scope</dt><dd>{}</dd><dt>Recheck when</dt><dd>{}</dd></dl>", escape(&p.status), escape(&p.claim), escape(&p.evidence), escape(&p.scope), escape(&p.validity)));
+                    if let Some(source) = &p.source {
+                        h.push_str(&format!("<p class='muted'>From <a href='/chat/{}'>chat</a> · run {}</p>",escape(&source.chat),escape(source.run.as_deref().unwrap_or("local operator"))));
+                    }
                     if p.status == "pending" {
                         h.push_str(&format!("<form method='post' action='/review' class='actions'><input type='hidden' name='id' value='{id}'><button class='primary' name='decision' value='accepted'>Accept entry</button><button name='decision' value='rejected'>Reject</button></form>"));
                     }

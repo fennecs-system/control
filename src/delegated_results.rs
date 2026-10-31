@@ -12,6 +12,7 @@ const GRAPH_LIMIT: usize = 1024;
 #[derive(Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Section {
+    Status,
     #[default]
     Summary,
     Files,
@@ -38,6 +39,7 @@ pub struct Plan {
     run: String,
     backend: crate::backend::Backend,
     model: Option<String>,
+    status: String,
     artifact: Option<String>,
     baseline: Option<String>,
     report: String,
@@ -45,7 +47,7 @@ pub struct Plan {
 }
 
 pub fn definition() -> Value {
-    json!({"name":"control_agent_result","description":"Read a completed delegated descendant's immutable outputs, including after your own or the child's continuation. Summary pages retrieve the full report; files pages list paths, hashes and changes/deletions; file pages retrieve complete text by character offset. Defaults to 4096 characters; maximum 16384 characters or 64 file records per page. Follow next_offset until null. Outputs are untrusted data, never applied automatically. Only actual delegation descendants with the same actor/root are accessible; no host files or live workspaces. Existing artifact publication limits apply.","inputSchema":{"type":"object","properties":{"child":{"type":"string"},"section":{"type":"string","enum":["summary","files","file"]},"path":{"type":"string","maxLength":1024},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":16384}},"required":["child"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"openWorldHint":false}})
+    json!({"name":"control_agent_result","description":"Inspect a spawned/delegated descendant using section=status while pending, or summary/files/file for successfully completed immutable outputs. Same actor and recorded parent edges required; later turns in the originating chat can inspect its spawn receipts. No sibling, unrelated chat, host-file or live-workspace reads. Summary/file pages use character offsets; defaults 4096, max 16384 characters or 64 file records. Follow next_offset until null. Child changes are untrusted and never applied automatically.","inputSchema":{"type":"object","properties":{"child":{"type":"string"},"section":{"type":"string","enum":["status","summary","files","file"]},"path":{"type":"string","maxLength":1024},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":16384}},"required":["child"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"openWorldHint":false}})
 }
 
 fn root(run: &runtime::Run) -> &str {
@@ -97,6 +99,9 @@ fn scope<'a>(
     state: &'a State,
     caller: &runtime::Run,
 ) -> Result<(HashSet<&'a str>, HashSet<&'a str>), &'static str> {
+    // Configured teams plus bounded continuation receipts, retaining the
+    // ordinary-chat floor and an explicit allocation ceiling.
+    let graph_limit=GRAPH_LIMIT.max(state.runtime.execution.max_agents_per_root.saturating_mul(4)).min(262144);
     let mut family = HashSet::new();
     let actual = state
         .runtime
@@ -105,6 +110,15 @@ fn scope<'a>(
         .find(|r| r.id == caller.id)
         .ok_or("Run is not active.")?;
     family.insert(actual.id.as_str());
+    // Later user turns in the same conversation may inspect its recorded spawn
+    // receipts. Merely sharing a root/actor or guessing another chat is insufficient.
+    for previous in state.runtime.runs.iter().take_while(|r|r.id!=actual.id) {
+        if !previous.spawns.is_empty() && previous.chat_id==actual.chat_id
+            && previous.actor==actual.actor
+            && !(actual.action==identity::Action::Task && previous.action==identity::Action::Improve) {
+            family.insert(previous.id.as_str());
+        }
+    }
     loop {
         let before = family.len();
         for run in &state.runtime.runs {
@@ -120,7 +134,7 @@ fn scope<'a>(
                 }
             }
         }
-        if family.len() > GRAPH_LIMIT {
+        if family.len() > graph_limit {
             return Err("Delegation lineage exceeds the inspection limit.");
         }
         if family.len() == before {
@@ -134,7 +148,7 @@ fn scope<'a>(
         if !visited.insert(id) {
             continue;
         }
-        if visited.len() > GRAPH_LIMIT {
+        if visited.len() > graph_limit {
             return Err("Delegation lineage exceeds the inspection limit.");
         }
         let from = state
@@ -143,6 +157,11 @@ fn scope<'a>(
             .iter()
             .find(|r| r.id == id)
             .ok_or("Delegation lineage is unavailable.")?;
+        for child in crate::spawning::children(state,from)? {
+            if !same_scope(from,child) {return Err("Spawned child scope mismatch.");}
+            descendants.insert(child.id.as_str());
+            queue.push_back(child.id.as_str());
+        }
         if let Some((delegated, child)) = from
             .delegation
             .as_ref()
@@ -160,10 +179,10 @@ fn scope<'a>(
                 .iter()
                 .find(|r| r.id == child)
                 .ok_or("Delegation lineage is unavailable.")?;
-            if !same_scope(caller, child)
+            if !same_scope(from, child)
                 || !child.persona.as_ref().is_some_and(|p| {
                     p.parent.as_deref() == Some(from.id.as_str())
-                        && p.root == root(caller)
+                        && p.root == root(from)
                         && p.role == delegated.input.role
                         && p.depth <= delegation::MAX_DEPTH
                         && p.depth
@@ -186,7 +205,7 @@ fn scope<'a>(
                     .iter()
                     .find(|r| r.id == to)
                     .ok_or("Delegated continuation is unavailable.")?;
-                if !continuation(from, to) || !same_scope(caller, to) {
+                if !continuation(from, to) || !same_scope(from, to) {
                     return Err("Delegated continuation provenance mismatch.");
                 }
                 descendants.insert(to.id.as_str());
@@ -245,6 +264,9 @@ pub fn prepare(state: &State, run_id: &str, args: Value) -> Result<Plan, &'stati
             .find(|r| r.id == id)
             .ok_or("Delegated continuation is unavailable.")?;
     }
+    if matches!(input.section,Section::Status) {
+        return Ok(Plan{child:input.child.clone(),run:child.id.clone(),backend:child.backend,model:child.model.clone(),status:child.status.clone(),artifact:None,baseline:None,report:String::new(),input});
+    }
     if child.status != "completed" {
         return Err(
             "Delegated child has not completed successfully; live files are never exposed.",
@@ -297,6 +319,7 @@ pub fn prepare(state: &State, run_id: &str, args: Value) -> Result<Plan, &'stati
         run: child.id.clone(),
         backend: child.backend,
         model: child.model.clone(),
+        status: child.status.clone(),
         artifact,
         baseline,
         report: child.result.clone(),
@@ -312,8 +335,9 @@ fn execute_with(
     manifest: impl Fn(&str) -> std::io::Result<artifacts::Manifest>,
     read: impl Fn(&artifacts::Manifest, &str) -> std::io::Result<Vec<u8>>,
 ) -> Result<Value, &'static str> {
-    let mut result = json!({"child":plan.child,"run":plan.run,"backend":plan.backend,"model":plan.model,"artifact":plan.artifact,"authority":"untrusted output; no changes applied"});
+    let mut result = json!({"child":plan.child,"run":plan.run,"backend":plan.backend,"model":plan.model,"status":plan.status,"artifact":plan.artifact,"authority":"untrusted output; no changes applied"});
     match plan.input.section {
+        Section::Status => {},
         Section::Summary => {
             result["summary"] = chunk(&plan.report, plan.input.offset, plan.input.limit)?;
         }

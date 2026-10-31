@@ -10,11 +10,15 @@ pub use control_core::scheduling::MAX_PARALLEL;
 #[serde(default, deny_unknown_fields)]
 pub struct Limits {
     pub max_parallel_runs: usize,
+    pub max_agents_per_root: usize,
+    pub max_pending_agent_intents: usize,
 }
 impl Default for Limits {
     fn default() -> Self {
         Self {
             max_parallel_runs: 2,
+            max_agents_per_root: 64,
+            max_pending_agent_intents: 256,
         }
     }
 }
@@ -24,6 +28,10 @@ impl Limits {
             return Err(io::Error::other(
                 "max_parallel_runs must be between 1 and 8",
             ));
+        }
+        if !(1..=65536).contains(&self.max_agents_per_root)
+            || !(1..=65536).contains(&self.max_pending_agent_intents) {
+            return Err(io::Error::other("Agent root and pending-intent budgets must be positive integers up to 65536"));
         }
         Ok(self)
     }
@@ -172,6 +180,8 @@ mod tests {
         std::fs::create_dir(&directory).unwrap();
         let file = directory.join("execution.json");
         assert_eq!(load_limits_in(&file, None).unwrap().max_parallel_runs, 2);
+        assert_eq!(load_limits_in(&file, None).unwrap().max_agents_per_root,64);
+        assert_eq!(load_limits_in(&file, None).unwrap().max_pending_agent_intents,256);
         std::fs::write(&file, b"{\"max_parallel_runs\":4}").unwrap();
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
         assert_eq!(load_limits_in(&file, None).unwrap().max_parallel_runs, 4);
@@ -184,6 +194,11 @@ mod tests {
         for invalid in ["0", "9", "wrong"] {
             assert!(load_limits_in(&file, Some(invalid.into())).is_err());
         }
+        for invalid in [b"{\"max_agents_per_root\":0}".as_slice(),b"{\"max_pending_agent_intents\":0}".as_slice(),b"{\"max_agents_per_root\":65537}".as_slice(),b"{\"max_pending_agent_intents\":\"infinity\"}".as_slice()] {
+            std::fs::write(&file,invalid).unwrap();assert!(load_limits_in(&file,None).is_err());
+        }
+        std::fs::write(&file,b"{\"max_parallel_runs\":2,\"max_agents_per_root\":100,\"max_pending_agent_intents\":500}").unwrap();
+        assert_eq!(load_limits_in(&file,None).unwrap().max_agents_per_root,100);
         std::fs::write(&file, b"{\"unlimited\":true}").unwrap();
         assert!(load_limits_in(&file, None).is_err());
         std::fs::write(&file, b"{}").unwrap();

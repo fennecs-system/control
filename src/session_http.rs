@@ -146,7 +146,9 @@ pub fn rpc(state: &mut State, request: &Value) -> Value {
         "tools/call" => {
             let name = request["params"]["name"].as_str().unwrap_or("");
             let arguments = &request["params"]["arguments"];
-            let result = if crate::tool_registry::checkpoint(name)
+            let result = if crate::knowledge_tools::known(name) {
+                crate::knowledge_tools::local(state, name, arguments, storage::save)
+            } else if crate::tool_registry::checkpoint(name)
             {
                 change(state, name, arguments)
             } else {

@@ -65,7 +65,7 @@ fn rpc_at(
         "tools/list" => {
             let mut tools = crate::tool_registry::worker_definitions(run.action == identity::Action::Improve);
             if judge {
-                tools.retain(|tool|matches!(tool["name"].as_str(),Some("control.web.search"|"control.rust.run"|"control.rust.bench"|"control_agent_result"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel")));
+                tools.retain(|tool|matches!(tool["name"].as_str(),Some("control.web.search"|"control.rust.run"|"control.rust.bench"|"control_agent_result"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_knowledge_read"|"control_knowledge_search")));
             }
             if claude {
                 tools.push(crate::claude::definition());
@@ -91,11 +91,27 @@ fn rpc_at(
             json!({"tools":tools})
         }
         "tools/call" => {
-            if judge && !matches!(request["params"]["name"].as_str(),Some("control_workspace_run"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_web_search"|"control_rust_run"|"control_rust_bench"|"control_room_read"|"control_room_post"|"control_agent_result")) {
+            if judge && !matches!(request["params"]["name"].as_str(),Some("control_workspace_run"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_web_search"|"control_rust_run"|"control_rust_bench"|"control_room_read"|"control_room_post"|"control_agent_result"|"control_knowledge_read"|"control_knowledge_search")) {
                 return error("Judge policy permits read-only source inspection, isolated verification and room collaboration only.");
             }
             if crate::delegation::pausing(run) && request["params"]["name"]!="control_agent_delegate" {
                 return error("This attempt is pausing for delegated work; no more tools may run.");
+            }
+            if matches!(request["params"]["name"].as_str(),Some("control_agent_spawn_status"|"control_agent_spawn_cancel")) {
+                if run.question.as_ref().is_some_and(|q|q.answer.is_none()) {return error("This attempt is pausing for a design answer.");}
+                return match crate::spawning::manage(&mut state,run_id,request["params"]["name"].as_str().unwrap(),&request["params"]["arguments"],crate::storage::save) {
+                    Ok(value)=>json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(Ok(value))}),
+                    Err(message)=>error(message),
+                };
+            }
+            if request["params"]["name"]=="control_agent_spawn" {
+                let Some(generation)=run.attempts.last().and_then(|a|a.workspace_id.clone()) else {return error("Missing attempt identity");};
+                let Some(nonce)=envelope["nonce"].as_str() else {return error("Missing request identity");};
+                let input=match serde_json::from_value(request["params"]["arguments"].clone()) {Ok(input)=>input,Err(_)=>return error("Expected a bounded list of agent objectives")};
+                return match crate::spawning::request(&mut state,run_id,&generation,nonce,input,crate::storage::save) {
+                    Ok(value)=>json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(Ok(value))}),
+                    Err(message)=>error(message),
+                };
             }
             if request["params"]["name"]=="control_agent_delegate" {
                 let Some(nonce)=envelope["nonce"].as_str() else {return error("Missing request identity");};
@@ -106,6 +122,12 @@ fn rpc_at(
                 };
             }
             if request["params"]["name"]!="control_design_ask" && run.question.as_ref().is_some_and(|q|q.answer.is_none()&&run.attempts.last().is_some_and(|a|a.workspace_id.as_deref()==Some(&q.generation))) {return error("This attempt is pausing for a design answer; no more tools may run.");}
+            if crate::knowledge_tools::known(request["params"]["name"].as_str().unwrap_or("")) {
+                return match crate::knowledge_tools::worker(&mut state,run_id,request["params"]["name"].as_str().unwrap(),&request["params"]["arguments"],envelope["nonce"].as_str().unwrap_or(""),crate::storage::save) {
+                    Ok(value)=>json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":value.to_string()}],"structuredContent":{"data":value},"isError":false}}),
+                    Err(message)=>error(message),
+                };
+            }
             if crate::command_jobs::known(request["params"]["name"].as_str().unwrap_or("")) {
                 let generation=run.attempts.last().and_then(|a|a.workspace_id.clone()).unwrap_or_default();
                 let nonce=envelope["nonce"].as_str().unwrap_or("").to_owned();
@@ -293,14 +315,14 @@ fn rpc_at(
                 drop(state);
                 // Network requests and compilation must not hold the control-plane state lock.
                 crate::toolbox::result(crate::toolbox::call(name, &request["params"]["arguments"]))
-            } else if has_room && ["control_room_read", "control_room_post"].contains(&name) {
-                let count = state.collective.posts.len();
-                let response = rooms::worker_rpc(&mut state, run_id, envelope);
-                if state.collective.posts.len() != count && crate::storage::save(&state).is_err() {
-                    state.collective.posts.truncate(count);
-                    return error("Could not save room post");
-                }
-                return response;
+            } else if name == "control_web_fetch" {
+                drop(state);
+                crate::toolbox::result(crate::web_access::worker(shared, run_id, &request["params"]["arguments"]))
+            } else if name == "control_browser_capture" {
+                drop(state);
+                crate::web_access::capture_tool(&request["params"]["arguments"]).unwrap_or_else(|error|crate::toolbox::result(Err(error)))
+            } else if has_room && ["control_room_read", "control_room_post", "control_room_watch", "control_room_notifications", "control_room_ack"].contains(&name) {
+                return rooms::checkpoint(&mut state, run_id, envelope, crate::storage::save);
             } else {
                 return error("Tool is not allowed for this worker");
             }
@@ -344,7 +366,8 @@ mod tests {
         let listed=rpc_at(&shared,&id,&json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/list"}}),None);
         let names=listed["result"]["tools"].as_array().unwrap().iter().map(|t|t["name"].as_str().unwrap()).collect::<Vec<_>>();
         assert!(names.contains(&"control_workspace_run"));assert!(!names.contains(&"control_agent_delegate"));assert!(names.contains(&"control_agent_result"));
-        for name in ["control_agent_delegate","control_project_request","control_design_ask","control_preview_start","control_preview_stop","control_github_pr","control_service_start","control_service_attach","control_service_status","control_service_stop"] {
+        assert!(names.contains(&"control_knowledge_read"));assert!(names.contains(&"control_knowledge_search"));
+        for name in ["control_agent_delegate","control_agent_spawn","control_project_request","control_design_ask","control_preview_start","control_preview_stop","control_github_pr","control_service_start","control_service_attach","control_service_status","control_service_stop","control_knowledge_propose"] {
             assert!(!names.contains(&name));
             let denied=rpc_at(&shared,&id,&json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":{}}}}),None);
             assert!(denied["error"]["message"].as_str().unwrap().contains("Judge policy"));
@@ -416,13 +439,17 @@ mod tests {
         run.attempts.push(attempt);
         let state = Arc::new(Mutex::new(state));
         let stale = std::env::temp_dir().canonicalize().unwrap();
-        let request = json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_room_post","arguments":{"text":"late effect"}}}});
-        let response = rpc_at(&state, &id, &request, Some(&stale));
-        assert_eq!(
-            response["error"]["message"],
-            "Mailbox belongs to an inactive attempt"
-        );
+        let request=json!({"nonce":"late-proposal","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_knowledge_propose","arguments":{"claim":"Must not persist","evidence":"stale mailbox","scope":"fixture","validity":"always"}}}});
+        let response=rpc_at(&state,&id,&request,Some(&stale));
+        assert_eq!(response["error"]["message"],"Mailbox belongs to an inactive attempt");
+        assert!(state.lock().unwrap().collective.proposals.is_empty());
+        for (name, args) in [("control_room_post",json!({"message":"late effect"})),("control_room_watch",json!({"enabled":true,"wake":true})),("control_room_ack",json!({"through":0}))] {
+            let request = json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":args}}});
+            let response = rpc_at(&state, &id, &request, Some(&stale));
+            assert_eq!(response["error"]["message"], "Mailbox belongs to an inactive attempt");
+        }
         assert!(state.lock().unwrap().collective.posts.is_empty());
+        assert!(state.lock().unwrap().collective.room_watches.is_empty());
     }
     #[test]
     fn workspace_execution_is_backend_scoped_and_rejects_model_supplied_mounts() {
