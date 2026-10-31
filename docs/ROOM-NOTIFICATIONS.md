@@ -36,6 +36,8 @@ The wake receipt, queued run and visible chat entry are checkpointed together.
 Failed saves restore the pending watch. A restart reuses the retained queued run
 rather than creating another. The regular bounded run queue and per-chat
 scheduling rules still apply. Full queues leave the wake pending.
+The follow-up retains the original task's team root, so it shares that team's
+child-agent budget rather than allocating a fresh quota.
 
 Automatic wake allocation is unavailable to notification turns, their children,
 judges and continuations. Disabling and re-enabling a watch does not refill its
