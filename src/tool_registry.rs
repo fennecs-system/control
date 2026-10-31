@@ -54,6 +54,7 @@ pub fn entries() -> &'static [Entry] {
             entries.push(registered);
         }
         entries.push(entry(crate::projects::definition(false)));
+        entries.extend(crate::knowledge_tools::definitions().into_iter().map(entry));
         entries.push(entry(crate::github::definition()));
         entries.extend(crate::toolbox::definitions().into_iter().map(entry));
         entries.extend(crate::artifacts::definitions().into_iter().map(entry));
@@ -101,6 +102,10 @@ pub fn worker_definitions(improve: bool) -> Vec<Value> {
         .map(|e| e.definition.clone())
         .collect::<Vec<_>>();
     tools.push(crate::design::definition());
+    tools.extend(crate::knowledge_tools::definitions().into_iter().map(|mut definition| {
+        definition["name"] = json!(definition["name"].as_str().unwrap().replace('.', "_"));
+        definition
+    }));
     tools.push(crate::projects::definition(true));
     tools.extend(crate::previews::definitions());
     if improve {

@@ -330,6 +330,14 @@ pub fn handle(
     lens: &str,
     body: &[u8],
 ) -> bool {
+    if ["/propose", "/review"].contains(&path) && method == "POST" {
+        let fields=crate::fields(&String::from_utf8_lossy(body));
+        match crate::knowledge_tools::review_action(state,path,&fields,crate::storage::save) {
+            Ok(())=>respond(stream,"303 See Other","","Location: /knowledge?mode=review\r\n"),
+            Err(message)=>respond(stream,"500 Internal Server Error",&crate::error_page(message,"/knowledge?mode=review"),""),
+        }
+        return true;
+    }
     if path == "/knowledge" && method == "GET" {
         let selection = query
             .get("doc")

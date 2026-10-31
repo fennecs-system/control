@@ -21,6 +21,7 @@ mod federation;
 mod github;
 mod harness;
 mod knowledge;
+mod knowledge_tools;
 mod lens_library;
 mod lens_ui;
 mod lifecycle;

@@ -93,9 +93,9 @@ pub const TOOLS: [Tool; 19] = [
         description: "Documents and evidence",
         href: "/knowledge",
         aliases: "notes files",
-        mcp_names: &[],
+        mcp_names: &["control.knowledge.search", "control.knowledge.read", "control.knowledge.propose", "control_knowledge_search", "control_knowledge_read", "control_knowledge_propose"],
         execution: "local Rust server",
-        surface: "review form",
+        surface: "MCP / operator review",
         available: true,
     },
     Tool {

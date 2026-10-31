@@ -65,7 +65,7 @@ fn rpc_at(
         "tools/list" => {
             let mut tools = crate::tool_registry::worker_definitions(run.action == identity::Action::Improve);
             if judge {
-                tools.retain(|tool|matches!(tool["name"].as_str(),Some("control.web.search"|"control.rust.run"|"control.rust.bench"|"control_agent_result"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel")));
+                tools.retain(|tool|matches!(tool["name"].as_str(),Some("control.web.search"|"control.rust.run"|"control.rust.bench"|"control_agent_result"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_knowledge_read"|"control_knowledge_search")));
             }
             if claude {
                 tools.push(crate::claude::definition());
@@ -91,7 +91,7 @@ fn rpc_at(
             json!({"tools":tools})
         }
         "tools/call" => {
-            if judge && !matches!(request["params"]["name"].as_str(),Some("control_workspace_run"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_web_search"|"control_rust_run"|"control_rust_bench"|"control_room_read"|"control_room_post"|"control_agent_result")) {
+            if judge && !matches!(request["params"]["name"].as_str(),Some("control_workspace_run"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_web_search"|"control_rust_run"|"control_rust_bench"|"control_room_read"|"control_room_post"|"control_agent_result"|"control_knowledge_read"|"control_knowledge_search")) {
                 return error("Judge policy permits read-only source inspection, isolated verification and room collaboration only.");
             }
             if crate::delegation::pausing(run) && request["params"]["name"]!="control_agent_delegate" {
@@ -115,6 +115,12 @@ fn rpc_at(
                 };
             }
             if request["params"]["name"]!="control_design_ask" && run.question.as_ref().is_some_and(|q|q.answer.is_none()&&run.attempts.last().is_some_and(|a|a.workspace_id.as_deref()==Some(&q.generation))) {return error("This attempt is pausing for a design answer; no more tools may run.");}
+            if crate::knowledge_tools::known(request["params"]["name"].as_str().unwrap_or("")) {
+                return match crate::knowledge_tools::worker(&mut state,run_id,request["params"]["name"].as_str().unwrap(),&request["params"]["arguments"],envelope["nonce"].as_str().unwrap_or(""),crate::storage::save) {
+                    Ok(value)=>json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":value.to_string()}],"structuredContent":{"data":value},"isError":false}}),
+                    Err(message)=>error(message),
+                };
+            }
             if crate::command_jobs::known(request["params"]["name"].as_str().unwrap_or("")) {
                 let generation=run.attempts.last().and_then(|a|a.workspace_id.clone()).unwrap_or_default();
                 let nonce=envelope["nonce"].as_str().unwrap_or("").to_owned();
@@ -353,7 +359,8 @@ mod tests {
         let listed=rpc_at(&shared,&id,&json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/list"}}),None);
         let names=listed["result"]["tools"].as_array().unwrap().iter().map(|t|t["name"].as_str().unwrap()).collect::<Vec<_>>();
         assert!(names.contains(&"control_workspace_run"));assert!(!names.contains(&"control_agent_delegate"));assert!(names.contains(&"control_agent_result"));
-        for name in ["control_agent_delegate","control_agent_spawn","control_project_request","control_design_ask","control_preview_start","control_preview_stop","control_github_pr","control_service_start","control_service_attach","control_service_status","control_service_stop"] {
+        assert!(names.contains(&"control_knowledge_read"));assert!(names.contains(&"control_knowledge_search"));
+        for name in ["control_agent_delegate","control_agent_spawn","control_project_request","control_design_ask","control_preview_start","control_preview_stop","control_github_pr","control_service_start","control_service_attach","control_service_status","control_service_stop","control_knowledge_propose"] {
             assert!(!names.contains(&name));
             let denied=rpc_at(&shared,&id,&json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":{}}}}),None);
             assert!(denied["error"]["message"].as_str().unwrap().contains("Judge policy"));
@@ -431,6 +438,10 @@ mod tests {
             response["error"]["message"],
             "Mailbox belongs to an inactive attempt"
         );
+        let request=json!({"nonce":"late-proposal","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_knowledge_propose","arguments":{"claim":"Must not persist","evidence":"stale mailbox","scope":"fixture","validity":"always"}}}});
+        let response=rpc_at(&state,&id,&request,Some(&stale));
+        assert_eq!(response["error"]["message"],"Mailbox belongs to an inactive attempt");
+        assert!(state.lock().unwrap().collective.proposals.is_empty());
         assert!(state.lock().unwrap().collective.posts.is_empty());
     }
     #[test]
