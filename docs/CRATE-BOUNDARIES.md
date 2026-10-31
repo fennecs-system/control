@@ -72,6 +72,20 @@ than pretending a Codex/Claude CLI harness is the same protocol as a model API.
 Keep these as incremental extractions with persistence/authorization regressions.
 Measure targeted rebuilds before claiming compile-time improvements. Avoid an
 umbrella plugin runtime, cyclic dependencies and a crate for every source file.
+
+Persistent tools should drive the next core extraction: typed resource identity,
+ownership/generation, lease and lifecycle transitions, plus the narrow operations
+needed to start, inspect, attach and stop. Pure decisions return explicit effects;
+the application checkpoints intent and container adapters perform those effects.
+Keep engine inspection, network enforcement, clocks and storage outside core.
+Model attempts attach to a resource; they do not implicitly own its whole lifetime
+or gain writable access to another attempt's checkpoint.
+
+Do not wait for the full web/TUI split to implement the first persistent tool.
+Reuse command-job and preview mechanisms where their contracts match, keeping
+attempt-bound jobs and independent services distinct. Extract a common executor
+only when actual shared behavior supports it; neither duplicate a second
+scheduler nor introduce a generic orchestration framework for the first service.
 Record warm targeted check/rebuild times, transcript render time, lock-held work
 and allocations/peak memory on fixed fixtures before and after each slice. A
 crate split alone does not improve scheduling capacity or establish remote-node
