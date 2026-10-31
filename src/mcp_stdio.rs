@@ -43,6 +43,14 @@ pub(crate) fn render_preview(
     width: u16,
     height: u16,
 ) -> io::Result<crate::browser::Capture> {
+    render_preview_with_timeout(input, width, height, std::time::Duration::from_secs(60))
+}
+pub(crate) fn render_preview_with_timeout(
+    input: &Path,
+    width: u16,
+    height: u16,
+    timeout: std::time::Duration,
+) -> io::Result<crate::browser::Capture> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let directory = crate::config::state("browser").map_err(io::Error::other)?;
     fs::create_dir_all(&directory)?;
@@ -82,7 +90,12 @@ pub(crate) fn render_preview(
             "Browser artifact quota reached. Remove old captures before retrying.",
         ));
     }
-    crate::browser::capture(&image()?, input, width, height, &directory)
+    let image = image()?;
+    if timeout == std::time::Duration::from_secs(60) {
+        crate::browser::capture(&image, input, width, height, &directory)
+    } else {
+        crate::browser::capture_with_timeout(&image, input, width, height, &directory, timeout)
+    }
 }
 fn capture(root: &Path, args: &Value) -> io::Result<Value> {
     #[derive(serde::Deserialize)]

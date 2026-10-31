@@ -59,7 +59,7 @@ pub fn handle(stream: &mut TcpStream, method: &str, target: &str, body: &[u8]) -
         if path == "/tools/browser" {
             let query = crate::fields(query);
             let preview = query.get("capture").filter(|s| valid_name(s)).map(|s| format!("<a href='/tools/browser/artifacts/{s}'><img class='browser-capture' src='/tools/browser/artifacts/{s}' alt='Browser capture'></a>")).unwrap_or_default();
-            let content = format!("<h2>Browser</h2><p class='muted'>Offline HTML preview · Firefox</p><form method='post' action='/tools/browser/capture'><label>HTML file<input name='input' required placeholder='path/to/preview.html' maxlength='1000'></label><div class='browser-viewport'><label>Width<input name='width' type='number' min='240' max='2560' value='1280' required></label><label>Height<input name='height' type='number' min='240' max='2560' value='800' required></label></div><button class='primary'>Capture</button></form>{preview}");
+            let content = format!("<h2>Browser</h2><p><a href='/tools/browser/access'>Web access</a></p><p class='muted'>Offline HTML preview · Firefox</p><form method='post' action='/tools/browser/capture'><label>HTML file<input name='input' required placeholder='path/to/preview.html' maxlength='1000'></label><div class='browser-viewport'><label>Width<input name='width' type='number' min='240' max='2560' value='1280' required></label><label>Height<input name='height' type='number' min='240' max='2560' value='800' required></label></div><button class='primary'>Capture</button></form>{preview}");
             let page = crate::render(&crate::State::default(), "browser", "none", &content);
             respond(
                 stream,

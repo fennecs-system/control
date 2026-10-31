@@ -308,6 +308,12 @@ fn rpc_at(
                 drop(state);
                 // Network requests and compilation must not hold the control-plane state lock.
                 crate::toolbox::result(crate::toolbox::call(name, &request["params"]["arguments"]))
+            } else if name == "control_web_fetch" {
+                drop(state);
+                crate::toolbox::result(crate::web_access::worker(shared, run_id, &request["params"]["arguments"]))
+            } else if name == "control_browser_capture" {
+                drop(state);
+                crate::web_access::capture_tool(&request["params"]["arguments"]).unwrap_or_else(|error|crate::toolbox::result(Err(error)))
             } else if has_room && ["control_room_read", "control_room_post", "control_room_watch", "control_room_notifications", "control_room_ack"].contains(&name) {
                 return rooms::checkpoint(&mut state, run_id, envelope, crate::storage::save);
             } else {

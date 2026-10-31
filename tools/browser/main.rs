@@ -66,6 +66,19 @@ pub fn capture(
     height: u16,
     output: &Path,
 ) -> io::Result<Capture> {
+    capture_with_timeout(image, input, width, height, output, Duration::from_secs(60))
+}
+pub fn capture_with_timeout(
+    image: &str,
+    input: &Path,
+    width: u16,
+    height: u16,
+    output: &Path,
+    timeout: Duration,
+) -> io::Result<Capture> {
+    if timeout.is_zero() || timeout > Duration::from_secs(60) {
+        return Err(fail("Invalid browser deadline"));
+    }
     viewport(width, height)?;
     if !valid_image(image) {
         return Err(fail("Browser requires a pinned sha256 image ID"));
@@ -138,7 +151,7 @@ pub fn capture(
             if let Some(status) = child.try_wait()? {
                 break Some(status);
             }
-            if deadline.elapsed() > Duration::from_secs(60) {
+            if deadline.elapsed() > timeout {
                 break None;
             }
             std::thread::sleep(Duration::from_millis(100));

@@ -106,6 +106,8 @@ pub fn worker_definitions(improve: bool) -> Vec<Value> {
         definition["name"] = json!(definition["name"].as_str().unwrap().replace('.', "_"));
         definition
     }));
+    tools.push(crate::web_access::definition());
+    tools.push(crate::web_access::capture_definition());
     tools.push(crate::projects::definition(true));
     tools.extend(crate::previews::definitions());
     if improve {

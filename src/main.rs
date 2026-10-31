@@ -43,6 +43,7 @@ mod shutdown;
 mod storage;
 mod tool_catalog;
 mod toolbox;
+mod web_access;
 mod tools_http;
 mod tool_registry;
 mod usage;
@@ -59,6 +60,7 @@ use std::{
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 struct State {
+    web_grants: Vec<web_access::Grant>,
     services: Vec<services::Service>,
     github_publications: Vec<github::Publication>,
     previews: Vec<previews::Preview>,
@@ -263,6 +265,7 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         return;
     }
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    if web_access::http(&mut stream, &state, method, path, &data[header_end..header_end + length]) { return; }
     if github::http(&mut stream,&state,method,path,&data[header_end..header_end+length]) {return;}
     if projects::http(&mut stream,&state,method,path,&data[header_end..header_end+length]) {return;}
     if tools_http::handle(
