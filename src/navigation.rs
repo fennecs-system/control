@@ -69,8 +69,20 @@ pub fn heading(view: &str) -> String {
     "Control".into()
 }
 pub fn conversations(state: &crate::State, active: &str) -> String {
+    conversation_window(state,active,None,None,true)
+}
+pub fn history(state:&crate::State,older:Option<&str>,newer:Option<&str>)->String {
+    format!("<section class='conversation-history'>{}</section>",conversation_window(state,"",older,newer,false))
+}
+fn conversation_window(state:&crate::State,active:&str,older:Option<&str>,newer:Option<&str>,picker:bool)->String {
     use std::collections::{HashMap,HashSet};
     let entries=crate::conversations::ordered(state);
+    let roots=entries.iter().enumerate().filter(|(_,entry)|entry.depth==0).map(|(index,_)|index).collect::<Vec<_>>();
+    let find=|id:Option<&str>|id.and_then(|id|roots.iter().position(|index|entries[*index].session.id==id));
+    let range=crate::pagination::window(roots.len(),find(older),find(newer));
+    let start=roots.get(range.start).copied().unwrap_or(entries.len());
+    let end=roots.get(range.end).copied().unwrap_or(entries.len());
+    let selected=&entries[start..end];
     let parents:HashMap<_,_>=entries.iter().map(|entry|(entry.session.id.as_str(),entry.parent)).collect();
     let mut expanded=HashSet::new();let mut ancestor=parents.get(active).copied().flatten();
     while let Some(id)=ancestor {
@@ -80,22 +92,66 @@ pub fn conversations(state: &crate::State, active: &str) -> String {
     let current=if active.is_empty() {" aria-current='page'"}else{""};
     let mut links=format!("<a href='/chats'{current}>+ New chat</a>");
     let mut branches=Vec::new();
-    for (position,entry) in entries.iter().enumerate() {
+    for (position,entry) in selected.iter().enumerate() {
         while branches.last().is_some_and(|depth| *depth>=entry.depth) {links.push_str("</div></details>");branches.pop();}
         let chat=entry.session;
         let title=crate::escape(&chat.title);
         let current=if chat.id==active {" aria-current='page'"}else{""};
         let link=format!("<a href='/chat/{}' title='{title}'{current}>{title}</a>",chat.id);
-        if entries.get(position+1).is_some_and(|next|next.depth>entry.depth) {
+        if selected.get(position+1).is_some_and(|next|next.depth>entry.depth) {
             links.push_str(&format!("<details class='conversation-branch' data-chat-branch='{}'{}><summary>{link}</summary><div class='conversation-children'>",chat.id,if expanded.contains(chat.id.as_str()) {" open"}else{""}));
             branches.push(entry.depth);
         }else{links.push_str(&link);}
     }
     for _ in branches {links.push_str("</div></details>");}
-    format!("<aside class='section-navigation conversation-navigation'><h2>Conversations</h2><nav aria-label='Conversations'>{links}</nav></aside>")
+    let controls=if picker {
+        if roots.len()>crate::pagination::SIZE {"<a class='conversation-history-link' href='/chats/history'>All conversations ↗</a>".into()}else{String::new()}
+    }else{
+        crate::pagination::controls("/chats/history",(range.start>0).then(||entries[roots[range.start]].session.id.as_str()),(range.end<roots.len()).then(||entries[roots[range.end-1]].session.id.as_str()))
+    };
+    format!("<aside class='section-navigation conversation-navigation'><h2>Conversations</h2><nav aria-label='Conversations'>{links}</nav>{controls}</aside>")
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn conversation_pages_keep_threads_whole_and_cursors_stable() {
+        let mut state=crate::State::default();let mut ids=Vec::new();
+        for _ in 0..25 {ids.push(crate::chat::create(&mut state));}
+        let child=crate::chat::create(&mut state);state.chats.last_mut().unwrap().parent_chat=Some(ids[0].clone());
+        let roots=crate::conversations::ordered(&state).iter().filter(|entry|entry.depth==0).map(|entry|entry.session.id.clone()).collect::<Vec<_>>();
+        let picker=super::conversations(&state,&child);
+        assert_eq!(picker.matches("href='/chat/").count(),11,"Ten parent threads plus their nested child");
+        assert!(picker.contains("/chats/history"));assert!(picker.contains(&format!("data-chat-branch='{}' open",ids[0])));
+        let page=super::history(&state,Some(&roots[9]),None);
+        assert_eq!(page.matches("href='/chat/").count(),10);
+        for id in &roots[10..20] {assert!(page.contains(&format!("href='/chat/{id}'")));}
+        assert!(!page.contains(&format!("href='/chat/{child}'")));
+        crate::chat::create(&mut state);
+        assert_eq!(super::history(&state,Some(&roots[9]),None),page,"New chats must not shift an older cursor boundary");
+        let last=super::history(&state,Some(&roots[19]),None);
+        assert_eq!(last.matches("href='/chat/").count(),5);
+        assert!(!last.contains("Older →"));assert!(last.contains("← Newer"));
+        assert_eq!(super::history(&state,None,Some(&roots[20])),page);
+        let mut response=Vec::new();
+        assert!(crate::session_http::handle(&mut response,&mut state,"GET",&format!("/chats/history?older={}",roots[9]),"none","",&[]));
+        let response=String::from_utf8(response).unwrap();assert!(response.starts_with("HTTP/1.1 200 OK"));assert!(response.contains(&page));
+    }
+    #[test]
+    fn run_pages_render_only_ten_records_and_keep_cursor_boundaries() {
+        let mut state=crate::State::default();
+        for index in 0..25 {
+            state.runtime.enqueue(format!("task-{index}"),"chat","test");state.runtime.runs.last_mut().unwrap().status="completed".into();
+        }
+        let newest=state.runtime.runs_page(None,None);assert_eq!(newest.matches("<article class='record'>").count(),10);
+        assert!(newest.contains("<h3>task-24</h3>"));assert!(!newest.contains("<h3>task-14</h3>"));assert!(!newest.contains("← Newer"));
+        let cursor=state.runtime.runs[15].id.clone();let middle=state.runtime.runs_page(Some(&cursor),None);
+        assert_eq!(middle.matches("<article class='record'>").count(),10);assert!(middle.contains("<h3>task-14</h3>"));assert!(middle.contains("<h3>task-5</h3>"));
+        state.runtime.enqueue("new task".into(),"chat","test");assert_eq!(state.runtime.runs_page(Some(&cursor),None),middle);
+        let html=crate::public_render(&state,&crate::fields(&format!("view=runs&older={cursor}")),"none");
+        assert!(html.contains(&middle));assert!(html.contains("href='/?view=runs' aria-current='page'"));
+        let last_cursor=state.runtime.runs[5].id.clone();let last=state.runtime.runs_page(Some(&last_cursor),None);
+        assert_eq!(last.matches("<article class='record'>").count(),5);assert!(!last.contains("Older →"));
+    }
     #[test]
     fn manage_routes_preserve_section_navigation_and_global_context() {
         let state = crate::State::default();

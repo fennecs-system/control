@@ -255,6 +255,12 @@ pub fn handle(
         );
         return true;
     }
+    if path=="/chats/history" && method=="GET" {
+        let query=crate::fields(query);
+        let html=crate::navigation::history(state,query.get("older").map(String::as_str),query.get("newer").map(String::as_str));
+        respond(stream,"200 OK","text/html; charset=utf-8",&crate::render(state,"session-list",lens,&html),"");
+        return true;
+    }
     if path == "/chats" && method == "GET" {
         let query = crate::fields(query);
         let html = chat::landing_mode(
@@ -441,6 +447,10 @@ mod tests {
                         run.result=format!("{}\n\n{}",run.objective.replace("Prompt","Response"),"A retained paragraph exercises a longer conversation, including **formatted text**, `code`, and evidence without navigating the composer.\n\n".repeat(32));
                     }}
                 }
+                else if let Some(query)=path.strip_prefix("/?") {
+                    let html=crate::public_render(&served.lock().unwrap(),&crate::fields(query),"none");
+                    respond(&mut stream,"200 OK","text/html; charset=utf-8",&html,"");
+                }
                 else { crate::session_http::handle(&mut stream, &mut served.lock().unwrap(), &method, &path, "engineering", &headers, &body); }
             }
         });
@@ -465,6 +475,26 @@ mod tests {
         impl Drop for Browser {fn drop(&mut self){let _=self.client.delete(&self.url).send();}}
         let b=Browser{client,url:format!("{driver}/session/{id}")};
         b.post("/timeouts",json!({"implicit":5000,"pageLoad":15000}));
+        let child={let mut state=state.lock().unwrap();let mut parent=String::new();
+            for index in 0..25 {
+                parent=crate::chat::create(&mut state);state.chats.last_mut().unwrap().title=format!("History thread {index}");
+                state.runtime.enqueue(format!("History run {index}"),"chat","test");state.runtime.runs.last_mut().unwrap().status="completed".into();
+            }
+            let child=crate::chat::create(&mut state);let session=state.chats.last_mut().unwrap();session.parent_chat=Some(parent);session.title="Nested history agent".into();child
+        };
+        b.post("/url",json!({"url":format!("{server}/?view=runs")}));
+        assert_eq!(b.post("/elements",json!({"using":"css selector","value":"article.record"})).as_array().unwrap().len(),10);
+        b.wait("History run 24");let older=b.element(".history-controls a[href*='older=']");b.post(&format!("/element/{older}/click"),json!({}));b.wait("History run 14");
+        assert!(!b.text("body").contains("History run 24"));
+        b.post("/url",json!({"url":format!("{server}/chats/history")}));
+        assert_eq!(b.post("/elements",json!({"using":"css selector","value":".conversation-history nav a[href^='/chat/']"})).as_array().unwrap().len(),11);
+        let nested=b.element(&format!("a[href='/chat/{child}']"));assert_eq!(b.get(&format!("/element/{nested}/displayed")),false,"Child agents start collapsed under their parent");
+        let older=b.element(".history-controls a[href*='older=']");b.post(&format!("/element/{older}/click"),json!({}));b.wait("History thread 14");assert!(!b.text("body").contains("History thread 24"));
+        b.post("/url",json!({"url":format!("{server}/chat/{child}")}));
+        let fresh_input=b.element("textarea[data-enter-sends=true]");let toggle=b.element(".conversation-toggle > summary");b.post(&format!("/element/{toggle}/click"),json!({}));
+        let branch=b.element(".conversation-branch");assert_eq!(b.get(&format!("/element/{branch}/property/open")),true,"The active child's parent must be expanded");
+        {let mut state=state.lock().unwrap();crate::chat::create(&mut state);state.chats.last_mut().unwrap().title="Live recent thread".into();}
+        b.wait("Live recent thread");assert_eq!(b.get(&format!("/element/{fresh_input}/name")),"textarea","Refreshing the disclosed picker must not reload chat");
         b.post("/url",json!({"url":format!("{server}/chat/{chat}")}));
         let input=b.element("textarea[data-enter-sends=true]");
         b.post(&format!("/element/{input}/value"),json!({"text":"/op"}));
