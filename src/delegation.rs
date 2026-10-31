@@ -56,7 +56,7 @@ pub fn definition() -> Value {
     json!({"name":"control_agent_delegate","description":"Delegate a bounded task to an isolated worker, or request one isolated, read-only judge review using your captured provider and model. This checkpoints your files, pauses you, releases the worker, then automatically resumes you with the child's result. Stop immediately after acknowledgement; never poll or wait inside a command. Children share your actor and authority ceiling, not writable files. Review feedback never applies or merges changes. Limits: depth 2, 8 children and one judge per root task; execution uses bounded node slots.","inputSchema":{"type":"object","properties":{"objective":{"type":"string","minLength":1,"maxLength":2000},"role":{"type":"string","enum":["worker","judge"]}},"required":["objective","role"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
 }
 
-fn lineage(run: &runtime::Run) -> Persona {
+pub(crate) fn lineage(run: &runtime::Run) -> Persona {
     run.persona.clone().unwrap_or(Persona {
         role: Role::Worker,
         root: run.id.clone(),
@@ -64,7 +64,7 @@ fn lineage(run: &runtime::Run) -> Persona {
         parent: None,
     })
 }
-fn budget(state: &State, run: &runtime::Run, role: Role) -> Result<(), &'static str> {
+pub(crate) fn budget(state: &State, run: &runtime::Run, role: Role) -> Result<(), &'static str> {
     let persona = lineage(run);
     if persona.role == Role::Judge {
         return Err("Judges cannot delegate or acquire additional authority.");
@@ -77,7 +77,7 @@ fn budget(state: &State, run: &runtime::Run, role: Role) -> Result<(), &'static 
         .runs
         .iter()
         .filter(|r| {
-            r.kind == "delegated" && r.persona.as_ref().is_some_and(|p| p.root == persona.root)
+            matches!(r.kind.as_str(), "delegated" | "spawned") && r.persona.as_ref().is_some_and(|p| p.root == persona.root)
         })
         .collect();
     if children.len() >= MAX_CHILDREN {

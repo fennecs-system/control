@@ -36,6 +36,7 @@ mod runtime;
 mod rust_bench;
 mod scheduler;
 mod services;
+mod spawning;
 mod session_http;
 mod shutdown;
 mod storage;

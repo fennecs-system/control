@@ -97,6 +97,15 @@ fn rpc_at(
             if crate::delegation::pausing(run) && request["params"]["name"]!="control_agent_delegate" {
                 return error("This attempt is pausing for delegated work; no more tools may run.");
             }
+            if request["params"]["name"]=="control_agent_spawn" {
+                let Some(generation)=run.attempts.last().and_then(|a|a.workspace_id.clone()) else {return error("Missing attempt identity");};
+                let Some(nonce)=envelope["nonce"].as_str() else {return error("Missing request identity");};
+                let input=match serde_json::from_value(request["params"]["arguments"].clone()) {Ok(input)=>input,Err(_)=>return error("Expected a bounded list of agent objectives")};
+                return match crate::spawning::request(&mut state,run_id,&generation,nonce,input,crate::storage::save) {
+                    Ok(value)=>json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(Ok(value))}),
+                    Err(message)=>error(message),
+                };
+            }
             if request["params"]["name"]=="control_agent_delegate" {
                 let Some(nonce)=envelope["nonce"].as_str() else {return error("Missing request identity");};
                 let Ok(input)=serde_json::from_value(request["params"]["arguments"].clone()) else{return error("Expected a delegation objective and role");};
@@ -344,7 +353,7 @@ mod tests {
         let listed=rpc_at(&shared,&id,&json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/list"}}),None);
         let names=listed["result"]["tools"].as_array().unwrap().iter().map(|t|t["name"].as_str().unwrap()).collect::<Vec<_>>();
         assert!(names.contains(&"control_workspace_run"));assert!(!names.contains(&"control_agent_delegate"));assert!(names.contains(&"control_agent_result"));
-        for name in ["control_agent_delegate","control_project_request","control_design_ask","control_preview_start","control_preview_stop","control_github_pr","control_service_start","control_service_attach","control_service_status","control_service_stop"] {
+        for name in ["control_agent_delegate","control_agent_spawn","control_project_request","control_design_ask","control_preview_start","control_preview_stop","control_github_pr","control_service_start","control_service_attach","control_service_status","control_service_stop"] {
             assert!(!names.contains(&name));
             let denied=rpc_at(&shared,&id,&json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":{}}}}),None);
             assert!(denied["error"]["message"].as_str().unwrap().contains("Judge policy"));

@@ -1,5 +1,22 @@
 # Delegated agents and judges
 
+Use `control_agent_spawn` with an `objectives` array for nonblocking work: admit
+one to eight child tasks and receive their run/chat handles immediately while the
+parent keeps working. Children queue under the existing node model-slot limit;
+this does not start eight concurrent model calls or persistent bots. Spawning and
+delegation share the eight-child root budget and depth-two limit.
+
+Spawned children inherit the captured provider/model, lenses, actor and immutable
+baseline from the parent's active attempt. They never read its live edits or
+share its writable directory. Use ordinary delegation below when current edits
+need a checkpoint first; a first Improve turn without a published baseline must
+delegate. Source modifications and child outputs are never automatically merged.
+Use `control_agent_result` with `section=status` to inspect queued/running/failed
+children, and the output sections below after successful completion. Later turns
+in the originating chat can inspect its recorded spawn receipts; siblings and
+unrelated chats cannot. Cancellation of an active parent cascades to its children.
+Room watches deliver information to existing chats and are a separate mechanism.
+
 Workers can call `control_agent_delegate` with an `objective` and `role`:
 `worker` or `judge`. Control checkpoints the current files, releases the worker,
 runs the child, and resumes the parent with bounded feedback. The web transcript

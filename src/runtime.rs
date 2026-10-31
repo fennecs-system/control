@@ -30,6 +30,8 @@ pub struct Runtime {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Run {
     #[serde(default)]
+    pub spawns: Vec<crate::spawning::Batch>,
+    #[serde(default)]
     pub persona: Option<crate::delegation::Persona>,
     #[serde(default)]
     pub delegation: Option<crate::delegation::Delegation>,
@@ -232,6 +234,7 @@ impl Runtime {
             .unwrap_or_default()
             .as_nanos();
         self.runs.push(Run {
+            spawns: Vec::new(),
             persona: None,
             delegation: None,
             question: None,

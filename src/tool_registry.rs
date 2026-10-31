@@ -107,6 +107,7 @@ pub fn worker_definitions(improve: bool) -> Vec<Value> {
         tools.push(crate::github::definition());
     }
     tools.push(crate::delegation::definition());
+    tools.push(crate::spawning::definition());
     tools.extend(crate::command_jobs::definitions());
     tools.extend(crate::services::definitions());
     tools.push(crate::delegated_results::definition());
