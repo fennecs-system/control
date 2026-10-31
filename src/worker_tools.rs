@@ -179,9 +179,9 @@ fn rpc_at(
             }
             if request["params"]["name"] == "control_design_ask" {
                 let Some(nonce) = envelope["nonce"].as_str() else { return error("Missing request identity"); };
-                let input = match serde_json::from_value(request["params"]["arguments"].clone()) {
+                let input = match crate::design::parse_input(request["params"]["arguments"].clone()) {
                     Ok(input) => input,
-                    Err(_) => return error("Invalid design question"),
+                    Err(message) => return error(message),
                 };
                 return match crate::design::ask(&mut state, run_id, nonce, input) {
                     Ok(value) => json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":value.to_string()}],"isError":false}}),
@@ -352,6 +352,58 @@ pub fn pump_at(state: &Arc<Mutex<State>>, run: &str, mailbox: &Path, workspace: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn design_transport_envelope() -> Value {
+        // Reproduce the recorded successful transport shape with generic task
+        // arguments, not the literal user conversation. Identities are timestamp-count.
+        json!({"nonce":"1793455807009221658-5","request":{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"control_design_ask","arguments":{
+            "question":"How should we proceed with the local service? The checked environment lacks its required runtime, and no supported dependency download route is available.",
+            "options":["Supply a tool container with the required runtime and dependencies, then continue implementation.","Prepare task-local service configuration and an implementation plan for later execution.","Stop the service task."],"recommended":0
+        }}}})
+    }
+    #[test]
+    fn design_rpc_reports_fields_without_blaming_transport_and_retains_pause_fences() {
+        let (mut state, _) = crate::design::tests::fixture();
+        let id=state.runtime.runs[0].id.clone();
+        let envelope=design_transport_envelope();
+        let input=crate::design::parse_input(envelope["request"]["params"]["arguments"].clone()).unwrap();
+        let admitted=crate::design::tests::ask_without_io(&mut state,&id,envelope["nonce"].as_str().unwrap(),input).unwrap();
+        let shared=Arc::new(Mutex::new(state));
+        let before=serde_json::to_vec(&*shared.lock().unwrap()).unwrap();
+        for (field,value,expected) in [
+            ("question",json!(null),"question must be a string"),
+            ("question",json!(" "),"question must contain"),
+            ("options",json!("A or B"),"options must be an array"),
+            ("options",json!(["Only one"]),"options must contain"),
+            ("options",json!(["Same"," Same "]),"options must be distinct"),
+            ("options",json!(["A","x".repeat(201)]),"Each option must contain"),
+            ("recommended",json!(3),"recommended must be a zero-based index"),
+            ("recommended",json!(-1),"recommended must be a nonnegative"),
+            ("recommended",json!("first"),"recommended must be a nonnegative"),
+        ] {
+            let mut malformed=envelope.clone();malformed["request"]["params"]["arguments"][field]=value;
+            let response=rpc_at(&shared,&id,&malformed,None);
+            let message=response["error"]["message"].as_str().unwrap();
+            assert!(message.starts_with(expected),"{message}");assert!(!message.contains("identity"));
+            assert_eq!(serde_json::to_vec(&*shared.lock().unwrap()).unwrap(),before);
+        }
+        for _ in 0..2 {
+            let replay=rpc_at(&shared,&id,&envelope,None);
+            assert_eq!(serde_json::from_str::<Value>(replay["result"]["content"][0]["text"].as_str().unwrap()).unwrap(),admitted);
+        }
+        let mut unknown=envelope.clone();unknown["request"]["params"]["arguments"]["extra"]=json!("do-not-echo-this-value");
+        let response=rpc_at(&shared,&id,&unknown,None);
+        let message=response["error"]["message"].as_str().unwrap();
+        assert!(message.contains("an object containing only"));assert!(!message.contains("do-not-echo-this-value"));
+        for nonce in ["", "unsupported_identity", &"a".repeat(129)] {
+            let mut bad_identity=envelope.clone();bad_identity["nonce"]=json!(nonce);
+            assert_eq!(rpc_at(&shared,&id,&bad_identity,None)["error"]["message"],"Invalid design request identity; retry the tool call.");
+        }
+        let mut different=envelope.clone();different["request"]["params"]["arguments"]["question"]=json!("A different valid question?");
+        assert_eq!(rpc_at(&shared,&id,&different,None)["error"]["message"],"This attempt already has a design question.");
+        let write=json!({"nonce":"1793455807009221658-6","request":{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"control_workspace_start","arguments":{"command":"true"}}}});
+        assert_eq!(rpc_at(&shared,&id,&write,None)["error"]["message"],"This attempt is pausing for a design answer; no more tools may run.");
+        assert_eq!(serde_json::to_vec(&*shared.lock().unwrap()).unwrap(),before);
+    }
     #[test]
     fn completed_child_summary_is_available_through_the_worker_broker() {
         let shared=Arc::new(Mutex::new(crate::delegated_results::tests::fixture()));
