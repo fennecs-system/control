@@ -19,6 +19,8 @@ pub struct Message {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Session {
     #[serde(default)]
+    pub activity_order: u64,
+    #[serde(default)]
     pub project: Option<crate::projects::Project>,
     #[serde(default)]
     pub parent_chat: Option<String>,
@@ -199,7 +201,9 @@ pub fn create(state: &mut State) -> String {
         .unwrap_or_default()
         .as_nanos();
     let id = format!("c-{stamp:x}-{}", state.chats.len());
+    let activity_order=next_activity(state);
     state.chats.push(Session {
+        activity_order,
         project: None,
         parent_chat: None,
         fork_context: None,
@@ -227,6 +231,7 @@ pub fn receive(state: &mut State, incoming: &discord::Incoming) -> Result<(), &'
     }
     if !state.chats.iter().any(|s| s.id == id) {
         state.chats.push(Session {
+            activity_order:0,
             project: None,
             parent_chat: None,
             fork_context: None,
@@ -306,6 +311,16 @@ pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -
 }
 
 pub fn send(state: &mut State, id: &str, text: &str, source: &str) -> Result<(), &'static str> {
+    send_command(state,id,text,source)?;
+    touch(state,id);
+    Ok(())
+}
+fn next_activity(state:&State)->u64 {state.chats.iter().map(|chat|chat.activity_order).max().unwrap_or(0).saturating_add(1)}
+pub(crate) fn touch(state:&mut State,id:&str) {
+    let order=next_activity(state);
+    if let Some(chat)=state.chats.iter_mut().find(|chat|chat.id==id) {chat.activity_order=order;}
+}
+fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result<(), &'static str> {
     if crate::shutdown::requested() {
         return Err("Control is stopping; try again after restart.");
     }
@@ -594,15 +609,10 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
     )
 }
 pub fn list(state: &State) -> Value {
-    let mut authorize = identity::authorizer();
-    json!(state
-        .chats
-        .iter()
-        .filter(|s| valid_id(&s.id) && authorize(&s.actor, Action::Task).is_ok())
-        .map(
-            |s| json!({"id":s.id,"title":s.title,"lens":s.lens,"lenses":selected_lenses(s),"revision":s.revision,"messages":s.messages.len()})
-        )
-        .collect::<Vec<_>>())
+    json!(crate::conversations::ordered(state).into_iter().map(|entry| {
+        let s=entry.session;
+        json!({"id":s.id,"title":s.title,"lens":s.lens,"lenses":selected_lenses(s),"revision":s.revision,"messages":s.messages.len(),"parent_chat":entry.parent,"depth":entry.depth,"activity_order":s.activity_order})
+    }).collect::<Vec<_>>())
 }
 pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
     let session = state.chats.iter().find(|s| s.id == id).ok_or("Chat not found.")?;

@@ -69,26 +69,29 @@ pub fn heading(view: &str) -> String {
     "Control".into()
 }
 pub fn conversations(state: &crate::State, active: &str) -> String {
-    let current = if active.is_empty() {
-        " aria-current='page'"
-    } else {
-        ""
-    };
-    let mut links = format!("<a href='/chats'{current}>+ New chat</a>");
-    if let Some(chats) = crate::chat::list(state).as_array() {
-        for chat in chats.iter().rev() {
-            let id = chat["id"].as_str().unwrap();
-            let title = crate::escape(chat["title"].as_str().unwrap_or("Chat"));
-            let current = if id == active {
-                " aria-current='page'"
-            } else {
-                ""
-            };
-            links.push_str(&format!(
-                "<a href='/chat/{id}' title='{title}'{current}>{title}</a>"
-            ));
-        }
+    use std::collections::{HashMap,HashSet};
+    let entries=crate::conversations::ordered(state);
+    let parents:HashMap<_,_>=entries.iter().map(|entry|(entry.session.id.as_str(),entry.parent)).collect();
+    let mut expanded=HashSet::new();let mut ancestor=parents.get(active).copied().flatten();
+    while let Some(id)=ancestor {
+        if !expanded.insert(id) {break;}
+        ancestor=parents.get(id).copied().flatten();
     }
+    let current=if active.is_empty() {" aria-current='page'"}else{""};
+    let mut links=format!("<a href='/chats'{current}>+ New chat</a>");
+    let mut branches=Vec::new();
+    for (position,entry) in entries.iter().enumerate() {
+        while branches.last().is_some_and(|depth| *depth>=entry.depth) {links.push_str("</div></details>");branches.pop();}
+        let chat=entry.session;
+        let title=crate::escape(&chat.title);
+        let current=if chat.id==active {" aria-current='page'"}else{""};
+        let link=format!("<a href='/chat/{}' title='{title}'{current}>{title}</a>",chat.id);
+        if entries.get(position+1).is_some_and(|next|next.depth>entry.depth) {
+            links.push_str(&format!("<details class='conversation-branch' data-chat-branch='{}'{}><summary>{link}</summary><div class='conversation-children'>",chat.id,if expanded.contains(chat.id.as_str()) {" open"}else{""}));
+            branches.push(entry.depth);
+        }else{links.push_str(&link);}
+    }
+    for _ in branches {links.push_str("</div></details>");}
     format!("<aside class='section-navigation conversation-navigation'><h2>Conversations</h2><nav aria-label='Conversations'>{links}</nav></aside>")
 }
 #[cfg(test)]

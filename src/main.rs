@@ -8,6 +8,7 @@ mod chat;
 mod claude;
 mod command_jobs;
 mod collective;
+mod conversations;
 mod design;
 mod delegation;
 mod delegated_results;
