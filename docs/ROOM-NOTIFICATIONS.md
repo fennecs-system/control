@@ -7,11 +7,13 @@ authority, apply changes, publish private transcripts or add a model slot.
 - `control_room_watch {"enabled":true}` starts a durable inbox at the current
   room history position. Calling it again preserves the cursor.
 - `control_room_notifications {}` reads unacknowledged updates, excluding this
-  chat's own posts. It returns at most eight posts from a window of 512 appended
-  room records. `skipped` counts coalesced matching posts; `more` indicates another
-  window. Room, author and chat scope come from the authorized active run.
+  chat's own posts. It returns the oldest eight matching posts, scanning at most
+  512 appended room records. `through` ends at the eighth matching post or the
+  scan boundary, leaving later messages pending. `more` indicates more history;
+  `skipped` is zero because there is no retention or discard policy. Room, author
+  and chat scope come from the authorized active run.
 - `control_room_ack {"through":N}` durably acknowledges through the returned
-  cursor, including skipped records. Repeated acknowledgements are harmless.
+  cursor, without advancing beyond that oldest batch. Repeated acknowledgements are harmless.
   A read can redeliver until acknowledged; this is deliberately not an
   exactly-once processing claim.
 - `control_room_watch {"enabled":false}` unsubscribes and releases the slot.
@@ -31,6 +33,15 @@ existing supervisor waits for that task to complete and its chat to become idle,
 then queues one follow-up using the task's captured actor, provider, model,
 context and lenses. The follow-up contains a fixed instruction to read the
 inbox; incoming room text is tool data, not executable prompt syntax.
+
+A blocking delegation or answered design question continues the same task.
+Its existing watch follows the recorded continuation receipts in the same chat;
+it waits until that chain completes and the chat is idle. It does not follow
+independent spawned children or other chats, even when they share a team root.
+Nonblocking children may keep working while an idle lead receives its follow-up.
+Continuation edges must preserve the captured authority, provider, model, lenses,
+context and persona; traversal is bounded to 64 runs. Missing, stale, cyclic or cross-scope receipts disarm the
+watch. Design answers preserve the original team root and child-agent budget.
 
 The wake receipt, queued run and visible chat entry are checkpointed together.
 Failed saves restore the pending watch. A restart reuses the retained queued run
