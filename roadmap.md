@@ -75,8 +75,9 @@ unperformed release checks. Branch-only work is identified separately.
 - Local preview start/stop tools run credential-free, offline services against a
   read-only project mount. Loopback ingress uses a separate browser origin;
   durable identity is verified before restart rebinding or cleanup.
-- Base filesystems remain read-only. Agents receive factual environment guidance:
-  current images are Nix-built but do not include the `nix` command.
+- Lite workers retain read-only filesystems and Rust tools. Opt-in full workers
+  add Nix and common runtimes, with a private writable layer for credential-free
+  tools; model CLI containers stay read-only. See [worker profiles](docs/WORKER-PROFILES.md).
 
 See [projects and previews](docs/WORKSPACES.md) for limits and tested boundaries.
 Native file pickers, in-place host edits, Jujutsu and remote publishing are not
@@ -249,8 +250,9 @@ deterministic Rust supervision remains responsible for scheduling.
    finite budgets; reuse existing human questions and Discord delivery for steering.
 5. **Tool construction and first demonstration.** Agents request/select a pinned
    tool runtime, write their own task-specific code and coordinate through normal
-   tools and rooms. Runtime/image requests and persistent bot identity need their
-   own contracts; generic ports alone do not supply an arbitrary runtime image.
+   tools and rooms. Operator-selected lite/full images provide an initial runtime
+   choice. Agent-built images and persistent bot identity need their own contracts;
+   generic ports alone do not supply an arbitrary runtime image.
    Keep domain-specific adapters and server setup outside Control's source.
 
 Keep these as small, usable increments. Measure lifecycle/attach overhead and
@@ -351,6 +353,9 @@ Conditional transcript rendering still needs complete invalidation.
   writable stores/profiles/build state, with bounded resources. Agents can use
   advertised environment tools freely within their grant; package fetching is an
   explicit network capability. Never expose the host daemon or engine socket.
+  Start with operator-selected lite/full workers. A later image-build tool must
+  accept constrained build inputs, never arbitrary host mounts, engine options
+  or authority; it is not required for the first small playtest.
 - Keep shared images immutable. Cache reads and publication are separate policies;
   never promote a worker's filesystem or generated output into a shared base/cache
   automatically. Defer caching complexity until measured reuse justifies it.

@@ -401,7 +401,7 @@ impl App {
         if let Some(messages) = self.detail["messages"].as_array() {
             for message in messages {
                 lines.push(Line::styled(
-                    "You",
+                    control_context::agent_policy::MessageSpeaker::for_run_kind(message["kind"].as_str()).label(),
                     Style::default().fg(Color::Rgb(181, 160, 255)),
                 ));
                 lines.extend(
@@ -1346,6 +1346,21 @@ mod tests {
                 ),
             }
         }
+    }
+    #[test]
+    fn automatic_updates_are_attributed_to_control_in_terminal() {
+        let app = App {
+            detail: json!({"messages":[
+                {"kind":"delegation-result","text":"Delegated task · completed"},
+                {"kind":"room-notification","text":"New room posts"},
+                {"kind":"design-answer","text":"Use the smaller option"}
+            ]}),
+            ..App::default()
+        };
+        let text = app.transcript();
+        let labels = text.lines.iter().map(ToString::to_string).collect::<Vec<_>>();
+        assert_eq!(labels.iter().filter(|line| *line == "You").count(), 1);
+        assert_eq!(labels.iter().filter(|line| *line == "Control").count(), 2);
     }
     #[test]
     fn file_diffs_use_purple_additions_and_pastel_red_removals_in_terminal() {

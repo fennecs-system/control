@@ -1,5 +1,6 @@
 //! Pure lens selection. Resource permissions remain outside this function.
 mod library;
+pub mod agent_policy;
 pub mod commands;
 pub mod tool_policy;
 pub use library::{valid_id, Definition, DocumentInput, LensVersion, Library, Resolved};

@@ -539,8 +539,13 @@ fn history_window(session: &Session, current: usize, runtime: &Runtime) -> (Vec<
     let mut history = Vec::new();
     let mut count = 0;
     for message in session.messages[..current].iter().rev() {
-        let response = response(message, runtime);
-        let entry = format!("User: {}\nAssistant: {}\n", message.text, response.1);
+        let run = message.run_id.as_deref().and_then(|id| runtime.runs.iter().find(|r| r.id == id));
+        let response = response_from_run(message, run);
+        let label = match control_context::agent_policy::MessageSpeaker::for_run_kind(run.map(|r| r.kind.as_str())) {
+            control_context::agent_policy::MessageSpeaker::User => "User",
+            control_context::agent_policy::MessageSpeaker::Control => "Control event",
+        };
+        let entry = format!("{label}: {}\nAssistant: {}\n", message.text, response.1);
         count += entry.chars().count();
         if count > 20000 {
             break;
@@ -563,9 +568,6 @@ pub fn omitted_history(state: &State, run: &str) -> usize {
                 .map(|current| history_window(session, current, &state.runtime).1)
         })
         .unwrap_or(0)
-}
-fn response<'a>(message: &'a Message, runtime: &'a Runtime) -> (&'a str, &'a str) {
-    response_from_run(message,message.run_id.as_deref().and_then(|id|runtime.runs.iter().find(|r|r.id==id)))
 }
 fn response_from_run<'a>(message:&'a Message,run:Option<&'a crate::runtime::Run>)->(&'a str,&'a str) {
     run
@@ -685,7 +687,11 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
         let body = question.map(|q|crate::design::render(q,id,run_status == "waiting"))
             .unwrap_or_else(||format!("<p class='preserve'>{reply}</p>"));
         let body = if project_message==Some(position) {format!("{}{}",if folder_request {String::new()}else{body},crate::projects::panel(state,id))}else{body};
-        html.push_str(&format!("<article class='user-message' aria-label='You'><p class='preserve'>{}</p></article><article class='assistant-message' aria-label='Control'>{status}{body}</article>", command_text(&message.text)));
+        let input = match control_context::agent_policy::MessageSpeaker::for_run_kind(run.map(|r| r.kind.as_str())) {
+            control_context::agent_policy::MessageSpeaker::User => format!("<article class='user-message' aria-label='You'><p class='preserve'>{}</p></article>", command_text(&message.text)),
+            control_context::agent_policy::MessageSpeaker::Control => format!("<p class='message-status' aria-label='Control update'>{}</p>", escape(&message.text)),
+        };
+        html.push_str(&format!("{input}<article class='assistant-message' aria-label='Control'>{status}{body}</article>"));
         if let Some(child)=run.and_then(|r|r.delegation.as_ref()).and_then(|d|d.child.as_deref())
             .and_then(|run_id|state.runtime.runs.iter().find(|r|r.id==run_id))
             .and_then(|r|r.chat_id.as_deref()).filter(|child|valid_id(child)) {
@@ -1326,6 +1332,22 @@ mod tests {
         assert!(!transcript(&state, &id)
             .unwrap()
             .contains("http-equiv='refresh'"));
+    }
+    #[test]
+    fn automatic_updates_are_not_presented_as_user_messages() {
+        let mut state = State::default();
+        let id = create(&mut state);
+        send(&mut state, &id, "Delegated task · completed", "test").unwrap();
+        state.runtime.runs[0].kind = "delegation-result".into();
+        let html = transcript(&state, &id).unwrap();
+        assert!(html.contains("aria-label='Control update'>Delegated task · completed"));
+        assert!(!html.contains("aria-label='You'"));
+        assert!(history_window(&state.chats[0], 1, &state.runtime).0[0].starts_with("Control event:"));
+        state.runtime.runs[0].kind = "room-notification".into();
+        assert!(!transcript(&state, &id).unwrap().contains("aria-label='You'"));
+        state.runtime.runs[0].kind = "design-answer".into();
+        assert!(transcript(&state, &id).unwrap().contains("aria-label='You'"));
+        assert!(history_window(&state.chats[0], 1, &state.runtime).0[0].starts_with("User:"));
     }
     #[test]
     fn html_escapes_chat_and_api_does_not_accept_actor_overrides() {

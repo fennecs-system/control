@@ -57,6 +57,8 @@ pub struct Service {
     gid: u32,
     #[serde(default, skip_serializing_if="std::ops::Not::not")]
     workspace_exec: bool,
+    #[serde(default, skip_serializing_if = "crate::worker_profile::Profile::is_lite")]
+    profile: crate::worker_profile::Profile,
     #[serde(default)]
     diagnostic: String,
 }
@@ -189,8 +191,13 @@ pub fn call(
                 "Rebuild worker/Claude images with Nix setup before starting persistent services",
             ));
         }
+        let profile = crate::worker_profile::Profile::inspect(image.as_str())?;
         let mut s = shared.lock().map_err(|_| fail("State unavailable"))?;
-        let value = admit(
+        // Revalidate the captured image after the engine query outside the state lock.
+        if caller(&s, run, generation)?.0.attempts.last().and_then(|a| a.image.as_deref()) != Some(image.as_str()) {
+            return Err(fail("Captured service image changed"));
+        }
+        let value = admit_profile(
             &mut s,
             Request {
                 run,
@@ -200,6 +207,7 @@ pub fn call(
             input,
             node,
             now(),
+            profile,
             crate::storage::save,
         )?;
         return Ok(value);
@@ -254,12 +262,17 @@ struct Request<'a> {
     generation: &'a str,
     nonce: &'a str,
 }
-fn admit(
+#[cfg(test)]
+fn admit(s: &mut State, request: Request<'_>, input: Input, node: NodeId, time: u64, save: impl FnOnce(&State) -> io::Result<()>) -> io::Result<Value> {
+    admit_profile(s, request, input, node, time, crate::worker_profile::Profile::Lite, save)
+}
+fn admit_profile(
     s: &mut State,
     request: Request<'_>,
     input: Input,
     node: NodeId,
     time: u64,
+    profile: crate::worker_profile::Profile,
     save: impl FnOnce(&State) -> io::Result<()>,
 ) -> io::Result<Value> {
     let Request {
@@ -347,6 +360,7 @@ fn admit(
         uid,
         gid: unsafe { libc::getgid() },
         workspace_exec: true,
+        profile,
         diagnostic: String::new(),
     };
     // Retain nonce receipts while their origin attempt can still submit retries.
@@ -433,7 +447,7 @@ struct Inspection {
 }
 const INSPECT: &str = r#"{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Image}},"node":{{json (index .Config.Labels "dev.control.node")}},"resource":{{json (index .Config.Labels "dev.control.resource")}},"chat":{{json (index .Config.Labels "dev.control.chat")}},"generation":{{json (index .Config.Labels "dev.control.generation")}},"status":{{json .State.Status}},"network":{{json .HostConfig.NetworkMode}},"readonly":{{json .HostConfig.ReadonlyRootfs}},"privileged":{{json .HostConfig.Privileged}},"user":{{json .Config.User}},"pid_mode":{{json .HostConfig.PidMode}},"restart":{{json .HostConfig.RestartPolicy.Name}},"caps":{{json .HostConfig.CapDrop}},"security":{{json .HostConfig.SecurityOpt}},"memory":{{json .HostConfig.Memory}},"cpu":{{json .HostConfig.NanoCpus}},"pids":{{json .HostConfig.PidsLimit}},"mounts":{{json .Mounts}},"tmpfs":{{json .HostConfig.Tmpfs}},"entrypoint":{{json .Config.Entrypoint}},"command":{{json .Config.Cmd}}}"#;
 fn tmpfs(service: &Service) -> HashMap<String, String> {
-    [("/workspace", 64), ("/tmp", 128), ("/home/agent", 32)]
+    [("/workspace", service.profile.service_workspace_mb()), ("/tmp", 128), ("/home/agent", 32)]
         .into_iter()
         .map(|(path, size)| {
             (
@@ -466,16 +480,16 @@ fn verify<'a>(service: &'a Service, inspection: &Inspection) -> io::Result<Verif
             .container()
             .is_some_and(|id| id.as_str() != inspection.id)
         || inspection.network != "none"
-        || !inspection.readonly
+        || inspection.readonly != service.profile.readonly_root()
         || inspection.privileged
         || !inspection.pid_mode.is_empty()
         || inspection.restart != "no"
         || inspection.user != format!("{}:{}", service.uid, service.gid)
         || inspection.caps != ["ALL"]
         || !inspection.security.iter().any(|s| s == "no-new-privileges")
-        || inspection.memory != 512 * 1024 * 1024
+        || inspection.memory != service.profile.service_memory()
         || inspection.cpu != 1_000_000_000
-        || inspection.pids != 64
+        || inspection.pids != service.profile.service_pids()
         || inspection.tmpfs != expected_tmpfs
         || inspection.mounts.iter().any(|m| {
             m["Type"] != "tmpfs"
@@ -589,11 +603,10 @@ impl Engine for Docker {
             "--pull=never".into(),
             "--restart=no".into(),
             "--network=none".into(),
-            "--read-only".into(),
             "--cap-drop=ALL".into(),
             "--security-opt=no-new-privileges".into(),
-            "--pids-limit=64".into(),
-            "--memory=512m".into(),
+            format!("--pids-limit={}", service.profile.service_pids()),
+            format!("--memory={}", service.profile.service_memory()),
             "--cpus=1".into(),
             "--log-driver=local".into(),
             "--log-opt=max-size=1m".into(),
@@ -607,6 +620,7 @@ impl Engine for Docker {
             "--workdir=/workspace".into(),
             "--entrypoint=control-service-runner".into(),
         ];
+        if service.profile.readonly_root() { args.push("--read-only".into()); }
         for (key, value) in [
             ("node", r.owner.node.as_str().to_owned()),
             ("purpose", "service".into()),
@@ -1310,6 +1324,27 @@ mod tests {
         let old_observation=inspection(&legacy,&"b".repeat(64));let new_observation=inspection(&current,&"b".repeat(64));assert!(verify(&legacy,&old_observation).is_ok());assert!(verify(&current,&new_observation).is_ok());assert!(verify(&legacy,&new_observation).is_err());assert!(verify(&current,&old_observation).is_err());
     }
     #[test]
+    fn full_profile_captures_private_store_policy_and_legacy_stays_readonly() {
+        let (mut state, run, _, time) = fixture();
+        admit_fixture(&mut state, &run, time, |_| Ok(())).unwrap();
+        let mut service = state.services[0].clone();
+        assert!(serde_json::to_value(&service).unwrap().get("profile").is_none());
+        service.resource.phase = Phase::Creating;
+        let mut observed = inspection(&service, &"b".repeat(64));
+        service.profile = crate::worker_profile::Profile::Full;
+        assert!(verify(&service, &observed).is_err());
+        observed.memory = service.profile.service_memory();
+        observed.pids = service.profile.service_pids();
+        observed.tmpfs = tmpfs(&service);
+        observed.readonly = false;
+        assert!(verify(&service, &observed).is_ok());
+        let restored: Service = serde_json::from_value(serde_json::to_value(&service).unwrap()).unwrap();
+        assert_eq!(restored.profile, crate::worker_profile::Profile::Full);
+        assert!(verify(&restored, &observed).is_ok());
+        service.profile = crate::worker_profile::Profile::Lite;
+        assert!(verify(&service, &observed).is_err());
+    }
+    #[test]
     #[ignore = "requires CONTROL_QA_SERVICE_IMAGE (new pinned worker image), CONTROL_QA_CONTROL_BIN and a local Linux engine; no credentials/models"]
     fn live_service_survives_server_restart_and_expires_without_control() {
         use std::{
@@ -1342,7 +1377,8 @@ mod tests {
         fs::write(state_dir.join("node-id"), &node).unwrap();
         fs::set_permissions(state_dir.join("node-id"), fs::Permissions::from_mode(0o600)).unwrap();
         let (mut s, run, _, time) = fixture();
-        let value=admit(&mut s,Request{run:&run,generation:"attempt-a",nonce:"live"},Input{command:"printf durable > /workspace/counter; if (exec 3<> /proc/1/mem) 2>/dev/null; then exit 41; fi; kill -STOP 1 2>/dev/null || true; echo ready; sleep 60".to_owned().try_into().unwrap(),lease_seconds:20},node.clone().try_into().unwrap(),time,|_|Ok(())).unwrap();
+        let profile = crate::worker_profile::Profile::inspect(&image).unwrap();
+        let value=admit_profile(&mut s,Request{run:&run,generation:"attempt-a",nonce:"live"},Input{command:"printf durable > /workspace/counter; if (exec 3<> /proc/1/mem) 2>/dev/null; then exit 41; fi; kill -STOP 1 2>/dev/null || true; echo ready; sleep 60".to_owned().try_into().unwrap(),lease_seconds:20},node.clone().try_into().unwrap(),time,profile,|_|Ok(())).unwrap();
         assert!(value["service_id"].is_string());
         s.services[0].resource.image = image.try_into().unwrap();
         s.runtime.runs[0].status = "completed".into();

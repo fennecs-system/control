@@ -1,14 +1,17 @@
 # Executed by the pinned tools in `nix run .#setup`, from the checkout root.
 images=(worker)
 provider=codex
+profile=lite
 while [ "$#" -ne 0 ]; do
   case "$1" in
     --claude) images+=(claude); provider=claude ;;
     --browser) images+=(browser) ;;
     --build-environment) images+=(build) ;;
+    --full) profile=full ;;
     --help|-h)
-      printf '%s\n' 'Usage: nix run .#setup [-- --claude] [--browser] [--build-environment]' \
+      printf '%s\n' 'Usage: nix run .#setup [-- --claude] [--full] [--browser] [--build-environment]' \
         'Build the release UI/binary and Codex worker; optionally add Claude Code, browser capture and offline Rust/WASM build environments.' \
+        '--full adds private single-user Nix, Node/npm, JDK, Python and curl to worker images; lite remains the default.' \
         'Requires a running Docker-compatible engine and a Linux Nix builder.' \
         'Preserves private configuration and state. Does not sign in or start services.'
       exit 0 ;;
@@ -30,7 +33,9 @@ fi
 printf '%s\n' "Building Nix ${CONTROL_SETUP_LINUX_SYSTEM} images: ${images[*]}…"
 declare -A image_path image_id
 for image in "${images[@]}"; do
-  if ! image_path[$image]=$(nix build ".#packages.${CONTROL_SETUP_LINUX_SYSTEM}.${image}-image" --no-link --print-out-paths); then
+  image_output=$image
+  if [ "$profile" = full ] && [[ "$image" = worker || "$image" = claude ]]; then image_output="${image}-full"; fi
+  if ! image_path[$image]=$(nix build ".#packages.${CONTROL_SETUP_LINUX_SYSTEM}.${image_output}-image" --no-link --print-out-paths); then
     printf '%s\n' "Could not build the ${CONTROL_SETUP_LINUX_SYSTEM} ${image} image. On macOS this needs a Linux Nix builder;" \
       'see "Linux builder on macOS" in docs/setup.md.' >&2
     exit 1
@@ -58,7 +63,9 @@ check_pin_target() {
 }
 for image in "${images[@]}"; do
   docker load -i "${image_path[$image]}"
-  image_id[$image]=$(docker image inspect "control-${image}:nix" --format '{{.Id}}')
+  image_tag=nix
+  if [ "$profile" = full ] && [[ "$image" = worker || "$image" = claude ]]; then image_tag=nix-full; fi
+  image_id[$image]=$(docker image inspect "control-${image}:${image_tag}" --format '{{.Id}}')
   verify_pin "${image_id[$image]}"
   check_pin_target "${image}-image-id"
 done

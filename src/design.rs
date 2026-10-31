@@ -13,6 +13,50 @@ pub struct Input {
     #[serde(default)]
     pub recommended: Option<usize>,
 }
+/// Decode only the advertised fields; report fixed field errors without echoing
+/// potentially private model arguments from a serde error.
+pub(crate) fn parse_input(arguments: Value) -> Result<Input, &'static str> {
+    #[derive(Default, Deserialize)]
+    #[serde(default, deny_unknown_fields)]
+    struct Fields {
+        question: Value,
+        options: Value,
+        recommended: Value,
+    }
+    let fields: Fields = serde_json::from_value(arguments).map_err(|_| {
+        "Design question arguments must be an object containing only question, options, and optional recommended."
+    })?;
+    Ok(Input {
+        question: serde_json::from_value(fields.question)
+            .map_err(|_| "question must be a string.")?,
+        options: serde_json::from_value(fields.options)
+            .map_err(|_| "options must be an array of strings.")?,
+        recommended: if fields.recommended.is_null() { None } else {
+            Some(serde_json::from_value(fields.recommended)
+                .map_err(|_| "recommended must be a nonnegative zero-based integer, or omitted.")?)
+        },
+    })
+}
+fn validate_input(input: &Input) -> Result<(), &'static str> {
+    if input.question.trim().is_empty() || input.question.chars().count() > 1000 {
+        return Err("question must contain 1–1000 characters and must not be blank.");
+    }
+    if !(2..=4).contains(&input.options.len()) {
+        return Err("options must contain 2–4 choices.");
+    }
+    if input.options.iter().any(|option| option.trim().is_empty() || option.chars().count() > 200) {
+        return Err("Each option must contain 1–200 characters and must not be blank.");
+    }
+    if input.options.iter().enumerate().any(|(i, option)| {
+        input.options[..i].iter().any(|other| other.trim() == option.trim())
+    }) {
+        return Err("options must be distinct after trimming whitespace.");
+    }
+    if input.recommended.is_some_and(|index| index >= input.options.len()) {
+        return Err("recommended must be a zero-based index smaller than the number of options.");
+    }
+    Ok(())
+}
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Question {
     pub id: String,
@@ -32,7 +76,7 @@ pub struct Continuation {
     pub decision: Input,
 }
 pub fn definition() -> Value {
-    json!({"name":"control_design_ask","description":"Ask the user about a consequential architecture, design, scope or behavior choice. Include 2–4 concrete options and optionally a recommended zero-based option index. This durably pauses this task and releases its worker; Control resumes from a safe checkpoint when the user answers. Do not use for routine sandbox edits, builds or tests. This is not permission escalation. After asking, stop work and await the user's answer.","inputSchema":{"type":"object","properties":{"question":{"type":"string","minLength":1,"maxLength":1000},"options":{"type":"array","minItems":2,"maxItems":4,"items":{"type":"string","minLength":1,"maxLength":200}},"recommended":{"type":"integer","minimum":0,"maximum":3}},"required":["question","options"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
+    json!({"name":"control_design_ask","description":"Ask the user about a consequential architecture, design, scope or behavior choice. Include 2–4 distinct, nonblank options of at most 200 characters each; optionally recommend a zero-based index into those options. This durably pauses this task and releases its worker; Control resumes from a safe checkpoint when the user answers. Correct a field validation error and retry this tool rather than replacing it with an untracked chat question. Do not use for routine sandbox edits, builds or tests. This is not permission escalation. After asking, stop work and await the user's answer.","inputSchema":{"type":"object","properties":{"question":{"type":"string","minLength":1,"maxLength":1000},"options":{"type":"array","minItems":2,"maxItems":4,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":200}},"recommended":{"type":"integer","minimum":0,"maximum":3,"description":"Zero-based index smaller than the number of options."}},"required":["question","options"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
 }
 pub fn requested(bridge: Option<(&Arc<Mutex<State>>, &str)>) -> bool {
     bridge.is_some_and(|(state, id)| {
@@ -60,26 +104,14 @@ fn ask_with_save(
     input: Input,
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Result<Value, &'static str> {
-    if input.question.trim().is_empty()
-        || input.question.chars().count() > 1000
-        || !(2..=4).contains(&input.options.len())
-        || input
-            .options
-            .iter()
-            .any(|s| s.trim().is_empty() || s.chars().count() > 200)
-        || input.options.iter().enumerate().any(|(i, s)| {
-            input.options[..i]
-                .iter()
-                .any(|other| other.trim() == s.trim())
-        })
-        || input.recommended.is_some_and(|i| i >= input.options.len())
-        || nonce.is_empty()
+    validate_input(&input)?;
+    if nonce.is_empty()
         || nonce.len() > 128
         || !nonce
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-')
     {
-        return Err("Expected a question, 2–4 distinct options, a valid recommendation and request identity.");
+        return Err("Invalid design request identity; retry the tool call.");
     }
     let index = state
         .runtime
@@ -341,6 +373,9 @@ pub fn render(question: &Question, chat_id: &str, ready: bool) -> String {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    pub fn ask_without_io(state: &mut State, id: &str, nonce: &str, input: Input) -> Result<Value, &'static str> {
+        ask_with_save(state, id, nonce, input, |_| Ok(()))
+    }
     pub fn fixture() -> (State, String) {
         let mut state = State::default();
         let chat = chat::create(&mut state);
@@ -398,6 +433,29 @@ pub(crate) mod tests {
         assert!(ask_with_save(&mut state, &run, "nonce", invalid, |_| Ok(())).is_err());
         state.runtime.runs[0].actor = identity::Actor::Unknown;
         assert!(ask_with_save(&mut state, &run, "nonce", input(), |_| Ok(())).is_err());
+    }
+
+    #[test]
+    fn question_option_and_recommendation_limits_report_the_actual_field() {
+        let (mut state, _) = fixture();
+        let run = state.runtime.runs[0].id.clone();
+        for (value, expected) in [
+            (json!({"question":" ","options":["A","B"]}), "question"),
+            (json!({"question":"é".repeat(1001),"options":["A","B"]}), "question"),
+            (json!({"question":"Choose","options":["A"]}), "options"),
+            (json!({"question":"Choose","options":["A","B","C","D","E"]}), "options"),
+            (json!({"question":"Choose","options":["A","  "]}), "Each option"),
+            (json!({"question":"Choose","options":["A","é".repeat(201)]}), "Each option"),
+            (json!({"question":"Choose","options":["Same"," Same "]}), "options must be distinct"),
+            (json!({"question":"Choose","options":["A","B"],"recommended":2}), "recommended"),
+        ] {
+            let error = ask_with_save(&mut state, &run, "1793455807009221658-5", parse_input(value).unwrap(), |_| panic!("invalid inputs cannot persist a pause")).unwrap_err();
+            assert!(error.starts_with(expected), "{error}");
+            assert!(!error.contains("identity"));
+            assert!(state.runtime.runs[0].question.is_none());
+        }
+        let input = parse_input(json!({"question":"é".repeat(1000),"options":["A","é".repeat(200)],"recommended":1})).unwrap();
+        assert!(ask_without_io(&mut state, &run, "1793455807009221658-5", input).is_ok());
     }
     #[test]
     fn pause_survives_reload_and_answer_keeps_authority_and_workspace_baseline() {
