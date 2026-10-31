@@ -308,14 +308,8 @@ fn rpc_at(
                 drop(state);
                 // Network requests and compilation must not hold the control-plane state lock.
                 crate::toolbox::result(crate::toolbox::call(name, &request["params"]["arguments"]))
-            } else if has_room && ["control_room_read", "control_room_post"].contains(&name) {
-                let count = state.collective.posts.len();
-                let response = rooms::worker_rpc(&mut state, run_id, envelope);
-                if state.collective.posts.len() != count && crate::storage::save(&state).is_err() {
-                    state.collective.posts.truncate(count);
-                    return error("Could not save room post");
-                }
-                return response;
+            } else if has_room && ["control_room_read", "control_room_post", "control_room_watch", "control_room_notifications", "control_room_ack"].contains(&name) {
+                return rooms::checkpoint(&mut state, run_id, envelope, crate::storage::save);
             } else {
                 return error("Tool is not allowed for this worker");
             }
@@ -432,17 +426,17 @@ mod tests {
         run.attempts.push(attempt);
         let state = Arc::new(Mutex::new(state));
         let stale = std::env::temp_dir().canonicalize().unwrap();
-        let request = json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_room_post","arguments":{"text":"late effect"}}}});
-        let response = rpc_at(&state, &id, &request, Some(&stale));
-        assert_eq!(
-            response["error"]["message"],
-            "Mailbox belongs to an inactive attempt"
-        );
         let request=json!({"nonce":"late-proposal","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_knowledge_propose","arguments":{"claim":"Must not persist","evidence":"stale mailbox","scope":"fixture","validity":"always"}}}});
         let response=rpc_at(&state,&id,&request,Some(&stale));
         assert_eq!(response["error"]["message"],"Mailbox belongs to an inactive attempt");
         assert!(state.lock().unwrap().collective.proposals.is_empty());
+        for (name, args) in [("control_room_post",json!({"message":"late effect"})),("control_room_watch",json!({"enabled":true,"wake":true})),("control_room_ack",json!({"through":0}))] {
+            let request = json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":args}}});
+            let response = rpc_at(&state, &id, &request, Some(&stale));
+            assert_eq!(response["error"]["message"], "Mailbox belongs to an inactive attempt");
+        }
         assert!(state.lock().unwrap().collective.posts.is_empty());
+        assert!(state.lock().unwrap().collective.room_watches.is_empty());
     }
     #[test]
     fn workspace_execution_is_backend_scoped_and_rejects_model_supplied_mounts() {

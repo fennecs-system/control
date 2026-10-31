@@ -6,6 +6,7 @@ use std::collections::HashMap;
 pub struct Collective {
     pub room: Vec<(String, String)>,
     pub posts: Vec<crate::rooms::Post>,
+    pub room_watches: Vec<crate::rooms::Watch>,
     pub(crate) proposals: Vec<Knowledge>,
     requests: Vec<Request>,
     pub notice: String,

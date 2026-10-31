@@ -32,6 +32,8 @@ pub struct Run {
     #[serde(default)]
     pub spawns: Vec<crate::spawning::Batch>,
     #[serde(default)]
+    pub room_wake_used: bool,
+    #[serde(default)]
     pub persona: Option<crate::delegation::Persona>,
     #[serde(default)]
     pub delegation: Option<crate::delegation::Delegation>,
@@ -235,6 +237,7 @@ impl Runtime {
             .as_nanos();
         self.runs.push(Run {
             spawns: Vec::new(),
+            room_wake_used: false,
             persona: None,
             delegation: None,
             question: None,
