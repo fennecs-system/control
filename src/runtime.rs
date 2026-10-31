@@ -348,21 +348,22 @@ impl Runtime {
                 Some(h)
             }
             "runs" => {
-                let mut h = "<h2>Runs</h2>".to_owned();
-                if !self.notice.is_empty() {
-                    h.push_str(&format!("<p role='status'>{}</p>", escape(&self.notice)));
-                }
-                if self.runs.is_empty() {
-                    h.push_str("<div class='empty'>No runs yet.</div>");
-                }
-                for r in self.runs.iter().rev() {
-                    h.push_str(&run_record(r));
-                }
-                Some(h)
+                Some(self.runs_page(None,None))
             }
             "integrations" => Some(integrations()),
             _ => None,
         }
+    }
+    pub fn runs_page(&self, older:Option<&str>, newer:Option<&str>)->String {
+        let find=|id:Option<&str>|id.and_then(|id|self.runs.iter().rev().position(|run|run.id==id));
+        let range=crate::pagination::window(self.runs.len(),find(older),find(newer));
+        let mut html="<h2>Runs</h2>".to_owned();
+        if !self.notice.is_empty(){html.push_str(&format!("<p role='status'>{}</p>",escape(&self.notice)));}
+        if self.runs.is_empty(){html.push_str("<div class='empty'>No runs yet.</div>");}
+        for run in self.runs.iter().rev().skip(range.start).take(range.len()){html.push_str(&run_record(run));}
+        let id=|index:usize|self.runs.get(self.runs.len().checked_sub(index+1)?).map(|run|run.id.as_str());
+        html.push_str(&crate::pagination::controls("/?view=runs",(range.start>0).then(||id(range.start)).flatten(),(range.end<self.runs.len()).then(||id(range.end-1)).flatten()));
+        html
     }
 }
 

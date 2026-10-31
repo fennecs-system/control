@@ -9,6 +9,7 @@ mod claude;
 mod command_jobs;
 mod collective;
 mod conversations;
+mod pagination;
 mod design;
 mod delegation;
 mod delegated_results;
@@ -119,6 +120,9 @@ fn fields(body: &str) -> HashMap<String, String> {
         .collect()
 }
 fn render(state: &State, view: &str, lens: &str, channel: &str) -> String {
+    render_with_content(state,view,lens,channel,None)
+}
+fn render_with_content(state: &State, view: &str, lens: &str, channel: &str, supplied:Option<String>) -> String {
     let view = if view == "manage" { "nodes" } else { view };
     let lens = lens_ui::normalize(lens);
     let chat_navigation = matches!(view, "session" | "session-list");
@@ -129,7 +133,7 @@ fn render(state: &State, view: &str, lens: &str, channel: &str) -> String {
         .replace("{{section_navigation}}", &navigation::secondary(view))
         .replace("{{layout_class}}", if chat_navigation { "chat-workspace" } else if navigation::managed(view) { "with-section-nav" } else { "" })
         .replace("{{page_title}}", &navigation::heading(view));
-    let content = (if view == "monitor" { Some(usage::render(&state.runtime)) } else { state.runtime.render(view,lens) }).or_else(|| state.collective.render(view, channel)).unwrap_or_else(|| match view {
+    let content = supplied.or_else(|| if view == "monitor" { Some(usage::render(&state.runtime)) } else { state.runtime.render(view,lens) }).or_else(|| state.collective.render(view, channel)).unwrap_or_else(|| match view {
         "providers" => providers::render(&state.runtime),
         "tools" => tool_catalog::render(state, if channel == "general" { "" } else { channel }),
         "session" => chat::render(state,channel).unwrap_or_else(escape),
@@ -152,6 +156,9 @@ const INTERNAL_VIEWS: [&str; 6] = ["session-list", "artifact-page", "browser", "
 fn public_render(state: &State, query: &HashMap<String, String>, lens: &str) -> String {
     let view = query.get("view").map(String::as_str).filter(|v| !INTERNAL_VIEWS.contains(v)).unwrap_or("hub");
     let channel = query.get(if view == "tools" { "q" } else { "channel" }).map(String::as_str).unwrap_or("general");
+    if view=="runs" {
+        return render_with_content(state,view,lens,channel,Some(state.runtime.runs_page(query.get("older").map(String::as_str),query.get("newer").map(String::as_str))));
+    }
     render(state, view, lens, channel)
 }
 const MAX_HEADER: usize = 65536;
