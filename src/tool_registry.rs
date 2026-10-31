@@ -108,6 +108,7 @@ pub fn worker_definitions(improve: bool) -> Vec<Value> {
     }
     tools.push(crate::delegation::definition());
     tools.extend(crate::command_jobs::definitions());
+    tools.extend(crate::services::definitions());
     tools.push(crate::delegated_results::definition());
     tools
 }
@@ -159,5 +160,15 @@ mod tests {
         assert!(!http_definitions()
             .iter()
             .any(|d| d["name"] == "control.browser.capture"));
+    }
+    #[test]
+    fn every_worker_schema_is_registered_for_ui_and_provider_discovery() {
+        let names=control_context::worker_mcp_names();
+        for definition in worker_definitions(true) {
+            let name=definition["name"].as_str().unwrap();
+            assert!(control_context::tool_for_mcp(name).is_some(),"Missing UI registration: {name}");
+            let worker_name=name.replace('.',"_");
+            assert!(names.contains(&worker_name.as_str()),"Missing provider discovery: {name}");
+        }
     }
 }

@@ -815,7 +815,7 @@ mod tests {
         }
         crate::lifecycle::reconcile(&crate::lifecycle::owners(
             &state.lock().unwrap().runtime.runs,
-        ))
+        ), &[])
         .unwrap();
         assert_eq!(
             client.get(url.clone()).send().unwrap().text().unwrap(),

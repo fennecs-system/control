@@ -219,6 +219,15 @@ deterministic Rust supervision remains responsible for scheduling.
 
 ### First slice and Minecraft prerequisites
 
+The persistent-tool foundation branch implements the first offline slice:
+chat/actor/node ownership, typed lifecycle and explicit effects in `control-core`,
+durable handles, bounded private state, verified container reconciliation and a
+Rust watchdog that enforces expiry without Control running. Worker MCP tools and
+UI discovery share the existing catalogue. This is not yet networked bots,
+durable disk storage or an interactive service API. See
+[the implemented contract and checks](docs/PERSISTENT-TOOLS.md). Mark the first
+slice complete after merge; scoped egress remains the next implementation step.
+
 1. **Persistent tool lifecycle first.** Start/status/attach/stop through the shared
    tool surface. Give the resource a durable identity, actor/grant, pinned image,
    private state, lease and resource limits independent of a model attempt.
@@ -334,6 +343,11 @@ node reliability and the Minecraft/bot demonstrations ahead of distributed
 frameworks or broad rewrites.
 
 ## Later: personas as persistent bots
+
+[Bot-control research and the version-0 contract draft](docs/research/BOT-CONTROL.md)
+recommend ordinary versioned configuration, pure transitions and typed effects
+first. Callback/language experiments belong in an optional separate project over
+the tool contract; they do not block the five-bot gameplay milestone.
 
 A bot is a supervised instance using a persona, tools, state and explicit grants,
 not a second agent runtime. Preserve the original personality + policy +

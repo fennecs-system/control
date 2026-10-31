@@ -1139,7 +1139,7 @@ mod tests {
             serde_json::from_slice(&serde_json::to_vec(&*state.lock().unwrap()).unwrap()).unwrap();
         let mut recovered = recovered;
         recovered.runtime.runs[0].status = "interrupted".into();
-        crate::lifecycle::reconcile(&crate::lifecycle::owners(&recovered.runtime.runs)).unwrap();
+        crate::lifecycle::reconcile(&crate::lifecycle::owners(&recovered.runtime.runs), &recovered.services).unwrap();
         assert!(inspect(&job).is_err());
         // Let the original supervisor observe loss and release its final state fence.
         quiesce(&state, &run, &generation).unwrap();

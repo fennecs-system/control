@@ -15,14 +15,20 @@ pub struct Tool {
     pub aliases: &'static str,
     pub mcp_names: &'static [&'static str],
 }
-pub const TOOLS: [Tool; 18] = [
+pub const TOOLS: [Tool; 19] = [
+    Tool {
+        name: "service.persistent", title: "Persistent service", description: "Private offline tools · leased lifetime",
+        href: "/chats", aliases: "bot persistent container lifecycle attach stop service",
+        mcp_names: &["control_service_start", "control_service_attach", "control_service_status", "control_service_stop"],
+        execution: "credential-free Nix container / Rust supervisor", surface: "chat / worker MCP", available: true,
+    },
     Tool {
         name: "github.pull_request", title: "GitHub pull request", description: "Completed improvement · scoped repository",
         href: "/chats", aliases: "github git pull request draft publish review",
         mcp_names: &["control_github_open_pr"], execution: "Rust credential broker / GitHub API", surface: "improve chat / MCP", available: true,
     },
     Tool {
-        name:"agent.delegate",title:"Delegate agent",description:"Isolated workers · independent cross-provider judge",
+        name:"agent.delegate",title:"Delegate agent",description:"Isolated workers · read-only judge",
         href:"/chats",aliases:"persona review judge subagent spawn delegation",
         mcp_names:&["control_agent_delegate", "control_agent_result"],execution:"local Rust / durable bounded task queue",surface:"chat / worker MCP",available:true,
     },
