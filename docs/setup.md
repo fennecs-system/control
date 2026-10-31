@@ -135,15 +135,17 @@ the binary after rebuilding. For development checks, see
 
 ## Terminal chat
 
-Run `control tui`; it works from any directory. Use Enter to send, Alt+Enter for
+Run `control tui`; it starts a fresh chat without resuming or creating a saved
+conversation until you send a message. It works from any directory. Use Enter to send, Alt+Enter for
 a newline, Ctrl+N or `/new` for a new chat, Ctrl+Up/Down to switch chats, and
 Ctrl+Q to quit. PageUp/PageDown scroll; End follows new replies.
 
 `/chats` opens the conversation picker. `/lenses` opens a picker with Space to
 toggle selections and Enter to apply. `/use engineering evidence` composes lenses;
 `/use none` clears them. `/context` previews the next-message context, `/chat`
-returns to the transcript, and Esc closes a picker. `/resume ID` or `--session ID`
-opens a conversation; `tui --check` verifies the connection without opening the UI.
+returns to the transcript, and Esc closes a picker. `/resume` opens the conversation
+picker; `/resume ID` or `tui --resume ID` opens a conversation (`--session ID` is
+also supported). `tui --check` verifies the connection without creating a chat.
 `--server` accepts a loopback HTTP origin; its default follows `CONTROL_ADDR`.
 
 ## Background services
