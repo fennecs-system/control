@@ -27,6 +27,8 @@ name = "control-tool-window"
 version = "0.1.0"
 dependencies = [
  "control-context",
+ "js-sys",
+ "serde_json",
  "wasm-bindgen",
  "web-sys",
 ]

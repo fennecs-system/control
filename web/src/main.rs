@@ -137,6 +137,7 @@ fn attach_composer(
         option.add_event_listener_with_callback("click", clicked.as_ref().unchecked_ref())?;
         clicked.forget();
     }
+    attach_submission(&composer)?;
     let target = composer;
     let handler =
         Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |event: web_sys::KeyboardEvent| {
@@ -204,6 +205,113 @@ fn attach_composer(
     Ok(())
 }
 
+fn attach_submission(composer: &Rc<Composer>) -> Result<(), JsValue> {
+    let Some(form)=composer.input.form().filter(|form|form.id()=="session-message") else{return Ok(());};
+    let error=composer.document.create_element("p")?;
+    error.set_attribute("role","alert")?;
+    error.set_attribute("hidden","")?;
+    form.append_child(&error)?;
+    let button=form.query_selector(".send-message")?;
+    let busy=Rc::new(Cell::new(false));
+    let target=composer.clone();let submitted_form=form.clone();
+    let submit=Closure::<dyn FnMut(web_sys::Event)>::new(move |event:web_sys::Event| {
+        if target.input.value().trim()=="/open" {return;}
+        if busy.get(){event.prevent_default();return;}
+        // Preserve native form fallback if browser APIs cannot initialize.
+        let prepare=||->Result<_,JsValue>{
+            let data=web_sys::FormData::new_with_form(&submitted_form)?;
+            let params=web_sys::UrlSearchParams::new()?;
+            for entry in js_sys::try_iter(&data)?.ok_or_else(||JsValue::from_str("No form iterator"))? {
+                let pair=js_sys::Array::from(&entry?);
+                if let (Some(key),Some(value))=(pair.get(0).as_string(),pair.get(1).as_string()) {params.append(&key,&value);}
+            }
+            let request=web_sys::XmlHttpRequest::new()?;
+            request.open("POST",&submitted_form.action())?;
+            request.set_request_header("Accept","application/json")?;
+            request.set_request_header("Content-Type","application/x-www-form-urlencoded")?;
+            request.set_timeout(15000);
+            Ok((request,String::from(params.to_string())))
+        };
+        let Ok((request,payload))=prepare() else{return;};
+        event.prevent_default();busy.set(true);
+        let _=error.set_attribute("hidden","");
+        if let Some(button)=&button {let _=button.set_attribute("disabled","");}
+        let response=request.clone();let done=busy.clone();let target=target.clone();let error=error.clone();let completed_button=button.clone();
+        let send_error=error.clone();
+        let submitted=target.input.value();
+        let finished=Closure::<dyn FnMut(web_sys::Event)>::once(move |_| {
+            done.set(false);
+            if let Some(button)=&completed_button {let _=button.remove_attribute("disabled");}
+            let value=response.response_text().ok().flatten().and_then(|text|serde_json::from_str::<serde_json::Value>(&text).ok());
+            if response.status().ok()==Some(200) && value.as_ref().is_some_and(|v|v["title"].is_string()) {
+                let value=value.unwrap();
+                if target.input.value()==submitted {target.input.set_value("");}
+                target.selected.set(None);target.dismissed.set(true);let _=target.refresh();
+                if let Ok(Some(title))=target.document.query_selector(".conversation-heading h2") {title.set_text_content(value["title"].as_str());}
+                if let Ok(Some(heading))=target.document.query_selector(".conversation-heading") {
+                    if let Ok(Some(mode))=heading.query_selector(".active-command") {mode.remove();}
+                    if value["improve"]==true && let Ok(mode)=target.document.create_element("span") {
+                        let _=mode.set_attribute("class","chat-command active-command");
+                        mode.set_text_content(Some("/improve"));let _=heading.append_child(&mode);
+                    }
+                }
+                if let Ok(Some(frame))=target.document.query_selector("iframe.chat-transcript")
+                    && let Ok(frame)=frame.dyn_into::<web_sys::HtmlIFrameElement>()
+                    && let Some(doc)=frame.content_document()
+                    && let Some(scroller)=doc.scrolling_element() {scroller.set_scroll_top(scroller.scroll_height());}
+                if let Ok(event)=web_sys::Event::new("control-transcript-refresh") {let _=target.document.dispatch_event(&event);}
+                let _=target.input.focus();
+            } else {
+                let message=value.as_ref().and_then(|value|value["error"].as_str()).unwrap_or("Could not confirm delivery. Check the conversation before sending again.");
+                error.set_text_content(Some(message));let _=error.remove_attribute("hidden");
+            }
+        });
+        request.set_onloadend(Some(finished.as_ref().unchecked_ref()));
+        if request.send_with_opt_str(Some(&payload)).is_err() {
+            busy.set(false);if let Some(button)=&button {let _=button.remove_attribute("disabled");}
+            send_error.set_text_content(Some("Could not confirm delivery. Check the conversation before sending again."));
+            let _=send_error.remove_attribute("hidden");
+        }
+        finished.forget();
+    });
+    form.add_event_listener_with_callback("submit",submit.as_ref().unchecked_ref())?;
+    submit.forget();Ok(())
+}
+
+// Stable root identities retain old messages and interactive forms. Only changed
+// streaming blocks are replaced; an append never rebuilds the preceding history.
+fn keyed_nodes(body: &web_sys::HtmlElement) -> Vec<(String,web_sys::Node)> {
+    let mut counts=std::collections::HashMap::<String,usize>::new();
+    let nodes=body.child_nodes();
+    (0..nodes.length()).filter_map(|index|nodes.item(index)).map(|node|{
+        // `instanceof Element` fails across iframe realms in Chromium. The DOM
+        // node type is realm-independent; this cast follows that explicit check.
+        let base=if node.node_type()==web_sys::Node::ELEMENT_NODE {
+            let element=node.unchecked_ref::<web_sys::Element>();
+            if let Some(key)=element.get_attribute("data-transcript-key") {format!("event:{key}")}
+            else if !element.id().is_empty(){format!("id:{}",element.id())}
+            else{format!("{}:{}",element.tag_name(),element.get_attribute("aria-label").unwrap_or_default())}
+        }else{format!("node:{}",node.node_type())};
+        let count=counts.entry(base.clone()).or_default();let key=format!("{base}:{count}");*count+=1;(key,node)
+    }).collect()
+}
+fn reconcile(body:&web_sys::HtmlElement,new_body:&web_sys::HtmlElement)->Result<(),JsValue> {
+    let old=keyed_nodes(body);let wanted=keyed_nodes(new_body);
+    let keys:std::collections::HashSet<_>=wanted.iter().map(|(key,_)|key.as_str()).collect();
+    for (key,node) in &old {if !keys.contains(key.as_str()){body.remove_child(node)?;}}
+    let old:std::collections::HashMap<_,_>=old.into_iter().collect();
+    let mut cursor=body.first_child();
+    for (key,incoming) in wanted {
+        let node=if let Some(existing)=old.get(&key) {
+            if existing.is_equal_node(Some(&incoming)) {existing.clone()}
+            else {body.replace_child(&incoming,existing)?;if cursor.as_ref().is_some_and(|n|n.is_same_node(Some(existing))){cursor=Some(incoming.clone());}incoming}
+        }else{incoming};
+        if cursor.as_ref().is_some_and(|n|n.is_same_node(Some(&node))){cursor=node.next_sibling();}
+        else{body.insert_before(&node,cursor.as_ref())?;}
+    }
+    Ok(())
+}
+
 // The parent owns updates: browser-managed iframe refreshes can stall in Chromium
 // and visibly reload in Firefox. Neither the frame nor the composer is navigated.
 fn attach_transcript(document: &web_sys::Document) -> Result<(), JsValue> {
@@ -234,20 +342,20 @@ fn attach_transcript(document: &web_sys::Document) -> Result<(), JsValue> {
             let Some(scroller) = doc.scrolling_element() else { return; };
             let top = scroller.scroll_top();
             let at_end = scroller.scroll_height() - scroller.client_height() - top < 80;
-            let mut details = Vec::new();
+            let mut details = std::collections::HashMap::new();
             if let Ok(nodes) = body.query_selector_all("details") {
                 for index in 0..nodes.length() {
-                    if let Some(node) = nodes.item(index).and_then(|n| n.dyn_into::<web_sys::HtmlDetailsElement>().ok())
-                        && let Some(key) = node.get_attribute("data-transcript-key") { details.push((key, node.open())); }
+                    if let Some(node) = nodes.item(index).map(|n| n.unchecked_into::<web_sys::HtmlDetailsElement>())
+                        && let Some(key) = node.get_attribute("data-transcript-key") { details.insert(key, node.open()); }
                 }
             }
-            body.set_inner_html(&new_body.inner_html());
-            if let Ok(nodes) = body.query_selector_all("details") {
+            if let Ok(nodes) = new_body.query_selector_all("details") {
                 for index in 0..nodes.length() {
-                    if let Some(node) = nodes.item(index).and_then(|n| n.dyn_into::<web_sys::HtmlDetailsElement>().ok())
-                        && let Some((_, open)) = node.get_attribute("data-transcript-key").and_then(|key|details.iter().find(|(saved,_)|*saved==key)) { node.set_open(*open); }
+                    if let Some(node) = nodes.item(index).map(|n| n.unchecked_into::<web_sys::HtmlDetailsElement>())
+                        && let Some(open) = node.get_attribute("data-transcript-key").and_then(|key|details.get(&key)) { node.set_open(*open); }
                 }
             }
+            if reconcile(&body, &new_body).is_err() { return; }
             scroller.set_scroll_top(if at_end { scroller.scroll_height() } else { top });
             *previous.borrow_mut() = text;
         });
@@ -256,6 +364,7 @@ fn attach_transcript(document: &web_sys::Document) -> Result<(), JsValue> {
         finished.forget();
     });
     web_sys::window().unwrap().set_interval_with_callback_and_timeout_and_arguments_0(poll.as_ref().unchecked_ref(), 1000)?;
+    document.add_event_listener_with_callback("control-transcript-refresh",poll.as_ref().unchecked_ref())?;
     poll.forget();
     Ok(())
 }

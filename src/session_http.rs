@@ -42,6 +42,44 @@ fn respond_with_policy(
 fn change(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &'static str> {
     change_with_save(state, name, arguments, storage::save)
 }
+// Both native forms and the WASM composer use the same checkpointed command.
+fn send_message(
+    stream: &mut impl Write,
+    state: &mut State,
+    id: &str,
+    lens: &str,
+    header: &str,
+    fields: &std::collections::HashMap<String, String>,
+    save: impl FnOnce(&State) -> std::io::Result<()>,
+) {
+    let asynchronous = header.lines().any(|line| line.split_once(':').is_some_and(|(name,value)|
+        name.eq_ignore_ascii_case("accept") && value.split(',').any(|mime|mime.trim()=="application/json")));
+    if fields.get("message").is_some_and(|message|message.trim()=="/open") {
+        match chat::detail(state,id) {
+            Ok(_) => respond(stream,"303 See Other","text/plain","",&format!("Location: /chat/{id}/project\r\n")),
+            Err(message) => respond_chat_status(stream,"400 Bad Request",&chat_page(state,lens,id,message,"/open")),
+        }
+        return;
+    }
+    let mut arguments=json!({"id":id,"message":fields.get("message").map(String::as_str).unwrap_or("")});
+    if fields.contains_key("composition") {arguments["lenses"]=chat::form_lenses(fields,"none");}
+    let result=change_with_save(state,"control.chat.send",&arguments,save);
+    if asynchronous {
+        let (status,value)=match result {
+            Ok(_) => {
+                let session=state.chats.iter().find(|chat|chat.id==id).unwrap();
+                ("200 OK",json!({"title":session.title,"improve":session.improve_mode}))
+            },
+            Err(message) => ("400 Bad Request",json!({"error":message})),
+        };
+        respond(stream,status,"application/json",&value.to_string(),"");
+    } else {
+        match result {
+            Ok(_) => respond(stream,"303 See Other","text/plain","",&format!("Location: /chat/{id}\r\n")),
+            Err(message) => respond_chat_status(stream,"400 Bad Request",&chat_page(state,lens,id,message,fields.get("message").map(String::as_str).unwrap_or(""))),
+        }
+    }
+}
 fn change_with_save(
     state: &mut State,
     name: &str,
@@ -286,28 +324,7 @@ pub fn handle(
         }
     } else if method == "POST" && operation == "messages" {
         let fields = crate::fields(&String::from_utf8_lossy(body));
-        if fields.get("message").is_some_and(|message| message.trim() == "/open") {
-            match chat::detail(state, id) {
-                Ok(_) => respond(stream, "303 See Other", "text/plain", "", &format!("Location: /chat/{id}/project\r\n")),
-                Err(message) => respond_chat_status(stream, "400 Bad Request", &chat_page(state, lens, id, message, "/open")),
-            }
-            return true;
-        }
-        let mut arguments =
-            json!({"id":id,"message":fields.get("message").map(String::as_str).unwrap_or("")});
-        if fields.contains_key("composition") {
-            arguments["lenses"] = chat::form_lenses(&fields, "none");
-        }
-        match change(state, "control.chat.send", &arguments) {
-            Ok(_) => respond(
-                stream,
-                "303 See Other",
-                "text/plain",
-                "",
-                &format!("Location: /chat/{id}\r\n"),
-            ),
-            Err(message) => respond_chat_status(stream, "400 Bad Request", &chat_page(state, lens, id, message, fields.get("message").map(String::as_str).unwrap_or(""))),
-        }
+        send_message(stream,state,id,lens,header,&fields,storage::save);
     } else if method == "GET" && operation == "conversations" {
         let allowed=state.chats.iter().find(|chat|chat.id==id).ok_or("Chat not found.")
             .and_then(|chat|crate::identity::authorize(&chat.actor,crate::identity::Action::Task).map(|_|()));
@@ -378,19 +395,21 @@ mod tests {
     #[test]
     #[ignore = "requires built WASM and a local Chrome or Firefox WebDriver; isolated in-memory fixture, no credentials or models"]
     fn live_transcript_updates_without_navigation() {
-        use std::io::{BufRead, Write};
+        use std::io::{BufRead, Read, Write};
         use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
         let (mut initial, chat) = crate::design::tests::paused();
         let question = initial.runtime.runs[0].question.take().unwrap();
         initial.runtime.runs[0].status = "running".into();
         initial.runtime.runs[0].result.clear();
         crate::projects::request(&mut initial,&chat,"/fixture/project").unwrap();
+        let long_chat=crate::chat::create(&mut initial);
         let state = Arc::new(Mutex::new(initial));
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let server = format!("http://{}", listener.local_addr().unwrap());
         listener.set_nonblocking(true).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let failed = Arc::new(AtomicBool::new(false));
+        let rejected=Arc::new(AtomicBool::new(false));let reject=rejected.clone();
         let served = state.clone(); let stopped = stop.clone(); let fail = failed.clone();
         let thread = std::thread::spawn(move || {
             while !stopped.load(Ordering::Relaxed) {
@@ -399,12 +418,30 @@ mod tests {
                 stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
                 let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
                 let mut line = String::new(); if reader.read_line(&mut line).unwrap_or(0)==0 {continue;}
+                let method=line.split_whitespace().next().unwrap_or("GET").to_owned();
                 let path = line.split_whitespace().nth(1).unwrap_or("/").to_owned();
-                loop { let mut header=String::new(); if reader.read_line(&mut header).unwrap_or(0)==0 || header=="\r\n" {break;} }
+                let mut headers=String::new();let mut length=0;
+                loop {
+                    let mut header=String::new();
+                    if reader.read_line(&mut header).unwrap_or(0)==0 || header=="\r\n" {break;}
+                    if let Some((key,value))=header.split_once(':') && key.eq_ignore_ascii_case("content-length"){length=value.trim().parse::<usize>().unwrap();}
+                    headers.push_str(&header);
+                }
+                assert!(length<64*1024);let mut body=vec![0;length];reader.read_exact(&mut body).unwrap();
                 if path.starts_with("/tool-window/") { crate::web_assets::serve(&mut stream, &path); }
                 else if crate::serve_stylesheet(&mut stream, &path) {}
                 else if path.contains("/transcript") && fail.load(Ordering::Relaxed) { let _=stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); }
-                else { crate::session_http::handle(&mut stream, &mut served.lock().unwrap(), "GET", &path, "engineering", "", &[]); }
+                else if method=="POST" && path.ends_with("/messages") {
+                    let id=path.trim_start_matches("/chat/").trim_end_matches("/messages");
+                    let fields=crate::fields(&String::from_utf8_lossy(&body));
+                    let mut state=served.lock().unwrap();
+                    send_message(&mut stream,&mut state,id,"engineering",&headers,&fields,|_|if reject.load(Ordering::Relaxed){Err(std::io::Error::other("fixture disk full"))}else{Ok(())});
+                    for run in &mut state.runtime.runs {if run.chat_id.as_deref()==Some(id) && run.status=="queued" {
+                        run.status="completed".into();
+                        run.result=format!("{}\n\n{}",run.objective.replace("Prompt","Response"),"A retained paragraph exercises a longer conversation, including **formatted text**, `code`, and evidence without navigating the composer.\n\n".repeat(32));
+                    }}
+                }
+                else { crate::session_http::handle(&mut stream, &mut served.lock().unwrap(), &method, &path, "engineering", &headers, &body); }
             }
         });
         struct Fixture { stop: Arc<AtomicBool>, thread: Option<std::thread::JoinHandle<()>> }
@@ -479,12 +516,64 @@ mod tests {
         assert_eq!(b.get(&format!("/element/{article}/name")),"article","Unchanged polls must retain DOM nodes");
         {let mut state=state.lock().unwrap();let run=&mut state.runtime.runs[0];run.status="waiting".into();run.question=Some(question);}
         b.wait("Which format?");
+        let activity=b.element(".run-activity");
+        assert_eq!(b.get(&format!("/element/{activity}/property/open")),false,"Collapsed activity must survive a changed transcript in both browser realms");
         assert!(b.text("body").contains("Plain text"));
         let answer=b.element("form");
         assert_eq!(b.get(&format!("/element/{answer}/attribute/target")),"_top");
         b.post("/frame",json!({"id":null}));
         assert_eq!(b.get(&format!("/element/{input}/property/value")),"Keep this unfinished draft");
         assert_eq!(b.get("/element/active")["element-6066-11e4-a52e-4f735466cecf"],input);
+        // Fifteen real form submissions through the WASM client and HTTP command;
+        // deterministic worker results isolate browser costs from model latency.
+        b.post("/url",json!({"url":format!("{server}/chat/{long_chat}")}));
+        let page=b.element("body");let input=b.element("textarea[data-enter-sends=true]");let frame=b.element("iframe.chat-transcript");
+        rejected.store(true,Ordering::Relaxed);
+        b.post(&format!("/element/{input}/value"),json!({"text":"Prompt rejected\u{E007}"}));
+        b.wait("Could not save the chat");
+        assert_eq!(b.get(&format!("/element/{input}/property/value")),"Prompt rejected");
+        assert!(state.lock().unwrap().chats.iter().find(|chat|chat.id==long_chat).unwrap().messages.is_empty());
+        rejected.store(false,Ordering::Relaxed);b.post(&format!("/element/{input}/clear"),json!({}));
+        let mut first=None;let mut first_html=Value::Null;let mut timings=Vec::new();
+        for turn in 1..=15 {
+            let start=Instant::now();
+            b.post(&format!("/element/{input}/value"),json!({"text":format!("Prompt {turn}\u{E007}")}));
+            b.post("/frame",json!({"id":{"element-6066-11e4-a52e-4f735466cecf":frame}}));
+            b.wait(&format!("Response {turn}"));
+            let scroller=b.element("html");
+            let height=b.get(&format!("/element/{scroller}/property/scrollHeight")).as_f64().unwrap();
+            let viewport=b.get(&format!("/element/{scroller}/property/clientHeight")).as_f64().unwrap();
+            let top=b.get(&format!("/element/{scroller}/property/scrollTop")).as_f64().unwrap();
+            assert!(height-viewport-top<80.0,"Turn {turn} should follow the latest reply");
+            let current=b.element("article");
+            if let Some(first)=&first {assert_eq!(&current,first,"Earlier messages changed at turn {turn}; before {first_html}, after {}",b.get(&format!("/element/{current}/property/outerHTML")));}
+            else {first_html=b.get(&format!("/element/{current}/property/outerHTML"));first=Some(current);}
+            b.post("/frame",json!({"id":null}));
+            assert_eq!(b.get(&format!("/element/{page}/name")),"body","Sending must not navigate the page");
+            assert_eq!(b.get(&format!("/element/{input}/property/value")),"");
+            timings.push(start.elapsed());
+        }
+        assert_eq!(state.lock().unwrap().chats.iter().find(|chat|chat.id==long_chat).unwrap().messages.len(),15);
+        timings.sort();println!("{}: 15 turns, median {:?}, maximum {:?}",if chrome{"Chrome"}else{"Firefox"},timings[7],timings[14]);
+        assert!(timings[14]<Duration::from_secs(5),"Local fixture responses should stay responsive");
+    }
+
+    #[test]
+    fn asynchronous_send_commits_before_ack_and_preserves_native_navigation() {
+        let mut state=State::default();let id=chat::create(&mut state);
+        let fields=crate::fields("message=hello&composition=1&lens=research");let before=serde_json::to_vec(&state).unwrap();
+        let mut response=Vec::new();
+        send_message(&mut response,&mut state,&id,"engineering","Accept: application/json",&fields,|_|Err(std::io::Error::other("disk full")));
+        assert_eq!(serde_json::to_vec(&state).unwrap(),before);
+        assert!(String::from_utf8(response).unwrap().contains("\"error\":\"Could not save the chat"));
+        let mut response=Vec::new();
+        send_message(&mut response,&mut state,&id,"engineering","Accept: application/json",&fields,|_|Ok(()));
+        let response=String::from_utf8(response).unwrap();assert!(response.starts_with("HTTP/1.1 200 OK"));assert!(!response.contains("Location:"));assert!(response.contains("application/json"));
+        assert_eq!(state.chats[0].messages.len(),1);
+        let mut response=Vec::new();send_message(&mut response,&mut state,&id,"engineering","",&crate::fields("message=%2Fopen"),|_|panic!("Picker navigation must not save"));
+        assert!(String::from_utf8(response).unwrap().to_ascii_lowercase().contains(&format!("location: /chat/{id}/project")));
+        let mut response=Vec::new();send_message(&mut response,&mut state,&id,"engineering","",&crate::fields("message=%2Fcancel"),|_|Ok(()));
+        assert!(String::from_utf8(response).unwrap().starts_with("HTTP/1.1 303 See Other"));
     }
 
     #[test]
