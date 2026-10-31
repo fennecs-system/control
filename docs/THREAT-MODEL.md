@@ -40,15 +40,20 @@ arbitrary downloaded code safe.
   `live_offline_workspace_isolated_and_persistent_across_processes`.
 
 - **Malicious builds and base-image integrity.** Pinned Nix images run non-root
-  with read-only roots, dropped capabilities, no-new-privileges and resource
-  limits. Workspace edits, private scratch and declared build environments do not
-  modify shared images or immutable dependency stores. No host Nix daemon is
-  exposed. Offline vendoring prevents an execution job from fetching arbitrary
+  with dropped capabilities, no-new-privileges and resource limits. Lite and
+  credential-bearing harnesses keep read-only roots. Opt-in Full tool containers
+  have private writable layers for single-user Nix; root-owned preinstalled store
+  paths and a sticky store directory protect trusted executables. Store additions
+  disappear with the container and never modify the shared image. The captured
+  profile controls restart verification; old records default to Lite.
+  No host Nix daemon is exposed. Offline vendoring prevents an execution job from fetching arbitrary
   dependencies; it does not make existing dependencies or build scripts benign.
   Evidence: [command_jobs.rs](../src/command_jobs.rs),
   `immutable_job_identity_and_isolation_are_checked_before_adoption`,
   `live_commands_stream_past_short_deadline_cancel_and_reconcile_exact_restart_identity`;
   [worker.rs](../src/worker.rs), `container_command_scoped`;
+  [worker_profile.rs](../src/worker_profile.rs),
+  `live_private_nix_build_and_runtime_isolation`;
   [worker-seccomp.json](../hosting/worker-seccomp.json).
 
 - **Delegation and judges.** Admission checks actor, attempt and lineage; depth
