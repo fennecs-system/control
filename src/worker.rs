@@ -414,14 +414,14 @@ fn start_with(state: Arc<Mutex<State>>, execute: fn(Arc<Mutex<State>>, Task)) ->
                     || crate::backend::Backend::Claude.image().is_some()
                 {
                     // Only attempt identities cross the lock; activity and transcripts stay put.
-                    let owners = {
+                    let (owners,services) = {
                         let Ok(s) = state.lock() else {
                             crate::shutdown::request();
                             break;
                         };
-                        crate::lifecycle::owners(&s.runtime.runs)
+                        (crate::lifecycle::owners(&s.runtime.runs),s.services.iter().filter(|s|s.resource.phase.reserves_capacity()).cloned().collect::<Vec<_>>())
                     };
-                    let reconciled = crate::lifecycle::reconcile(&owners);
+                    let reconciled = crate::lifecycle::reconcile(&owners,&services);
                     if let Ok(mut s) = state.lock() {
                         match &reconciled {
                             Err(message) => {

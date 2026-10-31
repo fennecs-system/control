@@ -112,6 +112,12 @@ fn rpc_at(
                 drop(state);
                 return json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(crate::command_jobs::call(shared,run_id,&generation,&nonce,request["params"]["name"].as_str().unwrap(),&request["params"]["arguments"]))});
             }
+            if crate::services::known(request["params"]["name"].as_str().unwrap_or("")) {
+                let generation=run.attempts.last().and_then(|a|a.workspace_id.clone()).unwrap_or_default();
+                let nonce=envelope["nonce"].as_str().unwrap_or("").to_owned();
+                drop(state);
+                return json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(crate::services::call(shared,run_id,&generation,&nonce,request["params"]["name"].as_str().unwrap(),&request["params"]["arguments"]))});
+            }
             if request["params"]["name"]=="control_github_open_pr" {
                 if run.action != identity::Action::Improve {return error("GitHub publication requires an improvement run");}
                 let chat=run.chat_id.clone().unwrap_or_default();
@@ -338,7 +344,8 @@ mod tests {
         let listed=rpc_at(&shared,&id,&json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/list"}}),None);
         let names=listed["result"]["tools"].as_array().unwrap().iter().map(|t|t["name"].as_str().unwrap()).collect::<Vec<_>>();
         assert!(names.contains(&"control_workspace_run"));assert!(!names.contains(&"control_agent_delegate"));assert!(names.contains(&"control_agent_result"));
-        for name in ["control_agent_delegate","control_project_request","control_design_ask","control_preview_start","control_preview_stop","control_github_pr"] {
+        for name in ["control_agent_delegate","control_project_request","control_design_ask","control_preview_start","control_preview_stop","control_github_pr","control_service_start","control_service_attach","control_service_status","control_service_stop"] {
+            assert!(!names.contains(&name));
             let denied=rpc_at(&shared,&id,&json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":{}}}}),None);
             assert!(denied["error"]["message"].as_str().unwrap().contains("Judge policy"));
         }

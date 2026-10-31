@@ -11,11 +11,12 @@ Current libraries:
 - `control-http`: typed HTTP response construction and security/header policies.
 - `control-ai`: provider record decoding, normalized
   activity, usage and final results. No credentials, networking, containers or UI.
-- `control-core`: borrowed scheduling inputs, validated slot capacity and pure
-  admission/dispatch/attempt-generation predicates. This is the first extraction;
-  full application commands and durable resource supervision are still in the app.
-  Core has no dependencies. Configuration loading and concrete effects remain in
-  adapters, and saved-state types/format are unchanged.
+- `control-core`: borrowed scheduling inputs, validated slot capacity, pure
+  admission/dispatch/attempt-generation predicates and typed persistent-resource
+  transitions. Default builds use only `std`; optional Serde support validates
+  identities and leases at persistence boundaries. Full application commands,
+  authority checks, durable writes and Docker supervision remain in adapters.
+  See [persistent tools](PERSISTENT-TOOLS.md) for the current resource contract.
 - The `control` library currently shares configuration, identity, diff rendering
   and the Discord adapter between executables. Discord is compiled once rather
   than included as source in two binaries. It consumes a typed delivery projection

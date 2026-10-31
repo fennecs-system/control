@@ -1,6 +1,10 @@
 # Build on a Linux Nix builder. This supplies the worker, not the control plane.
 { pkgs, backend ? "codex" }:
 let
+  serviceRunner = pkgs.runCommand "control-service-runner" { nativeBuildInputs = [ pkgs.rustc pkgs.stdenv.cc ]; } ''
+    mkdir -p $out/bin
+    rustc --edition=2024 -O ${../tools/service-runner/main.rs} -o $out/bin/control-service-runner
+  '';
   playground = pkgs.runCommand "control-playground" { nativeBuildInputs = [ pkgs.rustc pkgs.stdenv.cc ]; } ''
     mkdir -p $out/bin src/playground
     cp ${../tools/playground/main.rs} src/playground/main.rs
@@ -18,7 +22,7 @@ pkgs.dockerTools.buildLayeredImage {
   name = if backend == "claude" then "control-claude" else "control-worker";
   tag = "nix";
   contents = [
-    roomMcp playground
+    roomMcp playground serviceRunner
     (if backend == "claude" then pkgs.claude-code else pkgs.codex)
     pkgs.rustc pkgs.cargo pkgs.rustfmt pkgs.clippy
     pkgs.gitMinimal pkgs.stdenv.cc pkgs.pkg-config pkgs.ripgrep pkgs.fd
@@ -30,6 +34,7 @@ pkgs.dockerTools.buildLayeredImage {
     chmod 0777 home/agent workspace
   '';
   config = {
+    Labels = { "dev.control.service-runner" = "1"; };
     WorkingDir = "/workspace";
     Env = [
       "HOME=/home/agent"

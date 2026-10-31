@@ -285,8 +285,14 @@ pub fn owners(runs: &[crate::runtime::Run]) -> Vec<Owner> {
 }
 /// Reconcile after restart outside the state lock. Active attempts belong to
 /// execution supervisors; any attempt of a finished run is eligible for cleanup.
-pub fn reconcile(owners: &[Owner]) -> Result<(), String> {
-    reconcile_with(owners, &crate::config::node_id()?, names()?, stop_named)
+pub fn reconcile(owners: &[Owner], services: &[crate::services::Service]) -> Result<(), String> {
+    let node = crate::config::node_id()?;
+    let mut listed = names()?;
+    if listed.iter().any(|(_,owner,purpose)|owner==&node&&purpose=="service") {
+        let verified = crate::services::verified_names(services,&node).map_err(|e|e.to_string())?;
+        listed.retain(|(name,owner,purpose)|!(owner==&node&&purpose=="service"&&verified.contains(name)));
+    }
+    reconcile_with(owners, &node, listed, stop_named)
 }
 fn reconcile_with(
     owners: &[Owner],
