@@ -11,6 +11,11 @@ are interfaces to shared capabilities. Tool availability, resource grants and
 transport are separate. Lenses are pure, composable context/tool selections;
 personas describe behavior and policy, not additional authority.
 
+For one owner, sustained high fan-out may hit subscription limits; prefer API keys
+for 50-agent runs. Control roles do not change credential ownership. Operators
+remain responsible for provider terms; using Control to share account access or
+otherwise misuse a subscription risks violating those terms.
+
 A ✓ in a title means the described implementation exists. It does not close
 unperformed release checks. Branch-only work is identified separately.
 
