@@ -25,7 +25,9 @@ No image is modified or committed from an agent's writable state.
 
 The initial scope is deliberately small:
 
-- No network, ports, provider credentials, Docker socket or host/attempt mounts.
+- No Docker network, provider credentials, Docker socket or host/attempt mounts.
+  [Scoped TCP ports](PORTS.md) require separate operator approval and trusted
+  relays; they do not enable the container's network namespace.
 - Read-only image, non-root user, dropped capabilities, no new privileges and
   a private PID namespace. No automatic container restart.
 - Private writable tmpfs: `/workspace` 64 MiB, `/tmp` 128 MiB and `/home/agent`
@@ -41,8 +43,9 @@ The initial scope is deliberately small:
   stopped receipts remain pinned while their originating attempt is active.
 
 Attachment currently reads logs and metadata; it does not provide an interactive
-exec/write channel. The next game adapter will expose typed operations over an
-explicit resource binding rather than granting host command execution.
+exec/write channel. Tool-specific operations belong behind an explicit resource
+binding rather than granting host command execution. Task-specific adapters and
+server configuration remain outside Control's source.
 
 ## Lifecycle and recovery
 
@@ -106,6 +109,7 @@ at a median 12.5 ns on the development node (optimized Rust, 100,000 iterations,
 nine samples). This measures the reducer only, not container startup or an
 improvement over a previous persistent-service implementation.
 
-Next: operator-approved destination/port egress with revocation, then a typed
-game adapter and five persistent peers. Durable storage, service restart policy,
-bot callbacks and broader attachment are separate increments.
+Next: a pinned tool-runtime request contract and cooperating agents using their
+own tools. Operator-approved TCP access is described in [scoped ports](PORTS.md).
+Durable storage, service restart policy, bot callbacks and broader attachment
+are separate increments. See the [roadmap](../roadmap.md) for demonstration goals.

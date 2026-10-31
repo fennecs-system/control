@@ -151,7 +151,7 @@ authenticated remote access are not configured; private networking alone would
 not establish authorization.
 
 Codex and Claude Code are connected backends. Native API and self-hosted adapters,
-artifact editing, persistent personas, concurrent swarms and live federation are
+artifact editing, persistent autonomous personas and live federation are
 not implemented. Usage records provider-reported tokens by person, model, UTC
 day and attempt; missing/incomplete telemetry stays unknown and is not a bill.
 

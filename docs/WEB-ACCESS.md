@@ -80,8 +80,8 @@ preview tools; this capture tool's inline input is deliberately small.
 - No new crate dependencies, host service, container bridge or Docker socket is
   exposed to models. HTTP transfer does not hold the control-plane state lock.
 
-Minecraft still needs separately enforced TCP destination/port/lifetime access
-for persistent tools. This HTTP capability does not implement that transport.
+Persistent tools use separate [scoped TCP ports](PORTS.md) for non-HTTP ingress
+and approved egress. An HTTP origin grant does not authorize that transport.
 
 ## Local verification
 

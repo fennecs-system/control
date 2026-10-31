@@ -52,7 +52,11 @@ arbitrary downloaded code safe.
   [worker-seccomp.json](../hosting/worker-seccomp.json).
 
 - **Delegation and judges.** Admission checks actor, attempt and lineage; depth
-  is limited to two, with eight children and one judge per root task. Delegation
+  is limited to two, with a configurable shared root budget and one judge review.
+  Nonblocking batches reserve their entire size before acknowledgement, with a
+  separate bounded node backlog; materialization never increases that reservation.
+  [Spawning](../src/spawning.rs) tests 50-task restart/admission and cancellation.
+  Delegation
   checkpoints files and releases its bounded execution slot. Judges use a
   captured parent provider/model, receive read-only source and cannot delegate,
   publish or advance a development head. They can report findings and collaborate
@@ -98,6 +102,12 @@ arbitrary downloaded code safe.
   browser automation. Evidence: [previews.rs](../src/previews.rs),
   `preview_origin_gate_rejects_control_hosts_cookies_and_ambiguous_headers`,
   `live_preview_is_local_readonly_credential_free_and_survives_run_completion`.
+
+- **Scoped service TCP.** Port approval binds a verified service, owner, node,
+  generation, endpoint and lease while its container stays offline. Raw ingress
+  rejects browser HTTP/TLS before forwarding client bytes, preventing localhost
+  cookies from reaching the tool. HTTP content uses the guarded preview path.
+  See [port scope and regression checks](PORTS.md).
 
 ## Guidance is not enforcement
 
