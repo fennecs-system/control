@@ -118,6 +118,7 @@ pub fn worker_definitions(improve: bool) -> Vec<Value> {
     tools.extend(crate::spawning::management_definitions());
     tools.extend(crate::command_jobs::definitions());
     tools.extend(crate::services::definitions());
+    tools.extend(crate::ports::definitions());
     tools.push(crate::delegated_results::definition());
     tools
 }

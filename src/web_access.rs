@@ -82,7 +82,7 @@ fn checked_url(value: &str) -> io::Result<Url> {
     Ok(url)
 }
 /// Conservative public unicast predicate. Reject special-use, mapped, local and transition ranges.
-fn public_ip(ip: IpAddr) -> bool {
+pub(crate) fn public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
             let [a, b, c, _] = ip.octets();
@@ -138,7 +138,7 @@ impl Drop for FetchSlot<'_> {
         self.0.fetch_sub(1, Ordering::Release);
     }
 }
-fn resolve(url: &Url) -> io::Result<Vec<SocketAddr>> {
+pub(crate) fn resolve(url: &Url) -> io::Result<Vec<SocketAddr>> {
     if DNS_ACTIVE
         .try_update(Ordering::AcqRel, Ordering::Relaxed, |n| {
             (n < 4).then_some(n + 1)

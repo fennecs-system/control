@@ -31,6 +31,7 @@ mod navigation;
 mod performance;
 mod providers;
 mod projects;
+mod ports;
 mod previews;
 mod rooms;
 mod runtime;
@@ -60,6 +61,7 @@ use std::{
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 struct State {
+    ports: Vec<ports::Port>,
     web_grants: Vec<web_access::Grant>,
     services: Vec<services::Service>,
     github_publications: Vec<github::Publication>,
@@ -265,6 +267,7 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         return;
     }
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    if ports::http(&mut stream, &state, method, path, &data[header_end..header_end + length]) { return; }
     if web_access::http(&mut stream, &state, method, path, &data[header_end..header_end + length]) { return; }
     if github::http(&mut stream,&state,method,path,&data[header_end..header_end+length]) {return;}
     if projects::http(&mut stream,&state,method,path,&data[header_end..header_end+length]) {return;}
@@ -583,6 +586,7 @@ fn main() -> std::io::Result<()> {
     let preview_restore=std::thread::spawn(move||previews::restore(preview_state));
     let workers = worker::start(state.clone());
     let services = services::supervise(state.clone());
+    let ports = ports::supervise(state.clone());
     println!("control · {} · run ./target/release/control open in another terminal to sign in", config::server_url());
     let mut listener_error = None;
     let mut requests: Vec<std::thread::JoinHandle<()>> = Vec::new();
@@ -610,6 +614,7 @@ fn main() -> std::io::Result<()> {
     eprintln!("Control is stopping; waiting for owned workers and saving state.");
     let stopped = workers.join();
     let service_failed = services.join().is_err();
+    let port_failed = ports.join().is_err();
     let _=preview_restore.join();
     // Already-admitted HTTP tool calls have their own bounded waits. Let those
     // handlers finish too before the final state save and process exit.
@@ -619,6 +624,7 @@ fn main() -> std::io::Result<()> {
     storage::save(&state)?;
     stopped?;
     if service_failed { return Err(std::io::Error::other("Service supervisor stopped unexpectedly; inspect retained service identities.")); }
+    if port_failed { return Err(std::io::Error::other("Port supervisor stopped unexpectedly; inspect retained port approvals.")); }
     if request_failed { return Err(std::io::Error::other("A request stopped unexpectedly during shutdown; inspect node state before restarting.")); }
     match listener_error { Some(error) => Err(error), None => Ok(()) }
 }

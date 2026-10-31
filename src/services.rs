@@ -55,6 +55,8 @@ pub struct Service {
     command: CommandText,
     uid: NonZeroU32,
     gid: u32,
+    #[serde(default, skip_serializing_if="std::ops::Not::not")]
+    workspace_exec: bool,
     #[serde(default)]
     diagnostic: String,
 }
@@ -65,7 +67,7 @@ struct Origin {
     attempt: AttemptId,
 }
 impl Service {
-    fn owned_by(&self, node: &NodeId, chat: &str, actor: &Actor) -> bool {
+    pub(crate) fn owned_by(&self, node: &NodeId, chat: &str, actor: &Actor) -> bool {
         self.resource.owner.node == *node
             && self.resource.owner.chat.as_str() == chat
             && self.actor == *actor
@@ -78,7 +80,7 @@ impl Service {
         )
     }
     fn summary(&self) -> Value {
-        json!({"service_id":self.resource.id,"phase":self.resource.phase,"scope":self.resource.scope,"expires_unix":self.resource.lease.expires(),"diagnostic":self.diagnostic})
+        json!({"service_id":self.resource.id,"phase":self.resource.phase,"scope":self.resource.scope,"workspace_executable":self.workspace_exec,"expires_unix":self.resource.lease.expires(),"diagnostic":self.diagnostic})
     }
 }
 #[derive(Deserialize)]
@@ -344,6 +346,7 @@ fn admit(
         command: input.command,
         uid,
         gid: unsafe { libc::getgid() },
+        workspace_exec: true,
         diagnostic: String::new(),
     };
     // Retain nonce receipts while their origin attempt can still submit retries.
@@ -436,8 +439,8 @@ fn tmpfs(service: &Service) -> HashMap<String, String> {
             (
                 path.to_owned(),
                 format!(
-                    "rw,nosuid,nodev,uid={},gid={},size={size}m",
-                    service.uid, service.gid
+                    "rw,{}nosuid,nodev,uid={},gid={},size={size}m",
+                    if path=="/workspace"&&service.workspace_exec {"exec,"}else{""}, service.uid, service.gid
                 ),
             )
         })
@@ -512,6 +515,40 @@ trait Engine {
     fn remove(&mut self, binding: &Verified<'_>) -> io::Result<()>;
 }
 struct Docker;
+/// A live verified offline service capability, never an arbitrary container ID.
+pub(crate) struct PortBinding { id: ContainerId, user: String, expires: u64 }
+#[derive(Clone, Copy)]
+pub(crate) enum RelayMode { Connect, Listen }
+impl PortBinding {
+    pub(crate) fn spawn(&self, mode: RelayMode, port: std::num::NonZeroU16, expires: u64) -> io::Result<std::process::Child> {
+        if expires <= now() || expires > self.expires { return Err(fail("Port lease exceeds its service")); }
+        std::process::Command::new("docker").args(["exec", "-i", "--user", &self.user, self.id.as_str(), "/bin/control-tcp-relay", match mode { RelayMode::Connect => "connect", RelayMode::Listen => "listen" }, &port.to_string(), &expires.to_string()])
+            .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn()
+    }
+}
+pub(crate) fn relay_capable(service: &Service) -> io::Result<()> {
+    // Image IDs are immutable. Avoid an extra engine query on every connection.
+    static CAPABILITIES:std::sync::OnceLock<Mutex<HashMap<ImageId,bool>>>=std::sync::OnceLock::new();
+    let cache=CAPABILITIES.get_or_init(Mutex::default);
+    let cached=cache.lock().map_err(|_|fail("Relay capability cache unavailable"))?.get(&service.resource.image).copied();
+    if cached==Some(true){return Ok(());}
+    if cached==Some(false){return Err(fail("Rebuild the immutable worker images with Nix setup, then start a new service to enable TCP relay v2"));}
+    let marker = crate::runtime::docker_query(&["image", "inspect", service.resource.image.as_str(), "--format", "{{index .Config.Labels \"dev.control.tcp-relay\"}}"])?;
+    let capable=marker.trim()=="2";
+    let mut cached=cache.lock().map_err(|_|fail("Relay capability cache unavailable"))?;
+    if cached.len()<MAX_RECORDS{cached.insert(service.resource.image.clone(),capable);}
+    if marker.trim() != "2" { return Err(fail("Rebuild the immutable worker images with Nix setup, then start a new service to enable TCP relays")); }
+    Ok(())
+}
+pub(crate) fn port_binding(service: &Service, expected: &ContainerId) -> io::Result<PortBinding> {
+    if !matches!(&service.resource.phase, Phase::Running(id) if id == expected) || service.resource.lease.expired(now()) { return Err(fail("Service is not running under this lease and generation")); }
+    relay_capable(service)?;
+    let data = crate::runtime::docker_query(&["inspect", "--format", INSPECT, expected.as_str()])?;
+    let observation: Inspection = serde_json::from_str(data.trim()).map_err(fail)?;
+    let binding = verify(service, &observation)?;
+    if observation.status != "running" { return Err(fail("Service is not running")); }
+    Ok(PortBinding { id: binding.id, user: format!("{}:{}",service.uid,service.gid), expires: service.resource.lease.expires() })
+}
 impl Engine for Docker {
     fn inventory(&mut self, node: &str) -> io::Result<HashMap<String, Inspection>> {
         let text = crate::runtime::docker_query(&[
@@ -808,13 +845,21 @@ pub fn supervise(shared: Arc<Mutex<State>>) -> std::thread::JoinHandle<()> {
 /// identities, never every container bearing a service label.
 pub fn verified_names(services: &[Service], node: &str) -> io::Result<Vec<String>> {
     let observations = Docker.inventory(node)?;
+    verified_discovery_names(services,&observations)
+}
+fn verified_discovery_names(services:&[Service],observations:&HashMap<String,Inspection>)->io::Result<Vec<String>>{
     let mut names = Vec::new();
     for o in observations.values() {
         let service = services
             .iter()
             .find(|s| o.name == format!("/{}", s.name()))
             .ok_or_else(|| fail("Unregistered service container"))?;
-        verify(service, o)?;
+        if matches!(service.resource.phase,Phase::Requested){
+            // Dispatch can snapshot Requested just before the supervisor saves
+            // Creating and creates a dormant container. Classify only; do not
+            // relax the capability verifier or adopt an unknown execution.
+            let mut creating=service.clone();creating.resource.phase=Phase::Creating;verify(&creating,o)?;
+        }else{verify(service, o)?;}
         names.push(service.name());
     }
     Ok(names)
@@ -1247,6 +1292,22 @@ mod tests {
         })
         .unwrap();
         assert_eq!(engine.inspections, 0);
+    }
+    #[test]
+    fn requested_dispatch_snapshot_classifies_only_matching_dormant_creation(){
+        let(mut state,run,_,time)=fixture();admit_fixture(&mut state,&run,time,|_|Ok(())).unwrap();let requested=state.services[0].clone();assert!(matches!(requested.resource.phase,Phase::Requested));
+        let mut creating=requested.clone();creating.resource.phase=Phase::Creating;let observation=inspection(&creating,&"b".repeat(64));
+        assert!(verify(&requested,&observation).is_err(),"Execution capabilities must remain strict");
+        let observations=HashMap::from([(observation.id.clone(),observation.clone())]);assert_eq!(verified_discovery_names(std::slice::from_ref(&requested),&observations).unwrap(),vec![requested.name()]);assert!(matches!(requested.resource.phase,Phase::Requested));
+        for field in ["running","exited","image","node","mount","name"]{let mut bad=observation.clone();match field{"running"=>bad.status="running".into(),"exited"=>bad.status="exited".into(),"image"=>bad.image=format!("sha256:{}","c".repeat(64)),"node"=>bad.node=Some("foreign".into()),"mount"=>bad.mounts.push(json!({"Type":"bind","Destination":"/workspace"})),_=>bad.name="/unregistered".into()};assert!(verified_discovery_names(std::slice::from_ref(&requested),&HashMap::from([(bad.id.clone(),bad)])).is_err(),"{field}");}
+    }
+    #[test]
+    fn executable_workspace_policy_is_captured_and_legacy_services_remain_unchanged() {
+        let(mut state,run,_,time)=fixture();admit_fixture(&mut state,&run,time,|_|Ok(())).unwrap();
+        let mut current=state.services[0].clone();assert!(current.workspace_exec);current.resource.phase=Phase::Creating;
+        let mut old=serde_json::to_value(&current).unwrap();assert_eq!(old["workspace_exec"],true);old.as_object_mut().unwrap().remove("workspace_exec");let legacy:Service=serde_json::from_value(old).unwrap();assert!(!legacy.workspace_exec);assert!(serde_json::to_value(&legacy).unwrap().get("workspace_exec").is_none());
+        assert!(tmpfs(&current)["/workspace"].contains("rw,exec,nosuid,nodev"));assert!(!tmpfs(&legacy)["/workspace"].contains("exec"));assert_eq!(tmpfs(&current)["/tmp"],tmpfs(&legacy)["/tmp"]);
+        let old_observation=inspection(&legacy,&"b".repeat(64));let new_observation=inspection(&current,&"b".repeat(64));assert!(verify(&legacy,&old_observation).is_ok());assert!(verify(&current,&new_observation).is_ok());assert!(verify(&legacy,&new_observation).is_err());assert!(verify(&current,&old_observation).is_err());
     }
     #[test]
     #[ignore = "requires CONTROL_QA_SERVICE_IMAGE (new pinned worker image), CONTROL_QA_CONTROL_BIN and a local Linux engine; no credentials/models"]
