@@ -21,6 +21,10 @@ become a cache shared with another service or attempt.
 
 Local derivations and already available dependencies build offline. Full does not
 grant internet access or make arbitrary remote nixpkgs packages reachable.
+For example, `nix shell --offline --file '<nixpkgs>' nodejs --command node --version`
+uses the bundled, registered Node package. Legacy `nix-shell -p nodejs` also
+requests shell/stdenv dependencies that are not bundled; it cannot generally
+complete offline even when Node itself is available.
 Network access remains separately scoped. Nix's internal build sandbox is disabled
 because the enclosing container supplies the isolation boundary; builds cannot
 obtain privileges, host credentials or host daemon access.
