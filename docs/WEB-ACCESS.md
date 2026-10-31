@@ -26,6 +26,12 @@ instructions. Optional `"capture":true` renders the fetched page in offline
 Firefox and returns a PNG artifact link. Remote assets, cookies, authentication
 and additional page requests are not loaded. UTF-8 HTML/XHTML and plain text are
 supported; other encodings and content types fail with a bounded error.
+URL fragments are removed before requests, origin checks and returned link
+evidence; credential-bearing URLs remain denied. Large pages return their first
+1 MiB rather than failing. Evidence includes `body_truncated`, `text_truncated`
+and combined `truncated` flags; neither partial text nor its offline screenshot
+represents the complete source. A UTF-8 character split at the byte limit is
+omitted; malformed UTF-8 within the retained prefix remains an error.
 
 `control_browser_capture {"html":"<!doctype html>...","width":1024,"height":768}`
 lets a worker verify a small generated page without any web grant. Supply at most
@@ -60,7 +66,12 @@ preview tools; this capture tool's inline input is deliberately small.
 - Up to 64 active grants, four concurrent fetches, and four outstanding resolver
   threads. Resolver waits are bounded to two seconds; a timed-out OS lookup keeps
   its slot until it ends. Fetch budget is eight seconds, plus at most a resolver
-  wait before its deadline is observed. HTTP bodies are limited to 1 MiB.
+  wait before its deadline is observed. The broker reads at most 1 MiB plus one
+  probe byte, then drops the response without draining the remainder. HTTP slots
+  are released before evidence parsing/offline capture; captures use their own
+  lock and quota, and the grant is checked again before returning evidence.
+  Busy fetches fail promptly with a retry-later error; there is no hidden wait
+  queue or unbounded thread allocation.
 - Captures use the existing pinned Nix Firefox image: network disabled, read-only,
   non-root, capabilities dropped, bounded CPU/memory/PIDs/output and private tmpfs.
   Only a private copy of the supplied HTML is mounted read-only. No worker tree,
