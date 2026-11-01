@@ -94,7 +94,7 @@ impl Service {
         )
     }
     fn summary(&self) -> Value {
-        json!({"service_id":self.resource.id,"phase":self.resource.phase,"scope":self.resource.scope,"workspace_executable":self.workspace_exec,"expires_unix":self.resource.lease.expires(),"diagnostic":self.diagnostic,"output":self.output,"exit_code":self.exit_code,"output_limit_bytes":OUTPUT,"executions":self.executions.iter().map(|e|e.brief()).collect::<Vec<_>>()})
+        json!({"service_id":self.resource.id,"phase":self.resource.phase,"scope":self.resource.scope,"workspace_executable":self.workspace_exec,"expires_unix":(!self.resource.lease.is_until_stopped()).then(||self.resource.lease.expires()),"until_stopped":self.resource.lease.is_until_stopped(),"diagnostic":self.diagnostic,"output":self.output,"exit_code":self.exit_code,"output_limit_bytes":OUTPUT,"executions":self.executions.iter().map(|e|e.brief()).collect::<Vec<_>>()})
     }
 }
 #[derive(Deserialize)]

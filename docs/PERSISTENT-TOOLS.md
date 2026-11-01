@@ -92,7 +92,7 @@ An engine failure remains pending with a bounded diagnostic. Revocation permits
 cleanup but prevents new create/start effects. No exactly-once external effect
 guarantee is implied by this local reconciliation protocol.
 
-A trusted Rust PID 1 enforces a monotonic deadline bounded by the recorded lease,
+A trusted Rust PID 1 enforces the recorded lifetime (a monotonic deadline for timed services),
 even while Control is stopped. It starts non-dumpable before spawning the command
 and reaps descendants. Linux terminates the PID namespace when its init exits;
 same-namespace children cannot send an unhandled SIGSTOP/SIGKILL to PID 1.

@@ -672,7 +672,7 @@ fn handshake(
         });
         let _ = tx.send(result);
     });
-    let deadline = Instant::now() + wait;
+    let started = Instant::now();
     let result = loop {
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(result) => break result,
@@ -681,7 +681,7 @@ fn handshake(
             }
             Err(_) => {}
         }
-        if Instant::now() >= deadline || live_service(shared, port, cancel).is_err() {
+        if started.elapsed() >= wait || live_service(shared, port, cancel).is_err() {
             break Err(fail("Relay handshake expired or was revoked"));
         }
     };
@@ -1580,7 +1580,7 @@ fn main(){
             let mut value=template.clone();let id=format!("svc-{name}-{node}");ids.push(id.clone());
             value["resource"]["id"]=json!(id);value["resource"]["owner"]["node"]=json!(node);
             value["resource"]["image"]=json!(image);value["resource"]["phase"]=json!(Phase::Requested);
-            value["resource"]["lease"]=serde_json::to_value(control_core::resources::Lease::new(now(),180).unwrap()).unwrap();
+            value["resource"]["lease"]=serde_json::to_value(if name=="probe" {control_core::resources::Lease::new(now(),180).unwrap()} else {control_core::resources::Lease::until_stopped(now()).unwrap()}).unwrap();
             value["workspace_exec"]=json!(true);value["profile"]=json!(crate::worker_profile::Profile::inspect(&image).unwrap());
             value["command"]=json!(if name=="probe" {"printf 'short probe stdout\\n'; printf 'short probe stderr\\n' >&2; exit 7"}else{"exec sleep 180"});
             state.services.push(serde_json::from_value(value).unwrap());
@@ -1626,7 +1626,7 @@ printf source-ready
         let client=reqwest::blocking::Client::builder().no_proxy().timeout(Duration::from_secs(10)).build().unwrap();
         let post=|id:&str,fields:&str|{let response=client.post(format!("{url}/tools/ports")).header("Cookie",format!("control_operator={cookie}")).header("Content-Type","application/x-www-form-urlencoded").body(format!("id={id}&{fields}")).send().unwrap();assert_eq!(response.status(),200);};
         let port=|id:&str|read().ports.into_iter().find(|p|p.id.as_str()==id).unwrap();
-        assert_eq!(port(&ingress_id).status,Status::Pending);post(&ingress_id,"seconds=120");
+        assert_eq!(port(&ingress_id).status,Status::Pending);post(&ingress_id,"seconds=-1");
         wait(||port(&ingress_id).approval.as_ref().is_some_and(|a|a.host_port!=0),8,"source ingress approval");
         let published=port(&ingress_id).approval.unwrap().host_port;
         // A private host HTTP fixture represents an explicitly approved download
@@ -1641,7 +1641,7 @@ printf source-ready
         }
         state.runtime.runs[0].status="completed".into();write(&state);server=launch();
         wait(||client.get(format!("{url}/health")).send().is_ok_and(|r|r.status().is_success()),5,"approval UI online");
-        for id in &pending {assert_eq!(port(id).status,Status::Pending);post(id,"seconds=100&loopback=yes");}
+        for id in &pending {assert_eq!(port(id).status,Status::Pending);post(id,"seconds=-1&loopback=yes");}
         server.stop();state=read();state.runtime.runs[0].status="running".into();
         let command=format!(r#"set -eu
 test "$(cat /workspace/settings)" = persistent
