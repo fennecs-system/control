@@ -34,9 +34,9 @@ pub const TOOLS: [Tool; 20] = [
         mcp_names: &["control_github_open_pr"], execution: "Rust credential broker / GitHub API", surface: "improve chat / MCP", available: true,
     },
     Tool {
-        name:"agent.delegate",title:"Delegate agent",description:"Isolated workers · read-only judge",
+        name:"agent.delegate",title:"Spawn agents",description:"Background tasks · blocking worker or judge",
         href: None,aliases:"persona review judge subagent spawn delegation",
-        mcp_names:&["control_agent_delegate", "control_agent_spawn", "control_agent_spawn_status", "control_agent_spawn_cancel", "control_agent_result"],execution:"local Rust / durable bounded task queue",surface:"chat / worker MCP",available:true,
+        mcp_names:&["control_agent_spawn_blocking", "control_agent_spawn", "control_agent_spawn_status", "control_agent_spawn_cancel", "control_agent_result"],execution:"local Rust / durable bounded task queue",surface:"chat / worker MCP",available:true,
     },
     Tool {
         name: "workspace.commands", title: "Workspace commands", description: "Offline jobs · live output",
@@ -295,6 +295,7 @@ mod tests {
                 assert_eq!(tool_for_mcp(name), Some(&tool));
             }
         }
+        assert!(tool_for_mcp("control_agent_delegate").is_none());
     }
     #[test]
     fn selection_is_deterministic_and_does_not_expand_unknown_lenses() {
