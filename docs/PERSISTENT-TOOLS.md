@@ -53,7 +53,7 @@ Attachment reads logs and metadata. To configure a service after approval, use
 private setup files; clients can use the service's approved loopback relays to
 download binaries directly into `/workspace`, without passing them through model
 text or mounting a host folder. The service's foreground process must stay alive;
-`exec sleep 1800` is a generic idle command while setting up other processes.
+`exec sleep infinity` keeps an idle worker alive while setting up other processes.
 Long-lived background programs must redirect stdin/stdout/stderr to private files.
 
 Commands survive model turns and have a 1–1800 second timeout (default 120), capped
