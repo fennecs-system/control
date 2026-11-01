@@ -82,7 +82,14 @@ pub struct Lease {
 }
 impl Lease {
     pub const MAX_SECONDS: u64 = 3600;
+    /// A resource explicitly retained until stopped. No fabricated far-future
+    /// date enters the API; the sentinel keeps existing saved tuples compatible.
+    pub fn until_stopped(now: u64) -> Result<Self, Invalid> {
+        Self::try_from([now, u64::MAX])
+    }
+    pub fn is_until_stopped(self) -> bool { self.expires == u64::MAX }
     pub fn new(now: u64, seconds: u64) -> Result<Self, Invalid> {
+        if !(1..=Self::MAX_SECONDS).contains(&seconds) { return Err(Invalid); }
         let expires = now.checked_add(seconds).ok_or(Invalid)?;
         Self::try_from([now, expires])
     }
@@ -93,13 +100,13 @@ impl Lease {
         self.expires
     }
     pub fn seconds(self) -> u64 {
-        self.expires - self.issued
+        if self.is_until_stopped() { u64::MAX } else { self.expires - self.issued }
     }
 }
 impl TryFrom<[u64; 2]> for Lease {
     type Error = Invalid;
     fn try_from([issued, expires]: [u64; 2]) -> Result<Self, Invalid> {
-        if expires
+        if (expires == u64::MAX && issued < expires) || expires
             .checked_sub(issued)
             .is_some_and(|ttl| (1..=Self::MAX_SECONDS).contains(&ttl))
         {
@@ -535,6 +542,11 @@ mod tests {
         assert!(Lease::new(u64::MAX, 1).is_err());
         assert!(Lease::new(0, 0).is_err());
         assert!(Lease::new(0, 3601).is_err());
+        assert!(Lease::new(0, u64::MAX).is_err());
+        let lifetime = Lease::until_stopped(10).unwrap();
+        assert!(!lifetime.expired(10 + 86400 * 365));
+        assert!(lifetime.expired(9));
+        assert_eq!(Lease::try_from(<[u64;2]>::from(lifetime)).unwrap(), lifetime);
         assert!(Lease::new(10, 10).unwrap().expired(9));
         assert!(ResourceId::try_from("../../host".to_owned()).is_err());
         assert!(ImageId::try_from("latest".to_owned()).is_err());

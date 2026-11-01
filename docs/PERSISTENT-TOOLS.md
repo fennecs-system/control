@@ -38,8 +38,10 @@ The initial scope is deliberately small:
   engine restart or machine restart. Attempt checkpoints do not include them.
 - Eight reserved service slots per node, each limited to one CPU, 512 MiB RAM
   and 64 processes (Full: 2 GiB and 128 processes). Fenced resources retain their reservation.
-- Lease of 1–3600 seconds, default 1800. There is no renewal API yet. Use a
-  foreground command; shell exit ends the service and its descendants.
+- `lease_seconds: -1` (default) retains a service until stopped; use 1–3600
+  seconds for a bounded lifetime. Use a foreground command; shell exit ends
+  the service and its descendants. Port approvals default to the service's
+  lifetime and remain revocable; an optional shorter duration never outlives it.
 - Per-container Docker logs rotate at two 1 MiB files. Reads return at most
   80 lines and 16,000 bytes. Completed history is bounded to 128 records;
   stopped receipts remain pinned while their originating attempt is active.
@@ -51,7 +53,7 @@ Attachment reads logs and metadata. To configure a service after approval, use
 private setup files; clients can use the service's approved loopback relays to
 download binaries directly into `/workspace`, without passing them through model
 text or mounting a host folder. The service's foreground process must stay alive;
-`exec sleep 1800` is a generic idle command while setting up other processes.
+`exec sleep infinity` keeps an idle worker alive while setting up other processes.
 Long-lived background programs must redirect stdin/stdout/stderr to private files.
 
 Commands survive model turns and have a 1–1800 second timeout (default 120), capped
@@ -90,7 +92,7 @@ An engine failure remains pending with a bounded diagnostic. Revocation permits
 cleanup but prevents new create/start effects. No exactly-once external effect
 guarantee is implied by this local reconciliation protocol.
 
-A trusted Rust PID 1 enforces a monotonic deadline bounded by the recorded lease,
+A trusted Rust PID 1 enforces the recorded lifetime (a monotonic deadline for timed services),
 even while Control is stopped. It starts non-dumpable before spawning the command
 and reaps descendants. Linux terminates the PID namespace when its init exits;
 same-namespace children cannot send an unhandled SIGSTOP/SIGKILL to PID 1.
