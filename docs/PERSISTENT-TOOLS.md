@@ -5,6 +5,11 @@ it across turns; finishing or cancelling a turn does not stop it. Explicit stop,
 permission revocation, command exit or lease expiry starts cleanup. A service is
 not another model session and does not consume a model-turn slot.
 
+Delegated workers inherit captured grants for exact service generations. This
+does not change ownership or expose other chats' services. Design continuations
+retain grants; completed delegated work returns its resource handles to the parent.
+Judges receive no service grants.
+
 ## First slice
 
 The worker MCP surface advertises these tools for ordinary Codex and Claude
