@@ -90,6 +90,15 @@ arbitrary downloaded code safe.
   [storage.rs](../src/storage.rs),
   `restart_fences_running_and_cancelling_without_replaying_or_publishing`.
 
+  Service commands bind to an owned service's exact verified container ID,
+  generation, image, user and private workspace; they cannot supply host paths or
+  Docker options. Intent and execution receipts are durable before launch.
+  Timeout or uncertain execution requests service stop, and restart never replays
+  an in-flight command. Bounded final logs are saved before service removal.
+  Evidence: [service commands](../src/services/commands.rs),
+  `restart_never_replays_uncertain_execution_and_save_failure_rolls_back`,
+  `live_service_commands_download_and_connect_two_private_services`.
+
 - **GitHub side effects.** A private broker credential is bound to the operator's
   configured repository/source. Only completed same-chat improvements with captured
   source/checkpoints are eligible. Durable publication intent precedes reachable

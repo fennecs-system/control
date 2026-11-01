@@ -419,7 +419,7 @@ fn start_with(state: Arc<Mutex<State>>, execute: fn(Arc<Mutex<State>>, Task)) ->
                             crate::shutdown::request();
                             break;
                         };
-                        (crate::lifecycle::owners(&s.runtime.runs),s.services.iter().filter(|s|s.resource.phase.reserves_capacity()).cloned().collect::<Vec<_>>())
+                        (crate::lifecycle::owners(&s.runtime.runs),s.services.iter().filter(|s|s.resource.phase.reserves_capacity()).map(crate::services::Service::binding_snapshot).collect::<Vec<_>>())
                     };
                     let reconciled = crate::lifecycle::reconcile(&owners,&services);
                     if let Ok(mut s) = state.lock() {

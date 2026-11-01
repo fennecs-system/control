@@ -222,6 +222,12 @@ Rust watchdog enforces expiry while Control is offline. Model turns attach to a
 resource rather than owning its lifetime. Live restart and missing-receipt tests
 passed. See [persistent tools](docs/PERSISTENT-TOOLS.md).
 
+Resource-bound commands now provide private file/setup access after service start
+and port approval. Durable receipts prevent retry replay; uncertain execution
+stops its service. Final logs survive short-lived service removal. Two-service
+routes reuse separately approved ingress and loopback egress rather than a new
+container network or host mount capability.
+
 Keep bounded slots, per-chat FIFO ordering, isolated workspaces and captured
 provider/model selection. Preserve exact resource ownership, cancellation cascades,
 stale-result fences and restart reconciliation as service lifetimes expand.
