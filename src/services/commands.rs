@@ -117,11 +117,11 @@ fn owned(
     node: &NodeId,
     service: &str,
 ) -> io::Result<usize> {
-    let (active, chat) = caller(state, run, generation)?;
+    let (active, _) = caller(state, run, generation)?;
     state
         .services
         .iter()
-        .position(|s| s.resource.id.as_str() == service && s.owned_by(node, chat, &active.actor))
+        .position(|s| s.resource.id.as_str() == service && accessible(s, node, active))
         .ok_or_else(|| fail("Service is not owned by this chat"))
 }
 pub(super) fn call(

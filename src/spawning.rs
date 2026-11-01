@@ -28,6 +28,8 @@ pub struct Batch {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Seed {
+    #[serde(default)]
+    resource_grants: Vec<crate::services::Grant>,
     actor: identity::Actor,
     action: identity::Action,
     backend: crate::backend::Backend,
@@ -187,6 +189,7 @@ pub fn request(
     let before = (state.chats.len(), state.runtime.runs.len());
     let previous_notice = state.runtime.notice.clone();
     let seed = Seed {
+        resource_grants: crate::services::grants(state,run),
         actor,
         action,
         backend,
@@ -290,6 +293,7 @@ fn materialize(state: &mut State, index: usize, batch_index: usize) -> Result<()
         )?;
         let run = state.runtime.runs.last_mut().unwrap();
         run.chat_id = Some(child_id);
+        run.resource_grants = seed.resource_grants.clone();
         run.backend = seed.backend;
         run.model = seed.model.clone();
         run.context = seed.context.clone();

@@ -217,7 +217,7 @@ and stale-execution fences still need their own implementation and tests.
 
 Merged and locally deployed in #33: chat/actor/node ownership, typed lifecycle
 decisions in `control-core`, durable start/status/attach/stop handles, captured
-immutable Nix images, private tmpfs, resource limits and bounded leases. A trusted
+immutable Nix images, private tmpfs, resource limits and explicit lifetimes. A trusted
 Rust watchdog enforces expiry while Control is offline. Model turns attach to a
 resource rather than owning its lifetime. Live restart and missing-receipt tests
 passed. See [persistent tools](docs/PERSISTENT-TOOLS.md).
@@ -240,7 +240,7 @@ deterministic Rust supervision remains responsible for scheduling.
    writable attempt mount across its checkpoint barrier. Tmpfs is not durable
    disk, and attachment currently reads metadata/logs rather than exposing exec.
 2. **✓ Scoped TCP ports.** Operator-approved ingress and pinned-destination egress
-   bind to a verified service, owner, node, generation and finite lease. Containers
+   bind to a verified service, owner, node, generation and approved lifetime. Containers
    remain on `--network=none`; trusted relays close on revocation, expiry or loss
    of their host connection. Raw ingress rejects browser HTTP/TLS before sending
    client bytes to the service; websites use the guarded preview tool. See

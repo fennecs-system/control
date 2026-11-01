@@ -5,6 +5,11 @@ it across turns; finishing or cancelling a turn does not stop it. Explicit stop,
 permission revocation, command exit or lease expiry starts cleanup. A service is
 not another model session and does not consume a model-turn slot.
 
+Delegated workers inherit captured grants for exact service generations. This
+does not change ownership or expose other chats' services. Design continuations
+retain grants; completed delegated work returns its resource handles to the parent.
+Judges receive no service grants.
+
 ## First slice
 
 The worker MCP surface advertises these tools for ordinary Codex and Claude
@@ -53,7 +58,7 @@ Attachment reads logs and metadata. To configure a service after approval, use
 private setup files; clients can use the service's approved loopback relays to
 download binaries directly into `/workspace`, without passing them through model
 text or mounting a host folder. The service's foreground process must stay alive;
-`exec sleep 1800` is a generic idle command while setting up other processes.
+`exec sleep infinity` keeps an idle worker alive while setting up other processes.
 Long-lived background programs must redirect stdin/stdout/stderr to private files.
 
 Commands survive model turns and have a 1–1800 second timeout (default 120), capped
@@ -92,7 +97,7 @@ An engine failure remains pending with a bounded diagnostic. Revocation permits
 cleanup but prevents new create/start effects. No exactly-once external effect
 guarantee is implied by this local reconciliation protocol.
 
-A trusted Rust PID 1 enforces a monotonic deadline bounded by the recorded lease,
+A trusted Rust PID 1 enforces the recorded lifetime (a monotonic deadline for timed services),
 even while Control is stopped. It starts non-dumpable before spawning the command
 and reaps descendants. Linux terminates the PID namespace when its init exits;
 same-namespace children cannot send an unhandled SIGSTOP/SIGKILL to PID 1.

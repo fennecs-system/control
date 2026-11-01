@@ -295,6 +295,7 @@ pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -
         let model = previous.model.clone();
         let context = previous.context.clone();
         let lenses = previous.lenses.clone();
+        let resources = crate::services::grants(state,previous);
         if let Some(lenses) = &lenses {
             let session = state.chats.last_mut().unwrap();
             session.lenses = Some(lenses.clone());
@@ -302,6 +303,7 @@ pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -
         }
         if let Some(run) = state.runtime.runs.last_mut().filter(|r| r.chat_id.as_deref() == Some(&child)) {
             run.backend = backend;
+            run.resource_grants = resources;
             run.model = model;
             run.context = context;
             run.lenses = lenses;
@@ -453,6 +455,9 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
         None
     };
     let run_id = if native.is_none() {
+        let resources = state.runtime.runs.iter().rev()
+            .find(|run|run.chat_id.as_deref() == Some(id) && run.actor == state.chats[index].actor)
+            .map(|run|crate::services::grants(state,run)).unwrap_or_default();
         state.runtime.enqueue_for(
             objective.into(),
             if action == Action::Improve {
@@ -469,6 +474,7 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
             run.kind = "steering".into();
         }
         run.chat_id = Some(id.into());
+        run.resource_grants = resources;
         run.lenses = Some(selected_lenses(&state.chats[index]));
         run.context = Some(context);
         Some(run.id.clone())
@@ -602,12 +608,13 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
         .ok_or("Chat not found.")?;
     identity::authorize(&session.actor, Action::Task)?;
     let runs=indexed_runs(&state.runtime,&session.messages);
+    let pending_questions = crate::design::pending_json(state, id);
     Ok(
         json!({"id":session.id,"title":session.title,"previews":state.previews.iter().filter(|p|p.chat==id && p.status!="stopped").map(|p|json!({"id":p.id,"url":p.url,"status":p.status})).collect::<Vec<_>>(),"project":session.project,"project_worktree":session.project.as_ref().and_then(|p|p.head.as_deref()).and_then(|id|crate::runtime::workspace(id).ok()),"parent_chat":session.parent_chat,"mode":if session.improve_mode {"improve"} else {"chat"},"room":session.room,"lens":session.lens,"lenses":selected_lenses(session),"design_context":session.design_context,"revision":session.revision,"messages": session.messages.iter().map(|m| {
         let run = m.run_id.as_deref().and_then(|id|runs.get(id).copied().flatten());
         let (status, reply) = response_from_run(m,run);
         json!({"text":m.text,"reply":reply,"status":status,"run_id":m.run_id,"kind":run.map(|r| &r.kind),"persona":run.and_then(|r|r.persona.as_ref()),"delegation":run.and_then(|r|r.delegation.as_ref()),"question":run.and_then(|r|r.question.as_ref()),"attempts":run.map(|r| &r.attempts)})
-    }).collect::<Vec<_>>()}),
+    }).collect::<Vec<_>>(),"pending_questions":pending_questions,"decision_revision":crate::design::decision_revision(state)}),
     )
     .map(|mut value: Value| {
         value["pending_ports"]=json!(crate::ports::pending_json(state,id));
@@ -616,10 +623,11 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
     })
 }
 pub fn list(state: &State) -> Value {
+    let decision_revision = crate::design::decision_revision(state);
     let port_revision=crate::ports::decision_revision(state);
     json!(crate::conversations::ordered(state).into_iter().map(|entry| {
         let s=entry.session;
-        json!({"id":s.id,"title":s.title,"lens":s.lens,"lenses":selected_lenses(s),"revision":s.revision,"messages":s.messages.len(),"parent_chat":entry.parent,"depth":entry.depth,"activity_order":s.activity_order,"port_revision":port_revision})
+        json!({"id":s.id,"title":s.title,"lens":s.lens,"lenses":selected_lenses(s),"revision":s.revision,"messages":s.messages.len(),"parent_chat":entry.parent,"depth":entry.depth,"activity_order":s.activity_order,"decision_revision":decision_revision,"port_revision":port_revision})
     }).collect::<Vec<_>>())
 }
 pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
@@ -733,6 +741,10 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
         }
     }
     if project_message.is_none() && session.project.is_some() {html.push_str(&crate::projects::panel(state,id));}
+    for run in crate::design::pending(state, id).into_iter().filter(|run|run.chat_id.as_deref()!=Some(id)) {
+        let question = run.question.as_ref().unwrap();
+        html.push_str(&format!("<article class='assistant-message pending-decision' data-transcript-key='decision-{}'><p class='message-status'>Agent decision · <a target='_top' href='/chat/{}'>View agent ↗</a></p>{}</article>",escape(&question.id),escape(run.chat_id.as_deref().unwrap_or("")),crate::design::render(question,id,true)));
+    }
     html.push_str(&crate::ports::pending_panel(state,id));
     html.push_str("<div id='latest'></div></body></html>");
     Ok(html)

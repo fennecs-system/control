@@ -214,7 +214,13 @@ struct Store {
     dir: PathBuf,
     key: Ed25519KeyPair,
     ledger: Ledger,
-    _lock: File,
+    _lock: StoreLock,
+}
+// An unrelated fork may briefly inherit an open descriptor before exec closes
+// it. Release ownership explicitly rather than waiting for the final fd close.
+struct StoreLock(File);
+impl Drop for StoreLock {
+    fn drop(&mut self) { let _ = self.0.unlock(); }
 }
 impl Store {
     fn open(dir: &Path) -> Result<Self> {
@@ -264,7 +270,7 @@ impl Store {
             dir: dir.to_owned(),
             key,
             ledger,
-            _lock: lock,
+            _lock: StoreLock(lock),
         })
     }
     fn id(&self) -> String {
@@ -658,6 +664,18 @@ mod tests {
         receiver
             .trust(&sender.id(), "Sender", vec!["engineering".into()], false)
             .unwrap();
+    }
+    #[test]
+    fn dropping_store_releases_ownership_even_with_an_inherited_descriptor() {
+        let dir=Temp::new();
+        let store=Store::open(&dir.0).unwrap();
+        let inherited=store._lock.0.try_clone().unwrap();
+        drop(store);
+        let reopened=Store::open(&dir.0).unwrap();
+        drop(inherited);
+        assert!(Store::open(&dir.0).is_err(),"The new owner must retain exclusivity");
+        drop(reopened);
+        assert!(Store::open(&dir.0).is_ok());
     }
     #[test]
     fn two_nodes_persist_identity_quarantine_and_idempotent_receipts() {

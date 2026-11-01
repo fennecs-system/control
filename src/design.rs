@@ -185,6 +185,48 @@ pub fn waiting<'a>(state: &'a State, chat_id: &str) -> Option<&'a runtime::Run> 
             && r.question.as_ref().is_some_and(|q| q.answer.is_none())
     })
 }
+
+/// Only recorded, validated delegation edges surface another chat's decisions.
+/// A matching actor, parent_chat or persona root alone grants no access.
+pub fn pending<'a>(state: &'a State, chat_id: &str) -> Vec<&'a runtime::Run> {
+    let Some(chat) = state.chats.iter().find(|chat| chat.id == chat_id) else { return vec![]; };
+    let mut visible = std::collections::HashSet::new();
+    for run in state.runtime.runs.iter().filter(|run|
+        run.chat_id.as_deref() == Some(chat_id) && run.actor == chat.actor
+    ) {
+        visible.insert(run.id.as_str());
+        if let Ok((_, children)) = crate::delegated_results::scope(state, run) {
+            visible.extend(children);
+        }
+    }
+    state.runtime.runs.iter().filter(|run|
+        visible.contains(run.id.as_str()) && run.actor == chat.actor
+        && run.status == "waiting" && run.question.as_ref().is_some_and(|q| q.answer.is_none())
+    ).collect()
+}
+
+pub fn pending_json(state: &State, chat_id: &str) -> Vec<Value> {
+    pending(state, chat_id).into_iter().map(|run| {
+        let question = run.question.as_ref().unwrap();
+        json!({"run_id":run.id,"chat_id":run.chat_id,"question":question,"summary":summary(question)})
+    }).collect()
+}
+
+pub fn decision_revision(state: &State) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    for run in state.runtime.runs.iter().filter(|run|run.question.is_some()) {
+        (&run.id, &run.status, &run.question.as_ref().unwrap().answer).hash(&mut hash);
+    }
+    hash.finish()
+}
+
+pub fn answer_target<'a>(state: &'a State, chat_id: &'a str, question: &str) -> Result<&'a str, &'static str> {
+    pending(state, chat_id).into_iter()
+        .find(|run|run.question.as_ref().is_some_and(|q|q.id == question))
+        .and_then(|run|run.chat_id.as_deref())
+        .ok_or("That design question is no longer pending or accessible from this chat.")
+}
 pub fn summary(question: &Question) -> String {
     let mut text = format!("{}\n", question.input.question);
     for (i, option) in question.input.options.iter().enumerate() {
@@ -213,6 +255,8 @@ pub fn answer(
     text: &str,
     source: &str,
 ) -> Result<(), &'static str> {
+    let target = question_id.map(|question|answer_target(state, chat_id, question).map(str::to_owned)).transpose()?;
+    let chat_id = target.as_deref().unwrap_or(chat_id);
     let run = waiting(state, chat_id)
         .ok_or("No design question is ready for an answer in this chat.")?;
     let question = run.question.as_ref().unwrap();
@@ -280,6 +324,7 @@ pub fn answer(
     let context = run.context.clone();
     let lenses = run.lenses.clone();
     let queue_order = run.queue_order;
+    let resources = run.resource_grants.clone();
     let objective = run.continuation.as_ref().map(|c|c.objective.clone()).unwrap_or_else(||run.objective.clone());
     let continuation = Continuation {
         project_base: attempt.project_base.clone(), checkpoint,
@@ -301,6 +346,7 @@ pub fn answer(
     }
     let next = state.runtime.runs.last_mut().unwrap();
     next.backend = backend;
+    next.resource_grants = resources;
     next.persona = Some(persona);
     next.model = model;
     next.context = context;

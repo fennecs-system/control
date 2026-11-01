@@ -164,7 +164,7 @@ pub struct Port {
 }
 impl Port {
     fn summary(&self) -> Value {
-        json!({"port_id":self.id,"service_id":self.service,"name":self.name,"direction":self.direction,"service_port":self.service_port,"target":self.target,"status":self.status,"ready":self.ready,"local_address":self.approval.as_ref().filter(|_|self.direction==Direction::Ingress).filter(|a|a.host_port!=0).map(|a|format!("127.0.0.1:{}",a.host_port)),"pinned_target":self.approval.as_ref().and_then(|a|a.pinned),"expires_unix":self.approval.as_ref().map(|a|a.expires),"diagnostic":self.diagnostic,"approval_url":"/tools/ports"})
+        json!({"port_id":self.id,"service_id":self.service,"name":self.name,"direction":self.direction,"service_port":self.service_port,"target":self.target,"status":self.status,"ready":self.ready,"local_address":self.approval.as_ref().filter(|_|self.direction==Direction::Ingress).filter(|a|a.host_port!=0).map(|a|format!("127.0.0.1:{}",a.host_port)),"pinned_target":self.approval.as_ref().and_then(|a|a.pinned),"expires_unix":self.approval.as_ref().map(|a|a.expires).filter(|expires|*expires!=u64::MAX),"until_stopped":self.approval.as_ref().is_some_and(|a|a.expires==u64::MAX),"diagnostic":self.diagnostic,"approval_url":"/tools/ports"})
     }
 }
 #[derive(Deserialize)]
@@ -188,6 +188,12 @@ pub fn known(name: &str) -> bool {
         name,
         "control_port_request" | "control_port_status" | "control_port_stop"
     )
+}
+fn accessible(state: &State, port: &Port, run: &crate::runtime::Run, node: &NodeId) -> bool {
+    port.node == *node && port.actor == run.actor && state.services.iter().any(|service|
+        service.resource.id == port.service && service.resource.generation == port.generation
+        && service.resource.owner.chat.as_str() == port.chat
+        && crate::services::accessible(service,node,run))
 }
 fn service<'a>(state: &'a State, port: &Port, time: u64) -> io::Result<&'a Service> {
     identity::authorize(&port.actor, Action::Task).map_err(fail)?;
@@ -293,7 +299,7 @@ fn admit(
         .iter()
         .find(|s| {
             s.resource.id == input.service_id
-                && s.owned_by(&node, chat, &run.actor)
+                && crate::services::accessible(s, &node, run)
                 && matches!(s.resource.phase, Phase::Running(_))
                 && !s.resource.lease.expired(now())
         })
@@ -339,13 +345,14 @@ fn admit(
             "Service port name or egress listener is already reserved",
         ));
     }
+    let owner_chat = service.resource.owner.chat.as_str().to_owned();
     let port = Port {
         id,
         service: input.service_id,
         generation: service.resource.generation,
         container: service.resource.phase.container().unwrap().clone(),
         node,
-        chat: chat.clone(),
+        chat: owner_chat,
         actor: run.actor.clone(),
         origin_run: run_id.into(),
         origin_attempt: generation.into(),
@@ -422,18 +429,14 @@ pub fn call(
     if crate::delegation::is_judge(r) {
         return Err(fail("Judge cannot manage ports"));
     }
-    let actor = r.actor.clone();
-    let chat = r
-        .chat_id
-        .clone()
-        .ok_or_else(|| fail("A chat is required"))?;
+    r.chat_id.as_ref().ok_or_else(|| fail("A chat is required"))?;
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Id {
         port_id: Option<ResourceId>,
     }
     let id: Id = serde_json::from_value(args.clone()).map_err(fail)?;
-    let owned = |p: &&Port| p.node == node && p.chat == chat && p.actor == actor;
+    let owned = |p: &&Port| accessible(&state,p,r,&node);
     if name == "control_port_status" && id.port_id.is_none() {
         return Ok(
             json!({"ports":state.ports.iter().filter(owned).filter(|p|p.status!=Status::Stopped).chain(state.ports.iter().rev().filter(owned).filter(|p|p.status==Status::Stopped).take(10)).map(Port::summary).collect::<Vec<_>>()}),
@@ -443,9 +446,7 @@ pub fn call(
         .ports
         .iter()
         .position(|p| {
-            p.node == node
-                && p.chat == chat
-                && p.actor == actor
+            accessible(&state,p,r,&node)
                 && Some(&p.id) == id.port_id.as_ref()
         })
         .ok_or_else(|| fail("Owned port not found"))?;
@@ -733,7 +734,7 @@ fn handshake(
         });
         let _ = tx.send(result);
     });
-    let deadline = Instant::now() + wait;
+    let started = Instant::now();
     let result = loop {
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(result) => break result,
@@ -742,7 +743,7 @@ fn handshake(
             }
             Err(_) => {}
         }
-        if Instant::now() >= deadline || live_service(shared, port, cancel).is_err() {
+        if started.elapsed() >= wait || live_service(shared, port, cancel).is_err() {
             break Err(fail("Relay handshake expired or was revoked"));
         }
     };
@@ -1252,7 +1253,7 @@ pub(crate) mod tests {
         assert!(html.contains("value='-1'>Service lifetime"));
         assert!(html.contains("target='_top'"));
     }
-    pub(super) fn fixture() -> (State, String, String) {
+    pub(crate) fn fixture() -> (State, String, String) {
         let mut state = State::default();
         let chat = crate::chat::create(&mut state);
         crate::chat::send(&mut state, &chat, "Run a tool", "test").unwrap();
@@ -1304,6 +1305,102 @@ pub(crate) mod tests {
             "node-a".to_owned().try_into().unwrap(),
             |_| Ok(()),
         )
+    }
+    #[test]
+    #[ignore = "requires local Chrome/Firefox WebDriver; isolated fixture, no credentials/models"]
+    fn live_port_controls_have_equal_buttons_and_themed_checkbox() {
+        use reqwest::blocking::Client;
+        use std::io::{BufRead, Write};
+        use std::sync::atomic::{AtomicBool,Ordering};
+        let (mut state, run, _) = fixture();
+        request(&mut state,&run,Direction::Egress).unwrap();
+        let state = Arc::new(Mutex::new(state));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}",listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let done = stop.clone();
+        let server = std::thread::spawn(move || {
+            while !done.load(Ordering::Relaxed) {
+                let Ok((mut stream,_)) = listener.accept() else {std::thread::sleep(Duration::from_millis(10));continue;};
+                stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                let mut reader=std::io::BufReader::new(stream.try_clone().unwrap());
+                let mut first=String::new();
+                if reader.read_line(&mut first).is_err() {continue;}
+                let path=first.split_whitespace().nth(1).unwrap_or("/");
+                if !crate::serve_stylesheet(&mut stream,path) {
+                    if path=="/tools/ports" {http(&mut stream,&state,"GET",path,&[]);}
+                    else {let _=stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");}
+                }
+            }
+        });
+        struct Server(Arc<AtomicBool>,Option<std::thread::JoinHandle<()>>);
+        impl Drop for Server {fn drop(&mut self){self.0.store(true,Ordering::Relaxed);self.1.take().unwrap().join().unwrap();}}
+        let _server=Server(stop,Some(server));
+        let client=Client::builder().timeout(Duration::from_secs(20)).build().unwrap();
+        let driver=std::env::var("CONTROL_WEBDRIVER_URL").unwrap();
+        let chrome=std::env::var("CONTROL_QA_BROWSER").is_ok_and(|b|b=="chrome");
+        let caps=if chrome {json!({"browserName":"chrome","goog:chromeOptions":{"binary":"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome","args":["--headless=new","--no-first-run"]}})} else {json!({"browserName":"firefox","moz:firefoxOptions":{"binary":"/Applications/Firefox.app/Contents/MacOS/firefox","args":["-headless"]}})};
+        let session:Value=client.post(format!("{driver}/session")).json(&json!({"capabilities":{"alwaysMatch":caps}})).send().unwrap().json().unwrap();
+        let id=session["value"]["sessionId"].as_str().expect("Browser session");
+        let base=format!("{driver}/session/{id}");
+        struct Browser(Client,String);
+        impl Drop for Browser {fn drop(&mut self){let _=self.0.delete(&self.1).send();}}
+        let _browser=Browser(client.clone(),base.clone());
+        let post=|path:&str,args:Value|->Value {
+            let response=client.post(format!("{base}{path}")).json(&args).send().unwrap();
+            assert!(response.status().is_success(),"WebDriver {path}");
+            response.json::<Value>().unwrap()["value"].clone()
+        };
+        let get=|path:&str|->Value {client.get(format!("{base}{path}")).send().unwrap().json::<Value>().unwrap()["value"].clone()};
+        post("/url",json!({"url":format!("{url}/tools/ports")}));
+        let elements=post("/elements",json!({"using":"css selector","value":"form[action='/tools/ports'] > button"}));
+        let buttons=elements.as_array().unwrap();assert_eq!(buttons.len(),2);
+        let element=|value:&Value|value["element-6066-11e4-a52e-4f735466cecf"].as_str().unwrap().to_owned();
+        let allow=element(&buttons[0]);let deny=element(&buttons[1]);
+        let a=get(&format!("/element/{allow}/rect"));let b=get(&format!("/element/{deny}/rect"));
+        assert_eq!(a["height"],b["height"]);assert_eq!(a["width"],b["width"]);
+        assert_eq!(get(&format!("/element/{allow}/css/border-top-left-radius")),"3px");
+        let checkbox=element(&post("/element",json!({"using":"css selector","value":"input[type=checkbox]"})));
+        assert_eq!(get(&format!("/element/{checkbox}/css/appearance")),"none");
+        let before=get(&format!("/element/{checkbox}/css/background-color"));
+        post(&format!("/element/{checkbox}/click"),json!({}));
+        assert_eq!(get(&format!("/element/{checkbox}/property/checked")),true);
+        assert_ne!(get(&format!("/element/{checkbox}/css/background-color")),before);
+    }
+    #[test]
+    fn captured_resource_handoff_is_exact_and_does_not_reown_ports() {
+        let (mut state, parent, parent_chat) = fixture();
+        let node: NodeId = "node-a".to_owned().try_into().unwrap();
+        let grants = crate::services::grants(&state,&state.runtime.runs[0]);
+        let child_chat = crate::chat::create(&mut state);
+        let mut child = state.runtime.runs[0].clone();
+        child.id = "child-run".into();
+        child.chat_id = Some(child_chat);
+        state.runtime.runs.push(child);
+        assert!(!crate::services::accessible(&state.services[0],&node,&state.runtime.runs[1]));
+        state.runtime.runs[1].resource_grants = grants;
+        assert!(crate::services::accessible(&state.services[0],&node,&state.runtime.runs[1]));
+        let result = admit(&mut state,"child-run","attempt-a","child-request",input(Direction::Ingress),node.clone(), |_|Ok(())).unwrap();
+        assert_eq!(state.ports[0].chat,parent_chat);
+        assert_eq!(state.ports[0].origin_run,"child-run");
+        assert!(accessible(&state,&state.ports[0],&state.runtime.runs[0],&node));
+        assert!(crate::services::enqueue_test_command(&mut state,"child-run","exec","svc-a","echo probe",60).is_ok());
+        let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        assert!(accessible(&restored,&restored.ports[0],&restored.runtime.runs[1],&node));
+        let mut denied=restored.runtime.runs[1].clone();
+        denied.actor=Actor::Unknown;
+        assert!(!crate::services::accessible(&restored.services[0],&node,&denied));
+        denied=restored.runtime.runs[1].clone();
+        let mut persona=crate::delegation::lineage(&denied);
+        persona.role=crate::delegation::Role::Judge;denied.persona=Some(persona);
+        assert!(!crate::services::accessible(&restored.services[0],&node,&denied));
+        assert!(!crate::services::accessible(&restored.services[0],&"other-node".to_owned().try_into().unwrap(),&restored.runtime.runs[1]));
+        state.services[0].resource.generation = Generation::INITIAL.checked_next().unwrap();
+        assert!(!accessible(&state,&state.ports[0],&state.runtime.runs[1],&node));
+        assert!(!crate::services::accessible(&state.services[0],&node,&state.runtime.runs[1]));
+        assert!(result["port_id"].is_string());
+        assert_eq!(state.runtime.runs[0].id,parent);
     }
     #[test]
     fn pending_requests_are_idempotent_owned_and_rollback_on_save_failure() {
@@ -1373,6 +1470,8 @@ pub(crate) mod tests {
         request(&mut state,&run,Direction::Ingress).unwrap();
         let id = state.ports[0].id.as_str().to_owned();
         approve(&mut state,&id,-1,false,None,time,|_|Ok(())).unwrap();
+        assert!(state.ports[0].summary()["expires_unix"].is_null());
+        assert_eq!(state.ports[0].summary()["until_stopped"],true);
         let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
         assert!(authorized(&restored,&restored.ports[0],time+86400).is_ok());
         state.ports[0].status = Status::Stopping;
@@ -1658,7 +1757,7 @@ fn main(){
             let mut value=template.clone();let id=format!("svc-{name}-{node}");ids.push(id.clone());
             value["resource"]["id"]=json!(id);value["resource"]["owner"]["node"]=json!(node);
             value["resource"]["image"]=json!(image);value["resource"]["phase"]=json!(Phase::Requested);
-            value["resource"]["lease"]=serde_json::to_value(control_core::resources::Lease::new(now(),180).unwrap()).unwrap();
+            value["resource"]["lease"]=serde_json::to_value(if name=="probe" {control_core::resources::Lease::new(now(),180).unwrap()} else {control_core::resources::Lease::until_stopped(now()).unwrap()}).unwrap();
             value["workspace_exec"]=json!(true);value["profile"]=json!(crate::worker_profile::Profile::inspect(&image).unwrap());
             value["command"]=json!(if name=="probe" {"printf 'short probe stdout\\n'; printf 'short probe stderr\\n' >&2; exit 7"}else{"exec sleep 180"});
             state.services.push(serde_json::from_value(value).unwrap());
@@ -1704,7 +1803,7 @@ printf source-ready
         let client=reqwest::blocking::Client::builder().no_proxy().timeout(Duration::from_secs(10)).build().unwrap();
         let post=|id:&str,fields:&str|{let response=client.post(format!("{url}/tools/ports")).header("Cookie",format!("control_operator={cookie}")).header("Content-Type","application/x-www-form-urlencoded").body(format!("id={id}&{fields}")).send().unwrap();assert_eq!(response.status(),200);};
         let port=|id:&str|read().ports.into_iter().find(|p|p.id.as_str()==id).unwrap();
-        assert_eq!(port(&ingress_id).status,Status::Pending);post(&ingress_id,"seconds=120");
+        assert_eq!(port(&ingress_id).status,Status::Pending);post(&ingress_id,"seconds=-1");
         wait(||port(&ingress_id).approval.as_ref().is_some_and(|a|a.host_port!=0),8,"source ingress approval");
         let published=port(&ingress_id).approval.unwrap().host_port;
         // A private host HTTP fixture represents an explicitly approved download
@@ -1719,7 +1818,7 @@ printf source-ready
         }
         state.runtime.runs[0].status="completed".into();write(&state);server=launch();
         wait(||client.get(format!("{url}/health")).send().is_ok_and(|r|r.status().is_success()),5,"approval UI online");
-        for id in &pending {assert_eq!(port(id).status,Status::Pending);post(id,"seconds=100&loopback=yes");}
+        for id in &pending {assert_eq!(port(id).status,Status::Pending);post(id,"seconds=-1&loopback=yes");}
         server.stop();state=read();state.runtime.runs[0].status="running".into();
         let command=format!(r#"set -eu
 test "$(cat /workspace/settings)" = persistent
