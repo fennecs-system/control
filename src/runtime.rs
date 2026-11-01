@@ -327,7 +327,7 @@ impl Runtime {
                 Some(h)
             }
             "agents" => {
-                let mut h = "<div class='section-heading'><h2>Agents</h2><a href='/?view=runs'>Run history ↗</a></div>".to_owned();
+                let mut h = "<div class='section-heading'><h2>Bots</h2><a href='/?view=runs'>Run history ↗</a></div>".to_owned();
                 let mut running = self
                     .runs
                     .iter()
