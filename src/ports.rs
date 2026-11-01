@@ -1,5 +1,6 @@
 //! Service-owned TCP ports over verified stdio relays. Containers stay offline.
 mod ingress_guard;
+mod decisions;
 #[path = "../tools/tcp-relay/protocol.rs"]
 mod protocol;
 use crate::{
@@ -157,6 +158,8 @@ pub struct Port {
     target: Option<Endpoint>,
     status: Status,
     approval: Option<Approval>,
+    #[serde(default, skip_serializing_if="Option::is_none")]
+    decision: Option<decisions::Receipt>,
     #[serde(default)]
     diagnostic: String,
     #[serde(skip)]
@@ -362,6 +365,7 @@ fn admit(
         target: input.target,
         status: Status::Pending,
         approval: None,
+        decision: None,
         diagnostic: String::new(),
         ready: false,
     };
@@ -503,6 +507,7 @@ fn approve(
         allow_loopback,
     });
     state.ports[index].status = Status::Approved;
+    state.ports[index].decision = Some(decisions::Receipt::pending(true));
     state.ports[index].diagnostic.clear();
     if let Err(error) = save(state) {
         state.ports[index] = old;
@@ -543,8 +548,9 @@ pub(crate) fn http_with_save(
                     .iter_mut()
                     .find(|p| p.id.as_str() == id)
                     .ok_or_else(|| fail("Port not found"))?;
-                let old = p.status;
-                if old != Status::Stopped {
+                let old = p.clone();
+                if p.status == Status::Pending { p.decision = Some(decisions::Receipt::pending(false)); }
+                if p.status != Status::Stopped {
                     p.status = Status::Stopping;
                 }
                 if let Err(e) = save(&state) {
@@ -553,7 +559,7 @@ pub(crate) fn http_with_save(
                         .iter_mut()
                         .find(|p| p.id.as_str() == id)
                         .unwrap()
-                        .status = old;
+                        .clone_from(&old);
                     return Err(e);
                 }
             } else {
@@ -1175,6 +1181,9 @@ pub fn supervise(shared: Arc<Mutex<State>>) -> JoinHandle<()> {
         };
         let mut active: HashMap<ResourceId, Active> = HashMap::new();
         while !crate::shutdown::requested() {
+            if let Ok(mut state) = shared.lock() {
+                let _ = decisions::advance(&mut state, crate::storage::save);
+            }
             let ports = match shared.lock() {
                 Ok(s) => s
                     .ports
@@ -1768,7 +1777,7 @@ fn main(){
         write(&state);
         let launch=||{
             let log=fs::OpenOptions::new().create(true).append(true).open(root.join("server.log")).unwrap();
-            Server{child:Command::new(&binary).arg("serve").env("CONTROL_STATE_DIR",&state_dir).env("CONTROL_CONFIG_DIR",&config).env("CONTROL_ADDR",address.to_string()).env_remove("CONTROL_WORKER_IMAGE").env_remove("CONTROL_CLAUDE_IMAGE").stdin(Stdio::null()).stdout(log.try_clone().unwrap()).stderr(log).spawn().unwrap()}
+            Server{child:Command::new(&binary).arg("serve").env("CONTROL_STATE_DIR",&state_dir).env("CONTROL_CONFIG_DIR",&config).env("CONTROL_CODEX_AUTH_FILE",root.join("missing-qa-auth.json")).env("CONTROL_CLAUDE_AUTH_FILE",root.join("missing-qa-claude.json")).env("CONTROL_ADDR",address.to_string()).env_remove("CONTROL_WORKER_IMAGE").env_remove("CONTROL_CLAUDE_IMAGE").stdin(Stdio::null()).stdout(log.try_clone().unwrap()).stderr(log).spawn().unwrap()}
         };
         struct Cleanup {node:String,root:PathBuf}
         impl Drop for Cleanup {fn drop(&mut self){
@@ -1930,6 +1939,8 @@ printf verified-download >> /workspace/completions
                     .arg("serve")
                     .env("CONTROL_STATE_DIR", &state_dir)
                     .env("CONTROL_CONFIG_DIR", &config_dir)
+                    .env("CONTROL_CODEX_AUTH_FILE", root.join("missing-qa-auth.json"))
+                    .env("CONTROL_CLAUDE_AUTH_FILE", root.join("missing-qa-claude.json"))
                     .env("CONTROL_ADDR", address.to_string())
                     .env_remove("CONTROL_WORKER_IMAGE")
                     .env_remove("CONTROL_CLAUDE_IMAGE")
