@@ -497,6 +497,13 @@ mod tests {
         let branch=b.element(".conversation-branch");assert_eq!(b.get(&format!("/element/{branch}/property/open")),true,"The active child's parent must be expanded");
         {let mut state=state.lock().unwrap();crate::chat::create(&mut state);state.chats.last_mut().unwrap().title="Live recent thread".into();}
         b.wait("Live recent thread");assert_eq!(b.get(&format!("/element/{fresh_input}/name")),"textarea","Refreshing the disclosed picker must not reload chat");
+        {let mut state=state.lock().unwrap();let late=crate::chat::create(&mut state);let session=state.chats.last_mut().unwrap();session.parent_chat=Some(chat.clone());session.title=format!("Late background child {late}");}
+        for path in ["/?view=tools","/?view=runs","/chats"] {
+            b.post("/url",json!({"url":format!("{server}{path}")}));
+        }
+        let toggle=b.element(".conversation-toggle > summary");b.post(&format!("/element/{toggle}/click"),json!({}));
+        let newest=b.element("nav[aria-label=Conversations] > a[href^='/chat/']");
+        assert_eq!(b.get(&format!("/element/{newest}/text")),"Live recent thread","Returning through Tools, Runs and Chat must not promote an older background playtest");
         b.post("/url",json!({"url":format!("{server}/chat/{chat}")}));
         let input=b.element("textarea[data-enter-sends=true]");
         b.post(&format!("/element/{input}/value"),json!({"text":"/op"}));

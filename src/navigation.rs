@@ -82,12 +82,22 @@ fn conversation_window(state:&crate::State,active:&str,older:Option<&str>,newer:
     let range=crate::pagination::window(roots.len(),find(older),find(newer));
     let start=roots.get(range.start).copied().unwrap_or(entries.len());
     let end=roots.get(range.end).copied().unwrap_or(entries.len());
-    let selected=&entries[start..end];
+    let mut selected=entries[start..end].iter().collect::<Vec<_>>();
     let parents:HashMap<_,_>=entries.iter().map(|entry|(entry.session.id.as_str(),entry.parent)).collect();
     let mut expanded=HashSet::new();let mut ancestor=parents.get(active).copied().flatten();
     while let Some(id)=ancestor {
         if !expanded.insert(id) {break;}
         ancestor=parents.get(id).copied().flatten();
+    }
+    if picker && let Some(index)=entries.iter().position(|entry|entry.session.id==active) {
+        let root=(0..=index).rev().find(|index|entries[*index].depth==0).unwrap();
+        if root<start || root>=end {
+            // Keep the active thread reachable without letting it reorder the
+            // newest history or exceeding the ten-root picker budget.
+            if let Some(last)=selected.iter().rposition(|entry|entry.depth==0) { selected.truncate(last); }
+            let root_end=roots.iter().copied().find(|next|*next>root).unwrap_or(entries.len());
+            selected.extend(entries[root..root_end].iter());
+        }
     }
     let current=if active.is_empty() {" aria-current='page'"}else{""};
     let mut links=format!("<a href='/chats'{current}>+ New chat</a>");
@@ -129,7 +139,7 @@ mod tests {
         crate::chat::create(&mut state);
         assert_eq!(super::history(&state,Some(&roots[9]),None),page,"New chats must not shift an older cursor boundary");
         let last=super::history(&state,Some(&roots[19]),None);
-        assert_eq!(last.matches("href='/chat/").count(),5);
+        assert_eq!(last.matches("href='/chat/").count(),6,"The oldest root retains its nested child on the final page");
         assert!(!last.contains("Older →"));assert!(last.contains("← Newer"));
         assert_eq!(super::history(&state,None,Some(&roots[20])),page);
         let mut response=Vec::new();
