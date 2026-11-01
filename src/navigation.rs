@@ -90,7 +90,7 @@ fn conversation_window(state:&crate::State,active:&str,older:Option<&str>,newer:
         ancestor=parents.get(id).copied().flatten();
     }
     let current=if active.is_empty() {" aria-current='page'"}else{""};
-    let mut links=format!("<a href='/chats'{current}>+ New chat</a>");
+    let mut links=format!("<a href='/chats?new=1'{current}>+ New chat</a>");
     let mut branches=Vec::new();
     for (position,entry) in selected.iter().enumerate() {
         while branches.last().is_some_and(|depth| *depth>=entry.depth) {links.push_str("</div></details>");branches.pop();}
@@ -177,7 +177,7 @@ mod tests {
         let landing = crate::chat::landing(&state, "none", None);
         assert!(landing.contains("<details class='conversation-toggle'>"));
         assert!(!landing.contains("conversation-toggle' open"));
-        assert!(landing.contains("href='/chats' aria-current='page'"));
+        assert!(landing.contains("href='/chats?new=1' aria-current='page'"));
         assert!(chat.contains("chat-workspace"));
         assert!(super::primary("session-list").contains("href='/chats' aria-current='page'"));
     }
