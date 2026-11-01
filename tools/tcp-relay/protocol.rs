@@ -13,6 +13,7 @@ pub enum Kind {
     Ping = 3,
     Close = 4,
     Credit = 5,
+    Open = 6,
 }
 pub fn read(reader: &mut impl Read, buffer: &mut [u8; LIMIT]) -> io::Result<(Kind, usize)> {
     let mut header = [0; 5];
@@ -23,6 +24,7 @@ pub fn read(reader: &mut impl Read, buffer: &mut [u8; LIMIT]) -> io::Result<(Kin
         3 => Kind::Ping,
         4 => Kind::Close,
         5 => Kind::Credit,
+        6 => Kind::Open,
         _ => return Err(io::Error::other("Invalid relay frame")),
     };
     let size = u32::from_be_bytes(header[1..].try_into().unwrap()) as usize;
@@ -103,7 +105,7 @@ mod tests {
         assert!(read(&mut input, &mut buffer).is_err());
         assert!(write(&mut data, Kind::Data, &vec![0; LIMIT + 1]).is_err());
         assert!(read(&mut [1, 0, 1, 0, 0].as_slice(), &mut buffer).is_err());
-        assert!(read(&mut [6, 0, 0, 0, 0].as_slice(), &mut buffer).is_err());
+        assert!(read(&mut [7, 0, 0, 0, 0].as_slice(), &mut buffer).is_err());
     }
     #[test]
     fn credit_cannot_accumulate_or_be_reused() {

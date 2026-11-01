@@ -81,20 +81,22 @@ pub struct Grant {
     owner: control_core::resources::Owner,
     generation: control_core::resources::Generation,
 }
+impl Grant {
+    pub(crate) fn matches(&self, service: &Service) -> bool {
+        self.id == service.resource.id && self.owner == service.resource.owner
+            && self.generation == service.resource.generation
+    }
+}
 pub(crate) fn accessible(service: &Service, node: &NodeId, run: &crate::runtime::Run) -> bool {
     service.resource.owner.node == *node && service.actor == run.actor
         && !crate::delegation::is_judge(run)
         && (run.chat_id.as_deref() == Some(service.resource.owner.chat.as_str())
-            || run.resource_grants.iter().any(|grant|
-                grant.id == service.resource.id && grant.owner == service.resource.owner
-                && grant.generation == service.resource.generation))
+            || run.resource_grants.iter().any(|grant|grant.matches(service)))
 }
 pub(crate) fn grants(state: &State, run: &crate::runtime::Run) -> Vec<Grant> {
     state.services.iter().filter(|service|
         accessible(service, &service.resource.owner.node, run)
-    ).map(|service|Grant {
-        id:service.resource.id.clone(),owner:service.resource.owner.clone(),generation:service.resource.generation,
-    }).collect()
+    ).map(Service::grant).collect()
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -103,6 +105,9 @@ struct Origin {
     attempt: AttemptId,
 }
 impl Service {
+    pub(crate) fn grant(&self) -> Grant {
+        Grant { id:self.resource.id.clone(),owner:self.resource.owner.clone(),generation:self.resource.generation }
+    }
     pub(crate) fn binding_snapshot(&self)->Self {
         Self {resource:self.resource.clone(),origin:self.origin.clone(),actor:self.actor.clone(),command:self.command.clone(),uid:self.uid,gid:self.gid,workspace_exec:self.workspace_exec,profile:self.profile,diagnostic:String::new(),output:String::new(),exit_code:None,executions:Vec::new()}
     }
@@ -584,27 +589,29 @@ struct Docker;
 /// A live verified offline service capability, never an arbitrary container ID.
 pub(crate) struct PortBinding { id: ContainerId, user: String, expires: u64 }
 #[derive(Clone, Copy)]
-pub(crate) enum RelayMode { Connect, Listen }
+pub(crate) enum RelayMode { Connect, Listen, Multiplex }
 impl PortBinding {
     pub(crate) fn spawn(&self, mode: RelayMode, port: std::num::NonZeroU16, expires: u64) -> io::Result<std::process::Child> {
         if expires <= now() || expires > self.expires { return Err(fail("Port lease exceeds its service")); }
-        std::process::Command::new("docker").args(["exec", "-i", "--user", &self.user, self.id.as_str(), "/bin/control-tcp-relay", match mode { RelayMode::Connect => "connect", RelayMode::Listen => "listen" }, &port.to_string(), &expires.to_string()])
+        std::process::Command::new("docker").args(["exec", "-i", "--user", &self.user, self.id.as_str(), "/bin/control-tcp-relay", match mode { RelayMode::Connect => "connect", RelayMode::Listen => "listen", RelayMode::Multiplex => "listen-multi" }, &port.to_string(), &expires.to_string()])
             .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn()
     }
 }
 pub(crate) fn relay_capable(service: &Service) -> io::Result<()> {
+    relay_version(service).map(|_|())
+}
+pub(crate) fn relay_version(service: &Service) -> io::Result<u8> {
     // Image IDs are immutable. Avoid an extra engine query on every connection.
-    static CAPABILITIES:std::sync::OnceLock<Mutex<HashMap<ImageId,bool>>>=std::sync::OnceLock::new();
+    static CAPABILITIES:std::sync::OnceLock<Mutex<HashMap<ImageId,u8>>>=std::sync::OnceLock::new();
     let cache=CAPABILITIES.get_or_init(Mutex::default);
     let cached=cache.lock().map_err(|_|fail("Relay capability cache unavailable"))?.get(&service.resource.image).copied();
-    if cached==Some(true){return Ok(());}
-    if cached==Some(false){return Err(fail("Rebuild the immutable worker images with Nix setup, then start a new service to enable TCP relay v2"));}
+    if let Some(version)=cached{return Ok(version);}
     let marker = crate::runtime::docker_query(&["image", "inspect", service.resource.image.as_str(), "--format", "{{index .Config.Labels \"dev.control.tcp-relay\"}}"])?;
-    let capable=matches!(marker.trim(),"2"|"3");
+    let version=marker.trim().parse::<u8>().ok().filter(|version|matches!(version,2..=4))
+        .ok_or_else(||fail("Rebuild the immutable worker images with Nix setup, then start a new service to enable TCP relays"))?;
     let mut cached=cache.lock().map_err(|_|fail("Relay capability cache unavailable"))?;
-    if cached.len()<MAX_RECORDS{cached.insert(service.resource.image.clone(),capable);}
-    if !capable { return Err(fail("Rebuild the immutable worker images with Nix setup, then start a new service to enable TCP relays")); }
-    Ok(())
+    if cached.len()<MAX_RECORDS{cached.insert(service.resource.image.clone(),version);}
+    Ok(version)
 }
 pub(crate) fn port_binding(service: &Service, expected: &ContainerId) -> io::Result<PortBinding> {
     if !matches!(&service.resource.phase, Phase::Running(id) if id == expected) || service.resource.lease.expired(now()) { return Err(fail("Service is not running under this lease and generation")); }

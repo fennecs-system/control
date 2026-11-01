@@ -1,5 +1,6 @@
 //! Trusted lease/heartbeat-bounded relay inside an offline service.
 mod protocol;
+mod multiplex;
 use protocol::{Credit, Kind, LIMIT};
 use std::{
     io::{self, Read, Write},
@@ -44,6 +45,7 @@ fn run() -> io::Result<()> {
         .and_then(|n| n.checked_sub(now))
         .filter(|n| (1..=3600).contains(n) || args[2] == u64::MAX.to_string())
         .ok_or_else(|| io::Error::other("Expired relay lease"))?;
+    if args[0]=="listen-multi" {return multiplex_listener(port,Duration::from_secs(seconds));}
     let start = Instant::now();
     let heartbeat = Arc::new(AtomicU64::new(0));
     let clock = heartbeat.clone();
@@ -195,6 +197,20 @@ fn run() -> io::Result<()> {
         std::thread::sleep(Duration::from_millis(25));
     }
     Ok(())
+}
+fn multiplex_listener(port:u16,lifetime:Duration) -> io::Result<()> {
+    let listener=TcpListener::bind(("127.0.0.1",port))?;listener.set_nonblocking(true)?;
+    let (transport,_incoming,_reader)=multiplex::Transport::start(io::stdin(),io::stdout(),false);
+    println!("CONTROL_RELAY_V3_READY");io::stdout().flush()?;
+    let started=Instant::now();
+    while transport.alive() && transport.heartbeat_age()<Duration::from_secs(5) && started.elapsed()<lifetime {
+        match listener.accept() {
+            Ok((socket,_)) => {let _=transport.open(socket);}
+            Err(error) if error.kind()==io::ErrorKind::WouldBlock=>std::thread::sleep(Duration::from_millis(10)),
+            Err(error)=>{transport.stop();return Err(error);}
+        }
+    }
+    transport.stop();Err(io::Error::other("Relay expired or lost its host"))
 }
 fn main() -> ExitCode {
     match run() {

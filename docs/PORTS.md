@@ -58,14 +58,23 @@ using the local relay, for example `curl --connect-to
 example.com:443:127.0.0.1:3001 https://example.com/file -o /workspace/file`.
 Redirects or dependencies on other hosts require their own approved endpoints;
 package managers may need a task-local adapter rather than a generic proxy setting.
+Updated worker images keep the egress listener bound and allow eight concurrent
+TCP sessions per port. Each stream has independent bounded flow control, so a
+slow download does not block another stream or heartbeats. `ready` means the
+listener is running, not merely that approval was saved. Ingress also accepts
+up to eight concurrent connections. Existing services on older images keep their
+single-session relay; start a new service with a rebuilt image to upgrade it.
 
-For two services owned by the same chat, expose an ingress on the destination, then
+For two owned or explicitly granted services, expose an ingress on the destination, then
 request an egress on the source with `"peer_port_id":"INGRESS_PORT_ID"` instead of
 a `target`. Control pins the route to that ingress's host listener, connects only
 while the ingress is listening, and closes the route when the ingress is revoked,
 moves or its service changes generation. No loopback checkbox is needed. The
 source connects to its own `service_port`; the ingress host port is not a
 container's direct route to the host.
+Delegated services may retain different owner chats: requesting the route requires
+access to both exact service generations. The saved route captures the peer grant;
+sharing an actor, root task or guessed port ID never grants access.
 
 A literal `127.0.0.1` or `::1` destination additionally requires the operator's
 explicit loopback checkbox. Private DNS answers, metadata, multicast and LAN

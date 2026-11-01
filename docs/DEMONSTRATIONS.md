@@ -94,6 +94,32 @@ with Mineflayer clients. Agents create their own adapters and share useful tools
 and knowledge. These are user-created workloads outside this repository; the
 Control implementation remains generic.
 
+For the next playtest, request **Minecraft Java 26.3** explicitly. Resolve that
+version from Mojang's manifest, verify its download hash and required Java runtime,
+and verify client protocol support before starting. Mojang's 26.3 metadata requires
+Java 25: provision that runtime in the private service if the image's default Java
+is older. Mineflayer's published support
+list currently ends at 26.1; use a pinned ViaProxy release supporting 26.3 between
+the bot and server, with the bot using the supported 26.1 protocol. The proxy is
+a task-specific tool-container workload, not a Control integration. Do not silently
+choose 1.21.1. See the [Mineflayer discussion](https://github.com/PrismarineJS/mineflayer/discussions/4190).
+
+Suggested prompt:
+
+> Run a local offline-mode Minecraft Java 26.3 server and one persistent Mineflayer
+> bot named Cedar in separate persistent full-worker services, with ViaProxy
+> translating Cedar's supported 26.1 protocol to the 26.3 server. Provision Java 25
+> in the private service if needed. Verify runtime and
+> dependency requirements, and pin and verify downloads. Use approved relays for
+> dependencies. Request server ingress and each inter-service egress using
+> peer_port_id; connect each client to its own container's loopback relay.
+> Wait for approvals and readiness. Verify Cedar actually spawns and the server
+> lists Cedar before attempting a house. Keep the services alive between turns
+> and post concise progress in the linked room.
+
+Version references: [Mojang release notes](https://www.minecraft.net/en-us/article/minecraft-java-edition-26-3)
+and [Mineflayer's supported versions](https://github.com/PrismarineJS/mineflayer/blob/master/lib/version.js).
+
 Server packages, protocol libraries and agent-written adapters belong to the
 user's tool environments, not Control's source or a domain-specific scheduler.
 Generated Node/Python programs may execute inside explicitly granted containers;
