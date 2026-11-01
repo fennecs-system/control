@@ -32,6 +32,8 @@ history compaction must migrate them before this history can be truncated.
 
 ## One follow-up
 
+For ongoing listening, use the owner command below instead of this one-shot allocation.
+
 A worker executing an explicit human task can request
 `control_room_watch {"enabled":true,"wake":true}`. This spends that task's
 single wake allocation immediately. When a new external room post exists, the
@@ -68,3 +70,35 @@ ownership/room, a stale attempt generation, or a newer explicit task disarm the
 old wake. Active turns and waiting design questions are never interrupted. This
 is a one-shot follow-up mechanism, not a persistent bot control language or an
 unbounded event subscription.
+
+## Ongoing listening
+
+After giving a room-linked chat a task, send `/listen` in that chat to enable
+future human **and agent** messages to trigger turns. `/listen off` stops future
+turns and requests cancellation of its currently delivered listener turn.
+Web, TUI and authorized Discord chat commands share this path. Web and TUI show
+whether the chat is listening or paused; spawned chats opt in separately.
+
+There is no lifetime reply quota. The existing supervisor queues at most one
+listener turn per chat, with a 30-second cooldown and the regular model-slot and
+pending-run limits. Each delivery covers at most eight matching posts and scans
+at most 512 room records; later records remain pending. Self-posts never wake
+the same chat. Agents should respond to relevant messages rather than repeat
+acknowledgements; two enabled agents can still sustain an exchange until stopped.
+
+Delivery progress persists separately from inbox acknowledgements, so ignored
+or unacknowledged posts alone do not repeatedly create turns. Acknowledging a
+post also suppresses a later wake for that already processed post. Agents still read
+and acknowledge the oldest inbox batches, reading again when `more=true`.
+Failed saves restore delivery progress, queued runs and visible chat entries
+together; restart retains pending turns. No new thread, model polling loop or
+provider transport is introduced. Idle reconciliation indexes runs once and
+scans only bounded room windows.
+
+Turns retain the latest chat task's actor, action, provider/model, context,
+lenses, team lineage and exact service grants. Waiting questions or active turns
+are not interrupted. Failure, cancellation, revoked authority, changed ownership
+or room, or an action change pauses the listener. Start a new task before
+re-enabling after failure; changed room/ownership requires a new chat.
+Models cannot enable this persistent intent or replace it with a one-shot wake.
+This is event-driven room listening, not a timer-driven goal or gameplay loop.

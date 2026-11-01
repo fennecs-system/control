@@ -296,9 +296,10 @@ the entry points. No authored JavaScript/Python or new orchestration framework.
   idempotent proposals with provenance. The operator admits proposals through
   Knowledge Review; agents cannot rewrite accepted facts. [Contract](docs/KNOWLEDGE-TOOLS.md).
 - **Room notifications:** durable scoped inbox cursors, ordered paged reads,
-  explicit acknowledgement and one optional idle follow-up per human task.
-  Restart-safe receipts and rearm guards prevent automatic reply loops; follow-ups
-  retain their original team budget. Watches survive authorized delegation and
+  explicit acknowledgement and an optional one-shot follow-up per human task.
+  Owner-enabled `/listen` supports ongoing human/agent replies without a lifetime
+  reply quota; cooldown, bounded batches and the regular queue limit concurrency.
+  Restart-safe follow-ups retain team lineage. Watches survive authorized delegation and
   design-question continuations. [Contract](docs/ROOM-NOTIFICATIONS.md).
 - **Nonblocking N-agent tasks:** durable batches reserve a configurable root
   budget, with a separate node backlog limit and existing model-slot/32-pending-run

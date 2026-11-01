@@ -587,7 +587,8 @@ mod tests {
     use super::*;
     #[test]
     fn completion_and_highlighting_keep_arguments_and_regular_chat_distinct() {
-        assert_eq!(completions("/"), vec![0, 1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(completions("/"), (0..control_context::commands::DEFINITIONS.len()).collect::<Vec<_>>());
+        assert_eq!(completions("/lis"), vec![8, 9]);
         assert_eq!(completions("/op"), vec![7]);
         assert_eq!(command_length("/open /a/project"), 5);
         assert_eq!(command_length("/opened"), 0);

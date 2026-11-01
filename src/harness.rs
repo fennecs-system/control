@@ -310,7 +310,7 @@ impl App {
                 let lines=self.chats.iter().map(|c|format!("{}\n  /resume {}",c["title"].as_str().unwrap_or("Chat"),c["id"].as_str().unwrap_or(""))).collect::<Vec<_>>().join("\n\n");
                 self.inspector=Some(("Conversations".into(),lines));self.scroll=0;self.follow=false;self.status="↑ ↓ choose · Enter open · Esc back".into();
             }
-            "/help" => self.status = "/chats · /lenses · /use ID ID · /use none · /context · /chat · /new · /resume ID · /improve request · /improve off · /answer QUESTION_ID choice · /steer direction · /btw question · /spawn task · /cancel · Ctrl+Q quit".into(),
+            "/help" => self.status = "/chats · /lenses · /use ID ID · /use none · /context · /chat · /new · /resume ID · /improve request · /improve off · /answer QUESTION_ID choice · /steer direction · /btw question · /spawn task · /listen · /listen off · /cancel · Ctrl+Q quit".into(),
             "/lenses"=>{
                 let definitions=hive.tool("control.lenses.list",json!({}))?;
                 let entries=definitions.as_array().ok_or_else(||failure("Invalid lens library response."))?.iter().map(|d| (d["name"].as_str().unwrap_or("Lens").into(), d["includes"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" + ")).unwrap_or_default(), d["id"].as_str().unwrap_or("").into())).collect();
@@ -418,6 +418,9 @@ impl App {
             );
         }
         let mut lines = Vec::new();
+        if let Some(listener)=self.detail["room_listener"].as_object() {
+            lines.push(Line::styled(format!("Room #{} · {}",listener.get("room").and_then(Value::as_str).unwrap_or(""),listener.get("state").and_then(Value::as_str).unwrap_or("")),Style::default().fg(Color::Rgb(181,160,255))));
+        }
         if let Some(previews)=self.detail["previews"].as_array() {for preview in previews {if let Some(url)=preview["url"].as_str(){lines.push(Line::styled(format!("Preview · {}",clean(url)),Style::default().fg(Color::Rgb(181,160,255))));}}}
         if let Some(path)=self.detail["project_worktree"].as_str(){lines.push(Line::from(format!("Worktree · {}",clean(path))));}
         if let Some(project)=self.detail["project"].as_object() {
@@ -823,14 +826,51 @@ pub fn run() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn listen_commands_reach_the_server_and_render_returned_state() {
+        use std::io::{BufRead, Read};
+        let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr=listener.local_addr().unwrap();
+        let server=std::thread::spawn(move || {
+            for command in ["/listen", "/listen off"] {
+                let (mut stream,_)=listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut reader=io::BufReader::new(stream.try_clone().unwrap());
+                let mut line=String::new(); reader.read_line(&mut line).unwrap();
+                assert!(line.starts_with("POST /mcp "));
+                let mut length=0;
+                loop {
+                    line.clear(); reader.read_line(&mut line).unwrap();
+                    if line=="\r\n" {break;}
+                    if let Some((name,value))=line.split_once(':') && name.eq_ignore_ascii_case("content-length") {length=value.trim().parse::<usize>().unwrap();}
+                }
+                let mut bytes=vec![0;length]; reader.read_exact(&mut bytes).unwrap();
+                let request:Value=serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(request["params"]["name"], "control.chat.send");
+                assert_eq!(request["params"]["arguments"], json!({"id":"c-fixture","message":command}));
+                let status=if command=="/listen" {json!({"room":"research","state":"listening"})}else{Value::Null};
+                let response=json!({"jsonrpc":"2.0","id":request["id"],"result":{"isError":false,"structuredContent":{"data":{"id":"c-fixture","room_listener":status}}}});
+                control_http::respond(&mut stream,"200 OK","application/json",response.to_string().as_bytes(),"",control_http::Policy::Embedded).unwrap();
+            }
+        });
+        let mut hive=Hive {client:Client::builder().timeout(Duration::from_secs(3)).build().unwrap(),endpoint:format!("http://{addr}/mcp"),next:0,operator_cookie:HeaderValue::from_static("fixture")};
+        let mut app=App {active:"c-fixture".into(),input:"/listen".into(),..Default::default()};
+        app.submit(&mut hive).unwrap();
+        assert!(app.transcript().to_string().contains("Room #research · listening"));
+        app.input="/listen off".into(); app.submit(&mut hive).unwrap();
+        assert!(!app.transcript().to_string().contains("listening"));
+        server.join().unwrap();
+    }
+
+    #[test]
     fn parent_transcript_exposes_child_decisions_and_answer_command() {
         let app = super::App {
-            detail:serde_json::json!({"messages":[{"text":"Earlier prompt","reply":"Earlier response"}],"pending_questions":[{"summary":"Choose a route\n1. Relay\n2. Stop\n/answer q-child YOUR_ANSWER"}]}),
+            detail:serde_json::json!({"room_listener":{"room":"research","state":"listening"},"messages":[{"text":"Earlier prompt","reply":"Earlier response"}],"pending_questions":[{"summary":"Choose a route\n1. Relay\n2. Stop\n/answer q-child YOUR_ANSWER"}]}),
             ..Default::default()
         };
         let transcript = app.transcript().to_string();
         assert!(transcript.contains("Choose a route"));
         assert!(transcript.contains("/answer q-child YOUR_ANSWER"));
+        assert!(transcript.contains("Room #research · listening"));
         assert!(transcript.find("Earlier response").unwrap()<transcript.find("Decision requested").unwrap(),"Pending decisions must remain visible at the live tail");
     }
     #[test]
