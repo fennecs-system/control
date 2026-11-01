@@ -40,8 +40,8 @@ pub(crate) struct Hive {
     #[cfg(test)]
     operator_cookie: HeaderValue,
 }
-fn failure(message: &str) -> io::Error {
-    io::Error::other(message)
+fn failure(message: impl std::fmt::Display) -> io::Error {
+    io::Error::other(message.to_string())
 }
 fn local_server(value: &str) -> io::Result<Url> {
     let url = Url::parse(value).map_err(|_| failure("Invalid server URL."))?;
@@ -240,7 +240,8 @@ impl App {
             .map(|s| s["revision"].clone());
         if !self.active.is_empty()
             && (self.detail["id"] != self.active
-                || revision.as_ref() != Some(&self.detail["revision"]))
+                || revision.as_ref() != Some(&self.detail["revision"])
+                || self.chats.iter().find(|s|s["id"]==self.active).map(|s|&s["port_revision"]) != Some(&self.detail["port_revision"]))
         {
             self.detail = hive.tool("control.chat.read", json!({"id":self.active}))?;
         }
@@ -260,6 +261,27 @@ impl App {
         let text = self.input.trim().to_owned();
         self.menu = None;
         match text.as_str() {
+            _ if text.starts_with("/port ") => {
+                let parts=text.split_whitespace().collect::<Vec<_>>();
+                if !(3..=4).contains(&parts.len()) || !matches!(parts[1],"allow"|"deny") || (parts.len()==4 && parts[3]!="--loopback") {
+                    return Err(failure("Use /port allow ID [--loopback] or /port deny ID. Review the exact target before allowing loopback."));
+                }
+                let request=self.detail["pending_ports"].as_array().and_then(|ports|ports.iter().find(|port|port["port_id"]==parts[2]))
+                    .ok_or_else(||failure("Port request changed. Refresh the conversation before approving it."))?;
+                let loopback=parts.get(3)==Some(&"--loopback");
+                if parts[1]=="allow" && request["loopback_required"]==true && !loopback {return Err(failure("This exact loopback target requires /port allow ID --loopback."));}
+                let endpoint=Url::parse(&hive.endpoint).map_err(failure)?;
+                let mut fields=vec![("id",parts[2]),("return_chat",self.active.as_str()),("response","json"),("seconds","-1")];
+                if parts[1]=="deny" {fields.push(("revoke","yes"));}
+                if loopback {fields.push(("loopback","yes"));}
+                let response=hive.client.post(endpoint.join("/tools/ports").map_err(failure)?)
+                    .timeout(Duration::from_secs(15))
+                    .header("Origin",endpoint.origin().ascii_serialization()).form(&fields).send().map_err(failure)?;
+                let status=response.status();let value:Value=response.json().map_err(failure)?;
+                if !status.is_success() {return Err(failure(value["error"].as_str().unwrap_or("Port decision failed")));}
+                self.detail=hive.tool("control.chat.read",json!({"id":self.active}))?;
+                self.status="Port decision saved".into();
+            }
             _ if text.starts_with("/trust ")=>{
                 let request=text[7..].trim();
                 if request!=self.detail["project"]["request"].as_str().unwrap_or("") || (self.detail["project"]["grant"].is_string()&&self.detail["project"]["pending"]!=true) {return Err(failure("Project request changed. Use /open to review it."));}
@@ -387,6 +409,11 @@ impl App {
             );
         }
         let mut lines = Vec::new();
+        if let Some(ports)=self.detail["pending_ports"].as_array() {for port in ports {
+            lines.push(Line::styled(format!("Port request · {} · {}",clean(port["name"].as_str().unwrap_or("")),clean(&port["target"].to_string())),Style::default().fg(Color::Rgb(181,160,255))));
+            let id=clean(port["port_id"].as_str().unwrap_or(""));
+            lines.push(Line::from(format!("/port allow {id}{} · /port deny {id}",if port["loopback_required"]==true {" --loopback"}else{""})));
+        }}
         if let Some(previews)=self.detail["previews"].as_array() {for preview in previews {if let Some(url)=preview["url"].as_str(){lines.push(Line::styled(format!("Preview · {}",clean(url)),Style::default().fg(Color::Rgb(181,160,255))));}}}
         if let Some(path)=self.detail["project_worktree"].as_str(){lines.push(Line::from(format!("Worktree · {}",clean(path))));}
         if let Some(project)=self.detail["project"].as_object() {

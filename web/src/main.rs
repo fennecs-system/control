@@ -314,9 +314,61 @@ fn reconcile(body:&web_sys::HtmlElement,new_body:&web_sys::HtmlElement)->Result<
 
 // The parent owns updates: browser-managed iframe refreshes can stall in Chromium
 // and visibly reload in Firefox. Neither the frame nor the composer is navigated.
+fn attach_port_approvals(frame:&web_sys::HtmlIFrameElement)->Result<(),JsValue> {
+    let Some(document)=frame.content_document() else{return Ok(());};
+    let Some(root)=document.document_element() else{return Ok(());};
+    if root.has_attribute("data-port-handler"){return Ok(());}
+    root.set_attribute("data-port-handler","")?;
+    let submit=Closure::<dyn FnMut(web_sys::SubmitEvent)>::new(move |event:web_sys::SubmitEvent| {
+        // Submit targets are forms. Use a realm-independent tag check rather
+        // than instanceof, which rejects iframe forms in Chromium.
+        let Some(form)=event.target().map(|target|target.unchecked_into::<web_sys::HtmlFormElement>()) else{return;};
+        if form.tag_name()!="FORM" || form.get_attribute("action").as_deref()!=Some("/tools/ports"){return;}
+        if form.has_attribute("data-submitting"){event.prevent_default();return;}
+        let prepare=||->Result<_,JsValue> {
+            let params=web_sys::UrlSearchParams::new()?;
+            let data=web_sys::FormData::new_with_form(&form)?;
+            for entry in js_sys::try_iter(&data)?.ok_or_else(||JsValue::from_str("No form iterator"))? {
+                let pair=js_sys::Array::from(&entry?);
+                if let (Some(key),Some(value))=(pair.get(0).as_string(),pair.get(1).as_string()){params.append(&key,&value);}
+            }
+            if let Some(button)=event.submitter() && let Some(name)=button.get_attribute("name") {
+                params.append(&name,&button.get_attribute("value").unwrap_or_default());
+            }
+            params.append("response","json");
+            let request=web_sys::XmlHttpRequest::new()?;
+            request.open("POST","/tools/ports")?;
+            request.set_request_header("Content-Type","application/x-www-form-urlencoded")?;
+            request.set_timeout(15000);
+            Ok((request,String::from(params.to_string())))
+        };
+        let Ok((request,payload))=prepare() else{return;};
+        event.prevent_default();let _=form.set_attribute("data-submitting","");
+        let response=request.clone();let failed_form=form.clone();
+        let finished=Closure::<dyn FnMut(web_sys::Event)>::once(move |_| {
+            let _=form.remove_attribute("data-submitting");
+            let value=response.response_text().ok().flatten().and_then(|text|serde_json::from_str::<serde_json::Value>(&text).ok());
+            if response.status().ok()==Some(200) && value.as_ref().is_some_and(|value|value["ok"]==true) {
+                if let Some(parent)=web_sys::window().and_then(|window|window.document()) && let Ok(event)=web_sys::Event::new("control-transcript-refresh"){let _=parent.dispatch_event(&event);}
+            }else if let Ok(Some(error))=form.query_selector("[role=alert]") {
+                error.set_text_content(Some(value.as_ref().and_then(|value|value["error"].as_str()).unwrap_or("Could not confirm the port decision. Check status before retrying.")));
+                let _=error.remove_attribute("hidden");
+            }
+        });
+        request.set_onloadend(Some(finished.as_ref().unchecked_ref()));
+        if request.send_with_opt_str(Some(&payload)).is_err(){let _=failed_form.remove_attribute("data-submitting");}
+        finished.forget();
+    });
+    document.add_event_listener_with_callback("submit",submit.as_ref().unchecked_ref())?;
+    submit.forget();Ok(())
+}
 fn attach_transcript(document: &web_sys::Document) -> Result<(), JsValue> {
     let Some(frame) = document.query_selector("iframe.chat-transcript")? else { return Ok(()); };
     let frame: web_sys::HtmlIFrameElement = frame.dyn_into()?;
+    let loaded_frame=frame.clone();
+    let loaded=Closure::<dyn FnMut(web_sys::Event)>::new(move |_|{let _=attach_port_approvals(&loaded_frame);});
+    frame.add_event_listener_with_callback("load",loaded.as_ref().unchecked_ref())?;
+    loaded.forget();attach_port_approvals(&frame)?;
     let url = frame.get_attribute("src").unwrap_or_default().split('#').next().unwrap_or_default().to_owned();
     let busy = Rc::new(Cell::new(false));
     let previous = Rc::new(RefCell::new(String::new()));

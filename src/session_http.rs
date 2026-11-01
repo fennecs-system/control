@@ -411,6 +411,11 @@ mod tests {
         initial.runtime.runs[0].result.clear();
         crate::projects::request(&mut initial,&chat,"/fixture/project").unwrap();
         let long_chat=crate::chat::create(&mut initial);
+        let (ports,_,port_chat)=crate::ports::tests::pending_fixture();
+        initial.services.extend(ports.services);
+        initial.ports.extend(ports.ports);
+        initial.runtime.runs.extend(ports.runtime.runs);
+        initial.chats.extend(ports.chats);
         let state = Arc::new(Mutex::new(initial));
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let server = format!("http://{}", listener.local_addr().unwrap());
@@ -438,6 +443,7 @@ mod tests {
                 assert!(length<64*1024);let mut body=vec![0;length];reader.read_exact(&mut body).unwrap();
                 if path.starts_with("/tool-window/") { crate::web_assets::serve(&mut stream, &path); }
                 else if crate::serve_stylesheet(&mut stream, &path) {}
+                else if path=="/tools/ports" {crate::ports::http_with_save(&mut stream,&served,&method,&path,&body,|_|Ok(()));}
                 else if path.contains("/transcript") && fail.load(Ordering::Relaxed) { let _=stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); }
                 else if method=="POST" && path.ends_with("/messages") {
                     let id=path.trim_start_matches("/chat/").trim_end_matches("/messages");
@@ -558,6 +564,27 @@ mod tests {
         assert_eq!(b.get("/element/active")["element-6066-11e4-a52e-4f735466cecf"],input);
         // Fifteen real form submissions through the WASM client and HTTP command;
         // deterministic worker results isolate browser costs from model latency.
+        b.post("/url",json!({"url":format!("{server}/chat/{port_chat}")}));
+        let port_page=b.element("body");let draft=b.element("textarea[data-enter-sends=true]");
+        b.post(&format!("/element/{draft}/value"),json!({"text":"Keep this draft while denying a port"}));
+        let port_frame=b.element("iframe.chat-transcript");
+        b.post("/frame",json!({"id":{"element-6066-11e4-a52e-4f735466cecf":port_frame}}));
+        b.wait("Port access");
+        let request=b.element(".port-request");
+        let deny=b.element(".port-request button[name=revoke]");
+        // Deny must work without the loopback checkbox. FormData alone omits
+        // submitter values and would accidentally send an approval instead.
+        b.post(&format!("/element/{deny}/click"),json!({}));
+        let start=Instant::now();loop {
+            let requests=b.post("/elements",json!({"using":"css selector","value":".port-request"}));
+            if requests.as_array().unwrap().is_empty(){break;}
+            assert!(start.elapsed()<Duration::from_secs(5),"Denied port did not leave the chat prompt");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let _=request;
+        b.post("/frame",json!({"id":null}));
+        assert_eq!(b.get(&format!("/element/{port_page}/name")),"body","Port decisions must not navigate the page");
+        assert_eq!(b.get(&format!("/element/{draft}/property/value")),"Keep this draft while denying a port");
         b.post("/url",json!({"url":format!("{server}/chat/{long_chat}")}));
         let page=b.element("body");let input=b.element("textarea[data-enter-sends=true]");let frame=b.element("iframe.chat-transcript");
         rejected.store(true,Ordering::Relaxed);
