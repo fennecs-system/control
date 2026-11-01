@@ -61,7 +61,7 @@ backlog without repeated state writes. Actor revocation, source grant changes an
 ancestor cancellation fence future materialization. No extra model calls or
 independent scheduler are used for backlog admission.
 
-Workers can call `control_agent_delegate` with an `objective` and `role`:
+Workers can call `control_agent_spawn_blocking` with an `objective` and `role`:
 `worker` or `judge`. Control checkpoints the current files, releases the worker,
 runs the child, and resumes the parent with bounded feedback. The web transcript
 links to the child conversation; Agents shows its execution and queue status.

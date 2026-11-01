@@ -94,7 +94,8 @@ fn rpc_at(
             if judge && !matches!(request["params"]["name"].as_str(),Some("control_workspace_run"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_web_search"|"control_rust_run"|"control_rust_bench"|"control_room_read"|"control_room_post"|"control_agent_result"|"control_knowledge_read"|"control_knowledge_search")) {
                 return error("Judge policy permits read-only source inspection, isolated verification and room collaboration only.");
             }
-            if crate::delegation::pausing(run) && request["params"]["name"]!="control_agent_delegate" {
+            let blocking_spawn=request["params"]["name"]=="control_agent_spawn_blocking";
+            if crate::delegation::pausing(run) && !blocking_spawn {
                 return error("This attempt is pausing for delegated work; no more tools may run.");
             }
             if matches!(request["params"]["name"].as_str(),Some("control_agent_spawn_status"|"control_agent_spawn_cancel")) {
@@ -113,7 +114,7 @@ fn rpc_at(
                     Err(message)=>error(message),
                 };
             }
-            if request["params"]["name"]=="control_agent_delegate" {
+            if blocking_spawn {
                 let Some(nonce)=envelope["nonce"].as_str() else {return error("Missing request identity");};
                 let Ok(input)=serde_json::from_value(request["params"]["arguments"].clone()) else{return error("Expected a delegation objective and role");};
                 return match crate::delegation::request(&mut state,run_id,nonce,input) {
@@ -423,9 +424,9 @@ mod tests {
         let shared=Arc::new(Mutex::new(s));
         let listed=rpc_at(&shared,&id,&json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/list"}}),None);
         let names=listed["result"]["tools"].as_array().unwrap().iter().map(|t|t["name"].as_str().unwrap()).collect::<Vec<_>>();
-        assert!(names.contains(&"control_workspace_run"));assert!(!names.contains(&"control_agent_delegate"));assert!(names.contains(&"control_agent_result"));
+        assert!(names.contains(&"control_workspace_run"));assert!(!names.contains(&"control_agent_spawn_blocking"));assert!(!names.contains(&"control_agent_delegate"));assert!(names.contains(&"control_agent_result"));
         assert!(names.contains(&"control_knowledge_read"));assert!(names.contains(&"control_knowledge_search"));
-        for name in ["control_agent_delegate","control_agent_spawn","control_project_request","control_design_ask","control_preview_start","control_preview_stop","control_github_pr","control_service_start","control_service_attach","control_service_status","control_service_stop","control_service_exec","control_service_exec_status","control_knowledge_propose"] {
+        for name in ["control_agent_spawn_blocking","control_agent_delegate","control_agent_spawn","control_project_request","control_design_ask","control_preview_start","control_preview_stop","control_github_pr","control_service_start","control_service_attach","control_service_status","control_service_stop","control_service_exec","control_service_exec_status","control_knowledge_propose"] {
             assert!(!names.contains(&name));
             let denied=rpc_at(&shared,&id,&json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":{}}}}),None);
             assert!(denied["error"]["message"].as_str().unwrap().contains("Judge policy"));
@@ -548,7 +549,14 @@ mod tests {
             &json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/list"}}),
         );
         let names:std::collections::BTreeSet<_>=list["result"]["tools"].as_array().unwrap().iter().filter_map(|t|t["name"].as_str()).collect();
-        for name in ["control_agent_delegate","control_agent_result","control_workspace_start","control_project_request"] {assert!(names.contains(name));}
+        for name in ["control_agent_spawn_blocking","control_agent_result","control_workspace_start","control_project_request"] {assert!(names.contains(name));}
+        assert!(!names.contains("control_agent_delegate"));
+        let request=|name|json!({"nonce":"1-1","request":{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":name,"arguments":{"unexpected":true}}}});
+        let response=rpc(&state,&run,&request("control_agent_spawn_blocking"));
+        assert_eq!(response["error"]["message"],"Expected a delegation objective and role");
+        let retired=rpc(&state,&run,&request("control_agent_delegate"));
+        assert!(retired.get("error").is_some());
+        assert_ne!(retired["error"]["message"],response["error"]["message"]);
         assert!(!names.contains("control_github_open_pr"),"Ordinary tasks have no publication grant");
         let forbidden = rpc(
             &state,
