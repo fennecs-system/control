@@ -314,9 +314,40 @@ fn reconcile(body:&web_sys::HtmlElement,new_body:&web_sys::HtmlElement)->Result<
 
 // The parent owns updates: browser-managed iframe refreshes can stall in Chromium
 // and visibly reload in Firefox. Neither the frame nor the composer is navigated.
+fn follow_transcript(frame: &web_sys::HtmlIFrameElement, following: Rc<Cell<bool>>) -> Result<(),JsValue> {
+    let Some(doc) = frame.content_document() else { return Ok(()); };
+    let Some(scroller) = doc.scrolling_element() else { return Ok(()); };
+    let target = scroller.clone();
+    let state = following.clone();
+    let scroll = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
+        state.set(target.scroll_height()-target.client_height()-target.scroll_top()<80);
+    });
+    doc.add_event_listener_with_callback("scroll",scroll.as_ref().unchecked_ref())?;
+    scroll.forget();
+    let resize = Closure::<dyn FnMut()>::new(move || {
+        if following.get() { scroller.set_scroll_top(scroller.scroll_height()); }
+    });
+    let observer = web_sys::ResizeObserver::new(resize.as_ref().unchecked_ref())?;
+    if let Some(body) = doc.body() { observer.observe(&body); }
+    // Keep the observer alive for this document's lifetime; replacing the frame
+    // document on navigation releases its observed nodes with the page.
+    std::mem::forget(observer);
+    resize.forget();
+    Ok(())
+}
 fn attach_transcript(document: &web_sys::Document) -> Result<(), JsValue> {
     let Some(frame) = document.query_selector("iframe.chat-transcript")? else { return Ok(()); };
     let frame: web_sys::HtmlIFrameElement = frame.dyn_into()?;
+    let following = Rc::new(Cell::new(true));
+    let loaded_frame = frame.clone();
+    let loaded_following = following.clone();
+    let loaded = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
+        loaded_following.set(true);
+        let _ = follow_transcript(&loaded_frame,loaded_following.clone());
+    });
+    frame.add_event_listener_with_callback("load",loaded.as_ref().unchecked_ref())?;
+    loaded.forget();
+    follow_transcript(&frame,following.clone())?;
     let url = frame.get_attribute("src").unwrap_or_default().split('#').next().unwrap_or_default().to_owned();
     let busy = Rc::new(Cell::new(false));
     let previous = Rc::new(RefCell::new(String::new()));
@@ -327,6 +358,7 @@ fn attach_transcript(document: &web_sys::Document) -> Result<(), JsValue> {
         request.set_timeout(10_000);
         let response = request.clone();
         let frame = frame.clone();
+        let following = following.clone();
         let previous = previous.clone();
         let completed = busy.clone();
         let finished = Closure::<dyn FnMut(web_sys::Event)>::once(move |_| {
@@ -341,7 +373,7 @@ fn attach_transcript(document: &web_sys::Document) -> Result<(), JsValue> {
             let Some(new_body) = parsed.body() else { return; };
             let Some(scroller) = doc.scrolling_element() else { return; };
             let top = scroller.scroll_top();
-            let at_end = scroller.scroll_height() - scroller.client_height() - top < 80;
+            let at_end = following.get();
             let mut details = std::collections::HashMap::new();
             if let Ok(nodes) = body.query_selector_all("details") {
                 for index in 0..nodes.length() {
@@ -357,6 +389,15 @@ fn attach_transcript(document: &web_sys::Document) -> Result<(), JsValue> {
             }
             if reconcile(&body, &new_body).is_err() { return; }
             scroller.set_scroll_top(if at_end { scroller.scroll_height() } else { top });
+            // Layout can settle after reconciliation (fonts, details and frame
+            // sizing). Follow again at the next paint, but respect scrollback.
+            let callback = Closure::<dyn FnMut(f64)>::once(move |_| {
+                if following.get()==at_end {
+                    scroller.set_scroll_top(if at_end {scroller.scroll_height()} else {top});
+                }
+            });
+            let _ = web_sys::window().unwrap().request_animation_frame(callback.as_ref().unchecked_ref());
+            callback.forget();
             *previous.borrow_mut() = text;
         });
         request.set_onloadend(Some(finished.as_ref().unchecked_ref()));
