@@ -468,6 +468,8 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let failed = Arc::new(AtomicBool::new(false));
         let rejected=Arc::new(AtomicBool::new(false));let reject=rejected.clone();
+        let port_posts=Arc::new(std::sync::atomic::AtomicUsize::new(0));let posted_ports=port_posts.clone();
+        let reject_port=Arc::new(AtomicBool::new(false));let rejected_port=reject_port.clone();
         let served = state.clone(); let stopped = stop.clone(); let fail = failed.clone();
         let thread = std::thread::spawn(move || {
             while !stopped.load(Ordering::Relaxed) {
@@ -488,7 +490,16 @@ mod tests {
                 assert!(length<64*1024);let mut body=vec![0;length];reader.read_exact(&mut body).unwrap();
                 if path.starts_with("/tool-window/") { crate::web_assets::serve(&mut stream, &path); }
                 else if crate::serve_stylesheet(&mut stream, &path) {}
-                else if path=="/tools/ports" {crate::ports::http_with_save(&mut stream,&served,&method,&path,&body,|_|Ok(()));}
+                else if path=="/tools/ports" {
+                    posted_ports.fetch_add(1,Ordering::Relaxed);
+                    let fail_save=rejected_port.swap(false,Ordering::Relaxed);let served=served.clone();
+                    std::thread::spawn(move || {
+                        // Leave transcript polling live while operator validation
+                        // is slow, including one recoverable persistence error.
+                        std::thread::sleep(Duration::from_millis(1800));
+                        crate::ports::http_with_save(&mut stream,&served,&method,&path,&body,|_|if fail_save {Err(std::io::Error::other("fixture port save failed"))}else{Ok(())});
+                    });
+                }
                 else if path.contains("/transcript") && fail.load(Ordering::Relaxed) { let _=stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); }
                 else if method=="POST" && path.ends_with("/messages") {
                     let id=path.trim_start_matches("/chat/").trim_end_matches("/messages");
@@ -555,7 +566,7 @@ mod tests {
         let older=b.element(".history-controls a[href*='older=']");b.post(&format!("/element/{older}/click"),json!({}));b.wait("History thread 14");assert!(!b.text("body").contains("History thread 24"));
         b.post("/url",json!({"url":format!("{server}/chat/{child}")}));
         let fresh_input=b.element("textarea[data-enter-sends=true]");let toggle=b.element(".conversation-toggle > summary");b.post(&format!("/element/{toggle}/click"),json!({}));
-        let branch=b.element(".conversation-branch");assert_eq!(b.get(&format!("/element/{branch}/property/open")),true,"The active child's parent must be expanded");
+        assert!(!b.post("/elements",json!({"using":"css selector","value":".conversation-branch[open]"})).as_array().unwrap().is_empty(),"The active child's parent must be expanded");
         {let mut state=state.lock().unwrap();crate::chat::create(&mut state);state.chats.last_mut().unwrap().title="Live recent thread".into();}
         b.wait("Live recent thread");assert_eq!(b.get(&format!("/element/{fresh_input}/name")),"textarea","Refreshing the disclosed picker must not reload chat");
         {let mut state=state.lock().unwrap();let late=crate::chat::create(&mut state);let session=state.chats.last_mut().unwrap();session.parent_chat=Some(chat.clone());session.title=format!("Late background child {late}");}
@@ -636,13 +647,25 @@ mod tests {
         let deny=b.element(".port-request button[name=revoke]");
         // Deny must work without the loopback checkbox. FormData alone omits
         // submitter values and would accidentally send an approval instead.
+        reject_port.store(true,Ordering::Relaxed);
+        b.post(&format!("/element/{deny}/click"),json!({}));
+        assert_eq!(b.get(&format!("/element/{deny}/property/disabled")),true,"A port decision needs immediate disabled feedback");
+        assert_eq!(b.get(&format!("/element/{deny}/text")),"Denying…");
+        std::thread::sleep(Duration::from_millis(1100));
+        assert_eq!(b.get(&format!("/element/{deny}/property/disabled")),true,"A transcript poll must retain the pending form");
+        b.post(&format!("/element/{deny}/click"),json!({}));
+        assert_eq!(port_posts.load(Ordering::Relaxed),1,"A repeated click must not send another decision");
+        b.wait("fixture port save failed");
+        assert_eq!(b.get(&format!("/element/{deny}/property/disabled")),false,"A failed decision must be retryable");
+        assert_eq!(b.get(&format!("/element/{deny}/text")),"Deny");
         b.post(&format!("/element/{deny}/click"),json!({}));
         let start=Instant::now();loop {
-            let requests=b.post("/elements",json!({"using":"css selector","value":".port-request"}));
+            let requests=b.post("/elements",json!({"using":"css selector","value":".port-request:not([hidden])"}));
             if requests.as_array().unwrap().is_empty(){break;}
             assert!(start.elapsed()<Duration::from_secs(5),"Denied port did not leave the chat prompt");
             std::thread::sleep(Duration::from_millis(100));
         }
+        assert_eq!(port_posts.load(Ordering::Relaxed),2);
         let _=request;
         b.post("/frame",json!({"id":null}));
         assert_eq!(b.get(&format!("/element/{port_page}/name")),"body","Port decisions must not navigate the page");

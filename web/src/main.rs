@@ -303,7 +303,15 @@ fn reconcile(body:&web_sys::HtmlElement,new_body:&web_sys::HtmlElement)->Result<
     let mut cursor=body.first_child();
     for (key,incoming) in wanted {
         let node=if let Some(existing)=old.get(&key) {
-            if existing.is_equal_node(Some(&incoming)) {existing.clone()}
+            // An older poll must not reset an in-flight decision or resurrect
+            // its buttons after the server has acknowledged it. Once the port
+            // leaves the next snapshot, the normal removal above still applies.
+            let local_decision=existing.node_type()==web_sys::Node::ELEMENT_NODE && {
+                let element=existing.unchecked_ref::<web_sys::Element>();
+                element.matches(".port-request")? && (element.has_attribute("data-port-decided")
+                    || element.query_selector("form[data-submitting]")?.is_some())
+            };
+            if local_decision || existing.is_equal_node(Some(&incoming)) {existing.clone()}
             else {body.replace_child(&incoming,existing)?;if cursor.as_ref().is_some_and(|n|n.is_same_node(Some(existing))){cursor=Some(incoming.clone());}incoming}
         }else{incoming};
         if cursor.as_ref().is_some_and(|n|n.is_same_node(Some(&node))){cursor=node.next_sibling();}
@@ -365,20 +373,38 @@ fn attach_port_approvals(frame:&web_sys::HtmlIFrameElement)->Result<(),JsValue> 
         };
         let Ok((request,payload))=prepare() else{return;};
         event.prevent_default();let _=form.set_attribute("data-submitting","");
-        let response=request.clone();let failed_form=form.clone();
+        let _=form.set_attribute("aria-busy","true");
+        if let Ok(Some(error))=form.query_selector("[role=alert]"){let _=error.set_attribute("hidden","");}
+        let controls=form.query_selector_all("button, input, select").ok().map(|nodes| {
+            (0..nodes.length()).filter_map(|index|nodes.item(index)).map(|node|node.unchecked_into::<web_sys::Element>())
+                .filter(|element|!element.has_attribute("disabled")).collect::<Vec<_>>()
+        }).unwrap_or_default();
+        for control in &controls {let _=control.set_attribute("disabled","");}
+        let button=event.submitter().map(|button| {
+            let label=button.text_content().unwrap_or_default();
+            button.set_text_content(Some(if button.get_attribute("name").as_deref()==Some("revoke"){"Denying…"}else{"Allowing…"}));
+            (button,label)
+        });
+        let response=request.clone();let failed_form=form.clone();let failed_controls=controls.clone();let failed_button=button.clone();
         let finished=Closure::<dyn FnMut(web_sys::Event)>::once(move |_| {
-            let _=form.remove_attribute("data-submitting");
             let value=response.response_text().ok().flatten().and_then(|text|serde_json::from_str::<serde_json::Value>(&text).ok());
             if response.status().ok()==Some(200) && value.as_ref().is_some_and(|value|value["ok"]==true) {
+                if let Ok(Some(prompt))=form.closest(".port-request") {
+                    let _=prompt.set_attribute("data-port-decided","");
+                    let _=prompt.set_attribute("hidden","");
+                }
                 if let Some(parent)=web_sys::window().and_then(|window|window.document()) && let Ok(event)=web_sys::Event::new("control-transcript-refresh"){let _=parent.dispatch_event(&event);}
-            }else if let Ok(Some(error))=form.query_selector("[role=alert]") {
-                error.set_text_content(Some(value.as_ref().and_then(|value|value["error"].as_str()).unwrap_or("Could not confirm the port decision. Check status before retrying.")));
-                let _=error.remove_attribute("hidden");
+            }else {
+                restore_port_form(&form,&controls,button.as_ref());
+                if let Ok(Some(error))=form.query_selector("[role=alert]") {
+                    error.set_text_content(Some(value.as_ref().and_then(|value|value["error"].as_str()).unwrap_or("Could not confirm the port decision. Check status before retrying.")));
+                    let _=error.remove_attribute("hidden");
+                }
             }
         });
         request.set_onloadend(Some(finished.as_ref().unchecked_ref()));
         if request.send_with_opt_str(Some(&payload)).is_err(){
-            let _=failed_form.remove_attribute("data-submitting");
+            restore_port_form(&failed_form,&failed_controls,failed_button.as_ref());
             if let Ok(Some(error))=failed_form.query_selector("[role=alert]") {
                 error.set_text_content(Some("Could not confirm the port decision. Check status before retrying."));
                 let _=error.remove_attribute("hidden");
@@ -388,6 +414,11 @@ fn attach_port_approvals(frame:&web_sys::HtmlIFrameElement)->Result<(),JsValue> 
     });
     document.add_event_listener_with_callback("submit",submit.as_ref().unchecked_ref())?;
     submit.forget();Ok(())
+}
+fn restore_port_form(form:&web_sys::HtmlFormElement,controls:&[web_sys::Element],button:Option<&(web_sys::HtmlElement,String)>) {
+    let _=form.remove_attribute("data-submitting");let _=form.remove_attribute("aria-busy");
+    for control in controls {let _=control.remove_attribute("disabled");}
+    if let Some((button,label))=button {button.set_text_content(Some(label));}
 }
 fn attach_transcript(document: &web_sys::Document) -> Result<(), JsValue> {
     let Some(frame) = document.query_selector("iframe.chat-transcript")? else { return Ok(()); };
