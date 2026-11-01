@@ -101,6 +101,7 @@ These chat commands work on the web, in the TUI and in authorized Discord DMs:
 | `/open /absolute/path` | Add an approved folder at `/workspace/<name>`; use `--as NAME` for duplicate names. [Workspaces →](docs/WORKSPACES.md) |
 | `/cancel` | Stop the active or oldest queued task in this chat. |
 | `/answer QUESTION_ID answer` | Answer an agent's pending design question. |
+| `/port allow ID` / `/port deny ID` | TUI port approval; add `--loopback` to allow an exact loopback target. Web requests appear inline. |
 | `/improve` / `/improve off` | Enter or leave architect-only Control improvement mode. |
 
 ## Features

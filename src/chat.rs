@@ -616,12 +616,18 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
         json!({"text":m.text,"reply":reply,"status":status,"run_id":m.run_id,"kind":run.map(|r| &r.kind),"persona":run.and_then(|r|r.persona.as_ref()),"delegation":run.and_then(|r|r.delegation.as_ref()),"question":run.and_then(|r|r.question.as_ref()),"attempts":run.map(|r| &r.attempts)})
     }).collect::<Vec<_>>(),"pending_questions":pending_questions,"decision_revision":crate::design::decision_revision(state)}),
     )
+    .map(|mut value: Value| {
+        value["pending_ports"]=json!(crate::ports::pending_json(state,id));
+        value["port_revision"]=json!(crate::ports::decision_revision(state));
+        value
+    })
 }
 pub fn list(state: &State) -> Value {
     let decision_revision = crate::design::decision_revision(state);
+    let port_revision=crate::ports::decision_revision(state);
     json!(crate::conversations::ordered(state).into_iter().map(|entry| {
         let s=entry.session;
-        json!({"id":s.id,"title":s.title,"lens":s.lens,"lenses":selected_lenses(s),"revision":s.revision,"messages":s.messages.len(),"parent_chat":entry.parent,"depth":entry.depth,"activity_order":s.activity_order,"decision_revision":decision_revision})
+        json!({"id":s.id,"title":s.title,"lens":s.lens,"lenses":selected_lenses(s),"revision":s.revision,"messages":s.messages.len(),"parent_chat":entry.parent,"depth":entry.depth,"activity_order":s.activity_order,"decision_revision":decision_revision,"port_revision":port_revision})
     }).collect::<Vec<_>>())
 }
 pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
@@ -739,6 +745,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
         let question = run.question.as_ref().unwrap();
         html.push_str(&format!("<article class='assistant-message pending-decision' data-transcript-key='decision-{}'><p class='message-status'>Agent decision · <a target='_top' href='/chat/{}'>View agent ↗</a></p>{}</article>",escape(&question.id),escape(run.chat_id.as_deref().unwrap_or("")),crate::design::render(question,id,true)));
     }
+    html.push_str(&crate::ports::pending_panel(state,id));
     html.push_str("<div id='latest'></div></body></html>");
     Ok(html)
 }

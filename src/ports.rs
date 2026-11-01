@@ -122,7 +122,7 @@ fn validate_destination(
     }
     Ok(answers[0])
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Status {
     Pending,
@@ -517,13 +517,25 @@ pub fn http(
     path: &str,
     body: &[u8],
 ) -> bool {
+    http_with_save(stream,shared,method,path,body,crate::storage::save)
+}
+pub(crate) fn http_with_save(
+    stream:&mut TcpStream,shared:&Arc<Mutex<State>>,method:&str,path:&str,body:&[u8],
+    save:impl Fn(&State)->io::Result<()>,
+) -> bool {
     if path != "/tools/ports" {
         return false;
     }
+    let fields = crate::fields(&String::from_utf8_lossy(body));
+    let asynchronous = fields.get("response").is_some_and(|value|value == "json");
+    let return_chat = fields.get("return_chat").filter(|id|crate::chat::valid_id(id)).cloned();
     let result = (|| -> io::Result<String> {
         if method == "POST" {
-            let fields = crate::fields(&String::from_utf8_lossy(body));
             let id = fields.get("id").ok_or_else(|| fail("Missing port ID"))?;
+            if let Some(chat) = &return_chat {
+                let state=shared.lock().map_err(|_|fail("State unavailable"))?;
+                if !pending_for_chat(&state,chat).iter().any(|port|port.id.as_str() == id) {return Err(fail("Port request is no longer pending in this conversation"));}
+            }
             if fields.contains_key("revoke") {
                 let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
                 let p = state
@@ -535,7 +547,7 @@ pub fn http(
                 if old != Status::Stopped {
                     p.status = Status::Stopping;
                 }
-                if let Err(e) = crate::storage::save(&state) {
+                if let Err(e) = save(&state) {
                     state
                         .ports
                         .iter_mut()
@@ -581,12 +593,13 @@ pub fn http(
                     allow_loopback,
                     pinned,
                     now(),
-                    crate::storage::save,
+                    &save,
                 )?;
             }
         } else if method != "GET" {
             return Err(fail("Use GET or POST"));
         }
+        if method=="POST" && (asynchronous || return_chat.is_some()) {return Ok(String::new());}
         let state = shared.lock().map_err(|_| fail("State unavailable"))?;
         let ports=state.ports.iter().rev().filter(|p|p.status!=Status::Stopped).take(MAX_PORTS).map(|p|{
             let detail=match p.direction{Direction::Ingress=>format!("host loopback → service :{}",p.service_port),Direction::Egress=>format!("service :{} → {}:{}",p.service_port,crate::escape(&p.target.as_ref().map(|e|e.host.clone()).unwrap_or_default()),p.target.as_ref().map(|e|e.port.get()).unwrap_or(0))};
@@ -603,6 +616,15 @@ pub fn http(
             ),
         ))
     })();
+    if asynchronous {
+        let (status,value) = match result {Ok(_) => ("200 OK",json!({"ok":true})),Err(error) => ("400 Bad Request",json!({"error":error.to_string()}))};
+        let _=control_http::respond(stream,status,"application/json",value.to_string().as_bytes(),"",control_http::Policy::Page);
+        return true;
+    }
+    if result.is_ok() && method == "POST" && let Some(chat) = return_chat {
+        let _=control_http::respond(stream,"303 See Other","text/plain",b"",&format!("Location: /chat/{chat}\r\n"),control_http::Policy::Page);
+        return true;
+    }
     let (status, page) = match result {
         Ok(p) => ("200 OK", p),
         Err(e) => (
@@ -619,6 +641,45 @@ pub fn http(
         control_http::Policy::Page,
     );
     true
+}
+
+pub(crate) fn pending_for_chat<'a>(state: &'a State, id: &str) -> Vec<&'a Port> {
+    let Some(chat)=state.chats.iter().find(|chat|chat.id==id) else{return vec![];};
+    let mut runs=std::collections::HashSet::new();
+    for run in state.runtime.runs.iter().filter(|run|run.chat_id.as_deref()==Some(id)&&run.actor==chat.actor) {
+        runs.insert(run.id.as_str());
+        if let Ok((_,children))=crate::delegated_results::scope(state,run){runs.extend(children);}
+    }
+    state.ports.iter().filter(|port|port.status==Status::Pending && port.actor==chat.actor
+        && (port.chat==id || runs.contains(port.origin_run.as_str()))).collect()
+}
+
+pub(crate) fn pending_json(state: &State,id: &str)->Vec<Value> {
+    pending_for_chat(state,id).into_iter().map(|port| {
+        let mut value=port.summary();
+        value["loopback_required"]=json!(port.target.as_ref().is_some_and(|target|target.host.parse::<IpAddr>().is_ok_and(|ip|ip.is_loopback())));
+        value
+    }).collect()
+}
+
+pub(crate) fn pending_panel(state:&State,id:&str)->String {
+    pending_for_chat(state,id).into_iter().map(|port| {
+        let detail=match &port.target {
+            Some(target)=>format!("Service :{} → {}:{}",port.service_port,crate::escape(&target.host),target.port),
+            None=>format!("Host loopback → service :{}",port.service_port),
+        };
+        let loopback=if port.target.as_ref().is_some_and(|target|target.host.parse::<IpAddr>().is_ok_and(|ip|ip.is_loopback())) {
+            "<label><input type='checkbox' name='loopback' value='yes' required> Allow this exact loopback target</label>"
+        }else{""};
+        format!("<article class='assistant-message port-request' data-transcript-key='port-{}'><h3>Port access · {}</h3><p>{detail}</p><form method='post' action='/tools/ports' target='_top'><input type='hidden' name='id' value='{}'><input type='hidden' name='return_chat' value='{}'><label>Allow for<select name='seconds'><option value='-1'>Service lifetime</option><option value='900'>Up to 15 minutes</option><option value='3600'>Up to 1 hour</option></select></label>{loopback}<button class='primary'>Allow port</button><button name='revoke' value='yes' formnovalidate>Deny</button><p role='alert' hidden></p></form></article>",port.id.as_str(),crate::escape(&port.name.0),port.id.as_str(),crate::escape(id))
+    }).collect()
+}
+
+pub(crate) fn decision_revision(state:&State)->u64 {
+    use std::hash::{Hash,Hasher};
+    let mut hash=std::collections::hash_map::DefaultHasher::new();
+    for port in &state.ports {(&port.id,&port.status).hash(&mut hash);}
+    hash.finish()
 }
 fn live_service(
     shared: &Arc<Mutex<State>>,
@@ -1175,6 +1236,23 @@ pub fn supervise(shared: Arc<Mutex<State>>) -> JoinHandle<()> {
 pub(crate) mod tests {
     use super::*;
     use control_core::resources::{ChatId, ImageId, Lease, Owner, Resource, Scope};
+    pub(crate) fn pending_fixture() -> (State,String,String) {
+        let (mut state,run,chat)=fixture();
+        request(&mut state,&run,Direction::Egress).unwrap();
+        (state,run,chat)
+    }
+    #[test]
+    fn pending_approvals_are_visible_only_in_the_request_scope() {
+        let (mut state,_,chat)=pending_fixture();
+        let other=crate::chat::create(&mut state);
+        state.chats.last_mut().unwrap().parent_chat=Some(chat.clone());
+        assert!(pending_json(&state,&other).is_empty());
+        assert_eq!(pending_json(&state,&chat).len(),1);
+        let html=crate::chat::transcript(&state,&chat).unwrap();
+        assert!(html.contains("class='assistant-message port-request'"));
+        assert!(html.contains("value='-1'>Service lifetime"));
+        assert!(html.contains("target='_top'"));
+    }
     pub(crate) fn fixture() -> (State, String, String) {
         let mut state = State::default();
         let chat = crate::chat::create(&mut state);
