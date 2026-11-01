@@ -78,10 +78,19 @@ struct Summary {
     tokens: Tokens,
     attempts: u64,
     measured: u64,
+    completed: u64,
+    failed: u64,
+    interrupted: u64,
 }
 impl Summary {
     fn add(&mut self, attempt: &Attempt) {
         self.attempts += 1;
+        match attempt.status.as_str() {
+            "completed" => self.completed += 1,
+            "failed" => self.failed += 1,
+            "interrupted" => self.interrupted += 1,
+            _ => {}
+        }
         if let Some(tokens) = attempt.tokens {
             self.measured += 1;
             self.tokens.add(tokens);
@@ -116,6 +125,39 @@ fn table(title: &str, groups: &BTreeMap<String, Summary>) -> String {
     html
 }
 
+/// Reuse model summaries rather than scanning runs or cloning activity histories.
+fn outcomes(models: &BTreeMap<String, Summary>) -> String {
+    use std::fmt::Write;
+
+    let mut rows: Vec<_> = models.iter().collect();
+    rows.sort_unstable_by(|(a, x), (b, y)| y.attempts.cmp(&x.attempts).then_with(|| a.cmp(b)));
+    let mut html = String::from("<figure class='usage-outcomes'><figcaption>Attempt outcomes</figcaption>");
+    if rows.is_empty() {
+        html.push_str("<p class='muted'>No recorded attempts yet.</p></figure>");
+        return html;
+    }
+    for (name, sum) in rows.iter().take(6) {
+        let other = sum.attempts - sum.completed - sum.failed - sum.interrupted;
+        let label = format!("{}: {} completed, {} failed, {} interrupted, {} other attempts", name, sum.completed, sum.failed, sum.interrupted, other);
+        let _ = write!(html, "<div class='usage-outcome-row'><div><span>{}</span><span>{} attempts</span></div><svg viewBox='0 0 100 3' preserveAspectRatio='none' role='img' aria-label='{}'><title>{}</title>", escape(name), sum.attempts, escape(&label), escape(&label));
+        let mut offset = 0.0;
+        for (class, count) in [("completed", sum.completed), ("failed", sum.failed), ("interrupted", sum.interrupted), ("other", other)] {
+            let width = count as f64 / sum.attempts as f64 * 100.0;
+            if count > 0 {
+                let _ = write!(html, "<rect x='{offset:.4}' y='0' width='{width:.4}' height='3' class='usage-outcome-{class}'/>");
+            }
+            offset += width;
+        }
+        html.push_str("</svg></div>");
+    }
+    html.push_str("<div class='usage-outcome-legend'><span class='usage-outcome-completed'>Completed</span><span class='usage-outcome-failed'>Failed</span><span class='usage-outcome-interrupted'>Interrupted</span><span class='usage-outcome-other'>Other / active</span></div><p class='muted'>Attempt status, not verified task success.</p>");
+    if rows.len() > 6 {
+        html.push_str("<p class='muted'>Six most-used models; all models below.</p>");
+    }
+    html.push_str("</figure>");
+    html
+}
+
 pub fn render(runtime: &Runtime) -> String {
     let mut overall = Summary::default();
     let mut people = BTreeMap::<String, Summary>::new();
@@ -142,6 +184,7 @@ pub fn render(runtime: &Runtime) -> String {
         }
     }
     let mut html = format!("<h2>Usage</h2><div class='metrics'><div><b>{}</b><span>INPUT</span></div><div><b>{}</b><span>OUTPUT</span></div><div><b>{}/{}</b><span>MEASURED ATTEMPTS</span></div></div><p class='muted'>Cached input: {} · unknown attempts: {} · older runs without tracking: {legacy}</p><p class='muted'>Cached tokens are part of input. Counts are provider-reported; subscription billing is not estimated.</p>", overall.tokens.input_tokens, overall.tokens.output_tokens, overall.measured, overall.attempts, overall.tokens.cached_input_tokens, overall.attempts - overall.measured);
+    html.push_str(&outcomes(&models));
     html.push_str(&table("By person", &people));
     html.push_str(&table("By provider / requested model", &models));
     html.push_str(&table("By day (UTC)", &days));
@@ -189,6 +232,49 @@ pub(crate) fn day_label(timestamp: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn outcomes_keep_statuses_exact_and_bound_visible_models() {
+        let mut models = BTreeMap::<String, Summary>::new();
+        for status in ["completed", "completed", "failed", "interrupted", "running", "blocked", "unknown"] {
+            models.entry("Claude · '<model>'".into()).or_default().add(&Attempt {
+                status: status.into(),
+                ..Attempt::default()
+            });
+        }
+        let html = outcomes(&models);
+        assert!(html.contains("2 completed, 1 failed, 1 interrupted, 3 other attempts"));
+        assert_eq!(html.matches("<rect ").count(), 4);
+        assert!(html.contains("Claude · &#39;&lt;model&gt;&#39;"));
+        assert!(!html.contains("<model>"));
+        assert!(html.contains("not verified task success"));
+        for index in 0..10 {
+            models.entry(format!("model-{index}")).or_default().add(&Attempt::default());
+        }
+        let html = outcomes(&models);
+        assert_eq!(html.matches("<svg ").count(), 6);
+        assert!(html.contains("Six most-used models"));
+        assert!(outcomes(&BTreeMap::new()).contains("No recorded attempts yet"));
+    }
+
+    #[test]
+    #[ignore = "local bounded outcome rendering measurement"]
+    fn profile_outcome_rendering() {
+        let models: BTreeMap<_, _> = (0..64)
+            .map(|model| (format!("provider · model-{model}"), Summary {
+                attempts: 100,
+                completed: 80,
+                failed: 10,
+                interrupted: 5,
+                ..Summary::default()
+            }))
+            .collect();
+        let start = std::time::Instant::now();
+        for _ in 0..10_000 {
+            std::hint::black_box(outcomes(std::hint::black_box(&models)));
+        }
+        eprintln!("Six outcome bars / 64 models: {:?} per render", start.elapsed() / 10_000);
+    }
+
     #[test]
     fn structured_activity_keeps_tools_bounded_and_excludes_reasoning() {
         let events = format!(
