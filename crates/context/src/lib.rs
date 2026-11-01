@@ -12,48 +12,48 @@ pub struct Tool {
     pub available: bool,
     pub title: &'static str,
     pub description: &'static str,
-    pub href: &'static str,
+    pub href: Option<&'static str>,
     pub aliases: &'static str,
     pub mcp_names: &'static [&'static str],
 }
 pub const TOOLS: [Tool; 20] = [
     Tool {
         name:"service.ports",title:"TCP ports",description:"Scoped service connections · operator approval",
-        href:"/tools/ports",aliases:"network tcp port ingress egress loopback proxy relay",
+        href: Some("/tools/ports"),aliases:"network tcp port ingress egress loopback proxy relay",
         mcp_names:&["control_port_request","control_port_status","control_port_stop"],execution:"Rust capability broker / offline service relay",surface:"chat / local TCP",available:true,
     },
     Tool {
         name: "service.persistent", title: "Persistent service", description: "Private offline tools · leased lifetime",
-        href: "/chats", aliases: "bot persistent container lifecycle attach stop service",
+        href: None, aliases: "bot persistent container lifecycle attach stop service",
         mcp_names: &["control_service_start", "control_service_attach", "control_service_status", "control_service_stop", "control_service_exec", "control_service_exec_status"],
         execution: "credential-free Nix container / Rust supervisor", surface: "chat / worker MCP", available: true,
     },
     Tool {
         name: "github.pull_request", title: "GitHub pull request", description: "Completed improvement · scoped repository",
-        href: "/chats", aliases: "github git pull request draft publish review",
+        href: None, aliases: "github git pull request draft publish review",
         mcp_names: &["control_github_open_pr"], execution: "Rust credential broker / GitHub API", surface: "improve chat / MCP", available: true,
     },
     Tool {
         name:"agent.delegate",title:"Delegate agent",description:"Isolated workers · read-only judge",
-        href:"/chats",aliases:"persona review judge subagent spawn delegation",
+        href: None,aliases:"persona review judge subagent spawn delegation",
         mcp_names:&["control_agent_delegate", "control_agent_spawn", "control_agent_spawn_status", "control_agent_spawn_cancel", "control_agent_result"],execution:"local Rust / durable bounded task queue",surface:"chat / worker MCP",available:true,
     },
     Tool {
         name: "workspace.commands", title: "Workspace commands", description: "Offline jobs · live output",
-        href: "/chats", aliases: "shell terminal build test logs cancel environment",
+        href: None, aliases: "shell terminal build test logs cancel environment",
         mcp_names: &["control_workspace_start", "control_workspace_status", "control_workspace_cancel"],
         execution: "credential-free Nix container", surface: "chat / TUI", available: true,
     },
     Tool {
         name: "preview.serve", title: "Local preview", description: "Nix service · private localhost origin",
-        href: "/chats", aliases: "ports proxy service browser preview tunnel",
+        href: None, aliases: "ports proxy service browser preview tunnel",
         mcp_names: &["control_preview_start", "control_preview_stop"], execution: "credential-free Nix container", surface: "chat / browser", available: true,
     },
     Tool {
         name: "project.request",
         title: "Open project",
         description: "Operator-approved folder · isolated worktree",
-        href: "/chats",
+        href: None,
         aliases: "open directory code workspace trust mount",
         mcp_names: &["control.project.request", "control_project_request"],
         execution: "local Rust / explicit operator approval",
@@ -64,7 +64,7 @@ pub const TOOLS: [Tool; 20] = [
         name: "design.ask",
         title: "Design decision",
         description: "Agent question · pauses for your answer",
-        href: "/chats",
+        href: None,
         aliases: "architecture options recommendation",
         mcp_names: &["control_design_ask"],
         execution: "local Rust / durable task pause",
@@ -75,7 +75,7 @@ pub const TOOLS: [Tool; 20] = [
         name: "artifacts.read",
         title: "Artifacts",
         description: "Published files · read only",
-        href: "/chats",
+        href: None,
         aliases: "files outputs viewer",
         mcp_names: &["control.artifacts.list", "control.artifact.read"],
         execution: "local Rust / published files",
@@ -86,7 +86,7 @@ pub const TOOLS: [Tool; 20] = [
         name: "context.inspect",
         title: "Context inspector",
         description: "Pure context preview",
-        href: "/tool-window/",
+        href: Some("/tool-window/"),
         aliases: "wasm lens context",
         mcp_names: &[],
         execution: "pure Rust",
@@ -97,7 +97,7 @@ pub const TOOLS: [Tool; 20] = [
         name: "knowledge.propose",
         title: "Knowledge",
         description: "Documents and evidence",
-        href: "/knowledge",
+        href: Some("/knowledge"),
         aliases: "notes files",
         mcp_names: &["control.knowledge.search", "control.knowledge.read", "control.knowledge.propose", "control_knowledge_search", "control_knowledge_read", "control_knowledge_propose"],
         execution: "local Rust server",
@@ -108,7 +108,7 @@ pub const TOOLS: [Tool; 20] = [
         name: "repo.read",
         title: "Repository read",
         description: "Planned",
-        href: "",
+        href: None,
         aliases: "",
         mcp_names: &[],
         execution: "Codex container",
@@ -119,7 +119,7 @@ pub const TOOLS: [Tool; 20] = [
         name: "repo.patch",
         title: "Repository patch",
         description: "Planned",
-        href: "",
+        href: None,
         aliases: "",
         mcp_names: &[],
         execution: "Codex container",
@@ -130,7 +130,7 @@ pub const TOOLS: [Tool; 20] = [
         name: "search.read",
         title: "Search",
         description: "Web · DuckDuckGo / Bing",
-        href: "/tools/search",
+        href: Some("/tools/search"),
         aliases: "web search",
         mcp_names: &["control.web.search", "control_web_search"],
         execution: "host search broker",
@@ -141,7 +141,7 @@ pub const TOOLS: [Tool; 20] = [
         name: "rust.run",
         title: "Rust playground",
         description: "Offline · standard library",
-        href: "/tools/rust",
+        href: Some("/tools/rust"),
         aliases: "code compile execute benchmark performance timing",
         mcp_names: &["control.rust.run", "control_rust_run", "control.rust.bench", "control_rust_bench"],
         execution: "offline Nix container",
@@ -152,7 +152,7 @@ pub const TOOLS: [Tool; 20] = [
         name: "browser.capture",
         title: "Browser",
         description: "Scoped web pages · offline Firefox capture",
-        href: "/tools/browser",
+        href: Some("/tools/browser"),
         aliases: "screenshot preview web fetch internet access origin",
         mcp_names: &["control.browser.capture", "control_web_fetch", "control_browser_capture"],
         execution: "Rust HTTP capability broker / offline Nix Firefox",
@@ -163,7 +163,7 @@ pub const TOOLS: [Tool; 20] = [
         name: "workspace.run",
         title: "Workspace command",
         description: "Claude agent · offline Nix workspace",
-        href: "/chats",
+        href: None,
         aliases: "shell rust rg fd edit command",
         mcp_names: &["control_workspace_run"],
         execution: "offline Nix container",
@@ -174,7 +174,7 @@ pub const TOOLS: [Tool; 20] = [
         name: "rooms.collaborate",
         title: "Rooms",
         description: "Shared updates · room-linked agents",
-        href: "/?view=rooms",
+        href: Some("/?view=rooms"),
         aliases: "collaboration messages",
         mcp_names: &[
             "control.rooms.list",
@@ -194,7 +194,7 @@ pub const TOOLS: [Tool; 20] = [
         name: "chats.manage",
         title: "Chats",
         description: "Conversations · operator MCP",
-        href: "/chats",
+        href: Some("/chats"),
         aliases: "sessions messages agents",
         mcp_names: &[
             "control.chats.list",
@@ -211,7 +211,7 @@ pub const TOOLS: [Tool; 20] = [
         name: "lenses.resolve",
         title: "Lenses",
         description: "Library · compose context and tool selections",
-        href: "/lenses",
+        href: Some("/lenses"),
         aliases: "context composition",
         mcp_names: &[
             "control.lenses.list",
@@ -286,7 +286,9 @@ mod tests {
             assert!(ids.insert(tool.name));
             if tool.available {
                 assert!(!tool.title.is_empty() && !tool.description.is_empty());
-                assert!(tool.href.starts_with('/') && !tool.href.starts_with("//"));
+                if let Some(href) = tool.href {
+                    assert!(href.starts_with('/') && !href.starts_with("//"));
+                }
             }
             for name in tool.mcp_names {
                 assert!(protocol_names.insert(name), "Duplicate MCP name: {name}");

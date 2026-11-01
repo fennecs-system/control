@@ -1,5 +1,5 @@
 //! One catalogue; lens membership is a filter, never a second tool listing.
-use crate::{escape, State};
+use crate::{State, escape};
 pub fn render(state: &State, query: &str) -> String {
     let mut roots = Vec::new();
     let mut words = Vec::new();
@@ -30,7 +30,10 @@ pub fn render(state: &State, query: &str) -> String {
             }
         }
     };
-    let mut html = format!("<h2>Tools</h2><form class='tool-search' method='get' action='/' role='search'><input type='hidden' name='view' value='tools'><input name='q' value='{}' placeholder='Search tools · lens:engineering' aria-label='Search tools' maxlength='500'><button class='primary'>Search</button></form>", escape(query));
+    let mut html = format!(
+        "<h2>Tools</h2><form class='tool-search' method='get' action='/' role='search'><input type='hidden' name='view' value='tools'><input name='q' value='{}' placeholder='Search tools · lens:engineering' aria-label='Search tools' maxlength='500'><button class='primary'>Search</button></form>",
+        escape(query)
+    );
     if let Some(error) = error {
         html.push_str(&format!("<p role='status'>{}</p>", escape(&error)));
         return html;
@@ -55,7 +58,20 @@ pub fn render(state: &State, query: &str) -> String {
             continue;
         }
         count += 1;
-        html.push_str(&format!("<article class='record'><h3><a href='{}'>{} ↗</a></h3><p class='muted'>{}</p></article>", escape(entry.href), escape(entry.title), escape(entry.description)));
+        html.push_str("<article class='record'><h3>");
+        if let Some(href) = entry.href {
+            html.push_str(&format!(
+                "<a href='{}'>{} ↗</a>",
+                escape(href),
+                escape(entry.title)
+            ));
+        } else {
+            html.push_str(&escape(entry.title));
+        }
+        html.push_str(&format!(
+            "</h3><p class='muted'>{}</p></article>",
+            escape(entry.description)
+        ));
     }
     html.push_str("</div>");
     if count == 0 {
@@ -66,6 +82,16 @@ pub fn render(state: &State, query: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn heading(entry: &control_context::Tool) -> String {
+        match entry.href {
+            Some(href) => format!(
+                "<h3><a href='{}'>{} ↗</a></h3>",
+                escape(href),
+                escape(entry.title)
+            ),
+            None => format!("<h3>{}</h3>", escape(entry.title)),
+        }
+    }
     #[test]
     fn every_operator_mcp_tool_is_discoverable_in_the_catalogue() {
         let mut state = State::default();
@@ -83,15 +109,15 @@ mod tests {
                 .unwrap_or_else(|| panic!("Missing catalogue registration: {name}"));
             let html = render(&state, name);
             assert!(
-                html.contains(&format!("{} ↗", entry.title)),
+                html.contains(&heading(entry)),
                 "MCP name not searchable: {name}"
             );
         }
         let html = render(&state, "");
         for entry in control_context::TOOLS.iter().filter(|tool| tool.available) {
-            assert_eq!(html.matches(&format!("{} ↗", entry.title)).count(), 1);
+            assert_eq!(html.matches(&heading(entry)).count(), 1);
         }
-        assert!(!html.contains("Repository patch ↗") && !html.contains("Repository read ↗"));
+        assert!(!html.contains("Repository patch") && !html.contains("Repository read"));
     }
     #[test]
     fn catalogue_search_resolves_live_composed_lenses_without_duplicate_lists() {
@@ -111,9 +137,14 @@ mod tests {
         assert_eq!(all.matches("href='/tools/browser'").count(), 1);
         assert!(!all.contains("<iframe"));
         assert!(!all.contains("Lens tools"));
-        assert_eq!(all.matches("Design decision ↗").count(), 1);
-        assert!(render(&state, "control_design_ask").contains("Design decision ↗"));
-        assert!(render(&state, "lens:test-tools control_design_ask").contains("Design decision ↗"));
+        assert_eq!(all.matches("href='/chats'").count(), 1);
+        assert!(all.contains("<h3>Persistent service</h3>"));
+        assert!(all.contains("<h3>Design decision</h3>"));
+        assert!(render(&state, "control_design_ask").contains("<h3>Design decision</h3>"));
+        assert!(
+            render(&state, "lens:test-tools control_design_ask")
+                .contains("<h3>Design decision</h3>")
+        );
         let result = render(&state, "lens:test-tools rust");
         assert!(result.contains("href='/tools/rust'"));
         assert!(!result.contains("href='/tools/search'"));
