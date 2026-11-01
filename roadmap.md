@@ -248,7 +248,10 @@ deterministic Rust supervision remains responsible for scheduling.
 3. **A small team, then scale.** Start with a few persistent tool connections.
    Keep service/resource budgets separate from concurrent model-turn slots.
    Nonblocking task batches are implemented below; they are not persistent bot
-   identities or tool connections. Preserve the bounded
+   identities or tool connections. New batches queue deduplicated completion
+   responses without reserving the parent chat. Explicit delegation still awaits
+   its dependency. Directed child steering and persistent bot event subscriptions
+   remain follow-ups. Preserve the bounded
    scheduler and measure resource use before increasing concurrency.
 4. **Shared evidence and coordination.** Knowledge admission and durable room
    inboxes/one-shot follow-ups are implemented below.

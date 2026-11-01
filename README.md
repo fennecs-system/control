@@ -109,7 +109,7 @@ These chat commands work on the web, in the TUI and in authorized Discord DMs:
 - **Chat and artifacts.** Persistent conversations, live command activity and
   purple/red diff previews. Browse published files in a read-only viewer.
 - **Bots and runs.** See active tasks, the queue and execution history. Cancel
-  work, retry an interrupted attempt, or spawn a nonblocking batch with paged status.
+  work, retry an interrupted attempt, or spawn background tasks with queued completion updates.
 - **Lenses.** Compose knowledge, instructions and tool selections per chat.
   Engineering and Research are built from smaller reusable lenses.
 - **Knowledge.** Write Markdown notes, connect them with `[[links]]`, explore the

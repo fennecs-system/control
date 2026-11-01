@@ -532,7 +532,13 @@ pub fn prompt(state: &State, run_id: &str) -> Option<String> {
     } else {
         ""
     };
-    let persona = if crate::delegation::is_judge(run) { "Persona: independent judge. Review the captured source, report concrete defects and verification evidence. Source is mounted read-only; /tmp is scratch. You cannot delegate, grant host access, publish changes, or administer Control. For Codex source is /review; for Claude workspace commands read /workspace.\n" } else { "Use control_agent_delegate to ask an isolated worker or one isolated read-only judge using your captured model for feedback when useful. This pauses and resumes the task automatically; stop after acknowledgement.\n" };
+    let persona = if crate::delegation::is_judge(run) {
+        "Persona: independent judge. Review the captured source, report concrete defects and verification evidence. Source is mounted read-only; /tmp is scratch. You cannot delegate, grant host access, publish changes, or administer Control. For Codex source is /review; for Claude workspace commands read /workspace.\n"
+    } else if run.persona.as_ref().is_some_and(|p|p.depth >= crate::delegation::MAX_DEPTH) {
+        "This worker is at the maximum child depth. Perform the assigned work directly; do not call control_agent_spawn or control_agent_delegate. Report concrete blockers to your parent. Persistent services keep running after you finish your turn.\n"
+    } else {
+        "Use control_agent_spawn for independent or background work, including bots. Spawn returns immediately; finish your turn after reporting the handles so the user can keep chatting. Control queues completion updates automatically; do not poll in a loop or delegate merely to wait. Persistent services keep running between turns. Use control_agent_delegate only when this turn must await a bounded dependency or an isolated read-only judge review. Delegation reserves this conversation until the child returns; stop after its acknowledgement.\n"
+    };
     let folders=session.project.as_ref().filter(|p|p.grant.is_some()&&run.action==Action::Task).map(|p|{
         let root=if crate::delegation::is_judge(run)&&run.backend==crate::backend::Backend::Codex {"/review"}else{"/workspace"};
         if p.named {format!("Approved isolated folders: {}. Each folder has independent Git metadata; run project commands inside its directory. Host folders are unchanged.\n",p.mounts.iter().map(|m|format!("{root}/{}",m.name)).collect::<Vec<_>>().join(", "))}else{format!("Approved isolated project: {root}.\n")}
