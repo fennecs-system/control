@@ -80,7 +80,7 @@ fn send_message(
         }
     }
 }
-fn change_with_save(
+pub(crate) fn change_with_save(
     state: &mut State,
     name: &str,
     arguments: &Value,
@@ -102,19 +102,23 @@ fn transact(
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Result<Value, &'static str> {
     let count = state.chats.len();
+    let targets: std::collections::HashSet<_> = id.into_iter().chain(id.into_iter().flat_map(|id|
+        crate::design::pending(state,id).into_iter().filter_map(|run|run.chat_id.as_deref())
+    )).map(str::to_owned).collect();
     let previous = state
         .chats
         .iter()
-        .position(|s| Some(s.id.as_str()) == id)
-        .map(|i| (i, state.chats[i].clone()));
+        .enumerate()
+        .filter(|(_,s)| targets.contains(&s.id))
+        .map(|(i,s)| (i,s.clone())).collect::<Vec<_>>();
     let run_count = state.runtime.runs.len();
-    let pending = crate::runtime::RunStatusCheckpoint::capture(&state.runtime, |run| run.chat_id.as_deref() == id);
+    let pending = crate::runtime::RunStatusCheckpoint::capture(&state.runtime, |run| run.chat_id.as_ref().is_some_and(|chat|targets.contains(chat)));
     let notice = state.runtime.notice.clone();
     let post_count = state.collective.posts.len();
     let result = operation(state);
     if result.is_err() || save(state).is_err() {
         state.chats.truncate(count);
-        if let Some((index, session)) = previous {
+        for (index, session) in previous {
             state.chats[index] = session;
         }
         state.runtime.runs.truncate(run_count);

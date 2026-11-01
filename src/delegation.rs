@@ -699,6 +699,47 @@ mod tests {
         assert_eq!(s.runtime.runs.len(), 2);
     }
     #[test]
+    fn child_question_is_answerable_from_parent_but_not_unrelated_chat() {
+        let mut state = active(Action::Task);
+        pause(&mut state, Role::Worker);
+        reconcile(&mut state, |_| Ok(())).unwrap();
+        let parent_chat = state.runtime.runs[0].chat_id.clone().unwrap();
+        let child_chat = state.runtime.runs[1].chat_id.clone().unwrap();
+        let child = &mut state.runtime.runs[1];
+        child.status = "running".into();
+        child.attempts.push(Attempt {
+            workspace_id: Some("child-attempt".into()),
+            parent_artifact: Some("immutable-paused-source".into()),
+            ..Default::default()
+        });
+        let child_id = child.id.clone();
+        crate::design::tests::ask_without_io(&mut state,&child_id,"question",crate::design::tests::input()).unwrap();
+        let child = &mut state.runtime.runs[1];
+        child.status = "waiting".into();
+        child.attempts[0].status = "waiting".into();
+        child.attempts[0].artifact = Some("paused-child".into());
+        let question = child.question.as_ref().unwrap().id.clone();
+        let other = chat::create(&mut state);
+        // A UI-only parent link is not a delegation capability.
+        state.chats.last_mut().unwrap().parent_chat = Some(parent_chat.clone());
+        assert!(crate::design::pending(&state,&other).is_empty());
+        assert!(crate::design::answer(&mut state,&other,Some(&question),"1","test").is_err());
+        assert_eq!(crate::design::pending(&state,&parent_chat).len(),1);
+        assert!(chat::transcript(&state,&parent_chat).unwrap().contains(&format!("value='/answer {question} 1'")));
+        assert_eq!(chat::detail(&state,&parent_chat).unwrap()["pending_questions"][0]["chat_id"],child_chat);
+        let before = serde_json::to_vec(&state).unwrap();
+        assert!(crate::session_http::change_with_save(&mut state,"control.chat.send",
+            &serde_json::json!({"id":parent_chat,"message":format!("/answer {question} 2")}),
+            |_|Err(std::io::Error::other("disk full"))).is_err());
+        assert_eq!(serde_json::to_vec(&state).unwrap(),before,"A failed save must restore the child and parent together");
+        chat::send(&mut state,&parent_chat,&format!("/answer {question} 2"),"test").unwrap();
+        let resumed = state.runtime.runs.last().unwrap();
+        assert_eq!(resumed.chat_id.as_deref(),Some(child_chat.as_str()));
+        assert_eq!(resumed.persona.as_ref().unwrap().parent.as_deref(),Some(state.runtime.runs[0].id.as_str()));
+        assert_eq!(resumed.continuation.as_ref().unwrap().checkpoint,"paused-child");
+        assert!(crate::design::pending(&state,&parent_chat).is_empty());
+    }
+    #[test]
     fn parent_waits_for_child_design_and_delegation_continuations() {
         for design in [true, false] {
             let mut s = active(Action::Task);

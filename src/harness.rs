@@ -240,7 +240,8 @@ impl App {
             .map(|s| s["revision"].clone());
         if !self.active.is_empty()
             && (self.detail["id"] != self.active
-                || revision.as_ref() != Some(&self.detail["revision"]))
+                || revision.as_ref() != Some(&self.detail["revision"])
+                || self.chats.iter().find(|s|s["id"] == self.active).map(|s|&s["decision_revision"]) != Some(&self.detail["decision_revision"]))
         {
             self.detail = hive.tool("control.chat.read", json!({"id":self.active}))?;
         }
@@ -387,6 +388,12 @@ impl App {
             );
         }
         let mut lines = Vec::new();
+        if let Some(questions) = self.detail["pending_questions"].as_array() {
+            for question in questions {
+                lines.push(Line::styled("Decision requested",Style::default().fg(Color::Rgb(181,160,255))));
+                lines.extend(clean(question["summary"].as_str().unwrap_or("")).lines().map(|line|Line::from(line.to_owned())));
+            }
+        }
         if let Some(previews)=self.detail["previews"].as_array() {for preview in previews {if let Some(url)=preview["url"].as_str(){lines.push(Line::styled(format!("Preview · {}",clean(url)),Style::default().fg(Color::Rgb(181,160,255))));}}}
         if let Some(path)=self.detail["project_worktree"].as_str(){lines.push(Line::from(format!("Worktree · {}",clean(path))));}
         if let Some(project)=self.detail["project"].as_object() {
@@ -764,6 +771,16 @@ pub fn run() -> io::Result<()> {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn parent_transcript_exposes_child_decisions_and_answer_command() {
+        let app = super::App {
+            detail:serde_json::json!({"pending_questions":[{"summary":"Choose a route\n1. Relay\n2. Stop\n/answer q-child YOUR_ANSWER"}]}),
+            ..Default::default()
+        };
+        let transcript = app.transcript().to_string();
+        assert!(transcript.contains("Choose a route"));
+        assert!(transcript.contains("/answer q-child YOUR_ANSWER"));
+    }
     #[test]
     fn startup_only_resumes_an_explicit_selection() {
         let args=|values:&[&str]|values.iter().map(|s|s.to_string()).collect::<Vec<_>>();
