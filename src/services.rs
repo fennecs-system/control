@@ -71,6 +71,31 @@ pub struct Service {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     executions: Vec<commands::Execution>,
 }
+
+/// Captured at a trusted delegation transition, never accepted as tool input.
+/// Grants bind one exact resource generation and preserve its original owner.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Grant {
+    id: ResourceId,
+    owner: control_core::resources::Owner,
+    generation: control_core::resources::Generation,
+}
+pub(crate) fn accessible(service: &Service, node: &NodeId, run: &crate::runtime::Run) -> bool {
+    service.resource.owner.node == *node && service.actor == run.actor
+        && !crate::delegation::is_judge(run)
+        && (run.chat_id.as_deref() == Some(service.resource.owner.chat.as_str())
+            || run.resource_grants.iter().any(|grant|
+                grant.id == service.resource.id && grant.owner == service.resource.owner
+                && grant.generation == service.resource.generation))
+}
+pub(crate) fn grants(state: &State, run: &crate::runtime::Run) -> Vec<Grant> {
+    state.services.iter().filter(|service|
+        accessible(service, &service.resource.owner.node, run)
+    ).map(|service|Grant {
+        id:service.resource.id.clone(),owner:service.resource.owner.clone(),generation:service.resource.generation,
+    }).collect()
+}
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Origin {
@@ -186,7 +211,7 @@ pub fn call(
         return commands::call(shared, run, generation, nonce, name, args, &node);
     }
     let mut s = shared.lock().map_err(|_| fail("State unavailable"))?;
-    let (active, chat) = caller(&s, run, generation)?;
+    let (active, _) = caller(&s, run, generation)?;
     if name == "control_service_start" {
         let input: Input = serde_json::from_value(args.clone()).map_err(fail)?;
         let image: ImageId = active
@@ -233,7 +258,7 @@ pub fn call(
     if !known(name) {
         return Err(fail("Unknown service tool"));
     }
-    let owned = |service: &&Service| service.owned_by(&node, chat, &active.actor);
+    let owned = |service: &&Service| accessible(service, &node, active);
     let Some(id) = args.get("service_id").and_then(Value::as_str) else {
         return if name == "control_service_status" {
             Ok(

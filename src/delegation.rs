@@ -265,10 +265,15 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
             return Err("Delegated child actor mismatch.");
         }
         let feedback = feedback(&child);
+        let mut resources = crate::services::grants(state, &parent);
+        for grant in crate::services::grants(state, &child) {
+            if !resources.contains(&grant) { resources.push(grant); }
+        }
         state.runtime.runs[index].status = "continued".into();
         state.runtime.enqueue_for("Continue the original task using the delegated feedback. Review findings critically; no child edits were applied.".into(),"delegation-result","delegation",parent.actor.clone(),parent.action)?;
         let next = state.runtime.runs.last_mut().unwrap();
         next.chat_id = parent.chat_id.clone();
+        next.resource_grants = resources;
         next.backend = parent.backend;
         next.model = parent.model.clone();
         next.context = parent.context.clone();
@@ -312,6 +317,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
         session.revision = session.revision.saturating_add(1);
     } else {
         budget_for(state, &parent, d.input.role, 0, true)?;
+        let resources = if d.input.role == Role::Judge { vec![] } else { crate::services::grants(state, &parent) };
         crate::scheduler::admit(&state.runtime)?;
         let id = chat::create(state);
         let child_chat = state.chats.last_mut().unwrap();
@@ -345,6 +351,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
         let root = lineage(&parent);
         let child = state.runtime.runs.last_mut().unwrap();
         child.chat_id = Some(id);
+        child.resource_grants = resources;
         child.backend = d.backend;
         child.model = Some(d.model);
         child.context = parent.context.clone();

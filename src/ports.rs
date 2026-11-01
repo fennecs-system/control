@@ -189,6 +189,12 @@ pub fn known(name: &str) -> bool {
         "control_port_request" | "control_port_status" | "control_port_stop"
     )
 }
+fn accessible(state: &State, port: &Port, run: &crate::runtime::Run, node: &NodeId) -> bool {
+    port.node == *node && port.actor == run.actor && state.services.iter().any(|service|
+        service.resource.id == port.service && service.resource.generation == port.generation
+        && service.resource.owner.chat.as_str() == port.chat
+        && crate::services::accessible(service,node,run))
+}
 fn service<'a>(state: &'a State, port: &Port, time: u64) -> io::Result<&'a Service> {
     identity::authorize(&port.actor, Action::Task).map_err(fail)?;
     if !state
@@ -293,7 +299,7 @@ fn admit(
         .iter()
         .find(|s| {
             s.resource.id == input.service_id
-                && s.owned_by(&node, chat, &run.actor)
+                && crate::services::accessible(s, &node, run)
                 && matches!(s.resource.phase, Phase::Running(_))
                 && !s.resource.lease.expired(now())
         })
@@ -339,13 +345,14 @@ fn admit(
             "Service port name or egress listener is already reserved",
         ));
     }
+    let owner_chat = service.resource.owner.chat.as_str().to_owned();
     let port = Port {
         id,
         service: input.service_id,
         generation: service.resource.generation,
         container: service.resource.phase.container().unwrap().clone(),
         node,
-        chat: chat.clone(),
+        chat: owner_chat,
         actor: run.actor.clone(),
         origin_run: run_id.into(),
         origin_attempt: generation.into(),
@@ -422,18 +429,14 @@ pub fn call(
     if crate::delegation::is_judge(r) {
         return Err(fail("Judge cannot manage ports"));
     }
-    let actor = r.actor.clone();
-    let chat = r
-        .chat_id
-        .clone()
-        .ok_or_else(|| fail("A chat is required"))?;
+    r.chat_id.as_ref().ok_or_else(|| fail("A chat is required"))?;
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Id {
         port_id: Option<ResourceId>,
     }
     let id: Id = serde_json::from_value(args.clone()).map_err(fail)?;
-    let owned = |p: &&Port| p.node == node && p.chat == chat && p.actor == actor;
+    let owned = |p: &&Port| accessible(&state,p,r,&node);
     if name == "control_port_status" && id.port_id.is_none() {
         return Ok(
             json!({"ports":state.ports.iter().filter(owned).filter(|p|p.status!=Status::Stopped).chain(state.ports.iter().rev().filter(owned).filter(|p|p.status==Status::Stopped).take(10)).map(Port::summary).collect::<Vec<_>>()}),
@@ -443,9 +446,7 @@ pub fn call(
         .ports
         .iter()
         .position(|p| {
-            p.node == node
-                && p.chat == chat
-                && p.actor == actor
+            accessible(&state,p,r,&node)
                 && Some(&p.id) == id.port_id.as_ref()
         })
         .ok_or_else(|| fail("Owned port not found"))?;
@@ -1223,6 +1224,40 @@ mod tests {
             "node-a".to_owned().try_into().unwrap(),
             |_| Ok(()),
         )
+    }
+    #[test]
+    fn captured_resource_handoff_is_exact_and_does_not_reown_ports() {
+        let (mut state, parent, parent_chat) = fixture();
+        let node: NodeId = "node-a".to_owned().try_into().unwrap();
+        let grants = crate::services::grants(&state,&state.runtime.runs[0]);
+        let child_chat = crate::chat::create(&mut state);
+        let mut child = state.runtime.runs[0].clone();
+        child.id = "child-run".into();
+        child.chat_id = Some(child_chat);
+        state.runtime.runs.push(child);
+        assert!(!crate::services::accessible(&state.services[0],&node,&state.runtime.runs[1]));
+        state.runtime.runs[1].resource_grants = grants;
+        assert!(crate::services::accessible(&state.services[0],&node,&state.runtime.runs[1]));
+        let result = admit(&mut state,"child-run","attempt-a","child-request",input(Direction::Ingress),node.clone(), |_|Ok(())).unwrap();
+        assert_eq!(state.ports[0].chat,parent_chat);
+        assert_eq!(state.ports[0].origin_run,"child-run");
+        assert!(accessible(&state,&state.ports[0],&state.runtime.runs[0],&node));
+        assert!(crate::services::enqueue_test_command(&mut state,"child-run","exec","svc-a","echo probe",60).is_ok());
+        let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        assert!(accessible(&restored,&restored.ports[0],&restored.runtime.runs[1],&node));
+        let mut denied=restored.runtime.runs[1].clone();
+        denied.actor=Actor::Unknown;
+        assert!(!crate::services::accessible(&restored.services[0],&node,&denied));
+        denied=restored.runtime.runs[1].clone();
+        let mut persona=crate::delegation::lineage(&denied);
+        persona.role=crate::delegation::Role::Judge;denied.persona=Some(persona);
+        assert!(!crate::services::accessible(&restored.services[0],&node,&denied));
+        assert!(!crate::services::accessible(&restored.services[0],&"other-node".to_owned().try_into().unwrap(),&restored.runtime.runs[1]));
+        state.services[0].resource.generation = Generation::INITIAL.checked_next().unwrap();
+        assert!(!accessible(&state,&state.ports[0],&state.runtime.runs[1],&node));
+        assert!(!crate::services::accessible(&state.services[0],&node,&state.runtime.runs[1]));
+        assert!(result["port_id"].is_string());
+        assert_eq!(state.runtime.runs[0].id,parent);
     }
     #[test]
     fn pending_requests_are_idempotent_owned_and_rollback_on_save_failure() {

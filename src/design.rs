@@ -280,6 +280,7 @@ pub fn answer(
     let context = run.context.clone();
     let lenses = run.lenses.clone();
     let queue_order = run.queue_order;
+    let resources = run.resource_grants.clone();
     let objective = run.continuation.as_ref().map(|c|c.objective.clone()).unwrap_or_else(||run.objective.clone());
     let continuation = Continuation {
         project_base: attempt.project_base.clone(), checkpoint,
@@ -301,6 +302,7 @@ pub fn answer(
     }
     let next = state.runtime.runs.last_mut().unwrap();
     next.backend = backend;
+    next.resource_grants = resources;
     next.persona = Some(persona);
     next.model = model;
     next.context = context;
