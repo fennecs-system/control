@@ -1601,7 +1601,7 @@ fn main(){
         write(&state);
         let launch=||{
             let log=fs::OpenOptions::new().create(true).append(true).open(root.join("server.log")).unwrap();
-            Server{child:Command::new(&binary).arg("serve").env("CONTROL_STATE_DIR",&state_dir).env("CONTROL_CONFIG_DIR",&config).env("CONTROL_ADDR",address.to_string()).env_remove("CONTROL_WORKER_IMAGE").env_remove("CONTROL_CLAUDE_IMAGE").stdin(Stdio::null()).stdout(log.try_clone().unwrap()).stderr(log).spawn().unwrap()}
+            Server{child:Command::new(&binary).arg("serve").env("CONTROL_STATE_DIR",&state_dir).env("CONTROL_CONFIG_DIR",&config).env("CONTROL_CODEX_AUTH_FILE",root.join("missing-qa-auth.json")).env("CONTROL_CLAUDE_AUTH_FILE",root.join("missing-qa-claude.json")).env("CONTROL_ADDR",address.to_string()).env_remove("CONTROL_WORKER_IMAGE").env_remove("CONTROL_CLAUDE_IMAGE").stdin(Stdio::null()).stdout(log.try_clone().unwrap()).stderr(log).spawn().unwrap()}
         };
         struct Cleanup {node:String,root:PathBuf}
         impl Drop for Cleanup {fn drop(&mut self){
@@ -1763,6 +1763,8 @@ printf verified-download >> /workspace/completions
                     .arg("serve")
                     .env("CONTROL_STATE_DIR", &state_dir)
                     .env("CONTROL_CONFIG_DIR", &config_dir)
+                    .env("CONTROL_CODEX_AUTH_FILE", root.join("missing-qa-auth.json"))
+                    .env("CONTROL_CLAUDE_AUTH_FILE", root.join("missing-qa-claude.json"))
                     .env("CONTROL_ADDR", address.to_string())
                     .env_remove("CONTROL_WORKER_IMAGE")
                     .env_remove("CONTROL_CLAUDE_IMAGE")
