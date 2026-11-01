@@ -265,10 +265,15 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
             return Err("Delegated child actor mismatch.");
         }
         let feedback = feedback(&child);
+        let mut resources = crate::services::grants(state, &parent);
+        for grant in crate::services::grants(state, &child) {
+            if !resources.contains(&grant) { resources.push(grant); }
+        }
         state.runtime.runs[index].status = "continued".into();
         state.runtime.enqueue_for("Continue the original task using the delegated feedback. Review findings critically; no child edits were applied.".into(),"delegation-result","delegation",parent.actor.clone(),parent.action)?;
         let next = state.runtime.runs.last_mut().unwrap();
         next.chat_id = parent.chat_id.clone();
+        next.resource_grants = resources;
         next.backend = parent.backend;
         next.model = parent.model.clone();
         next.context = parent.context.clone();
@@ -312,6 +317,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
         session.revision = session.revision.saturating_add(1);
     } else {
         budget_for(state, &parent, d.input.role, 0, true)?;
+        let resources = if d.input.role == Role::Judge { vec![] } else { crate::services::grants(state, &parent) };
         crate::scheduler::admit(&state.runtime)?;
         let id = chat::create(state);
         let child_chat = state.chats.last_mut().unwrap();
@@ -345,6 +351,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
         let root = lineage(&parent);
         let child = state.runtime.runs.last_mut().unwrap();
         child.chat_id = Some(id);
+        child.resource_grants = resources;
         child.backend = d.backend;
         child.model = Some(d.model);
         child.context = parent.context.clone();
@@ -738,6 +745,27 @@ mod tests {
         assert_eq!(resumed.persona.as_ref().unwrap().parent.as_deref(),Some(state.runtime.runs[0].id.as_str()));
         assert_eq!(resumed.continuation.as_ref().unwrap().checkpoint,"paused-child");
         assert!(crate::design::pending(&state,&parent_chat).is_empty());
+    }
+    #[test]
+    fn persistent_resources_follow_real_delegation_and_return_to_parent() {
+        let mut state=active(Action::Task);
+        let (mut resources,_,_)=crate::ports::tests::fixture();
+        let mut service=resources.services.remove(0);
+        service.resource.owner.chat=state.runtime.runs[0].chat_id.clone().unwrap().try_into().unwrap();
+        state.services.push(service);
+        pause(&mut state,Role::Worker);
+        reconcile(&mut state,|_|Ok(())).unwrap();
+        let node=state.services[0].resource.owner.node.clone();
+        assert!(crate::services::accessible(&state.services[0],&node,&state.runtime.runs[1]));
+        let mut created=state.services[0].clone();
+        created.resource.id="svc-created-by-child".to_owned().try_into().unwrap();
+        created.resource.owner.chat=state.runtime.runs[1].chat_id.clone().unwrap().try_into().unwrap();
+        state.services.push(created);
+        state.runtime.runs[1].status="completed".into();
+        reconcile(&mut state,|_|Ok(())).unwrap();
+        let parent=state.runtime.runs.last().unwrap();
+        assert_eq!(parent.chat_id,state.runtime.runs[0].chat_id);
+        assert!(crate::services::accessible(&state.services[1],&node,parent));
     }
     #[test]
     fn parent_waits_for_child_design_and_delegation_continuations() {

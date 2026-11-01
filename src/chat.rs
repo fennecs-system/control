@@ -295,6 +295,7 @@ pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -
         let model = previous.model.clone();
         let context = previous.context.clone();
         let lenses = previous.lenses.clone();
+        let resources = crate::services::grants(state,previous);
         if let Some(lenses) = &lenses {
             let session = state.chats.last_mut().unwrap();
             session.lenses = Some(lenses.clone());
@@ -302,6 +303,7 @@ pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -
         }
         if let Some(run) = state.runtime.runs.last_mut().filter(|r| r.chat_id.as_deref() == Some(&child)) {
             run.backend = backend;
+            run.resource_grants = resources;
             run.model = model;
             run.context = context;
             run.lenses = lenses;
@@ -453,6 +455,9 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
         None
     };
     let run_id = if native.is_none() {
+        let resources = state.runtime.runs.iter().rev()
+            .find(|run|run.chat_id.as_deref() == Some(id) && run.actor == state.chats[index].actor)
+            .map(|run|crate::services::grants(state,run)).unwrap_or_default();
         state.runtime.enqueue_for(
             objective.into(),
             if action == Action::Improve {
@@ -469,6 +474,7 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
             run.kind = "steering".into();
         }
         run.chat_id = Some(id.into());
+        run.resource_grants = resources;
         run.lenses = Some(selected_lenses(&state.chats[index]));
         run.context = Some(context);
         Some(run.id.clone())
