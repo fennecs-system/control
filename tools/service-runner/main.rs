@@ -32,14 +32,14 @@ fn main() -> ExitCode {
             .first()
             .and_then(|s| s.parse::<u64>().ok())
             .and_then(|deadline| deadline.checked_sub(now))
-            .filter(|s| (1..=3600).contains(s))
+            .filter(|s| (1..=3600).contains(s) || args.first().is_some_and(|s|s == &u64::MAX.to_string()))
         else {
             return ExitCode::from(124);
         };
         let Some(maximum) = args
             .get(1)
             .and_then(|s| s.parse::<u64>().ok())
-            .filter(|s| (1..=3600).contains(s))
+            .filter(|s| (1..=3600).contains(s) || (*s == u64::MAX && args.first().is_some_and(|s|s == &u64::MAX.to_string())))
         else {
             return ExitCode::from(125);
         };
