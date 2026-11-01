@@ -210,6 +210,10 @@ impl Menu {
         }
     }
 }
+fn service_command_lines(lines: &mut Vec<Line<'static>>, command: &Value) {
+    lines.push(Line::styled(format!("[{}] > {}",clean(command["status"].as_str().unwrap_or("")),clean(command["text"].as_str().unwrap_or(""))),Style::default().fg(Color::Rgb(181,160,255))));
+    lines.extend(clean(command["output"].as_str().unwrap_or("")).lines().map(|line|Line::from(format!("  {line}"))));
+}
 fn clean(text: &str) -> String {
     text.chars()
         .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
@@ -481,7 +485,16 @@ impl App {
                         }
                     }
                 }
+                if let Some(commands)=message["commands"].as_array() {
+                    for command in commands { service_command_lines(&mut lines,command); }
+                }
                 lines.push(Line::from(""));
+            }
+        }
+        if let Some(commands)=self.detail["agent_commands"].as_array() {
+            for command in commands {
+                lines.push(Line::styled(format!("Agent · {}",clean(command["chat"].as_str().unwrap_or(""))),Style::default().fg(Color::Rgb(181,160,255))));
+                service_command_lines(&mut lines,&command["activity"]);
             }
         }
         if let Some(questions) = self.detail["pending_questions"].as_array() {
@@ -1471,6 +1484,13 @@ mod tests {
         assert!(text.contains("cargo check"));
         assert!(text.contains("finished"));
         assert!(text.contains("3 earlier exchanges excluded"));
+        assert!(!text.contains('\u{001b}'));
+    }
+    #[test]
+    fn service_commands_and_child_stdout_render_in_terminal() {
+        let app=App{detail:json!({"messages":[{"text":"Run","commands":[{"text":"echo own","status":"completed","output":"own output\nExit 0"}]}],"agent_commands":[{"chat":"child-chat","activity":{"text":"npm install","status":"running","output":"downloaded\u{001b}[31m\n"}}]}),..App::default()};
+        let text=app.transcript().to_string();
+        for expected in ["echo own","own output","Exit 0","Agent · child-chat","npm install","downloaded"] {assert!(text.contains(expected),"Missing {expected}: {text}");}
         assert!(!text.contains('\u{001b}'));
     }
     #[test]

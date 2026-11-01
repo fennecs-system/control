@@ -1,6 +1,7 @@
 //! Chat-owned, bounded offline services. Attempts only attach; a pure core
 //! reducer decides effects, and one supervisor interprets durable intents.
 mod commands;
+pub(crate) use commands::activity as command_activity;
 #[cfg(test)]
 pub(crate) use commands::enqueue_test as enqueue_test_command;
 use crate::{

@@ -461,6 +461,11 @@ mod tests {
         initial.ports.extend(ports.ports);
         initial.runtime.runs.extend(ports.runtime.runs);
         initial.chats.extend(ports.chats);
+        // Retained asynchronous service output uses a different path from
+        // provider Activity events. Exercise both through the real WASM poller.
+        let mut service=serde_json::to_value(&initial.services[0]).unwrap();
+        service["executions"]=json!([{"id":"browser-command","digest":"fixture","run":initial.runtime.runs[0].id,"attempt":"fixture","command":"printf service-output","display_command":"printf service-output","timeout_seconds":120,"status":"running","output":"Service streaming alpha","truncated":false,"exit_code":null,"diagnostic":""}]);
+        initial.services[0]=serde_json::from_value(service).unwrap();
         let state = Arc::new(Mutex::new(initial));
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let server = format!("http://{}", listener.local_addr().unwrap());
@@ -602,6 +607,16 @@ mod tests {
         assert_eq!(b.get(&format!("/element/{body}/name")),"body");
         {let mut state=state.lock().unwrap();state.runtime.runs[0].attempts[0].activity.push(crate::usage::Activity{id:"command-1".into(),kind:"command_execution".into(),text:"cargo test".into(),output:"Streaming output alpha".into(),status:"running".into()});}
         b.wait("Streaming output alpha");
+        b.wait("Service streaming alpha");
+        b.wait("printf service-output");
+        {
+            let mut state=state.lock().unwrap();
+            let mut service=serde_json::to_value(&state.services[0]).unwrap();
+            service["executions"][0]["output"]=json!("Service streaming alpha\nService streaming beta");
+            state.services[0]=serde_json::from_value(service).unwrap();
+        }
+        b.wait("Service streaming beta");
+        assert_eq!(b.get(&format!("/element/{body}/name")),"body","Service output must update without replacing the transcript document");
         let details=b.element(".run-activity > summary");
         b.post(&format!("/element/{details}/click"),json!({}));
         b.post("/frame",json!({"id":null}));
