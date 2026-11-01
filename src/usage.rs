@@ -206,6 +206,9 @@ mod tests {
         assert_eq!(activity[1].output.chars().count(), 4000);
         assert!(!activity[1].output.contains('\u{1b}'));
         assert!(control_ai::codex::activity(&serde_json::json!({"type":"item.completed","item":{"id":"secret","type":"agent_message","text":"not tool output"}})).is_none());
+        let failed = control_ai::codex::activity(&serde_json::json!({"type":"item.completed","item":{"id":"mcp1","type":"mcp_tool_call","server":"control","tool":"control_port_request","arguments":{},"error":{"message":"Egress requires exactly one of target or peer_port_id"},"status":"failed"}})).unwrap();
+        assert_eq!((failed.text.as_str(), failed.status.as_str()), ("control_port_request", "failed"));
+        assert!(failed.output.contains("peer_port_id"));
     }
     #[test]
     fn aggregates_retries_preserves_legacy_runs_and_escapes_content() {

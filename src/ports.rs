@@ -156,6 +156,8 @@ pub struct Port {
     direction: Direction,
     service_port: NonZeroU16,
     target: Option<Endpoint>,
+    #[serde(default, skip_serializing_if="Option::is_none")]
+    peer: Option<ResourceId>,
     status: Status,
     approval: Option<Approval>,
     #[serde(default, skip_serializing_if="Option::is_none")]
@@ -167,7 +169,7 @@ pub struct Port {
 }
 impl Port {
     fn summary(&self) -> Value {
-        json!({"port_id":self.id,"service_id":self.service,"name":self.name,"direction":self.direction,"service_port":self.service_port,"target":self.target,"status":self.status,"ready":self.ready,"local_address":self.approval.as_ref().filter(|_|self.direction==Direction::Ingress).filter(|a|a.host_port!=0).map(|a|format!("127.0.0.1:{}",a.host_port)),"pinned_target":self.approval.as_ref().and_then(|a|a.pinned),"expires_unix":self.approval.as_ref().map(|a|a.expires).filter(|expires|*expires!=u64::MAX),"until_stopped":self.approval.as_ref().is_some_and(|a|a.expires==u64::MAX),"diagnostic":self.diagnostic,"approval_url":"/tools/ports"})
+        json!({"port_id":self.id,"service_id":self.service,"name":self.name,"direction":self.direction,"service_port":self.service_port,"target":self.target,"peer_port_id":self.peer,"status":self.status,"ready":self.ready,"local_address":self.approval.as_ref().filter(|_|self.direction==Direction::Ingress).filter(|a|a.host_port!=0).map(|a|format!("127.0.0.1:{}",a.host_port)),"pinned_target":self.approval.as_ref().and_then(|a|a.pinned),"expires_unix":self.approval.as_ref().map(|a|a.expires).filter(|expires|*expires!=u64::MAX),"until_stopped":self.approval.as_ref().is_some_and(|a|a.expires==u64::MAX),"diagnostic":self.diagnostic,"approval_url":"/tools/ports"})
     }
 }
 #[derive(Deserialize)]
@@ -178,11 +180,13 @@ struct Input {
     direction: Direction,
     service_port: NonZeroU16,
     target: Option<Endpoint>,
+    #[serde(default)]
+    peer_port_id: Option<ResourceId>,
 }
 pub fn definitions() -> Vec<Value> {
     vec![
-        json!({"name":"control_port_request","description":"Request operator approval for a named TCP port owned by this chat's running persistent service. ingress exposes non-HTTP/non-TLS raw service loopback on host 127.0.0.1; HTTP artifacts use control_preview_start. egress exposes a service loopback relay to one explicitly approved pinned target, including TLS. Containers remain network=none. No traffic until approved at /tools/ports. A target is required only for egress. Port lifetime cannot exceed the service lease.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"name":{"type":"string","maxLength":48},"direction":{"type":"string","enum":["ingress","egress"]},"service_port":{"type":"integer","minimum":1,"maximum":65535},"target":{"type":"object","properties":{"host":{"type":"string"},"port":{"type":"integer","minimum":1,"maximum":65535}},"required":["host","port"],"additionalProperties":false}},"required":["service_id","name","direction","service_port"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"openWorldHint":false}}),
-        json!({"name":"control_port_status","description":"Read owned port approvals, readiness, pinned endpoints, assigned loopback addresses and bounded diagnostics. Omit port_id for active and ten recent terminal records.","inputSchema":{"type":"object","properties":{"port_id":{"type":"string"}},"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
+        json!({"name":"control_port_request","description":"Request operator approval for a named TCP port owned by this chat's running persistent service. ingress exposes non-HTTP/non-TLS raw service loopback on host 127.0.0.1; HTTP artifacts use control_preview_start. egress exposes a service loopback relay to one explicitly approved pinned target, including TLS. Containers remain network=none, so another service cannot dial an ingress host address directly. To connect two owned services, request ingress on the listening service, then egress on the connecting service with peer_port_id set to that ingress port_id; the client dials 127.0.0.1:service_port inside its own container. Egress requires exactly one of target or peer_port_id. No traffic until approved at /tools/ports; a peer route also needs its ingress approved and ready. Port lifetime cannot exceed the service lease.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"name":{"type":"string","maxLength":48},"direction":{"type":"string","enum":["ingress","egress"]},"service_port":{"type":"integer","minimum":1,"maximum":65535},"target":{"type":"object","properties":{"host":{"type":"string"},"port":{"type":"integer","minimum":1,"maximum":65535}},"required":["host","port"],"additionalProperties":false},"peer_port_id":{"type":"string","description":"Ingress port_id of another service owned by this chat; egress only."}},"required":["service_id","name","direction","service_port"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"openWorldHint":false}}),
+        json!({"name":"control_port_status","description":"Read owned port approvals, readiness, pinned endpoints, assigned loopback addresses and bounded diagnostics. An ingress local_address is reachable only from the host; connect another owned service with an egress peer_port_id route. Omit port_id for active and ten recent terminal records.","inputSchema":{"type":"object","properties":{"port_id":{"type":"string"}},"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
         json!({"name":"control_port_stop","description":"Persist revocation of an owned port and close its listener/connections. Stopping is intent; inspect until stopped. Never stops the owning service.","inputSchema":{"type":"object","properties":{"port_id":{"type":"string"}},"required":["port_id"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"openWorldHint":false}}),
     ]
 }
@@ -219,6 +223,29 @@ fn service<'a>(state: &'a State, port: &Port, time: u64) -> io::Result<&'a Servi
         })
         .ok_or_else(|| fail("Port service ownership, generation or lifetime changed"))
 }
+fn peer_endpoint(state: &State, port: &Port, time: u64) -> io::Result<SocketAddr> {
+    let id = port.peer.as_ref().ok_or_else(|| fail("Not a peer route"))?;
+    let peer = state
+        .ports
+        .iter()
+        .find(|p| {
+            &p.id == id
+                && p.direction == Direction::Ingress
+                && p.node == port.node
+                && p.chat == port.chat
+                && p.actor == port.actor
+                && p.service != port.service
+        })
+        .ok_or_else(|| fail("Peer ingress is not owned by this chat"))?;
+    authorized(state, peer, time).map_err(|e| fail(format!("Peer ingress unavailable: {e}")))?;
+    match peer.approval.as_ref().map(|a| a.host_port) {
+        Some(port) if port != 0 => Ok(SocketAddr::from(([127, 0, 0, 1], port))),
+        _ => Err(fail("Peer ingress is not ready yet")),
+    }
+}
+fn peer_listening(state: &State, port: &Port) -> bool {
+    port.peer.as_ref().is_none_or(|id| state.ports.iter().any(|p| &p.id == id && p.ready))
+}
 fn authorized(state: &State, port: &Port, time: u64) -> io::Result<Service> {
     let current = state
         .ports
@@ -240,7 +267,14 @@ fn authorized(state: &State, port: &Port, time: u64) -> io::Result<Service> {
         return Err(fail("Port lease exceeds service lease"));
     }
     match current.direction {
-        Direction::Ingress if approval.pinned.is_none() => {}
+        Direction::Ingress if approval.pinned.is_none() && current.peer.is_none() => {}
+        Direction::Egress if current.peer.is_some() => {
+            if current.target.is_some()
+                || approval.pinned != Some(peer_endpoint(state, current, time)?)
+            {
+                return Err(fail("Peer ingress endpoint changed"));
+            }
+        }
         Direction::Egress => {
             let endpoint = current
                 .target
@@ -291,8 +325,11 @@ fn admit(
     {
         return Err(fail("Invalid request nonce"));
     }
-    if (input.direction == Direction::Egress) != input.target.is_some() {
-        return Err(fail("Only egress requests require a target"));
+    let routes = usize::from(input.target.is_some()) + usize::from(input.peer_port_id.is_some());
+    if (input.direction == Direction::Egress) != (routes == 1) || routes > 1 {
+        return Err(fail(
+            "Egress requires exactly one of target or peer_port_id; ingress takes neither",
+        ));
     }
     if let Some(target) = &input.target {
         target.url()?;
@@ -322,10 +359,25 @@ fn admit(
             || old.direction != input.direction
             || old.service_port != input.service_port
             || old.target != input.target
+            || old.peer != input.peer_port_id
         {
             return Err(fail("Nonce reused with a different port request"));
         }
         return Ok(old.summary());
+    }
+    if let Some(peer) = &input.peer_port_id
+        && !state.ports.iter().any(|p| {
+            &p.id == peer
+                && p.direction == Direction::Ingress
+                && p.status != Status::Stopped
+                && p.service != input.service_id
+                && p.chat == service.resource.owner.chat.as_str()
+                && accessible(state, p, run, &node)
+        })
+    {
+        return Err(fail(
+            "peer_port_id must be an active ingress port of another service owned by this chat",
+        ));
     }
     if state
         .ports
@@ -363,6 +415,7 @@ fn admit(
         direction: input.direction,
         service_port: input.service_port,
         target: input.target,
+        peer: input.peer_port_id,
         status: Status::Pending,
         approval: None,
         decision: None,
@@ -489,6 +542,11 @@ fn approve(
     };
     match port.direction {
         Direction::Ingress if pinned.is_none() => {}
+        Direction::Egress if port.peer.is_some() => {
+            if pinned.is_none() || pinned != Some(peer_endpoint(state, port, time)?) {
+                return Err(fail("Peer ingress endpoint changed; review the request again"));
+            }
+        }
         Direction::Egress => {
             validate_destination(
                 port.target.as_ref().ok_or_else(|| fail("Missing target"))?,
@@ -498,6 +556,7 @@ fn approve(
         }
         _ => return Err(fail("Invalid approval")),
     }
+    let allow_loopback = allow_loopback && port.peer.is_none();
     let old = state.ports[index].clone();
     state.ports[index].approval = Some(Approval {
         issued: time,
@@ -563,14 +622,15 @@ pub(crate) fn http_with_save(
                     return Err(e);
                 }
             } else {
-                let (request, service) = {
+                let (request, service, peer) = {
                     let state = shared.lock().map_err(|_| fail("State unavailable"))?;
                     let p = state
                         .ports
                         .iter()
                         .find(|p| p.id.as_str() == id && p.status == Status::Pending)
                         .ok_or_else(|| fail("Pending port not found"))?;
-                    (p.clone(), service(&state, p, now())?.binding_snapshot())
+                    let peer = p.peer.is_some().then(|| peer_endpoint(&state, p, now())).transpose()?;
+                    (p.clone(), service(&state, p, now())?.binding_snapshot(), peer)
                 };
                 if request.node.as_str() != crate::config::node_id().map_err(fail)? {
                     return Err(fail("Port belongs to another node"));
@@ -582,11 +642,14 @@ pub(crate) fn http_with_save(
                 }
                 crate::services::port_binding(&service, &request.container)?;
                 let allow_loopback = fields.get("loopback").is_some_and(|v| v == "yes");
-                let pinned = request
-                    .target
-                    .as_ref()
-                    .map(|e| e.pin(allow_loopback))
-                    .transpose()?;
+                let pinned = match peer {
+                    Some(peer) => Some(peer),
+                    None => request
+                        .target
+                        .as_ref()
+                        .map(|e| e.pin(allow_loopback))
+                        .transpose()?,
+                };
                 let seconds = fields
                     .get("seconds")
                     .and_then(|s| s.parse().ok())
@@ -608,8 +671,8 @@ pub(crate) fn http_with_save(
         if method=="POST" && (asynchronous || return_chat.is_some()) {return Ok(String::new());}
         let state = shared.lock().map_err(|_| fail("State unavailable"))?;
         let ports=state.ports.iter().rev().filter(|p|p.status!=Status::Stopped).take(MAX_PORTS).map(|p|{
-            let detail=match p.direction{Direction::Ingress=>format!("host loopback → service :{}",p.service_port),Direction::Egress=>format!("service :{} → {}:{}",p.service_port,crate::escape(&p.target.as_ref().map(|e|e.host.clone()).unwrap_or_default()),p.target.as_ref().map(|e|e.port.get()).unwrap_or(0))};
-            let action=if p.status==Status::Pending{format!("<label>Allow for<select name='seconds'><option value='-1'>Service lifetime</option><option value='900'>Up to 15 minutes</option><option value='3600'>Up to 1 hour</option></select></label><p class='muted'>Access ends when this service stops. You can revoke it at any time.</p>{}<button class='primary'>Allow port</button><button name='revoke' value='yes' formnovalidate>Deny</button>",if p.direction==Direction::Egress{"<label><input type='checkbox' name='loopback' value='yes'> Allow this exact literal loopback target</label>"}else{""})}else{"<button name='revoke' value='yes'>Revoke</button>".into()};
+            let detail=route(&state,p);
+            let action=if p.status==Status::Pending{format!("<label>Allow for<select name='seconds'><option value='-1'>Service lifetime</option><option value='900'>Up to 15 minutes</option><option value='3600'>Up to 1 hour</option></select></label><p class='muted'>Access ends when this service stops. You can revoke it at any time.</p>{}<button class='primary'>Allow port</button><button name='revoke' value='yes' formnovalidate>Deny</button>",if p.target.is_some(){"<label><input type='checkbox' name='loopback' value='yes'> Allow this exact literal loopback target</label>"}else{""})}else{"<button name='revoke' value='yes'>Revoke</button>".into()};
             let address=p.approval.as_ref().filter(|a|a.host_port!=0).map(|a|format!(" · 127.0.0.1:{}",a.host_port)).unwrap_or_default();
             format!("<article><h3>{}</h3><p>{detail}{address}</p><p>{:?} · {} · {} · {}</p><p>{}</p><form method='post' action='/tools/ports'><input type='hidden' name='id' value='{}'>{action}</form></article>",crate::escape(&p.name.0),p.status,crate::escape(&p.chat),if p.ready{"ready"}else{"waiting"},crate::escape(p.service.as_str()),crate::escape(&p.diagnostic),crate::escape(p.id.as_str()))
         }).collect::<String>();
@@ -668,12 +731,25 @@ pub(crate) fn pending_json(state: &State,id: &str)->Vec<Value> {
     }).collect()
 }
 
+fn route(state: &State, port: &Port) -> String {
+    match (&port.target, &port.peer) {
+        (Some(target), _) => format!("Service :{} → {}:{}", port.service_port, crate::escape(&target.host), target.port),
+        (None, Some(peer)) => {
+            let ingress = state.ports.iter().find(|p| &p.id == peer);
+            format!(
+                "Service :{} → peer ingress {} (service {} :{})",
+                port.service_port,
+                crate::escape(ingress.map_or(peer.as_str(), |p| p.name.0.as_str())),
+                crate::escape(ingress.map_or("unknown", |p| p.service.as_str())),
+                ingress.map_or(0, |p| p.service_port.get()),
+            )
+        }
+        (None, None) => format!("Host loopback → service :{}", port.service_port),
+    }
+}
 pub(crate) fn pending_panel(state:&State,id:&str)->String {
     pending_for_chat(state,id).into_iter().map(|port| {
-        let detail=match &port.target {
-            Some(target)=>format!("Service :{} → {}:{}",port.service_port,crate::escape(&target.host),target.port),
-            None=>format!("Host loopback → service :{}",port.service_port),
-        };
+        let detail=route(state,port);
         let loopback=if port.target.as_ref().is_some_and(|target|target.host.parse::<IpAddr>().is_ok_and(|ip|ip.is_loopback())) {
             "<label><input type='checkbox' name='loopback' value='yes' required> Allow this exact loopback target</label>"
         }else{""};
@@ -1112,6 +1188,11 @@ fn egress(shared: Arc<Mutex<State>>, port: Port, cancel: Arc<AtomicBool>) -> io:
                 &cancel,
             )?;
             live_service(&shared, &port, &cancel)?;
+            if !shared.lock().is_ok_and(|state| peer_listening(&state, &port)) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(fail("Peer ingress is not listening"));
+            }
             let socket = match TcpStream::connect_timeout(
                 &approval
                     .pinned
@@ -1302,6 +1383,7 @@ pub(crate) mod tests {
             } else {
                 None
             },
+            peer_port_id: None,
         }
     }
     fn request(state: &mut State, run: &str, direction: Direction) -> io::Result<Value> {
@@ -1592,6 +1674,113 @@ pub(crate) mod tests {
             );
         }
     }
+    fn peer_fixture() -> (State, String, NodeId, String) {
+        let (mut state, run, _) = fixture();
+        let mut client = serde_json::to_value(&state.services[0]).unwrap();
+        client["resource"]["id"] = json!("svc-b");
+        client["resource"]["phase"] = json!(Phase::Running(ContainerId::try_from("c".repeat(64)).unwrap()));
+        state.services.push(serde_json::from_value(client).unwrap());
+        let node: NodeId = "node-a".to_owned().try_into().unwrap();
+        let ingress = admit(&mut state, &run, "attempt-a", "server", input(Direction::Ingress), node.clone(), |_| Ok(())).unwrap();
+        let ingress = ingress["port_id"].as_str().unwrap().to_owned();
+        (state, run, node, ingress)
+    }
+    fn peer_input(peer: &str) -> Input {
+        Input {
+            service_id: "svc-b".to_owned().try_into().unwrap(),
+            name: "game-route".to_owned().try_into().unwrap(),
+            direction: Direction::Egress,
+            service_port: NonZeroU16::new(25565).unwrap(),
+            target: None,
+            peer_port_id: Some(peer.to_owned().try_into().unwrap()),
+        }
+    }
+    #[test]
+    fn peer_routes_admit_only_owned_ingress_of_another_service() {
+        let (mut state, run, node, ingress) = peer_fixture();
+        let egress = admit(&mut state, &run, "attempt-a", "client", Input { name: "download".to_owned().try_into().unwrap(), ..input(Direction::Egress) }, node.clone(), |_| Ok(())).unwrap();
+        let egress = egress["port_id"].as_str().unwrap().to_owned();
+        let both = Input { target: input(Direction::Egress).target, ..peer_input(&ingress) };
+        let same_service = Input { service_id: "svc-a".to_owned().try_into().unwrap(), service_port: NonZeroU16::new(31002).unwrap(), ..peer_input(&ingress) };
+        let ingress_with_peer = Input { direction: Direction::Ingress, ..peer_input(&ingress) };
+        for (nonce, request) in [("both", both), ("self", same_service), ("ingress", ingress_with_peer), ("egress-peer", peer_input(&egress)), ("missing", peer_input("port-missing"))] {
+            assert!(admit(&mut state, &run, "attempt-a", nonce, request, node.clone(), |_| Ok(())).is_err(), "{nonce}");
+        }
+        let foreign = crate::chat::create(&mut state);
+        state.ports.iter_mut().find(|p| p.id.as_str() == ingress).unwrap().chat = foreign.clone();
+        assert!(admit(&mut state, &run, "attempt-a", "foreign", peer_input(&ingress), node.clone(), |_| Ok(())).is_err());
+        let owner = state.services[0].resource.owner.chat.as_str().to_owned();
+        state.ports.iter_mut().find(|p| p.id.as_str() == ingress).unwrap().chat = owner;
+        let value = admit(&mut state, &run, "attempt-a", "route", peer_input(&ingress), node.clone(), |_| Ok(())).unwrap();
+        assert_eq!(value["peer_port_id"], ingress.as_str());
+        assert!(value["target"].is_null());
+        let changed = Input { peer_port_id: Some(egress.clone().try_into().unwrap()), ..peer_input(&ingress) };
+        assert!(admit(&mut state, &run, "attempt-a", "route", changed, node.clone(), |_| Ok(())).is_err());
+        let route = route(&state, state.ports.last().unwrap());
+        assert!(route.contains("peer ingress echo (service svc-a :31000)"), "{route}");
+        let peer = state.ports.iter().position(|p| p.id.as_str() == ingress).unwrap();
+        state.ports[peer].status = Status::Stopped;
+        assert_eq!(admit(&mut state, &run, "attempt-a", "route", peer_input(&ingress), node.clone(), |_| Ok(())).unwrap()["port_id"], value["port_id"]);
+        state.ports[peer].status = Status::Pending;
+        state.ports[peer].actor = Actor::Unknown;
+        let other = Input { name: "other-route".to_owned().try_into().unwrap(), service_port: NonZeroU16::new(25566).unwrap(), ..peer_input(&ingress) };
+        assert!(admit(&mut state, &run, "attempt-a", "actor", other, node, |_| Ok(())).is_err());
+    }
+    #[test]
+    fn peer_route_connects_only_while_the_ingress_listens() {
+        let (mut state, run, node, ingress) = peer_fixture();
+        admit(&mut state, &run, "attempt-a", "route", peer_input(&ingress), node, |_| Ok(())).unwrap();
+        let egress = state.ports.last().unwrap().clone();
+        assert!(!peer_listening(&state, &egress));
+        state.ports.iter_mut().find(|p| p.id.as_str() == ingress).unwrap().ready = true;
+        assert!(peer_listening(&state, &egress));
+        let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        assert!(!peer_listening(&restored, &egress));
+        assert!(peer_listening(&state, &state.ports[0]));
+    }
+    #[test]
+    fn peer_route_follows_the_approved_ingress_and_closes_with_it() {
+        let (mut state, run, node, ingress) = peer_fixture();
+        let egress = admit(&mut state, &run, "attempt-a", "route", peer_input(&ingress), node, |_| Ok(())).unwrap();
+        let egress = egress["port_id"].as_str().unwrap().to_owned();
+        let time = now();
+        let listener: SocketAddr = "127.0.0.1:40001".parse().unwrap();
+        assert!(approve(&mut state, &egress, 60, false, Some(listener), time, |_| Ok(())).is_err());
+        approve(&mut state, &ingress, 60, false, None, time, |_| Ok(())).unwrap();
+        assert!(approve(&mut state, &egress, 60, false, Some(listener), time, |_| Ok(())).is_err());
+        state.ports.iter_mut().find(|p| p.id.as_str() == ingress).unwrap().approval.as_mut().unwrap().host_port = 40001;
+        for wrong in [None, Some("127.0.0.1:40002".parse().unwrap()), Some("8.8.8.8:40001".parse().unwrap())] {
+            assert!(approve(&mut state, &egress, 60, true, wrong, time, |_| Ok(())).is_err());
+        }
+        approve(&mut state, &egress, 60, true, Some(listener), time, |_| Ok(())).unwrap();
+        let port = state.ports.iter().find(|p| p.id.as_str() == egress).unwrap().clone();
+        assert!(!port.approval.as_ref().unwrap().allow_loopback);
+        assert!(authorized(&state, &port, time).is_ok());
+        assert_eq!(intent(&state, &port, &port.node, time), Intent::Serve);
+        let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        assert!(authorized(&restored, &port, time).is_ok());
+        let peer = |state: &mut State| state.ports.iter_mut().find(|p| p.id.as_str() == ingress).unwrap().clone();
+        let original = peer(&mut state);
+        state.ports.iter_mut().find(|p| p.id.as_str() == ingress).unwrap().approval.as_mut().unwrap().host_port = 40002;
+        assert!(authorized(&state, &port, time).is_err());
+        state.ports.iter_mut().find(|p| p.id.as_str() == ingress).unwrap().clone_from(&original);
+        state.ports.iter_mut().find(|p| p.id.as_str() == ingress).unwrap().status = Status::Stopping;
+        assert!(authorized(&state, &port, time).is_err());
+        assert_eq!(intent(&state, &port, &port.node, time), Intent::Stop);
+        state.ports.iter_mut().find(|p| p.id.as_str() == ingress).unwrap().clone_from(&original);
+        state.services[0].resource.generation = Generation::INITIAL.checked_next().unwrap();
+        assert!(authorized(&state, &port, time).is_err());
+    }
+    #[test]
+    fn legacy_port_records_without_peer_still_load() {
+        let (mut state, run, _) = fixture();
+        request(&mut state, &run, Direction::Egress).unwrap();
+        let mut value = serde_json::to_value(&state.ports[0]).unwrap();
+        assert!(value.get("peer").is_none());
+        value.as_object_mut().unwrap().remove("peer");
+        let port: Port = serde_json::from_value(value).unwrap();
+        assert!(port.peer.is_none());
+    }
 }
 
 #[cfg(test)]
@@ -1803,7 +1992,7 @@ printf source-ready
 "#;
         let source_receipt=crate::services::enqueue_test_command(&mut state,&run,"source-setup",&ids[0],source_command,30).unwrap();
         let staged=crate::services::enqueue_test_command(&mut state,&run,"client-files",&ids[1],"set -eu; printf persistent > /workspace/settings; if timeout 1 bash -c 'exec 3<>/dev/tcp/127.0.0.1/34003' 2>/dev/null; then exit 42; fi; printf staged-without-network",10).unwrap();
-        let ingress=admit(&mut state,&run,"attempt-a","source-ingress",Input{service_id:ids[0].clone().try_into().unwrap(),name:"source-ingress".to_owned().try_into().unwrap(),direction:Direction::Ingress,service_port:NonZeroU16::new(34001).unwrap(),target:None},node.clone().try_into().unwrap(),|_|Ok(())).unwrap();
+        let ingress=admit(&mut state,&run,"attempt-a","source-ingress",Input{service_id:ids[0].clone().try_into().unwrap(),name:"source-ingress".to_owned().try_into().unwrap(),direction:Direction::Ingress,service_port:NonZeroU16::new(34001).unwrap(),target:None,peer_port_id:None},node.clone().try_into().unwrap(),|_|Ok(())).unwrap();
         let ingress_id=ingress["port_id"].as_str().unwrap().to_owned();
         state.runtime.runs[0].status="completed".into();write(&state);server=launch();
         let execution=|service:usize,id:&str|{let state=read();let value=serde_json::to_value(&state.services[service]).unwrap();value["executions"].as_array().unwrap().iter().find(|e|e["id"]==id).unwrap().clone()};
@@ -1822,12 +2011,13 @@ printf source-ready
         let download_thread=thread::spawn(move||{let(mut socket,_)=download.accept().unwrap();socket.set_read_timeout(Some(Duration::from_secs(15))).unwrap();let mut request=[0;4096];let _=socket.read(&mut request).unwrap();write!(socket,"HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()).unwrap();socket.write_all(&body).unwrap();});
         server.stop();state=read();state.runtime.runs[0].status="running".into();
         let mut pending=Vec::new();
-        for (name,local,target) in [("peer-route",34003,SocketAddr::from(([127,0,0,1],published))),("asset-download",34002,download_address)] {
-            let value=admit(&mut state,&run,"attempt-a",name,Input{service_id:ids[1].clone().try_into().unwrap(),name:name.to_owned().try_into().unwrap(),direction:Direction::Egress,service_port:NonZeroU16::new(local).unwrap(),target:Some(Endpoint{host:"127.0.0.1".into(),port:NonZeroU16::new(target.port()).unwrap()})},node.clone().try_into().unwrap(),|_|Ok(())).unwrap();pending.push(value["port_id"].as_str().unwrap().to_owned());
+        for (name,local,target) in [("peer-route",34003,None),("asset-download",34002,Some(download_address))] {
+            let value=admit(&mut state,&run,"attempt-a",name,Input{service_id:ids[1].clone().try_into().unwrap(),name:name.to_owned().try_into().unwrap(),direction:Direction::Egress,service_port:NonZeroU16::new(local).unwrap(),target:target.map(|t:SocketAddr|Endpoint{host:"127.0.0.1".into(),port:NonZeroU16::new(t.port()).unwrap()}),peer_port_id:target.is_none().then(||ingress_id.clone().try_into().unwrap())},node.clone().try_into().unwrap(),|_|Ok(())).unwrap();pending.push(value["port_id"].as_str().unwrap().to_owned());
         }
         state.runtime.runs[0].status="completed".into();write(&state);server=launch();
         wait(||client.get(format!("{url}/health")).send().is_ok_and(|r|r.status().is_success()),5,"approval UI online");
         for id in &pending {assert_eq!(port(id).status,Status::Pending);post(id,"seconds=-1&loopback=yes");}
+        assert_eq!(port(&pending[0]).approval.unwrap().pinned,Some(SocketAddr::from(([127,0,0,1],published))));
         server.stop();state=read();state.runtime.runs[0].status="running".into();
         let command=format!(r#"set -eu
 test "$(cat /workspace/settings)" = persistent
@@ -2016,6 +2206,7 @@ printf verified-download >> /workspace/completions
                     direction,
                     service_port: NonZeroU16::new(service_port).unwrap(),
                     target,
+                    peer_port_id: None,
                 },
                 node.clone().try_into().unwrap(),
                 |_| Ok(()),
