@@ -183,8 +183,9 @@ pub fn render(runtime: &Runtime) -> String {
                 .add(attempt);
         }
     }
-    let mut html = format!("<h2>Usage</h2><div class='metrics'><div><b>{}</b><span>INPUT</span></div><div><b>{}</b><span>OUTPUT</span></div><div><b>{}/{}</b><span>MEASURED ATTEMPTS</span></div></div><p class='muted'>Cached input: {} · unknown attempts: {} · older runs without tracking: {legacy}</p><p class='muted'>Cached tokens are part of input. Counts are provider-reported; subscription billing is not estimated.</p>", overall.tokens.input_tokens, overall.tokens.output_tokens, overall.measured, overall.attempts, overall.tokens.cached_input_tokens, overall.attempts - overall.measured);
+    let mut html = String::from("<h2>Usage</h2>");
     html.push_str(&outcomes(&models));
+    html.push_str(&format!("<details class='record'><summary>Token accounting</summary><div class='metrics'><div><b>{}</b><span>INPUT</span></div><div><b>{}</b><span>OUTPUT</span></div><div><b>{}/{}</b><span>MEASURED ATTEMPTS</span></div></div><p class='muted'>Cached input: {} · unknown attempts: {} · older runs without tracking: {legacy}</p><p class='muted'>Cached tokens are part of input. Counts are provider-reported; subscription billing is not estimated.</p></details>", overall.tokens.input_tokens, overall.tokens.output_tokens, overall.measured, overall.attempts, overall.tokens.cached_input_tokens, overall.attempts - overall.measured));
     html.push_str(&table("By person", &people));
     html.push_str(&table("By provider / requested model", &models));
     html.push_str(&table("By day (UTC)", &days));
