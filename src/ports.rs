@@ -164,7 +164,7 @@ pub struct Port {
 }
 impl Port {
     fn summary(&self) -> Value {
-        json!({"port_id":self.id,"service_id":self.service,"name":self.name,"direction":self.direction,"service_port":self.service_port,"target":self.target,"status":self.status,"ready":self.ready,"local_address":self.approval.as_ref().filter(|_|self.direction==Direction::Ingress).filter(|a|a.host_port!=0).map(|a|format!("127.0.0.1:{}",a.host_port)),"pinned_target":self.approval.as_ref().and_then(|a|a.pinned),"expires_unix":self.approval.as_ref().map(|a|a.expires),"diagnostic":self.diagnostic,"approval_url":"/tools/ports"})
+        json!({"port_id":self.id,"service_id":self.service,"name":self.name,"direction":self.direction,"service_port":self.service_port,"target":self.target,"status":self.status,"ready":self.ready,"local_address":self.approval.as_ref().filter(|_|self.direction==Direction::Ingress).filter(|a|a.host_port!=0).map(|a|format!("127.0.0.1:{}",a.host_port)),"pinned_target":self.approval.as_ref().and_then(|a|a.pinned),"expires_unix":self.approval.as_ref().map(|a|a.expires).filter(|expires|*expires!=u64::MAX),"until_stopped":self.approval.as_ref().is_some_and(|a|a.expires==u64::MAX),"diagnostic":self.diagnostic,"approval_url":"/tools/ports"})
     }
 }
 #[derive(Deserialize)]
@@ -1295,6 +1295,8 @@ mod tests {
         request(&mut state,&run,Direction::Ingress).unwrap();
         let id = state.ports[0].id.as_str().to_owned();
         approve(&mut state,&id,-1,false,None,time,|_|Ok(())).unwrap();
+        assert!(state.ports[0].summary()["expires_unix"].is_null());
+        assert_eq!(state.ports[0].summary()["until_stopped"],true);
         let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
         assert!(authorized(&restored,&restored.ports[0],time+86400).is_ok());
         state.ports[0].status = Status::Stopping;
