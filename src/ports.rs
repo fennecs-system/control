@@ -1225,6 +1225,68 @@ mod tests {
         )
     }
     #[test]
+    #[ignore = "requires local Chrome/Firefox WebDriver; isolated fixture, no credentials/models"]
+    fn live_port_controls_have_equal_buttons_and_themed_checkbox() {
+        use reqwest::blocking::Client;
+        use std::io::{BufRead, Write};
+        use std::sync::atomic::{AtomicBool,Ordering};
+        let (mut state, run, _) = fixture();
+        request(&mut state,&run,Direction::Egress).unwrap();
+        let state = Arc::new(Mutex::new(state));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}",listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let done = stop.clone();
+        let server = std::thread::spawn(move || {
+            while !done.load(Ordering::Relaxed) {
+                let Ok((mut stream,_)) = listener.accept() else {std::thread::sleep(Duration::from_millis(10));continue;};
+                stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                let mut reader=std::io::BufReader::new(stream.try_clone().unwrap());
+                let mut first=String::new();
+                if reader.read_line(&mut first).is_err() {continue;}
+                let path=first.split_whitespace().nth(1).unwrap_or("/");
+                if !crate::serve_stylesheet(&mut stream,path) {
+                    if path=="/tools/ports" {http(&mut stream,&state,"GET",path,&[]);}
+                    else {let _=stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");}
+                }
+            }
+        });
+        struct Server(Arc<AtomicBool>,Option<std::thread::JoinHandle<()>>);
+        impl Drop for Server {fn drop(&mut self){self.0.store(true,Ordering::Relaxed);self.1.take().unwrap().join().unwrap();}}
+        let _server=Server(stop,Some(server));
+        let client=Client::builder().timeout(Duration::from_secs(20)).build().unwrap();
+        let driver=std::env::var("CONTROL_WEBDRIVER_URL").unwrap();
+        let chrome=std::env::var("CONTROL_QA_BROWSER").is_ok_and(|b|b=="chrome");
+        let caps=if chrome {json!({"browserName":"chrome","goog:chromeOptions":{"binary":"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome","args":["--headless=new","--no-first-run"]}})} else {json!({"browserName":"firefox","moz:firefoxOptions":{"binary":"/Applications/Firefox.app/Contents/MacOS/firefox","args":["-headless"]}})};
+        let session:Value=client.post(format!("{driver}/session")).json(&json!({"capabilities":{"alwaysMatch":caps}})).send().unwrap().json().unwrap();
+        let id=session["value"]["sessionId"].as_str().expect("Browser session");
+        let base=format!("{driver}/session/{id}");
+        struct Browser(Client,String);
+        impl Drop for Browser {fn drop(&mut self){let _=self.0.delete(&self.1).send();}}
+        let _browser=Browser(client.clone(),base.clone());
+        let post=|path:&str,args:Value|->Value {
+            let response=client.post(format!("{base}{path}")).json(&args).send().unwrap();
+            assert!(response.status().is_success(),"WebDriver {path}");
+            response.json::<Value>().unwrap()["value"].clone()
+        };
+        let get=|path:&str|->Value {client.get(format!("{base}{path}")).send().unwrap().json::<Value>().unwrap()["value"].clone()};
+        post("/url",json!({"url":format!("{url}/tools/ports")}));
+        let elements=post("/elements",json!({"using":"css selector","value":"form[action='/tools/ports'] > button"}));
+        let buttons=elements.as_array().unwrap();assert_eq!(buttons.len(),2);
+        let element=|value:&Value|value["element-6066-11e4-a52e-4f735466cecf"].as_str().unwrap().to_owned();
+        let allow=element(&buttons[0]);let deny=element(&buttons[1]);
+        let a=get(&format!("/element/{allow}/rect"));let b=get(&format!("/element/{deny}/rect"));
+        assert_eq!(a["height"],b["height"]);assert_eq!(a["width"],b["width"]);
+        assert_eq!(get(&format!("/element/{allow}/css/border-top-left-radius")),"3px");
+        let checkbox=element(&post("/element",json!({"using":"css selector","value":"input[type=checkbox]"})));
+        assert_eq!(get(&format!("/element/{checkbox}/css/appearance")),"none");
+        let before=get(&format!("/element/{checkbox}/css/background-color"));
+        post(&format!("/element/{checkbox}/click"),json!({}));
+        assert_eq!(get(&format!("/element/{checkbox}/property/checked")),true);
+        assert_ne!(get(&format!("/element/{checkbox}/css/background-color")),before);
+    }
+    #[test]
     fn pending_requests_are_idempotent_owned_and_rollback_on_save_failure() {
         let (mut s, run, _) = fixture();
         let mut saves = 0;
