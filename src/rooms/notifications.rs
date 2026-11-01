@@ -1,5 +1,5 @@
-//! Explicit, bounded room inboxes. Wakes consume a human task's single budget;
-//! room text is never executed as a prompt or treated as authority.
+//! Bounded room inboxes with one-shot or owner-enabled ongoing follow-ups.
+//! Room text is never executed as a prompt or treated as authority.
 use crate::{State, identity, runtime};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -8,6 +8,8 @@ use std::collections::{HashMap, HashSet};
 const MAX_WATCHES: usize = 256;
 const WINDOW: usize = 512;
 const BATCH: usize = 8;
+mod listeners;
+pub(crate) use listeners::{configure as listen, status as listener_status};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Watch {
@@ -17,6 +19,8 @@ pub struct Watch {
     cursor: usize,
     wake: Option<Wake>,
     delivered: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    listener: Option<listeners::Listener>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct Wake {
@@ -91,6 +95,9 @@ pub(super) fn call(
         if wake && !enabled {
             return Err("A disabled watch cannot request a wake.");
         }
+        if wake && existing.is_some_and(|i| state.collective.room_watches[i].listener.is_some()) {
+            return Err("The owner enabled persistent listening; a separate one-shot wake is unnecessary.");
+        }
         // Retried arming is idempotent; disabling never restores its budget.
         let already = existing.is_some_and(|i| {
             state.collective.room_watches[i]
@@ -124,6 +131,9 @@ pub(super) fn call(
             return Ok(json!({"watching":false}));
         }
         if !enabled {
+            if state.collective.room_watches[existing.unwrap()].listener.is_some() {
+                return Err("The owner enabled persistent listening. Use /listen off in this chat to stop it.");
+            }
             state.collective.room_watches.remove(existing.unwrap());
             return Ok(json!({"watching":false}));
         }
@@ -139,6 +149,7 @@ pub(super) fn call(
                 cursor: state.collective.posts.len(),
                 wake: None,
                 delivered: None,
+                listener: None,
             });
         }
         let watch = &mut state.collective.room_watches[watch_index];
@@ -188,11 +199,14 @@ struct Batch<'a> {
     posts: Vec<&'a super::Post>,
 }
 fn batch<'a>(watch: &Watch, history: &'a [super::Post]) -> Batch<'a> {
+    batch_from(watch, history, watch.cursor)
+}
+fn batch_from<'a>(watch: &Watch, history: &'a [super::Post], cursor: usize) -> Batch<'a> {
     let mut batch = Batch {
-        through: watch.cursor,
+        through: cursor,
         posts: Vec::with_capacity(BATCH),
     };
-    for (index, post) in history.iter().enumerate().skip(watch.cursor).take(WINDOW) {
+    for (index, post) in history.iter().enumerate().skip(cursor).take(WINDOW) {
         batch.through = index + 1;
         if post.room == watch.room && post.chat.as_deref() != Some(&watch.chat) {
             batch.posts.push(post);
@@ -270,6 +284,10 @@ pub fn reconcile(
     state: &mut State,
     mut save: impl FnMut(&State) -> std::io::Result<()>,
 ) -> Result<(), &'static str> {
+    if state.collective.room_watches.iter().any(|watch|watch.listener.as_ref().is_some_and(|listener|!listener.paused())) {
+        let now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_|"System clock precedes Unix epoch.")?.as_secs();
+        listeners::reconcile(state, now, &mut save)?;
+    }
     if !state
         .collective
         .room_watches
@@ -476,7 +494,7 @@ pub fn reconcile(
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn fixture() -> (State, String) {
+    pub(super) fn fixture() -> (State, String) {
         let mut state = State::default();
         let chat = crate::chat::create(&mut state);
         state.chats[0].room = Some("research".into());
@@ -500,7 +518,7 @@ mod tests {
         )
         .unwrap();
     }
-    fn post(state: &mut State, room: &str, text: &str, chat: Option<String>) {
+    pub(super) fn post(state: &mut State, room: &str, text: &str, chat: Option<String>) {
         state.collective.posts.push(super::super::Post {
             room: room.into(),
             text: text.into(),

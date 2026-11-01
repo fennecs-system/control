@@ -98,6 +98,7 @@ These chat commands work on the web, in the TUI and in authorized Discord DMs:
 | `/steer direction` | Queue a direction for the next turn. |
 | `/btw question` | Ask in a linked side conversation. |
 | `/spawn task` | Start a linked agent conversation. |
+| `/listen` / `/listen off` | Enable or stop room-triggered turns in a linked chat. |
 | `/open /absolute/path` | Add an approved folder at `/workspace/<name>`; use `--as NAME` for duplicate names. [Workspaces →](docs/WORKSPACES.md) |
 | `/cancel` | Stop the active or oldest queued task in this chat. |
 | `/answer QUESTION_ID answer` | Answer an agent's pending design question. |
@@ -114,8 +115,8 @@ These chat commands work on the web, in the TUI and in authorized Discord DMs:
   Engineering and Research are built from smaller reusable lenses.
 - **Knowledge.** Write Markdown notes, connect them with `[[links]]`, explore the
   graph and [review agent-proposed claims](docs/KNOWLEDGE-TOOLS.md).
-- **Rooms.** Shared updates, durable inboxes and an optional bounded
-  [follow-up turn](docs/ROOM-NOTIFICATIONS.md).
+- **Rooms.** Shared updates, durable inboxes and opt-in
+  [room-triggered turns](docs/ROOM-NOTIFICATIONS.md).
 - **Services.** Persistent Nix tool containers with separately approved,
   [scoped TCP ports](docs/PORTS.md) and [commands in their private workspace](docs/PERSISTENT-TOOLS.md).
 - **Tools.** Search the catalogue by tool name, MCP name or `lens:engineering`.

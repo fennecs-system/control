@@ -329,6 +329,14 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
     if crate::shutdown::requested() {
         return Err("Control is stopping; try again after restart.");
     }
+    if let Some(option)=commands::tail(text.trim(),Kind::Listen) {
+        let enabled=match option.trim() {""|"on"=>true,"off"=>false,_=>return Err("Use /listen or /listen off.")};
+        let reply=crate::rooms::listen(state,id,enabled)?;
+        let session=state.chats.iter_mut().find(|session|session.id==id).unwrap();
+        session.messages.push(Message{text:text.trim().into(),run_id:None,reply:reply.into()});
+        session.revision=session.revision.saturating_add(1);
+        return Ok(());
+    }
     if let Some(path) = commands::tail(text.trim(), Kind::Open) {
         if let Some(named)=path.trim().strip_prefix("--as ") {
             let (name,path)=named.split_once(char::is_whitespace).ok_or("Use /open --as NAME /absolute/path.")?;
@@ -629,6 +637,7 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
         value["pending_ports"]=json!(crate::ports::pending_json(state,id));
         value["port_revision"]=json!(crate::ports::decision_revision(state));
         value["agent_activity"]=json!(agent_activity(state,id));
+        value["room_listener"]=crate::rooms::listener_status(state,id).unwrap_or(Value::Null);
         if let Some(messages)=value["messages"].as_array_mut() {
             for message in messages {
                 if let Some(run)=message["run_id"].as_str() {
@@ -677,6 +686,9 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
     let project_message=crate::projects::message_index(session);
     html.push_str(&crate::previews::links(state,id));
     html.push_str(&crate::github::panel(state,id));
+    if let Some(listener)=crate::rooms::listener_status(state,id) {
+        html.push_str(&format!("<p class='message-status'>Room #{} · {}</p>",escape(listener["room"].as_str().unwrap_or("")),escape(listener["state"].as_str().unwrap_or(""))));
+    }
     let messages = &session.messages;
     for (position, message) in messages.iter().enumerate() {
         let run=message.run_id.as_deref().and_then(|id|runs.get(id).copied().flatten());

@@ -9,6 +9,7 @@ pub enum Kind {
     Cancel,
     Answer,
     Open,
+    Listen,
 }
 
 pub struct Definition {
@@ -66,6 +67,8 @@ pub const DEFINITIONS: &[Definition] = &[
         description: "Open a folder on this node",
         architect: false,
     },
+    Definition { id:"listen", text:"/listen", description:"Listen for room messages", architect:false },
+    Definition { id:"listen-off", text:"/listen off", description:"Stop room listening", architect:false },
 ];
 
 #[derive(Debug, PartialEq, Eq)]
@@ -86,6 +89,7 @@ pub fn parse(text: &str) -> Option<Parsed<'_>> {
         "/cancel" => Kind::Cancel,
         "/answer" => Kind::Answer,
         "/open" => Kind::Open,
+        "/listen" => Kind::Listen,
         _ => return None,
     };
     let tail = &trimmed[end..];

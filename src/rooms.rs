@@ -11,6 +11,7 @@ use std::{
 pub const NAMES: [&str; 3] = ["general", "engineering", "research"];
 mod notifications;
 pub use notifications::{Watch, reconcile};
+pub(crate) use notifications::{listen, listener_status};
 pub fn valid(room: &str) -> bool {
     NAMES.contains(&room)
 }
