@@ -27,12 +27,12 @@ pub(crate) fn changed(state: &mut State, id: &str) {
 }
 
 #[derive(serde::Serialize)]
-pub(super) struct AgentCommand<'a> {
+pub(super) struct AgentActivity<'a> {
     pub chat: &'a str,
     pub activity: Activity,
 }
 
-pub(super) fn agent_commands<'a>(state: &'a State, id: &str) -> Vec<AgentCommand<'a>> {
+pub(super) fn agent_activity<'a>(state: &'a State, id: &str) -> Vec<AgentActivity<'a>> {
     let Some(session) = state.chats.iter().find(|chat| chat.id == id) else {
         return Vec::new();
     };
@@ -58,12 +58,24 @@ pub(super) fn agent_commands<'a>(state: &'a State, id: &str) -> Vec<AgentCommand
                 let parent = chat.parent_chat.as_deref()?;
                 if parent == id {
                     return Some(
-                        crate::services::command_activity(state, &run.id)
-                            .rev()
-                            .take(4)
-                            .map(move |activity| AgentCommand {
-                                chat: child,
-                                activity,
+                        run.attempts
+                            .last()
+                            .into_iter()
+                            .flat_map(|attempt| attempt.activity.iter().rev())
+                            .filter(|event| event.kind == "message")
+                            .take(1)
+                            .cloned()
+                            .chain(
+                                crate::services::command_activity(state, &run.id)
+                                    .rev()
+                                    .take(1),
+                            )
+                            .map(move |mut activity| {
+                                activity.id = format!("{}-{}", run.id, activity.id);
+                                AgentActivity {
+                                    chat: child,
+                                    activity,
+                                }
                             }),
                     );
                 }
@@ -77,6 +89,13 @@ pub(super) fn agent_commands<'a>(state: &'a State, id: &str) -> Vec<AgentCommand
 }
 
 pub(super) fn command_html(event: &Activity) -> String {
+    if event.kind == "message" {
+        return format!(
+            "<article class='assistant-message' data-transcript-key='message-{}'><p class='preserve'>{}</p></article>",
+            escape(&event.id),
+            escape(&event.text)
+        );
+    }
     format!(
         "<details class='command-activity' data-transcript-key='{}' open><summary><span>{}</span> <code>{}</code></summary><pre>{}</pre></details>",
         escape(&event.id),
@@ -84,4 +103,62 @@ pub(super) fn command_html(event: &Activity) -> String {
         escape(&event.text),
         escape(&event.output)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn child_chat_messages_are_inline_scoped_and_refresh_ancestors() {
+        let mut state = State::default();
+        let parent = crate::chat::create(&mut state);
+        let child = crate::chat::create(&mut state);
+        state.chats[1].parent_chat = Some(parent.clone());
+        crate::chat::send(&mut state, &child, "Check inventory", "test").unwrap();
+        let run = &mut state.runtime.runs[0];
+        let run_id = run.id.clone();
+        run.status = "running".into();
+        run.attempts.push(crate::usage::Attempt {
+            workspace_id: Some("generation".into()),
+            ..Default::default()
+        });
+        let revision = state.chats[0].revision;
+        let event = Activity {
+            id: "message-1".into(),
+            kind: "message".into(),
+            text: "Checking <inventory>.".into(),
+            output: String::new(),
+            status: "running".into(),
+        };
+        assert!(crate::worker::record_activity_for(
+            &mut state,
+            &run_id,
+            "generation",
+            event
+        ));
+        assert!(state.chats[0].revision > revision);
+        let html = crate::chat::transcript(&state, &parent).unwrap();
+        assert!(html.contains("<p class='preserve'>Checking &lt;inventory&gt;.</p>"));
+        assert!(!html.contains("<pre>Checking"));
+        let detail = crate::chat::detail(&state, &parent).unwrap();
+        assert_eq!(detail["agent_activity"][0]["activity"]["kind"], "message");
+        let mut stored: State =
+            serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        assert!(
+            crate::chat::transcript(&stored, &child)
+                .unwrap()
+                .contains("Checking &lt;inventory&gt;.")
+        );
+        stored.runtime.runs[0].result = "Checking <inventory>.".into();
+        assert_eq!(
+            crate::chat::transcript(&stored, &child)
+                .unwrap()
+                .matches("Checking &lt;inventory&gt;.")
+                .count(),
+            1,
+            "Do not repeat the final answer as a progress message"
+        );
+        stored.chats[1].actor = crate::identity::Actor::Unknown;
+        assert!(agent_activity(&stored, &parent).is_empty());
+    }
 }

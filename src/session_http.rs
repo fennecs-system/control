@@ -607,6 +607,9 @@ mod tests {
         assert_eq!(b.get(&format!("/element/{body}/name")),"body");
         {let mut state=state.lock().unwrap();state.runtime.runs[0].attempts[0].activity.push(crate::usage::Activity{id:"command-1".into(),kind:"command_execution".into(),text:"cargo test".into(),output:"Streaming output alpha".into(),status:"running".into()});}
         b.wait("Streaming output alpha");
+        {let mut state=state.lock().unwrap();state.runtime.runs[0].attempts[0].activity.push(crate::usage::Activity{id:"visible-message-1".into(),kind:"message".into(),text:"Cedar is checking inventory".into(),output:String::new(),status:"running".into()});}
+        b.wait("Cedar is checking inventory");
+        assert!(!b.text(".run-activity").contains("Cedar is checking inventory"),"Chat messages must be inline, outside the collapsed tool log");
         b.wait("Service streaming alpha");
         b.wait("printf service-output");
         {

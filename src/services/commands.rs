@@ -758,7 +758,7 @@ mod tests {
             }
             let detail = crate::chat::detail(&state, &parent).unwrap();
             assert_eq!(
-                detail["agent_commands"][0]["activity"]["output"],
+                detail["agent_activity"][0]["activity"]["output"],
                 "first <progress>\n"
             );
             let html = crate::chat::transcript(&state, &parent).unwrap();
@@ -773,7 +773,7 @@ mod tests {
                     .contains("progress")
             );
             assert!(
-                crate::chat::detail(&state, &unrelated).unwrap()["agent_commands"]
+                crate::chat::detail(&state, &unrelated).unwrap()["agent_activity"]
                     .as_array()
                     .unwrap()
                     .is_empty()
@@ -803,7 +803,7 @@ mod tests {
         let mut isolated = restored;
         isolated.chats[1].actor = Actor::Unknown;
         assert!(
-            crate::chat::detail(&isolated, &parent).unwrap()["agent_commands"]
+            crate::chat::detail(&isolated, &parent).unwrap()["agent_activity"]
                 .as_array()
                 .unwrap()
                 .is_empty()

@@ -1034,13 +1034,7 @@ pub(crate) fn record_activity_for(
         attempt.activity.push(event);
     }
     let chat = run.chat_id.clone();
-    if let Some(chat) = state
-        .chats
-        .iter_mut()
-        .find(|c| Some(&c.id) == chat.as_ref())
-    {
-        chat.revision = chat.revision.saturating_add(1);
-    }
+    if let Some(chat)=chat { crate::chat::activity_changed(state,&chat); }
     true
 }
 
