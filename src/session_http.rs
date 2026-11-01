@@ -83,13 +83,19 @@ fn send_message(
         }
     }
 }
-fn change_with_save(
+pub(crate) fn change_with_save(
     state: &mut State,
     name: &str,
     arguments: &Value,
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Result<Value, &'static str> {
-    transact(state, arguments["id"].as_str(), |state| if crate::tool_registry::lookup(name).is_some_and(|tool|tool.route==crate::tool_registry::Route::Project) {
+    let related = if name=="control.chat.send" {
+        arguments["message"].as_str().and_then(|text|control_context::commands::tail(text.trim(),control_context::commands::Kind::Answer))
+            .and_then(|answer|answer.trim().split_once(char::is_whitespace))
+            .and_then(|(question,_)|crate::design::answer_target(state,arguments["id"].as_str().unwrap_or(""),question).ok())
+            .map(str::to_owned)
+    } else { None };
+    transact(state, arguments["id"].as_str(), related.as_deref(), |state| if crate::tool_registry::lookup(name).is_some_and(|tool|tool.route==crate::tool_registry::Route::Project) {
         crate::projects::request_named(state,arguments["id"].as_str().unwrap_or(""),arguments["path"].as_str().unwrap_or(""),arguments["name"].as_str())
     } else if crate::tool_registry::lookup(name).is_some_and(|tool|tool.route==crate::tool_registry::Route::Room) {
         crate::rooms::tool(state, name, arguments)
@@ -101,23 +107,26 @@ fn change_with_save(
 fn transact(
     state: &mut State,
     id: Option<&str>,
+    related: Option<&str>,
     operation: impl FnOnce(&mut State) -> Result<Value, &'static str>,
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Result<Value, &'static str> {
     let count = state.chats.len();
+    let targets: std::collections::HashSet<_> = id.into_iter().chain(related).collect();
     let previous = state
         .chats
         .iter()
-        .position(|s| Some(s.id.as_str()) == id)
-        .map(|i| (i, state.chats[i].clone()));
+        .enumerate()
+        .filter(|(_,s)| targets.contains(s.id.as_str()))
+        .map(|(i,s)| (i,s.clone())).collect::<Vec<_>>();
     let run_count = state.runtime.runs.len();
-    let pending = crate::runtime::RunStatusCheckpoint::capture(&state.runtime, |run| run.chat_id.as_deref() == id);
+    let pending = crate::runtime::RunStatusCheckpoint::capture(&state.runtime, |run| run.chat_id.as_deref().is_some_and(|chat|targets.contains(chat)));
     let notice = state.runtime.notice.clone();
     let post_count = state.collective.posts.len();
     let result = operation(state);
     if result.is_err() || save(state).is_err() {
         state.chats.truncate(count);
-        if let Some((index, session)) = previous {
+        for (index, session) in previous {
             state.chats[index] = session;
         }
         state.runtime.runs.truncate(run_count);
@@ -298,7 +307,7 @@ pub fn handle(
             .get(if path == "/improve" { "objective" } else { "message" })
             .filter(|text| !text.trim().is_empty());
         // Create and first message commit together, so a rejected message leaves no empty chat.
-        let result = transact(state, None, |state| {
+        let result = transact(state, None, None, |state| {
             let value = chat::tool(state, "control.chat.create", &arguments)?;
             if let Some(text) = text {
                 chat::tool(state, "control.chat.send", &json!({"id":value["id"],"message":text}))?;
