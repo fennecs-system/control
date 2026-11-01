@@ -1,5 +1,8 @@
 //! Chat-owned, bounded offline services. Attempts only attach; a pure core
 //! reducer decides effects, and one supervisor interprets durable intents.
+mod commands;
+#[cfg(test)]
+pub(crate) use commands::enqueue_test as enqueue_test_command;
 use crate::{
     State,
     identity::{self, Action, Actor},
@@ -61,6 +64,12 @@ pub struct Service {
     profile: crate::worker_profile::Profile,
     #[serde(default)]
     diagnostic: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    output: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    executions: Vec<commands::Execution>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -69,6 +78,9 @@ struct Origin {
     attempt: AttemptId,
 }
 impl Service {
+    pub(crate) fn binding_snapshot(&self)->Self {
+        Self {resource:self.resource.clone(),origin:self.origin.clone(),actor:self.actor.clone(),command:self.command.clone(),uid:self.uid,gid:self.gid,workspace_exec:self.workspace_exec,profile:self.profile,diagnostic:String::new(),output:String::new(),exit_code:None,executions:Vec::new()}
+    }
     pub(crate) fn owned_by(&self, node: &NodeId, chat: &str, actor: &Actor) -> bool {
         self.resource.owner.node == *node
             && self.resource.owner.chat.as_str() == chat
@@ -82,7 +94,7 @@ impl Service {
         )
     }
     fn summary(&self) -> Value {
-        json!({"service_id":self.resource.id,"phase":self.resource.phase,"scope":self.resource.scope,"workspace_executable":self.workspace_exec,"expires_unix":self.resource.lease.expires(),"diagnostic":self.diagnostic})
+        json!({"service_id":self.resource.id,"phase":self.resource.phase,"scope":self.resource.scope,"workspace_executable":self.workspace_exec,"expires_unix":self.resource.lease.expires(),"diagnostic":self.diagnostic,"output":self.output,"exit_code":self.exit_code,"output_limit_bytes":OUTPUT,"executions":self.executions.iter().map(|e|e.brief()).collect::<Vec<_>>()})
     }
 }
 #[derive(Deserialize)]
@@ -118,6 +130,7 @@ pub fn definitions() -> Vec<Value> {
     ] {
         tools.push(json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":{"service_id":{"type":"string"}},"required":if name=="control_service_status"{json!([])}else{json!(["service_id"])},"additionalProperties":false},"annotations":{"readOnlyHint":readonly,"openWorldHint":false}}));
     }
+    tools.extend(commands::definitions());
     tools
 }
 pub fn known(name: &str) -> bool {
@@ -127,6 +140,8 @@ pub fn known(name: &str) -> bool {
             | "control_service_attach"
             | "control_service_status"
             | "control_service_stop"
+            | "control_service_exec"
+            | "control_service_exec_status"
     )
 }
 fn caller<'a>(
@@ -167,6 +182,9 @@ pub fn call(
         .map_err(fail)?
         .try_into()
         .map_err(fail)?;
+    if commands::known(name) {
+        return commands::call(shared, run, generation, nonce, name, args, &node);
+    }
     let mut s = shared.lock().map_err(|_| fail("State unavailable"))?;
     let (active, chat) = caller(&s, run, generation)?;
     if name == "control_service_start" {
@@ -240,16 +258,15 @@ pub fn call(
         )?;
         return Ok(s.services[index].summary());
     }
-    let service = s.services[index].clone();
+    let service = s.services[index].binding_snapshot();
+    let mut value = s.services[index].summary();
     drop(s);
-    let mut value = service.summary();
     if let Some(id) = service.resource.phase.container() {
         // Verify identity before reading another process's output.
         let inspected = Docker.inventory(service.resource.owner.node.as_str())?;
         if let Some(observation) = inspected.get(id.as_str()) {
             verify(&service, observation)?;
-            let mut output = crate::runtime::docker_query(&["logs", "--tail", "80", id.as_str()])?;
-            output.truncate(output.floor_char_boundary(OUTPUT));
+            let output = commands::logs(id.as_str())?;
             value["output"] = json!(output);
             value["output_limit_bytes"] = json!(OUTPUT);
         }
@@ -362,6 +379,9 @@ fn admit_profile(
         workspace_exec: true,
         profile,
         diagnostic: String::new(),
+        output: String::new(),
+        exit_code: None,
+        executions: Vec::new(),
     };
     // Retain nonce receipts while their origin attempt can still submit retries.
     // Older stopped records may be evicted; they can no longer launch effects.
@@ -429,6 +449,8 @@ struct Inspection {
     chat: Option<String>,
     generation: Option<String>,
     status: String,
+    #[serde(default)]
+    exit_code: Option<i32>,
     network: String,
     readonly: bool,
     privileged: bool,
@@ -445,7 +467,7 @@ struct Inspection {
     entrypoint: Vec<String>,
     command: Vec<String>,
 }
-const INSPECT: &str = r#"{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Image}},"node":{{json (index .Config.Labels "dev.control.node")}},"resource":{{json (index .Config.Labels "dev.control.resource")}},"chat":{{json (index .Config.Labels "dev.control.chat")}},"generation":{{json (index .Config.Labels "dev.control.generation")}},"status":{{json .State.Status}},"network":{{json .HostConfig.NetworkMode}},"readonly":{{json .HostConfig.ReadonlyRootfs}},"privileged":{{json .HostConfig.Privileged}},"user":{{json .Config.User}},"pid_mode":{{json .HostConfig.PidMode}},"restart":{{json .HostConfig.RestartPolicy.Name}},"caps":{{json .HostConfig.CapDrop}},"security":{{json .HostConfig.SecurityOpt}},"memory":{{json .HostConfig.Memory}},"cpu":{{json .HostConfig.NanoCpus}},"pids":{{json .HostConfig.PidsLimit}},"mounts":{{json .Mounts}},"tmpfs":{{json .HostConfig.Tmpfs}},"entrypoint":{{json .Config.Entrypoint}},"command":{{json .Config.Cmd}}}"#;
+const INSPECT: &str = r#"{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Image}},"node":{{json (index .Config.Labels "dev.control.node")}},"resource":{{json (index .Config.Labels "dev.control.resource")}},"chat":{{json (index .Config.Labels "dev.control.chat")}},"generation":{{json (index .Config.Labels "dev.control.generation")}},"status":{{json .State.Status}},"exit_code":{{json .State.ExitCode}},"network":{{json .HostConfig.NetworkMode}},"readonly":{{json .HostConfig.ReadonlyRootfs}},"privileged":{{json .HostConfig.Privileged}},"user":{{json .Config.User}},"pid_mode":{{json .HostConfig.PidMode}},"restart":{{json .HostConfig.RestartPolicy.Name}},"caps":{{json .HostConfig.CapDrop}},"security":{{json .HostConfig.SecurityOpt}},"memory":{{json .HostConfig.Memory}},"cpu":{{json .HostConfig.NanoCpus}},"pids":{{json .HostConfig.PidsLimit}},"mounts":{{json .Mounts}},"tmpfs":{{json .HostConfig.Tmpfs}},"entrypoint":{{json .Config.Entrypoint}},"command":{{json .Config.Cmd}}}"#;
 fn tmpfs(service: &Service) -> HashMap<String, String> {
     [("/workspace", service.profile.service_workspace_mb()), ("/tmp", 128), ("/home/agent", 32)]
         .into_iter()
@@ -527,6 +549,7 @@ trait Engine {
     fn create(&mut self, service: &Service) -> io::Result<ContainerId>;
     fn start(&mut self, binding: &Verified<'_>) -> io::Result<()>;
     fn remove(&mut self, binding: &Verified<'_>) -> io::Result<()>;
+    fn logs(&mut self, _binding: &Verified<'_>) -> io::Result<String> { Ok(String::new()) }
 }
 struct Docker;
 /// A live verified offline service capability, never an arbitrary container ID.
@@ -564,6 +587,9 @@ pub(crate) fn port_binding(service: &Service, expected: &ContainerId) -> io::Res
     Ok(PortBinding { id: binding.id, user: format!("{}:{}",service.uid,service.gid), expires: service.resource.lease.expires() })
 }
 impl Engine for Docker {
+    fn logs(&mut self, binding: &Verified<'_>) -> io::Result<String> {
+        commands::logs(binding.id.as_str())
+    }
     fn inventory(&mut self, node: &str) -> io::Result<HashMap<String, Inspection>> {
         let text = crate::runtime::docker_query(&[
             "ps",
@@ -681,7 +707,15 @@ fn apply(
         return Ok(None);
     }
     let effect = transition(&mut s, index, event, time, save)?;
-    Ok(effect.map(|effect| (s.services[index].clone(), effect)))
+    Ok(effect.map(|effect| (s.services[index].binding_snapshot(), effect)))
+}
+fn retain_output(shared:&Arc<Mutex<State>>, snapshot:&Service, output:String, exit_code:Option<i32>, save:&impl Fn(&State)->io::Result<()>) -> io::Result<()> {
+    let mut state=shared.lock().map_err(|_|fail("State unavailable"))?;
+    let Some(index)=state.services.iter().position(|s|s.resource==snapshot.resource) else { return Err(fail("Service changed before retaining output")); };
+    let previous=std::mem::replace(&mut state.services[index].output,output);
+    let previous_exit=std::mem::replace(&mut state.services[index].exit_code,exit_code);
+    if let Err(error)=save(&state) {state.services[index].output=previous;state.services[index].exit_code=previous_exit;return Err(error);}
+    Ok(())
 }
 fn drive(
     shared: &Arc<Mutex<State>>,
@@ -698,7 +732,7 @@ fn drive(
                 s.resource.phase.reserves_capacity()
                     && !matches!(s.resource.phase, Phase::Fenced { .. })
             })
-            .cloned()
+            .map(Service::binding_snapshot)
             .collect::<Vec<_>>()
     };
     if services.is_empty() {
@@ -791,10 +825,12 @@ fn drive(
                                     )?)?;
                                 }
                             }
-                            Effect::Remove => engine.remove(&verify(
-                                &next,
-                                observation.ok_or_else(|| fail("Missing service observation"))?,
-                            )?)?,
+                            Effect::Remove => {
+                                let binding=verify(&next, observation.ok_or_else(||fail("Missing service observation"))?)?;
+                                let output=engine.logs(&binding)?;
+                                retain_output(shared,&next,output,observation.and_then(|o|o.exit_code).filter(|_|observation.is_some_and(|o|o.status=="exited"||o.status=="dead")),&save)?;
+                                engine.remove(&binding)?;
+                            }
                             Effect::Inspect => {}
                         }
                     }
@@ -847,12 +883,21 @@ pub fn supervise(shared: Arc<Mutex<State>>) -> std::thread::JoinHandle<()> {
         let Ok(node) = crate::config::node_id() else {
             return;
         };
+        while let Err(error)=commands::recover(&shared,crate::storage::save) {
+            let _=diagnose(&shared,None,&error,&crate::storage::save);
+            if crate::shutdown::pause(Duration::from_secs(2)) {return;}
+        }
+        let mut executions = Vec::new();
         while !crate::shutdown::requested() {
             if let Err(error) = drive(&shared, &mut Docker, &node, now(), crate::storage::save) {
                 let _ = diagnose(&shared, None, &error, &crate::storage::save);
             }
+            if let Err(error)=commands::dispatch(&shared, &mut executions) {
+                let _=diagnose(&shared,None,&error,&crate::storage::save);
+            }
             crate::shutdown::pause(Duration::from_secs(2));
         }
+        for execution in executions { let _=execution.join(); }
     })
 }
 /// Other resource reconciliation may skip only fully verified registered service
@@ -883,7 +928,7 @@ fn verified_discovery_names(services:&[Service],observations:&HashMap<String,Ins
 mod tests {
     use super::*;
     use std::cell::Cell;
-    fn fixture() -> (State, String, String, u64) {
+    pub(super) fn fixture() -> (State, String, String, u64) {
         let mut s = State::default();
         let chat = crate::chat::create(&mut s);
         crate::chat::send(&mut s, &chat, "Run a persistent counter", "test").unwrap();
@@ -904,7 +949,7 @@ mod tests {
             lease_seconds: 60,
         }
     }
-    fn admit_fixture(
+    pub(super) fn admit_fixture(
         s: &mut State,
         run: &str,
         time: u64,
@@ -933,6 +978,7 @@ mod tests {
             chat: Some(s.resource.owner.chat.as_str().into()),
             generation: Some(s.resource.generation.get().to_string()),
             status: "created".into(),
+            exit_code: None,
             network: "none".into(),
             readonly: true,
             privileged: false,
@@ -963,6 +1009,7 @@ mod tests {
         inspections: usize,
     }
     impl Engine for Fake {
+        fn logs(&mut self, _: &Verified<'_>) -> io::Result<String> { Ok("retained final diagnostic".into()) }
         fn inventory(&mut self, _: &str) -> io::Result<HashMap<String, Inspection>> {
             self.inspections += 1;
             Ok(self.records.clone())
@@ -983,6 +1030,25 @@ mod tests {
             self.records.remove(binding.id.as_str());
             Ok(())
         }
+    }
+    #[test]
+    fn exited_service_keeps_output_before_removal_and_failed_save_prevents_removal() {
+        let (state,run,_,time)=fixture();let shared=Arc::new(Mutex::new(state));
+        admit_fixture(&mut shared.lock().unwrap(),&run,time,|_|Ok(())).unwrap();
+        let mut engine=Fake::default();
+        for offset in 0..4 {drive(&shared,&mut engine,"node-a",time+offset,|_|Ok(())).unwrap();}
+        let id=shared.lock().unwrap().services[0].resource.phase.container().unwrap().as_str().to_owned();
+        engine.records.get_mut(&id).unwrap().status="exited".into();
+        engine.records.get_mut(&id).unwrap().exit_code=Some(7);
+        drive(&shared,&mut engine,"node-a",time+4,|state|if state.services[0].output.is_empty(){Ok(())}else{Err(fail("disk full"))}).unwrap();
+        assert_eq!(engine.removes,0);assert!(shared.lock().unwrap().services[0].output.is_empty());
+        drive(&shared,&mut engine,"node-a",time+5,|_|Ok(())).unwrap();
+        assert_eq!(engine.removes,1);
+        drive(&shared,&mut engine,"node-a",time+6,|_|Ok(())).unwrap();
+        let restored:State=serde_json::from_slice(&serde_json::to_vec(&*shared.lock().unwrap()).unwrap()).unwrap();
+        assert!(matches!(restored.services[0].resource.phase,Phase::Stopped(_)));
+        assert_eq!(restored.services[0].summary()["output"],"retained final diagnostic");
+        assert_eq!(restored.services[0].summary()["exit_code"],7);
     }
     #[test]
     fn admission_is_bounded_deduplicated_and_rolls_back_before_any_effect() {

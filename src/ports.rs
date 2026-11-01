@@ -247,7 +247,7 @@ fn authorized(state: &State, port: &Port, time: u64) -> io::Result<Service> {
         }
         _ => return Err(fail("Invalid port approval")),
     }
-    Ok(service.clone())
+    Ok(service.binding_snapshot())
 }
 fn admit(
     state: &mut State,
@@ -551,7 +551,7 @@ pub fn http(
                         .iter()
                         .find(|p| p.id.as_str() == id && p.status == Status::Pending)
                         .ok_or_else(|| fail("Pending port not found"))?;
-                    (p.clone(), service(&state, p, now())?.clone())
+                    (p.clone(), service(&state, p, now())?.binding_snapshot())
                 };
                 if request.node.as_str() != crate::config::node_id().map_err(fail)? {
                     return Err(fail("Port belongs to another node"));
@@ -1527,6 +1527,126 @@ fn main(){
  thread::spawn(||{let listener=TcpListener::bind("127.0.0.1:33005").unwrap();for stream in listener.incoming(){let mut s=stream.unwrap();thread::spawn(move||{s.write_all(b"banner\n").unwrap();let mut body=Vec::new();let _=s.read_to_end(&mut body);let _=s.write_all(b"after:");let _=s.write_all(&body);let _=s.shutdown(Shutdown::Write);});}});
  let mut first=true;loop{if let Ok(mut s)=TcpStream::connect("127.0.0.1:33002"){if first{s.write_all(b"outbound").unwrap();s.shutdown(Shutdown::Write).unwrap();let mut reply=Vec::new();s.read_to_end(&mut reply).unwrap();if reply==b"host:outbound"{std::fs::write("/workspace/outbound-result",b"half-close-ok").unwrap();first=false;}}else{let _=s.write_all(b"hold");let mut reply=Vec::new();let _=s.read_to_end(&mut reply);}}thread::sleep(Duration::from_millis(100));}
 }"#;
+    #[test]
+    #[ignore = "requires CONTROL_QA_SERVICE_IMAGE Full profile and CONTROL_QA_CONTROL_BIN; isolated service commands, downloads and peer routing, no models"]
+    fn live_service_commands_download_and_connect_two_private_services() {
+        let image=std::env::var("CONTROL_QA_SERVICE_IMAGE").unwrap();
+        let binary=std::env::var("CONTROL_QA_CONTROL_BIN").unwrap();
+        let root=PathBuf::from("/private/tmp").join(format!("control-service-interaction-{}-{}",std::process::id(),now()));
+        let state_dir=root.join("state");let config=root.join("config");
+        fs::create_dir_all(&state_dir).unwrap();fs::create_dir(&config).unwrap();
+        let node=ring::digest::digest(&ring::digest::SHA256,root.to_string_lossy().as_bytes()).as_ref()[..16].iter().map(|b|format!("{b:02x}")).collect::<String>();
+        fs::write(state_dir.join("node-id"),&node).unwrap();fs::set_permissions(state_dir.join("node-id"),fs::Permissions::from_mode(0o600)).unwrap();
+        let cookie="d".repeat(64);fs::write(state_dir.join("operator-session"),&cookie).unwrap();fs::set_permissions(state_dir.join("operator-session"),fs::Permissions::from_mode(0o600)).unwrap();
+        let listener=TcpListener::bind("127.0.0.1:0").unwrap();let address=listener.local_addr().unwrap();drop(listener);let url=format!("http://{address}");
+        let (mut state,run,_)=super::tests::fixture();
+        let template=serde_json::to_value(&state.services[0]).unwrap();state.services.clear();
+        let mut ids=Vec::new();
+        for name in ["source","client","probe"] {
+            let mut value=template.clone();let id=format!("svc-{name}-{node}");ids.push(id.clone());
+            value["resource"]["id"]=json!(id);value["resource"]["owner"]["node"]=json!(node);
+            value["resource"]["image"]=json!(image);value["resource"]["phase"]=json!(Phase::Requested);
+            value["resource"]["lease"]=serde_json::to_value(control_core::resources::Lease::new(now(),180).unwrap()).unwrap();
+            value["workspace_exec"]=json!(true);value["profile"]=json!(crate::worker_profile::Profile::inspect(&image).unwrap());
+            value["command"]=json!(if name=="probe" {"printf 'short probe stdout\\n'; printf 'short probe stderr\\n' >&2; exit 7"}else{"exec sleep 180"});
+            state.services.push(serde_json::from_value(value).unwrap());
+        }
+        state.runtime.runs[0].status="completed".into();
+        let write=|state:&State|fs::write(state_dir.join("state.json"),serde_json::to_vec(state).unwrap()).unwrap();
+        let read=||serde_json::from_slice::<State>(&fs::read(state_dir.join("state.json")).unwrap()).unwrap();
+        write(&state);
+        let launch=||{
+            let log=fs::OpenOptions::new().create(true).append(true).open(root.join("server.log")).unwrap();
+            Server{child:Command::new(&binary).arg("serve").env("CONTROL_STATE_DIR",&state_dir).env("CONTROL_CONFIG_DIR",&config).env("CONTROL_ADDR",address.to_string()).env_remove("CONTROL_WORKER_IMAGE").env_remove("CONTROL_CLAUDE_IMAGE").stdin(Stdio::null()).stdout(log.try_clone().unwrap()).stderr(log).spawn().unwrap()}
+        };
+        struct Cleanup {node:String,root:PathBuf}
+        impl Drop for Cleanup {fn drop(&mut self){
+            if let Ok(bytes)=fs::read(self.root.join("state/state.json")) && let Ok(state)=serde_json::from_slice::<State>(&bytes) {
+                for service in &state.services {if let Some(id)=service.resource.phase.container() && crate::services::port_binding(service,id).is_ok(){let _=Command::new("docker").args(["rm","-f",id.as_str()]).stdout(Stdio::null()).stderr(Stdio::null()).status();}}
+            }
+            println!("Service interaction fixture retained at {} (node {})",self.root.display(),self.node);
+        }}
+        let _cleanup=Cleanup{node:node.clone(),root:root.clone()};
+        let mut server=launch();
+        wait(||{let state=read();matches!(state.services[0].resource.phase,Phase::Running(_))&&matches!(state.services[1].resource.phase,Phase::Running(_))&&matches!(state.services[2].resource.phase,Phase::Stopped(_))},25,"two services and retained short probe");
+        let probe=serde_json::to_value(&read().services[2]).unwrap();
+        assert!(probe["output"].as_str().unwrap().contains("short probe stdout"));assert!(probe["output"].as_str().unwrap().contains("short probe stderr"));assert_eq!(probe["exit_code"],7);
+        server.stop();state=read();state.runtime.runs[0].status="running".into();
+        let source_command=r#"set -eu
+cat > /workspace/server.rs <<'RUST'
+use std::{io::{Read,Write},net::{TcpListener,Shutdown}};
+fn main(){for socket in TcpListener::bind("127.0.0.1:34001").unwrap().incoming(){let mut socket=socket.unwrap();let mut data=Vec::new();socket.read_to_end(&mut data).unwrap();socket.write_all(b"peer:").unwrap();socket.write_all(&data).unwrap();socket.shutdown(Shutdown::Write).unwrap();}}
+RUST
+rustc --edition=2024 /workspace/server.rs -o /workspace/server
+nohup /workspace/server > /workspace/server.log 2>&1 < /dev/null &
+printf source-ready
+"#;
+        let source_receipt=crate::services::enqueue_test_command(&mut state,&run,"source-setup",&ids[0],source_command,30).unwrap();
+        let staged=crate::services::enqueue_test_command(&mut state,&run,"client-files",&ids[1],"set -eu; printf persistent > /workspace/settings; if timeout 1 bash -c 'exec 3<>/dev/tcp/127.0.0.1/34003' 2>/dev/null; then exit 42; fi; printf staged-without-network",10).unwrap();
+        let ingress=admit(&mut state,&run,"attempt-a","source-ingress",Input{service_id:ids[0].clone().try_into().unwrap(),name:"source-ingress".to_owned().try_into().unwrap(),direction:Direction::Ingress,service_port:NonZeroU16::new(34001).unwrap(),target:None},node.clone().try_into().unwrap(),|_|Ok(())).unwrap();
+        let ingress_id=ingress["port_id"].as_str().unwrap().to_owned();
+        state.runtime.runs[0].status="completed".into();write(&state);server=launch();
+        let execution=|service:usize,id:&str|{let state=read();let value=serde_json::to_value(&state.services[service]).unwrap();value["executions"].as_array().unwrap().iter().find(|e|e["id"]==id).unwrap().clone()};
+        wait(||execution(0,source_receipt["execution_id"].as_str().unwrap())["status"]=="completed"&&execution(1,staged["execution_id"].as_str().unwrap())["status"]=="completed",35,"service file creation after model turn");
+        assert_eq!(execution(1,staged["execution_id"].as_str().unwrap())["exit_code"],0);
+        let client=reqwest::blocking::Client::builder().no_proxy().timeout(Duration::from_secs(10)).build().unwrap();
+        let post=|id:&str,fields:&str|{let response=client.post(format!("{url}/tools/ports")).header("Cookie",format!("control_operator={cookie}")).header("Content-Type","application/x-www-form-urlencoded").body(format!("id={id}&{fields}")).send().unwrap();assert_eq!(response.status(),200);};
+        let port=|id:&str|read().ports.into_iter().find(|p|p.id.as_str()==id).unwrap();
+        assert_eq!(port(&ingress_id).status,Status::Pending);post(&ingress_id,"seconds=120");
+        wait(||port(&ingress_id).approval.as_ref().is_some_and(|a|a.host_port!=0),8,"source ingress approval");
+        let published=port(&ingress_id).approval.unwrap().host_port;
+        // A private host HTTP fixture represents an explicitly approved download
+        // origin. Its binary body never passes through model text or host mounts.
+        let download=TcpListener::bind("127.0.0.1:0").unwrap();let download_address=download.local_addr().unwrap();
+        let body=(0..262144).map(|n|(n%251)as u8).collect::<Vec<_>>();let expected=ring::digest::digest(&ring::digest::SHA256,&body).as_ref().iter().map(|b|format!("{b:02x}")).collect::<String>();
+        let download_thread=thread::spawn(move||{let(mut socket,_)=download.accept().unwrap();socket.set_read_timeout(Some(Duration::from_secs(15))).unwrap();let mut request=[0;4096];let _=socket.read(&mut request).unwrap();write!(socket,"HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()).unwrap();socket.write_all(&body).unwrap();});
+        server.stop();state=read();state.runtime.runs[0].status="running".into();
+        let mut pending=Vec::new();
+        for (name,local,target) in [("peer-route",34003,SocketAddr::from(([127,0,0,1],published))),("asset-download",34002,download_address)] {
+            let value=admit(&mut state,&run,"attempt-a",name,Input{service_id:ids[1].clone().try_into().unwrap(),name:name.to_owned().try_into().unwrap(),direction:Direction::Egress,service_port:NonZeroU16::new(local).unwrap(),target:Some(Endpoint{host:"127.0.0.1".into(),port:NonZeroU16::new(target.port()).unwrap()})},node.clone().try_into().unwrap(),|_|Ok(())).unwrap();pending.push(value["port_id"].as_str().unwrap().to_owned());
+        }
+        state.runtime.runs[0].status="completed".into();write(&state);server=launch();
+        wait(||client.get(format!("{url}/health")).send().is_ok_and(|r|r.status().is_success()),5,"approval UI online");
+        for id in &pending {assert_eq!(port(id).status,Status::Pending);post(id,"seconds=100&loopback=yes");}
+        server.stop();state=read();state.runtime.runs[0].status="running".into();
+        let command=format!(r#"set -eu
+test "$(cat /workspace/settings)" = persistent
+curl --noproxy '*' --fail --silent --show-error --retry 8 --retry-connrefused --retry-delay 1 --max-time 15 --connect-to 'download.invalid:80:127.0.0.1:34002' http://download.invalid/asset -o /workspace/asset
+test "$(sha256sum /workspace/asset | cut -d ' ' -f 1)" = {expected}
+cat > /workspace/client.rs <<'RUST'
+use std::{{io::{{Read,Write}},net::{{TcpStream,Shutdown}},time::{{Duration,Instant}}}};
+fn main(){{let start=Instant::now();let mut socket=loop{{match TcpStream::connect("127.0.0.1:34003"){{Ok(s)=>break s,Err(_)if start.elapsed()<Duration::from_secs(8)=>std::thread::sleep(Duration::from_millis(100)),Err(e)=>panic!("{{e}}")}}}};socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();socket.write_all(b"connected").unwrap();socket.shutdown(Shutdown::Write).unwrap();let mut reply=String::new();socket.read_to_string(&mut reply).unwrap();assert_eq!(reply,"peer:connected");println!("peer-connected");}}
+RUST
+rustc --edition=2024 /workspace/client.rs -o /workspace/client
+/workspace/client
+printf verified-download >> /workspace/completions
+"#);
+        let receipt=crate::services::enqueue_test_command(&mut state,&run,"download-connect",&ids[1],&command,60).unwrap();state.runtime.runs[0].status="completed".into();write(&state);server=launch();
+        let execution_id=receipt["execution_id"].as_str().unwrap();
+        wait(||execution(1,execution_id)["status"]=="completed",65,"binary download and cross-container route");
+        let outcome=execution(1,execution_id);assert_eq!(outcome["exit_code"],0,"{outcome}");assert!(outcome["output"].as_str().unwrap().contains("peer-connected"));download_thread.join().unwrap();
+        server.stop();state=read();state.runtime.runs[0].status="running".into();
+        let check=crate::services::enqueue_test_command(&mut state,&run,"verify-retention",&ids[1],"test $(wc -c < /workspace/asset) = 262144; test $(cat /workspace/completions) = verified-download; printf retained-once",10).unwrap();state.runtime.runs[0].status="completed".into();write(&state);server=launch();
+        wait(||execution(1,check["execution_id"].as_str().unwrap())["status"]=="completed",15,"private files and exactly one effect across restart");
+        assert_eq!(execution(1,check["execution_id"].as_str().unwrap())["exit_code"],0);
+        server.stop();state=read();state.runtime.runs[0].status="running".into();
+        let failed=crate::services::enqueue_test_command(&mut state,&run,"failed-command",&ids[1],"printf expected-command-error >&2; exit 7",10).unwrap();state.runtime.runs[0].status="completed".into();write(&state);server=launch();
+        wait(||execution(1,failed["execution_id"].as_str().unwrap())["status"]=="failed",15,"nonzero command reports failure");
+        assert_eq!(execution(1,failed["execution_id"].as_str().unwrap())["exit_code"],7);
+        assert!(execution(1,failed["execution_id"].as_str().unwrap())["output"].as_str().unwrap().contains("expected-command-error"));
+        assert!(matches!(read().services[1].resource.phase,Phase::Running(_)));
+        server.stop();state=read();state.runtime.runs[0].status="running".into();
+        let timeout=crate::services::enqueue_test_command(&mut state,&run,"timeout",&ids[1],"printf before-timeout; exec sleep 60",1).unwrap();state.runtime.runs[0].status="completed".into();write(&state);server=launch();
+        wait(||execution(1,timeout["execution_id"].as_str().unwrap())["status"]=="timed_out"&&matches!(read().services[1].resource.phase,Phase::Stopped(_)),15,"timed-out command stops only its service");
+        assert!(matches!(read().services[0].resource.phase,Phase::Running(_)));server.stop();state=read();state.runtime.runs[0].status="running".into();
+        let crash=crate::services::enqueue_test_command(&mut state,&run,"crash-command",&ids[0],"printf once >> /workspace/crash-marker; exec sleep 60",30).unwrap();state.runtime.runs[0].status="completed".into();write(&state);server=launch();
+        wait(||execution(0,crash["execution_id"].as_str().unwrap())["status"]=="running",10,"command running before host crash");
+        let running=read();let source=&running.services[0];let container=source.resource.phase.container().unwrap();crate::services::port_binding(source,container).unwrap();
+        wait(||crate::runtime::docker_query(&["exec",container.as_str(),"cat","/workspace/crash-marker"]).is_ok_and(|text|text=="once"),5,"remote command effect before crash");
+        server.crash();server=launch();
+        wait(||execution(0,crash["execution_id"].as_str().unwrap())["status"]=="interrupted"&&matches!(read().services[0].resource.phase,Phase::Stopped(_)),15,"uncertain command fenced without replay after crash");server.stop();
+        println!("Verified service file creation, retained failed output, explicit scoped binary download, peer routing, restart persistence and timeout cleanup.");
+    }
     #[test]
     #[ignore = "requires CONTROL_QA_SERVICE_IMAGE, CONTROL_QA_CONTROL_BIN and Docker; isolated generic TCP fixtures, no models"]
     fn live_tcp_ports_preserve_half_close_and_recover_after_host_death() {

@@ -17,6 +17,8 @@ them. Operator stdio/HTTP MCP does not yet expose service management.
 | `control_service_status` | Inspect one handle, or list active services and ten recent completed handles. |
 | `control_service_attach` | Read status and bounded output for an owned handle; does not extend its lease. |
 | `control_service_stop` | Record stop intent. Wait for `Stopped` before assuming removal succeeded. |
+| `control_service_exec` | Submit a bounded command inside an owned running service; returns an execution ID. |
+| `control_service_exec_status` | Read that command's live output, durable status and exit code. |
 
 Commands run in a fresh container from the attempt's captured, immutable Nix
 worker image. Rebuild worker/Claude images with the documented Nix setup before
@@ -28,24 +30,39 @@ The initial scope is deliberately small:
 - No Docker network, provider credentials, Docker socket or host/attempt mounts.
   [Scoped TCP ports](PORTS.md) require separate operator approval and trusted
   relays; they do not enable the container's network namespace.
-- Read-only image, non-root user, dropped capabilities, no new privileges and
+- Lite has a read-only root; Full has a private Nix layer. Both use a non-root user, dropped capabilities, no new privileges and
   a private PID namespace. No automatic container restart.
-- Private writable tmpfs: `/workspace` 64 MiB, `/tmp` 128 MiB and `/home/agent`
+- Private writable tmpfs: `/workspace` 64 MiB (Full: 512 MiB), `/tmp` 128 MiB and `/home/agent`
   32 MiB. Files survive model turns and a Control process restart while the
   container stays alive; they are not durable storage across container stops,
   engine restart or machine restart. Attempt checkpoints do not include them.
 - Eight reserved service slots per node, each limited to one CPU, 512 MiB RAM
-  and 64 processes. Fenced resources retain their reservation.
+  and 64 processes (Full: 2 GiB and 128 processes). Fenced resources retain their reservation.
 - Lease of 1–3600 seconds, default 1800. There is no renewal API yet. Use a
   foreground command; shell exit ends the service and its descendants.
 - Per-container Docker logs rotate at two 1 MiB files. Reads return at most
   80 lines and 16,000 bytes. Completed history is bounded to 128 records;
   stopped receipts remain pinned while their originating attempt is active.
+  Final bounded output and an observed exit code are saved before removal, so a
+  short failed probe remains inspectable after its container disappears.
 
-Attachment currently reads logs and metadata; it does not provide an interactive
-exec/write channel. Tool-specific operations belong behind an explicit resource
-binding rather than granting host command execution. Task-specific adapters and
-server configuration remain outside Control's source.
+Attachment reads logs and metadata. To configure a service after approval, use
+`control_service_exec` with its service ID. Shell commands and heredocs can write
+private setup files; clients can use the service's approved loopback relays to
+download binaries directly into `/workspace`, without passing them through model
+text or mounting a host folder. The service's foreground process must stay alive;
+`exec sleep 1800` is a generic idle command while setting up other processes.
+Long-lived background programs must redirect stdin/stdout/stderr to private files.
+
+Commands survive model turns and have a 1–1800 second timeout (default 120), capped
+by the service lease. Poll `control_service_exec_status` until complete. One active
+command per service and 16 retained command receipts bound work and output.
+Retries of the same request identity return its receipt rather than re-executing.
+Timeout, shutdown or uncertain completion requests service stop: killing the host
+Docker client alone would not prove its remote writer stopped. A restart never
+replays an in-flight command. Other services remain running. These tools provide
+no host command execution, arbitrary container selection or new network authority.
+Task-specific adapters and server configuration remain outside Control's source.
 
 ## Lifecycle and recovery
 

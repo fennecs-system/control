@@ -50,6 +50,18 @@ use only that pinned IP and port, without redirects or DNS re-resolution. The
 service can speak TLS itself; Control does not terminate or supply credentials.
 This is TCP forwarding, not an HTTP proxy and not a container-wide egress grant.
 
+After approval, a service command can preserve TLS hostname verification while
+using the local relay, for example `curl --connect-to
+example.com:443:127.0.0.1:3001 https://example.com/file -o /workspace/file`.
+Redirects or dependencies on other hosts require their own approved endpoints;
+package managers may need a task-local adapter rather than a generic proxy setting.
+
+For two services, expose an ingress on the destination, then request an egress on
+the source targeting that ingress's reported host `127.0.0.1` port. The operator
+must explicitly allow loopback. The source connects to its own `service_port`;
+the host port is the broker's target, not a container's direct route to the host.
+Each side keeps its own ownership, readiness, revocation and lease checks.
+
 A literal `127.0.0.1` or `::1` destination additionally requires the operator's
 explicit loopback checkbox. Private DNS answers, metadata, multicast and LAN
 addresses remain denied; checking the box does not authorize a hostname that

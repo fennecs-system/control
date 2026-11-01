@@ -116,7 +116,7 @@ These chat commands work on the web, in the TUI and in authorized Discord DMs:
 - **Rooms.** Shared updates, durable inboxes and an optional bounded
   [follow-up turn](docs/ROOM-NOTIFICATIONS.md).
 - **Services.** Persistent Nix tool containers with separately approved,
-  [scoped TCP ports](docs/PORTS.md).
+  [scoped TCP ports](docs/PORTS.md) and [commands in their private workspace](docs/PERSISTENT-TOOLS.md).
 - **Tools.** Search the catalogue by tool name, MCP name or `lens:engineering`.
   [Approved web fetch and offline Firefox capture](docs/WEB-ACCESS.md), search
   and Rust playground have dedicated views.
