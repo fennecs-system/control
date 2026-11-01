@@ -13,6 +13,8 @@ impl Receipt {
 
 fn target<'a>(state: &'a State, port: &Port) -> Option<&'a crate::runtime::Run> {
     let origin = state.runtime.runs.iter().find(|run|run.id == port.origin_run && run.actor == port.actor)?;
+    if matches!(origin.status.as_str(),"cancelled"|"cancelling"|"failed"|"interrupted"|"blocked")
+        || !origin.attempts.iter().any(|attempt|attempt.workspace_id.as_deref()==Some(&port.origin_attempt)) {return None;}
     let root = origin.persona.as_ref().map_or(origin.id.as_str(), |persona|persona.root.as_str());
     let root = state.runtime.runs.iter().find(|run|run.id == root && run.actor == origin.actor && run.action == origin.action)?;
     if origin.id != root.id && !state.runtime.runs.iter()
@@ -63,6 +65,12 @@ pub(super) fn advance(state: &mut State, save: impl FnOnce(&State) -> io::Result
     let context = latest.context.clone();
     let lenses = latest.lenses.clone();
     let persona = crate::delegation::lineage(latest);
+    let mut resources = crate::services::grants(state,latest);
+    for origin in state.runtime.runs.iter().filter(|run|indices.iter().any(|index|state.ports[*index].origin_run==run.id)) {
+        for grant in crate::services::grants(state,origin) {
+            if !resources.contains(&grant) {resources.push(grant);}
+        }
+    }
     let objective = root.objective.clone();
     let decisions = indices.iter().map(|index| {
         let port = &state.ports[*index];
@@ -81,6 +89,7 @@ pub(super) fn advance(state: &mut State, save: impl FnOnce(&State) -> io::Result
         next.context = context;
         next.lenses = lenses;
         next.persona = Some(persona);
+        next.resource_grants = resources;
         let id = next.id.clone();
         state.chats[chat_index].messages.push(crate::chat::Message {text:format!("Port decisions\n{decisions}"),run_id:Some(id),reply:String::new()});
         state.chats[chat_index].revision = revision.saturating_add(1);
@@ -160,5 +169,33 @@ mod tests {
         assert_eq!(state.runtime.runs.len(),3);
         assert_eq!(state.runtime.runs[2].chat_id.as_deref(),Some(chat.as_str()));
         assert_eq!(state.runtime.runs[2].kind,"port-decision");
+    }
+    #[test]
+    fn waiting_chat_does_not_starve_an_independent_ready_callback() {
+        let (mut state,_)=approved(); // first task is still running
+        let (mut other,chat)=approved();
+        other.runtime.runs[0].status="completed".into();
+        state.chats.extend(other.chats);
+        state.runtime.runs.extend(other.runtime.runs);
+        state.ports.extend(other.ports);
+        advance(&mut state,|_|Ok(())).unwrap();
+        assert_eq!(state.runtime.runs.len(),3);
+        assert_eq!(state.runtime.runs[2].chat_id.as_deref(),Some(chat.as_str()));
+        assert!(!state.ports[0].decision.as_ref().unwrap().acknowledged);
+    }
+    #[test]
+    fn denial_wakes_without_granting_access_and_cancelled_requests_never_wake() {
+        let (mut state,_)=approved();
+        state.ports[0].status=Status::Stopping;
+        state.ports[0].approval=None;
+        state.ports[0].decision=Some(Receipt::pending(false));
+        state.runtime.runs[0].status="completed".into();
+        advance(&mut state,|_|Ok(())).unwrap();
+        assert!(state.runtime.runs[1].objective.contains("denied"));
+        assert!(state.ports[0].approval.is_none());
+        let (mut cancelled,_)=approved();
+        cancelled.runtime.runs[0].status="cancelled".into();
+        advance(&mut cancelled,|_|panic!("cancelled origin must not wake")).unwrap();
+        assert_eq!(cancelled.runtime.runs.len(),1);
     }
 }
