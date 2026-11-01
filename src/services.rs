@@ -102,14 +102,14 @@ impl Service {
 struct Input {
     command: CommandText,
     #[serde(default = "default_lease")]
-    lease_seconds: u64,
+    lease_seconds: i64,
 }
-fn default_lease() -> u64 {
-    1800
+fn default_lease() -> i64 {
+    -1
 }
 pub fn definitions() -> Vec<Value> {
     let mut tools = vec![
-        json!({"name":"control_service_start","description":"Start a chat-owned offline tool container that survives model turns and Control restart while its lease is live. Private bounded /workspace memory, no attempt files, credentials, network or host mounts. Use a foreground command. The immutable worker image needs control-service-runner. Returns a durable handle immediately; inspect status before assuming startup succeeded. State lasts for this container, not engine/machine restart.","inputSchema":{"type":"object","properties":{"command":{"type":"string","minLength":1,"maxLength":16000},"lease_seconds":{"type":"integer","minimum":1,"maximum":3600,"default":1800}},"required":["command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"openWorldHint":false}}),
+        json!({"name":"control_service_start","description":"Start a chat-owned offline tool container that survives model turns and Control restart. lease_seconds=-1 (default) retains it until explicitly stopped; a positive duration limits its lifetime. Private bounded /workspace memory, no attempt files, credentials, network or host mounts. Use a foreground command. The immutable worker image needs control-service-runner. Returns a durable handle immediately; inspect status before assuming startup succeeded. State lasts for this container, not engine/machine restart.","inputSchema":{"type":"object","properties":{"command":{"type":"string","minLength":1,"maxLength":16000},"lease_seconds":{"type":"integer","oneOf":[{"const":-1},{"minimum":1,"maximum":3600}],"default":-1}},"required":["command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"openWorldHint":false}}),
     ];
     for (name, description, readonly) in [
         (
@@ -204,7 +204,7 @@ pub fn call(
             "{{index .Config.Labels \"dev.control.service-runner\"}}",
             image.as_str(),
         ])?;
-        if marker.trim() != "1" {
+        if !matches!(marker.trim(), "1" | "2") || (input.lease_seconds == -1 && marker.trim() != "2") {
             return Err(fail(
                 "Rebuild worker/Claude images with Nix setup before starting persistent services",
             ));
@@ -298,7 +298,11 @@ fn admit_profile(
         nonce,
     } = request;
     let (run, chat) = caller(s, run, generation)?;
-    let lease = Lease::new(time, input.lease_seconds).map_err(fail)?;
+    let lease = if input.lease_seconds == -1 {
+        Lease::until_stopped(time)
+    } else {
+        u64::try_from(input.lease_seconds).map_err(|_|control_core::resources::Invalid).and_then(|seconds|Lease::new(time,seconds))
+    }.map_err(fail)?;
     if nonce.is_empty()
         || nonce.len() > 128
         || !nonce
@@ -327,7 +331,7 @@ fn admit_profile(
     .map_err(fail)?;
     if let Some(existing) = s.services.iter().find(|service| service.resource.id == id) {
         if existing.command.0 != input.command.0
-            || existing.resource.lease.seconds() != input.lease_seconds
+            || existing.resource.lease.seconds() != lease.seconds()
         {
             return Err(fail("Request identity already has a different command"));
         }
@@ -571,10 +575,10 @@ pub(crate) fn relay_capable(service: &Service) -> io::Result<()> {
     if cached==Some(true){return Ok(());}
     if cached==Some(false){return Err(fail("Rebuild the immutable worker images with Nix setup, then start a new service to enable TCP relay v2"));}
     let marker = crate::runtime::docker_query(&["image", "inspect", service.resource.image.as_str(), "--format", "{{index .Config.Labels \"dev.control.tcp-relay\"}}"])?;
-    let capable=marker.trim()=="2";
+    let capable=matches!(marker.trim(),"2"|"3");
     let mut cached=cache.lock().map_err(|_|fail("Relay capability cache unavailable"))?;
     if cached.len()<MAX_RECORDS{cached.insert(service.resource.image.clone(),capable);}
-    if marker.trim() != "2" { return Err(fail("Rebuild the immutable worker images with Nix setup, then start a new service to enable TCP relays")); }
+    if !capable { return Err(fail("Rebuild the immutable worker images with Nix setup, then start a new service to enable TCP relays")); }
     Ok(())
 }
 pub(crate) fn port_binding(service: &Service, expected: &ContainerId) -> io::Result<PortBinding> {

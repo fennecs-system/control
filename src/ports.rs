@@ -222,7 +222,7 @@ fn authorized(state: &State, port: &Port, time: u64) -> io::Result<Service> {
         .ok_or_else(|| fail("Port has no approval"))?;
     if time < approval.issued
         || time >= approval.expires
-        || approval.expires.saturating_sub(approval.issued) > 3600
+        || (approval.expires != u64::MAX && approval.expires.saturating_sub(approval.issued) > 3600)
     {
         return Err(fail("Port approval expired"));
     }
@@ -463,7 +463,7 @@ pub fn call(
 fn approve(
     state: &mut State,
     id: &str,
-    seconds: u64,
+    seconds: i64,
     allow_loopback: bool,
     pinned: Option<SocketAddr>,
     time: u64,
@@ -476,12 +476,12 @@ fn approve(
         .ok_or_else(|| fail("Pending request not found"))?;
     let port = &state.ports[index];
     let service = service(state, port, time)?;
-    let expires = time
-        .checked_add(seconds)
-        .filter(|end| (1..=3600).contains(&seconds) && *end <= service.resource.lease.expires())
-        .ok_or_else(|| {
-            fail("Choose a lease within the remaining service lifetime (maximum one hour)")
-        })?;
+    let expires = match seconds {
+        -1 => service.resource.lease.expires(),
+        1..=3600 => time.checked_add(seconds as u64)
+            .ok_or_else(||fail("Invalid lease"))?.min(service.resource.lease.expires()),
+        _ => return Err(fail("Choose service lifetime (-1) or 1–3600 seconds")),
+    };
     match port.direction {
         Direction::Ingress if pinned.is_none() => {}
         Direction::Egress => {
@@ -557,6 +557,10 @@ pub fn http(
                     return Err(fail("Port belongs to another node"));
                 }
                 crate::services::relay_capable(&service)?;
+                if service.resource.lease.is_until_stopped() && fields.get("seconds").is_some_and(|v|v == "-1") {
+                    let marker = crate::runtime::docker_query(&["image","inspect",service.resource.image.as_str(),"--format","{{index .Config.Labels \"dev.control.tcp-relay\"}}"])?;
+                    if marker.trim() != "3" {return Err(fail("Rebuild worker images before approving service-lifetime ports"));}
+                }
                 crate::services::port_binding(&service, &request.container)?;
                 let allow_loopback = fields.get("loopback").is_some_and(|v| v == "yes");
                 let pinned = request
@@ -584,9 +588,8 @@ pub fn http(
         }
         let state = shared.lock().map_err(|_| fail("State unavailable"))?;
         let ports=state.ports.iter().rev().filter(|p|p.status!=Status::Stopped).take(MAX_PORTS).map(|p|{
-            let service=state.services.iter().find(|s|s.resource.id==p.service);let ttl=service.map(|s|s.resource.lease.expires().saturating_sub(now()).min(3600)).unwrap_or(0);
             let detail=match p.direction{Direction::Ingress=>format!("host loopback → service :{}",p.service_port),Direction::Egress=>format!("service :{} → {}:{}",p.service_port,crate::escape(&p.target.as_ref().map(|e|e.host.clone()).unwrap_or_default()),p.target.as_ref().map(|e|e.port.get()).unwrap_or(0))};
-            let action=if p.status==Status::Pending{format!("<label>Seconds<input name='seconds' type='number' min='1' max='{}' value='{}' required></label>{}<button class='primary'>Allow port</button><button name='revoke' value='yes' formnovalidate>Deny</button>",ttl,ttl.min(900),if p.direction==Direction::Egress{"<label><input type='checkbox' name='loopback' value='yes'> Allow this exact literal loopback target</label>"}else{""})}else{"<button name='revoke' value='yes'>Revoke</button>".into()};
+            let action=if p.status==Status::Pending{format!("<label>Allow for<select name='seconds'><option value='-1'>Service lifetime</option><option value='900'>Up to 15 minutes</option><option value='3600'>Up to 1 hour</option></select></label><p class='muted'>Access ends when this service stops. You can revoke it at any time.</p>{}<button class='primary'>Allow port</button><button name='revoke' value='yes' formnovalidate>Deny</button>",if p.direction==Direction::Egress{"<label><input type='checkbox' name='loopback' value='yes'> Allow this exact literal loopback target</label>"}else{""})}else{"<button name='revoke' value='yes'>Revoke</button>".into()};
             let address=p.approval.as_ref().filter(|a|a.host_port!=0).map(|a|format!(" · 127.0.0.1:{}",a.host_port)).unwrap_or_default();
             format!("<article><h3>{}</h3><p>{detail}{address}</p><p>{:?} · {} · {} · {}</p><p>{}</p><form method='post' action='/tools/ports'><input type='hidden' name='id' value='{}'>{action}</form></article>",crate::escape(&p.name.0),p.status,crate::escape(&p.chat),if p.ready{"ready"}else{"waiting"},crate::escape(p.service.as_str()),crate::escape(&p.diagnostic),crate::escape(p.id.as_str()))
         }).collect::<String>();
@@ -1283,6 +1286,37 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[test]
+    fn service_lifetime_approval_is_explicit_revocable_and_survives_reload() {
+        let (mut state, run, _) = fixture();
+        let time = now();
+        state.services[0].resource.lease = Lease::until_stopped(time).unwrap();
+        request(&mut state,&run,Direction::Ingress).unwrap();
+        let id = state.ports[0].id.as_str().to_owned();
+        approve(&mut state,&id,-1,false,None,time,|_|Ok(())).unwrap();
+        let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        assert!(authorized(&restored,&restored.ports[0],time+86400).is_ok());
+        state.ports[0].status = Status::Stopping;
+        assert!(authorized(&state,&state.ports[0],time+86400).is_err());
+        state.ports[0].status = Status::Approved;
+        state.services[0].resource.phase = Phase::Stopping {container:None,reason:control_core::resources::StopReason::Requested};
+        assert!(authorized(&state,&state.ports[0],time+86400).is_err());
+    }
+    #[test]
+    fn approval_clamps_to_service_deadline_after_operator_review() {
+        let (mut state, run, _) = fixture();
+        request(&mut state, &run, Direction::Ingress).unwrap();
+        let id = state.ports[0].id.as_str().to_owned();
+        let deadline = state.services[0].resource.lease.expires();
+        // The form was opened with 312 seconds left; 13 seconds pass before approval.
+        approve(&mut state, &id, 312, false, None, deadline - 299, |_| Ok(())).unwrap();
+        assert_eq!(state.ports[0].approval.as_ref().unwrap().expires, deadline);
+        state.ports[0].status = Status::Pending;
+        assert!(approve(&mut state, &id, 0, false, None, deadline - 1, |_| Ok(())).is_err());
+        assert!(approve(&mut state, &id, 3601, false, None, deadline - 1, |_| Ok(())).is_err());
+        assert!(approve(&mut state, &id, 300, false, None, deadline, |_| Ok(())).is_err());
+        assert_eq!(state.ports[0].status, Status::Pending);
     }
     #[test]
     fn approval_is_exact_endpoint_and_durable_service_generation_not_a_network_grant() {

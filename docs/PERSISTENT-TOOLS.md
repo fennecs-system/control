@@ -38,8 +38,10 @@ The initial scope is deliberately small:
   engine restart or machine restart. Attempt checkpoints do not include them.
 - Eight reserved service slots per node, each limited to one CPU, 512 MiB RAM
   and 64 processes (Full: 2 GiB and 128 processes). Fenced resources retain their reservation.
-- Lease of 1–3600 seconds, default 1800. There is no renewal API yet. Use a
-  foreground command; shell exit ends the service and its descendants.
+- `lease_seconds: -1` (default) retains a service until stopped; use 1–3600
+  seconds for a bounded lifetime. Use a foreground command; shell exit ends
+  the service and its descendants. Port approvals default to the service's
+  lifetime and remain revocable; an optional shorter duration never outlives it.
 - Per-container Docker logs rotate at two 1 MiB files. Reads return at most
   80 lines and 16,000 bytes. Completed history is bounded to 128 records;
   stopped receipts remain pinned while their originating attempt is active.
