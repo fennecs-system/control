@@ -95,7 +95,7 @@ fn parent_continuation(from: &runtime::Run, to: &runtime::Run) -> bool {
 
 /// The requesting conversation's recorded predecessors supply delegation
 /// edges. Sharing a root, actor, parent_chat, or a guessed ID is insufficient.
-fn scope<'a>(
+pub(crate) fn scope<'a>(
     state: &'a State,
     caller: &runtime::Run,
 ) -> Result<(HashSet<&'a str>, HashSet<&'a str>), &'static str> {
