@@ -96,7 +96,9 @@ Control implementation remains generic.
 
 For the next playtest, request **Minecraft Java 26.3** explicitly. Resolve that
 version from Mojang's manifest, verify its download hash and required Java runtime,
-and verify client protocol support before starting. Mineflayer's published support
+and verify client protocol support before starting. Mojang's 26.3 metadata requires
+Java 25: provision that runtime in the private service if the image's default Java
+is older. Mineflayer's published support
 list currently ends at 26.1; use a pinned ViaProxy release supporting 26.3 between
 the bot and server, with the bot using the supported 26.1 protocol. The proxy is
 a task-specific tool-container workload, not a Control integration. Do not silently
@@ -106,7 +108,8 @@ Suggested prompt:
 
 > Run a local offline-mode Minecraft Java 26.3 server and one persistent Mineflayer
 > bot named Cedar in separate persistent full-worker services, with ViaProxy
-> translating Cedar's supported 26.1 protocol to the 26.3 server. Verify Java and
+> translating Cedar's supported 26.1 protocol to the 26.3 server. Provision Java 25
+> in the private service if needed. Verify runtime and
 > dependency requirements, and pin and verify downloads. Use approved relays for
 > dependencies. Request server ingress and each inter-service egress using
 > peer_port_id; connect each client to its own container's loopback relay.
