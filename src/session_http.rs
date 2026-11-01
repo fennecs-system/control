@@ -586,6 +586,26 @@ mod tests {
             timings.push(start.elapsed());
         }
         assert_eq!(state.lock().unwrap().chats.iter().find(|chat|chat.id==long_chat).unwrap().messages.len(),15);
+        b.post("/frame",json!({"id":{"element-6066-11e4-a52e-4f735466cecf":frame}}));
+        let scroller=b.element("html");
+        let bottom_before=b.get(&format!("/element/{scroller}/property/scrollTop")).as_f64().unwrap();
+        b.post("/actions",json!({"actions":[{"type":"wheel","id":"history-scroll","actions":[{"type":"scroll","x":0,"y":0,"deltaX":0,"deltaY":-1200,"duration":100,"origin":{"element-6066-11e4-a52e-4f735466cecf":scroller}}]}]}));
+        std::thread::sleep(Duration::from_millis(500));
+        let top=b.get(&format!("/element/{scroller}/property/scrollTop")).as_f64().unwrap();
+        assert!(top < bottom_before-400.0,"The wheel must actually scroll the transcript: {bottom_before} → {top}");
+        {let mut state=state.lock().unwrap();let run=state.runtime.runs.iter_mut().rev().find(|run|run.chat_id.as_deref()==Some(&long_chat)).unwrap();run.result.push_str("\n\nTail arrived while reading history.");}
+        b.wait("Tail arrived while reading history.");
+        let after=b.get(&format!("/element/{scroller}/property/scrollTop")).as_f64().unwrap();
+        assert!((after-top).abs()<20.0,"Reading history moved from {top} to {after}");
+        b.post("/actions",json!({"actions":[{"type":"wheel","id":"history-scroll","actions":[{"type":"scroll","x":0,"y":0,"deltaX":0,"deltaY":1000000,"duration":100,"origin":{"element-6066-11e4-a52e-4f735466cecf":scroller}}]}]}));
+        std::thread::sleep(Duration::from_millis(500));
+        {let mut state=state.lock().unwrap();let run=state.runtime.runs.iter_mut().rev().find(|run|run.chat_id.as_deref()==Some(&long_chat)).unwrap();run.result.push_str(&format!("\n\n{}\nFollowing resumed.","An additional streamed paragraph.\n\n".repeat(20)));}
+        b.wait("Following resumed.");
+        let height=b.get(&format!("/element/{scroller}/property/scrollHeight")).as_f64().unwrap();
+        let viewport=b.get(&format!("/element/{scroller}/property/clientHeight")).as_f64().unwrap();
+        let top=b.get(&format!("/element/{scroller}/property/scrollTop")).as_f64().unwrap();
+        assert!(height-viewport-top<80.0,"Scrolling back to the end must re-enable following");
+        b.post("/frame",json!({"id":null}));
         timings.sort();println!("{}: 15 turns, median {:?}, maximum {:?}",if chrome{"Chrome"}else{"Firefox"},timings[7],timings[14]);
         assert!(timings[14]<Duration::from_secs(5),"Local fixture responses should stay responsive");
     }

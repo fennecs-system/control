@@ -391,13 +391,13 @@ fn attach_transcript(document: &web_sys::Document) -> Result<(), JsValue> {
             scroller.set_scroll_top(if at_end { scroller.scroll_height() } else { top });
             // Layout can settle after reconciliation (fonts, details and frame
             // sizing). Follow again at the next paint, but respect scrollback.
-            if at_end {
-                let callback = Closure::<dyn FnMut(f64)>::once(move |_| {
-                    if following.get() { scroller.set_scroll_top(scroller.scroll_height()); }
-                });
-                let _ = web_sys::window().unwrap().request_animation_frame(callback.as_ref().unchecked_ref());
-                callback.forget();
-            }
+            let callback = Closure::<dyn FnMut(f64)>::once(move |_| {
+                if following.get()==at_end {
+                    scroller.set_scroll_top(if at_end {scroller.scroll_height()} else {top});
+                }
+            });
+            let _ = web_sys::window().unwrap().request_animation_frame(callback.as_ref().unchecked_ref());
+            callback.forget();
             *previous.borrow_mut() = text;
         });
         request.set_onloadend(Some(finished.as_ref().unchecked_ref()));
