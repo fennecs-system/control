@@ -7,6 +7,40 @@ const INIT: &str = "{\"type\":\"system\",\"subtype\":\"init\",\"tools\":[\"mcp__
 const FINAL: &str = "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"done\",\"usage\":{\"input_tokens\":10,\"cache_read_input_tokens\":30,\"cache_creation_input_tokens\":5,\"output_tokens\":2}}\n";
 
 #[test]
+fn visible_messages_are_emitted_with_stable_identity_and_without_reasoning_blocks() {
+    let records=[
+        json!({"type":"item.started","item":{"type":"agent_message","id":"message-1","text":"Checking"}}),
+        json!({"type":"item.updated","item":{"type":"agent_message","id":"message-1","text":"Checking the inventory."}}),
+        json!({"type":"item.completed","item":{"type":"reasoning","id":"private","text":"not conversation output"}}),
+    ].iter().map(ToString::to_string).collect::<Vec<_>>().join("\n");
+    let mut events = Vec::new();
+    json_lines(records.as_bytes(), Codex::default(), |event| {
+        events.push(event)
+    })
+    .unwrap();
+    assert_eq!(events.len(), 2);
+    assert!(
+        matches!(&events[0],Event::Activity(a) if a.id=="message-1" && a.kind=="message" && a.text=="Checking")
+    );
+    assert!(
+        matches!(&events[1],Event::Activity(a) if a.id=="message-1" && a.text=="Checking the inventory.")
+    );
+    let first = json!({"type":"assistant","message":{"id":"claude-1","content":[{"type":"thinking","text":"not conversation output"},{"type":"text","text":"Checking\u{001b} the inventory."}]}});
+    let second = json!({"type":"assistant","message":{"id":"claude-2","content":[{"type":"text","text":"Connected."}]}});
+    let records = format!("{INIT}{first}\n{second}\n{FINAL}");
+    let mut events = Vec::new();
+    json_lines(records.as_bytes(), Claude::new(ALLOWED), |event| {
+        events.push(event)
+    })
+    .unwrap();
+    assert_eq!(events.len(), 2);
+    assert!(
+        matches!(&events[0],Event::Activity(a) if a.id=="claude-1" && a.text=="Checking the inventory.")
+    );
+    assert!(matches!(&events[1],Event::Activity(a) if a.id=="claude-2" && a.text=="Connected."));
+}
+
+#[test]
 fn adapters_share_events_and_usage_without_application_state() {
     let output = json_lines(
         format!("{INIT}{FINAL}").as_bytes(),
@@ -88,7 +122,7 @@ impl Read for Bytes<'_> {
 #[test]
 fn fragmented_utf8_and_bounded_assistant_messages() {
     let text = "🐾".repeat(6000);
-    let record = json!({"type":"assistant","message":{"content":[{"text":text},{"text":"tail"}]}});
+    let record = json!({"type":"assistant","message":{"id":"message-1","content":[{"type":"text","text":text},{"type":"text","text":"tail"}]}});
     let records = format!("{INIT}{record}\n{FINAL}");
     let mut events = Vec::new();
     json_lines(Bytes(records.as_bytes()), Claude::new(ALLOWED), |event| {

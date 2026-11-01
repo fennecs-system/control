@@ -89,13 +89,19 @@ impl Claude<'_> {
                 let mut remaining = 4000usize;
                 let mut first = true;
                 for block in value["message"]["content"].as_array()? {
-                    if let Some(part) = block["text"].as_str() {
+                    if block["type"] == "text"
+                        && let Some(part) = block["text"].as_str()
+                    {
                         if !first && remaining > 0 {
                             text.push('\n');
                             remaining -= 1;
                         }
                         first = false;
-                        for c in part.chars().take(remaining) {
+                        for c in part
+                            .chars()
+                            .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+                            .take(remaining)
+                        {
                             text.push(c);
                             remaining -= 1;
                         }
@@ -106,7 +112,12 @@ impl Claude<'_> {
                 }
                 if !text.is_empty() {
                     return Some(Activity {
-                        id: "claude-response".into(),
+                        id: value["message"]["id"]
+                            .as_str()
+                            .unwrap_or("claude-response")
+                            .chars()
+                            .take(100)
+                            .collect(),
                         kind: "message".into(),
                         text,
                         output: String::new(),

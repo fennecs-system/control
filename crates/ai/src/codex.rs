@@ -12,15 +12,21 @@ pub fn activity(value: &serde_json::Value) -> Option<Activity> {
         "command_execution" => item["command"].as_str()?,
         "mcp_tool_call" => item["tool"].as_str()?,
         "file_change" => "File changes",
+        "agent_message" => item["text"].as_str()?,
         _ => return None,
     };
     Some(Activity {
         id: item["id"].as_str()?.chars().take(100).collect(),
-        kind: kind.into(),
+        kind: if kind == "agent_message" {
+            "message"
+        } else {
+            kind
+        }
+        .into(),
         text: text
             .chars()
             .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
-            .take(2000)
+            .take(if kind == "agent_message" { 4000 } else { 2000 })
             .collect(),
         output: item["aggregated_output"]
             .as_str()

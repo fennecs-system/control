@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::{SystemTime, UNIX_EPOCH};
 use control_context::commands::{self, Kind};
+mod activity;
+pub(crate) use activity::changed as activity_changed;
+use activity::{agent_activity, command_html};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Message {
@@ -619,6 +622,14 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
     .map(|mut value: Value| {
         value["pending_ports"]=json!(crate::ports::pending_json(state,id));
         value["port_revision"]=json!(crate::ports::decision_revision(state));
+        value["agent_activity"]=json!(agent_activity(state,id));
+        if let Some(messages)=value["messages"].as_array_mut() {
+            for message in messages {
+                if let Some(run)=message["run_id"].as_str() {
+                    message["commands"]=json!(crate::services::command_activity(state,run).collect::<Vec<_>>());
+                }
+            }
+        }
         value
     })
 }
@@ -727,7 +738,10 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
                     }
                     html.push_str(&format!("<details class='edit-diff' data-transcript-key='{position}-{index}-diff-{}'{}><summary>Changes · attempt {} <span>{}</span></summary><pre aria-label='File changes'>{body}</pre></details>",escape(&event.id),if position + 1 == messages.len() && index + 1 == attempts.len() {" open"} else {""},index+1,escape(&event.text)));
                 }
-                let mut events=events.iter().filter(|event|event.kind != "file_change").enumerate().peekable();
+                for event in events.iter().filter(|event|event.kind=="message" && event.text.trim()!=run_reply.trim()) {
+                    html.push_str(&format!("<article class='assistant-message' data-transcript-key='{position}-{index}-message-{}'><p class='preserve'>{}</p></article>",escape(&event.id),escape(&event.text)));
+                }
+                let mut events=events.iter().filter(|event|event.kind != "file_change" && event.kind != "message").enumerate().peekable();
                 if events.peek().is_none() {continue;}
                 html.push_str(&format!(
                     "<details class='run-activity' data-transcript-key='{position}-{index}-activity'{}><summary>Recent activity · attempt {}</summary>",
@@ -739,6 +753,12 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
                 html.push_str("</details>");
             }
         }
+        if let Some(run)=message.run_id.as_deref() {
+            for event in crate::services::command_activity(state,run) { html.push_str(&command_html(&event)); }
+        }
+    }
+    for entry in agent_activity(state,id) {
+        html.push_str(&format!("<p class='message-status'><a target='_top' href='/chat/{}'>Agent activity ↗</a></p>{}",escape(entry.chat),command_html(&entry.activity)));
     }
     if project_message.is_none() && session.project.is_some() {html.push_str(&crate::projects::panel(state,id));}
     for run in crate::design::pending(state, id).into_iter().filter(|run|run.chat_id.as_deref()!=Some(id)) {

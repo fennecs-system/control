@@ -32,6 +32,8 @@ pub(super) struct Execution {
     run: String,
     attempt: String,
     command: String,
+    #[serde(default)]
+    display_command: String,
     timeout_seconds: u64,
     status: Status,
     output: String,
@@ -61,6 +63,56 @@ struct Input {
 }
 fn default_timeout() -> u64 {
     120
+}
+
+/// Project retained command evidence for one run; no engine calls or log reads.
+pub(crate) fn activity<'a>(
+    state: &'a State,
+    run: &'a str,
+) -> impl DoubleEndedIterator<Item = crate::usage::Activity> + 'a {
+    state
+        .services
+        .iter()
+        .flat_map(|service| &service.executions)
+        .filter(move |execution| execution.run == run)
+        .map(|execution| {
+            let clean = |text: &str| {
+                text.chars()
+                    .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+                    .collect::<String>()
+            };
+            let mut output = clean(&execution.output);
+            if execution.truncated {
+                output.push_str("\n[Output truncated]");
+            }
+            if let Some(code) = execution.exit_code {
+                output.push_str(&format!("\nExit {code}"));
+            }
+            if !execution.diagnostic.is_empty() {
+                output.push_str(&format!("\n{}", clean(&execution.diagnostic)));
+            }
+            crate::usage::Activity {
+                id: format!("service-command-{}", execution.id),
+                kind: "command_execution".into(),
+                text: clean(if !execution.display_command.is_empty() {
+                    &execution.display_command
+                } else if !execution.command.is_empty() {
+                    &execution.command
+                } else {
+                    "Service command"
+                }),
+                output,
+                status: match execution.status {
+                    Status::Requested => "queued",
+                    Status::Running => "running",
+                    Status::Completed => "completed",
+                    Status::Failed => "failed",
+                    Status::Interrupted => "interrupted",
+                    Status::TimedOut => "timed_out",
+                }
+                .into(),
+            }
+        })
 }
 #[cfg(test)]
 pub(crate) fn enqueue_test(
@@ -233,6 +285,7 @@ fn admit(
         run: run.into(),
         attempt: generation.into(),
         command: input.command.0.to_string(),
+        display_command: input.command.0.chars().take(2000).collect(),
         timeout_seconds: input.timeout_seconds,
         status: Status::Requested,
         output: String::new(),
@@ -370,7 +423,19 @@ fn update(
         .find(|e| e.id == id)
         .ok_or_else(|| fail("Service command missing"))?;
     let previous = persist.then(|| execution.clone());
+    let previous_output = (
+        execution.output.len(),
+        execution.truncated,
+        execution.status,
+    );
     change(execution);
+    let changed = previous_output
+        != (
+            execution.output.len(),
+            execution.truncated,
+            execution.status,
+        );
+    let run = execution.run.clone();
     if persist && let Err(error) = crate::storage::save(&state) {
         if let Some(previous) = previous {
             *state.services[index]
@@ -380,6 +445,17 @@ fn update(
                 .unwrap() = previous;
         }
         return Err(error);
+    }
+    if changed {
+        let chat = state
+            .runtime
+            .runs
+            .iter()
+            .find(|r| r.id == run)
+            .and_then(|r| r.chat_id.clone());
+        if let Some(chat) = chat {
+            crate::chat::activity_changed(&mut state, &chat);
+        }
     }
     Ok(())
 }
@@ -635,6 +711,145 @@ pub(super) fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn live_command_evidence_reaches_parent_and_terminal_clients_without_reordering() {
+        let (mut state, run, node, service_id) = fixture();
+        let admitted = admit(
+            &mut state,
+            &run,
+            "attempt-a",
+            "visible-command",
+            &node,
+            input(&service_id, "printf '<progress>'"),
+            |_| Ok(()),
+        )
+        .unwrap();
+        let execution_id = admitted["execution_id"].as_str().unwrap();
+        let parent = state.chats[0].id.clone();
+        let child = crate::chat::create(&mut state);
+        state.chats.last_mut().unwrap().parent_chat = Some(parent.clone());
+        state.runtime.runs[0].chat_id = Some(child.clone());
+        let unrelated = crate::chat::create(&mut state);
+        let before: Vec<_> = state
+            .chats
+            .iter()
+            .map(|chat| (chat.revision, chat.activity_order))
+            .collect();
+        let service = state.services[0].clone();
+        let shared = Arc::new(Mutex::new(state));
+        update(
+            &shared,
+            &service,
+            execution_id,
+            |e| {
+                e.status = Status::Running;
+                e.output = "first <progress>\n".into();
+            },
+            false,
+        )
+        .unwrap();
+        {
+            let state = shared.lock().unwrap();
+            assert!(state.chats[0].revision > before[0].0);
+            assert!(state.chats[1].revision > before[1].0);
+            assert_eq!(state.chats[2].revision, before[2].0);
+            for (chat, (_, order)) in state.chats.iter().zip(&before) {
+                assert_eq!(chat.activity_order, *order);
+            }
+            let detail = crate::chat::detail(&state, &parent).unwrap();
+            assert_eq!(
+                detail["agent_activity"][0]["activity"]["output"],
+                "first <progress>\n"
+            );
+            let html = crate::chat::transcript(&state, &parent).unwrap();
+            assert!(html.contains("first &lt;progress&gt;"));
+            assert!(
+                html.contains("printf &#39;&lt;progress&gt;&#39;")
+                    || html.contains("printf '&lt;progress&gt;'")
+            );
+            assert!(
+                !crate::chat::transcript(&state, &unrelated)
+                    .unwrap()
+                    .contains("progress")
+            );
+            assert!(
+                crate::chat::detail(&state, &unrelated).unwrap()["agent_activity"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        update(
+            &shared,
+            &service,
+            execution_id,
+            |e| {
+                e.status = Status::Completed;
+                e.output.push_str("second\n");
+                e.exit_code = Some(0);
+                e.command.clear();
+            },
+            false,
+        )
+        .unwrap();
+        let state = shared.lock().unwrap();
+        let restored: State =
+            serde_json::from_slice(&serde_json::to_vec(&*state).unwrap()).unwrap();
+        let event = activity(&restored, &run).next().unwrap();
+        assert_eq!(event.text, "printf '<progress>'");
+        assert_eq!(event.status, "completed");
+        assert!(event.output.contains("second\n\nExit 0"));
+        assert!(activity(&restored, "other-run").next().is_none());
+        let mut isolated = restored;
+        isolated.chats[1].actor = Actor::Unknown;
+        assert!(
+            crate::chat::detail(&isolated, &parent).unwrap()["agent_activity"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        let revision = isolated.chats[0].revision;
+        crate::chat::activity_changed(&mut isolated, &child);
+        assert_eq!(isolated.chats[0].revision, revision);
+    }
+
+    #[test]
+    fn unchanged_samples_do_not_refresh_chat_and_parent_cycles_terminate() {
+        let (mut state, run, node, id) = fixture();
+        let result = admit(
+            &mut state,
+            &run,
+            "attempt-a",
+            "sample",
+            &node,
+            input(&id, "echo hi"),
+            |_| Ok(()),
+        )
+        .unwrap();
+        let service = state.services[0].clone();
+        let chat = state.chats[0].id.clone();
+        state.chats[0].parent_chat = Some(chat);
+        let revision = state.chats[0].revision;
+        let shared = Arc::new(Mutex::new(state));
+        update(
+            &shared,
+            &service,
+            result["execution_id"].as_str().unwrap(),
+            |_| {},
+            false,
+        )
+        .unwrap();
+        assert_eq!(shared.lock().unwrap().chats[0].revision, revision);
+        update(
+            &shared,
+            &service,
+            result["execution_id"].as_str().unwrap(),
+            |e| e.status = Status::Running,
+            false,
+        )
+        .unwrap();
+        assert_eq!(shared.lock().unwrap().chats[0].revision, revision + 1);
+    }
     fn fixture() -> (State, String, NodeId, String) {
         let (mut state, run, _, time) = super::super::tests::fixture();
         super::super::tests::admit_fixture(&mut state, &run, time, |_| Ok(())).unwrap();
@@ -783,5 +998,30 @@ mod tests {
         let result = capture(command, Duration::from_millis(50), || false, |_| {}).unwrap();
         assert!(result.timed_out);
         assert!(start.elapsed() < Duration::from_secs(2));
+    }
+    #[test]
+    fn capture_publishes_output_before_command_exit() {
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            "printf 'early output\\n'; sleep 1; printf 'final output\\n'",
+        ]);
+        let samples = Mutex::new(Vec::new());
+        let result = capture(
+            command,
+            Duration::from_secs(5),
+            || false,
+            |output| samples.lock().unwrap().push(output.text()),
+        )
+        .unwrap();
+        assert!(
+            samples
+                .into_inner()
+                .unwrap()
+                .iter()
+                .any(|text| text.contains("early output") && !text.contains("final output"))
+        );
+        assert!(result.output.text().contains("final output"));
+        assert_eq!(result.exit_code, Some(0));
     }
 }
