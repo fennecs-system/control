@@ -1169,10 +1169,10 @@ pub fn supervise(shared: Arc<Mutex<State>>) -> JoinHandle<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use control_core::resources::{ChatId, ImageId, Lease, Owner, Resource, Scope};
-    pub(super) fn fixture() -> (State, String, String) {
+    pub(crate) fn fixture() -> (State, String, String) {
         let mut state = State::default();
         let chat = crate::chat::create(&mut state);
         crate::chat::send(&mut state, &chat, "Run a tool", "test").unwrap();

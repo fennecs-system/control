@@ -706,6 +706,27 @@ mod tests {
         assert_eq!(s.runtime.runs.len(), 2);
     }
     #[test]
+    fn persistent_resources_follow_real_delegation_and_return_to_parent() {
+        let mut state=active(Action::Task);
+        let (mut resources,_,_)=crate::ports::tests::fixture();
+        let mut service=resources.services.remove(0);
+        service.resource.owner.chat=state.runtime.runs[0].chat_id.clone().unwrap().try_into().unwrap();
+        state.services.push(service);
+        pause(&mut state,Role::Worker);
+        reconcile(&mut state,|_|Ok(())).unwrap();
+        let node=state.services[0].resource.owner.node.clone();
+        assert!(crate::services::accessible(&state.services[0],&node,&state.runtime.runs[1]));
+        let mut created=state.services[0].clone();
+        created.resource.id="svc-created-by-child".to_owned().try_into().unwrap();
+        created.resource.owner.chat=state.runtime.runs[1].chat_id.clone().unwrap().try_into().unwrap();
+        state.services.push(created);
+        state.runtime.runs[1].status="completed".into();
+        reconcile(&mut state,|_|Ok(())).unwrap();
+        let parent=state.runtime.runs.last().unwrap();
+        assert_eq!(parent.chat_id,state.runtime.runs[0].chat_id);
+        assert!(crate::services::accessible(&state.services[1],&node,parent));
+    }
+    #[test]
     fn parent_waits_for_child_design_and_delegation_continuations() {
         for design in [true, false] {
             let mut s = active(Action::Task);
