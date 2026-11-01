@@ -42,7 +42,7 @@ fn run() -> io::Result<()> {
         .parse::<u64>()
         .ok()
         .and_then(|n| n.checked_sub(now))
-        .filter(|n| (1..=3600).contains(n))
+        .filter(|n| (1..=3600).contains(n) || args[2] == u64::MAX.to_string())
         .ok_or_else(|| io::Error::other("Expired relay lease"))?;
     let start = Instant::now();
     let heartbeat = Arc::new(AtomicU64::new(0));

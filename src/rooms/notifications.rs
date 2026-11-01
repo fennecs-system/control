@@ -448,7 +448,6 @@ pub fn reconcile(
                     reply: String::new(),
                 });
                 chat.revision = chat.revision.saturating_add(1);
-                crate::chat::touch(state, &previous.chat);
                 if save(state).is_err() {
                     state.runtime.runs.truncate(run_count);
                     state.runtime.notice = notice;

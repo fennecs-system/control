@@ -1,5 +1,5 @@
 //! Authorized, borrowed conversation forest. Linear cycle repair and subtree
-//! activity aggregation keep saved orphan/cyclic links visible without recursion.
+//! ordering keeps saved orphan/cyclic links visible without recursion.
 use crate::{
     State,
     chat::{Session, valid_id},
@@ -64,18 +64,9 @@ pub fn ordered(state: &State) -> Vec<Entry<'_>> {
             roots.push(index);
         }
     }
-    let mut activity: Vec<_> = visible.iter().map(|chat| chat.activity_order).collect();
-    let mut stack: Vec<_> = roots.iter().map(|index| (*index, false)).collect();
-    while let Some((index, visited)) = stack.pop() {
-        if visited {
-            if let Some(parent) = parents[index] {
-                activity[parent] = activity[parent].max(activity[index]);
-            }
-        } else {
-            stack.push((index, true));
-            stack.extend(children[index].iter().map(|child| (*child, false)));
-        }
-    }
+    // Background child creation/completion must not make an old playtest look
+    // like the user's most recent conversation when returning from another page.
+    let activity: Vec<_> = visible.iter().map(|chat| chat.activity_order).collect();
     let key = |index: &usize| std::cmp::Reverse((activity[*index], *index));
     roots.sort_by_key(key);
     for siblings in &mut children {
@@ -119,21 +110,21 @@ mod tests {
                 .iter()
                 .map(|e| e.session.id.as_str())
                 .collect::<Vec<_>>(),
-            [second.as_str(), child.as_str(), first.as_str()]
+            [first.as_str(), second.as_str(), child.as_str()]
         );
-        assert_eq!(entries[1].depth, 1);
-        assert_eq!(entries[1].parent, Some(second.as_str()));
+        assert_eq!(entries[2].depth, 1);
+        assert_eq!(entries[2].parent, Some(second.as_str()));
         let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
         assert_eq!(
             ordered(&restored)
                 .iter()
                 .map(|e| e.session.id.as_str())
                 .collect::<Vec<_>>(),
-            [second.as_str(), child.as_str(), first.as_str()]
+            [first.as_str(), second.as_str(), child.as_str()]
         );
         let api = chat::list(&restored);
-        assert_eq!(api[1]["parent_chat"], second);
-        assert_eq!(api[1]["depth"], 1);
+        assert_eq!(api[2]["parent_chat"], second);
+        assert_eq!(api[2]["depth"], 1);
         let html = crate::navigation::conversations(&restored, &child);
         assert!(html.contains(&format!("data-chat-branch='{second}' open")));
         let html = crate::navigation::conversations(&restored, &second);
