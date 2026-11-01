@@ -513,6 +513,23 @@ fn encode(value: &str) -> String {
         })
         .collect()
 }
+
+// Empty checkpoints still restore workspaces, but are not file outputs. Keep
+// them in durable state and in the explicit read API; omit them from the viewer.
+fn visible_outputs<'a>(
+    ids: impl IntoIterator<Item = &'a str>,
+    mut load: impl FnMut(&str) -> io::Result<Manifest>,
+) -> io::Result<Vec<Manifest>> {
+    let mut seen = std::collections::HashSet::new();
+    ids.into_iter()
+        .filter(|id| seen.insert(*id))
+        .map(&mut load)
+        .filter_map(|result| match result {
+            Ok(manifest) if manifest.files.is_empty() => None,
+            other => Some(other),
+        })
+        .collect()
+}
 pub fn render(
     state: &crate::State,
     chat: &str,
@@ -520,10 +537,12 @@ pub fn render(
 ) -> Result<String, &'static str> {
     use crate::escape;
     let ids = published(state, chat)?;
+    let outputs = visible_outputs(ids.iter().copied(), manifest)
+        .map_err(|_| "Artifact unavailable or invalid")?;
     let selected = args
         .get("artifact")
         .map(String::as_str)
-        .or_else(|| ids.last().copied());
+        .or_else(|| outputs.last().map(|output| output.id.as_str()));
     let mut html = format!("<section class='artifacts'><div class='section-heading'><h2>Artifacts</h2><a href='/chat/{chat}'>Back to chat ↗</a></div>");
     let Some(id) = selected.filter(|id| ids.contains(id)) else {
         html.push_str("<p class='muted'>No published files yet.</p></section>");
@@ -531,10 +550,11 @@ pub fn render(
     };
     let manifest = manifest(id).map_err(|_| "Artifact unavailable or invalid")?;
     html.push_str("<nav class='artifact-versions' aria-label='Output versions'>");
-    for (index, version) in ids.iter().enumerate().rev().take(16) {
+    for (index, output) in outputs.iter().enumerate().rev().take(16) {
+        let version = output.id.as_str();
         html.push_str(&format!(
             "<a href='/chat/{chat}/artifacts?artifact={version}'{}>Output {}</a>",
-            if *version == id {
+            if version == id {
                 " aria-current='page'"
             } else {
                 ""
@@ -611,6 +631,22 @@ mod tests {
         assert!(snapshot.files.values().all(|text| !text.contains("outside-fixture")));
         assert!(diff_snapshot(&workspace.join("src")).is_err());
         fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn output_browser_omits_empty_checkpoints_and_duplicate_versions() {
+        let outputs = visible_outputs(["empty", "file", "empty", "file"], |id| {
+            Ok(Manifest {
+                id: id.into(),
+                files: if id == "file" { vec![Entry {
+                    path: "empty-but-real.txt".into(), bytes: 0,
+                    sha256: "0".repeat(64), media_type: "text/plain".into(),
+                }] } else { vec![] },
+                omitted: vec![],
+            })
+        }).unwrap();
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].files[0].bytes, 0);
+        assert!(visible_outputs(["broken"], |_| Err(fail("bad manifest"))).is_err());
     }
     #[test]
     fn artifact_tools_keep_chat_authority_and_reject_actor_overrides() {
