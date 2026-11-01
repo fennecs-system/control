@@ -14,6 +14,9 @@ fn chat_page(state: &State, lens: &str, id: &str, error: &str, draft: &str) -> S
     if error.is_empty() { page } else { chat::rejected(&page, error, draft) }
 }
 fn respond_chat_status(stream: &mut impl Write, status: &str, html: &str) {
+    respond_chat_headers(stream,status,html,"");
+}
+fn respond_chat_headers(stream:&mut impl Write,status:&str,html:&str,extra:&str) {
     let page = html.replace(
         "</head>",
         "<script type='module' src='/tool-window/chat-bootstrap.js'></script></head>",
@@ -23,7 +26,7 @@ fn respond_chat_status(stream: &mut impl Write, status: &str, html: &str) {
         status,
         "text/html; charset=utf-8",
         &page,
-        "",
+        extra,
         "'self' 'wasm-unsafe-eval'",
     );
 }
@@ -265,6 +268,17 @@ pub fn handle(
     }
     if path == "/chats" && method == "GET" {
         let query = crate::fields(query);
+        if !query.contains_key("new") && !query.contains_key("discuss") && !query.contains_key("improve") {
+            let recent=header.lines().filter_map(|line|line.split_once(':'))
+                .filter(|(name,_)|name.eq_ignore_ascii_case("cookie"))
+                .flat_map(|(_,value)|value.split(';'))
+                .filter_map(|cookie|cookie.trim().split_once('='))
+                .find_map(|(name,id)|(name=="control_recent_chat" && chat::valid_id(id)).then_some(id));
+            if let Some(id)=recent.filter(|id|chat::detail(state,id).is_ok()) {
+                respond(stream,"303 See Other","text/plain","",&format!("Location: /chat/{id}\r\n"));
+                return true;
+            }
+        }
         let html = chat::landing_mode(
             state,
             lens,
@@ -358,7 +372,8 @@ pub fn handle(
         }
     } else if method == "GET" && operation.is_empty() {
         match chat::detail(state, id) {
-            Ok(_) => respond_chat(stream, &chat_page(state, lens, id, "", "")),
+            Ok(_) => respond_chat_headers(stream,"200 OK",&chat_page(state,lens,id,"",""),
+                &format!("Set-Cookie: control_recent_chat={id}; Path=/; HttpOnly; SameSite=Strict\r\n")),
             Err(_) if chat::discord_actor(id).is_some_and(|actor|crate::identity::authorize(&actor,crate::identity::Action::Task).is_ok()) => respond(stream,"202 Accepted","text/html; charset=utf-8","<!doctype html><html lang='en'><head><meta http-equiv='refresh' content='2'><title>Control / Chat</title></head><body><p>Waiting for the Discord message…</p></body></html>",""),
             Err(message) => respond(stream, "404 Not Found", "text/plain", message, ""),
         }
@@ -376,6 +391,27 @@ pub fn handle(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn returning_to_chat_remembers_only_an_existing_authorized_conversation() {
+        let mut state=crate::State::default();
+        let id=crate::chat::create(&mut state);
+        let mut response=Vec::new();
+        handle(&mut response,&mut state,"GET",&format!("/chat/{id}"),"none","",&[]);
+        assert!(String::from_utf8(response).unwrap().to_ascii_lowercase().contains(&format!("set-cookie: control_recent_chat={id}; path=/; httponly; samesite=strict")));
+        let cookie=format!("Cookie: control_recent_chat={id}\r\n");
+        let mut response=Vec::new();
+        handle(&mut response,&mut state,"GET","/chats","none",&cookie,&[]);
+        assert!(String::from_utf8(response).unwrap().to_ascii_lowercase().contains(&format!("location: /chat/{id}")));
+        for path in ["/chats?new=1","/chats?discuss=tools","/chats?improve=1"] {
+            let mut response=Vec::new();handle(&mut response,&mut state,"GET",path,"none",&cookie,&[]);
+            assert!(String::from_utf8(response).unwrap().starts_with("HTTP/1.1 200 OK"));
+        }
+        state.chats[0].actor=crate::identity::Actor::Unknown;
+        for header in [&cookie,"Cookie: control_recent_chat=c-missing\r\n","Cookie: control_recent_chat=../../tools\r\n"] {
+            let mut response=Vec::new();handle(&mut response,&mut state,"GET","/chats","none",header,&[]);
+            assert!(!String::from_utf8(response).unwrap().to_ascii_lowercase().contains("location:"));
+        }
+    }
     #[test]
     fn web_folder_picker_is_opt_in_and_bare_open_only_navigates() {
         let mut state = State::default();
@@ -471,7 +507,17 @@ mod tests {
             fn post(&self,path:&str,args:Value)->Value {self.request(reqwest::Method::POST,path,args)}
             fn get(&self,path:&str)->Value {self.request(reqwest::Method::GET,path,Value::Null)}
             fn element(&self,selector:&str)->String {self.post("/element",json!({"using":"css selector","value":selector}))["element-6066-11e4-a52e-4f735466cecf"].as_str().unwrap().to_owned()}
-            fn text(&self,selector:&str)->String {let id=self.element(selector);self.get(&format!("/element/{id}/text")).as_str().unwrap().to_owned()}
+            fn text(&self,selector:&str)->String {
+                let start=Instant::now();
+                loop {
+                    let id=self.element(selector);
+                    let response=self.client.get(format!("{}/element/{id}/text",self.url)).send().unwrap();
+                    let status=response.status();let value:Value=response.json().unwrap();
+                    if status.is_success(){return value["value"].as_str().unwrap().to_owned();}
+                    assert!(value["value"]["error"]=="stale element reference" && start.elapsed()<Duration::from_secs(10),"WebDriver text: {}",value["value"]["error"]);
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+            }
             fn wait(&self,text:&str) {let start=Instant::now(); loop {if self.text("body").contains(text) {break;} assert!(start.elapsed()<Duration::from_secs(12),"Transcript never displayed {text}"); std::thread::sleep(Duration::from_millis(100));}}
         }
         impl Drop for Browser {fn drop(&mut self){let _=self.client.delete(&self.url).send();}}
