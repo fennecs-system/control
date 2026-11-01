@@ -11,7 +11,7 @@ pub enum MessageSpeaker {
 impl MessageSpeaker {
     pub fn for_run_kind(kind: Option<&str>) -> Self {
         match kind {
-            Some("delegation-result" | "room-notification" | "port-decision") => Self::Control,
+            Some("delegation-result" | "agent-completion" | "room-notification" | "port-decision") => Self::Control,
             _ => Self::User,
         }
     }
@@ -30,7 +30,7 @@ mod tests {
 
     #[test]
     fn only_automatic_events_are_attributed_to_control() {
-        for kind in ["delegation-result", "room-notification", "port-decision"] {
+        for kind in ["delegation-result", "agent-completion", "room-notification", "port-decision"] {
             assert_eq!(MessageSpeaker::for_run_kind(Some(kind)), MessageSpeaker::Control);
         }
         for kind in [None, Some("chat"), Some("design-answer"), Some("steering"), Some("spawn")] {

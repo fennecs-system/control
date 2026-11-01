@@ -391,7 +391,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
     }
     Ok(())
 }
-fn leaf<'a>(state: &'a State, id: &str) -> Result<&'a runtime::Run, &'static str> {
+pub(crate) fn leaf<'a>(state: &'a State, id: &str) -> Result<&'a runtime::Run, &'static str> {
     let mut id = id;
     let mut seen = std::collections::HashSet::new();
     for _ in 0..64 {

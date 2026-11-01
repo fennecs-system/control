@@ -7,6 +7,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+mod completions;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -24,6 +25,11 @@ pub struct Batch {
     seed: Option<Seed>,
     #[serde(default)]
     cancelled: bool,
+    // Old saved batches retain their original polling behavior on upgrade.
+    #[serde(default)]
+    notify: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    completions: Vec<completions::Receipt>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -68,7 +74,7 @@ impl Batch {
     }
 }
 pub fn definition() -> Value {
-    json!({"name":"control_agent_spawn","description":"Accept N independent worker objectives and continue immediately. Configured team budget (default 64), pending-intent budget and 24000-byte objective payload apply, independently of node model slots. Returns a durable batch ID; poll control_agent_spawn_status for paged handles as queue capacity frees. Each inherits captured model, lenses, actor and immutable baseline, never live edits. First Improve turns without a published baseline must delegate. Depth limit 2; children and delegations share one root budget. Parent cancellation cancels backlog and descendants; a later originating-chat turn may cancel the batch explicitly.","inputSchema":{"type":"object","properties":{"objectives":{"type":"array","minItems":1,"items":{"type":"string","minLength":1,"maxLength":2000}}},"required":["objectives"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
+    json!({"name":"control_agent_spawn","description":"Start independent or background worker objectives without pausing this conversation. Return the handles and finish your turn; Control queues completion updates automatically. Use control_agent_spawn_status only when a current status check is needed, never in a polling loop. Configured team budget (default 64), pending-intent budget and 24000-byte payload apply independently of model slots. Children inherit captured model, lenses, actor and immutable baseline, never live edits. First Improve turns without a published baseline must checkpoint via delegation or finish first. Depth limit 2; children and delegations share one root budget. Cancellation fences backlog and descendants; later originating-chat turns can inspect or cancel retained batches.","inputSchema":{"type":"object","properties":{"objectives":{"type":"array","minItems":1,"items":{"type":"string","minLength":1,"maxLength":2000}}},"required":["objectives"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
 }
 pub fn management_definitions() -> Vec<Value> {
     vec![
@@ -211,6 +217,8 @@ pub fn request(
             children: Vec::new(),
             seed: Some(seed),
             cancelled: false,
+            notify: true,
+            completions: Vec::new(),
         };
         state.runtime.runs[index].spawns.push(batch);
         let batch_index = state.runtime.runs[index].spawns.len() - 1;
@@ -567,7 +575,7 @@ pub fn reconcile(
     if let Some((index, batch_index, cancel)) = candidate {
         transact_batch(state, index, batch_index, cancel, save)
     } else {
-        Ok(())
+        completions::reconcile(state, save)
     }
 }
 
@@ -684,7 +692,7 @@ mod tests {
         identity::{Action, Actor},
         usage::Attempt,
     };
-    fn active() -> (State, String) {
+    pub(super) fn active() -> (State, String) {
         let mut s = State::default();
         let chat = chat::create(&mut s);
         s.runtime
@@ -709,7 +717,7 @@ mod tests {
         let id = run.id.clone();
         (s, id)
     }
-    fn input(n: usize) -> Input {
+    pub(super) fn input(n: usize) -> Input {
         Input {
             objectives: (0..n).map(|n| format!("Inspect page {n}")).collect(),
         }
@@ -923,6 +931,9 @@ mod tests {
         reconcile(&mut s, |_| Ok(())).unwrap();
         assert_eq!(s.runtime.runs.len(), 51);
         assert_eq!(s.runtime.runs[0].spawns[0].pending(), 0);
+        reconcile(&mut s, |_| Ok(())).unwrap();
+        assert_eq!(s.runtime.runs.len(), 52);
+        assert_eq!(s.runtime.runs[51].kind, "agent-completion");
         reconcile(&mut s, |_| panic!("No completed backlog effects")).unwrap();
     }
     #[test]

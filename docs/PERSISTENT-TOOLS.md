@@ -63,8 +63,11 @@ Long-lived background programs must redirect stdin/stdout/stderr to private file
 
 Commands survive model turns and have a 1–1800 second timeout (default 120), capped
 by the service lease. Poll `control_service_exec_status` until complete. One active
-command per service and 16 retained command receipts bound work and output.
-Retries of the same request identity return its receipt rather than re-executing.
+command per service and 16 retained full command outputs bound work and memory.
+Evicted output leaves a lightweight retry receipt while its attempt can still
+submit tools (at most 1,024 per service). Status reports `output_evicted=true`
+when only that receipt remains. Retries return the recorded outcome rather than
+re-executing; a full live receipt budget asks the worker to finish its turn.
 Timeout, shutdown or uncertain completion requests service stop: killing the host
 Docker client alone would not prove its remote writer stopped. A restart never
 replays an in-flight command. Other services remain running. These tools provide

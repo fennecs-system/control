@@ -70,6 +70,8 @@ pub struct Service {
     exit_code: Option<i32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     executions: Vec<commands::Execution>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    command_receipts: Vec<commands::Receipt>,
 }
 
 /// Captured at a trusted delegation transition, never accepted as tool input.
@@ -109,7 +111,7 @@ impl Service {
         Grant { id:self.resource.id.clone(),owner:self.resource.owner.clone(),generation:self.resource.generation }
     }
     pub(crate) fn binding_snapshot(&self)->Self {
-        Self {resource:self.resource.clone(),origin:self.origin.clone(),actor:self.actor.clone(),command:self.command.clone(),uid:self.uid,gid:self.gid,workspace_exec:self.workspace_exec,profile:self.profile,diagnostic:String::new(),output:String::new(),exit_code:None,executions:Vec::new()}
+        Self {resource:self.resource.clone(),origin:self.origin.clone(),actor:self.actor.clone(),command:self.command.clone(),uid:self.uid,gid:self.gid,workspace_exec:self.workspace_exec,profile:self.profile,diagnostic:String::new(),output:String::new(),exit_code:None,executions:Vec::new(),command_receipts:Vec::new()}
     }
     pub(crate) fn owned_by(&self, node: &NodeId, chat: &str, actor: &Actor) -> bool {
         self.resource.owner.node == *node
@@ -416,6 +418,7 @@ fn admit_profile(
         output: String::new(),
         exit_code: None,
         executions: Vec::new(),
+        command_receipts: Vec::new(),
     };
     // Retain nonce receipts while their origin attempt can still submit retries.
     // Older stopped records may be evicted; they can no longer launch effects.

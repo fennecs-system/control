@@ -9,6 +9,7 @@ use std::{
 };
 
 const MAX_EXECUTIONS: usize = 16;
+const MAX_RECEIPTS: usize = 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -50,6 +51,42 @@ impl Execution {
         value["output_limit_bytes"] = json!(OUTPUT);
         value
     }
+}
+
+/// Keep effect identity and outcome after evicting the much larger output.
+/// An acknowledged nonce can never turn into another command execution.
+#[derive(Clone, Serialize, Deserialize)]
+pub(super) struct Receipt {
+    id: String,
+    digest: String,
+    run: String,
+    attempt: String,
+    status: Status,
+    exit_code: Option<i32>,
+    diagnostic: String,
+}
+impl Receipt {
+    fn from_execution(execution: &Execution) -> Self {
+        Self {
+            id: execution.id.clone(),
+            digest: execution.digest.clone(),
+            run: execution.run.clone(),
+            attempt: execution.attempt.clone(),
+            status: execution.status,
+            exit_code: execution.exit_code,
+            diagnostic: execution.diagnostic.clone(),
+        }
+    }
+    fn summary(&self) -> Value {
+        json!({"execution_id":self.id,"status":self.status,"exit_code":self.exit_code,"diagnostic":self.diagnostic,"output":"","output_evicted":true,"output_truncated":true,"output_limit_bytes":OUTPUT})
+    }
+}
+fn live_attempt(state: &State, run: &str, attempt: &str) -> bool {
+    state.runtime.runs.iter().any(|r| {
+        r.id == run
+            && r.status == "running"
+            && r.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt)
+    })
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -161,6 +198,13 @@ pub(super) fn call(
         .iter()
         .find(|e| e.id == input.execution_id)
         .map(Execution::summary)
+        .or_else(|| {
+            state.services[index]
+                .command_receipts
+                .iter()
+                .find(|r| r.id == input.execution_id)
+                .map(Receipt::summary)
+        })
         .ok_or_else(|| fail("Service command not found"))
 }
 fn admit(
@@ -198,6 +242,19 @@ fn admit(
             ))
         };
     }
+    if let Some(receipt) = service
+        .command_receipts
+        .iter()
+        .find(|receipt| receipt.id == id)
+    {
+        return if receipt.digest == digest {
+            Ok(receipt.summary())
+        } else {
+            Err(fail(
+                "Service command identity was reused with different arguments",
+            ))
+        };
+    }
     if !matches!(service.resource.phase, Phase::Running(_)) || service.resource.lease.expired(now())
     {
         return Err(fail("Wait for a running service with a live lease"));
@@ -212,21 +269,42 @@ fn admit(
             service
                 .executions
                 .iter()
-                .position(|e| {
-                    !e.status.active()
-                        && !state.runtime.runs.iter().any(|r| {
-                            r.id == e.run
-                                && r.status == "running"
-                                && r.attempts.last().and_then(|a| a.workspace_id.as_deref())
-                                    == Some(&e.attempt)
-                        })
-                })
-                .ok_or_else(|| fail("Service command history is full for this attempt"))?,
+                .position(|e| !e.status.active())
+                .ok_or_else(|| fail("Service already has an active command"))?,
         )
     } else {
         None
     };
+    let receipt = evict.and_then(|i| {
+        let e = &state.services[index].executions[i];
+        live_attempt(state, &e.run, &e.attempt).then(|| Receipt::from_execution(e))
+    });
+    let old_receipts = if receipt.is_some()
+        && state.services[index].command_receipts.len() >= MAX_RECEIPTS
+    {
+        let retained = state.services[index]
+            .command_receipts
+            .iter()
+            .filter(|r| live_attempt(state, &r.run, &r.attempt))
+            .cloned()
+            .collect::<Vec<_>>();
+        if retained.len() >= MAX_RECEIPTS {
+            return Err(fail(
+                "Active command receipt budget exhausted; finish this model turn before running more commands",
+            ));
+        }
+        Some(std::mem::replace(
+            &mut state.services[index].command_receipts,
+            retained,
+        ))
+    } else {
+        None
+    };
     let previous = evict.map(|i| (i, state.services[index].executions.remove(i)));
+    let receipt_len = state.services[index].command_receipts.len();
+    if let Some(receipt) = receipt {
+        state.services[index].command_receipts.push(receipt);
+    }
     let execution = Execution {
         id,
         digest,
@@ -244,6 +322,10 @@ fn admit(
     state.services[index].executions.push(execution);
     if let Err(error) = save(state) {
         state.services[index].executions.pop();
+        state.services[index].command_receipts.truncate(receipt_len);
+        if let Some(old) = old_receipts {
+            state.services[index].command_receipts = old;
+        }
         if let Some((i, old)) = previous {
             state.services[index].executions.insert(i, old);
         }
@@ -635,6 +717,134 @@ pub(super) fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn output_eviction_keeps_active_attempt_retry_receipts_and_rolls_back() {
+        let (mut state, run, node, id) = fixture();
+        for n in 0..MAX_EXECUTIONS + 8 {
+            let nonce = format!("command-{n}");
+            let before = serde_json::to_vec(&state).unwrap();
+            if n == MAX_EXECUTIONS {
+                assert!(
+                    admit(
+                        &mut state,
+                        &run,
+                        "attempt-a",
+                        &nonce,
+                        &node,
+                        input(&id, "echo test"),
+                        |_| Err(fail("disk full"))
+                    )
+                    .is_err()
+                );
+                assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+            }
+            admit(
+                &mut state,
+                &run,
+                "attempt-a",
+                &nonce,
+                &node,
+                input(&id, "echo test"),
+                |_| Ok(()),
+            )
+            .unwrap();
+            let execution = state.services[0].executions.last_mut().unwrap();
+            execution.status = Status::Completed;
+            execution.exit_code = Some(0);
+            execution.output = "retained output".into();
+        }
+        assert_eq!(state.services[0].executions.len(), MAX_EXECUTIONS);
+        assert_eq!(state.services[0].command_receipts.len(), 8);
+        let mut restored: State =
+            serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        let receipt = admit(
+            &mut restored,
+            &run,
+            "attempt-a",
+            "command-0",
+            &node,
+            input(&id, "echo test"),
+            |_| panic!("Eviction must not replay effects"),
+        )
+        .unwrap();
+        assert_eq!(receipt["output_evicted"], true);
+        assert_eq!(receipt["status"], "completed");
+        assert_eq!(receipt["exit_code"], 0);
+        assert!(
+            admit(
+                &mut restored,
+                &run,
+                "attempt-a",
+                "command-0",
+                &node,
+                input(&id, "different command"),
+                |_| panic!("Changed identity must fail")
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn receipt_pruning_never_discards_live_attempt_identity() {
+        let (mut state, run, node, id) = fixture();
+        for n in 0..MAX_EXECUTIONS + 1 {
+            admit(
+                &mut state,
+                &run,
+                "attempt-a",
+                &format!("command-{n}"),
+                &node,
+                input(&id, "true"),
+                |_| Ok(()),
+            )
+            .unwrap();
+            state.services[0].executions.last_mut().unwrap().status = Status::Completed;
+        }
+        let receipt = state.services[0].command_receipts[0].clone();
+        state.services[0].command_receipts = vec![receipt; MAX_RECEIPTS];
+        let before = serde_json::to_vec(&state).unwrap();
+        assert!(
+            admit(
+                &mut state,
+                &run,
+                "attempt-a",
+                "next",
+                &node,
+                input(&id, "true"),
+                |_| panic!("Full live receipt budget must fail before effects")
+            )
+            .is_err()
+        );
+        assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+        for receipt in &mut state.services[0].command_receipts {
+            receipt.run = "finished-run".into();
+        }
+        let before = serde_json::to_vec(&state).unwrap();
+        assert!(
+            admit(
+                &mut state,
+                &run,
+                "attempt-a",
+                "next",
+                &node,
+                input(&id, "true"),
+                |_| Err(fail("disk full"))
+            )
+            .is_err()
+        );
+        assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+        admit(
+            &mut state,
+            &run,
+            "attempt-a",
+            "next",
+            &node,
+            input(&id, "true"),
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(state.services[0].command_receipts.len(), 1);
+        assert_eq!(state.services[0].command_receipts[0].run, run);
+    }
     fn fixture() -> (State, String, NodeId, String) {
         let (mut state, run, _, time) = super::super::tests::fixture();
         super::super::tests::admit_fixture(&mut state, &run, time, |_| Ok(())).unwrap();

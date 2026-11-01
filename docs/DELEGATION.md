@@ -7,6 +7,16 @@ As space becomes available in the existing 32-pending-task execution queue, Cont
 materializes children from the captured source. The model-slot limit independently
 controls execution concurrency. Accepting 50 tasks does not start 50 model calls.
 
+For background work, report the handles and finish the parent turn so the user
+can keep chatting. New batches queue a concise completion response in the parent
+conversation, coalescing up to eight finished children per update. Callbacks use
+the ordinary queue and current conversation workspace; they never restore an old
+checkpoint or apply child edits. A saved receipt prevents duplicate notifications
+after restart. Cancelled/revoked batches do not wake the parent, and older saved
+batches retain their original polling behavior. Status tools remain available
+for on-demand checks; a polling loop is unnecessary. Each completion response is
+an ordinary model turn subject to the node queue and provider limits.
+
 Private `~/.config/control/execution.json` (mode 0600) configures these separate
 limits; omitted fields retain their defaults:
 
@@ -58,6 +68,8 @@ links to the child conversation; Agents shows its execution and queue status.
 Independent chats can run concurrently within the [node limit](EXECUTION.md).
 A model must stop after delegation acknowledgement,
 rather than poll or hold a command open waiting for a child.
+Explicit delegation reserves the conversation until its dependency returns;
+use spawning for independently running bots and other background tasks.
 
 Each child has the same actor, captured lenses and authority ceiling. Its files
 come from an immutable copy of the parent's paused checkpoint, including in
