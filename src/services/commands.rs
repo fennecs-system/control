@@ -717,6 +717,13 @@ pub(super) fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn fixture() -> (State, String, NodeId, String) {
+        let (mut state, run, _, time) = super::super::tests::fixture();
+        super::super::tests::admit_fixture(&mut state, &run, time, |_| Ok(())).unwrap();
+        state.services[0].resource.phase = Phase::Running("b".repeat(64).try_into().unwrap());
+        let id = state.services[0].resource.id.as_str().to_owned();
+        (state, run, "node-a".to_owned().try_into().unwrap(), id)
+    }
     #[test]
     fn output_eviction_keeps_active_attempt_retry_receipts_and_rolls_back() {
         let (mut state, run, node, id) = fixture();
@@ -844,13 +851,6 @@ mod tests {
         .unwrap();
         assert_eq!(state.services[0].command_receipts.len(), 1);
         assert_eq!(state.services[0].command_receipts[0].run, run);
-    }
-    fn fixture() -> (State, String, NodeId, String) {
-        let (mut state, run, _, time) = super::super::tests::fixture();
-        super::super::tests::admit_fixture(&mut state, &run, time, |_| Ok(())).unwrap();
-        state.services[0].resource.phase = Phase::Running("b".repeat(64).try_into().unwrap());
-        let id = state.services[0].resource.id.as_str().to_owned();
-        (state, run, "node-a".to_owned().try_into().unwrap(), id)
     }
     fn input(service: &str, command: &str) -> Input {
         Input {
