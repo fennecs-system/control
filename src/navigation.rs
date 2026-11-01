@@ -2,7 +2,7 @@
 const PRIMARY: &[(&str, &str, &str, &str)] = &[
     ("hub", "/", "▦", "Overview"),
     ("session", "/chats", "⌁", "Chat"),
-    ("agents", "/?view=agents", "⌁", "Agents"),
+    ("agents", "/?view=agents", "⌁", "Bots"),
     ("runs", "/?view=runs", "⌁", "Runs"),
     ("knowledge", "/knowledge", "▤", "Knowledge"),
     ("rooms", "/?view=rooms", "#", "Rooms"),
