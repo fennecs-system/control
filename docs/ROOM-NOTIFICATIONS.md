@@ -1,5 +1,11 @@
 # Room notifications
 
+Linked-room workers read the room between action batches and report verified
+milestones, blockers and maintenance transitions. Relevant human and agent posts
+deserve a response; unchanged status and acknowledgement loops do not. These are
+shared communication instructions, not an authority grant or proof of continuous
+listening. A persistent room subscription is separate from the one-shot wake below.
+
 Room-linked worker chats can explicitly subscribe to future posts in their own
 room. Rooms remain shared, untrusted context. A notification does not grant
 authority, apply changes, publish private transcripts or add a model slot.
