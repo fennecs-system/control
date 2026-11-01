@@ -59,11 +59,13 @@ example.com:443:127.0.0.1:3001 https://example.com/file -o /workspace/file`.
 Redirects or dependencies on other hosts require their own approved endpoints;
 package managers may need a task-local adapter rather than a generic proxy setting.
 
-For two services, expose an ingress on the destination, then request an egress on
-the source targeting that ingress's reported host `127.0.0.1` port. The operator
-must explicitly allow loopback. The source connects to its own `service_port`;
-the host port is the broker's target, not a container's direct route to the host.
-Each side keeps its own ownership, readiness, revocation and lease checks.
+For two services owned by the same chat, expose an ingress on the destination, then
+request an egress on the source with `"peer_port_id":"INGRESS_PORT_ID"` instead of
+a `target`. Control pins the route to that ingress's host listener, connects only
+while the ingress is listening, and closes the route when the ingress is revoked,
+moves or its service changes generation. No loopback checkbox is needed. The
+source connects to its own `service_port`; the ingress host port is not a
+container's direct route to the host.
 
 A literal `127.0.0.1` or `::1` destination additionally requires the operator's
 explicit loopback checkbox. Private DNS answers, metadata, multicast and LAN

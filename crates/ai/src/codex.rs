@@ -24,6 +24,7 @@ pub fn activity(value: &serde_json::Value) -> Option<Activity> {
             .collect(),
         output: item["aggregated_output"]
             .as_str()
+            .or_else(|| item["error"]["message"].as_str())
             .unwrap_or("")
             .chars()
             .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')

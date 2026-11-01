@@ -113,7 +113,7 @@ mod tests {
         let (mut state,run,chat) = super::super::tests::fixture();
         admit(&mut state,&run,"attempt-a","notice",Input {
             service_id:"svc-a".to_owned().try_into().unwrap(),name:"server".to_owned().try_into().unwrap(),
-            direction:Direction::Ingress,service_port:std::num::NonZeroU16::new(25565).unwrap(),target:None,
+            direction:Direction::Ingress,service_port:std::num::NonZeroU16::new(25565).unwrap(),target:None,peer_port_id:None,
         },"node-a".to_owned().try_into().unwrap(),|_|Ok(())).unwrap();
         let id=state.ports[0].id.as_str().to_owned();
         approve(&mut state,&id,60,false,None,now(),|_|Ok(())).unwrap();
