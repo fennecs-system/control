@@ -409,11 +409,6 @@ impl App {
             );
         }
         let mut lines = Vec::new();
-        if let Some(ports)=self.detail["pending_ports"].as_array() {for port in ports {
-            lines.push(Line::styled(format!("Port request · {} · {}",clean(port["name"].as_str().unwrap_or("")),clean(&port["target"].to_string())),Style::default().fg(Color::Rgb(181,160,255))));
-            let id=clean(port["port_id"].as_str().unwrap_or(""));
-            lines.push(Line::from(format!("/port allow {id}{} · /port deny {id}",if port["loopback_required"]==true {" --loopback"}else{""})));
-        }}
         if let Some(previews)=self.detail["previews"].as_array() {for preview in previews {if let Some(url)=preview["url"].as_str(){lines.push(Line::styled(format!("Preview · {}",clean(url)),Style::default().fg(Color::Rgb(181,160,255))));}}}
         if let Some(path)=self.detail["project_worktree"].as_str(){lines.push(Line::from(format!("Worktree · {}",clean(path))));}
         if let Some(project)=self.detail["project"].as_object() {
@@ -488,6 +483,11 @@ impl App {
                 lines.push(Line::from(""));
             }
         }
+        if let Some(ports)=self.detail["pending_ports"].as_array() {for port in ports {
+            lines.push(Line::styled(format!("Port request · {} · {}",clean(port["name"].as_str().unwrap_or("")),clean(&port["target"].to_string())),Style::default().fg(Color::Rgb(181,160,255))));
+            let id=clean(port["port_id"].as_str().unwrap_or(""));
+            lines.push(Line::from(format!("/port allow {id}{} · /port deny {id}",if port["loopback_required"]==true {" --loopback"}else{""})));
+        }}
         Text::from(lines)
     }
 }
@@ -791,6 +791,49 @@ pub fn run() -> io::Result<()> {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn terminal_port_decisions_require_explicit_loopback_and_use_operator_http() {
+        use std::io::{BufRead,Read};
+        let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr=listener.local_addr().unwrap();
+        let server=std::thread::spawn(move || {
+            for index in 0..2 {
+                let (mut stream,_)=listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut reader=io::BufReader::new(stream.try_clone().unwrap());
+                let mut line=String::new();reader.read_line(&mut line).unwrap();
+                let path=line.split_whitespace().nth(1).unwrap().to_owned();
+                let mut length=0;let mut origin=String::new();
+                loop {line.clear();reader.read_line(&mut line).unwrap();if line=="\r\n"{break;}
+                    if let Some((name,value))=line.split_once(':') {
+                        if name.eq_ignore_ascii_case("content-length"){length=value.trim().parse::<usize>().unwrap();}
+                        if name.eq_ignore_ascii_case("origin"){origin=value.trim().to_owned();}
+                    }
+                }
+                let mut bytes=vec![0;length];reader.read_exact(&mut bytes).unwrap();
+                let value=if index==0 {
+                    assert_eq!(path,"/tools/ports");assert_eq!(origin,format!("http://{addr}"));
+                    let fields:std::collections::HashMap<_,_>=Url::parse(&format!("http://fixture/?{}",String::from_utf8(bytes).unwrap())).unwrap().query_pairs().into_owned().collect();
+                    assert_eq!(fields["id"],"port-fixture");assert_eq!(fields["revoke"],"yes");
+                    assert_eq!(fields["seconds"],"-1");assert_eq!(fields["return_chat"],"c-fixture");
+                    assert!(!fields.contains_key("loopback"));json!({"ok":true})
+                }else {
+                    assert_eq!(path,"/mcp");let request:Value=serde_json::from_slice(&bytes).unwrap();
+                    assert_eq!(request["params"]["name"],"control.chat.read");
+                    json!({"jsonrpc":"2.0","id":request["id"],"result":{"isError":false,"structuredContent":{"data":{"id":"c-fixture","pending_ports":[]}}}})
+                };
+                control_http::respond(&mut stream,"200 OK","application/json",value.to_string().as_bytes(),"",control_http::Policy::Embedded).unwrap();
+            }
+        });
+        let mut hive=Hive {client:Client::builder().timeout(Duration::from_secs(3)).build().unwrap(),endpoint:format!("http://{addr}/mcp"),next:0,operator_cookie:HeaderValue::from_static("fixture")};
+        let mut app=App {active:"c-fixture".into(),detail:json!({"messages":[{"text":"Earlier prompt","reply":"Earlier response"}],"pending_ports":[{"port_id":"port-fixture","name":"relay","target":{"host":"127.0.0.1","port":25565},"loopback_required":true}]}),input:"/port allow port-fixture".into(),..Default::default()};
+        let transcript=app.transcript().to_string();
+        assert!(transcript.find("Earlier response").unwrap()<transcript.find("Port request").unwrap());
+        assert!(app.submit(&mut hive).unwrap_err().to_string().contains("--loopback"));
+        app.input="/port deny port-fixture".into();app.submit(&mut hive).unwrap();
+        assert_eq!(app.detail["pending_ports"],json!([]));
+        server.join().unwrap();
+    }
     #[test]
     fn startup_only_resumes_an_explicit_selection() {
         let args=|values:&[&str]|values.iter().map(|s|s.to_string()).collect::<Vec<_>>();

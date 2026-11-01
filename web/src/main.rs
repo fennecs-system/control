@@ -356,7 +356,13 @@ fn attach_port_approvals(frame:&web_sys::HtmlIFrameElement)->Result<(),JsValue> 
             }
         });
         request.set_onloadend(Some(finished.as_ref().unchecked_ref()));
-        if request.send_with_opt_str(Some(&payload)).is_err(){let _=failed_form.remove_attribute("data-submitting");}
+        if request.send_with_opt_str(Some(&payload)).is_err(){
+            let _=failed_form.remove_attribute("data-submitting");
+            if let Ok(Some(error))=failed_form.query_selector("[role=alert]") {
+                error.set_text_content(Some("Could not confirm the port decision. Check status before retrying."));
+                let _=error.remove_attribute("hidden");
+            }
+        }
         finished.forget();
     });
     document.add_event_listener_with_callback("submit",submit.as_ref().unchecked_ref())?;
