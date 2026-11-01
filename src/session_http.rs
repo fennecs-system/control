@@ -507,7 +507,17 @@ mod tests {
             fn post(&self,path:&str,args:Value)->Value {self.request(reqwest::Method::POST,path,args)}
             fn get(&self,path:&str)->Value {self.request(reqwest::Method::GET,path,Value::Null)}
             fn element(&self,selector:&str)->String {self.post("/element",json!({"using":"css selector","value":selector}))["element-6066-11e4-a52e-4f735466cecf"].as_str().unwrap().to_owned()}
-            fn text(&self,selector:&str)->String {let id=self.element(selector);self.get(&format!("/element/{id}/text")).as_str().unwrap().to_owned()}
+            fn text(&self,selector:&str)->String {
+                let start=Instant::now();
+                loop {
+                    let id=self.element(selector);
+                    let response=self.client.get(format!("{}/element/{id}/text",self.url)).send().unwrap();
+                    let status=response.status();let value:Value=response.json().unwrap();
+                    if status.is_success(){return value["value"].as_str().unwrap().to_owned();}
+                    assert!(value["value"]["error"]=="stale element reference" && start.elapsed()<Duration::from_secs(10),"WebDriver text: {}",value["value"]["error"]);
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+            }
             fn wait(&self,text:&str) {let start=Instant::now(); loop {if self.text("body").contains(text) {break;} assert!(start.elapsed()<Duration::from_secs(12),"Transcript never displayed {text}"); std::thread::sleep(Duration::from_millis(100));}}
         }
         impl Drop for Browser {fn drop(&mut self){let _=self.client.delete(&self.url).send();}}
