@@ -314,9 +314,96 @@ fn reconcile(body:&web_sys::HtmlElement,new_body:&web_sys::HtmlElement)->Result<
 
 // The parent owns updates: browser-managed iframe refreshes can stall in Chromium
 // and visibly reload in Firefox. Neither the frame nor the composer is navigated.
+fn follow_transcript(frame: &web_sys::HtmlIFrameElement, following: Rc<Cell<bool>>) -> Result<(),JsValue> {
+    let Some(doc) = frame.content_document() else { return Ok(()); };
+    let Some(scroller) = doc.scrolling_element() else { return Ok(()); };
+    let target = scroller.clone();
+    let state = following.clone();
+    let scroll = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
+        state.set(target.scroll_height()-target.client_height()-target.scroll_top()<80);
+    });
+    doc.add_event_listener_with_callback("scroll",scroll.as_ref().unchecked_ref())?;
+    scroll.forget();
+    let resize = Closure::<dyn FnMut()>::new(move || {
+        if following.get() { scroller.set_scroll_top(scroller.scroll_height()); }
+    });
+    let observer = web_sys::ResizeObserver::new(resize.as_ref().unchecked_ref())?;
+    if let Some(body) = doc.body() { observer.observe(&body); }
+    // Keep the observer alive for this document's lifetime; replacing the frame
+    // document on navigation releases its observed nodes with the page.
+    std::mem::forget(observer);
+    resize.forget();
+    Ok(())
+}
+fn attach_port_approvals(frame:&web_sys::HtmlIFrameElement)->Result<(),JsValue> {
+    let Some(document)=frame.content_document() else{return Ok(());};
+    let Some(root)=document.document_element() else{return Ok(());};
+    if root.has_attribute("data-port-handler"){return Ok(());}
+    root.set_attribute("data-port-handler","")?;
+    let submit=Closure::<dyn FnMut(web_sys::SubmitEvent)>::new(move |event:web_sys::SubmitEvent| {
+        // Submit targets are forms. Use a realm-independent tag check rather
+        // than instanceof, which rejects iframe forms in Chromium.
+        let Some(form)=event.target().map(|target|target.unchecked_into::<web_sys::HtmlFormElement>()) else{return;};
+        if form.tag_name()!="FORM" || form.get_attribute("action").as_deref()!=Some("/tools/ports"){return;}
+        if form.has_attribute("data-submitting"){event.prevent_default();return;}
+        let prepare=||->Result<_,JsValue> {
+            let params=web_sys::UrlSearchParams::new()?;
+            let data=web_sys::FormData::new_with_form(&form)?;
+            for entry in js_sys::try_iter(&data)?.ok_or_else(||JsValue::from_str("No form iterator"))? {
+                let pair=js_sys::Array::from(&entry?);
+                if let (Some(key),Some(value))=(pair.get(0).as_string(),pair.get(1).as_string()){params.append(&key,&value);}
+            }
+            if let Some(button)=event.submitter() && let Some(name)=button.get_attribute("name") {
+                params.append(&name,&button.get_attribute("value").unwrap_or_default());
+            }
+            params.append("response","json");
+            let request=web_sys::XmlHttpRequest::new()?;
+            request.open("POST","/tools/ports")?;
+            request.set_request_header("Content-Type","application/x-www-form-urlencoded")?;
+            request.set_timeout(15000);
+            Ok((request,String::from(params.to_string())))
+        };
+        let Ok((request,payload))=prepare() else{return;};
+        event.prevent_default();let _=form.set_attribute("data-submitting","");
+        let response=request.clone();let failed_form=form.clone();
+        let finished=Closure::<dyn FnMut(web_sys::Event)>::once(move |_| {
+            let _=form.remove_attribute("data-submitting");
+            let value=response.response_text().ok().flatten().and_then(|text|serde_json::from_str::<serde_json::Value>(&text).ok());
+            if response.status().ok()==Some(200) && value.as_ref().is_some_and(|value|value["ok"]==true) {
+                if let Some(parent)=web_sys::window().and_then(|window|window.document()) && let Ok(event)=web_sys::Event::new("control-transcript-refresh"){let _=parent.dispatch_event(&event);}
+            }else if let Ok(Some(error))=form.query_selector("[role=alert]") {
+                error.set_text_content(Some(value.as_ref().and_then(|value|value["error"].as_str()).unwrap_or("Could not confirm the port decision. Check status before retrying.")));
+                let _=error.remove_attribute("hidden");
+            }
+        });
+        request.set_onloadend(Some(finished.as_ref().unchecked_ref()));
+        if request.send_with_opt_str(Some(&payload)).is_err(){
+            let _=failed_form.remove_attribute("data-submitting");
+            if let Ok(Some(error))=failed_form.query_selector("[role=alert]") {
+                error.set_text_content(Some("Could not confirm the port decision. Check status before retrying."));
+                let _=error.remove_attribute("hidden");
+            }
+        }
+        finished.forget();
+    });
+    document.add_event_listener_with_callback("submit",submit.as_ref().unchecked_ref())?;
+    submit.forget();Ok(())
+}
 fn attach_transcript(document: &web_sys::Document) -> Result<(), JsValue> {
     let Some(frame) = document.query_selector("iframe.chat-transcript")? else { return Ok(()); };
     let frame: web_sys::HtmlIFrameElement = frame.dyn_into()?;
+    let following = Rc::new(Cell::new(true));
+    let loaded_frame = frame.clone();
+    let loaded_following = following.clone();
+    let loaded = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
+        loaded_following.set(true);
+        let _ = follow_transcript(&loaded_frame,loaded_following.clone());
+        let _ = attach_port_approvals(&loaded_frame);
+    });
+    frame.add_event_listener_with_callback("load",loaded.as_ref().unchecked_ref())?;
+    loaded.forget();
+    follow_transcript(&frame,following.clone())?;
+    attach_port_approvals(&frame)?;
     let url = frame.get_attribute("src").unwrap_or_default().split('#').next().unwrap_or_default().to_owned();
     let busy = Rc::new(Cell::new(false));
     let previous = Rc::new(RefCell::new(String::new()));
@@ -327,6 +414,7 @@ fn attach_transcript(document: &web_sys::Document) -> Result<(), JsValue> {
         request.set_timeout(10_000);
         let response = request.clone();
         let frame = frame.clone();
+        let following = following.clone();
         let previous = previous.clone();
         let completed = busy.clone();
         let finished = Closure::<dyn FnMut(web_sys::Event)>::once(move |_| {
@@ -341,7 +429,7 @@ fn attach_transcript(document: &web_sys::Document) -> Result<(), JsValue> {
             let Some(new_body) = parsed.body() else { return; };
             let Some(scroller) = doc.scrolling_element() else { return; };
             let top = scroller.scroll_top();
-            let at_end = scroller.scroll_height() - scroller.client_height() - top < 80;
+            let at_end = following.get();
             let mut details = std::collections::HashMap::new();
             if let Ok(nodes) = body.query_selector_all("details") {
                 for index in 0..nodes.length() {
@@ -357,6 +445,15 @@ fn attach_transcript(document: &web_sys::Document) -> Result<(), JsValue> {
             }
             if reconcile(&body, &new_body).is_err() { return; }
             scroller.set_scroll_top(if at_end { scroller.scroll_height() } else { top });
+            // Layout can settle after reconciliation (fonts, details and frame
+            // sizing). Follow again at the next paint, but respect scrollback.
+            let callback = Closure::<dyn FnMut(f64)>::once(move |_| {
+                if following.get()==at_end {
+                    scroller.set_scroll_top(if at_end {scroller.scroll_height()} else {top});
+                }
+            });
+            let _ = web_sys::window().unwrap().request_animation_frame(callback.as_ref().unchecked_ref());
+            callback.forget();
             *previous.borrow_mut() = text;
         });
         request.set_onloadend(Some(finished.as_ref().unchecked_ref()));

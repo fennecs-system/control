@@ -14,6 +14,9 @@ fn chat_page(state: &State, lens: &str, id: &str, error: &str, draft: &str) -> S
     if error.is_empty() { page } else { chat::rejected(&page, error, draft) }
 }
 fn respond_chat_status(stream: &mut impl Write, status: &str, html: &str) {
+    respond_chat_headers(stream,status,html,"");
+}
+fn respond_chat_headers(stream:&mut impl Write,status:&str,html:&str,extra:&str) {
     let page = html.replace(
         "</head>",
         "<script type='module' src='/tool-window/chat-bootstrap.js'></script></head>",
@@ -23,7 +26,7 @@ fn respond_chat_status(stream: &mut impl Write, status: &str, html: &str) {
         status,
         "text/html; charset=utf-8",
         &page,
-        "",
+        extra,
         "'self' 'wasm-unsafe-eval'",
     );
 }
@@ -80,13 +83,19 @@ fn send_message(
         }
     }
 }
-fn change_with_save(
+pub(crate) fn change_with_save(
     state: &mut State,
     name: &str,
     arguments: &Value,
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Result<Value, &'static str> {
-    transact(state, arguments["id"].as_str(), |state| if crate::tool_registry::lookup(name).is_some_and(|tool|tool.route==crate::tool_registry::Route::Project) {
+    let related = if name=="control.chat.send" {
+        arguments["message"].as_str().and_then(|text|control_context::commands::tail(text.trim(),control_context::commands::Kind::Answer))
+            .and_then(|answer|answer.trim().split_once(char::is_whitespace))
+            .and_then(|(question,_)|crate::design::answer_target(state,arguments["id"].as_str().unwrap_or(""),question).ok())
+            .map(str::to_owned)
+    } else { None };
+    transact(state, arguments["id"].as_str(), related.as_deref(), |state| if crate::tool_registry::lookup(name).is_some_and(|tool|tool.route==crate::tool_registry::Route::Project) {
         crate::projects::request_named(state,arguments["id"].as_str().unwrap_or(""),arguments["path"].as_str().unwrap_or(""),arguments["name"].as_str())
     } else if crate::tool_registry::lookup(name).is_some_and(|tool|tool.route==crate::tool_registry::Route::Room) {
         crate::rooms::tool(state, name, arguments)
@@ -98,23 +107,26 @@ fn change_with_save(
 fn transact(
     state: &mut State,
     id: Option<&str>,
+    related: Option<&str>,
     operation: impl FnOnce(&mut State) -> Result<Value, &'static str>,
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Result<Value, &'static str> {
     let count = state.chats.len();
+    let targets: std::collections::HashSet<_> = id.into_iter().chain(related).collect();
     let previous = state
         .chats
         .iter()
-        .position(|s| Some(s.id.as_str()) == id)
-        .map(|i| (i, state.chats[i].clone()));
+        .enumerate()
+        .filter(|(_,s)| targets.contains(s.id.as_str()))
+        .map(|(i,s)| (i,s.clone())).collect::<Vec<_>>();
     let run_count = state.runtime.runs.len();
-    let pending = crate::runtime::RunStatusCheckpoint::capture(&state.runtime, |run| run.chat_id.as_deref() == id);
+    let pending = crate::runtime::RunStatusCheckpoint::capture(&state.runtime, |run| run.chat_id.as_deref().is_some_and(|chat|targets.contains(chat)));
     let notice = state.runtime.notice.clone();
     let post_count = state.collective.posts.len();
     let result = operation(state);
     if result.is_err() || save(state).is_err() {
         state.chats.truncate(count);
-        if let Some((index, session)) = previous {
+        for (index, session) in previous {
             state.chats[index] = session;
         }
         state.runtime.runs.truncate(run_count);
@@ -265,6 +277,17 @@ pub fn handle(
     }
     if path == "/chats" && method == "GET" {
         let query = crate::fields(query);
+        if !query.contains_key("new") && !query.contains_key("discuss") && !query.contains_key("improve") {
+            let recent=header.lines().filter_map(|line|line.split_once(':'))
+                .filter(|(name,_)|name.eq_ignore_ascii_case("cookie"))
+                .flat_map(|(_,value)|value.split(';'))
+                .filter_map(|cookie|cookie.trim().split_once('='))
+                .find_map(|(name,id)|(name=="control_recent_chat" && chat::valid_id(id)).then_some(id));
+            if let Some(id)=recent.filter(|id|chat::detail(state,id).is_ok()) {
+                respond(stream,"303 See Other","text/plain","",&format!("Location: /chat/{id}\r\n"));
+                return true;
+            }
+        }
         let html = chat::landing_mode(
             state,
             lens,
@@ -284,7 +307,7 @@ pub fn handle(
             .get(if path == "/improve" { "objective" } else { "message" })
             .filter(|text| !text.trim().is_empty());
         // Create and first message commit together, so a rejected message leaves no empty chat.
-        let result = transact(state, None, |state| {
+        let result = transact(state, None, None, |state| {
             let value = chat::tool(state, "control.chat.create", &arguments)?;
             if let Some(text) = text {
                 chat::tool(state, "control.chat.send", &json!({"id":value["id"],"message":text}))?;
@@ -358,7 +381,8 @@ pub fn handle(
         }
     } else if method == "GET" && operation.is_empty() {
         match chat::detail(state, id) {
-            Ok(_) => respond_chat(stream, &chat_page(state, lens, id, "", "")),
+            Ok(_) => respond_chat_headers(stream,"200 OK",&chat_page(state,lens,id,"",""),
+                &format!("Set-Cookie: control_recent_chat={id}; Path=/; HttpOnly; SameSite=Strict\r\n")),
             Err(_) if chat::discord_actor(id).is_some_and(|actor|crate::identity::authorize(&actor,crate::identity::Action::Task).is_ok()) => respond(stream,"202 Accepted","text/html; charset=utf-8","<!doctype html><html lang='en'><head><meta http-equiv='refresh' content='2'><title>Control / Chat</title></head><body><p>Waiting for the Discord message…</p></body></html>",""),
             Err(message) => respond(stream, "404 Not Found", "text/plain", message, ""),
         }
@@ -376,6 +400,27 @@ pub fn handle(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn returning_to_chat_remembers_only_an_existing_authorized_conversation() {
+        let mut state=crate::State::default();
+        let id=crate::chat::create(&mut state);
+        let mut response=Vec::new();
+        handle(&mut response,&mut state,"GET",&format!("/chat/{id}"),"none","",&[]);
+        assert!(String::from_utf8(response).unwrap().to_ascii_lowercase().contains(&format!("set-cookie: control_recent_chat={id}; path=/; httponly; samesite=strict")));
+        let cookie=format!("Cookie: control_recent_chat={id}\r\n");
+        let mut response=Vec::new();
+        handle(&mut response,&mut state,"GET","/chats","none",&cookie,&[]);
+        assert!(String::from_utf8(response).unwrap().to_ascii_lowercase().contains(&format!("location: /chat/{id}")));
+        for path in ["/chats?new=1","/chats?discuss=tools","/chats?improve=1"] {
+            let mut response=Vec::new();handle(&mut response,&mut state,"GET",path,"none",&cookie,&[]);
+            assert!(String::from_utf8(response).unwrap().starts_with("HTTP/1.1 200 OK"));
+        }
+        state.chats[0].actor=crate::identity::Actor::Unknown;
+        for header in [&cookie,"Cookie: control_recent_chat=c-missing\r\n","Cookie: control_recent_chat=../../tools\r\n"] {
+            let mut response=Vec::new();handle(&mut response,&mut state,"GET","/chats","none",header,&[]);
+            assert!(!String::from_utf8(response).unwrap().to_ascii_lowercase().contains("location:"));
+        }
+    }
     #[test]
     fn web_folder_picker_is_opt_in_and_bare_open_only_navigates() {
         let mut state = State::default();
@@ -411,6 +456,11 @@ mod tests {
         initial.runtime.runs[0].result.clear();
         crate::projects::request(&mut initial,&chat,"/fixture/project").unwrap();
         let long_chat=crate::chat::create(&mut initial);
+        let (ports,_,port_chat)=crate::ports::tests::pending_fixture();
+        initial.services.extend(ports.services);
+        initial.ports.extend(ports.ports);
+        initial.runtime.runs.extend(ports.runtime.runs);
+        initial.chats.extend(ports.chats);
         let state = Arc::new(Mutex::new(initial));
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let server = format!("http://{}", listener.local_addr().unwrap());
@@ -438,6 +488,7 @@ mod tests {
                 assert!(length<64*1024);let mut body=vec![0;length];reader.read_exact(&mut body).unwrap();
                 if path.starts_with("/tool-window/") { crate::web_assets::serve(&mut stream, &path); }
                 else if crate::serve_stylesheet(&mut stream, &path) {}
+                else if path=="/tools/ports" {crate::ports::http_with_save(&mut stream,&served,&method,&path,&body,|_|Ok(()));}
                 else if path.contains("/transcript") && fail.load(Ordering::Relaxed) { let _=stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); }
                 else if method=="POST" && path.ends_with("/messages") {
                     let id=path.trim_start_matches("/chat/").trim_end_matches("/messages");
@@ -471,7 +522,17 @@ mod tests {
             fn post(&self,path:&str,args:Value)->Value {self.request(reqwest::Method::POST,path,args)}
             fn get(&self,path:&str)->Value {self.request(reqwest::Method::GET,path,Value::Null)}
             fn element(&self,selector:&str)->String {self.post("/element",json!({"using":"css selector","value":selector}))["element-6066-11e4-a52e-4f735466cecf"].as_str().unwrap().to_owned()}
-            fn text(&self,selector:&str)->String {let id=self.element(selector);self.get(&format!("/element/{id}/text")).as_str().unwrap().to_owned()}
+            fn text(&self,selector:&str)->String {
+                let start=Instant::now();
+                loop {
+                    let id=self.element(selector);
+                    let response=self.client.get(format!("{}/element/{id}/text",self.url)).send().unwrap();
+                    let status=response.status();let value:Value=response.json().unwrap();
+                    if status.is_success(){return value["value"].as_str().unwrap().to_owned();}
+                    assert!(value["value"]["error"]=="stale element reference" && start.elapsed()<Duration::from_secs(10),"WebDriver text: {}",value["value"]["error"]);
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+            }
             fn wait(&self,text:&str) {let start=Instant::now(); loop {if self.text("body").contains(text) {break;} assert!(start.elapsed()<Duration::from_secs(12),"Transcript never displayed {text}"); std::thread::sleep(Duration::from_millis(100));}}
         }
         impl Drop for Browser {fn drop(&mut self){let _=self.client.delete(&self.url).send();}}
@@ -497,6 +558,13 @@ mod tests {
         let branch=b.element(".conversation-branch");assert_eq!(b.get(&format!("/element/{branch}/property/open")),true,"The active child's parent must be expanded");
         {let mut state=state.lock().unwrap();crate::chat::create(&mut state);state.chats.last_mut().unwrap().title="Live recent thread".into();}
         b.wait("Live recent thread");assert_eq!(b.get(&format!("/element/{fresh_input}/name")),"textarea","Refreshing the disclosed picker must not reload chat");
+        {let mut state=state.lock().unwrap();let late=crate::chat::create(&mut state);let session=state.chats.last_mut().unwrap();session.parent_chat=Some(chat.clone());session.title=format!("Late background child {late}");}
+        for path in ["/?view=tools","/?view=runs","/chats"] {
+            b.post("/url",json!({"url":format!("{server}{path}")}));
+        }
+        let toggle=b.element(".conversation-toggle > summary");b.post(&format!("/element/{toggle}/click"),json!({}));
+        let newest=b.element("nav[aria-label=Conversations] > a[href^='/chat/']");
+        assert_eq!(b.get(&format!("/element/{newest}/text")),"Live recent thread","Returning through Tools, Runs and Chat must not promote an older background playtest");
         b.post("/url",json!({"url":format!("{server}/chat/{chat}")}));
         let input=b.element("textarea[data-enter-sends=true]");
         b.post(&format!("/element/{input}/value"),json!({"text":"/op"}));
@@ -558,6 +626,27 @@ mod tests {
         assert_eq!(b.get("/element/active")["element-6066-11e4-a52e-4f735466cecf"],input);
         // Fifteen real form submissions through the WASM client and HTTP command;
         // deterministic worker results isolate browser costs from model latency.
+        b.post("/url",json!({"url":format!("{server}/chat/{port_chat}")}));
+        let port_page=b.element("body");let draft=b.element("textarea[data-enter-sends=true]");
+        b.post(&format!("/element/{draft}/value"),json!({"text":"Keep this draft while denying a port"}));
+        let port_frame=b.element("iframe.chat-transcript");
+        b.post("/frame",json!({"id":{"element-6066-11e4-a52e-4f735466cecf":port_frame}}));
+        b.wait("Port access");
+        let request=b.element(".port-request");
+        let deny=b.element(".port-request button[name=revoke]");
+        // Deny must work without the loopback checkbox. FormData alone omits
+        // submitter values and would accidentally send an approval instead.
+        b.post(&format!("/element/{deny}/click"),json!({}));
+        let start=Instant::now();loop {
+            let requests=b.post("/elements",json!({"using":"css selector","value":".port-request"}));
+            if requests.as_array().unwrap().is_empty(){break;}
+            assert!(start.elapsed()<Duration::from_secs(5),"Denied port did not leave the chat prompt");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let _=request;
+        b.post("/frame",json!({"id":null}));
+        assert_eq!(b.get(&format!("/element/{port_page}/name")),"body","Port decisions must not navigate the page");
+        assert_eq!(b.get(&format!("/element/{draft}/property/value")),"Keep this draft while denying a port");
         b.post("/url",json!({"url":format!("{server}/chat/{long_chat}")}));
         let page=b.element("body");let input=b.element("textarea[data-enter-sends=true]");let frame=b.element("iframe.chat-transcript");
         rejected.store(true,Ordering::Relaxed);
@@ -586,6 +675,26 @@ mod tests {
             timings.push(start.elapsed());
         }
         assert_eq!(state.lock().unwrap().chats.iter().find(|chat|chat.id==long_chat).unwrap().messages.len(),15);
+        b.post("/frame",json!({"id":{"element-6066-11e4-a52e-4f735466cecf":frame}}));
+        let scroller=b.element("html");
+        let bottom_before=b.get(&format!("/element/{scroller}/property/scrollTop")).as_f64().unwrap();
+        b.post("/actions",json!({"actions":[{"type":"wheel","id":"history-scroll","actions":[{"type":"scroll","x":0,"y":0,"deltaX":0,"deltaY":-1200,"duration":100,"origin":{"element-6066-11e4-a52e-4f735466cecf":scroller}}]}]}));
+        std::thread::sleep(Duration::from_millis(500));
+        let top=b.get(&format!("/element/{scroller}/property/scrollTop")).as_f64().unwrap();
+        assert!(top < bottom_before-400.0,"The wheel must actually scroll the transcript: {bottom_before} → {top}");
+        {let mut state=state.lock().unwrap();let run=state.runtime.runs.iter_mut().rev().find(|run|run.chat_id.as_deref()==Some(&long_chat)).unwrap();run.result.push_str("\n\nTail arrived while reading history.");}
+        b.wait("Tail arrived while reading history.");
+        let after=b.get(&format!("/element/{scroller}/property/scrollTop")).as_f64().unwrap();
+        assert!((after-top).abs()<20.0,"Reading history moved from {top} to {after}");
+        b.post("/actions",json!({"actions":[{"type":"wheel","id":"history-scroll","actions":[{"type":"scroll","x":0,"y":0,"deltaX":0,"deltaY":1000000,"duration":100,"origin":{"element-6066-11e4-a52e-4f735466cecf":scroller}}]}]}));
+        std::thread::sleep(Duration::from_millis(500));
+        {let mut state=state.lock().unwrap();let run=state.runtime.runs.iter_mut().rev().find(|run|run.chat_id.as_deref()==Some(&long_chat)).unwrap();run.result.push_str(&format!("\n\n{}\nFollowing resumed.","An additional streamed paragraph.\n\n".repeat(20)));}
+        b.wait("Following resumed.");
+        let height=b.get(&format!("/element/{scroller}/property/scrollHeight")).as_f64().unwrap();
+        let viewport=b.get(&format!("/element/{scroller}/property/clientHeight")).as_f64().unwrap();
+        let top=b.get(&format!("/element/{scroller}/property/scrollTop")).as_f64().unwrap();
+        assert!(height-viewport-top<80.0,"Scrolling back to the end must re-enable following");
+        b.post("/frame",json!({"id":null}));
         timings.sort();println!("{}: 15 turns, median {:?}, maximum {:?}",if chrome{"Chrome"}else{"Firefox"},timings[7],timings[14]);
         assert!(timings[14]<Duration::from_secs(5),"Local fixture responses should stay responsive");
     }

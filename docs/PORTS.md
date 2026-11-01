@@ -6,9 +6,12 @@ chat, actor and node. Control bridges bytes through a trusted Rust helper inside
 that exact verified service. No host network, bridge network, Docker socket,
 host directory or credentials are exposed to the service.
 
-Open **Tools → TCP ports** to allow or deny a pending request, inspect the bound
-service and endpoint, or revoke access. Approval lasts at most one hour and never
-outlives the service's lease. The default is 15 minutes or its remaining lifetime.
+Allow or deny pending requests directly in chat, including delegated requests.
+Approval defaults to the service's lifetime and remains revocable. A shorter
+duration ends at the service deadline if that comes first; there is no countdown
+to edit. **Tools → TCP ports** lists endpoints and revocation controls.
+In the TUI, use `/port allow ID` or `/port deny ID`; literal loopback targets
+also require `--loopback` when allowing them.
 Rebuilding worker images does not upgrade existing services: rebuild with Nix
 setup, then start a new service to gain the trusted relay capability.
 

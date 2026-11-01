@@ -723,7 +723,6 @@ fn commit(
         }
         session.revision = session.revision.saturating_add(1);
     }
-    if let Some(id)=chat_id.as_deref() {crate::chat::touch(s,id);}
     if save(s).is_err() {
         let run = &mut s.runtime.runs[run_index];
         run.status = previous_status;
