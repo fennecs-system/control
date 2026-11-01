@@ -6,6 +6,7 @@ let
     mkdir -p $out/bin
     cp ${../tools/tcp-relay/main.rs} main.rs
     cp ${../tools/tcp-relay/protocol.rs} protocol.rs
+    cp ${../tools/tcp-relay/multiplex.rs} multiplex.rs
     rustc --edition=2024 -Dwarnings -O main.rs -o $out/bin/control-tcp-relay
   '';
   serviceRunner = pkgs.runCommand "control-service-runner" { nativeBuildInputs = [ pkgs.rustc pkgs.stdenv.cc ]; } ''
@@ -59,7 +60,7 @@ pkgs.dockerTools.buildLayeredImage {
     chmod 0755 nix/var/nix/profiles/per-user nix/var/nix/gcroots/per-user
   '';
   config = {
-    Labels = { "dev.control.service-runner" = "2"; "dev.control.tcp-relay" = "3"; }
+    Labels = { "dev.control.service-runner" = "2"; "dev.control.tcp-relay" = "4"; }
       // pkgs.lib.optionalAttrs (profile == "full") { "dev.control.worker-profile" = "full-v1"; };
     WorkingDir = "/workspace";
     Env = [

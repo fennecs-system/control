@@ -1,6 +1,9 @@
 //! Service-owned TCP ports over verified stdio relays. Containers stay offline.
 mod ingress_guard;
 mod decisions;
+mod multiplex;
+#[path = "../tools/tcp-relay/multiplex.rs"]
+mod multiplex_transport;
 #[path = "../tools/tcp-relay/protocol.rs"]
 mod protocol;
 use crate::{
@@ -26,7 +29,7 @@ use std::{
 };
 const MAX_PORTS: usize = 8;
 const MAX_RECORDS: usize = 128;
-const MAX_CONNECTIONS: usize = 4;
+const MAX_CONNECTIONS: usize = 8;
 fn fail(s: impl ToString) -> io::Error {
     io::Error::other(s.to_string())
 }
@@ -158,6 +161,8 @@ pub struct Port {
     target: Option<Endpoint>,
     #[serde(default, skip_serializing_if="Option::is_none")]
     peer: Option<ResourceId>,
+    #[serde(default, skip_serializing_if="Option::is_none")]
+    peer_grant: Option<crate::services::Grant>,
     status: Status,
     approval: Option<Approval>,
     #[serde(default, skip_serializing_if="Option::is_none")]
@@ -185,7 +190,7 @@ struct Input {
 }
 pub fn definitions() -> Vec<Value> {
     vec![
-        json!({"name":"control_port_request","description":"Request operator approval for a named TCP port owned by this chat's running persistent service. ingress exposes non-HTTP/non-TLS raw service loopback on host 127.0.0.1; HTTP artifacts use control_preview_start. egress exposes a service loopback relay to one explicitly approved pinned target, including TLS. Containers remain network=none, so another service cannot dial an ingress host address directly. To connect two owned services, request ingress on the listening service, then egress on the connecting service with peer_port_id set to that ingress port_id; the client dials 127.0.0.1:service_port inside its own container. Egress requires exactly one of target or peer_port_id. No traffic until approved at /tools/ports; a peer route also needs its ingress approved and ready. Port lifetime cannot exceed the service lease.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"name":{"type":"string","maxLength":48},"direction":{"type":"string","enum":["ingress","egress"]},"service_port":{"type":"integer","minimum":1,"maximum":65535},"target":{"type":"object","properties":{"host":{"type":"string"},"port":{"type":"integer","minimum":1,"maximum":65535}},"required":["host","port"],"additionalProperties":false},"peer_port_id":{"type":"string","description":"Ingress port_id of another service owned by this chat; egress only."}},"required":["service_id","name","direction","service_port"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"openWorldHint":false}}),
+        json!({"name":"control_port_request","description":"Request operator approval for a named TCP port on an owned or explicitly granted running service. ingress exposes non-HTTP/non-TLS raw service loopback on host 127.0.0.1; HTTP artifacts use control_preview_start. egress exposes a service loopback relay to one approved pinned target, including TLS. Containers remain network=none. To connect two accessible services, request ingress on the listening service, then egress on the connecting service with peer_port_id set to that ingress port_id; the client dials its own 127.0.0.1:service_port. Different owner chats require captured service grants, not just a shared actor. Egress requires exactly one of target or peer_port_id. No traffic until approved; a peer route also needs its ingress approved and ready. Poll control_port_status before connecting. Updated worker images keep one listener alive for up to eight concurrent sessions per port. Start new services from rebuilt images to upgrade older single-session relays. Port lifetime cannot exceed the service lifetime.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"name":{"type":"string","maxLength":48},"direction":{"type":"string","enum":["ingress","egress"]},"service_port":{"type":"integer","minimum":1,"maximum":65535},"target":{"type":"object","properties":{"host":{"type":"string"},"port":{"type":"integer","minimum":1,"maximum":65535}},"required":["host","port"],"additionalProperties":false},"peer_port_id":{"type":"string","description":"Ingress port_id of another owned or explicitly granted service; egress only."}},"required":["service_id","name","direction","service_port"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"openWorldHint":false}}),
         json!({"name":"control_port_status","description":"Read owned port approvals, readiness, pinned endpoints, assigned loopback addresses and bounded diagnostics. An ingress local_address is reachable only from the host; connect another owned service with an egress peer_port_id route. Omit port_id for active and ten recent terminal records.","inputSchema":{"type":"object","properties":{"port_id":{"type":"string"}},"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
         json!({"name":"control_port_stop","description":"Persist revocation of an owned port and close its listener/connections. Stopping is intent; inspect until stopped. Never stops the owning service.","inputSchema":{"type":"object","properties":{"port_id":{"type":"string"}},"required":["port_id"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"openWorldHint":false}}),
     ]
@@ -232,12 +237,16 @@ fn peer_endpoint(state: &State, port: &Port, time: u64) -> io::Result<SocketAddr
             &p.id == id
                 && p.direction == Direction::Ingress
                 && p.node == port.node
-                && p.chat == port.chat
                 && p.actor == port.actor
                 && p.service != port.service
         })
-        .ok_or_else(|| fail("Peer ingress is not owned by this chat"))?;
-    authorized(state, peer, time).map_err(|e| fail(format!("Peer ingress unavailable: {e}")))?;
+        .ok_or_else(|| fail("Peer ingress is not accessible to this route"))?;
+    let peer_service=authorized(state, peer, time).map_err(|e| fail(format!("Peer ingress unavailable: {e}")))?;
+    // Persist the exact authority admitted for this route. A service outlives
+    // its model run; sharing an actor or a delegation root is not authority.
+    if !port.peer_grant.as_ref().map_or(peer.chat==port.chat,|grant|grant.matches(&peer_service)) {
+        return Err(fail("Peer service ownership or generation changed"));
+    }
     match peer.approval.as_ref().map(|a| a.host_port) {
         Some(port) if port != 0 => Ok(SocketAddr::from(([127, 0, 0, 1], port))),
         _ => Err(fail("Peer ingress is not ready yet")),
@@ -365,20 +374,16 @@ fn admit(
         }
         return Ok(old.summary());
     }
-    if let Some(peer) = &input.peer_port_id
-        && !state.ports.iter().any(|p| {
+    let peer_grant = input.peer_port_id.as_ref().map(|peer| {
+        let port=state.ports.iter().find(|p| {
             &p.id == peer
                 && p.direction == Direction::Ingress
                 && p.status != Status::Stopped
                 && p.service != input.service_id
-                && p.chat == service.resource.owner.chat.as_str()
                 && accessible(state, p, run, &node)
-        })
-    {
-        return Err(fail(
-            "peer_port_id must be an active ingress port of another service owned by this chat",
-        ));
-    }
+        }).ok_or_else(||fail("peer_port_id must be an active ingress of another owned or explicitly granted service"))?;
+        self::service(state,port,now()).map(Service::grant)
+    }).transpose()?;
     if state
         .ports
         .iter()
@@ -416,6 +421,7 @@ fn admit(
         service_port: input.service_port,
         target: input.target,
         peer: input.peer_port_id,
+        peer_grant,
         status: Status::Pending,
         approval: None,
         decision: None,
@@ -638,7 +644,7 @@ pub(crate) fn http_with_save(
                 crate::services::relay_capable(&service)?;
                 if service.resource.lease.is_until_stopped() && fields.get("seconds").is_some_and(|v|v == "-1") {
                     let marker = crate::runtime::docker_query(&["image","inspect",service.resource.image.as_str(),"--format","{{index .Config.Labels \"dev.control.tcp-relay\"}}"])?;
-                    if marker.trim() != "3" {return Err(fail("Rebuild worker images before approving service-lifetime ports"));}
+                    if !matches!(marker.trim(),"3"|"4") {return Err(fail("Rebuild worker images before approving service-lifetime ports"));}
                 }
                 crate::services::port_binding(&service, &request.container)?;
                 let allow_loopback = fields.get("loopback").is_some_and(|v| v == "yes");
@@ -1159,6 +1165,8 @@ fn ingress(shared: Arc<Mutex<State>>, mut port: Port, cancel: Arc<AtomicBool>) -
     Ok(())
 }
 fn egress(shared: Arc<Mutex<State>>, port: Port, cancel: Arc<AtomicBool>) -> io::Result<()> {
+    let service=live_service(&shared,&port,&cancel)?;
+    if crate::services::relay_version(&service)? >= 4 {return multiplex::egress(shared,port,cancel);}
     while let Ok(service) = live_service(&shared, &port, &cancel) {
         let result = (|| {
             let binding = crate::services::port_binding(&service, &port.container)?;
@@ -1187,6 +1195,7 @@ fn egress(shared: Arc<Mutex<State>>, port: Port, cancel: Arc<AtomicBool>) -> io:
                 &port,
                 &cancel,
             )?;
+            receipt(&shared, &port, false, "");
             live_service(&shared, &port, &cancel)?;
             if !shared.lock().is_ok_and(|state| peer_listening(&state, &port)) {
                 let _ = child.kill();
@@ -1208,9 +1217,11 @@ fn egress(shared: Arc<Mutex<State>>, port: Port, cancel: Arc<AtomicBool>) -> io:
             };
             bridge(socket, child, output, &shared, &port, &cancel)
         })();
-        if let Err(error) = result {
-            receipt(&shared, &port, false, &error.to_string());
-        }
+        // A successful connection needs a new helper listener immediately.
+        // Back off only on failures; an unconditional pause made consecutive
+        // dependency downloads hit a needless refusal window.
+        let Err(error) = result else {continue;};
+        receipt(&shared, &port, false, &error.to_string());
         for _ in 0..10 {
             if live_service(&shared, &port, &cancel).is_err() {
                 break;
@@ -1739,6 +1750,38 @@ pub(crate) mod tests {
         assert!(peer_listening(&state, &state.ports[0]));
     }
     #[test]
+    fn delegated_peer_routes_capture_exact_authority_across_owner_chats() {
+        let (mut state,run,node,ingress)=peer_fixture();
+        let child=crate::chat::create(&mut state);
+        let parent_grant=state.services[0].grant();
+        state.services[1].resource.owner.chat=child.clone().try_into().unwrap();
+        state.runtime.runs[0].chat_id=Some(child);
+        // A shared actor, guessed peer ID or UI parent is insufficient.
+        assert!(admit(&mut state,&run,"attempt-a","route",peer_input(&ingress),node.clone(),|_|Ok(())).is_err());
+        state.runtime.runs[0].resource_grants=vec![parent_grant];
+        let value=admit(&mut state,&run,"attempt-a","route",peer_input(&ingress),node,|_|Ok(())).unwrap();
+        let route_id=value["port_id"].as_str().unwrap();
+        let time=now();
+        approve(&mut state,&ingress,60,false,None,time,|_|Ok(())).unwrap();
+        state.ports[0].approval.as_mut().unwrap().host_port=40001;
+        approve(&mut state,route_id,60,false,Some("127.0.0.1:40001".parse().unwrap()),time,|_|Ok(())).unwrap();
+        let route=state.ports.last().unwrap().clone();
+        assert_ne!(route.chat,state.ports[0].chat);
+        assert!(authorized(&state,&route,time).is_ok());
+        // The captured route survives model-turn history removal and restart.
+        state.runtime.runs.clear();
+        let restored:State=serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        assert!(authorized(&restored,&route,time).is_ok());
+        state.ports.last_mut().unwrap().peer_grant=None;
+        assert!(authorized(&state,&route,time).is_err());
+        *state.ports.last_mut().unwrap()=route.clone();
+        state.ports[0].actor=Actor::Unknown;
+        assert!(authorized(&state,&route,time).is_err());
+        state.ports[0].actor=route.actor.clone();
+        state.services[0].resource.generation=Generation::INITIAL.checked_next().unwrap();
+        assert!(authorized(&state,&route,time).is_err());
+    }
+    #[test]
     fn peer_route_follows_the_approved_ingress_and_closes_with_it() {
         let (mut state, run, node, ingress) = peer_fixture();
         let egress = admit(&mut state, &run, "attempt-a", "route", peer_input(&ingress), node, |_| Ok(())).unwrap();
@@ -1759,6 +1802,10 @@ pub(crate) mod tests {
         assert_eq!(intent(&state, &port, &port.node, time), Intent::Serve);
         let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
         assert!(authorized(&restored, &port, time).is_ok());
+        let mut legacy=serde_json::to_value(&state).unwrap();
+        for port in legacy["ports"].as_array_mut().unwrap(){port.as_object_mut().unwrap().remove("peer_grant");}
+        let legacy:State=serde_json::from_value(legacy).unwrap();
+        assert!(authorized(&legacy,&port,time).is_ok(),"Existing same-chat peer approvals remain valid");
         let peer = |state: &mut State| state.ports.iter_mut().find(|p| p.id.as_str() == ingress).unwrap().clone();
         let original = peer(&mut state);
         state.ports.iter_mut().find(|p| p.id.as_str() == ingress).unwrap().approval.as_mut().unwrap().host_port = 40002;
@@ -1960,6 +2007,12 @@ fn main(){
             value["command"]=json!(if name=="probe" {"printf 'short probe stdout\\n'; printf 'short probe stderr\\n' >&2; exit 7"}else{"exec sleep 180"});
             state.services.push(serde_json::from_value(value).unwrap());
         }
+        // Mirror a delegated worker creating its own client while holding a
+        // grant to the parent's server, rather than testing only one owner.
+        let client_chat=crate::chat::create(&mut state);
+        state.services[1].resource.owner.chat=client_chat.clone().try_into().unwrap();
+        state.runtime.runs[0].chat_id=Some(client_chat);
+        state.runtime.runs[0].resource_grants=vec![state.services[0].grant(),state.services[2].grant()];
         state.runtime.runs[0].status="completed".into();
         let write=|state:&State|fs::write(state_dir.join("state.json"),serde_json::to_vec(state).unwrap()).unwrap();
         let read=||serde_json::from_slice::<State>(&fs::read(state_dir.join("state.json")).unwrap()).unwrap();
@@ -1984,7 +2037,7 @@ fn main(){
         let source_command=r#"set -eu
 cat > /workspace/server.rs <<'RUST'
 use std::{io::{Read,Write},net::{TcpListener,Shutdown}};
-fn main(){for socket in TcpListener::bind("127.0.0.1:34001").unwrap().incoming(){let mut socket=socket.unwrap();let mut data=Vec::new();socket.read_to_end(&mut data).unwrap();socket.write_all(b"peer:").unwrap();socket.write_all(&data).unwrap();socket.shutdown(Shutdown::Write).unwrap();}}
+fn main(){for socket in TcpListener::bind("127.0.0.1:34001").unwrap().incoming(){std::thread::spawn(move||{let mut socket=socket.unwrap();let mut data=Vec::new();socket.read_to_end(&mut data).unwrap();socket.write_all(b"peer:").unwrap();socket.write_all(&data).unwrap();socket.shutdown(Shutdown::Write).unwrap();});}}
 RUST
 rustc --edition=2024 /workspace/server.rs -o /workspace/server
 nohup /workspace/server > /workspace/server.log 2>&1 < /dev/null &
@@ -2025,7 +2078,7 @@ curl --noproxy '*' --fail --silent --show-error --retry 8 --retry-connrefused --
 test "$(sha256sum /workspace/asset | cut -d ' ' -f 1)" = {expected}
 cat > /workspace/client.rs <<'RUST'
 use std::{{io::{{Read,Write}},net::{{TcpStream,Shutdown}},time::{{Duration,Instant}}}};
-fn main(){{let start=Instant::now();let mut socket=loop{{match TcpStream::connect("127.0.0.1:34003"){{Ok(s)=>break s,Err(_)if start.elapsed()<Duration::from_secs(8)=>std::thread::sleep(Duration::from_millis(100)),Err(e)=>panic!("{{e}}")}}}};socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();socket.write_all(b"connected").unwrap();socket.shutdown(Shutdown::Write).unwrap();let mut reply=String::new();socket.read_to_string(&mut reply).unwrap();assert_eq!(reply,"peer:connected");println!("peer-connected");}}
+fn main(){{let rounds=Instant::now();let barrier=std::sync::Arc::new(std::sync::Barrier::new(4));let tasks=(0..4).map(|_|{{let barrier=barrier.clone();std::thread::spawn(move||{{let start=Instant::now();let mut socket=loop{{match TcpStream::connect("127.0.0.1:34003"){{Ok(s)=>break s,Err(_)if start.elapsed()<Duration::from_secs(8)=>std::thread::sleep(Duration::from_millis(100)),Err(e)=>panic!("{{e}}")}}}};socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();barrier.wait();socket.write_all(b"connected").unwrap();socket.shutdown(Shutdown::Write).unwrap();let mut reply=String::new();socket.read_to_string(&mut reply).unwrap();assert_eq!(reply,"peer:connected");}})}}).collect::<Vec<_>>();for task in tasks{{task.join().unwrap();}}println!("peer-connected; 4 concurrent connections in {{:?}}",rounds.elapsed());}}
 RUST
 rustc --edition=2024 /workspace/client.rs -o /workspace/client
 /workspace/client
@@ -2034,7 +2087,7 @@ printf verified-download >> /workspace/completions
         let receipt=crate::services::enqueue_test_command(&mut state,&run,"download-connect",&ids[1],&command,60).unwrap();state.runtime.runs[0].status="completed".into();write(&state);server=launch();
         let execution_id=receipt["execution_id"].as_str().unwrap();
         wait(||execution(1,execution_id)["status"]=="completed",65,"binary download and cross-container route");
-        let outcome=execution(1,execution_id);assert_eq!(outcome["exit_code"],0,"{outcome}");assert!(outcome["output"].as_str().unwrap().contains("peer-connected"));download_thread.join().unwrap();
+        let outcome=execution(1,execution_id);assert_eq!(outcome["exit_code"],0,"{outcome}");assert!(outcome["output"].as_str().unwrap().contains("peer-connected"));println!("{}",outcome["output"].as_str().unwrap());download_thread.join().unwrap();
         server.stop();state=read();state.runtime.runs[0].status="running".into();
         let check=crate::services::enqueue_test_command(&mut state,&run,"verify-retention",&ids[1],"test $(wc -c < /workspace/asset) = 262144; test $(cat /workspace/completions) = verified-download; printf retained-once",10).unwrap();state.runtime.runs[0].status="completed".into();write(&state);server=launch();
         wait(||execution(1,check["execution_id"].as_str().unwrap())["status"]=="completed",15,"private files and exactly one effect across restart");
