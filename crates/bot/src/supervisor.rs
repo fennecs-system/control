@@ -32,8 +32,9 @@ impl Topic {
     pub fn new(kind: impl Into<String>, name: impl Into<String>) -> Self {
         Self { kind: kind.into(), name: name.into() }
     }
+    /// Cursor key; the length prefix keeps `("a:b", "c")` and `("a", "b:c")` apart.
     fn key(&self) -> String {
-        format!("{}:{}", self.kind, self.name)
+        format!("{}:{}:{}", self.kind.len(), self.kind, self.name)
     }
 }
 
@@ -607,6 +608,17 @@ mod tests {
             Reason::Info { topic: watch("w-alice"), through: 20, info: Msg::Lines(5) },
             Reason::Info { topic: watch("w-alice"), through: 22, info: Msg::Exit(Some(0)) },
         ], "lines add up; exits fold separately with the latest code");
+    }
+
+    #[test]
+    fn topics_with_colons_keep_separate_cursors() {
+        let mut s = S::default();
+        let (left, right) = (topic("a:b", "c"), topic("a", "b:c"));
+        define(&mut s, "bot", vec![Source::Topic(left.clone()), Source::Topic(right.clone())], budget(0, 60_000, 10), 0);
+        let turn = turns(&s.step(Event::Info { topic: left, cursor: 5, from: None, info: Msg::Post }, Now(1)))[0].1;
+        assert!(s.step(Event::Info { topic: right.clone(), cursor: 3, from: None, info: Msg::Post }, Now(2)).is_empty());
+        let next = s.step(done("bot", turn), Now(3));
+        assert_eq!(turns(&next)[0].2, [Reason::Info { topic: right, through: 3, info: Msg::Post }]);
     }
 
     #[test]
