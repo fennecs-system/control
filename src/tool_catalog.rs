@@ -138,7 +138,7 @@ mod tests {
         assert!(!all.contains("<iframe"));
         assert!(!all.contains("Lens tools"));
         assert_eq!(all.matches("href='/chats'").count(), 1);
-        assert!(all.contains("<h3>Persistent service</h3>"));
+        assert!(all.contains("<h3><a href='/tools/services'>Persistent service ↗</a></h3>"));
         assert!(all.contains("<h3>Design decision</h3>"));
         assert!(render(&state, "control_design_ask").contains("<h3>Design decision</h3>"));
         assert!(

@@ -279,6 +279,7 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
     }
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     if ports::http(&mut stream, &state, method, path, &data[header_end..header_end + length]) { return; }
+    if services::http(&mut stream, &state, method, path) { return; }
     if web_access::http(&mut stream, &state, method, path, &data[header_end..header_end + length]) { return; }
     if github::http(&mut stream,&state,method,path,&data[header_end..header_end+length]) {return;}
     if projects::http(&mut stream,&state,method,path,&data[header_end..header_end+length]) {return;}
