@@ -517,6 +517,25 @@ fn tmpfs(service: &Service) -> HashMap<String, String> {
         })
         .collect()
 }
+/// The verified, running container of `service` and the user to run as, for
+/// commands Control runs in it on a chat's behalf. Queries the engine: call
+/// without the state lock.
+pub(crate) fn exec_target(service: &Service) -> io::Result<(String, String)> {
+    identity::authorize(&service.actor, Action::Task).map_err(fail)?;
+    let id = service.resource.phase.container().ok_or_else(|| fail("Service is not running"))?;
+    let text = crate::engine::query(&["inspect", "--format", INSPECT, id.as_str()])?;
+    let observed: Inspection = serde_json::from_str(text.trim()).map_err(fail)?;
+    verify(service, &observed)?;
+    if observed.status != "running" || service.resource.lease.expired(now()) {
+        return Err(fail("Service is no longer running"));
+    }
+    Ok((id.as_str().to_owned(), format!("{}:{}", service.uid, service.gid)))
+}
+/// Whether the service's image runner supervises watches (label 3 or later).
+pub(crate) fn supports_watches(service: &Service) -> io::Result<bool> {
+    let label = crate::engine::query(&["image", "inspect", "--format", "{{index .Config.Labels \"dev.control.service-runner\"}}", service.resource.image.as_str()])?;
+    Ok(label.trim().parse::<u8>().is_ok_and(|version| version >= 3))
+}
 struct Verified<'a> {
     id: ContainerId,
     service: &'a Service,

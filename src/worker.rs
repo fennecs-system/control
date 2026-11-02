@@ -440,6 +440,9 @@ fn start_with(state: Arc<Mutex<State>>, execute: fn(Arc<Mutex<State>>, Task)) ->
                 }
             }
             if triggered {
+                crate::watches::reconcile(&state);
+            }
+            if triggered {
                 loop {
                     if crate::shutdown::requested() {
                         break 'supervisor;
