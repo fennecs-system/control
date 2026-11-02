@@ -298,6 +298,15 @@ mod tests {
         let failed = control_ai::codex::activity(&serde_json::json!({"type":"item.completed","item":{"id":"mcp1","type":"mcp_tool_call","server":"control","tool":"control_port_request","arguments":{},"error":{"message":"Egress requires exactly one of target or peer_port_id"},"status":"failed"}})).unwrap();
         assert_eq!((failed.text.as_str(), failed.status.as_str()), ("control_port_request", "failed"));
         assert!(failed.output.contains("peer_port_id"));
+        let ok = control_ai::codex::activity(&serde_json::json!({"type":"item.completed","item":{"id":"mcp2","type":"mcp_tool_call","server":"control","tool":"control_port_status","arguments":{},"result":{"content":[{"type":"text","text":"ready"},{"type":"image","data":"x"},{"type":"text","text":"127.0.0.1:25565\u{1b}"}],"structured_content":{"ready":true}},"error":null,"status":"completed"}})).unwrap();
+        assert_eq!((ok.status.as_str(), ok.output.as_str()), ("completed", "ready\n127.0.0.1:25565"));
+        let rejected = control_ai::codex::activity(&serde_json::json!({"type":"item.completed","item":{"id":"mcp3","type":"mcp_tool_call","server":"control","tool":"control_port_request","arguments":{},"result":{"content":[{"type":"text","text":"Peer ingress is not owned by this chat"}],"structured_content":null},"error":null,"status":"failed"}})).unwrap();
+        assert_eq!((rejected.status.as_str(), rejected.output.as_str()), ("failed", "Peer ingress is not owned by this chat"));
+        let large = "y".repeat(10_000);
+        let bounded = control_ai::codex::activity(&serde_json::json!({"type":"item.completed","item":{"id":"mcp4","type":"mcp_tool_call","server":"control","tool":"control_service_exec_status","arguments":{},"result":{"content":[{"type":"text","text":large}]},"status":"completed"}})).unwrap();
+        assert_eq!(bounded.output.chars().count(), 1000);
+        let started = control_ai::codex::activity(&serde_json::json!({"type":"item.started","item":{"id":"mcp5","type":"mcp_tool_call","server":"control","tool":"control_port_status","arguments":{},"result":null,"error":null,"status":"in_progress"}})).unwrap();
+        assert_eq!(started.output, "");
     }
     #[test]
     fn aggregates_retries_preserves_legacy_runs_and_escapes_content() {

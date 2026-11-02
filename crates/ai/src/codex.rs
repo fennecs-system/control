@@ -31,10 +31,22 @@ pub fn activity(value: &serde_json::Value) -> Option<Activity> {
         output: item["aggregated_output"]
             .as_str()
             .or_else(|| item["error"]["message"].as_str())
-            .unwrap_or("")
-            .chars()
+            .map_or_else(
+                || {
+                    item["result"]["content"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|c| c["text"].as_str())
+                        .collect()
+                },
+                |text| vec![text],
+            )
+            .iter()
+            .enumerate()
+            .flat_map(|(i, part)| (i > 0).then_some('\n').into_iter().chain(part.chars()))
             .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
-            .take(4000)
+            .take(if kind == "mcp_tool_call" { 1000 } else { 4000 })
             .collect(),
         status: item["status"]
             .as_str()
