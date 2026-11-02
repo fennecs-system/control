@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 pub const MAX_DEPTH: u8 = 2;
+const SPAWN_WINDOW_MS: u64 = 3_600_000;
+const AUTOMATIC_SPAWN_TURNS_PER_WINDOW: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -88,8 +90,40 @@ pub(crate) fn budget_for(state: &State, run: &runtime::Run, role: Role, addition
     if delegated.saturating_add(reservations).saturating_add(additional)>state.runtime.execution.max_agents_per_root {
         return Err("Configured per-root agent budget exhausted.");
     }
+    if additional > 0 {
+        spawn_rate(state, run, additional, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64))?;
+    }
     if role == Role::Judge && (children.iter().any(|r| is_judge(r)) || state.runtime.runs.iter().any(|candidate|root(candidate)==persona.root && (!reserved || candidate.id!=run.id) && candidate.delegation.as_ref().is_some_and(|d|d.child.is_none()&&d.input.role==Role::Judge))) {
         return Err("One judge review is allowed per root task.");
+    }
+    Ok(())
+}
+
+/// Caps agents spawned under one top-level conversation per window, across
+/// turns and lineages: the team budget overall, and few spawning turns woken by
+/// Control events, so a blocked controller woken by child completions cannot
+/// fork forever.
+fn spawn_rate(state: &State, run: &runtime::Run, additional: usize, now: u64) -> Result<(), &'static str> {
+    let Some(chat) = run.chat_id.as_deref() else { return Ok(()) };
+    let tree = chat::tree(state, chat);
+    let cutoff = now.saturating_sub(SPAWN_WINDOW_MS);
+    let mine = |candidate: &runtime::Run| candidate.chat_id.as_deref().is_some_and(|id| tree.contains(id));
+    let automatic = |kind: &str| control_context::agent_policy::MessageSpeaker::for_run_kind(Some(kind)) == control_context::agent_policy::MessageSpeaker::Control;
+    let recent = state.runtime.runs.iter()
+        .filter(|candidate| matches!(candidate.kind.as_str(), "delegated" | "spawned") && candidate.created_ms().is_some_and(|at| at >= cutoff) && mine(candidate))
+        .collect::<Vec<_>>();
+    let pending = state.runtime.runs.iter().filter(|candidate| !candidate.spawns.is_empty() && mine(candidate))
+        .map(|candidate| candidate.spawns.iter().map(crate::spawning::Batch::pending).sum::<usize>()).sum::<usize>();
+    if recent.len().saturating_add(pending).saturating_add(additional) > state.runtime.execution.max_agents_per_root {
+        return Err("Spawn limit for this conversation reached for the past hour. Report the blocker to the operator, or continue an existing child with control_agent_message.");
+    }
+    if automatic(&run.kind) {
+        let parent = |child: &&runtime::Run| child.persona.as_ref().and_then(|persona| persona.parent.as_deref())
+            .and_then(|id| state.runtime.runs.iter().find(|candidate| candidate.id == id));
+        let turns = recent.iter().filter_map(parent).filter(|parent| automatic(&parent.kind) && parent.id != run.id).map(|parent| parent.id.as_str()).collect::<std::collections::HashSet<_>>();
+        if turns.len() >= AUTOMATIC_SPAWN_TURNS_PER_WINDOW {
+            return Err("Agents woken by Control events have spawned enough helpers this hour. Report the blocker to the operator, or continue an existing child with control_agent_message.");
+        }
     }
     Ok(())
 }
@@ -836,5 +870,52 @@ mod tests {
         assert_eq!(s.runtime.runs[0].status, "blocked");
         assert_eq!(s.runtime.runs.len(), 2);
         assert_eq!(crate::scheduler::next(&s.runtime), Some(1));
+    }
+    fn tree_with_children(count: usize, at_ms: u64, parent_kind: &str) -> (State, String) {
+        let mut s = State::default();
+        let lead = chat::create(&mut s);
+        chat::send(&mut s, &lead, "Lead", "test").unwrap();
+        for index in 0..count {
+            let mut turn = s.runtime.runs[0].clone();
+            turn.id = format!("turn-{index}");
+            turn.kind = parent_kind.into();
+            let parent = turn.id.clone();
+            s.runtime.runs.push(turn);
+            let child = chat::create(&mut s);
+            s.chats.last_mut().unwrap().parent_chat = Some(lead.clone());
+            chat::send(&mut s, &child, "Helper", "test").unwrap();
+            let run = s.runtime.runs.last_mut().unwrap();
+            run.kind = "spawned".into();
+            run.id = format!("{:x}-child{index}", u128::from(at_ms) * 1_000_000);
+            run.persona = Some(Persona { role: Role::Worker, root: parent.clone(), depth: 1, parent: Some(parent) });
+        }
+        (s, lead)
+    }
+
+    #[test]
+    fn spawns_are_capped_per_conversation_tree_per_window() {
+        let now = 10 * SPAWN_WINDOW_MS;
+        let (mut s, lead) = tree_with_children(3, now - 1_000, "chat");
+        s.runtime.execution.max_agents_per_root = 4;
+        let helper = chat::create(&mut s);
+        s.chats.last_mut().unwrap().parent_chat = Some(lead);
+        chat::send(&mut s, &helper, "A fresh turn in a helper", "test").unwrap();
+        let fresh = s.runtime.runs.last().unwrap().clone();
+        assert!(spawn_rate(&s, &fresh, 1, now).is_ok());
+        assert!(spawn_rate(&s, &fresh, 2, now).is_err(), "new roots in the same tree share the window");
+        assert!(spawn_rate(&s, &fresh, 2, now + SPAWN_WINDOW_MS).is_ok(), "the window resets");
+    }
+
+    #[test]
+    fn agents_woken_by_control_events_cannot_keep_respawning() {
+        let now = 10 * SPAWN_WINDOW_MS;
+        let (s, _) = tree_with_children(AUTOMATIC_SPAWN_TURNS_PER_WINDOW, now - 1_000, "agent-completion");
+        let mut woken = s.runtime.runs[0].clone();
+        woken.kind = "agent-completion".into();
+        assert!(spawn_rate(&s, &woken, 1, now).is_err(), "a completion-woken controller re-spawning is capped");
+        let mut asked = woken.clone();
+        asked.kind = "chat".into();
+        assert!(spawn_rate(&s, &asked, 1, now).is_ok(), "a person asking for more agents is not");
+        assert!(spawn_rate(&s, &woken, 1, now + SPAWN_WINDOW_MS).is_ok());
     }
 }

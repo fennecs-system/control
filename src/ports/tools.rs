@@ -69,6 +69,9 @@ mod tests {
         fn bots(&self) -> &dyn crate::bots::BotOps {
             unreachable!("port tools must not reach bot operations")
         }
+        fn messages(&self) -> &dyn crate::agent_message::MessageOps {
+            unreachable!("port tools must not reach agent messages")
+        }
     }
     impl PortOps for Recorder {
         fn port(&self, attempt: &AttemptRef<'_>, call: PortCall) -> io::Result<Value> {

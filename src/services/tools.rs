@@ -99,6 +99,9 @@ mod tests {
         fn bots(&self) -> &dyn crate::bots::BotOps {
             unreachable!("service tools must not reach bot operations")
         }
+        fn messages(&self) -> &dyn crate::agent_message::MessageOps {
+            unreachable!("service tools must not reach agent messages")
+        }
     }
     impl ServiceOps for Recorder {
         fn service(&self, attempt: &AttemptRef<'_>, call: ServiceCall) -> io::Result<Value> {

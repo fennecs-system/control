@@ -70,6 +70,13 @@ pub struct Run {
     pub source: String,
     pub result: String,
 }
+impl Run {
+    /// Milliseconds since the epoch when the run was queued, from its identifier.
+    pub(crate) fn created_ms(&self) -> Option<u64> {
+        let nanos = u128::from_str_radix(self.id.split('-').next()?, 16).ok()?;
+        u64::try_from(nanos / 1_000_000).ok()
+    }
+}
 
 // Pending transitions change status/result and possibly a design answer. Keep
 // rollback bounded, without cloning attempts or completed conversation history.

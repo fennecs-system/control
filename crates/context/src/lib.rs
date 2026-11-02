@@ -41,7 +41,7 @@ pub const TOOLS: [Tool; 21] = [
     Tool {
         name:"agent.delegate",title:"Spawn agents",description:"Background tasks · blocking worker or judge",
         href: None,aliases:"persona review judge subagent spawn delegation",
-        mcp_names:&["control_agent_spawn_blocking", "control_agent_spawn", "control_agent_spawn_status", "control_agent_spawn_cancel", "control_agent_result"],execution:"local Rust / durable bounded task queue",surface:"chat / worker MCP",available:true,
+        mcp_names:&["control_agent_spawn_blocking", "control_agent_spawn", "control_agent_spawn_status", "control_agent_spawn_cancel", "control_agent_result", "control_agent_message"],execution:"local Rust / durable bounded task queue",surface:"chat / worker MCP",available:true,
     },
     Tool {
         name: "workspace.commands", title: "Workspace commands", description: "Offline jobs · live output",
