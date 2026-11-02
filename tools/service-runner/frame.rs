@@ -5,6 +5,8 @@
 
 /// Longest line a frame carries; longer output is cut and marked.
 pub const MAX_LINE: usize = 4096;
+/// Longest encoded frame: every byte escaped plus sequence, kind and markers.
+pub const MAX_FRAME: usize = 2 * MAX_LINE + 32;
 /// Restarts allowed within `RESTART_WINDOW_SECONDS` before a watch gives up.
 pub const MAX_RESTARTS: u32 = 10;
 pub const RESTART_WINDOW_SECONDS: u64 = 600;
@@ -146,6 +148,7 @@ mod tests {
         let exit = Frame { seq: 8, event: Event::Exit { code: None, signal: Some(9), restarts: 3, gave_up: true } };
         let encoded = exit.encode();
         assert_eq!(Frame::decode(&encoded[..encoded.len() - 1]), Some((exit, false)));
+        assert!(Frame { seq: u64::MAX, event: Event::Line(vec![b'\\'; MAX_LINE + 1]) }.encode().len() <= MAX_FRAME);
         let long = Frame { seq: 9, event: Event::Line(vec![b'a'; MAX_LINE + 10]) }.encode();
         assert_eq!(Frame::decode(&long[..long.len() - 1]), Some((Frame { seq: 9, event: Event::Line(vec![b'a'; MAX_LINE]) }, true)));
         for bad in [&b"x\tL\ta"[..], b"1\tQ\ta", b"1\tL\ta\\q", b"1\tX\t0 - 0", b"1\tX\t0 - 0 2", b"1\tL\ta\\.b"] {

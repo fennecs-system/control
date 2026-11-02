@@ -198,7 +198,7 @@ mod watches {
             let last = |path: PathBuf| -> Option<u64> {
                 let mut file = fs::OpenOptions::new().read(true).custom_flags(0o4000).open(path).ok()?;
                 let length = file.metadata().ok().filter(|m| m.is_file())?.len();
-                file.seek(std::io::SeekFrom::Start(length.saturating_sub(8192))).ok()?;
+                file.seek(std::io::SeekFrom::Start(length.saturating_sub(2 * frame::MAX_FRAME as u64))).ok()?;
                 let mut bytes = Vec::new();
                 file.read_to_end(&mut bytes).ok()?;
                 bytes.split(|&b| b == b'\n').filter_map(|line| Frame::decode(line).map(|(frame, _)| frame.seq)).max()
