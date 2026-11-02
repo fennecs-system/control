@@ -50,6 +50,11 @@ without replacing it. Retries and design continuations keep their captured
 baseline. APFS copies use independent copy-on-write files; writable hardlinks
 are never shared between agents or with the original checkout.
 
+Working copies are disposable views of the captured checkpoint; they do not need
+per-file disk flushes before execution. Published checkpoints still flush their
+files before advancing the project head. Preparation and checkpoint durations
+appear in recent activity in the web chat and TUI.
+
 ## Local previews
 
 Trusting a project also allows its agents to start local previews:

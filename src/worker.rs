@@ -556,7 +556,7 @@ fn run_task(state: Arc<Mutex<State>>, task: Task) {
         }
     if !crate::shutdown::requested() && matches!(&outcome, Err(("waiting", _))) {
         outcome = match runtime::workspace(&workspace_id).map_err(std::io::Error::other)
-                .and_then(|workspace| crate::projects::publish(&mut attempt, &workspace, &workspace_id)) {
+                .and_then(|workspace| publish_workspace(&mut attempt, &workspace, &workspace_id, Some((&state, &task.0)))) {
                 Ok(()) => {
                     Err(("waiting", "Waiting for a design decision.".into()))
                 }
@@ -1011,13 +1011,17 @@ pub(crate) fn record_activity_for(
     state: &mut State,
     id: &str,
     generation: &str,
-    event: crate::usage::Activity,
+    mut event: crate::usage::Activity,
 ) -> bool {
     let Some(run) = state.runtime.runs.iter_mut().find(|r| r.id == id) else {
         return false;
     };
     if run.status != "running" {
-        return false;
+        // A synchronous copy can finish after cancellation was requested. Close
+        // its existing internal phase; provider progress remains fenced out.
+        if run.status == "cancelling" && event.kind == "workspace" && matches!(event.status.as_str(), "completed" | "failed") {
+            if event.status == "completed" { event.status = "cancelled".into(); }
+        } else { return false; }
     }
     let Some(attempt) = run.attempts.last_mut() else {
         return false;
@@ -1025,6 +1029,7 @@ pub(crate) fn record_activity_for(
     if attempt.workspace_id.as_deref() != Some(generation) {
         return false;
     }
+    if run.status == "cancelling" && !attempt.activity.iter().any(|old|old.id == event.id && old.kind == "workspace" && old.status == "in_progress") { return false; }
     if let Some(old) = attempt.activity.iter_mut().find(|a| a.id == event.id) {
         *old = event;
     } else {
@@ -1051,6 +1056,29 @@ pub(crate) fn observe_workspace_diff(state: &Arc<Mutex<State>>, run: &str, gener
         record_activity_for(&mut state,run,generation,crate::usage::Activity {
             id:"workspace-diff".into(),kind:"file_change".into(),text,output:preview.text,status:status.into(),
         });
+    }
+}
+fn project_operation<T>(bridge: Option<(&Arc<Mutex<State>>, &str)>, generation: &str, key: &str, label: &str, operation: impl FnOnce() -> std::io::Result<T>) -> std::io::Result<T> {
+    let record = |status: &str, output: String| {
+        if let Some((state, run)) = bridge && let Ok(mut state) = state.lock() {
+            record_activity_for(&mut state, run, generation, crate::usage::Activity {
+                id:key.into(),kind:"workspace".into(),text:label.into(),output,status:status.into(),
+            });
+        }
+    };
+    record("in_progress", String::new());
+    let started = Instant::now();
+    let result = operation();
+    let duration = format!("{:.2}s", started.elapsed().as_secs_f64());
+    let output = match &result {Ok(_) => duration, Err(error) => format!("{duration}\n{error}")};
+    record(if result.is_ok() {"completed"} else {"failed"}, output);
+    result
+}
+fn publish_workspace(attempt: &mut crate::usage::Attempt, workspace: &Path, id: &str, bridge: Option<(&Arc<Mutex<State>>, &str)>) -> std::io::Result<()> {
+    if attempt.project.is_some() {
+        project_operation(bridge, id, "project-checkpoint", "Saving checkpoint", ||crate::projects::publish(attempt, workspace, id))
+    } else {
+        crate::projects::publish(attempt, workspace, id)
     }
 }
 fn execute(
@@ -1085,7 +1113,7 @@ fn execute(
         return Err(blocked("A source snapshot already exists for this run. Inspect its artifacts; submit a new run to avoid overwriting evidence."));
     }
     if attempt.project.is_some() {
-        crate::projects::prepare(attempt,&baseline,&workspace).map_err(|error|blocked(&format!("Could not prepare project worktree: {error}")))?;
+        project_operation(bridge, id, "project-prepare", "Preparing workspace", ||crate::projects::prepare(attempt,&baseline,&workspace)).map_err(|error|blocked(&format!("Could not prepare project worktree: {error}")))?;
     } else if let Some(parent) = &attempt.parent_artifact {
         crate::artifacts::restore(parent, &baseline)
             .and_then(|_| crate::artifacts::restore(parent, &workspace))
@@ -1104,7 +1132,7 @@ fn execute(
         let output =
             crate::claude::execute(id, objective, attempt, bridge, &absolute, &image, &node)?;
         if let Some((state,run))=bridge {crate::command_jobs::quiesce(state,run,id).map_err(|e|failed(&e.to_string()))?;}
-        if !attempt.review_only { crate::projects::publish(attempt,&workspace, id)
+        if !attempt.review_only { publish_workspace(attempt,&workspace, id, bridge)
             .map_err(|e| failed(&format!("Claude outputs could not be published: {e} The previous checkpoint is unchanged.")))?;
         }
         return Ok(output);
@@ -1305,7 +1333,7 @@ fn execute(
         .unwrap_or_else(|_| "Worker finished without a safe final report.".into());
     let summary: String = output.chars().take(16000).collect();
     if let Some((state,run))=bridge {crate::command_jobs::quiesce(state,run,id).map_err(|e|failed(&e.to_string()))?;}
-    if !attempt.review_only { crate::projects::publish(attempt,&workspace, id)
+    if !attempt.review_only { publish_workspace(attempt,&workspace, id, bridge)
         .map_err(|e| failed(&format!("Worker outputs could not be published: {e} The previous checkpoint is unchanged.")))?;
     }
     Ok(summary)
@@ -1388,6 +1416,44 @@ fn prepare_source_workspace(source: &Path, baseline: &Path, workspace: &Path) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn project_io_activity_is_live_without_holding_state_lock_and_retains_failures() {
+        let mut state = State::default();
+        let chat = crate::chat::create(&mut state);
+        crate::chat::send(&mut state, &chat, "Read history", "test").unwrap();
+        checkpoint_next(&mut state, |_|Ok(())).unwrap();
+        let run = state.runtime.runs[0].id.clone();
+        let generation = state.runtime.runs[0].attempts[0].workspace_id.clone().unwrap();
+        let shared = Arc::new(Mutex::new(state));
+        let result = project_operation(Some((&shared, &run)), &generation, "project-prepare", "Preparing workspace", || {
+            let state = shared.try_lock().expect("Project I/O must not hold the state lock");
+            assert_eq!(state.runtime.runs[0].attempts[0].activity[0].status, "in_progress");
+            Ok("ready")
+        }).unwrap();
+        assert_eq!(result, "ready");
+        assert_eq!(shared.lock().unwrap().runtime.runs[0].attempts[0].activity[0].status, "completed");
+        let error = project_operation(Some((&shared, &run)), &generation, "project-checkpoint", "Saving checkpoint", ||Err::<(),_>(std::io::Error::other("disk full"))).unwrap_err();
+        assert_eq!(error.to_string(), "disk full");
+        let state = shared.lock().unwrap();
+        let activity = &state.runtime.runs[0].attempts[0].activity;
+        assert_eq!(activity.len(), 2);
+        assert_eq!(activity[1].status, "failed");
+        assert!(activity[1].output.lines().next().unwrap().ends_with('s'));
+        assert!(activity[1].output.contains("disk full"));
+        drop(state);
+        project_operation(Some((&shared, &run)), &generation, "project-prepare", "Preparing workspace", || {
+            shared.lock().unwrap().runtime.runs[0].status = "cancelling".into();
+            Ok(())
+        }).unwrap();
+        assert_eq!(shared.lock().unwrap().runtime.runs[0].attempts[0].activity[0].status, "cancelled");
+        shared.lock().unwrap().runtime.runs[0].status = "running".into();
+        let error = project_operation(Some((&shared, &run)), &generation, "project-checkpoint", "Saving checkpoint", || {
+            shared.lock().unwrap().runtime.runs[0].status = "cancelling".into();
+            Err::<(),_>(std::io::Error::other("disk full"))
+        }).unwrap_err();
+        assert_eq!(error.to_string(), "disk full");
+        assert_eq!(shared.lock().unwrap().runtime.runs[0].attempts[0].activity[1].status, "failed");
+    }
     #[test]
     fn result_rollback_preserves_attempt_history_and_live_diagnostics() {
         let mut state = State::default();
