@@ -3,7 +3,7 @@ const PRIMARY: &[(&str, &str, &str, &str)] = &[
     ("hub", "/", "▦", "Overview"),
     ("session", "/chats", "⌁", "Chat"),
     ("agents", "/?view=agents", "⌁", "Bots"),
-    ("runs", "/?view=runs", "⌁", "Runs"),
+    ("history", "/chats/history", "⌁", "History"),
     ("knowledge", "/knowledge", "▤", "Knowledge"),
     ("rooms", "/?view=rooms", "#", "Rooms"),
     ("lenses", "/lenses", "◈", "Lenses"),
@@ -27,6 +27,7 @@ pub fn primary(view: &str) -> String {
         "manage"
     } else {
         match view {
+            "runs" => "history",
             "session-list" | "artifact-page" => "session",
             "editor" | "knowledge-page" => "knowledge",
             "lens-page" => "lenses",
@@ -72,7 +73,11 @@ pub fn conversations(state: &crate::State, active: &str) -> String {
     conversation_window(state,active,None,None,true)
 }
 pub fn history(state:&crate::State,older:Option<&str>,newer:Option<&str>)->String {
-    format!("<section class='conversation-history'>{}</section>",conversation_window(state,"",older,newer,false))
+    format!("{}<section class='conversation-history'>{}</section>",history_tabs(false),conversation_window(state,"",older,newer,false))
+}
+pub fn history_tabs(runs: bool) -> String {
+    let current = |selected| if selected {" aria-current='page'"} else {""};
+    format!("<div class='section-heading'><h2>History</h2><a href='/chats?new=1'>+ New chat</a></div><nav class='tabs' aria-label='History'><a href='/chats/history'{}>Conversations</a><a href='/?view=runs'{}>Runs</a></nav>",current(!runs),current(runs))
 }
 fn conversation_window(state:&crate::State,active:&str,older:Option<&str>,newer:Option<&str>,picker:bool)->String {
     use std::collections::{HashMap,HashSet};
@@ -100,26 +105,43 @@ fn conversation_window(state:&crate::State,active:&str,older:Option<&str>,newer:
         }
     }
     let current=if active.is_empty() {" aria-current='page'"}else{""};
-    let mut links=format!("<a href='/chats?new=1'{current}>+ New chat</a>");
+    let mut links=if picker {format!("<a href='/chats?new=1'{current}>+ New chat</a>")} else {String::new()};
+    // One borrowed projection for the page, rather than scanning run history per chat.
+    let mut latest=HashMap::new();
+    if !picker {
+        let selected_ids=selected.iter().map(|entry|entry.session.id.as_str()).collect::<HashSet<_>>();
+        for run in state.runtime.runs.iter().rev() {
+            if let Some(chat)=run.chat_id.as_deref().filter(|chat|selected_ids.contains(chat)) {
+                latest.entry(chat).or_insert(run);
+                if latest.len()==selected_ids.len() {break;}
+            }
+        }
+    }
     let mut branches=Vec::new();
     for (position,entry) in selected.iter().enumerate() {
         while branches.last().is_some_and(|depth| *depth>=entry.depth) {links.push_str("</div></details>");branches.pop();}
         let chat=entry.session;
         let title=crate::escape(&chat.title);
         let current=if chat.id==active {" aria-current='page'"}else{""};
-        let link=format!("<a href='/chat/{}' title='{title}'{current}>{title}</a>",chat.id);
+        let metadata=latest.get(chat.id.as_str()).map(|run| {
+            let model=run.model.as_deref().map(|model|format!(" · {}",crate::escape(model))).unwrap_or_default();
+            format!("<span class='conversation-meta'>{} · {}{model}</span>",crate::escape(&run.status),crate::escape(run.backend.label()))
+        }).unwrap_or_default();
+        let link=format!("<a class='conversation-link' href='/chat/{}' title='{title}'{current}><span class='conversation-title'>{title}</span>{metadata}</a>",chat.id);
         if selected.get(position+1).is_some_and(|next|next.depth>entry.depth) {
             links.push_str(&format!("<details class='conversation-branch' data-chat-branch='{}'{}><summary>{link}</summary><div class='conversation-children'>",chat.id,if expanded.contains(chat.id.as_str()) {" open"}else{""}));
             branches.push(entry.depth);
         }else{links.push_str(&link);}
     }
     for _ in branches {links.push_str("</div></details>");}
+    if !picker && selected.is_empty() {links.push_str("<p class='muted'>No conversations yet.</p>");}
     let controls=if picker {
         if roots.len()>crate::pagination::SIZE {"<a class='conversation-history-link' href='/chats/history'>All conversations ↗</a>".into()}else{String::new()}
     }else{
         crate::pagination::controls("/chats/history",(range.start>0).then(||entries[roots[range.start]].session.id.as_str()),(range.end<roots.len()).then(||entries[roots[range.end-1]].session.id.as_str()))
     };
-    format!("<aside class='section-navigation conversation-navigation'><h2>Conversations</h2><nav aria-label='Conversations'>{links}</nav>{controls}</aside>")
+    let heading=if picker {"<h2>Conversations</h2>"}else{""};
+    format!("<aside class='section-navigation conversation-navigation'>{heading}<nav aria-label='Conversations'>{links}</nav>{controls}</aside>")
 }
 #[cfg(test)]
 mod tests {
@@ -146,6 +168,26 @@ mod tests {
         let mut response=Vec::new();
         assert!(crate::session_http::handle(&mut response,&mut state,"GET",&format!("/chats/history?older={}",roots[9]),"none","",&[]));
         let response=String::from_utf8(response).unwrap();assert!(response.starts_with("HTTP/1.1 200 OK"));assert!(response.contains(&page));
+        assert!(response.contains("href='/chats/history' aria-current='page'"));
+        assert!(!response.contains("body-grid chat-workspace"),"History must use the normal page layout, not the live chat shell");
+    }
+    #[test]
+    fn history_shows_latest_model_per_chat_and_keeps_threads_collapsible() {
+        let mut state=crate::State::default();
+        let parent=crate::chat::create(&mut state);
+        let child=crate::chat::create(&mut state);
+        state.chats.last_mut().unwrap().parent_chat=Some(parent.clone());
+        for (chat,model) in [(&parent,"obsolete"),(&child,"child-model"),(&parent,"<latest>")] {
+            state.runtime.enqueue("Task".into(),"chat","test");
+            let run=state.runtime.runs.last_mut().unwrap();
+            run.chat_id=Some(chat.clone());run.model=Some(model.into());run.status="completed".into();
+        }
+        let html=super::history(&state,None,None);
+        assert!(html.contains("&lt;latest&gt;") && html.contains("child-model"));
+        assert!(!html.contains("obsolete") && !html.contains("<latest>"));
+        assert!(html.contains(&format!("data-chat-branch='{parent}'><summary><a class='conversation-link'")));
+        assert_eq!(html.matches("class='conversation-meta'").count(),2);
+        assert!(!super::conversations(&state,&parent).contains("class='conversation-meta'"),"The compact picker does not need per-turn metadata");
     }
     #[test]
     fn run_pages_render_only_ten_records_and_keep_cursor_boundaries() {
@@ -159,7 +201,7 @@ mod tests {
         assert_eq!(middle.matches("<article class='record'>").count(),10);assert!(middle.contains("<h3>task-14</h3>"));assert!(middle.contains("<h3>task-5</h3>"));
         state.runtime.enqueue("new task".into(),"chat","test");assert_eq!(state.runtime.runs_page(Some(&cursor),None),middle);
         let html=crate::public_render(&state,&crate::fields(&format!("view=runs&older={cursor}")),"none");
-        assert!(html.contains(&middle));assert!(html.contains("href='/?view=runs' aria-current='page'"));
+        assert!(html.contains(&middle));assert!(super::primary("runs").contains("href='/chats/history' aria-current='page'"));
         let last_cursor=state.runtime.runs[5].id.clone();let last=state.runtime.runs_page(Some(&last_cursor),None);
         assert_eq!(last.matches("<article class='record'>").count(),5);assert!(!last.contains("Older →"));
     }

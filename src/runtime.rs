@@ -374,7 +374,7 @@ impl Runtime {
     pub fn runs_page(&self, older:Option<&str>, newer:Option<&str>)->String {
         let find=|id:Option<&str>|id.and_then(|id|self.runs.iter().rev().position(|run|run.id==id));
         let range=crate::pagination::window(self.runs.len(),find(older),find(newer));
-        let mut html="<h2>Runs</h2>".to_owned();
+        let mut html=crate::navigation::history_tabs(true);
         if !self.notice.is_empty(){html.push_str(&format!("<p role='status'>{}</p>",escape(&self.notice)));}
         if self.runs.is_empty(){html.push_str("<div class='empty'>No runs yet.</div>");}
         for run in self.runs.iter().rev().skip(range.start).take(range.len()){html.push_str(&run_record(run));}
