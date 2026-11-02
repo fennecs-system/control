@@ -35,7 +35,7 @@ pkgs.dockerTools.buildLayeredImage {
     (if backend == "claude" then pkgs.claude-code else pkgs.codex)
     pkgs.rustc pkgs.cargo pkgs.rustfmt pkgs.clippy
     pkgs.gitMinimal pkgs.stdenv.cc pkgs.pkg-config pkgs.ripgrep pkgs.fd
-    pkgs.bash pkgs.coreutils pkgs.cacert
+    pkgs.bash pkgs.coreutils pkgs.procps pkgs.cacert
   ] ++ pkgs.lib.optionals (profile == "full") [ pkgs.nix pkgs.nodejs pkgs.jdk_headless pkgs.python3 pkgs.curl pkgs.path ];
   extraCommands = ''
     mkdir -p tmp home/agent workspace
