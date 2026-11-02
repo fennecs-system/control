@@ -84,18 +84,22 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
                 Some(3) => return Err(fail("This service already supervises 8 watches")),
                 _ => return Err(fail("The service rejected the watch")),
             }
-            let watch = Watch { id: id.clone(), name, chat: chat.clone(), service: service_id, generation: service.resource.generation.get(), permanent, command: command.chars().take(200).collect(), stopped: false, seen: 0, lines: 0, line_seq: 0, exits: Vec::new(), last_exit: None };
+            let watch = Watch { id: id.clone(), name, chat: chat.clone(), service: service_id, generation: service.resource.generation.get(), permanent, command: command.chars().take(200).collect(), stopped: false, seen: 0, lines: 0, line_seq: 0, exits: Vec::new(), last_exit: None, recent: Vec::new() };
             let summary = watch.summary();
             let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
-            state.watches.retain(|old| !(old.chat == chat && !old.active()));
+            let (finished, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut state.watches).into_iter().partition(|old| old.chat == chat && !old.active());
+            state.watches = kept;
             state.watches.push(watch);
             if let Err(error) = crate::storage::save(&state) {
                 state.watches.retain(|watch| watch.id != id);
+                state.watches.extend(finished);
                 drop(state);
                 let _ = runner(&service, &["watch-rm", &id], "");
                 return Err(error);
             }
             let bot = crate::bots::defined(&state, &chat);
+            drop(state);
+            super::discard(&finished.iter().map(|old| old.id.clone()).collect::<Vec<_>>());
             let mut value = summary;
             value["wakes"] = json!(if bot { "New lines and exits wake this chat's bot." } else { "This chat is not a bot; read events with control_watch_events, or ask for a bot with control_bot_request." });
             Ok(value)

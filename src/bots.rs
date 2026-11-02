@@ -226,15 +226,19 @@ fn start(state: &mut State, chat: &str, minutes: Option<u64>, room: bool, now: N
     Ok("Bot started. It sleeps until room messages or its timer wake it.")
 }
 
-/// Every active watch a chat owns is a topic of its bot.
+/// Every active watch a chat owns is a topic of its bot; `pending` also keeps
+/// finished watches whose last output and exit are not yet offered.
 fn watch_sources(state: &State, chat: &str) -> Vec<Source> {
-    state.watches.iter().filter(|w| w.chat == chat && w.active()).map(|w| Source::Topic(watch(&w.id))).collect()
+    watch_topics(state, chat, false)
+}
+fn watch_topics(state: &State, chat: &str, pending: bool) -> Vec<Source> {
+    state.watches.iter().filter(|w| w.chat == chat && (w.active() || (pending && (w.lines > 0 || !w.exits.is_empty())))).map(|w| Source::Topic(watch(&w.id))).collect()
 }
 /// Redefinitions that keep each bot subscribed to exactly its chat's watches.
-fn drifted(state: &State) -> Vec<Definition> {
+fn drifted(state: &State, pending: bool) -> Vec<Definition> {
     state.bots.supervisor.definitions().filter_map(|definition| {
         let mut sources = definition.sources.iter().filter(|s| !matches!(s, Source::Topic(t) if t.kind == "watch")).cloned().collect::<Vec<_>>();
-        sources.extend(watch_sources(state, &definition.chat.0));
+        sources.extend(watch_topics(state, &definition.chat.0, pending));
         (sources != definition.sources && !sources.is_empty()).then(|| Definition { sources, ..definition.clone() })
     }).collect()
 }
@@ -264,8 +268,8 @@ fn describe(state: &State, reasons: &[Reason]) -> String {
     let name = |id: &str| state.watches.iter().find(|w| w.id == id).map_or(id.to_owned(), |w| format!("{} ({id})", w.name));
     reasons.iter().map(|reason| match reason {
         Reason::Info { topic, info: Message::Post, .. } => format!("new messages in room #{}", topic.name),
-        Reason::Info { topic, through, info: Message::Lines(lines) } => {
-            let recent = crate::watches::recent_lines(&topic.name, *through, 5);
+        Reason::Info { topic, info: Message::Lines(lines), .. } => {
+            let recent = state.watches.iter().find(|w| w.id == topic.name).map(|w| w.recent.clone()).unwrap_or_default();
             format!("{lines} new lines from watch {}; latest (untrusted output): {}", name(&topic.name), recent.join(" | "))
         }
         Reason::Info { topic, info: Message::Exit { code, signal, exits, gave_up }, .. } => format!(
@@ -334,7 +338,7 @@ fn reconcile_at(state: &mut State, now: u64, mut save: impl FnMut(&State) -> std
     let outstanding = state.bots.supervisor.outstanding().next().is_some();
     if !outstanding && !resumable && state.bots.requests.is_empty() && state.bots.room_cursor == state.collective.posts.len()
         && state.bots.supervisor.next_deadline(Now(now)).is_none_or(|due| due.0 > now)
-        && !pending_watch_events(state) && drifted(state).is_empty()
+        && !pending_watch_events(state) && drifted(state, false).is_empty()
     {
         return Ok(());
     }
@@ -367,11 +371,6 @@ fn reconcile_at(state: &mut State, now: u64, mut save: impl FnMut(&State) -> std
     for (bot, turn) in finished {
         effects.extend(state.bots.supervisor.step(Event::TurnCompleted { bot, turn }, Now(now)));
     }
-    let redefinitions = drifted(state);
-    let redefined = !redefinitions.is_empty();
-    for definition in redefinitions {
-        effects.extend(state.bots.supervisor.step(Event::Define(definition), Now(now)));
-    }
     let start = state.bots.room_cursor.min(state.collective.posts.len());
     let end = start.saturating_add(POSTS_PER_PASS).min(state.collective.posts.len());
     for (index, post) in state.collective.posts.iter().enumerate().take(end).skip(start) {
@@ -380,10 +379,21 @@ fn reconcile_at(state: &mut State, now: u64, mut save: impl FnMut(&State) -> std
     }
     let offered = state.bots.room_cursor != end;
     state.bots.room_cursor = end;
+    // Subscribe to new watches and keep finished ones until their last output
+    // is offered, then drop them.
+    let mut redefined = false;
+    for definition in drifted(state, true) {
+        redefined = true;
+        effects.extend(state.bots.supervisor.step(Event::Define(definition), Now(now)));
+    }
     let observed = watch_events(state);
     let watched = !observed.is_empty();
     for (topic, cursor, info) in observed {
         effects.extend(state.bots.supervisor.step(Event::Info { topic, cursor, from: None, info }, Now(now)));
+    }
+    for definition in drifted(state, false) {
+        redefined = true;
+        effects.extend(state.bots.supervisor.step(Event::Define(definition), Now(now)));
     }
     effects.extend(state.bots.supervisor.step(Event::Tick, Now(now)));
     let planned = !effects.is_empty();
@@ -1014,7 +1024,7 @@ mod tests {
     }
 
     fn watching(state: &mut State, chat: &str, id: &str) {
-        state.watches.push(crate::watches::Watch { id: id.into(), name: "game".into(), chat: chat.into(), service: "svc".into(), generation: 1, permanent: true, command: "node bot.js".into(), stopped: false, seen: 0, lines: 0, line_seq: 0, exits: Vec::new(), last_exit: None });
+        state.watches.push(crate::watches::Watch { id: id.into(), name: "game".into(), chat: chat.into(), service: "svc".into(), generation: 1, permanent: true, command: "node bot.js".into(), stopped: false, seen: 0, lines: 0, line_seq: 0, exits: Vec::new(), last_exit: None, recent: Vec::new() });
     }
     fn subscribed(state: &State, chat: &str) -> Vec<String> {
         state.bots.supervisor.definitions().filter(|d| d.chat.0 == chat).flat_map(|d| d.sources.iter().filter_map(|s| match s { Source::Topic(t) if t.kind == "watch" => Some(t.name.clone()), _ => None })).collect()
@@ -1061,5 +1071,25 @@ mod tests {
         command_at(&mut state, &chat, "on", Now(2)).unwrap();
         reconcile_at(&mut state, 3, |_| Ok(())).unwrap();
         assert!(bot_runs(&state).is_empty(), "a new bot is not woken by output from before it existed");
+    }
+
+    #[test]
+    fn a_finished_watch_still_delivers_its_last_output_and_exit() {
+        let (mut state, chat) = fixture();
+        watching(&mut state, &chat, "w-once");
+        state.watches[0].permanent = false;
+        command_at(&mut state, &chat, "on", Now(0)).unwrap();
+        assert_eq!(subscribed(&state, &chat), ["w-once"]);
+        let w = &mut state.watches[0];
+        w.observe_for_test(1, None);
+        w.observe_for_test(2, Some(0));
+        assert!(!state.watches[0].active(), "a transient watch ends with its exit");
+        reconcile_at(&mut state, 1, |_| Ok(())).unwrap();
+        assert!(bot_runs(&state)[0].objective.contains("1 new lines from watch game"), "the room-and-watch bot hears the final line");
+        assert!(subscribed(&state, &chat).is_empty(), "and is unsubscribed once it is offered");
+        let first = state.runtime.runs.iter().position(|run| run.bot_turn.is_some()).unwrap();
+        state.runtime.runs[first].status = "completed".into();
+        reconcile_at(&mut state, 40_000, |_| Ok(())).unwrap();
+        assert!(bot_runs(&state)[1].objective.contains("exited with code 0"), "the exit was kept for the next turn");
     }
 }
