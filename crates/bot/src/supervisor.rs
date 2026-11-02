@@ -1,5 +1,6 @@
 use control_effect::machine::{Durability, Machine, Now, Planned, Stamp};
 use std::collections::{BTreeMap, VecDeque};
+use std::fmt::Debug;
 
 /// Coalesced reasons a sleeping bot keeps before its next turn.
 const PENDING: usize = 16;
@@ -16,18 +17,42 @@ macro_rules! id {
 }
 id!(BotId, String);
 id!(ChatId, String);
-id!(ServiceId, String);
 id!(TurnId, u64);
 impl Copy for TurnId {}
 
-/// What a bot listens to: room messages for coordination with other agents,
-/// events observed on services it manages, and timers while idle.
+/// A subscribable source of messages, named by the application: a room, a
+/// watch, a service. The supervisor only compares topics.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Topic {
+    pub kind: String,
+    pub name: String,
+}
+impl Topic {
+    pub fn new(kind: impl Into<String>, name: impl Into<String>) -> Self {
+        Self { kind: kind.into(), name: name.into() }
+    }
+    /// Cursor key; the length prefix keeps `("a:b", "c")` and `("a", "b:c")` apart.
+    fn key(&self) -> String {
+        format!("{}:{}:{}", self.kind.len(), self.kind, self.name)
+    }
+}
+
+/// What a bot listens to: application topics, and a timer while idle.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Source {
-    Room { room: String },
-    Service { service: ServiceId },
+    Topic(Topic),
     Timer { every_ms: u64 },
+}
+
+/// An application message, like a GenServer's `handle_info` input. The
+/// supervisor never inspects it; it only asks whether a newer message on the
+/// same topic folds into one already pending.
+pub trait Info: Clone + Debug + PartialEq {
+    /// Folds `newer` into `self` and returns true, or returns false to keep
+    /// both as distinct reasons.
+    fn merge(&mut self, newer: &Self) -> bool;
 }
 
 /// Bounds automatic turns: a minimum gap between turns and a cap per window.
@@ -65,43 +90,46 @@ impl Definition {
     fn timer(&self) -> Option<u64> {
         self.sources.iter().filter_map(|source| match source {
             Source::Timer { every_ms } => Some(*every_ms),
-            _ => None,
+            Source::Topic(_) => None,
         }).min()
+    }
+    fn subscribes(&self, topic: &Topic) -> bool {
+        self.sources.iter().any(|source| matches!(source, Source::Topic(t) if t == topic))
     }
 }
 
-/// Admitted inputs. Commands come only from authorized routes; a room message
-/// saying "stop" is data. Cursors are per source and increase; replays at or
-/// below a bot's cursor are ignored. Every `RequestTurn` is answered by
-/// `TurnCompleted` with its turn ID, including when the turn could not run.
+/// Admitted inputs. Commands come only from authorized routes; a message saying
+/// "stop" is data. Cursors are per topic and increase; replays at or below a
+/// bot's cursor are ignored. Every `RequestTurn` is answered by `TurnCompleted`
+/// with its turn ID, including when the turn could not run.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Event {
+pub enum Event<I> {
     Define(Definition),
     Pause(BotId),
     Resume(BotId),
     Stop(BotId),
-    RoomMessage { room: String, from: Option<ChatId>, cursor: u64 },
-    ResourceObserved { service: ServiceId, cursor: u64, kind: String },
+    /// A message on `topic`. `from` names the chat that caused it, so a bot is
+    /// not woken by its own posts.
+    Info { topic: Topic, cursor: u64, from: Option<ChatId>, info: I },
     TurnCompleted { bot: BotId, turn: TurnId },
     Tick,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum Reason {
-    Room { room: String, through: u64 },
-    Service { service: ServiceId, kind: String, through: u64 },
+pub enum Reason<I> {
+    Info { topic: Topic, through: u64, info: I },
     Timer,
-    /// More distinct events arrived than a turn carries. Dropped events are
-    /// acknowledged, not replayed: the bot resynchronises from these sources.
-    Overflow { dropped: u64, sources: Vec<Source> },
+    /// More distinct messages arrived than a turn carries. Dropped messages are
+    /// acknowledged, not replayed: the bot resynchronises from these topics.
+    Overflow { dropped: u64, topics: Vec<Topic> },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Effect {
+pub enum Effect<I> {
     /// Queue one turn in the bot's conversation. The turn ID is the idempotency
     /// key: recovery re-queues only an outstanding turn, never a new one.
-    RequestTurn { bot: BotId, chat: ChatId, turn: TurnId, reasons: Vec<Reason> },
+    RequestTurn { bot: BotId, chat: ChatId, turn: TurnId, reasons: Vec<Reason<I>> },
     /// The budget is spent; reasons stay pending until `until`.
     BudgetExhausted { bot: BotId, until: u64 },
 }
@@ -115,11 +143,11 @@ pub enum Status {
 }
 
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-struct Bot {
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(bound(serialize = "I: serde::Serialize", deserialize = "I: serde::Deserialize<'de>")))]
+struct Bot<I> {
     definition: Definition,
     generation: u64,
-    pending: Vec<Reason>,
+    pending: Vec<Reason<I>>,
     turn: Option<(TurnId, ChatId)>,
     last_turn: Option<u64>,
     turns: VecDeque<u64>,
@@ -128,17 +156,17 @@ struct Bot {
     #[cfg_attr(feature = "serde", serde(default))]
     dropped: u64,
     #[cfg_attr(feature = "serde", serde(default))]
-    overflowed: Vec<Source>,
+    overflowed: Vec<Topic>,
     exhausted: bool,
     paused: bool,
     stopping: bool,
 }
-impl Bot {
-    /// Admits a reason. Replays at or below the source cursor are ignored. When
+impl<I: Info> Bot<I> {
+    /// Admits a reason. Replays at or below the topic cursor are ignored. When
     /// the pending set is full a new distinct reason is counted as dropped and
-    /// its source is reported for resynchronisation in the next turn.
-    fn accept(&mut self, source: Option<(String, u64)>, reason: Reason) {
-        if let Some((key, cursor)) = &source
+    /// its topic is reported for resynchronisation in the next turn.
+    fn accept(&mut self, cursor: Option<(String, u64)>, reason: Reason<I>) {
+        if let Some((key, cursor)) = &cursor
             && self.cursors.get(key).is_some_and(|seen| cursor <= seen)
         {
             return;
@@ -146,41 +174,37 @@ impl Bot {
         if !self.merge(&reason) {
             if self.pending.len() == PENDING {
                 self.dropped = self.dropped.saturating_add(1);
-                let origin = match &reason {
-                    Reason::Room { room, .. } => Some(Source::Room { room: room.clone() }),
-                    Reason::Service { service, .. } => Some(Source::Service { service: service.clone() }),
-                    _ => None,
-                };
-                if let Some(origin) = origin
-                    && !self.overflowed.contains(&origin)
+                if let Reason::Info { topic, .. } = &reason
+                    && !self.overflowed.contains(topic)
                 {
-                    self.overflowed.push(origin);
+                    self.overflowed.push(topic.clone());
                 }
             } else {
                 self.pending.push(reason);
             }
         }
-        if let Some((key, cursor)) = source {
+        if let Some((key, cursor)) = cursor {
             self.cursors.insert(key, cursor);
         }
     }
-    fn merge(&mut self, reason: &Reason) -> bool {
-        let through = match reason {
-            Reason::Room { room, through } => self.pending.iter_mut().find_map(|r| match r {
-                Reason::Room { room: other, through: existing } if other == room => Some((existing, *through)),
-                _ => None,
+    fn merge(&mut self, reason: &Reason<I>) -> bool {
+        match reason {
+            Reason::Info { topic, through, info } => self.pending.iter_mut().any(|pending| match pending {
+                Reason::Info { topic: t, through: existing, info: held } if t == topic => {
+                    let merged = held.merge(info);
+                    if merged {
+                        *existing = (*existing).max(*through);
+                    }
+                    merged
+                }
+                _ => false,
             }),
-            Reason::Service { service, kind, through } => self.pending.iter_mut().find_map(|r| match r {
-                Reason::Service { service: s, kind: k, through: existing } if s == service && k == kind => Some((existing, *through)),
-                _ => None,
-            }),
-            Reason::Timer => return self.pending.contains(&Reason::Timer),
-            Reason::Overflow { .. } => return false,
-        };
-        through.map(|(existing, through)| *existing = (*existing).max(through)).is_some()
+            Reason::Timer => self.pending.contains(&Reason::Timer),
+            Reason::Overflow { .. } => false,
+        }
     }
-    /// Whether a post came from this bot, through its current chat or the chat
-    /// its outstanding turn runs in.
+    /// Whether a message came from this bot, through its current chat or the
+    /// chat its outstanding turn runs in.
     fn own(&self, from: Option<&ChatId>) -> bool {
         from.is_some_and(|from| *from == self.definition.chat || self.turn.as_ref().is_some_and(|(_, chat)| chat == from))
     }
@@ -208,17 +232,24 @@ impl Bot {
     }
 }
 
-/// Persistable supervisor for every bot on a node. Deterministic for a given
-/// sequence of events and times; per-bot transitions are serialized.
-#[derive(Clone, Debug, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Supervisor {
-    bots: BTreeMap<BotId, Bot>,
+/// Persistable supervisor for every bot on a node: a mailbox per bot with
+/// cursors, coalescing, budgets and turn identity, generic over the
+/// application's messages. Deterministic for a given sequence of events and
+/// times; per-bot transitions are serialized.
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(bound(serialize = "I: serde::Serialize", deserialize = "I: serde::Deserialize<'de>")))]
+pub struct Supervisor<I> {
+    bots: BTreeMap<BotId, Bot<I>>,
     generation: u64,
     revision: u64,
     next_turn: u64,
 }
-impl Supervisor {
+impl<I> Default for Supervisor<I> {
+    fn default() -> Self {
+        Self { bots: BTreeMap::new(), generation: 0, revision: 0, next_turn: 0 }
+    }
+}
+impl<I: Info> Supervisor<I> {
     pub fn definitions(&self) -> impl Iterator<Item = &Definition> {
         self.bots.values().map(|bot| &bot.definition)
     }
@@ -280,7 +311,7 @@ impl Supervisor {
             }
         }
     }
-    fn deliver(&mut self, event: Event, now: u64) {
+    fn deliver(&mut self, event: Event<I>, now: u64) {
         match event {
             Event::Define(definition) => self.define(definition, now),
             Event::Pause(bot) => {
@@ -305,19 +336,11 @@ impl Supervisor {
                     }
                 }
             }
-            Event::RoomMessage { room, from, cursor } => {
+            Event::Info { topic, cursor, from, info } => {
+                let key = topic.key();
                 for bot in self.bots.values_mut().filter(|bot| !bot.stopping) {
-                    let listens = bot.definition.sources.iter().any(|source| matches!(source, Source::Room { room: r } if *r == room));
-                    if listens && !bot.own(from.as_ref()) {
-                        bot.accept(Some((format!("room:{room}"), cursor)), Reason::Room { room: room.clone(), through: cursor });
-                    }
-                }
-            }
-            Event::ResourceObserved { service, cursor, kind } => {
-                for bot in self.bots.values_mut().filter(|bot| !bot.stopping) {
-                    let manages = bot.definition.sources.iter().any(|source| matches!(source, Source::Service { service: s } if *s == service));
-                    if manages {
-                        bot.accept(Some((format!("service:{}", service.0), cursor)), Reason::Service { service: service.clone(), kind: kind.clone(), through: cursor });
+                    if bot.definition.subscribes(&topic) && !bot.own(from.as_ref()) {
+                        bot.accept(Some((key.clone(), cursor)), Reason::Info { topic: topic.clone(), through: cursor, info: info.clone() });
                     }
                 }
             }
@@ -342,7 +365,7 @@ impl Supervisor {
             }
         }
     }
-    fn drain(&mut self, now: u64) -> Vec<Planned<BotId, Effect>> {
+    fn drain(&mut self, now: u64) -> Vec<Planned<BotId, Effect<I>>> {
         let mut planned = Vec::new();
         for (id, bot) in &mut self.bots {
             let Some(ready) = bot.ready_at(now) else {
@@ -369,7 +392,7 @@ impl Supervisor {
                 bot.exhausted = false;
                 let mut reasons = std::mem::take(&mut bot.pending);
                 if bot.dropped > 0 {
-                    reasons.push(Reason::Overflow { dropped: std::mem::take(&mut bot.dropped), sources: std::mem::take(&mut bot.overflowed) });
+                    reasons.push(Reason::Overflow { dropped: std::mem::take(&mut bot.dropped), topics: std::mem::take(&mut bot.overflowed) });
                 }
                 Effect::RequestTurn { bot: id.clone(), chat: bot.definition.chat.clone(), turn, reasons }
             } else if bot.recent(now).count() >= bot.definition.budget.turns_per_window as usize && !bot.exhausted {
@@ -385,11 +408,11 @@ impl Supervisor {
         planned
     }
 }
-impl Machine for Supervisor {
+impl<I: Info> Machine for Supervisor<I> {
     type Resource = BotId;
-    type Event = Event;
-    type Effect = Effect;
-    fn step(&mut self, event: Event, now: Now) -> Vec<Planned<BotId, Effect>> {
+    type Event = Event<I>;
+    type Effect = Effect<I>;
+    fn step(&mut self, event: Event<I>, now: Now) -> Vec<Planned<BotId, Effect<I>>> {
         self.deliver(event, now.0);
         self.drain(now.0)
     }
@@ -399,40 +422,75 @@ impl Machine for Supervisor {
 mod tests {
     use super::*;
 
+    /// Test messages: posts that fold, counters that add, exits kept apart.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    enum Msg {
+        Post,
+        Lines(u64),
+        Exit(Option<i32>),
+        Kind(String),
+    }
+    impl Info for Msg {
+        fn merge(&mut self, newer: &Self) -> bool {
+            match (self, newer) {
+                (Msg::Post, Msg::Post) => true,
+                (Msg::Lines(held), Msg::Lines(more)) => {
+                    *held = held.saturating_add(*more);
+                    true
+                }
+                (Msg::Exit(held), Msg::Exit(code)) => {
+                    *held = *code;
+                    true
+                }
+                (Msg::Kind(held), Msg::Kind(kind)) => held == kind,
+                _ => false,
+            }
+        }
+    }
+    type S = Supervisor<Msg>;
+    type R = Reason<Msg>;
+
     fn bot(name: &str) -> BotId {
         BotId(name.into())
     }
     fn budget(cooldown_ms: u64, window_ms: u64, turns_per_window: u32) -> Budget {
         Budget { cooldown_ms, window_ms, turns_per_window }
     }
-    fn define(s: &mut Supervisor, name: &str, sources: Vec<Source>, budget: Budget, now: u64) {
+    fn define(s: &mut S, name: &str, sources: Vec<Source>, budget: Budget, now: u64) {
         let definition = Definition { bot: bot(name), chat: ChatId(format!("chat-{name}")), sources, budget };
         assert!(s.step(Event::Define(definition), Now(now)).is_empty());
     }
+    fn topic(kind: &str, name: &str) -> Topic {
+        Topic::new(kind, name)
+    }
     fn room(name: &str) -> Source {
-        Source::Room { room: name.into() }
+        Source::Topic(topic("room", name))
     }
-    fn message(from: Option<&str>, cursor: u64) -> Event {
-        Event::RoomMessage { room: "general".into(), from: from.map(|name| ChatId(format!("chat-{name}"))), cursor }
+    fn message(from: Option<&str>, cursor: u64) -> Event<Msg> {
+        Event::Info { topic: topic("room", "general"), cursor, from: from.map(|name| ChatId(format!("chat-{name}"))), info: Msg::Post }
     }
-    fn turns(planned: &[Planned<BotId, Effect>]) -> Vec<(&str, TurnId, &[Reason])> {
+    fn posted(through: u64) -> R {
+        Reason::Info { topic: topic("room", "general"), through, info: Msg::Post }
+    }
+    fn turns(planned: &[Planned<BotId, Effect<Msg>>]) -> Vec<(&str, TurnId, &[R])> {
         planned.iter().filter_map(|p| match &p.effect {
             Effect::RequestTurn { bot, turn, reasons, .. } => Some((bot.0.as_str(), *turn, reasons.as_slice())),
             _ => None,
         }).collect()
     }
-    fn done(name: &str, turn: TurnId) -> Event {
+    fn done(name: &str, turn: TurnId) -> Event<Msg> {
         Event::TurnCompleted { bot: bot(name), turn }
     }
 
     #[test]
-    fn room_messages_request_turns_coalesce_and_ignore_own_posts_and_replays() {
-        let mut s = Supervisor::default();
+    fn messages_request_turns_coalesce_and_ignore_own_posts_and_replays() {
+        let mut s = S::default();
         define(&mut s, "alice", vec![room("general")], budget(0, 60_000, 10), 0);
         define(&mut s, "cass", vec![room("general")], budget(0, 60_000, 10), 0);
         let first = s.step(message(Some("alice"), 1), Now(10));
         let [(name, cass_turn, reasons)] = turns(&first)[..] else { panic!("one turn") };
-        assert_eq!((name, reasons), ("cass", &[Reason::Room { room: "general".into(), through: 1 }][..]));
+        assert_eq!((name, reasons), ("cass", &[posted(1)][..]));
         assert_eq!(first[0].durability, Durability::Intent);
         assert!(matches!(&first[0].effect, Effect::RequestTurn { chat, .. } if chat.0 == "chat-cass"));
         assert_eq!(s.status(&bot("cass")), Some(Status::WaitingTurn));
@@ -441,7 +499,7 @@ mod tests {
         assert!(s.step(message(None, 3), Now(31)).is_empty(), "replayed cursor");
         assert!(s.step(message(None, 4), Now(40)).is_empty());
         let resumed = s.step(done("cass", cass_turn), Now(50));
-        assert_eq!(turns(&resumed)[0].2, [Reason::Room { room: "general".into(), through: 4 }]);
+        assert_eq!(turns(&resumed)[0].2, [posted(4)]);
         assert!(s.step(message(None, 2), Now(60)).is_empty(), "an older cursor is a replay");
         assert!(s.eligible(&bot("alice"), &alice));
         assert_eq!(s.outstanding().count(), 2);
@@ -449,7 +507,7 @@ mod tests {
 
     #[test]
     fn stale_or_duplicate_completions_never_release_a_newer_turn() {
-        let mut s = Supervisor::default();
+        let mut s = S::default();
         define(&mut s, "bot", vec![room("general")], budget(0, 60_000, 10), 0);
         let first = turns(&s.step(message(None, 1), Now(1)))[0].1;
         assert!(s.step(message(None, 2), Now(2)).is_empty());
@@ -464,7 +522,7 @@ mod tests {
 
     #[test]
     fn budgets_bound_turns_survive_redefinition_and_report_exhaustion_once() {
-        let mut s = Supervisor::default();
+        let mut s = S::default();
         define(&mut s, "bot", vec![room("general")], budget(1_000, 10_000, 2), 0);
         let t1 = turns(&s.step(message(None, 1), Now(0)))[0].1;
         s.step(done("bot", t1), Now(100));
@@ -477,12 +535,12 @@ mod tests {
         assert!(matches!(&exhausted[..], [Planned { effect: Effect::BudgetExhausted { until: 10_000, .. }, durability: Durability::None, .. }]), "redefinition keeps budget accounting");
         assert!(s.step(message(None, 4), Now(3_000)).is_empty(), "exhaustion is reported once per window");
         assert_eq!(s.next_deadline(Now(3_000)), Some(Now(10_000)));
-        assert_eq!(turns(&s.step(Event::Tick, Now(10_000)))[0].2, [Reason::Room { room: "general".into(), through: 4 }]);
+        assert_eq!(turns(&s.step(Event::Tick, Now(10_000)))[0].2, [posted(4)]);
     }
 
     #[test]
     fn timers_wake_idle_bots_and_set_the_next_deadline() {
-        let mut s = Supervisor::default();
+        let mut s = S::default();
         define(&mut s, "scout", vec![Source::Timer { every_ms: 5_000 }], budget(0, 60_000, 100), 1_000);
         assert_eq!(s.next_deadline(Now(1_000)), Some(Now(6_000)));
         assert!(s.step(Event::Tick, Now(5_999)).is_empty());
@@ -494,7 +552,7 @@ mod tests {
 
     #[test]
     fn deadlines_beyond_the_clock_never_fire_or_loop() {
-        let mut s = Supervisor::default();
+        let mut s = S::default();
         define(&mut s, "late", vec![Source::Timer { every_ms: 10 }], budget(0, 60_000, 10), u64::MAX - 5);
         assert_eq!(s.next_deadline(Now(u64::MAX - 5)), None, "the first timer is unrepresentable");
         assert!(s.step(Event::Tick, Now(u64::MAX)).is_empty());
@@ -508,11 +566,11 @@ mod tests {
     }
 
     #[test]
-    fn service_events_reach_only_bots_managing_that_service_and_stay_bounded() {
-        let mut s = Supervisor::default();
-        let manages = |service: &str| Source::Service { service: ServiceId(service.into()) };
-        let observed = |service: &str, cursor: u64, kind: &str| Event::ResourceObserved { service: ServiceId(service.into()), cursor, kind: kind.into() };
-        define(&mut s, "alice", vec![manages("svc-alice")], budget(0, 60_000, 10), 0);
+    fn messages_reach_only_subscribers_and_overflow_names_topics_to_resync() {
+        let mut s = S::default();
+        let service = |name: &str| topic("service", name);
+        let observed = |name: &str, cursor: u64, kind: &str| Event::Info { topic: service(name), cursor, from: None, info: Msg::Kind(kind.into()) };
+        define(&mut s, "alice", vec![Source::Topic(service("svc-alice"))], budget(0, 60_000, 10), 0);
         let turn = turns(&s.step(observed("svc-alice", 1, "started"), Now(0)))[0].1;
         assert!(s.step(observed("svc-cass", 2, "died"), Now(1)).is_empty());
         for cursor in 2..42 {
@@ -522,16 +580,50 @@ mod tests {
         let woke = s.step(done("alice", turn), Now(4));
         let (second, reasons) = (turns(&woke)[0].1, turns(&woke)[0].2.to_vec());
         assert_eq!(reasons.len(), PENDING + 1, "the first sixteen distinct reasons plus an overflow marker");
-        assert_eq!(reasons.last(), Some(&Reason::Overflow { dropped: 8, sources: vec![manages("svc-alice")] }), "overflow names the source to resynchronise");
-        assert!(reasons[..PENDING].iter().all(|r| matches!(r, Reason::Service { service, .. } if service.0 == "svc-alice")));
-        assert!(!reasons.iter().any(|r| matches!(r, Reason::Service { kind, .. } if kind == "replayed")));
-        assert!(s.step(observed("svc-alice", 18, "event-18"), Now(5)).is_empty(), "dropped events are acknowledged, not replayed");
+        assert_eq!(reasons.last(), Some(&Reason::Overflow { dropped: 8, topics: vec![service("svc-alice")] }));
+        assert!(reasons[..PENDING].iter().all(|r| matches!(r, Reason::Info { topic, .. } if topic.name == "svc-alice")));
+        assert!(!reasons.iter().any(|r| matches!(r, Reason::Info { info: Msg::Kind(kind), .. } if kind == "replayed")));
+        assert!(s.step(observed("svc-alice", 18, "event-18"), Now(5)).is_empty(), "dropped messages are acknowledged, not replayed");
         assert!(s.step(done("alice", second), Now(6)).is_empty());
     }
 
     #[test]
+    fn application_merge_rules_decide_coalescing_per_topic() {
+        let mut s = S::default();
+        let watch = |name: &str| topic("watch", name);
+        let info = |name: &str, cursor: u64, info: Msg| Event::Info { topic: watch(name), cursor, from: None, info };
+        define(&mut s, "alice", vec![Source::Topic(watch("w-alice"))], budget(0, 60_000, 10), 0);
+        assert!(s.step(info("w-cass", 5, Msg::Lines(3)), Now(1)).is_empty(), "other topics are not this bot's messages");
+        let woke = s.step(info("w-alice", 10, Msg::Lines(2)), Now(2));
+        let (_, turn, reasons) = turns(&woke)[0];
+        assert_eq!(reasons, [Reason::Info { topic: watch("w-alice"), through: 10, info: Msg::Lines(2) }]);
+        assert!(s.step(info("w-alice", 15, Msg::Lines(4)), Now(3)).is_empty());
+        assert!(s.step(info("w-alice", 15, Msg::Lines(4)), Now(3)).is_empty(), "replays at or below the cursor are ignored");
+        assert!(s.step(info("w-alice", 20, Msg::Lines(1)), Now(4)).is_empty());
+        assert!(s.step(info("w-alice", 21, Msg::Exit(Some(137))), Now(5)).is_empty());
+        assert!(s.step(info("w-alice", 22, Msg::Exit(Some(0))), Now(5)).is_empty());
+        let next = s.step(done("alice", turn), Now(6));
+        let (_, _, reasons) = turns(&next)[0];
+        assert_eq!(reasons, [
+            Reason::Info { topic: watch("w-alice"), through: 20, info: Msg::Lines(5) },
+            Reason::Info { topic: watch("w-alice"), through: 22, info: Msg::Exit(Some(0)) },
+        ], "lines add up; exits fold separately with the latest code");
+    }
+
+    #[test]
+    fn topics_with_colons_keep_separate_cursors() {
+        let mut s = S::default();
+        let (left, right) = (topic("a:b", "c"), topic("a", "b:c"));
+        define(&mut s, "bot", vec![Source::Topic(left.clone()), Source::Topic(right.clone())], budget(0, 60_000, 10), 0);
+        let turn = turns(&s.step(Event::Info { topic: left, cursor: 5, from: None, info: Msg::Post }, Now(1)))[0].1;
+        assert!(s.step(Event::Info { topic: right.clone(), cursor: 3, from: None, info: Msg::Post }, Now(2)).is_empty());
+        let next = s.step(done("bot", turn), Now(3));
+        assert_eq!(turns(&next)[0].2, [Reason::Info { topic: right, through: 3, info: Msg::Post }]);
+    }
+
+    #[test]
     fn pause_stop_and_validation_follow_the_command_contract() {
-        let mut s = Supervisor::default();
+        let mut s = S::default();
         for definition in [
             Definition { bot: bot("x"), chat: ChatId("c".into()), sources: vec![], budget: budget(0, 1, 1) },
             Definition { bot: bot("x"), chat: ChatId("c".into()), sources: vec![room("general")], budget: budget(0, 0, 1) },
@@ -559,20 +651,26 @@ mod tests {
 
     #[cfg(feature = "serde")]
     #[test]
-    fn restored_definitions_outside_the_contract_never_produce_turns() {
-        let mut s = Supervisor::default();
+    fn restored_state_round_trips_and_definitions_outside_the_contract_never_produce_turns() {
+        let mut s = S::default();
         define(&mut s, "bot", vec![room("general")], budget(0, 60_000, 10), 0);
-        let mut snapshot = serde_json::to_value(&s).unwrap();
+        let turn = turns(&s.step(message(None, 1), Now(1)))[0].1;
+        for i in 0..20 {
+            s.step(Event::Info { topic: topic("watch", &format!("w{i}")), cursor: 1, from: None, info: Msg::Exit(None) }, Now(2));
+        }
+        s.step(message(None, 2), Now(2));
+        let mut restored: S = serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
+        assert_eq!(turns(&restored.step(done("bot", turn), Now(3)))[0].2, [posted(2)], "only subscribed topics were admitted");
+        let mut snapshot = serde_json::to_value(&restored).unwrap();
         snapshot["bots"]["bot"]["definition"]["budget"]["turns_per_window"] = 1000.into();
-        let mut restored: Supervisor = serde_json::from_value(snapshot).unwrap();
-        let effects = restored.step(message(None, 1), Now(1));
-        assert!(turns(&effects).is_empty(), "an invalid restored budget fails closed");
-        assert_eq!(restored.next_deadline(Now(1)), None);
+        let mut invalid: S = serde_json::from_value(snapshot).unwrap();
+        assert!(turns(&invalid.step(message(None, 9), Now(9))).is_empty(), "an invalid restored budget fails closed");
+        assert_eq!(invalid.next_deadline(Now(9)), None);
     }
 
     #[test]
     fn outstanding_turns_keep_their_destination_stops_clear_timers_and_cursor_zero_counts() {
-        let mut s = Supervisor::default();
+        let mut s = S::default();
         define(&mut s, "bot", vec![room("general"), Source::Timer { every_ms: 100 }], budget(0, 60_000, 10), 0);
         let turn = turns(&s.step(message(None, 0), Now(1)))[0].1;
         let moved = Definition { bot: bot("bot"), chat: ChatId("chat-moved".into()), sources: vec![room("general"), Source::Timer { every_ms: 100 }], budget: budget(0, 60_000, 10) };

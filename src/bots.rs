@@ -5,7 +5,7 @@
 mod tools;
 pub use tools::{BotCall, BotOps, Tools};
 use crate::{State, identity, tool_registry::AttemptRef};
-use control_bot::{BotId, Budget, ChatId, Definition, Effect, Event, Reason, Source, Status, TurnId};
+use control_bot::{BotId, Budget, ChatId, Definition, Event, Source, Status, Topic, TurnId};
 use control_effect::machine::{Machine, Now, Planned};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -17,6 +17,26 @@ const TURNS_PER_WINDOW: u32 = 60;
 const MAX_INTERVAL_MINUTES: u64 = 1_440;
 /// Room posts offered per pass, bounding work under the state lock.
 const POSTS_PER_PASS: usize = 256;
+
+/// What wakes a bot, lifted in from Control's event sources. Coalescing is
+/// decided here; the supervisor never inspects messages.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Message {
+    Post,
+}
+impl control_bot::Info for Message {
+    fn merge(&mut self, newer: &Self) -> bool {
+        match (self, newer) {
+            (Message::Post, Message::Post) => true,
+        }
+    }
+}
+type Supervisor = control_bot::Supervisor<Message>;
+type Reason = control_bot::Reason<Message>;
+type Effect = control_bot::Effect<Message>;
+fn room(name: &str) -> Topic {
+    Topic::new("room", name)
+}
 
 /// Marks a run as a bot turn so its completion releases the supervisor.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,7 +57,7 @@ struct Request {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Bots {
-    supervisor: control_bot::Supervisor,
+    supervisor: Supervisor,
     /// Room posts before this index were already offered to the supervisor.
     room_cursor: usize,
     requests: Vec<Request>,
@@ -89,10 +109,10 @@ pub(crate) fn status(state: &State, chat: &str) -> Option<String> {
     let id = bot(chat);
     let status = state.bots.supervisor.status(&id)?;
     let definition = state.bots.supervisor.definitions().find(|definition| definition.bot == id)?;
-    let mut sources = definition.sources.iter().filter_map(|source| match source {
-        Source::Room { room } => Some(format!("room #{room}")),
-        Source::Timer { every_ms } => Some(format!("every {} min", every_ms / 60_000)),
-        Source::Service { .. } => None,
+    let mut sources = definition.sources.iter().map(|source| match source {
+        Source::Topic(Topic { kind, name }) if kind == "room" => format!("room #{name}"),
+        Source::Topic(Topic { kind, name }) => format!("{kind} {name}"),
+        Source::Timer { every_ms } => format!("every {} min", every_ms / 60_000),
     }).collect::<Vec<_>>().join(", ");
     if sources.is_empty() {
         sources = "no sources".into();
@@ -160,7 +180,7 @@ fn start(state: &mut State, chat: &str, minutes: Option<u64>, room: bool, now: N
     }
     let mut sources = Vec::new();
     if let Some(room) = session.room.as_deref().filter(|linked| room && crate::rooms::valid(linked)) {
-        sources.push(Source::Room { room: room.into() });
+        sources.push(Source::Topic(self::room(room)));
     }
     if let Some(minutes) = minutes {
         sources.push(Source::Timer { every_ms: minutes * 60_000 });
@@ -193,10 +213,9 @@ fn terminal(status: &str) -> bool {
 
 fn describe(reasons: &[Reason]) -> String {
     reasons.iter().map(|reason| match reason {
-        Reason::Room { room, .. } => format!("new messages in room #{room}"),
-        Reason::Service { service, kind, .. } => format!("service {} reported {}", service.0, kind.chars().take(80).collect::<String>()),
+        Reason::Info { topic, info: Message::Post, .. } => format!("new messages in room #{}", topic.name),
         Reason::Timer => "your scheduled check-in".into(),
-        Reason::Overflow { dropped, sources } => format!("{dropped} more events than fit; re-read {} source(s) directly", sources.len()),
+        Reason::Overflow { dropped, topics } => format!("{dropped} more events than fit; re-read {} source(s) directly", topics.len()),
     }).collect::<Vec<_>>().join("; ")
 }
 
@@ -287,7 +306,7 @@ fn reconcile_at(state: &mut State, now: u64, mut save: impl FnMut(&State) -> std
     let start = state.bots.room_cursor.min(state.collective.posts.len());
     let end = start.saturating_add(POSTS_PER_PASS).min(state.collective.posts.len());
     for (index, post) in state.collective.posts.iter().enumerate().take(end).skip(start) {
-        let event = Event::RoomMessage { room: post.room.clone(), from: post.chat.clone().map(ChatId), cursor: index as u64 + 1 };
+        let event = Event::Info { topic: room(&post.room), cursor: index as u64 + 1, from: post.chat.clone().map(ChatId), info: Message::Post };
         effects.extend(state.bots.supervisor.step(event, Now(now)));
     }
     let offered = state.bots.room_cursor != end;
