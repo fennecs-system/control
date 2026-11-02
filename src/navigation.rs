@@ -84,7 +84,7 @@ fn conversation_window(state:&crate::State,active:&str,older:Option<&str>,newer:
     let end=roots.get(range.end).copied().unwrap_or(entries.len());
     let mut selected=entries[start..end].iter().collect::<Vec<_>>();
     let parents:HashMap<_,_>=entries.iter().map(|entry|(entry.session.id.as_str(),entry.parent)).collect();
-    let mut expanded=HashSet::new();let mut ancestor=parents.get(active).copied().flatten();
+    let mut expanded=HashSet::from([active]);let mut ancestor=parents.get(active).copied().flatten();
     while let Some(id)=ancestor {
         if !expanded.insert(id) {break;}
         ancestor=parents.get(id).copied().flatten();
@@ -132,6 +132,7 @@ mod tests {
         let picker=super::conversations(&state,&child);
         assert_eq!(picker.matches("href='/chat/").count(),11,"Ten parent threads plus their nested child");
         assert!(picker.contains("/chats/history"));assert!(picker.contains(&format!("data-chat-branch='{}' open",ids[0])));
+        assert!(super::conversations(&state,&ids[0]).contains(&format!("data-chat-branch='{}' open",ids[0])),"The active parent's children must remain reachable");
         let page=super::history(&state,Some(&roots[9]),None);
         assert_eq!(page.matches("href='/chat/").count(),10);
         for id in &roots[10..20] {assert!(page.contains(&format!("href='/chat/{id}'")));}

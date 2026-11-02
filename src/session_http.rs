@@ -534,7 +534,9 @@ mod tests {
         let id=session["value"]["sessionId"].as_str().expect("Browser session failed");
         struct Browser { client:Client, url:String }
         impl Browser {
+            #[track_caller]
             fn request(&self, method:reqwest::Method, path:&str, args:Value)->Value {let mut r=self.client.request(method.clone(),format!("{}{path}",self.url));if method==reqwest::Method::POST {r=r.json(&args);} let response=r.send().unwrap();let status=response.status();let value:Value=response.json().unwrap(); assert!(status.is_success(),"WebDriver {path}: {}",value["value"]["error"]);value["value"].clone()}
+            #[track_caller]
             fn post(&self,path:&str,args:Value)->Value {self.request(reqwest::Method::POST,path,args)}
             fn get(&self,path:&str)->Value {self.request(reqwest::Method::GET,path,Value::Null)}
             fn element(&self,selector:&str)->String {self.post("/element",json!({"using":"css selector","value":selector}))["element-6066-11e4-a52e-4f735466cecf"].as_str().unwrap().to_owned()}
@@ -569,11 +571,38 @@ mod tests {
         assert_eq!(b.post("/elements",json!({"using":"css selector","value":".conversation-history nav a[href^='/chat/']"})).as_array().unwrap().len(),11);
         let nested=b.element(&format!("a[href='/chat/{child}']"));assert_eq!(b.get(&format!("/element/{nested}/displayed")),false,"Child agents start collapsed under their parent");
         let older=b.element(".history-controls a[href*='older=']");b.post(&format!("/element/{older}/click"),json!({}));b.wait("History thread 14");assert!(!b.text("body").contains("History thread 24"));
+        let parent={let mut state=state.lock().unwrap();
+            let parent=state.chats.iter().find(|session|session.id==child).unwrap().parent_chat.clone().unwrap();
+            for index in 0..64 {crate::chat::create(&mut state);let session=state.chats.last_mut().unwrap();session.parent_chat=Some(parent.clone());session.title=format!("Spawned worker {index}");}
+            parent
+        };
         b.post("/url",json!({"url":format!("{server}/chat/{child}")}));
+        let menu=b.element(".conversation-toggle");
+        assert_eq!(b.get(&format!("/element/{menu}/property/open")),false,"A new browser tab starts with the picker closed");
         let fresh_input=b.element("textarea[data-enter-sends=true]");let toggle=b.element(".conversation-toggle > summary");b.post(&format!("/element/{toggle}/click"),json!({}));
         assert!(!b.post("/elements",json!({"using":"css selector","value":".conversation-branch[open]"})).as_array().unwrap().is_empty(),"The active child's parent must be expanded");
+        for width in [1280,720] {
+            b.post("/window/rect",json!({"width":width,"height":900}));
+            let new_chat=b.element(".conversation-navigation nav > a:first-child");
+            assert!(b.get(&format!("/element/{new_chat}/rect"))["height"].as_f64().unwrap()>=32.0,"New chat must retain its height beside a long expanded team");
+            let nav=b.element(".conversation-navigation nav");
+            assert!(b.get(&format!("/element/{nav}/property/scrollHeight")).as_i64().unwrap()>b.get(&format!("/element/{nav}/property/clientHeight")).as_i64().unwrap(),"The team list must scroll instead of squeezing controls");
+        }
+        b.post("/window/rect",json!({"width":1280,"height":900}));
         {let mut state=state.lock().unwrap();crate::chat::create(&mut state);state.chats.last_mut().unwrap().title="Live recent thread".into();}
         b.wait("Live recent thread");assert_eq!(b.get(&format!("/element/{fresh_input}/name")),"textarea","Refreshing the disclosed picker must not reload chat");
+        for id in [&parent,&child] {
+            let link=b.element(&format!(".conversation-navigation a[href='/chat/{id}']"));b.post(&format!("/element/{link}/click"),json!({}));
+            b.element("textarea[data-enter-sends=true]");let menu=b.element(".conversation-toggle");
+            assert_eq!(b.get(&format!("/element/{menu}/property/open")),true,"Following parent/child links must preserve the open picker");
+        }
+        let new_chat=b.element(".conversation-navigation nav > a[href='/chats?new=1']");b.post(&format!("/element/{new_chat}/click"),json!({}));
+        b.element("textarea[data-enter-sends=true]");let menu=b.element(".conversation-toggle");
+        assert_eq!(b.get(&format!("/element/{menu}/property/open")),true,"New chat pages without a transcript must also restore the picker");
+        assert!(b.post("/elements",json!({"using":"css selector","value":"iframe.chat-transcript"})).as_array().unwrap().is_empty());
+        let toggle=b.element(".conversation-toggle > summary");b.post(&format!("/element/{toggle}/click"),json!({}));
+        b.post("/refresh",json!({}));b.element("textarea[data-enter-sends=true]");let menu=b.element(".conversation-toggle");
+        assert_eq!(b.get(&format!("/element/{menu}/property/open")),false,"Explicitly closing the picker must survive reload");
         {let mut state=state.lock().unwrap();let late=crate::chat::create(&mut state);let session=state.chats.last_mut().unwrap();session.parent_chat=Some(chat.clone());session.title=format!("Late background child {late}");}
         for path in ["/?view=tools","/?view=runs","/chats"] {
             b.post("/url",json!({"url":format!("{server}{path}")}));
