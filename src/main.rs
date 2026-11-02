@@ -170,6 +170,14 @@ fn public_render(state: &State, query: &HashMap<String, String>, lens: &str) -> 
     }
     render(state, view, lens, channel)
 }
+/// `/?view=session` predates `/chat/{id}`; send it to the page that renders chat state.
+fn legacy_session_location(state: &State, query: &HashMap<String, String>) -> Option<String> {
+    (query.get("view")? == "session").then(|| {
+        query.get("channel")
+            .filter(|id| chat::valid_id(id) && chat::detail(state, id).is_ok())
+            .map_or_else(|| "/chats".to_owned(), |id| format!("/chat/{id}"))
+    })
+}
 const MAX_HEADER: usize = 65536;
 enum Body { Length(usize), Invalid, Chunked }
 fn body_length(header: &str) -> Body {
@@ -406,6 +414,8 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
                 String::new(),
                 format!("Location: {location}\r\n"),
             )
+        } else if let Some(location) = (path == "/").then(|| legacy_session_location(state, &query)).flatten() {
+            ("303 See Other", "text/plain", String::new(), format!("Location: {location}\r\n"))
         } else if path == "/" {
             (
                 "200 OK",
@@ -669,6 +679,18 @@ mod responsiveness_tests {
         assert_eq!(state.lock().unwrap().runtime.notice, "committed");
     }
 
+    #[test]
+    fn legacy_session_view_redirects_to_the_canonical_chat_page() {
+        let mut state = State::default();
+        let id = chat::create(&mut state);
+        let location = |query: &str| legacy_session_location(&state, &fields(query));
+        assert_eq!(location(&format!("view=session&channel={id}")), Some(format!("/chat/{id}")));
+        assert_eq!(location("view=session&channel=c-missing").as_deref(), Some("/chats"));
+        assert_eq!(location("view=session&channel=..%2F..%2Ftools%0D%0ASet-Cookie%3A%20x").as_deref(), Some("/chats"));
+        assert_eq!(location("view=session").as_deref(), Some("/chats"));
+        assert_eq!(location(&format!("view=runs&channel={id}")), None);
+        assert_eq!(location(""), None);
+    }
     #[test]
     fn public_root_never_reflects_query_html_and_bodies_need_a_valid_length() {
         let state = State::default();
