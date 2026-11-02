@@ -174,7 +174,7 @@ impl crate::tool_registry::AttemptTools for Tools {
         known(name)
     }
     fn call(&self, cx: &crate::tool_registry::AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
-        call(cx.shared, cx.run, cx.generation, cx.nonce, name, args)
+        call(cx.host.legacy_state(), cx.attempt.run, cx.attempt.generation, cx.attempt.nonce, name, args)
     }
 }
 fn definitions() -> Vec<Value> {
