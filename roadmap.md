@@ -459,6 +459,24 @@ The [OpenClaw, Grok Bot and Muse review](docs/BOT-INSPIRATIONS.md) records the
 primary sources and useful contracts. Borrow those contracts rather than their
 runtimes or an entire feature list.
 
+## Later: pluggable execution backends
+
+Workspace jobs, services and previews currently assume the local Docker engine.
+Put container lifecycle behind one execution-backend interface, building on the
+existing service `Engine` seam and the typed tool host, so the same domain rules
+can drive different isolation levels.
+
+- Docker remains the default. Firecracker microVMs and remote nodes become
+  backends with the same start, inspect, exec, attach and stop contract,
+  generation fencing and lease expiry.
+- A host-shell "yolo" backend runs commands directly on the host for local
+  development and for exercising service, job and port flows without building
+  worker images. It provides no isolation: explicit opt-in per node, never a
+  default, never selectable by a model, and visibly marked wherever it is active.
+- Backends interpret effects; authorization, ownership, approvals and
+  checkpoints stay in Control's domain code. Capability differences (network
+  modes, storage, profiles) are declared by the backend and checked at admission.
+
 ## Deferred
 
 Live federation and remote delegation, other host platforms/NixOS packaging, GPU/microVM
