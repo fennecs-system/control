@@ -4,10 +4,10 @@ mod backend;
 mod agent_message;
 mod approvals;
 mod bots;
-#[cfg(test)]
 #[path = "../tools/service-runner/frame.rs"]
 #[allow(dead_code)]
 mod watch_frame;
+mod watches;
 #[path = "../tools/browser/main.rs"]
 mod browser;
 mod browser_ui;
@@ -81,6 +81,7 @@ struct State {
     runtime: runtime::Runtime,
     collective: collective::Collective,
     bots: bots::Bots,
+    watches: Vec<watches::Watch>,
     agent_messages: Vec<agent_message::Sent>,
     documents: Vec<knowledge::Document>,
     lens_library: control_context::Library,
