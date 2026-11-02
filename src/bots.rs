@@ -237,7 +237,7 @@ fn reconcile_at(state: &mut State, now: u64, mut save: impl FnMut(&State) -> std
         return Ok(());
     }
     let outstanding = state.bots.supervisor.outstanding().next().is_some();
-    if !outstanding && state.bots.requests.is_empty() && state.bots.room_cursor == state.collective.posts.len()
+    if !outstanding && !resumable && state.bots.requests.is_empty() && state.bots.room_cursor == state.collective.posts.len()
         && state.bots.supervisor.next_deadline(Now(now)).is_none_or(|due| due.0 > now)
     {
         return Ok(());
@@ -545,15 +545,13 @@ fn http_with_save(stream: &mut impl io::Write, shared: &Arc<Mutex<State>>, metho
         let id = fields.get("id").ok_or("Missing request ID")?;
         let chat = chat.as_deref().ok_or("Missing chat")?;
         let mut state = shared.lock().map_err(|_| "State unavailable")?;
-        let (bots, watches) = (state.bots.clone(), state.collective.room_watches.clone());
-        let revisions = state.chats.iter().map(|session| session.revision).collect::<Vec<_>>();
+        let checkpoint = {
+            let targets = state.bots.approvals.iter().filter(|a| &a.id == id).flat_map(|a| [a.chat.as_str(), a.requester.as_str()]).collect();
+            crate::chat::Checkpoint::capture(&state, &targets)
+        };
         let result = decide(&mut state, id, fields.contains_key("allow"), Some(chat), Now(now_ms()));
         if result.is_err() || save(&state).is_err() {
-            state.bots = bots;
-            state.collective.room_watches = watches;
-            for (session, revision) in state.chats.iter_mut().zip(revisions) {
-                session.revision = revision;
-            }
+            checkpoint.restore(&mut state);
             return result.and(Err("Could not save the decision. Try again."));
         }
         Ok(())
