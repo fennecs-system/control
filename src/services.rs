@@ -1,6 +1,8 @@
 //! Chat-owned, bounded offline services. Attempts only attach; a pure core
 //! reducer decides effects, and one supervisor interprets durable intents.
 mod commands;
+mod page;
+pub use page::http;
 mod tools;
 pub use tools::{ServiceCall, ServiceOps, Tools};
 pub(crate) use commands::activity as command_activity;

@@ -24,7 +24,7 @@ pub const TOOLS: [Tool; 20] = [
     },
     Tool {
         name: "service.persistent", title: "Persistent service", description: "Private offline tools · leased lifetime",
-        href: None, aliases: "bot persistent container lifecycle attach stop service",
+        href: Some("/tools/services"), aliases: "bot persistent container lifecycle attach stop service",
         mcp_names: &["control_service_start", "control_service_attach", "control_service_status", "control_service_stop", "control_service_exec", "control_service_exec_status"],
         execution: "credential-free Nix container / Rust supervisor", surface: "chat / worker MCP", available: true,
     },

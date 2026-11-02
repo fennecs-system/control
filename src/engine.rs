@@ -45,3 +45,67 @@ pub fn query(arguments: &[&str]) -> io::Result<String> {
 pub(crate) fn create(arguments: &[String]) -> io::Result<String> {
     crate::runtime::engine_output_diagnostic(cli().args(arguments), Duration::from_secs(5), true)
 }
+
+/// A point-in-time resource sample for one container, as reported by the engine.
+pub struct Stats {
+    pub cpu: String,
+    pub memory: String,
+    pub pids: String,
+}
+/// One sample per container ID; the engine measures for about a second.
+pub fn stats(ids: &[&str]) -> io::Result<std::collections::HashMap<String, Stats>> {
+    if ids.is_empty() {
+        return Ok(Default::default());
+    }
+    let mut arguments = vec!["stats", "--no-stream", "--no-trunc", "--format", "{{.ID}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.PIDs}}"];
+    arguments.extend_from_slice(ids);
+    Ok(parse_stats(&query(&arguments)?))
+}
+fn parse_stats(text: &str) -> std::collections::HashMap<String, Stats> {
+    text.lines()
+        .filter_map(|line| {
+            let mut fields = line.split('\t');
+            let id = fields.next()?.trim();
+            let (cpu, memory, pids) = (fields.next()?, fields.next()?, fields.next()?);
+            Some((id.to_owned(), Stats { cpu: cpu.trim().into(), memory: memory.trim().into(), pids: pids.trim().into() }))
+        })
+        .collect()
+}
+pub struct Process {
+    pub pid: String,
+    pub user: String,
+    pub command: String,
+}
+/// Processes inside one container, at most `limit`.
+pub fn top(id: &str, limit: usize) -> io::Result<Vec<Process>> {
+    Ok(parse_top(&query(&["top", id, "-o", "pid,user,args"])?, limit))
+}
+fn parse_top(text: &str, limit: usize) -> Vec<Process> {
+    text.lines()
+        .skip(1)
+        .filter_map(|line| {
+            let line = line.trim_start();
+            let (pid, rest) = line.split_once(char::is_whitespace)?;
+            let (user, command) = rest.trim_start().split_once(char::is_whitespace).unwrap_or((rest.trim(), ""));
+            Some(Process { pid: pid.into(), user: user.into(), command: command.trim().into() })
+        })
+        .take(limit)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stats_and_processes_parse_engine_output_and_stay_bounded() {
+        let stats = parse_stats("abc\t1.25%\t200MiB / 2GiB\t12\nbad line\n");
+        assert_eq!(stats.len(), 1);
+        let sample = &stats["abc"];
+        assert_eq!((sample.cpu.as_str(), sample.memory.as_str(), sample.pids.as_str()), ("1.25%", "200MiB / 2GiB", "12"));
+        let processes = parse_top("PID    USER   COMMAND\n1      502    control-service-runner 0 0 bash -lc 'sleep infinity'\n77     502    java -Xmx1G -jar server.jar nogui\n90 502 sleep\n", 2);
+        assert_eq!(processes.len(), 2);
+        assert_eq!((processes[1].pid.as_str(), processes[1].user.as_str(), processes[1].command.as_str()), ("77", "502", "java -Xmx1G -jar server.jar nogui"));
+        assert_eq!(parse_top("PID USER COMMAND\n5 502\n", 5)[0].command, "");
+    }
+}
