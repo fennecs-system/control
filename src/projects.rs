@@ -233,9 +233,15 @@ fn skip(name: &str, metadata: bool) -> bool {
         )
         || name.starts_with(".env.")
 }
+/// Imports and published checkpoints must be durable before being referenced.
+fn copy_tree(source: &Path, destination: &Path, metadata: bool) -> io::Result<()> {
+    copy_tree_with(source, destination, metadata, Durability::Checkpoint)
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Durability { WorkingCopy, Checkpoint }
 /// Descriptor-relative no-follow reads prevent a source path from redirecting a
 /// copy into another host directory. Preserve executable bits, never hardlinks.
-fn copy_tree(source: &Path, destination: &Path, metadata: bool) -> io::Result<()> {
+fn copy_tree_with(source: &Path, destination: &Path, metadata: bool, durability: Durability) -> io::Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
     fn walk(
         source: &fs::File,
@@ -243,6 +249,7 @@ fn copy_tree(source: &Path, destination: &Path, metadata: bool) -> io::Result<()
         metadata: bool,
         depth: usize,
         git_metadata: bool,
+        durability: Durability,
     ) -> io::Result<()> {
         use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
         if depth > 64 {
@@ -277,6 +284,7 @@ fn copy_tree(source: &Path, destination: &Path, metadata: bool) -> io::Result<()
                     metadata,
                     depth + 1,
                     git_metadata || matches!(label, ".git" | ".control-git"),
+                    durability,
                 )?;
             } else if info.is_file() {
                 #[cfg(target_os = "macos")]
@@ -301,7 +309,7 @@ fn copy_tree(source: &Path, destination: &Path, metadata: bool) -> io::Result<()
                             &target,
                             fs::Permissions::from_mode(0o600 | (info.permissions().mode() & 0o111)),
                         )?;
-                        fs::File::open(&target)?.sync_all()?;
+                        if durability == Durability::Checkpoint { fs::File::open(&target)?.sync_all()?; }
                         continue;
                     }
                     if target.try_exists()? {
@@ -321,20 +329,21 @@ fn copy_tree(source: &Path, destination: &Path, metadata: bool) -> io::Result<()
                         "Project files changed while being copied; retry after saving the folder",
                     ));
                 }
-                output.sync_all()?;
+                if durability == Durability::Checkpoint { output.sync_all()?; }
             } else {
                 return Err(fail(
                     "Project contains a socket, device or other special file",
                 ));
             }
         }
-        fs::File::open(destination)?.sync_all()
+        if durability == Durability::Checkpoint { fs::File::open(destination)?.sync_all()?; }
+        Ok(())
     }
     let source = fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC)
         .open(source)?;
-    walk(&source, destination, metadata, 0, false)
+    walk(&source, destination, metadata, 0, false, durability)
 }
 fn seed(source: &Path, destination: &Path) -> io::Result<()> {
     let source = source.canonicalize()?;
@@ -475,8 +484,10 @@ fn prepare_in(
     for destination in [baseline,workspace] {
         fs::create_dir_all(destination.parent().ok_or_else(||fail("Missing project workspace parent"))?)?;
     }
-    copy_tree(&source, baseline, true)?;
-    copy_tree(&source, workspace, true)
+    // The captured source is already durable. These isolated working copies are
+    // disposable; only published checkpoints need per-file persistence barriers.
+    copy_tree_with(&source, baseline, true, Durability::WorkingCopy)?;
+    copy_tree_with(&source, workspace, true, Durability::WorkingCopy)
 }
 fn compose(root: &Path, project: &Project, directory: &Path) -> io::Result<()> {
     if !valid_name(&project.name) {return Err(fail("Invalid workspace folder name"));}
@@ -804,6 +815,34 @@ mod tests {
         assert!(child.mounts.iter().all(|m|m.message_index.is_none()));
     }
     #[test]
+    #[ignore = "manual filesystem benchmark: 1 GiB history plus 4000 small files; no containers, models or user projects"]
+    fn profile_large_project_turn_copies() {
+        use std::time::Instant;
+        let fixture = Fixture::new();
+        let root = fixture.0.join("projects");
+        let source = root.join("grants/grant/seed");
+        let history = source.join(".control-git/objects/pack");
+        fs::create_dir_all(&history).unwrap();
+        let mut pack = fs::File::create(history.join("fixture.pack")).unwrap();
+        let block = vec![b'p'; 8 * 1024 * 1024];
+        for _ in 0..128 { pack.write_all(&block).unwrap(); }
+        for n in 0..4000 { fs::write(source.join(format!("file-{n:04}")), [b'x'; 1024]).unwrap(); }
+        crate::artifacts::sync_tree(&source).unwrap();
+        for trial in 0..3 {
+            let directory = fixture.0.join(format!("run-{trial}"));
+            let mut attempt = crate::usage::Attempt {project:Some("grant".into()),..Default::default()};
+            let started = Instant::now();
+            prepare_in(&root, &attempt, &directory.join("baseline"), &directory.join("workspace")).unwrap();
+            let prepared = started.elapsed();
+            let started = Instant::now();
+            publish_with(&root, &mut attempt, &directory.join("workspace"), &format!("trial-{trial}"), ||Ok("preview".into())).unwrap();
+            let published = started.elapsed();
+            println!("trial={trial} prepare_ms={} checkpoint_ms={}", prepared.as_millis(), published.as_millis());
+            assert_eq!(fs::metadata(directory.join("workspace/.control-git/objects/pack/fixture.pack")).unwrap().len(), 1024*1024*1024);
+            assert_eq!(fs::read_dir(directory.join("workspace")).unwrap().count(), 4001);
+        }
+    }
+    #[test]
     fn git_worktree_preserves_dirty_files_deletions_history_and_executable_modes() {
         let fixture = Fixture::new();
         let source = fixture.source();
@@ -1004,6 +1043,7 @@ mod tests {
         assert_eq!(fs::read_to_string(first.join("workspace/code.txt")).unwrap(),"original");
         command(&first.join("workspace"),&["status","--porcelain"]);
         fs::write(first.join("workspace/code.txt"),"edited").unwrap();
+        assert_eq!(fs::read_to_string(first.join("baseline/code.txt")).unwrap(),"original");
         publish_with(&root,&mut attempt,&first.join("workspace"),"first",||Ok("fixture-artifact".into())).unwrap();
         attempt.project_parent=attempt.project_checkpoint.clone();
         let second=fixture.0.join("runs/second");

@@ -81,6 +81,9 @@ fn interrupt_active(state: &mut State) -> bool {
                     .into();
             if let Some(attempt) = run.attempts.last_mut() {
                 attempt.status = "interrupted".into();
+                for activity in &mut attempt.activity {
+                    if activity.kind == "workspace" && activity.status == "in_progress" { activity.status = "interrupted".into(); }
+                }
                 for job in &mut attempt.command_jobs {
                     if ["preparing","running","stopping"].contains(&job.status.as_str()) {
                         job.status="interrupted".into();
@@ -154,6 +157,7 @@ mod tests {
             run.status = status.into();
             let mut a = crate::usage::Attempt::new();
             a.workspace_id = Some(format!("{}-attempt-1", run.id));
+            a.activity.push(crate::usage::Activity {id:"project-prepare".into(),kind:"workspace".into(),text:"Preparing workspace".into(),output:String::new(),status:"in_progress".into()});
             run.attempts.push(a);
         }
         assert!(interrupt_active(&mut state));
@@ -167,6 +171,8 @@ mod tests {
             vec!["interrupted", "interrupted", "queued", "completed"]
         );
         assert_eq!(state.runtime.runs[1].attempts[0].status, "interrupted");
+        assert_eq!(state.runtime.runs[1].attempts[0].activity[0].status, "interrupted");
+        assert_eq!(state.runtime.runs[2].attempts[0].activity[0].status, "in_progress");
         assert!(!interrupt_active(&mut state));
         assert!(state
             .runtime
