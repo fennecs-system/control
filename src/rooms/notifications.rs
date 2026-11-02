@@ -1,5 +1,6 @@
 //! Bounded room inboxes with one-shot or owner-enabled ongoing follow-ups.
 //! Room text is never executed as a prompt or treated as authority.
+use crate::runtime::RunKind;
 use crate::{State, identity, runtime};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -42,7 +43,7 @@ pub(super) fn definitions(mutable: bool) -> Vec<Value> {
 fn normal_task(run: &runtime::Run) -> bool {
     run.persona.is_none()
         && run.continuation.is_none()
-        && matches!(run.kind.as_str(), "chat" | "self-improvement" | "steering")
+        && matches!(run.kind, crate::runtime::RunKind::Chat | crate::runtime::RunKind::SelfImprovement | crate::runtime::RunKind::Steering)
         && run.source != "room-notification"
 }
 
@@ -244,13 +245,13 @@ pub(crate) fn continuation_leaf(state: &State, origin: usize, runs: &HashMap<&st
             .as_ref()
             .filter(|question| question.generation == generation && question.answer.is_some())
             .and_then(|question| question.continuation.as_deref())
-            .map(|id| (id, "design-answer"));
+            .map(|id| (id, RunKind::DesignAnswer));
         let delegated = run
             .delegation
             .as_ref()
             .filter(|delegation| delegation.generation == generation && delegation.child.is_some())
             .and_then(|delegation| delegation.continuation.as_deref())
-            .map(|id| (id, "delegation-result"));
+            .map(|id| (id, RunKind::DelegationResult));
         let (id, kind) = match (question, delegated) {
             (Some(edge), None) | (None, Some(edge)) => edge,
             _ => return None,
@@ -262,7 +263,7 @@ pub(crate) fn continuation_leaf(state: &State, origin: usize, runs: &HashMap<&st
             || next.actor!=run.actor || next.action!=run.action || next.backend!=run.backend || next.model!=run.model
             || next.context!=run.context || next.lenses!=run.lenses
             || next.persona.as_ref().is_some_and(|persona|persona!=&lineage)
-            || (next.persona.is_none() && (run.persona.is_some() || kind=="delegation-result"))
+            || (next.persona.is_none() && (run.persona.is_some() || kind==RunKind::DelegationResult))
             // A retried continuation has replaced its original attempt. It must
             // not revive a wake from a failed/cancelled execution generation.
             || next.attempts.first().and_then(|attempt|attempt.workspace_id.as_ref())!=next.attempts.last().and_then(|attempt|attempt.workspace_id.as_ref())
@@ -453,7 +454,7 @@ pub fn reconcile(
                 let notice = state.runtime.notice.clone();
                 state.runtime.enqueue_for(
                     objective,
-                    "room-notification",
+                    RunKind::RoomNotification,
                     "room-notification",
                     actor,
                     action,
@@ -1009,7 +1010,7 @@ mod tests {
         reconcile(&mut restored, |_| Ok(())).unwrap();
         assert_eq!(restored.runtime.runs.len(), count + 1);
         let notification = restored.runtime.runs.last().unwrap();
-        assert_eq!(notification.kind, "room-notification");
+        assert_eq!(notification.kind, RunKind::RoomNotification);
         assert_eq!(notification.model, state.runtime.runs[0].model);
         assert_eq!(notification.backend, state.runtime.runs[0].backend);
         assert_eq!(notification.context, state.runtime.runs[0].context);
@@ -1083,7 +1084,7 @@ mod tests {
         let mut child = state.runtime.runs[0].clone();
         child.id = "independent-child".into();
         child.chat_id = Some(child_chat);
-        child.kind = "spawned".into();
+        child.kind = RunKind::Spawned;
         child.persona = Some(crate::delegation::Persona {
             role: crate::delegation::Role::Worker,
             root: root.clone(),
@@ -1096,7 +1097,7 @@ mod tests {
         reconcile(&mut state, |_| Ok(())).unwrap();
         assert_eq!(state.runtime.runs.len(), 3);
         assert_eq!(state.runtime.runs[1].status, "running");
-        assert_eq!(state.runtime.runs[2].kind, "room-notification");
+        assert_eq!(state.runtime.runs[2].kind, RunKind::RoomNotification);
     }
 
     #[test]
@@ -1136,7 +1137,7 @@ mod tests {
                 .runtime
                 .enqueue_for(
                     "other task".into(),
-                    "task",
+                    RunKind::Task,
                     "fixture",
                     identity::Actor::LocalOperator,
                     identity::Action::Task,
@@ -1162,7 +1163,7 @@ mod tests {
             let mut old = template.clone();
             old.id = format!("retained-{i}");
             old.status = "completed".into();
-            old.kind = "task".into();
+            old.kind = RunKind::Task;
             state.runtime.runs.push(old);
         }
         for (armed, iterations) in [(false, 10_000usize), (true, 10)] {

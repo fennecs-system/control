@@ -1,5 +1,6 @@
 //! Child results enter the ordinary parent queue. No suspended parent workspace
 //! is restored, and no conversation is reserved while a spawned child runs.
+use crate::runtime::RunKind;
 use super::*;
 
 const WINDOW: usize = 8;
@@ -27,7 +28,7 @@ fn ready<'a>(
             .iter()
             .find(|run| run.id == *id)
             .ok_or("Spawned child is unavailable.")?;
-        if child.kind != "spawned"
+        if child.kind != RunKind::Spawned
             || child.actor != parent.actor
             || child.action != parent.action
             || !child.persona.as_ref().is_some_and(|persona| {
@@ -83,7 +84,7 @@ pub(super) fn reconcile(
             // Coalesce completions while an earlier notification is queued or
             // running; users and other chats retain normal queue ordering.
             if state.runtime.runs.iter().any(|run| {
-                run.kind == "agent-completion"
+                run.kind == RunKind::AgentCompletion
                     && run.chat_id == parent.chat_id
                     && matches!(
                         run.status.as_str(),
@@ -165,7 +166,7 @@ pub(super) fn reconcile(
     let notice = state.runtime.notice.clone();
     state.runtime.enqueue_for(
         objective,
-        "agent-completion",
+        RunKind::AgentCompletion,
         "agent-completion",
         actor,
         action,
@@ -245,7 +246,7 @@ mod tests {
         reconcile(&mut state, |_| Ok(())).unwrap();
         assert_eq!(state.runtime.runs.len(), 4);
         let callback = &state.runtime.runs[3];
-        assert_eq!(callback.kind, "agent-completion");
+        assert_eq!(callback.kind, RunKind::AgentCompletion);
         assert_eq!(callback.chat_id.as_deref(), Some(parent_chat.as_str()));
         assert!(callback.continuation.is_none());
         assert!(callback.queue_order > state.runtime.runs[2].queue_order);
@@ -313,7 +314,7 @@ mod tests {
                 .runtime
                 .enqueue_for(
                     "Other work".into(),
-                    "task",
+                    RunKind::Task,
                     "test",
                     identity::Actor::LocalOperator,
                     identity::Action::Task,
@@ -324,7 +325,7 @@ mod tests {
         assert!(state.runtime.runs[0].spawns[0].completions.is_empty());
         state.runtime.runs.last_mut().unwrap().status = "completed".into();
         reconcile(&mut state, |_| Ok(())).unwrap();
-        assert_eq!(state.runtime.runs.last().unwrap().kind, "agent-completion");
+        assert_eq!(state.runtime.runs.last().unwrap().kind, RunKind::AgentCompletion);
     }
     #[test]
     fn child_continuations_finish_before_notification_and_cannot_cross_scope() {
@@ -334,7 +335,7 @@ mod tests {
             .runtime
             .enqueue_for(
                 "Continue child".into(),
-                "design-answer",
+                RunKind::DesignAnswer,
                 "test",
                 child.actor.clone(),
                 child.action,

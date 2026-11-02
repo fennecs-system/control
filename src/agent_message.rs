@@ -1,5 +1,6 @@
 //! Messages from an agent to a chat it spawned, queued as that chat's next turn,
 //! so a blocked parent continues an existing child instead of spawning another.
+use crate::runtime::RunKind;
 use crate::{State, identity, tool_registry::{AttemptCall, AttemptRef, AttemptTools}};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -97,7 +98,7 @@ fn handle(state: &mut State, attempt: &AttemptRef<'_>, call: MessageCall, save: 
     }
     let runs = state.runtime.runs.len();
     let notice = state.runtime.notice.clone();
-    let id = match crate::chat::enqueue_continuation(state, &call.chat_id, from, objective, "agent-message", "agent-message") {
+    let id = match crate::chat::enqueue_continuation(state, &call.chat_id, from, objective, RunKind::AgentMessage, "agent-message") {
         Ok(id) => id,
         Err(error) => {
             state.agent_messages = sent;
@@ -155,7 +156,7 @@ mod tests {
         let queued = state.runtime.runs.last().unwrap();
         assert_eq!((queued.kind.as_str(), queued.chat_id.as_deref(), queued.status.as_str()), ("agent-message", Some(child.as_str()), "queued"));
         assert!(queued.objective.contains("Ports are free; retry") && queued.objective.contains(&lead));
-        assert_eq!(control_context::agent_policy::MessageSpeaker::for_run_kind(Some(&queued.kind)), control_context::agent_policy::MessageSpeaker::Control, "not a human turn that supersedes approvals");
+        assert_eq!(queued.kind.speaker(), control_context::agent_policy::MessageSpeaker::Control, "not a human turn that supersedes approvals");
         let runs = state.runtime.runs.len();
         assert_eq!(send(&mut state, "n1", &child).unwrap()["run_id"], first["run_id"], "retries are idempotent");
         assert_eq!(state.runtime.runs.len(), runs);

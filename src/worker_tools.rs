@@ -342,6 +342,7 @@ pub fn pump_at(state: &Arc<Mutex<State>>, run: &str, mailbox: &Path, workspace: 
 
 #[cfg(test)]
 mod tests {
+    use crate::runtime::RunKind;
     use super::*;
     fn design_transport_envelope() -> Value {
         // Reproduce the recorded successful transport shape with generic task
@@ -481,7 +482,7 @@ mod tests {
     #[test]
     fn stale_workspace_is_rejected_for_room_posts_before_dispatch() {
         let mut state = State::default();
-        state.runtime.enqueue("task".into(), "task", "test");
+        state.runtime.enqueue("task".into(), RunKind::Task, "test");
         let run = &mut state.runtime.runs[0];
         run.status = "running".into();
         let id = run.id.clone();
@@ -505,7 +506,7 @@ mod tests {
     #[test]
     fn workspace_execution_is_backend_scoped_and_rejects_model_supplied_mounts() {
         let mut state = State::default();
-        state.runtime.enqueue("Test".into(), "task", "test");
+        state.runtime.enqueue("Test".into(), RunKind::Task, "test");
         state.runtime.runs[0].status = "running".into();
         let id = state.runtime.runs[0].id.clone();
         let state = Arc::new(Mutex::new(state));
@@ -531,7 +532,7 @@ mod tests {
     #[test]
     fn workers_get_concrete_tools_without_operator_authority_or_room_access() {
         let mut state = State::default();
-        state.runtime.enqueue("Test tools".into(), "task", "test");
+        state.runtime.enqueue("Test tools".into(), RunKind::Task, "test");
         let run = state.runtime.runs[0].id.clone();
         state.runtime.runs[0].status = "running".into();
         let state = Arc::new(Mutex::new(state));

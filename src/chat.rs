@@ -1,7 +1,7 @@
 use crate::{
     discord, escape,
     identity::{self, Action, Actor},
-    runtime::Runtime,
+    runtime::{RunKind, Runtime},
     State,
 };
 use serde::{Deserialize, Serialize};
@@ -184,7 +184,7 @@ fn lineage<'a>(state: &'a State, chat: &'a str) -> impl Iterator<Item = &'a str>
 }
 /// Queues a Control-initiated turn in `chat`, inheriting the provider, context,
 /// lineage and grants of the run at `from`.
-pub(crate) fn enqueue_continuation(state: &mut State, chat: &str, from: usize, objective: String, kind: &str, source: &str) -> Result<String, &'static str> {
+pub(crate) fn enqueue_continuation(state: &mut State, chat: &str, from: usize, objective: String, kind: crate::runtime::RunKind, source: &str) -> Result<String, &'static str> {
     let latest = &state.runtime.runs[from];
     let (actor, action, backend, model, context, lenses) = (latest.actor.clone(), latest.action, latest.backend, latest.model.clone(), latest.context.clone(), latest.lenses.clone());
     let persona = crate::delegation::lineage(latest);
@@ -563,9 +563,9 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
         state.runtime.enqueue_for(
             objective.into(),
             if action == Action::Improve {
-                "self-improvement"
+                RunKind::SelfImprovement
             } else {
-                "chat"
+                RunKind::Chat
             },
             source,
             actor,
@@ -573,7 +573,7 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
         )?;
         let run = state.runtime.runs.last_mut().unwrap();
         if steering.is_some() {
-            run.kind = "steering".into();
+            run.kind = RunKind::Steering;
         }
         run.chat_id = Some(id.into());
         run.resource_grants = resources;
@@ -657,7 +657,7 @@ fn history_window(session: &Session, current: usize, runtime: &Runtime) -> (Vec<
     for message in session.messages[..current].iter().rev() {
         let run = message.run_id.as_deref().and_then(|id| runtime.runs.iter().find(|r| r.id == id));
         let response = response_from_run(message, run);
-        let label = match control_context::agent_policy::MessageSpeaker::for_run_kind(run.map(|r| r.kind.as_str())) {
+        let label = match run.map_or(control_context::agent_policy::MessageSpeaker::User, |r| r.kind.speaker()) {
             control_context::agent_policy::MessageSpeaker::User => "User",
             control_context::agent_policy::MessageSpeaker::Control => "Control event",
         };
@@ -792,7 +792,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
         let run=message.run_id.as_deref().and_then(|id|runs.get(id).copied().flatten());
         let (run_status,run_reply)=response_from_run(message,run);
         let status = match run_status {
-            "queued" if run.is_some_and(|r|r.kind=="steering") => "Queued · next turn",
+            "queued" if run.is_some_and(|r|r.kind==RunKind::Steering) => "Queued · next turn",
             "queued" if state.runtime.paused.is_some() => "Queued · dispatch paused",
             "queued" => "Queued",
             "running" => "Working…",
@@ -828,7 +828,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
         let body = question.map(|q|crate::design::render(q,id,run_status == "waiting"))
             .unwrap_or_else(||format!("<p class='preserve'>{reply}</p>"));
         let body = if project_message==Some(position) {format!("{}{}",if folder_request {String::new()}else{body},crate::projects::panel(state,id))}else{body};
-        let input = match control_context::agent_policy::MessageSpeaker::for_run_kind(run.map(|r| r.kind.as_str())) {
+        let input = match run.map_or(control_context::agent_policy::MessageSpeaker::User, |r| r.kind.speaker()) {
             control_context::agent_policy::MessageSpeaker::User => format!("<article class='user-message' aria-label='You'><p class='preserve'>{}</p></article>", command_text(&message.text)),
             control_context::agent_policy::MessageSpeaker::Control => format!("<p class='message-status' aria-label='Control update'>{}</p>", escape(&message.text)),
         };
@@ -1158,7 +1158,7 @@ mod tests {
         assert!(state.runtime.runs.is_empty());
         state.chats[0].actor = Actor::LocalOperator;
         for _ in 0..crate::scheduler::MAX_PENDING {
-            state.runtime.enqueue_for("task".into(), "chat", "test", Actor::LocalOperator, Action::Task).unwrap();
+            state.runtime.enqueue_for("task".into(), RunKind::Chat, "test", Actor::LocalOperator, Action::Task).unwrap();
         }
         assert!(fork(&mut state, &parent, "overflow", "test").is_err());
         assert_eq!(state.chats.len(), 1);
@@ -1243,7 +1243,7 @@ mod tests {
         assert_eq!(restored.runtime.runs[0].status, "running");
         assert_eq!(restored.runtime.runs[1].objective, "Also add examples");
         assert_eq!(restored.runtime.runs[2].objective, "Keep the API small");
-        assert_eq!(restored.runtime.runs[2].kind, "steering");
+        assert_eq!(restored.runtime.runs[2].kind, RunKind::Steering);
         assert!(restored.runtime.runs.windows(2).all(|pair| pair[0].queue_order < pair[1].queue_order));
         assert!(transcript(&restored, &id).unwrap().contains("Queued · next turn"));
         restored.runtime.runs[0].status = "completed".into();
@@ -1550,14 +1550,14 @@ mod tests {
         let mut state = State::default();
         let id = create(&mut state);
         send(&mut state, &id, "Delegated task · completed", "test").unwrap();
-        state.runtime.runs[0].kind = "delegation-result".into();
+        state.runtime.runs[0].kind = RunKind::DelegationResult;
         let html = transcript(&state, &id).unwrap();
         assert!(html.contains("aria-label='Control update'>Delegated task · completed"));
         assert!(!html.contains("aria-label='You'"));
         assert!(history_window(&state.chats[0], 1, &state.runtime).0[0].starts_with("Control event:"));
-        state.runtime.runs[0].kind = "room-notification".into();
+        state.runtime.runs[0].kind = RunKind::RoomNotification;
         assert!(!transcript(&state, &id).unwrap().contains("aria-label='You'"));
-        state.runtime.runs[0].kind = "design-answer".into();
+        state.runtime.runs[0].kind = RunKind::DesignAnswer;
         assert!(transcript(&state, &id).unwrap().contains("aria-label='You'"));
         assert!(history_window(&state.chats[0], 1, &state.runtime).0[0].starts_with("User:"));
     }

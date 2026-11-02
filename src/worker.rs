@@ -1412,6 +1412,7 @@ fn prepare_source_workspace(source: &Path, baseline: &Path, workspace: &Path) ->
 
 #[cfg(test)]
 mod tests {
+    use crate::runtime::RunKind;
     use super::*;
     #[test]
     fn project_io_activity_is_live_without_holding_state_lock_and_retains_failures() {
@@ -1991,7 +1992,7 @@ mod tests {
             .runtime
             .enqueue_for(
                 "Check a file".into(),
-                "task",
+                RunKind::Task,
                 "website",
                 Actor::LocalOperator,
                 Action::Task,

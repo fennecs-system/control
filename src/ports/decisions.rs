@@ -1,5 +1,6 @@
 //! Exactly-once approval notices. Persisting a receipt and its queued run is one
 //! checkpoint; restarting Control never replays an acknowledged decision.
+use crate::runtime::RunKind;
 use super::*;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -57,7 +58,7 @@ pub(super) fn advance(state: &mut State, save: impl FnOnce(&State) -> io::Result
     let requested_at = state.runtime.runs.iter().rposition(|run|indices.iter().any(|index|state.ports[*index].origin_run==run.id)).unwrap_or(0);
     let superseded = state.runtime.runs.iter().enumerate().any(|(index,run)|run.chat_id.as_deref() == Some(&chat_id)
         && index > requested_at
-        && control_context::agent_policy::MessageSpeaker::for_run_kind(Some(&run.kind)) == control_context::agent_policy::MessageSpeaker::User);
+        && run.kind.speaker() == control_context::agent_policy::MessageSpeaker::User);
     let resume = !superseded && latest.status == "completed" && latest.action == action
         && identity::authorize(&actor,action).is_ok();
     if resume && crate::scheduler::admit(&state.runtime).is_err() { return Ok(()); }
@@ -82,7 +83,7 @@ pub(super) fn advance(state: &mut State, save: impl FnOnce(&State) -> io::Result
     let revision = state.chats[chat_index].revision;
     let notice = state.runtime.notice.clone();
     if resume {
-        state.runtime.enqueue_for(format!("Operator port decisions:\n{decisions}\nContinue the original task within these grants. Do not assume traffic is ready; inspect status first. Original task:\n{objective}"),"port-decision","port-decision",actor,action).map_err(fail)?;
+        state.runtime.enqueue_for(format!("Operator port decisions:\n{decisions}\nContinue the original task within these grants. Do not assume traffic is ready; inspect status first. Original task:\n{objective}"),RunKind::PortDecision,"port-decision",actor,action).map_err(fail)?;
         let next = state.runtime.runs.last_mut().unwrap();
         next.chat_id = Some(chat_id);
         next.backend = backend;
@@ -134,10 +135,23 @@ mod tests {
         assert_eq!(state.runtime.runs.len(),2);
         assert_eq!(state.runtime.runs[1].chat_id.as_deref(),Some(chat.as_str()));
         assert_eq!(state.runtime.runs[1].model.as_deref(),Some("captured-model"));
-        assert_eq!(state.runtime.runs[1].kind,"port-decision");
+        assert_eq!(state.runtime.runs[1].kind,RunKind::PortDecision);
         let mut restored:State=serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
         advance(&mut restored,|_|panic!("acknowledged decisions must not replay")).unwrap();
         assert_eq!(restored.runtime.runs.len(),2);
+    }
+    #[test]
+    fn bot_wake_turns_do_not_supersede_approvals() {
+        let (mut state,chat)=approved();
+        state.runtime.runs[0].status="completed".into();
+        let mut wake=state.runtime.runs[0].clone();
+        wake.id="bot-wake".into();
+        wake.kind=crate::runtime::RunKind::BotWake;
+        state.runtime.runs.push(wake);
+        let count=state.runtime.runs.len();
+        advance(&mut state,|_|Ok(())).unwrap();
+        assert_eq!(state.runtime.runs.len(),count+1,"a bot waking is not a human steering the task");
+        assert_eq!(state.runtime.runs.last().unwrap().chat_id.as_deref(),Some(chat.as_str()));
     }
     #[test]
     fn newer_human_instruction_suppresses_delayed_approval_wake() {
@@ -156,7 +170,7 @@ mod tests {
         let mut continuation=state.runtime.runs[0].clone();
         continuation.id="after-design".into();
         continuation.status="completed".into();
-        continuation.kind="design-answer".into();
+        continuation.kind=RunKind::DesignAnswer;
         continuation.persona=Some(crate::delegation::lineage(&state.runtime.runs[0]));
         state.runtime.runs[0].status="continued".into();
         state.runtime.runs[0].question=Some(crate::design::Question {
@@ -169,7 +183,7 @@ mod tests {
         advance(&mut state,|_|Ok(())).unwrap();
         assert_eq!(state.runtime.runs.len(),3);
         assert_eq!(state.runtime.runs[2].chat_id.as_deref(),Some(chat.as_str()));
-        assert_eq!(state.runtime.runs[2].kind,"port-decision");
+        assert_eq!(state.runtime.runs[2].kind,RunKind::PortDecision);
     }
     #[test]
     fn requests_from_a_resumed_turn_wake_the_conversation_again() {

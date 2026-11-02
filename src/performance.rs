@@ -1,4 +1,5 @@
 //! Synthetic workloads: never load personal state or make provider calls.
+use crate::runtime::RunKind;
 use crate::{
     chat,
     usage::{Activity, Attempt},
@@ -11,7 +12,7 @@ fn fixture(messages: usize, unrelated: usize) -> State {
     chat::create(&mut state);
     state.chats[0].id = "benchmark-chat".into();
     state.chats[0].title = "Synthetic chat".into();
-    state.runtime.enqueue("Fixture".into(), "chat", "test");
+    state.runtime.enqueue("Fixture".into(), RunKind::Chat, "test");
     let template = state.runtime.runs.pop().unwrap();
     for index in 0..messages + unrelated {
         let mut run = template.clone();
@@ -25,7 +26,7 @@ fn fixture(messages: usize, unrelated: usize) -> State {
             .into(),
         );
         run.status = ["completed", "running", "failed", "queued", "cancelled"][index % 5].into();
-        run.kind = if index % 7 == 0 { "steering" } else { "chat" }.into();
+        run.kind = if index % 7 == 0 { RunKind::Steering } else { RunKind::Chat };
         run.result = format!("Answer {index}: Unicode λ & <code> \"text\".");
         run.attempts.push(Attempt {
             omitted_history: index % 3,

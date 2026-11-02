@@ -323,6 +323,7 @@ fn reconcile_with(
 
 #[cfg(test)]
 mod tests {
+    use crate::runtime::RunKind;
     use super::*;
     #[test]
     #[ignore = "requires the pinned Nix worker image and local Linux engine; offline, no credentials or model calls"]
@@ -381,7 +382,7 @@ mod tests {
     #[test]
     fn cancel_authority_queue_and_completion_generation() {
         let mut rt = Runtime::default();
-        rt.enqueue("task".into(), "task", "test");
+        rt.enqueue("task".into(), RunKind::Task, "test");
         let id = rt.runs[0].id.clone();
         assert!(request_cancel(&mut rt, &id, &Actor::Unknown).is_err());
         request_cancel(&mut rt, &id, &Actor::LocalOperator).unwrap();
@@ -399,7 +400,7 @@ mod tests {
     #[test]
     fn reconcile_owns_earlier_attempts_skips_checks_and_names_the_blocker() {
         let mut rt = Runtime::default();
-        rt.enqueue("task".into(), "task", "test");
+        rt.enqueue("task".into(), RunKind::Task, "test");
         for n in 1..=2 {
             let mut a = Attempt::new();
             a.workspace_id = Some(format!("old-attempt-{n}"));

@@ -135,11 +135,12 @@ fn write_checkpoint(directory: &std::path::Path, data: &[u8]) -> io::Result<()> 
 
 #[cfg(test)]
 mod tests {
+    use crate::runtime::RunKind;
     use super::*;
     #[test]
     fn finished_diagnostics_survive_compact_and_pretty_serialization() {
         let mut state = State::initial();
-        state.runtime.enqueue("t".into(), "task", "test");
+        state.runtime.enqueue("t".into(), RunKind::Task, "test");
         let run = &mut state.runtime.runs[0];
         let mut attempt = crate::usage::Attempt::new();
         attempt.activity.push(crate::usage::Activity { id: "workspace-diff".into(), kind: "file_change".into(), text: "1 file".into(), output: "x".repeat(5000), status: "completed".into() });
@@ -163,7 +164,7 @@ mod tests {
     fn restart_fences_running_and_cancelling_without_replaying_or_publishing() {
         let mut state = State::initial();
         for status in ["running", "cancelling", "queued", "completed"] {
-            state.runtime.enqueue(status.into(), "task", "test");
+            state.runtime.enqueue(status.into(), RunKind::Task, "test");
             let run = state.runtime.runs.last_mut().unwrap();
             run.status = status.into();
             let mut a = crate::usage::Attempt::new();
@@ -214,7 +215,7 @@ mod tests {
         for megabytes in [1usize, 3, 10] {
             let mut state = State::initial();
             for n in 0..megabytes * 4 {
-                state.runtime.enqueue(format!("run {n}"), "task", "test");
+                state.runtime.enqueue(format!("run {n}"), RunKind::Task, "test");
                 let mut attempt = crate::usage::Attempt::new();
                 for i in 0..64 {
                     let mut output = format!("{n}-{i} ");

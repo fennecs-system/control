@@ -1,4 +1,5 @@
 //! Compatibility oracle and synthetic timing; never reads personal node state.
+use crate::runtime::RunKind;
 use super::*;
 use std::{collections::HashSet, hint::black_box, time::Instant};
 fn reference_admit(runtime: &Runtime) -> Result<(), &'static str> {
@@ -56,7 +57,7 @@ fn reference_next(runtime: &Runtime) -> Option<usize> {
 
 fn seed() -> crate::runtime::Run {
     let mut runtime = Runtime::default();
-    runtime.enqueue("Synthetic".into(), "chat", "test");
+    runtime.enqueue("Synthetic".into(), RunKind::Chat, "test");
     runtime.runs.pop().unwrap()
 }
 #[test]
