@@ -1,8 +1,17 @@
 use crate::State;
+use control_effect::sync::Changes;
 use std::{
     fs,
     io::{self, Write},
+    sync::{Arc, OnceLock},
 };
+
+/// Bumped after every durable checkpoint so supervisors can wait for state
+/// changes instead of polling.
+pub fn changes() -> &'static Arc<Changes> {
+    static CHANGES: OnceLock<Arc<Changes>> = OnceLock::new();
+    CHANGES.get_or_init(Changes::new)
+}
 
 pub fn initialize() -> io::Result<()> {
     let directory = crate::config::state_directory().map_err(io::Error::other)?;
@@ -104,7 +113,9 @@ fn interrupt_active(state: &mut State) -> bool {
 }
 pub fn save(state: &State) -> io::Result<()> {
     let data = serde_json::to_vec(state).map_err(io::Error::other)?;
-    write_checkpoint(&crate::config::state_directory().map_err(io::Error::other)?, &data)
+    write_checkpoint(&crate::config::state_directory().map_err(io::Error::other)?, &data)?;
+    changes().bump();
+    Ok(())
 }
 fn write_checkpoint(directory: &std::path::Path, data: &[u8]) -> io::Result<()> {
     let mut options = fs::OpenOptions::new();
