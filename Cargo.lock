@@ -135,6 +135,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "control-bot"
+version = "0.1.0"
+dependencies = [
+ "control-effect",
+ "serde",
+]
+
+[[package]]
 name = "control-context"
 version = "0.1.0"
 dependencies = [
