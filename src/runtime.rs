@@ -29,6 +29,8 @@ pub struct Runtime {
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Run {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_turn: Option<crate::bots::Turn>,
     #[serde(default, skip_serializing_if="Vec::is_empty")]
     pub resource_grants: Vec<crate::services::Grant>,
     #[serde(default)]
@@ -243,6 +245,7 @@ impl Runtime {
             .unwrap_or_default()
             .as_nanos();
         self.runs.push(Run {
+            bot_turn: None,
             resource_grants: Vec::new(),
             spawns: Vec::new(),
             room_wake_used: false,

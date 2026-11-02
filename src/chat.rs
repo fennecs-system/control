@@ -329,8 +329,16 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
     if crate::shutdown::requested() {
         return Err("Control is stopping; try again after restart.");
     }
+    if let Some(option)=commands::tail(text.trim(),Kind::Bot) {
+        let reply=crate::bots::command(state,id,option)?;
+        let session=state.chats.iter_mut().find(|session|session.id==id).unwrap();
+        session.messages.push(Message{text:text.trim().into(),run_id:None,reply:reply.into()});
+        session.revision=session.revision.saturating_add(1);
+        return Ok(());
+    }
     if let Some(option)=commands::tail(text.trim(),Kind::Listen) {
         let enabled=match option.trim() {""|"on"=>true,"off"=>false,_=>return Err("Use /listen or /listen off.")};
+        if crate::bots::defined(state,id) {return Err("This chat runs a bot, which owns its room inbox. Use /bot off first.");}
         let reply=crate::rooms::listen(state,id,enabled)?;
         let session=state.chats.iter_mut().find(|session|session.id==id).unwrap();
         session.messages.push(Message{text:text.trim().into(),run_id:None,reply:reply.into()});
@@ -640,6 +648,7 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
         value["port_revision"]=json!(crate::ports::decision_revision(state));
         value["agent_activity"]=json!(agent_activity(state,id));
         value["room_listener"]=crate::rooms::listener_status(state,id).unwrap_or(Value::Null);
+        value["bot"]=crate::bots::status(state,id).map_or(Value::Null,Value::from);
         if let Some(messages)=value["messages"].as_array_mut() {
             for message in messages {
                 if let Some(run)=message["run_id"].as_str() {
@@ -690,6 +699,9 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
     html.push_str(&crate::github::panel(state,id));
     if let Some(listener)=crate::rooms::listener_status(state,id) {
         html.push_str(&format!("<p class='message-status'>Room #{} · {}</p>",escape(listener["room"].as_str().unwrap_or("")),escape(listener["state"].as_str().unwrap_or(""))));
+    }
+    if let Some(bot)=crate::bots::status(state,id) {
+        html.push_str(&format!("<p class='message-status'>{}</p>",escape(&bot)));
     }
     let messages = &session.messages;
     for (position, message) in messages.iter().enumerate() {

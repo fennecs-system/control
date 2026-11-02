@@ -139,8 +139,11 @@ fn transact(
     let pending = crate::runtime::RunStatusCheckpoint::capture(&state.runtime, |run| run.chat_id.as_deref().is_some_and(|chat|targets.contains(chat)));
     let notice = state.runtime.notice.clone();
     let post_count = state.collective.posts.len();
+    let (watches, bots) = (state.collective.room_watches.clone(), state.bots.clone());
     let result = operation(state);
     if result.is_err() || save(state).is_err() {
+        state.collective.room_watches = watches;
+        state.bots = bots;
         state.chats.truncate(count);
         for (index, session) in previous {
             state.chats[index] = session;

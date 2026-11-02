@@ -1,6 +1,7 @@
 mod access;
 mod artifacts;
 mod backend;
+mod bots;
 #[path = "../tools/browser/main.rs"]
 mod browser;
 mod browser_ui;
@@ -73,6 +74,7 @@ struct State {
     discord_seen: Vec<String>,
     runtime: runtime::Runtime,
     collective: collective::Collective,
+    bots: bots::Bots,
     documents: Vec<knowledge::Document>,
     lens_library: control_context::Library,
     messages: Vec<String>,

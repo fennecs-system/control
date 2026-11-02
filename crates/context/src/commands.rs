@@ -10,6 +10,7 @@ pub enum Kind {
     Answer,
     Open,
     Listen,
+    Bot,
 }
 
 pub struct Definition {
@@ -69,6 +70,8 @@ pub const DEFINITIONS: &[Definition] = &[
     },
     Definition { id:"listen", text:"/listen", description:"Listen for room messages", architect:false },
     Definition { id:"listen-off", text:"/listen off", description:"Stop room listening", architect:false },
+    Definition { id:"bot", text:"/bot on", description:"Run this chat as a persistent bot", architect:false },
+    Definition { id:"bot-off", text:"/bot off", description:"Stop this chat's bot", architect:false },
 ];
 
 #[derive(Debug, PartialEq, Eq)]
@@ -90,6 +93,7 @@ pub fn parse(text: &str) -> Option<Parsed<'_>> {
         "/answer" => Kind::Answer,
         "/open" => Kind::Open,
         "/listen" => Kind::Listen,
+        "/bot" => Kind::Bot,
         _ => return None,
     };
     let tail = &trimmed[end..];
