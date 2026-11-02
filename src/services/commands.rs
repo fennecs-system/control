@@ -92,7 +92,7 @@ fn live_attempt(state: &State, run: &str, attempt: &str) -> bool {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Input {
+pub struct Input {
     service_id: String,
     command: CommandText,
     #[serde(default = "default_timeout")]
@@ -183,9 +183,6 @@ pub(crate) fn enqueue_test(
         |_| Ok(()),
     )
 }
-pub(super) fn known(name: &str) -> bool {
-    matches!(name, "control_service_exec" | "control_service_exec_status")
-}
 pub(super) fn definitions() -> Vec<Value> {
     vec![
         json!({"name":"control_service_exec","description":"Run a command asynchronously inside an exact chat-owned running service, using its private files and approved loopback relays. Use shell commands/heredocs to create task files, configure clients or install dependencies; no host paths, mounts or engine options. Returns an execution_id; inspect control_service_exec_status. One active command per service. Commands survive model turns. Long-lived background programs must redirect their output to private files; the service foreground process must remain alive. Timeout or interrupted execution stops the service to prevent an untracked writer; never automatically replay an uncertain command.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"command":{"type":"string","minLength":1,"maxLength":16000},"timeout_seconds":{"type":"integer","minimum":1,"maximum":1800,"default":120}},"required":["service_id","command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":true}}),
@@ -213,37 +210,18 @@ fn owned(
         .position(|s| s.resource.id.as_str() == service && accessible(s, node, active))
         .ok_or_else(|| fail("Service is not owned by this chat"))
 }
-pub(super) fn call(
-    shared: &Arc<Mutex<State>>,
-    run: &str,
-    generation: &str,
-    nonce: &str,
-    name: &str,
-    args: &Value,
-    node: &NodeId,
-) -> io::Result<Value> {
+pub(super) fn exec(shared: &Arc<Mutex<State>>, run: &str, generation: &str, nonce: &str, node: &NodeId, input: Input) -> io::Result<Value> {
     let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
-    if name == "control_service_exec" {
-        let input: Input = serde_json::from_value(args.clone())
-            .map_err(|_| fail("Expected service_id, command and optional timeout_seconds"))?;
-        return admit(
-            &mut state,
-            run,
-            generation,
-            nonce,
-            node,
-            input,
-            crate::storage::save,
-        );
-    }
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Handle {
-        service_id: String,
-        execution_id: String,
-    }
-    let input: Handle = serde_json::from_value(args.clone())
-        .map_err(|_| fail("Expected service_id and execution_id"))?;
+    admit(&mut state, run, generation, nonce, node, input, crate::storage::save)
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Handle {
+    service_id: String,
+    execution_id: String,
+}
+pub(super) fn status(shared: &Arc<Mutex<State>>, run: &str, generation: &str, node: &NodeId, input: Handle) -> io::Result<Value> {
+    let state = shared.lock().map_err(|_| fail("State unavailable"))?;
     let index = owned(&state, run, generation, node, &input.service_id)?;
     state.services[index]
         .executions
