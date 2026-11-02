@@ -85,8 +85,9 @@ Observed resource health is separate from bot intent and model-run status.
 An event envelope has schema version, durable ID, source identity, per-source
 sequence/cursor, bot revision, provenance, bounded typed payload and receipt time.
 The supervisor authenticates the source and validates selectors before admission.
-Examples: `RoomMessage`, `TimerDue`, `ResourceObserved`, `EffectCompleted`,
-`HumanAnswered`, `TurnCompleted`, `GrantRevoked`, `LeaseExpired`.
+Applications lift these in as messages on topics: room posts, timer ticks,
+resource observations, effect completions, human answers, turn completions,
+grant revocations and lease expiries.
 
 Separate external commands: `StartBot`, `PauseBot`, `ResumeBot`, `StopBot`,
 `ChangeDefinition`. A room message that says “stop the bot” remains room data
