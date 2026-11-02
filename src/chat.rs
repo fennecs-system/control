@@ -645,6 +645,7 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
     )
     .map(|mut value: Value| {
         value["pending_ports"]=json!(crate::ports::pending_json(state,id));
+        value["pending_bots"]=crate::bots::pending_json(state,id);
         value["port_revision"]=json!(crate::ports::decision_revision(state));
         value["agent_activity"]=json!(agent_activity(state,id));
         value["room_listener"]=crate::rooms::listener_status(state,id).unwrap_or(Value::Null);
@@ -798,6 +799,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
         html.push_str(&format!("<article class='assistant-message pending-decision' data-transcript-key='decision-{}'><p class='message-status'>Agent decision · <a target='_top' href='/chat/{}'>View agent ↗</a></p>{}</article>",escape(&question.id),escape(run.chat_id.as_deref().unwrap_or("")),crate::design::render(question,id,true)));
     }
     html.push_str(&crate::ports::pending_panel(state,id));
+    html.push_str(&crate::bots::pending_panel(state,id));
     html.push_str("<div id='latest'></div></body></html>");
     Ok(html)
 }

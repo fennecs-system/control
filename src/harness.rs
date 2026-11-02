@@ -542,6 +542,11 @@ impl App {
             let id=clean(port["port_id"].as_str().unwrap_or(""));
             lines.push(Line::from(format!("/port allow {id}{} · /port deny {id}",if port["loopback_required"]==true {" --loopback"}else{""})));
         }}
+        if let Some(bots)=self.detail["pending_bots"].as_array() {for bot in bots {
+            lines.push(Line::styled(format!("Bot request · {}",clean(bot["chat_id"].as_str().unwrap_or(""))),Style::default().fg(Color::Rgb(181,160,255))));
+            let id=clean(bot["request_id"].as_str().unwrap_or(""));
+            lines.push(Line::from(format!("/bot allow {id} · /bot deny {id}")));
+        }}
         if let Some(project)=pending_project(&self.detail) {
             lines.push(Line::styled(format!("Folder access requested · {}",clean(project["path"].as_str().unwrap_or(""))),Style::default().fg(Color::Rgb(181,160,255))));
             lines.push(Line::from(format!("Open as /workspace/{}",clean(project["name"].as_str().unwrap_or("")))));

@@ -352,7 +352,8 @@ fn attach_port_approvals(frame:&web_sys::HtmlIFrameElement)->Result<(),JsValue> 
         // Submit targets are forms. Use a realm-independent tag check rather
         // than instanceof, which rejects iframe forms in Chromium.
         let Some(form)=event.target().map(|target|target.unchecked_into::<web_sys::HtmlFormElement>()) else{return;};
-        if form.tag_name()!="FORM" || form.get_attribute("action").as_deref()!=Some("/tools/ports"){return;}
+        let Some(action)=form.get_attribute("action").filter(|action|matches!(action.as_str(),"/tools/ports"|"/tools/bots")) else{return;};
+        if form.tag_name()!="FORM"{return;}
         if form.has_attribute("data-submitting"){event.prevent_default();return;}
         let prepare=||->Result<_,JsValue> {
             let params=web_sys::UrlSearchParams::new()?;
@@ -366,7 +367,7 @@ fn attach_port_approvals(frame:&web_sys::HtmlIFrameElement)->Result<(),JsValue> 
             }
             params.append("response","json");
             let request=web_sys::XmlHttpRequest::new()?;
-            request.open("POST","/tools/ports")?;
+            request.open("POST",&action)?;
             request.set_request_header("Content-Type","application/x-www-form-urlencoded")?;
             request.set_timeout(15000);
             Ok((request,String::from(params.to_string())))
@@ -382,7 +383,7 @@ fn attach_port_approvals(frame:&web_sys::HtmlIFrameElement)->Result<(),JsValue> 
         for control in &controls {let _=control.set_attribute("disabled","");}
         let button=event.submitter().map(|button| {
             let label=button.text_content().unwrap_or_default();
-            button.set_text_content(Some(if button.get_attribute("name").as_deref()==Some("revoke"){"Denying…"}else{"Allowing…"}));
+            button.set_text_content(Some(if matches!(button.get_attribute("name").as_deref(),Some("revoke"|"deny")){"Denying…"}else{"Allowing…"}));
             (button,label)
         });
         let response=request.clone();let failed_form=form.clone();let failed_controls=controls.clone();let failed_button=button.clone();
@@ -397,7 +398,7 @@ fn attach_port_approvals(frame:&web_sys::HtmlIFrameElement)->Result<(),JsValue> 
             }else {
                 restore_port_form(&form,&controls,button.as_ref());
                 if let Ok(Some(error))=form.query_selector("[role=alert]") {
-                    error.set_text_content(Some(value.as_ref().and_then(|value|value["error"].as_str()).unwrap_or("Could not confirm the port decision. Check status before retrying.")));
+                    error.set_text_content(Some(value.as_ref().and_then(|value|value["error"].as_str()).unwrap_or("Could not confirm the decision. Check status before retrying.")));
                     let _=error.remove_attribute("hidden");
                 }
             }
@@ -406,7 +407,7 @@ fn attach_port_approvals(frame:&web_sys::HtmlIFrameElement)->Result<(),JsValue> 
         if request.send_with_opt_str(Some(&payload)).is_err(){
             restore_port_form(&failed_form,&failed_controls,failed_button.as_ref());
             if let Ok(Some(error))=failed_form.query_selector("[role=alert]") {
-                error.set_text_content(Some("Could not confirm the port decision. Check status before retrying."));
+                error.set_text_content(Some("Could not confirm the decision. Check status before retrying."));
                 let _=error.remove_attribute("hidden");
             }
         }
