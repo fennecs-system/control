@@ -5,4 +5,4 @@
 //! the intents it emits and interprets them through ordinary conversation turns.
 //! See docs/research/BOT-CONTROL.md for the contract this implements a slice of.
 pub mod supervisor;
-pub use supervisor::{BotId, Budget, ChatId, Definition, Effect, Event, Reason, ServiceId, Source, Status, Supervisor, TurnId};
+pub use supervisor::{BotId, Budget, ChatId, Definition, Effect, Event, Reason, ServiceId, Source, Status, Supervisor, TurnId, WatchId};

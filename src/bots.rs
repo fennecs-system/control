@@ -92,6 +92,7 @@ pub(crate) fn status(state: &State, chat: &str) -> Option<String> {
     let mut sources = definition.sources.iter().filter_map(|source| match source {
         Source::Room { room } => Some(format!("room #{room}")),
         Source::Timer { every_ms } => Some(format!("every {} min", every_ms / 60_000)),
+        Source::Stream { watch } => Some(format!("watch {}", watch.0)),
         Source::Service { .. } => None,
     }).collect::<Vec<_>>().join(", ");
     if sources.is_empty() {
@@ -195,6 +196,8 @@ fn describe(reasons: &[Reason]) -> String {
     reasons.iter().map(|reason| match reason {
         Reason::Room { room, .. } => format!("new messages in room #{room}"),
         Reason::Service { service, kind, .. } => format!("service {} reported {}", service.0, kind.chars().take(80).collect::<String>()),
+        Reason::Stream { watch, lines, .. } => format!("{lines} new lines from watch {}", watch.0),
+        Reason::Exited { watch, code, exits, .. } => format!("watch {} exited{} ({exits}×)", watch.0, code.map_or(String::new(), |code| format!(" with code {code}"))),
         Reason::Timer => "your scheduled check-in".into(),
         Reason::Overflow { dropped, sources } => format!("{dropped} more events than fit; re-read {} source(s) directly", sources.len()),
     }).collect::<Vec<_>>().join("; ")

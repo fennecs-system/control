@@ -18,15 +18,18 @@ id!(BotId, String);
 id!(ChatId, String);
 id!(ServiceId, String);
 id!(TurnId, u64);
+id!(WatchId, String);
 impl Copy for TurnId {}
 
 /// What a bot listens to: room messages for coordination with other agents,
-/// events observed on services it manages, and timers while idle.
+/// events observed on services it manages, lines from watches it owns, and
+/// timers while idle.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Source {
     Room { room: String },
     Service { service: ServiceId },
+    Stream { watch: WatchId },
     Timer { every_ms: u64 },
 }
 
@@ -82,6 +85,10 @@ pub enum Event {
     Stop(BotId),
     RoomMessage { room: String, from: Option<ChatId>, cursor: u64 },
     ResourceObserved { service: ServiceId, cursor: u64, kind: String },
+    /// A batch of `lines` from a watch, ending at `cursor` in its stream.
+    StreamLines { watch: WatchId, cursor: u64, lines: u64 },
+    /// The watched process exited; `cursor` orders it within the same stream.
+    WatchExited { watch: WatchId, cursor: u64, code: Option<i32> },
     TurnCompleted { bot: BotId, turn: TurnId },
     Tick,
 }
@@ -91,6 +98,8 @@ pub enum Event {
 pub enum Reason {
     Room { room: String, through: u64 },
     Service { service: ServiceId, kind: String, through: u64 },
+    Stream { watch: WatchId, lines: u64, through: u64 },
+    Exited { watch: WatchId, code: Option<i32>, exits: u32, through: u64 },
     Timer,
     /// More distinct events arrived than a turn carries. Dropped events are
     /// acknowledged, not replayed: the bot resynchronises from these sources.
@@ -149,6 +158,7 @@ impl Bot {
                 let origin = match &reason {
                     Reason::Room { room, .. } => Some(Source::Room { room: room.clone() }),
                     Reason::Service { service, .. } => Some(Source::Service { service: service.clone() }),
+                    Reason::Stream { watch, .. } | Reason::Exited { watch, .. } => Some(Source::Stream { watch: watch.clone() }),
                     _ => None,
                 };
                 if let Some(origin) = origin
@@ -174,6 +184,29 @@ impl Bot {
                 Reason::Service { service: s, kind: k, through: existing } if s == service && k == kind => Some((existing, *through)),
                 _ => None,
             }),
+            Reason::Stream { watch, lines, through } => {
+                return self.pending.iter_mut().any(|r| match r {
+                    Reason::Stream { watch: w, lines: count, through: existing } if w == watch => {
+                        *count = count.saturating_add(*lines);
+                        *existing = (*existing).max(*through);
+                        true
+                    }
+                    _ => false,
+                });
+            }
+            Reason::Exited { watch, code, exits, through } => {
+                return self.pending.iter_mut().any(|r| match r {
+                    Reason::Exited { watch: w, code: last, exits: count, through: existing } if w == watch => {
+                        *count = count.saturating_add(*exits);
+                        if *through >= *existing {
+                            *last = *code;
+                            *existing = *through;
+                        }
+                        true
+                    }
+                    _ => false,
+                });
+            }
             Reason::Timer => return self.pending.contains(&Reason::Timer),
             Reason::Overflow { .. } => return false,
         };
@@ -280,6 +313,13 @@ impl Supervisor {
             }
         }
     }
+    fn observe(&mut self, watch: &WatchId, cursor: u64, reason: Reason) {
+        for bot in self.bots.values_mut().filter(|bot| !bot.stopping) {
+            if bot.definition.sources.iter().any(|source| matches!(source, Source::Stream { watch: w } if w == watch)) {
+                bot.accept(Some((format!("stream:{}", watch.0), cursor)), reason.clone());
+            }
+        }
+    }
     fn deliver(&mut self, event: Event, now: u64) {
         match event {
             Event::Define(definition) => self.define(definition, now),
@@ -321,6 +361,8 @@ impl Supervisor {
                     }
                 }
             }
+            Event::StreamLines { watch, cursor, lines } => self.observe(&watch, cursor, Reason::Stream { watch: watch.clone(), lines, through: cursor }),
+            Event::WatchExited { watch, cursor, code } => self.observe(&watch, cursor, Reason::Exited { watch: watch.clone(), code, exits: 1, through: cursor }),
             Event::TurnCompleted { bot: id, turn } => {
                 if let Some(bot) = self.bots.get_mut(&id)
                     && bot.turn.as_ref().is_some_and(|(id, _)| *id == turn)
@@ -583,5 +625,45 @@ mod tests {
         assert!(s.step(Event::Tick, Now(500)).is_empty());
         assert!(s.step(done("bot", turn), Now(501)).is_empty());
         assert_eq!(s.status(&bot("bot")), None);
+    }
+
+    #[test]
+    fn watch_lines_wake_their_bot_and_coalesce_until_the_turn_ends() {
+        let mut s = Supervisor::default();
+        let watch = |name: &str| WatchId(name.into());
+        let lines = |name: &str, cursor: u64, lines: u64| Event::StreamLines { watch: watch(name), cursor, lines };
+        define(&mut s, "alice", vec![Source::Stream { watch: watch("w-alice") }], budget(0, 60_000, 10), 0);
+        assert!(s.step(lines("w-cass", 5, 3), Now(1)).is_empty(), "other watches are not this bot's events");
+        let woke = s.step(lines("w-alice", 10, 2), Now(2));
+        let (_, turn, reasons) = turns(&woke)[0];
+        assert_eq!(reasons, [Reason::Stream { watch: watch("w-alice"), lines: 2, through: 10 }]);
+        assert!(s.step(lines("w-alice", 15, 4), Now(3)).is_empty());
+        assert!(s.step(lines("w-alice", 15, 4), Now(3)).is_empty(), "replays at or below the cursor are ignored");
+        assert!(s.step(lines("w-alice", 20, 1), Now(4)).is_empty());
+        assert!(s.step(Event::WatchExited { watch: watch("w-alice"), cursor: 21, code: Some(137) }, Now(5)).is_empty());
+        assert!(s.step(Event::WatchExited { watch: watch("w-alice"), cursor: 22, code: Some(0) }, Now(5)).is_empty());
+        let next = s.step(done("alice", turn), Now(6));
+        let (_, _, reasons) = turns(&next)[0];
+        assert_eq!(reasons, [
+            Reason::Stream { watch: watch("w-alice"), lines: 5, through: 20 },
+            Reason::Exited { watch: watch("w-alice"), code: Some(0), exits: 2, through: 22 },
+        ], "lines add up, exits stay a separate reason with the latest code");
+    }
+
+    #[test]
+    fn overflowing_streams_are_reported_for_resync_and_survive_persistence() {
+        let mut s = Supervisor::default();
+        let sources = (0..20).map(|i| Source::Stream { watch: WatchId(format!("w{i}")) }).collect::<Vec<_>>();
+        define(&mut s, "alice", sources, budget(0, 60_000, 10), 0);
+        let turn = turns(&s.step(Event::StreamLines { watch: WatchId("w0".into()), cursor: 1, lines: 1 }, Now(1)))[0].1;
+        for i in 0..20 {
+            s.step(Event::WatchExited { watch: WatchId(format!("w{i}")), cursor: 2, code: None }, Now(2));
+        }
+        let restored: Supervisor = serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
+        let mut s = restored;
+        let next = s.step(done("alice", turn), Now(3));
+        let (_, _, reasons) = turns(&next)[0];
+        assert_eq!(reasons.len(), PENDING + 1);
+        assert!(matches!(reasons.last(), Some(Reason::Overflow { dropped: 4, sources }) if sources.len() == 4 && matches!(sources[0], Source::Stream { .. })));
     }
 }
