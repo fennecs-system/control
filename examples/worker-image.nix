@@ -11,7 +11,8 @@ let
   '';
   serviceRunner = pkgs.runCommand "control-service-runner" { nativeBuildInputs = [ pkgs.rustc pkgs.stdenv.cc ]; } ''
     mkdir -p $out/bin
-    rustc --edition=2024 -O ${../tools/service-runner/main.rs} -o $out/bin/control-service-runner
+    cp ${../tools/service-runner}/*.rs .
+    rustc --edition=2024 -Dwarnings -O main.rs -o $out/bin/control-service-runner
   '';
   playground = pkgs.runCommand "control-playground" { nativeBuildInputs = [ pkgs.rustc pkgs.stdenv.cc ]; } ''
     mkdir -p $out/bin src/playground
@@ -60,7 +61,7 @@ pkgs.dockerTools.buildLayeredImage {
     chmod 0755 nix/var/nix/profiles/per-user nix/var/nix/gcroots/per-user
   '';
   config = {
-    Labels = { "dev.control.service-runner" = "2"; "dev.control.tcp-relay" = "4"; }
+    Labels = { "dev.control.service-runner" = "3"; "dev.control.tcp-relay" = "4"; }
       // pkgs.lib.optionalAttrs (profile == "full") { "dev.control.worker-profile" = "full-v1"; };
     WorkingDir = "/workspace";
     Env = [
