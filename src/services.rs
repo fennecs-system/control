@@ -165,7 +165,19 @@ struct Input {
 fn default_lease() -> i64 {
     -1
 }
-pub fn definitions() -> Vec<Value> {
+pub struct Tools;
+impl crate::tool_registry::AttemptTools for Tools {
+    fn definitions(&self) -> Vec<Value> {
+        definitions()
+    }
+    fn known(&self, name: &str) -> bool {
+        known(name)
+    }
+    fn call(&self, cx: &crate::tool_registry::AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
+        call(cx.shared, cx.run, cx.generation, cx.nonce, name, args)
+    }
+}
+fn definitions() -> Vec<Value> {
     let mut tools = vec![
         json!({"name":"control_service_start","description":"Start a chat-owned offline tool container that survives model turns and Control restart. lease_seconds=-1 (default) retains it until explicitly stopped; a positive duration limits its lifetime. Private disk-backed /workspace for task files and worktrees and /home/agent for tool configuration and caches, with no default disk cap. RAM-backed /tmp is disposable scratch (128 MiB), erased on container restart. Optional storage_limit_mb caps the private writable layer only and requires Docker quota support; mounted folders are excluded. No attempt files, credentials, network or host mounts. Use a foreground command. The immutable worker image needs control-service-runner. Returns a durable handle immediately; inspect status before assuming startup succeeded. Workspace and home files last until container removal.","inputSchema":{"type":"object","properties":{"command":{"type":"string","minLength":1,"maxLength":16000},"lease_seconds":{"type":"integer","oneOf":[{"const":-1},{"minimum":1,"maximum":3600}],"default":-1},"storage_limit_mb":{"type":"integer","minimum":1,"maximum":u32::MAX,"description":"Optional private writable-layer quota in MiB; mounts are excluded. Requires a quota-capable Docker storage driver. Omit for no Control disk cap; unsupported quotas fail creation."}},"required":["command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"openWorldHint":false}}),
     ];
@@ -191,7 +203,7 @@ pub fn definitions() -> Vec<Value> {
     tools.extend(commands::definitions());
     tools
 }
-pub fn known(name: &str) -> bool {
+fn known(name: &str) -> bool {
     matches!(
         name,
         "control_service_start"
@@ -228,7 +240,7 @@ fn caller<'a>(
             .ok_or_else(|| fail("Service requires a chat"))?,
     ))
 }
-pub fn call(
+fn call(
     shared: &Arc<Mutex<State>>,
     run: &str,
     generation: &str,

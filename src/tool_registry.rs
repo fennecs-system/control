@@ -1,8 +1,31 @@
 //! Shared MCP schemas and transport policy. Authorization remains at each broker.
 use serde_json::{json, Value};
-use std::sync::OnceLock;
+use std::{
+    io,
+    sync::{Arc, Mutex, OnceLock},
+};
 
 pub use control_context::tool_policy::{Bridge, Route};
+pub struct AttemptCall<'a> {
+    pub shared: &'a Arc<Mutex<crate::State>>,
+    pub run: &'a str,
+    pub generation: &'a str,
+    pub nonce: &'a str,
+}
+/// Worker tools bound to one attempt. Calls run without the state lock held.
+pub trait AttemptTools: Sync {
+    fn definitions(&self) -> Vec<Value>;
+    fn known(&self, name: &str) -> bool;
+    fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value>;
+}
+static ATTEMPT_TOOLS: [&dyn AttemptTools; 3] = [
+    &crate::command_jobs::Tools,
+    &crate::services::Tools,
+    &crate::ports::Tools,
+];
+pub fn attempt_tools(name: &str) -> Option<&'static dyn AttemptTools> {
+    ATTEMPT_TOOLS.iter().copied().find(|tools| tools.known(name))
+}
 pub struct Entry {
     pub definition: Value,
     pub route: Route,
@@ -116,9 +139,7 @@ pub fn worker_definitions(improve: bool) -> Vec<Value> {
     tools.push(crate::delegation::definition());
     tools.push(crate::spawning::definition());
     tools.extend(crate::spawning::management_definitions());
-    tools.extend(crate::command_jobs::definitions());
-    tools.extend(crate::services::definitions());
-    tools.extend(crate::ports::definitions());
+    tools.extend(ATTEMPT_TOOLS.iter().flat_map(|tools| tools.definitions()));
     tools.push(crate::delegated_results::definition());
     tools
 }
@@ -179,6 +200,25 @@ mod tests {
             assert!(control_context::tool_for_mcp(name).is_some(),"Missing UI registration: {name}");
             let worker_name=name.replace('.',"_");
             assert!(names.contains(&worker_name.as_str()),"Missing provider discovery: {name}");
+        }
+    }
+    #[test]
+    fn attempt_tools_route_each_name_to_exactly_one_group() {
+        let workers = worker_definitions(false);
+        let mut seen = std::collections::HashSet::new();
+        for &tools in &ATTEMPT_TOOLS {
+            let definitions = tools.definitions();
+            assert!(!definitions.is_empty());
+            for definition in definitions {
+                let name = definition["name"].as_str().unwrap();
+                assert_eq!(ATTEMPT_TOOLS.iter().filter(|other| other.known(name)).count(), 1, "{name}");
+                assert!(std::ptr::addr_eq(attempt_tools(name).unwrap(), tools), "{name}");
+                assert!(workers.iter().any(|worker| worker["name"] == name), "{name}");
+                assert!(seen.insert(name.to_owned()), "{name}");
+            }
+        }
+        for name in ["control_agent_result", "control_workspace_run", "control.chat.send", "unknown", ""] {
+            assert!(attempt_tools(name).is_none(), "{name}");
         }
     }
 }
