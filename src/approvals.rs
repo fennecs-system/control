@@ -25,8 +25,9 @@ pub(crate) enum Outcome {
     /// The chat is busy or there is no capacity; try again later.
     Wait,
     Resumed(String),
-    /// A newer human turn steers the task, or the request's turn did not
-    /// finish; the decisions are recorded in the chat without a new turn.
+    /// A newer human turn steers the task, the request's turn did not finish
+    /// or its actor may no longer act; the decisions are recorded in the chat
+    /// without a new turn.
     Noted,
 }
 
@@ -43,21 +44,25 @@ pub(crate) fn resume(state: &mut State, decisions: Decisions<'_>) -> Outcome {
     let latest = state.runtime.runs.iter().rposition(|run| in_chat(&run));
     let steered = requested.is_some_and(|at| state.runtime.runs[at + 1..].iter().filter(in_chat)
         .any(|run| run.kind.speaker() == MessageSpeaker::User && run.kind != RunKind::DesignAnswer));
-    let resumable = requested.is_some() && !steered && latest.is_some_and(|at| state.runtime.runs[at].status == "completed");
+    let resumable = requested.is_some() && !steered && latest.is_some_and(|at| {
+        let run = &state.runtime.runs[at];
+        run.status == "completed" && crate::identity::authorize(&run.actor, run.action).is_ok()
+    });
     let mut run_id = None;
     if let (true, Some(latest)) = (resumable, latest) {
         if crate::scheduler::admit(&state.runtime).is_err() {
             return Outcome::Wait;
         }
         let objective = format!("Operator {}:\n{}\n{} Original task:\n{}", decisions.heading.to_lowercase(), decisions.lines, decisions.instruction, decisions.task).chars().take(2000).collect();
-        let Ok(id) = crate::chat::enqueue_continuation(state, chat, latest, objective, decisions.kind, decisions.source) else { return Outcome::Wait };
-        let run = state.runtime.runs.last_mut().unwrap();
-        for grant in decisions.grants {
-            if !run.resource_grants.contains(&grant) {
-                run.resource_grants.push(grant);
+        if let Ok(id) = crate::chat::enqueue_continuation(state, chat, latest, objective, decisions.kind, decisions.source) {
+            let run = state.runtime.runs.last_mut().unwrap();
+            for grant in decisions.grants {
+                if !run.resource_grants.contains(&grant) {
+                    run.resource_grants.push(grant);
+                }
             }
+            run_id = Some(id);
         }
-        run_id = Some(id);
     }
     if let Some(session) = state.chats.iter_mut().find(|session| session.id == chat) {
         session.messages.push(crate::chat::Message { text: format!("{}\n{}", decisions.heading, decisions.lines), run_id: run_id.clone(), reply: String::new() });
@@ -110,6 +115,14 @@ mod tests {
         assert_eq!(decide(&mut state, &chat, &origin), Outcome::Noted);
         assert_eq!(state.runtime.runs.len(), runs);
         assert_eq!(state.chats[0].messages.last().unwrap().text, "Port decisions\nrelay: approved");
+    }
+
+    #[test]
+    fn a_requester_without_authority_gets_a_note_not_a_retry() {
+        let (mut state, chat, origin) = requested();
+        state.runtime.runs[0].status = "completed".into();
+        state.runtime.runs[0].actor = crate::identity::Actor::Discord { user_id: "1".parse().unwrap(), channel_id: "2".parse().unwrap() };
+        assert_eq!(decide(&mut state, &chat, &origin), Outcome::Noted);
     }
 
     #[test]
