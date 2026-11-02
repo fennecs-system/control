@@ -615,7 +615,7 @@ pub(crate) fn http_with_save(
                 }
                 crate::services::relay_capable(&service)?;
                 if service.resource.lease.is_until_stopped() && fields.get("seconds").is_some_and(|v|v == "-1") {
-                    let marker = crate::runtime::docker_query(&["image","inspect",service.resource.image.as_str(),"--format","{{index .Config.Labels \"dev.control.tcp-relay\"}}"])?;
+                    let marker = crate::engine::query(&["image","inspect",service.resource.image.as_str(),"--format","{{index .Config.Labels \"dev.control.tcp-relay\"}}"])?;
                     if !matches!(marker.trim(),"3"|"4") {return Err(fail("Rebuild worker images before approving service-lifetime ports"));}
                 }
                 crate::services::port_binding(&service, &request.container)?;
@@ -1999,7 +1999,7 @@ fn main(){
         struct Cleanup {node:String,root:PathBuf}
         impl Drop for Cleanup {fn drop(&mut self){
             if let Ok(bytes)=fs::read(self.root.join("state/state.json")) && let Ok(state)=serde_json::from_slice::<State>(&bytes) {
-                for service in &state.services {if let Some(id)=service.resource.phase.container() && crate::services::port_binding(service,id).is_ok(){let _=Command::new("docker").args(["rm","-f",id.as_str()]).stdout(Stdio::null()).stderr(Stdio::null()).status();}}
+                for service in &state.services {if let Some(id)=service.resource.phase.container() && crate::services::port_binding(service,id).is_ok(){let _=crate::engine::cli().args(["rm","-f",id.as_str()]).stdout(Stdio::null()).stderr(Stdio::null()).status();}}
             }
             println!("Service interaction fixture retained at {} (node {})",self.root.display(),self.node);
         }}
@@ -2080,7 +2080,7 @@ printf verified-download >> /workspace/completions
         let crash=crate::services::enqueue_test_command(&mut state,&run,"crash-command",&ids[0],"printf once >> /workspace/crash-marker; exec sleep 60",30).unwrap();state.runtime.runs[0].status="completed".into();write(&state);server=launch();
         wait(||execution(0,crash["execution_id"].as_str().unwrap())["status"]=="running",10,"command running before host crash");
         let running=read();let source=&running.services[0];let container=source.resource.phase.container().unwrap();crate::services::port_binding(source,container).unwrap();
-        wait(||crate::runtime::docker_query(&["exec",container.as_str(),"cat","/workspace/crash-marker"]).is_ok_and(|text|text=="once"),5,"remote command effect before crash");
+        wait(||crate::engine::query(&["exec",container.as_str(),"cat","/workspace/crash-marker"]).is_ok_and(|text|text=="once"),5,"remote command effect before crash");
         server.crash();server=launch();
         wait(||execution(0,crash["execution_id"].as_str().unwrap())["status"]=="interrupted"&&matches!(read().services[0].resource.phase,Phase::Stopped(_)),15,"uncertain command fenced without replay after crash");server.stop();
         println!("Verified service file creation, retained failed output, explicit scoped binary download, peer routing, restart persistence and timeout cleanup.");
@@ -2189,7 +2189,7 @@ printf verified-download >> /workspace/completions
         struct Cleanup(ContainerId);
         impl Drop for Cleanup {
             fn drop(&mut self) {
-                let _ = Command::new("docker")
+                let _ = crate::engine::cli()
                     .args(["rm", "-f", self.0.as_str()])
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
@@ -2331,7 +2331,7 @@ printf verified-download >> /workspace/completions
             "outbound half-close and held session",
         );
         assert_eq!(
-            crate::runtime::docker_query(&[
+            crate::engine::query(&[
                 "exec",
                 container.as_str(),
                 "cat",
@@ -2413,7 +2413,7 @@ printf verified-download >> /workspace/completions
             assert_closed(browser.read(&mut bytes));
             wait(
                 || {
-                    crate::runtime::docker_query(&[
+                    crate::engine::query(&[
                         "exec",
                         container.as_str(),
                         "cat",
@@ -2557,7 +2557,7 @@ printf verified-download >> /workspace/completions
         let current = read();
         crate::services::port_binding(&current.services[0], &container).unwrap();
         assert!(
-            Command::new("docker")
+            crate::engine::cli()
                 .args(["kill", container.as_str()])
                 .stdout(Stdio::null())
                 .status()

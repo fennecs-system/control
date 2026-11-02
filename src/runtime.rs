@@ -131,32 +131,13 @@ pub(crate) fn pinned_image(s: &str) -> bool {
         .or_else(|| s.split_once("@sha256:").map(|(_, hash)| hash));
     digest.is_some_and(|hash| hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()))
 }
-pub fn engine_ready() -> bool {
-    // A cold Docker Desktop or colima engine can take well over 5 s to answer `info`.
-    engine_output(
-        Command::new("docker").args(["info", "--format", "{{.OSType}}"]),
-        std::time::Duration::from_secs(20),
-    ).is_ok_and(|output| output.trim() == "linux")
-}
-pub fn docker_query(arguments: &[&str]) -> std::io::Result<String> {
-    engine_output(
-        Command::new("docker").args(arguments),
-        std::time::Duration::from_secs(5),
-    )
-}
-/// Creation requests here contain no credential mounts or provider arguments.
-/// Retain bounded engine diagnostics so unsupported quotas are distinguishable
-/// from other failures. Other engine queries keep their existing redaction.
-pub(crate) fn docker_create(arguments: &[String]) -> std::io::Result<String> {
-    engine_output_diagnostic(Command::new("docker").args(arguments), std::time::Duration::from_secs(5), true)
-}
 
 // Drain while the process runs: waiting first can deadlock on a full stdout pipe.
 // Ownership inspection must fail closed on oversized output, never use a prefix.
-fn engine_output(command: &mut Command, timeout: std::time::Duration) -> std::io::Result<String> {
+pub(crate) fn engine_output(command: &mut Command, timeout: std::time::Duration) -> std::io::Result<String> {
     engine_output_diagnostic(command, timeout, false)
 }
-fn engine_output_diagnostic(command: &mut Command, timeout: std::time::Duration, diagnostic: bool) -> std::io::Result<String> {
+pub(crate) fn engine_output_diagnostic(command: &mut Command, timeout: std::time::Duration, diagnostic: bool) -> std::io::Result<String> {
     use std::{
         io::Read,
         process::Stdio,

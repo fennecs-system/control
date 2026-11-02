@@ -129,7 +129,7 @@ fn verified_resource(
     Ok(())
 }
 fn names() -> Result<Vec<(String, String, String)>, &'static str> {
-    crate::runtime::docker_query(&[
+    crate::engine::query(&[
         "ps",
         "--all",
         "--format",
@@ -150,7 +150,7 @@ fn stop_named(attempt: &Attempt, name: &str) -> Result<(), &'static str> {
     if let Some(job)=attempt.command_jobs.iter().find(|job|job.name()==name) {
         return crate::command_jobs::stop(job).map_err(|_|"Could not stop exact command job; work remains fenced.");
     }
-    stop_named_with(attempt, name, crate::runtime::docker_query)
+    stop_named_with(attempt, name, crate::engine::query)
 }
 fn stop_named_with(
     attempt: &Attempt,
@@ -217,7 +217,7 @@ pub fn stop_resource_id(
     workspace: &std::path::Path,
     expected_id: Option<&str>,
 ) -> Result<(), &'static str> {
-    let text = crate::runtime::docker_query(&["inspect", "--format", INSPECT, name]);
+    let text = crate::engine::query(&["inspect", "--format", INSPECT, name]);
     let text = match text {
         Ok(s) => s,
         Err(_) => {
@@ -235,7 +235,7 @@ pub fn stop_resource_id(
     if expected_id.is_some_and(|id| container.id != id) {
         return Err("Resource identity changed; replacement was not stopped.");
     }
-    stop_container(&container, crate::runtime::docker_query)
+    stop_container(&container, crate::engine::query)
 }
 
 pub fn stop_attempt(attempt: &Attempt) -> Result<(), &'static str> {
@@ -333,7 +333,7 @@ mod tests {
         std::fs::create_dir_all(&workspace).unwrap();
         let workspace = workspace.canonicalize().unwrap();
         let mount = format!("type=bind,src={},dst=/workspace", workspace.display());
-        let id = crate::runtime::docker_query(&[
+        let id = crate::engine::query(&[
             "run",
             "--detach",
             "--rm",
@@ -357,7 +357,7 @@ mod tests {
         ])
         .unwrap();
         let wrong = stop_resource(&name, "wrong-node", &image, &workspace);
-        let still_running = crate::runtime::docker_query(&[
+        let still_running = crate::engine::query(&[
             "ps",
             "--quiet",
             "--filter",
@@ -365,7 +365,7 @@ mod tests {
         ])
         .unwrap();
         let stopped = stop_resource(&name, "lifecycle-fixture", &image, &workspace);
-        let absent = crate::runtime::docker_query(&[
+        let absent = crate::engine::query(&[
             "ps",
             "--quiet",
             "--filter",

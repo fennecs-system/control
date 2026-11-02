@@ -107,7 +107,7 @@ fn container_command_scoped(
         auth.uid, auth.gid
     );
     let codex_home = home.replacen("/home/agent:", "/home/agent/.codex:", 1);
-    let mut command = crate::claude::docker();
+    let mut command = crate::engine::scrubbed();
     command
         .args([
             "run",
@@ -1102,7 +1102,7 @@ fn execute(
         .map(Ok)
         .unwrap_or_else(crate::config::node_id)
         .map_err(blocked)?;
-    if !runtime::engine_ready() {
+    if !crate::engine::ready() {
         return Err(blocked("Linux container engine unavailable. Start Docker on this laptop; Control will not fall back to host execution."));
     }
     // Check Codex sign-in before any restore, so a missing login fails fast and leaves nothing behind.
@@ -1709,7 +1709,7 @@ mod tests {
                 let detail = tool("control.chat.read", json!({"id":sibling}));
                 if detail["messages"][0]["status"] == "cancelled" {
                     let id = detail["messages"][0]["attempts"].as_array().unwrap().last().unwrap()["workspace_id"].as_str().unwrap();
-                    let names = runtime::docker_query(&["ps", "--all", "--format", "{{.Names}}", "--filter", &format!("name=control-{id}")]).unwrap();
+                    let names = crate::engine::query(&["ps", "--all", "--format", "{{.Names}}", "--filter", &format!("name=control-{id}")]).unwrap();
                     assert!(names.trim().is_empty(), "Cancelled sibling still has a container");
                     break;
                 }
@@ -1742,7 +1742,7 @@ mod tests {
         let next = state.runtime.runs.iter().find(|r| Some(&r.id) == chat.messages[1].run_id.as_ref()).unwrap();
         assert_eq!(next.status, "queued");
         assert!(next.attempts.is_empty());
-        let names = runtime::docker_query(&["ps", "--all", "--format", "{{.Names}}", "--filter", &format!("name=control-{id}")]).unwrap();
+        let names = crate::engine::query(&["ps", "--all", "--format", "{{.Names}}", "--filter", &format!("name=control-{id}")]).unwrap();
         assert!(names.trim().is_empty(), "attempt still has a container");
     }
     #[test]

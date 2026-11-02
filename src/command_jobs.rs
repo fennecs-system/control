@@ -349,7 +349,7 @@ fn create(job: &Job) -> io::Result<String> {
         .map(str::to_owned),
     );
     let text =
-        crate::runtime::docker_query(&arguments.iter().map(String::as_str).collect::<Vec<_>>())?;
+        crate::engine::query(&arguments.iter().map(String::as_str).collect::<Vec<_>>())?;
     let id = text.trim();
     if id.len() != 64 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(fail("Invalid command container identity"));
@@ -371,7 +371,7 @@ struct Inspection {
     exit_code: i64,
 }
 fn inspect(job: &Job) -> io::Result<Inspection> {
-    let result = crate::runtime::docker_query(&["inspect", "--format", INSPECT, &job.name()])?;
+    let result = crate::engine::query(&["inspect", "--format", INSPECT, &job.name()])?;
     let inspection: Inspection =
         serde_json::from_str(result.trim()).map_err(|_| fail("Invalid command inspection"))?;
     verify(job, &inspection)?;
@@ -424,7 +424,7 @@ pub fn stop(job: &Job) -> io::Result<()> {
         .as_ref()
         .map(|id| format!("id={id}"))
         .unwrap_or_else(|| format!("name=^/{}$", job.name()));
-    if !crate::runtime::docker_query(&["ps", "--all", "--quiet", "--filter", &filter])?
+    if !crate::engine::query(&["ps", "--all", "--quiet", "--filter", &filter])?
         .trim()
         .is_empty()
     {
@@ -450,7 +450,7 @@ fn bounded_output(text: &str) -> String {
 }
 fn logs(job: &Job) -> io::Result<String> {
     use std::process::Stdio;
-    let mut child = crate::claude::docker()
+    let mut child = crate::engine::scrubbed()
         .args([
             "logs",
             "--tail",
@@ -617,7 +617,7 @@ fn supervise(shared: Arc<Mutex<State>>, run: String, mut job: Job) {
         activity(&shared, &run, &job, true);
         return;
     }
-    if crate::runtime::docker_query(&["start", job.container_id.as_deref().unwrap()]).is_err() {
+    if crate::engine::query(&["start", job.container_id.as_deref().unwrap()]).is_err() {
         job.status = if stop(&job).is_ok() {
             "failed"
         } else {
@@ -694,7 +694,7 @@ fn supervise(shared: Arc<Mutex<State>>, run: String, mut job: Job) {
 /// Wakes the supervisor as soon as the container exits, instead of at the next tick.
 fn exit_waiter(job: &Job) -> Option<crate::child::Watched> {
     use std::process::Stdio;
-    let child = crate::claude::docker()
+    let child = crate::engine::scrubbed()
         .args(["wait", job.container_id.as_deref()?])
         .stdin(Stdio::null())
         .stdout(Stdio::null())

@@ -261,7 +261,7 @@ fn start(shared: &Arc<Mutex<State>>, run: &str, generation: &str, nonce: &str, n
         .try_into()
         .map_err(fail)?;
     drop(s);
-    let marker = crate::runtime::docker_query(&[
+    let marker = crate::engine::query(&[
         "image",
         "inspect",
         "--format",
@@ -594,7 +594,7 @@ pub(crate) enum RelayMode { Connect, Listen, Multiplex }
 impl PortBinding {
     pub(crate) fn spawn(&self, mode: RelayMode, port: std::num::NonZeroU16, expires: u64) -> io::Result<std::process::Child> {
         if expires <= now() || expires > self.expires { return Err(fail("Port lease exceeds its service")); }
-        std::process::Command::new("docker").args(["exec", "-i", "--user", &self.user, self.id.as_str(), "/bin/control-tcp-relay", match mode { RelayMode::Connect => "connect", RelayMode::Listen => "listen", RelayMode::Multiplex => "listen-multi" }, &port.to_string(), &expires.to_string()])
+        crate::engine::cli().args(["exec", "-i", "--user", &self.user, self.id.as_str(), "/bin/control-tcp-relay", match mode { RelayMode::Connect => "connect", RelayMode::Listen => "listen", RelayMode::Multiplex => "listen-multi" }, &port.to_string(), &expires.to_string()])
             .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn()
     }
 }
@@ -607,7 +607,7 @@ pub(crate) fn relay_version(service: &Service) -> io::Result<u8> {
     let cache=CAPABILITIES.get_or_init(Mutex::default);
     let cached=cache.lock().map_err(|_|fail("Relay capability cache unavailable"))?.get(&service.resource.image).copied();
     if let Some(version)=cached{return Ok(version);}
-    let marker = crate::runtime::docker_query(&["image", "inspect", service.resource.image.as_str(), "--format", "{{index .Config.Labels \"dev.control.tcp-relay\"}}"])?;
+    let marker = crate::engine::query(&["image", "inspect", service.resource.image.as_str(), "--format", "{{index .Config.Labels \"dev.control.tcp-relay\"}}"])?;
     let version=marker.trim().parse::<u8>().ok().filter(|version|matches!(version,2..=4))
         .ok_or_else(||fail("Rebuild the immutable worker images with Nix setup, then start a new service to enable TCP relays"))?;
     let mut cached=cache.lock().map_err(|_|fail("Relay capability cache unavailable"))?;
@@ -617,7 +617,7 @@ pub(crate) fn relay_version(service: &Service) -> io::Result<u8> {
 pub(crate) fn port_binding(service: &Service, expected: &ContainerId) -> io::Result<PortBinding> {
     if !matches!(&service.resource.phase, Phase::Running(id) if id == expected) || service.resource.lease.expired(now()) { return Err(fail("Service is not running under this lease and generation")); }
     relay_capable(service)?;
-    let data = crate::runtime::docker_query(&["inspect", "--format", INSPECT, expected.as_str()])?;
+    let data = crate::engine::query(&["inspect", "--format", INSPECT, expected.as_str()])?;
     let observation: Inspection = serde_json::from_str(data.trim()).map_err(fail)?;
     let binding = verify(service, &observation)?;
     if observation.status != "running" { return Err(fail("Service is not running")); }
@@ -628,7 +628,7 @@ impl Engine for Docker {
         commands::logs(binding.id.as_str())
     }
     fn inventory(&mut self, node: &str) -> io::Result<HashMap<String, Inspection>> {
-        let text = crate::runtime::docker_query(&[
+        let text = crate::engine::query(&[
             "ps",
             "-a",
             "--no-trunc",
@@ -651,7 +651,7 @@ impl Engine for Docker {
         }
         let mut args = vec!["inspect", "--format", INSPECT];
         args.extend(ids.iter().map(ContainerId::as_str));
-        crate::runtime::docker_query(&args)?
+        crate::engine::query(&args)?
             .lines()
             .map(|line| {
                 let record: Inspection = serde_json::from_str(line).map_err(fail)?;
@@ -705,7 +705,7 @@ impl Engine for Docker {
             r.lease.seconds().to_string(),
             service.command.0.to_string(),
         ]);
-        crate::runtime::docker_create(&args)
+        crate::engine::create(&args)
             .map_err(|error| if !service.storage.options().is_empty() && ["storage-opt", "quota", "StorageOpt"].iter().any(|word|error.to_string().contains(word)) {
                 fail(format!("Could not create capped service: {error}. storage_limit_mb requires Docker storage-driver quota support; omit it for uncapped disk storage"))
             } else {
@@ -722,13 +722,13 @@ impl Engine for Docker {
         {
             return Err(fail("Service is no longer eligible to start"));
         }
-        crate::runtime::docker_query(&["start", binding.id.as_str()]).map(|_| ())
+        crate::engine::query(&["start", binding.id.as_str()]).map(|_| ())
     }
     fn remove(&mut self, binding: &Verified<'_>) -> io::Result<()> {
         if !matches!(binding.service.resource.phase, Phase::Stopping { .. }) {
             return Err(fail("Service stop intent is not recorded"));
         }
-        crate::runtime::docker_query(&["rm", "-f", binding.id.as_str()]).map(|_| ())
+        crate::engine::query(&["rm", "-f", binding.id.as_str()]).map(|_| ())
     }
 }
 
@@ -1509,7 +1509,7 @@ mod tests {
         let id = Docker.create(&service).unwrap();
         struct Container(ContainerId);
         impl Drop for Container {
-            fn drop(&mut self) { let _ = crate::runtime::docker_query(&["rm", "-f", self.0.as_str()]); }
+            fn drop(&mut self) { let _ = crate::engine::query(&["rm", "-f", self.0.as_str()]); }
         }
         let cleanup = Container(id.clone());
         let observations = Docker.inventory(&node).unwrap();
@@ -1517,11 +1517,11 @@ mod tests {
         service.resource.phase = Phase::Starting(id.clone());
         let binding = verify(&service, &observations[id.as_str()]).unwrap();
         Docker.start(&binding).unwrap();
-        let output = crate::runtime::docker_query(&["exec", id.as_str(), "bash", "-c", "set -eu; test ! -w /bin; test ! -w /bin/control-tcp-relay; dd if=/dev/zero of=/workspace/large.bin bs=1048576 count=540; test \"$(stat -c %s /workspace/large.bin)\" = 566231040; printf persisted > /tmp/marker; printf persisted > /home/agent/marker; printf disk-probe-ok"]).unwrap();
+        let output = crate::engine::query(&["exec", id.as_str(), "bash", "-c", "set -eu; test ! -w /bin; test ! -w /bin/control-tcp-relay; dd if=/dev/zero of=/workspace/large.bin bs=1048576 count=540; test \"$(stat -c %s /workspace/large.bin)\" = 566231040; printf persisted > /tmp/marker; printf persisted > /home/agent/marker; printf disk-probe-ok"]).unwrap();
         assert!(output.contains("disk-probe-ok"));
-        crate::runtime::docker_query(&["stop", "--time=1", id.as_str()]).unwrap();
-        crate::runtime::docker_query(&["start", id.as_str()]).unwrap();
-        let output = crate::runtime::docker_query(&["exec", id.as_str(), "bash", "-c", "set -eu; test \"$(stat -c %s /workspace/large.bin)\" = 566231040; test ! -e /tmp/marker; test \"$(cat /home/agent/marker)\" = persisted; printf restart-ok"]).unwrap();
+        crate::engine::query(&["stop", "--time=1", id.as_str()]).unwrap();
+        crate::engine::query(&["start", id.as_str()]).unwrap();
+        let output = crate::engine::query(&["exec", id.as_str(), "bash", "-c", "set -eu; test \"$(stat -c %s /workspace/large.bin)\" = 566231040; test ! -e /tmp/marker; test \"$(cat /home/agent/marker)\" = persisted; printf restart-ok"]).unwrap();
         assert_eq!(output.trim(), "restart-ok");
         let observations = Docker.inventory(&node).unwrap();
         service.resource.phase = Phase::Running(id.clone());
@@ -1717,7 +1717,7 @@ mod tests {
         let restored = wait_running(&mut second);
         assert_eq!(restored.resource.phase.container(), Some(&id));
         let contents =
-            crate::runtime::docker_query(&["exec", id.as_str(), "cat", "/workspace/counter"])
+            crate::engine::query(&["exec", id.as_str(), "cat", "/workspace/counter"])
                 .unwrap();
         assert_eq!(contents, "durable");
         second.stop();
@@ -1734,7 +1734,7 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(100));
         }
-        let log = crate::runtime::docker_query(&["logs", id.as_str()]).unwrap();
+        let log = crate::engine::query(&["logs", id.as_str()]).unwrap();
         assert!(
             log.contains("ready"),
             "Supervisor memory isolation failed or command did not run"

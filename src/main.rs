@@ -18,6 +18,7 @@ use control::config;
 use control::{discord, identity};
 use control::discord::bridge as discord_bridge;
 mod doctor;
+mod engine;
 mod federation;
 mod github;
 mod harness;

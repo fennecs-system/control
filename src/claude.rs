@@ -61,26 +61,8 @@ fn mount(path: &Path, target: &str, readonly: bool) -> io::Result<String> {
         if readonly { ",readonly" } else { "" }
     ))
 }
-pub(crate) fn docker() -> Command {
-    let mut command = Command::new("docker");
-    command.env_clear();
-    for name in [
-        "PATH",
-        "HOME",
-        "DOCKER_HOST",
-        "DOCKER_CONTEXT",
-        "DOCKER_CONFIG",
-        "DOCKER_CERT_PATH",
-        "DOCKER_TLS_VERIFY",
-    ] {
-        if let Some(value) = std::env::var_os(name) {
-            command.env(name, value);
-        }
-    }
-    command
-}
 fn base(name: &str, node: &str, uid: u32, gid: u32) -> Command {
-    let mut command = docker();
+    let mut command = crate::engine::scrubbed();
     command.args([
         "run",
         "--rm",
@@ -522,7 +504,7 @@ mod tests {
             assert!(start.elapsed() < Duration::from_secs(15), "offline command did not stop");
             std::thread::sleep(Duration::from_millis(50));
         }
-        let names = crate::runtime::docker_query(&["ps", "--all", "--format", "{{.Names}}", "--filter", &format!("name={}", probe.name)]).unwrap();
+        let names = crate::engine::query(&["ps", "--all", "--format", "{{.Names}}", "--filter", &format!("name={}", probe.name)]).unwrap();
         assert!(names.trim().is_empty());
     }
     #[test]

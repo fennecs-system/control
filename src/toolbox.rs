@@ -4,7 +4,7 @@ use scraper::{Html, Selector};
 use serde_json::{json, Value};
 use std::{
     io::{self, Read, Write},
-    process::{Command, Stdio},
+    process::Stdio,
     sync::Mutex,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -220,7 +220,7 @@ pub(crate) fn playground_mode(code: &str, optimized:bool) -> io::Result<Value> {
         .unwrap_or_default()
         .as_nanos();
     let name = format!("control-playground-{stamp}");
-    let mut command = Command::new("docker");
+    let mut command = crate::engine::cli();
     command.args([
             "run",
             "--rm",
@@ -270,7 +270,7 @@ pub(crate) fn playground_mode(code: &str, optimized:bool) -> io::Result<Value> {
         }
     };
     if status.is_none() {
-        let _ = Command::new("docker")
+        let _ = crate::engine::cli()
             .args(["rm", "-f", &name])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
