@@ -17,6 +17,13 @@ Current libraries:
   identities and leases at persistence boundaries. Full application commands,
   authority checks, durable writes and Docker supervision remain in adapters.
   See [persistent tools](PERSISTENT-TOOLS.md) for the current resource contract.
+- `control-effect`: `std`-only. `machine` defines the `Machine` trait (event and
+  supplied time in, stamped and durability-tagged effects out) with no clocks,
+  I/O or locks. `sync` provides `CancelToken`, a bounded cancellable channel and
+  a `Changes` generation counter, so drivers wait instead of polling. A durable
+  checkpoint does not make an effect eligible; interpreters revalidate its stamp
+  first. Its API follows tokio's shapes, so an async driver can replace a
+  blocking one without changing machines. Not a scheduler or an event bus.
 - The `control` library currently shares configuration, identity, diff rendering
   and the Discord adapter between executables. Discord is compiled once rather
   than included as source in two binaries. It consumes a typed delivery projection
