@@ -345,17 +345,19 @@ fn digest(parts: &[&str]) -> String {
     let joined = parts.join("\u{0}");
     ring::digest::digest(&ring::digest::SHA256, joined.as_bytes()).as_ref()[..8].iter().map(|b| format!("{b:02x}")).collect()
 }
-/// Whether `chat` is `ancestor` or was spawned from it, directly or through children.
-fn within(state: &State, chat: &str, ancestor: &str) -> bool {
-    let mut current = Some(chat);
+/// The top-level chat `chat` was spawned from, directly or through children.
+fn root<'a>(state: &'a State, chat: &str) -> Option<&'a str> {
+    let mut session = state.chats.iter().find(|session| session.id == chat)?;
     for _ in 0..64 {
-        let Some(id) = current else { return false };
-        if id == ancestor {
-            return true;
-        }
-        current = state.chats.iter().find(|session| session.id == id).and_then(|session| session.parent_chat.as_deref());
+        let Some(parent) = session.parent_chat.as_deref() else { return Some(session.id.as_str()) };
+        session = state.chats.iter().find(|candidate| candidate.id == parent)?;
     }
-    false
+    None
+}
+/// Whether two chats of one actor belong to the same top-level conversation:
+/// a lead, its helpers and every agent they spawned.
+fn related(state: &State, chat: &str, requester: &str, actor: &identity::Actor) -> bool {
+    state.chats.iter().any(|session| session.id == chat && &session.actor == actor) && root(state, chat).is_some_and(|top| root(state, requester) == Some(top))
 }
 
 /// Worker tool entry point: agents request bots and read their state.
@@ -377,8 +379,8 @@ fn handle(state: &mut State, attempt: &AttemptRef<'_>, call: BotCall, save: impl
     match call {
         BotCall::Status { chat_id } => {
             let chat = chat_id.unwrap_or_else(|| requester.clone());
-            if !within(state, &chat, &requester) {
-                return Err(fail("Read bot state only for this chat or chats it spawned"));
+            if !related(state, &chat, &requester, &actor) {
+                return Err(fail("Read bot state only for chats in this conversation"));
             }
             let requests = state.bots.approvals.iter().filter(|a| a.requester == requester).map(Approval::summary).collect::<Vec<_>>();
             Ok(json!({"chat_id":chat,"bot":status(state, &chat),"requests":requests}))
@@ -392,8 +394,8 @@ fn handle(state: &mut State, attempt: &AttemptRef<'_>, call: BotCall, save: impl
                 return Ok(existing.summary());
             }
             let target = state.chats.iter().find(|session| session.id == chat_id).ok_or_else(|| fail("Chat not found"))?;
-            if target.actor != actor || !within(state, &chat_id, &requester) {
-                return Err(fail("Request bots only for this chat or chats it spawned"));
+            if !related(state, &chat_id, &requester, &actor) {
+                return Err(fail("Request bots only for chats in this conversation"));
             }
             if every_minutes.is_some_and(|m| !(1..=MAX_INTERVAL_MINUTES).contains(&m)) {
                 return Err(fail("every_minutes must be 1–1440"));
@@ -820,7 +822,7 @@ mod tests {
     }
 
     #[test]
-    fn bots_may_request_bots_only_within_their_own_lineage() {
+    fn bots_may_request_bots_only_within_their_conversation() {
         let (mut state, parent, child) = requester();
         let grandchild = spawned(&mut state, &child, "Scout");
         assert!(ask(&mut state, "n1", &grandchild, None).is_ok(), "descendants through children");
@@ -837,6 +839,26 @@ mod tests {
         assert!(ask(&mut state, "n6", &parent, Some(5)).is_err(), "stale attempts");
         let first = format!("allow {}", state.bots.approvals[0].id);
         assert!(command_at(&mut state, &stranger, &first, Now(1)).is_err(), "decided only from the requesting or target chat");
+    }
+
+    #[test]
+    fn a_leads_helper_may_request_bots_for_controllers_another_helper_spawned() {
+        let (mut state, parent, _child) = requester();
+        let setup = spawned(&mut state, &parent, "Setup");
+        let alice = spawned(&mut state, &setup, "Alice");
+        let helper = spawned(&mut state, &parent, "Helper");
+        let run = state.runtime.runs.iter_mut().rev().find(|run| run.chat_id.as_deref() == Some(helper.as_str())).unwrap();
+        run.status = "running".into();
+        run.attempts.push(crate::usage::Attempt { workspace_id: Some("attempt-h".into()), ..Default::default() });
+        let id = run.id.clone();
+        let mut call = |chat: &str, nonce: &str| handle(&mut state, &AttemptRef { run: &id, generation: "attempt-h", nonce }, BotCall::Request { chat_id: chat.into(), every_minutes: Some(5), room: true }, |_| Ok(()));
+        assert!(call(&alice, "n1").is_ok(), "a cousin in the same conversation");
+        let other = crate::chat::create(&mut state);
+        crate::chat::send(&mut state, &other, "Another lead", "test").unwrap();
+        let stranger = spawned(&mut state, &other, "Stranger");
+        let mut call = |chat: &str, nonce: &str| handle(&mut state, &AttemptRef { run: &id, generation: "attempt-h", nonce }, BotCall::Request { chat_id: chat.into(), every_minutes: Some(5), room: true }, |_| Ok(()));
+        assert!(call(&stranger, "n2").is_err(), "another conversation's agents");
+        assert!(call(&other, "n3").is_err(), "another lead");
     }
 
     #[test]
