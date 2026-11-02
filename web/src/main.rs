@@ -500,6 +500,24 @@ fn attach_transcript(document: &web_sys::Document) -> Result<(), JsValue> {
 // Refresh only the disclosed picker; keep its scroll and expanded branches.
 fn attach_navigation(document:&web_sys::Document)->Result<(),JsValue> {
     let Some(toggle)=document.query_selector(".conversation-toggle")? else{return Ok(());};
+    // Per-tab presentation state only. Storage may be disabled; native details
+    // still works in that case. Remember clicks before a link changes pages.
+    const OPEN: &str="control.conversations.open";
+    if let Some(storage)=web_sys::window().and_then(|window|window.session_storage().ok().flatten()) {
+        if let Ok(Some(open))=storage.get_item(OPEN) {
+            toggle.toggle_attribute_with_force("open",open=="true")?;
+        }
+        let target=toggle.clone();
+        let remember=Closure::<dyn FnMut(web_sys::Event)>::new(move |event:web_sys::Event| {
+            if event.type_()=="click" && event.target().and_then(|node|node.dyn_into::<web_sys::Element>().ok())
+                .and_then(|element|element.closest("a[href]").ok().flatten()).is_none() {return;}
+            let _=storage.set_item(OPEN,if target.has_attribute("open") {"true"}else{"false"});
+        });
+        for event in ["toggle","click"] {
+            toggle.add_event_listener_with_callback(event,remember.as_ref().unchecked_ref())?;
+        }
+        remember.forget();
+    }
     let Some(frame)=document.query_selector("iframe.chat-transcript")? else{return Ok(());};
     let source=frame.get_attribute("src").unwrap_or_default();
     let Some(chat)=source.split('/').nth(2) else{return Ok(());};
@@ -524,9 +542,13 @@ fn attach_navigation(document:&web_sys::Document)->Result<(),JsValue> {
             let Ok(parser)=web_sys::DomParser::new() else{return;};
             let Ok(parsed)=parser.parse_from_string(&text,web_sys::SupportedType::TextHtml) else{return;};
             let Ok(Some(new_aside))=parsed.query_selector(".conversation-navigation") else{return;};
-            aside.set_inner_html(&new_aside.inner_html());
-            if let Ok(nodes)=aside.query_selector_all("details[data-chat-branch]"){for index in 0..nodes.length(){if let Some(node)=nodes.item(index).and_then(|n|n.dyn_into::<web_sys::HtmlDetailsElement>().ok()) && let Some(open)=node.get_attribute("data-chat-branch").and_then(|id|expanded.get(&id)){node.set_open(*open);}}}
-            if let Ok(Some(nav))=aside.query_selector("nav"){nav.set_scroll_top(old_scroll);}
+            if let Ok(nodes)=new_aside.query_selector_all("details[data-chat-branch]"){for index in 0..nodes.length(){if let Some(node)=nodes.item(index).and_then(|n|n.dyn_into::<web_sys::HtmlDetailsElement>().ok()) && let Some(open)=node.get_attribute("data-chat-branch").and_then(|id|expanded.get(&id)){node.set_open(*open);}}}
+            // The first poll can equal server-rendered content. Keep live links
+            // and focus instead of replacing an unchanged tree during a click.
+            if !aside.is_equal_node(Some(new_aside.unchecked_ref())) {
+                aside.set_inner_html(&new_aside.inner_html());
+                if let Ok(Some(nav))=aside.query_selector("nav"){nav.set_scroll_top(old_scroll);}
+            }
             *previous.borrow_mut()=text;
         });
         request.set_onloadend(Some(done.as_ref().unchecked_ref()));

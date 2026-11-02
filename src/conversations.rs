@@ -128,7 +128,7 @@ mod tests {
         let html = crate::navigation::conversations(&restored, &child);
         assert!(html.contains(&format!("data-chat-branch='{second}' open")));
         let html = crate::navigation::conversations(&restored, &second);
-        assert!(!html.contains(&format!("data-chat-branch='{second}' open")));
+        assert!(html.contains(&format!("data-chat-branch='{second}' open")),"Opening a parent conversation must keep its children reachable");
     }
     #[test]
     fn malformed_parents_never_hide_chats_or_cross_identity_boundaries() {

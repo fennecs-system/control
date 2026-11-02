@@ -54,6 +54,7 @@
 .session-view .conversation-toggle>.conversation-navigation{position:absolute;left:0;top:0;width:200px;min-height:0;max-height:none;height:100%;display:flex;flex-direction:column;overflow:hidden}
 .session-view .conversation-toggle:not([open])>.conversation-navigation{display:none}
 .conversation-navigation nav{min-height:0;overflow:auto;flex:1;scrollbar-width:thin;scrollbar-color:#393340 transparent}
+.conversation-navigation nav>*,.conversation-navigation>h2,.conversation-navigation>.conversation-history-link{flex-shrink:0}
 .conversation-navigation nav a{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .conversation-navigation nav>a:first-child{margin-bottom:12px;color:var(--purple)}
 .conversation-branch>summary{cursor:pointer;color:var(--purple);list-style-position:inside;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
