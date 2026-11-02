@@ -2,6 +2,7 @@ mod access;
 mod artifacts;
 mod backend;
 mod agent_message;
+mod approvals;
 mod bots;
 #[cfg(test)]
 #[path = "../tools/service-runner/frame.rs"]

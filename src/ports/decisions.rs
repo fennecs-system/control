@@ -44,7 +44,6 @@ pub(super) fn advance(state: &mut State, save: impl FnOnce(&State) -> io::Result
     let Some(chat_id) = root.chat_id.clone() else { return Ok(()); };
     let root_id = root.id.clone();
     let actor = root.actor.clone();
-    let action = root.action;
     let indices = state.ports.iter().enumerate().filter(|(_,port)| {
         port.decision.as_ref().is_some_and(|decision|!decision.acknowledged)
             && target(state,port).is_some_and(|run|run.id == root_id)
@@ -52,28 +51,14 @@ pub(super) fn advance(state: &mut State, save: impl FnOnce(&State) -> io::Result
     let pending = state.ports.iter().any(|port|port.status == Status::Pending && target(state,port).is_some_and(|run|run.id == root_id));
     if pending && indices.iter().all(|index|state.ports[*index].decision.as_ref().unwrap().allowed) { return Ok(()); }
     let Some(chat_index) = state.chats.iter().position(|chat|chat.id == chat_id && chat.actor == actor) else { return Ok(()); };
-    let Some(latest) = state.runtime.runs.iter().rev().find(|run|run.chat_id.as_deref() == Some(&chat_id) && run.actor == actor) else { return Ok(()); };
-    if state.runtime.runs.iter().any(|run|run.chat_id.as_deref() == Some(&chat_id) && matches!(run.status.as_str(),"queued"|"running"|"waiting"|"cancelling")) { return Ok(()); }
-    // A subsequent human turn already steers the task, including a stop request.
-    let requested_at = state.runtime.runs.iter().rposition(|run|indices.iter().any(|index|state.ports[*index].origin_run==run.id)).unwrap_or(0);
-    let superseded = state.runtime.runs.iter().enumerate().any(|(index,run)|run.chat_id.as_deref() == Some(&chat_id)
-        && index > requested_at
-        && run.kind.speaker() == control_context::agent_policy::MessageSpeaker::User);
-    let resume = !superseded && latest.status == "completed" && latest.action == action
-        && identity::authorize(&actor,action).is_ok();
-    if resume && crate::scheduler::admit(&state.runtime).is_err() { return Ok(()); }
-    let backend = latest.backend;
-    let model = latest.model.clone();
-    let context = latest.context.clone();
-    let lenses = latest.lenses.clone();
-    let persona = crate::delegation::lineage(latest);
-    let mut resources = crate::services::grants(state,latest);
-    for origin in state.runtime.runs.iter().filter(|run|indices.iter().any(|index|state.ports[*index].origin_run==run.id)) {
+    let task = root.objective.clone();
+    let origins = indices.iter().map(|index|state.ports[*index].origin_run.clone()).collect::<Vec<_>>();
+    let mut grants = Vec::new();
+    for origin in state.runtime.runs.iter().filter(|run|origins.contains(&run.id)) {
         for grant in crate::services::grants(state,origin) {
-            if !resources.contains(&grant) {resources.push(grant);}
+            if !grants.contains(&grant) {grants.push(grant);}
         }
     }
-    let objective = root.objective.clone();
     let decisions = indices.iter().map(|index| {
         let port = &state.ports[*index];
         format!("{} ({}): {}. Recheck control_port_status for current readiness and endpoints.",port.name.0,port.id.as_str(),if port.decision.as_ref().unwrap().allowed {"approved"} else {"denied"})
@@ -82,20 +67,13 @@ pub(super) fn advance(state: &mut State, save: impl FnOnce(&State) -> io::Result
     let message_count = state.chats[chat_index].messages.len();
     let revision = state.chats[chat_index].revision;
     let notice = state.runtime.notice.clone();
-    if resume {
-        state.runtime.enqueue_for(format!("Operator port decisions:\n{decisions}\nContinue the original task within these grants. Do not assume traffic is ready; inspect status first. Original task:\n{objective}"),RunKind::PortDecision,"port-decision",actor,action).map_err(fail)?;
-        let next = state.runtime.runs.last_mut().unwrap();
-        next.chat_id = Some(chat_id);
-        next.backend = backend;
-        next.model = model;
-        next.context = context;
-        next.lenses = lenses;
-        next.persona = Some(persona);
-        next.resource_grants = resources;
-        let id = next.id.clone();
-        state.chats[chat_index].messages.push(crate::chat::Message {text:format!("Port decisions\n{decisions}"),run_id:Some(id),reply:String::new()});
-        state.chats[chat_index].revision = revision.saturating_add(1);
-    }
+    let origin_ids = origins.iter().map(String::as_str).collect::<Vec<_>>();
+    let outcome = crate::approvals::resume(state, crate::approvals::Decisions {
+        chat: &chat_id, origins: &origin_ids, heading: "Port decisions", lines: &decisions,
+        instruction: "Continue the original task within these grants. Do not assume traffic is ready; inspect status first.",
+        task: &task, kind: RunKind::PortDecision, source: "port-decision", grants,
+    });
+    if outcome == crate::approvals::Outcome::Wait { return Ok(()); }
     for index in &indices {state.ports[*index].decision.as_mut().unwrap().acknowledged = true;}
     if let Err(error) = save(state) {
         state.runtime.runs.truncate(run_count);
