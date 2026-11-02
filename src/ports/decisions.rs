@@ -18,11 +18,10 @@ fn target<'a>(state: &'a State, port: &Port) -> Option<&'a crate::runtime::Run> 
         || !origin.attempts.iter().any(|attempt|attempt.workspace_id.as_deref()==Some(&port.origin_attempt)) {return None;}
     let root = origin.persona.as_ref().map_or(origin.id.as_str(), |persona|persona.root.as_str());
     let root = state.runtime.runs.iter().find(|run|run.id == root && run.actor == origin.actor && run.action == origin.action)?;
-    let continued = origin.chat_id == root.chat_id && origin.persona.as_ref().is_some_and(|persona| persona.parent.is_none());
-    if origin.id != root.id && !continued && !state.runtime.runs.iter()
-        .filter(|candidate|candidate.chat_id==root.chat_id && candidate.actor==root.actor)
-        .any(|candidate|crate::delegated_results::scope(state,candidate).is_ok_and(|(family,children)|
-            family.contains(root.id.as_str()) && (family.contains(origin.id.as_str()) || children.contains(origin.id.as_str())))) { return None; }
+    // Any agent in the root's conversation tree acts for it, however deep and
+    // whichever of the root chat's turns spawned it.
+    let related = origin.id == root.id || origin.chat_id.as_deref().zip(root.chat_id.as_deref()).is_some_and(|(chat, top)| crate::chat::within(state, chat, top));
+    if !related { return None; }
     Some(root)
 }
 
@@ -180,6 +179,42 @@ mod tests {
         advance(&mut state,|_|Ok(())).unwrap();
         assert_eq!(state.runtime.runs.len(),resumed+2,"a second round of approvals resumes the chat");
         assert_eq!(state.runtime.runs.last().unwrap().chat_id.as_deref(),Some(chat.as_str()));
+        assert!(state.ports[1].decision.as_ref().unwrap().acknowledged);
+    }
+    #[test]
+    fn requests_from_a_grandchild_spawned_by_a_later_turn_resume_the_lead() {
+        let (mut state,lead)=approved();
+        state.runtime.runs[0].status="completed".into();
+        state.ports[0].decision=None;
+        let root=state.runtime.runs[0].id.clone();
+        let mut later=state.runtime.runs[0].clone();
+        later.id="later".into();
+        later.kind=crate::runtime::RunKind::AgentCompletion;
+        state.runtime.runs.push(later);
+        let mut parent="later".to_owned();
+        let mut chat=lead.clone();
+        for (depth,id) in [(1,"helper"),(2,"coordinator")] {
+            let child=crate::chat::create(&mut state);
+            state.chats.iter_mut().find(|s|s.id==child).unwrap().parent_chat=Some(chat.clone());
+            let mut run=state.runtime.runs[0].clone();
+            run.id=id.into();
+            run.kind=crate::runtime::RunKind::Spawned;
+            run.chat_id=Some(child.clone());
+            run.persona=Some(crate::delegation::Persona{role:crate::delegation::Role::Worker,root:root.clone(),depth,parent:Some(parent.clone())});
+            run.attempts=vec![crate::usage::Attempt{workspace_id:Some(format!("{id}-attempt")),..Default::default()}];
+            state.runtime.runs.push(run);
+            (parent,chat)=(id.to_owned(),child);
+        }
+        let mut port=state.ports[0].clone();
+        port.id="port-grandchild".to_owned().try_into().unwrap();
+        port.origin_run="coordinator".into();
+        port.origin_attempt="coordinator-attempt".into();
+        port.decision=Some(Receipt::pending(true));
+        state.ports.push(port);
+        let count=state.runtime.runs.len();
+        advance(&mut state,|_|Ok(())).unwrap();
+        assert_eq!(state.runtime.runs.len(),count+1,"the lead resumes with the grandchild's approval");
+        assert_eq!(state.runtime.runs.last().unwrap().chat_id.as_deref(),Some(lead.as_str()));
         assert!(state.ports[1].decision.as_ref().unwrap().acknowledged);
     }
     #[test]
