@@ -16,7 +16,12 @@ pub struct Tool {
     pub aliases: &'static str,
     pub mcp_names: &'static [&'static str],
 }
-pub const TOOLS: [Tool; 20] = [
+pub const TOOLS: [Tool; 21] = [
+    Tool {
+        name: "agent.bot", title: "Persistent bot", description: "Event-woken agents · operator approval",
+        href: None, aliases: "bot persistent callback wake listen timer swarm",
+        mcp_names: &["control_bot_request", "control_bot_status"], execution: "Rust supervisor / continuation runs", surface: "chat / worker MCP", available: true,
+    },
     Tool {
         name:"service.ports",title:"TCP ports",description:"Scoped service connections · operator approval",
         href: Some("/tools/ports"),aliases:"network tcp port ingress egress loopback proxy relay",

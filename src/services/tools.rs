@@ -96,6 +96,9 @@ mod tests {
         fn ports(&self) -> &dyn crate::ports::PortOps {
             unreachable!("service tools must not reach port operations")
         }
+        fn bots(&self) -> &dyn crate::bots::BotOps {
+            unreachable!("service tools must not reach bot operations")
+        }
     }
     impl ServiceOps for Recorder {
         fn service(&self, attempt: &AttemptRef<'_>, call: ServiceCall) -> io::Result<Value> {
