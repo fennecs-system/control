@@ -120,7 +120,8 @@ fn spawn_rate(state: &State, run: &runtime::Run, additional: usize, now: u64) ->
     if automatic(&run.kind) {
         let parent = |child: &&runtime::Run| child.persona.as_ref().and_then(|persona| persona.parent.as_deref())
             .and_then(|id| state.runtime.runs.iter().find(|candidate| candidate.id == id));
-        let turns = recent.iter().filter_map(parent).filter(|parent| automatic(&parent.kind) && parent.id != run.id).map(|parent| parent.id.as_str()).collect::<std::collections::HashSet<_>>();
+        let holding = state.runtime.runs.iter().filter(|candidate| reserved(candidate) > 0 && mine(candidate));
+        let turns = recent.iter().filter_map(parent).chain(holding).filter(|parent| automatic(&parent.kind) && parent.id != run.id).map(|parent| parent.id.as_str()).collect::<std::collections::HashSet<_>>();
         if turns.len() >= AUTOMATIC_SPAWN_TURNS_PER_WINDOW {
             return Err("Agents woken by Control events have spawned enough helpers this hour. Report the blocker to the operator, or continue an existing child with control_agent_message.");
         }
@@ -932,5 +933,24 @@ mod tests {
         let fresh = s.runtime.runs.last().unwrap().clone();
         assert!(spawn_rate(&s, &fresh, 1, 10 * SPAWN_WINDOW_MS).is_ok());
         assert!(spawn_rate(&s, &fresh, 2, 10 * SPAWN_WINDOW_MS).is_err(), "the unmaterialized blocking child is reserved");
+    }
+
+    #[test]
+    fn automatic_turns_holding_reservations_count_toward_the_cap() {
+        let mut s = active(Action::Task);
+        let lead = s.chats[0].id.clone();
+        for index in 0..AUTOMATIC_SPAWN_TURNS_PER_WINDOW {
+            let mut turn = s.runtime.runs[0].clone();
+            turn.id = format!("woken-{index}");
+            turn.kind = "agent-completion".into();
+            turn.chat_id = Some(lead.clone());
+            turn.status = "running".into();
+            s.runtime.runs.push(turn);
+            request_with_save(&mut s, &format!("woken-{index}"), "n", input(Role::Worker), |_| Ok(())).unwrap();
+        }
+        let mut next = s.runtime.runs[0].clone();
+        next.id = "woken-next".into();
+        next.kind = "agent-completion".into();
+        assert!(spawn_rate(&s, &next, 1, 10 * SPAWN_WINDOW_MS).is_err(), "unmaterialized reservations from woken turns count");
     }
 }
