@@ -315,6 +315,7 @@ pub fn save_with(
 }
 #[cfg(test)]
 mod tests {
+    use crate::runtime::RunKind;
     use super::*;
     #[test]
     fn fresh_claude_setup_selects_sonnet_and_reruns_preserve_the_library() {
@@ -448,7 +449,7 @@ mod tests {
         save_with(&mut state, &fields, |_| Ok(())).unwrap();
         state
             .runtime
-            .enqueue("Uses saved selection".into(), "task", "test");
+            .enqueue("Uses saved selection".into(), RunKind::Task, "test");
         fields.insert("action".into(), "edit".into());
         fields.insert("old_model".into(), "sonnet".into());
         fields.insert("model".into(), "opus".into());
@@ -477,7 +478,7 @@ mod tests {
     fn backend_selection_is_captured_and_failed_settings_do_not_reroute_runs() {
         use crate::backend::Backend;
         let mut state = crate::State::default();
-        state.runtime.enqueue("Codex task".into(), "task", "test");
+        state.runtime.enqueue("Codex task".into(), RunKind::Task, "test");
         let fields = HashMap::from([
             ("provider".into(), "claude".into()),
             ("model".into(), "sonnet".into()),
@@ -490,7 +491,7 @@ mod tests {
         );
         assert_eq!(state.runtime.backend, Backend::Codex);
         save_with(&mut state, &fields, |_| Ok(())).unwrap();
-        state.runtime.enqueue("Claude task".into(), "task", "test");
+        state.runtime.enqueue("Claude task".into(), RunKind::Task, "test");
         assert_eq!(state.runtime.runs[0].backend, Backend::Codex);
         assert_eq!(state.runtime.runs[1].backend, Backend::Claude);
         let mut restored: crate::State =
@@ -512,7 +513,7 @@ mod tests {
             ("model".into(), "test-model-one".into()),
         ]);
         save_with(&mut state, &fields, |_| Ok(())).unwrap();
-        state.runtime.enqueue("First".into(), "task", "test");
+        state.runtime.enqueue("First".into(), RunKind::Task, "test");
         fields.insert("model".into(), "test-model-two".into());
         assert!(
             save_with(&mut state, &fields, |_| Err(std::io::Error::other(
@@ -522,7 +523,7 @@ mod tests {
         );
         assert_eq!(state.runtime.configured_model(), "test-model-one");
         save_with(&mut state, &fields, |_| Ok(())).unwrap();
-        state.runtime.enqueue("Second".into(), "task", "test");
+        state.runtime.enqueue("Second".into(), RunKind::Task, "test");
         assert_eq!(
             state.runtime.runs[0].model.as_deref(),
             Some("test-model-one")

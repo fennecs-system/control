@@ -4,6 +4,7 @@
 //! turns. Supervisor state, requested turns and queued runs share one checkpoint.
 mod tools;
 pub use tools::{BotCall, BotOps, Tools};
+use crate::runtime::RunKind;
 use crate::{State, identity, tool_registry::AttemptRef};
 use control_bot::{BotId, Budget, ChatId, Definition, Event, Source, Status, Topic, TurnId};
 use control_effect::machine::{Machine, Now, Planned};
@@ -239,7 +240,7 @@ fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
         "You are running as a persistent bot. You woke because of: {woke}. Read what changed (control_room_notifications for room messages, service status for your services), act on it, coordinate with other agents through control_room_post when useful, and acknowledge processed room updates. Then end your turn; new events will wake you again. Do not loop, poll or sleep inside commands."
     );
     let objective = objective.chars().take(2000).collect::<String>();
-    state.runtime.enqueue_for(objective, "chat", "bot", actor, action)?;
+    state.runtime.enqueue_for(objective, RunKind::BotWake, "bot", actor, action)?;
     let run = state.runtime.runs.last_mut().unwrap();
     run.chat_id = Some(chat.into());
     run.backend = backend;
@@ -505,7 +506,7 @@ fn advance(state: &mut State) -> bool {
         let decided = state.bots.approvals.iter().filter(mine).filter(|a| a.decision != Decision::Pending && !a.acknowledged).cloned().collect::<Vec<_>>();
         let latest = state.runtime.runs.iter().rposition(|run| run.chat_id.as_deref() == Some(requester.as_str()));
         let index = state.runtime.runs.iter().enumerate().map(|(index, run)| (run.id.as_str(), index)).collect::<std::collections::HashMap<_, _>>();
-        let human = |run: &crate::runtime::Run| control_context::agent_policy::MessageSpeaker::for_run_kind(Some(&run.kind)) == control_context::agent_policy::MessageSpeaker::User;
+        let human = |run: &crate::runtime::Run| run.kind.speaker() == control_context::agent_policy::MessageSpeaker::User;
         let resume = latest.filter(|&latest| state.runtime.runs[latest].status == "completed" && decided.iter().any(|a| index.get(a.origin.as_str()).is_some_and(|&origin| {
             crate::rooms::continuation_leaf(state, origin, &index) == Some(latest)
                 || !state.runtime.runs[origin + 1..].iter().any(|run| run.chat_id.as_deref() == Some(requester.as_str()) && human(run))
@@ -524,7 +525,7 @@ fn advance(state: &mut State) -> bool {
             let (actor, action, backend, model, context, lenses) = (latest.actor.clone(), latest.action, latest.backend, latest.model.clone(), latest.context.clone(), latest.lenses.clone());
             let persona = crate::delegation::lineage(latest);
             let grants = crate::services::grants(state, latest);
-            if state.runtime.enqueue_for(objective, "bot-decision", "bot", actor, action).is_err() {
+            if state.runtime.enqueue_for(objective, RunKind::BotDecision, "bot", actor, action).is_err() {
                 continue;
             }
             let run = state.runtime.runs.last_mut().unwrap();
@@ -697,7 +698,7 @@ mod tests {
         assert_eq!(state.runtime.runs.len(), runs);
         assert_eq!(state.bots.room_cursor, 0, "the post is offered again");
         for index in 0..crate::scheduler::MAX_PENDING {
-            state.runtime.enqueue(format!("filler {index}"), "chat", "test");
+            state.runtime.enqueue(format!("filler {index}"), RunKind::Chat, "test");
         }
         reconcile_at(&mut state, 1_000, |_| Ok(())).unwrap();
         assert!(bot_runs(&state).is_empty());
@@ -740,7 +741,7 @@ mod tests {
         let (mut state, chat) = fixture();
         command_at(&mut state, &chat, "on", Now(0)).unwrap();
         for index in 0..crate::scheduler::MAX_PENDING {
-            state.runtime.enqueue(format!("filler {index}"), "chat", "test");
+            state.runtime.enqueue(format!("filler {index}"), RunKind::Chat, "test");
         }
         post(&mut state, Some("c-other"), "while the queue is full");
         reconcile_at(&mut state, 1, |_| Ok(())).unwrap();
@@ -944,7 +945,7 @@ mod tests {
         state.runtime.runs.last_mut().unwrap().status = "completed".into();
         command_at(&mut state, &parent, &format!("deny {id}"), Now(1)).unwrap();
         reconcile_at(&mut state, 2, |_| Ok(())).unwrap();
-        assert_eq!(state.runtime.runs.last().unwrap().kind, "bot-decision");
+        assert_eq!(state.runtime.runs.last().unwrap().kind, RunKind::BotDecision);
     }
     fn ask_last(state: &mut State, nonce: &str, chat: &str) -> io::Result<Value> {
         let run = state.runtime.runs.last().unwrap().id.clone();
@@ -957,10 +958,10 @@ mod tests {
         let (mut state, parent, child) = requester();
         let id = ask(&mut state, "n1", &child, None).unwrap()["request_id"].as_str().unwrap().to_owned();
         finish_requesting_turn(&mut state);
-        crate::chat::enqueue_continuation(&mut state, &parent, 0, "Message from the lead".into(), "agent-message", "agent-message").unwrap();
+        crate::chat::enqueue_continuation(&mut state, &parent, 0, "Message from the lead".into(), RunKind::AgentMessage, "agent-message").unwrap();
         state.runtime.runs.last_mut().unwrap().status = "completed".into();
         command_at(&mut state, &parent, &format!("deny {id}"), Now(1)).unwrap();
         reconcile_at(&mut state, 2, |_| Ok(())).unwrap();
-        assert_eq!(state.runtime.runs.last().unwrap().kind, "bot-decision");
+        assert_eq!(state.runtime.runs.last().unwrap().kind, RunKind::BotDecision);
     }
 }

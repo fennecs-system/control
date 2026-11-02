@@ -1,5 +1,6 @@
 //! Durable design decisions. Asking yields execution; answering queues a fresh
 //! attempt from an immutable checkpoint, never grants additional authority.
+use crate::runtime::RunKind;
 use crate::{chat, identity, runtime, State};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -335,7 +336,7 @@ pub fn answer(
     let notice = state.runtime.notice.clone();
     if let Err(error) = state.runtime.enqueue_for(
         answer.clone(),
-        "design-answer",
+        RunKind::DesignAnswer,
         source,
         actor,
         action,
@@ -557,7 +558,7 @@ pub(crate) mod tests {
         let root = state.runtime.runs[0].id.clone();
         let mut used = state.runtime.runs[0].clone();
         used.id = "already-delegated".into();
-        used.kind = "delegated".into();
+        used.kind = RunKind::Delegated;
         used.status = "completed".into();
         used.question = None;
         used.persona = Some(crate::delegation::Persona {
@@ -675,7 +676,7 @@ pub(crate) mod tests {
     fn answering_at_capacity_replaces_wait_instead_of_exceeding_admission() {
         let (mut state, chat) = paused();
         for _ in 1..crate::scheduler::MAX_PENDING {
-            state.runtime.enqueue("Other task".into(), "task", "test");
+            state.runtime.enqueue("Other task".into(), RunKind::Task, "test");
         }
         assert!(crate::scheduler::admit(&state.runtime).is_err());
         answer(&mut state, &chat, None, "1", "test").unwrap();

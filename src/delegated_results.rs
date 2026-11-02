@@ -421,6 +421,7 @@ fn chunk(text: &str, offset: usize, limit: usize) -> Result<Value, &'static str>
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use crate::runtime::RunKind;
     use super::*;
     use crate::{
         backend::Backend,
@@ -476,7 +477,7 @@ pub(crate) mod tests {
         s.runtime
             .enqueue_for(
                 "Original task".into(),
-                "improve",
+                RunKind::SelfImprovement,
                 "test",
                 Actor::LocalOperator,
                 Action::Improve,
@@ -506,7 +507,7 @@ pub(crate) mod tests {
         });
         let mut child = parent.clone();
         child.id = "child".into();
-        child.kind = "delegated".into();
+        child.kind = RunKind::Delegated;
         child.status = "completed".into();
         child.delegation = None;
         child.chat_id = Some(child_chat);

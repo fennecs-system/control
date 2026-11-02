@@ -1,5 +1,6 @@
 use crate::escape;
 use crate::identity::{self, Action, Actor};
+pub use control_context::agent_policy::RunKind;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -65,7 +66,7 @@ pub struct Run {
     pub action: Action,
     pub id: String,
     pub objective: String,
-    pub kind: String,
+    pub kind: RunKind,
     pub status: String,
     pub source: String,
     pub result: String,
@@ -222,8 +223,8 @@ impl Runtime {
             .map(str::to_owned)
             .unwrap_or_else(|| self.backend.default_model())
     }
-    pub fn enqueue(&mut self, objective: String, kind: &str, source: &str) {
-        let action = if kind == "self-improvement" {
+    pub fn enqueue(&mut self, objective: String, kind: RunKind, source: &str) {
+        let action = if kind == RunKind::SelfImprovement {
             Action::Improve
         } else {
             Action::Task
@@ -237,7 +238,7 @@ impl Runtime {
     pub fn enqueue_for(
         &mut self,
         objective: String,
-        kind: &str,
+        kind: RunKind,
         source: &str,
         actor: Actor,
         action: Action,
@@ -277,7 +278,7 @@ impl Runtime {
             action,
             id: format!("{stamp:x}-{}", self.runs.len()),
             objective,
-            kind: kind.into(),
+            kind,
             source: source.into(),
             status: "queued".into(),
             result: String::new(),
@@ -295,7 +296,7 @@ impl Runtime {
                 .unwrap_or_else(str::to_owned);
         }
         if path == "/task" {
-            self.enqueue(field(f, "objective"), "task", "website");
+            self.enqueue(field(f, "objective"), RunKind::Task, "website");
         }
         if path == "/retry-run" {
             if let Err(message) = crate::scheduler::admit(self) {
@@ -392,7 +393,7 @@ impl Runtime {
 }
 
 fn run_record(run: &Run) -> String {
-    let mut html = format!("<article class='record'><span class='tag'>{}</span><span class='eyebrow'>{} / {}</span><h3>{}</h3><p class='muted tiny'>run {} · {}{}</p>", escape(&run.status), escape(&run.kind), escape(&run.source), escape(&run.objective), escape(&run.id), escape(run.backend.label()), run.model.as_ref().map(|m| format!(" · {}", escape(m))).unwrap_or_default());
+    let mut html = format!("<article class='record'><span class='tag'>{}</span><span class='eyebrow'>{} / {}</span><h3>{}</h3><p class='muted tiny'>run {} · {}{}</p>", escape(&run.status), escape(run.kind.as_str()), escape(&run.source), escape(&run.objective), escape(&run.id), escape(run.backend.label()), run.model.as_ref().map(|m| format!(" · {}", escape(m))).unwrap_or_default());
     if let Some(persona)=&run.persona {
         html.push_str(&format!("<span class='tag'>{} · depth {}</span>",if persona.role==crate::delegation::Role::Judge{"judge · read only"}else{"worker"},persona.depth));
     }
@@ -537,7 +538,7 @@ mod tests {
     fn failed_cancel_form_checkpoint_restores_target_run_and_notice() {
         for status in ["queued", "running"] {
             let mut state = crate::State::default();
-            state.runtime.enqueue("Keep my work".into(), "task", "test");
+            state.runtime.enqueue("Keep my work".into(), RunKind::Task, "test");
             state.runtime.runs[0].status = status.into();
             state.runtime.runs[0].result = "Existing progress".into();
             state.runtime.notice = "Before cancellation".into();
@@ -596,7 +597,7 @@ mod tests {
     #[test]
     fn retry_does_not_repeat_completed_work() {
         let mut rt = Runtime::default();
-        rt.enqueue("Improve review".into(), "self-improvement", "website");
+        rt.enqueue("Improve review".into(), RunKind::SelfImprovement, "website");
         let id = rt.runs[0].id.clone();
         rt.runs[0].status = "completed".into();
         rt.action("/retry-run", &HashMap::from([("id".into(), id)]));

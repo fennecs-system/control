@@ -178,7 +178,7 @@ mod tests {
         let child=crate::chat::create(&mut state);
         state.chats.last_mut().unwrap().parent_chat=Some(parent.clone());
         for (chat,model) in [(&parent,"obsolete"),(&child,"child-model"),(&parent,"<latest>")] {
-            state.runtime.enqueue("Task".into(),"chat","test");
+            state.runtime.enqueue("Task".into(),crate::runtime::RunKind::Chat,"test");
             let run=state.runtime.runs.last_mut().unwrap();
             run.chat_id=Some(chat.clone());run.model=Some(model.into());run.status="completed".into();
         }
@@ -193,13 +193,13 @@ mod tests {
     fn run_pages_render_only_ten_records_and_keep_cursor_boundaries() {
         let mut state=crate::State::default();
         for index in 0..25 {
-            state.runtime.enqueue(format!("task-{index}"),"chat","test");state.runtime.runs.last_mut().unwrap().status="completed".into();
+            state.runtime.enqueue(format!("task-{index}"),crate::runtime::RunKind::Chat,"test");state.runtime.runs.last_mut().unwrap().status="completed".into();
         }
         let newest=state.runtime.runs_page(None,None);assert_eq!(newest.matches("<article class='record'>").count(),10);
         assert!(newest.contains("<h3>task-24</h3>"));assert!(!newest.contains("<h3>task-14</h3>"));assert!(!newest.contains("← Newer"));
         let cursor=state.runtime.runs[15].id.clone();let middle=state.runtime.runs_page(Some(&cursor),None);
         assert_eq!(middle.matches("<article class='record'>").count(),10);assert!(middle.contains("<h3>task-14</h3>"));assert!(middle.contains("<h3>task-5</h3>"));
-        state.runtime.enqueue("new task".into(),"chat","test");assert_eq!(state.runtime.runs_page(Some(&cursor),None),middle);
+        state.runtime.enqueue("new task".into(),crate::runtime::RunKind::Chat,"test");assert_eq!(state.runtime.runs_page(Some(&cursor),None),middle);
         let html=crate::public_render(&state,&crate::fields(&format!("view=runs&older={cursor}")),"none");
         assert!(html.contains(&middle));assert!(super::primary("runs").contains("href='/chats/history' aria-current='page'"));
         let last_cursor=state.runtime.runs[5].id.clone();let last=state.runtime.runs_page(Some(&last_cursor),None);

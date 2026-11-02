@@ -88,7 +88,7 @@ mod tests {
             .runtime
             .enqueue_for(
                 "One task".into(),
-                "task",
+                crate::runtime::RunKind::Task,
                 "test",
                 crate::identity::Actor::LocalOperator,
                 crate::identity::Action::Task,

@@ -1,5 +1,6 @@
 //! Nonblocking admission of a bounded batch. Source is a captured immutable
 //! baseline; a running parent never lends its writable workspace to children.
+use crate::runtime::RunKind;
 use crate::{
     State, chat,
     delegation::{self, Persona, Role},
@@ -294,7 +295,7 @@ fn materialize(state: &mut State, index: usize, batch_index: usize) -> Result<()
         }
         state.runtime.enqueue_for(
             objective.clone(),
-            "spawned",
+            RunKind::Spawned,
             "agent-spawn",
             seed.actor.clone(),
             seed.action,
@@ -669,7 +670,7 @@ pub fn children<'a>(
                 .iter()
                 .find(|run| {
                     run.id == *id
-                        && run.kind == "spawned"
+                        && run.kind == RunKind::Spawned
                         && run.actor == parent.actor
                         && run.action == parent.action
                         && run.persona.as_ref().is_some_and(|p| {
@@ -698,7 +699,7 @@ mod tests {
         s.runtime
             .enqueue_for(
                 "Build a page".into(),
-                "chat",
+                RunKind::Chat,
                 "web",
                 Actor::LocalOperator,
                 Action::Task,
@@ -788,7 +789,7 @@ mod tests {
             .runtime
             .enqueue_for(
                 "Check the agents".into(),
-                "chat",
+                RunKind::Chat,
                 "web",
                 Actor::LocalOperator,
                 Action::Task,
@@ -831,7 +832,7 @@ mod tests {
             s.runtime
                 .enqueue_for(
                     "Pending".into(),
-                    "chat",
+                    RunKind::Chat,
                     "test",
                     Actor::LocalOperator,
                     Action::Task,
@@ -933,7 +934,7 @@ mod tests {
         assert_eq!(s.runtime.runs[0].spawns[0].pending(), 0);
         reconcile(&mut s, |_| Ok(())).unwrap();
         assert_eq!(s.runtime.runs.len(), 52);
-        assert_eq!(s.runtime.runs[51].kind, "agent-completion");
+        assert_eq!(s.runtime.runs[51].kind, RunKind::AgentCompletion);
         reconcile(&mut s, |_| panic!("No completed backlog effects")).unwrap();
     }
     #[test]
@@ -954,7 +955,7 @@ mod tests {
         s.runtime
             .enqueue_for(
                 "Stop the batch".into(),
-                "chat",
+                RunKind::Chat,
                 "test",
                 identity::Actor::LocalOperator,
                 identity::Action::Task,
@@ -1074,7 +1075,7 @@ mod tests {
         s.runtime
             .enqueue_for(
                 "Another team".into(),
-                "chat",
+                RunKind::Chat,
                 "test",
                 identity::Actor::LocalOperator,
                 identity::Action::Task,
@@ -1111,7 +1112,7 @@ mod tests {
         .unwrap();
         let mut next = s.runtime.runs[1].clone();
         next.id = "continued-child".into();
-        next.kind = "delegation-result".into();
+        next.kind = RunKind::DelegationResult;
         next.status = "running".into();
         next.attempts.push(crate::usage::Attempt {
             workspace_id: Some("continued-attempt".into()),

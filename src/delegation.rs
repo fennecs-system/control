@@ -1,5 +1,6 @@
 //! Durable, bounded delegation. A parent releases its model slot before its
 //! child is admitted. Results are feedback, never an implicit merge or grant.
+use crate::runtime::RunKind;
 use crate::{chat, identity, runtime, State};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -82,11 +83,11 @@ pub(crate) fn budget_for(state: &State, run: &runtime::Run, role: Role, addition
         .runs
         .iter()
         .filter(|r| {
-            matches!(r.kind.as_str(), "delegated" | "spawned") && r.persona.as_ref().is_some_and(|p| p.root == persona.root)
+            matches!(r.kind, RunKind::Delegated | RunKind::Spawned) && r.persona.as_ref().is_some_and(|p| p.root == persona.root)
         })
         .collect();
     let reservations=state.runtime.runs.iter().filter(|candidate|root(candidate)==persona.root).map(|candidate|candidate.spawns.iter().map(|batch|batch.reserved()).sum::<usize>() + usize::from(candidate.delegation.as_ref().is_some_and(|d|d.child.is_none()))).sum::<usize>();
-    let delegated=children.iter().filter(|child|child.kind=="delegated").count();
+    let delegated=children.iter().filter(|child|child.kind==RunKind::Delegated).count();
     if delegated.saturating_add(reservations).saturating_add(additional)>state.runtime.execution.max_agents_per_root {
         return Err("Configured per-root agent budget exhausted.");
     }
@@ -108,9 +109,9 @@ fn spawn_rate(state: &State, run: &runtime::Run, additional: usize, now: u64) ->
     let tree = chat::tree(state, chat);
     let cutoff = now.saturating_sub(SPAWN_WINDOW_MS);
     let mine = |candidate: &runtime::Run| candidate.chat_id.as_deref().is_some_and(|id| tree.contains(id));
-    let automatic = |kind: &str| control_context::agent_policy::MessageSpeaker::for_run_kind(Some(kind)) == control_context::agent_policy::MessageSpeaker::Control;
+    let automatic = |kind: &RunKind| kind.speaker() == control_context::agent_policy::MessageSpeaker::Control;
     let recent = state.runtime.runs.iter()
-        .filter(|candidate| matches!(candidate.kind.as_str(), "delegated" | "spawned") && candidate.created_ms().is_some_and(|at| at >= cutoff) && mine(candidate))
+        .filter(|candidate| matches!(candidate.kind, RunKind::Delegated | RunKind::Spawned) && candidate.created_ms().is_some_and(|at| at >= cutoff) && mine(candidate))
         .collect::<Vec<_>>();
     let reserved = |candidate: &runtime::Run| candidate.spawns.iter().map(crate::spawning::Batch::pending).sum::<usize>() + usize::from(candidate.delegation.as_ref().is_some_and(|d| d.child.is_none()));
     let pending = state.runtime.runs.iter().filter(|candidate| (!candidate.spawns.is_empty() || candidate.delegation.is_some()) && mine(candidate)).map(reserved).sum::<usize>();
@@ -305,7 +306,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
             if !resources.contains(&grant) { resources.push(grant); }
         }
         state.runtime.runs[index].status = "continued".into();
-        state.runtime.enqueue_for("Continue the original task using the delegated feedback. Review findings critically; no child edits were applied.".into(),"delegation-result","delegation",parent.actor.clone(),parent.action)?;
+        state.runtime.enqueue_for("Continue the original task using the delegated feedback. Review findings critically; no child edits were applied.".into(),RunKind::DelegationResult,"delegation",parent.actor.clone(),parent.action)?;
         let next = state.runtime.runs.last_mut().unwrap();
         next.chat_id = parent.chat_id.clone();
         next.resource_grants = resources;
@@ -378,7 +379,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
         }
         state.runtime.enqueue_for(
             d.input.objective.clone(),
-            "delegated",
+            RunKind::Delegated,
             "delegation",
             parent.actor.clone(),
             action,
@@ -493,7 +494,7 @@ mod tests {
         s.runtime
             .enqueue_for(
                 "Implement the feature".into(),
-                "task",
+                RunKind::Task,
                 "test",
                 Actor::LocalOperator,
                 action,
@@ -665,7 +666,7 @@ mod tests {
         s.runtime.runs[0].persona = None;
         for _ in 0..s.runtime.execution.max_agents_per_root {
             let mut child = s.runtime.runs[0].clone();
-            child.kind = "delegated".into();
+            child.kind = RunKind::Delegated;
             child.persona = Some(Persona {
                 root: id.clone(),
                 role: Role::Worker,
@@ -810,7 +811,7 @@ mod tests {
             reconcile(&mut s, |_| Ok(())).unwrap();
             let mut next = s.runtime.runs[1].clone();
             next.id.push_str("-continuation");
-            next.kind = "design-answer".into();
+            next.kind = RunKind::DesignAnswer;
             next.status = "queued".into();
             let next_id = next.id.clone();
             s.runtime.runs[1].status = "continued".into();
@@ -858,7 +859,7 @@ mod tests {
         s.runtime
             .enqueue_for(
                 "Later turn".into(),
-                "chat",
+                RunKind::Chat,
                 "test",
                 Actor::LocalOperator,
                 Action::Improve,
@@ -872,21 +873,21 @@ mod tests {
         assert_eq!(s.runtime.runs.len(), 2);
         assert_eq!(crate::scheduler::next(&s.runtime), Some(1));
     }
-    fn tree_with_children(count: usize, at_ms: u64, parent_kind: &str) -> (State, String) {
+    fn tree_with_children(count: usize, at_ms: u64, parent_kind: RunKind) -> (State, String) {
         let mut s = State::default();
         let lead = chat::create(&mut s);
         chat::send(&mut s, &lead, "Lead", "test").unwrap();
         for index in 0..count {
             let mut turn = s.runtime.runs[0].clone();
             turn.id = format!("turn-{index}");
-            turn.kind = parent_kind.into();
+            turn.kind = parent_kind;
             let parent = turn.id.clone();
             s.runtime.runs.push(turn);
             let child = chat::create(&mut s);
             s.chats.last_mut().unwrap().parent_chat = Some(lead.clone());
             chat::send(&mut s, &child, "Helper", "test").unwrap();
             let run = s.runtime.runs.last_mut().unwrap();
-            run.kind = "spawned".into();
+            run.kind = RunKind::Spawned;
             run.id = format!("{:x}-child{index}", u128::from(at_ms) * 1_000_000);
             run.persona = Some(Persona { role: Role::Worker, root: parent.clone(), depth: 1, parent: Some(parent) });
         }
@@ -896,7 +897,7 @@ mod tests {
     #[test]
     fn spawns_are_capped_per_conversation_tree_per_window() {
         let now = 10 * SPAWN_WINDOW_MS;
-        let (mut s, lead) = tree_with_children(3, now - 1_000, "chat");
+        let (mut s, lead) = tree_with_children(3, now - 1_000, RunKind::Chat);
         s.runtime.execution.max_agents_per_root = 4;
         let helper = chat::create(&mut s);
         s.chats.last_mut().unwrap().parent_chat = Some(lead);
@@ -910,12 +911,12 @@ mod tests {
     #[test]
     fn agents_woken_by_control_events_cannot_keep_respawning() {
         let now = 10 * SPAWN_WINDOW_MS;
-        let (s, _) = tree_with_children(AUTOMATIC_SPAWN_TURNS_PER_WINDOW, now - 1_000, "agent-completion");
+        let (s, _) = tree_with_children(AUTOMATIC_SPAWN_TURNS_PER_WINDOW, now - 1_000, RunKind::AgentCompletion);
         let mut woken = s.runtime.runs[0].clone();
-        woken.kind = "agent-completion".into();
+        woken.kind = RunKind::AgentCompletion;
         assert!(spawn_rate(&s, &woken, 1, now).is_err(), "a completion-woken controller re-spawning is capped");
         let mut asked = woken.clone();
-        asked.kind = "chat".into();
+        asked.kind = RunKind::Chat;
         assert!(spawn_rate(&s, &asked, 1, now).is_ok(), "a person asking for more agents is not");
         assert!(spawn_rate(&s, &woken, 1, now + SPAWN_WINDOW_MS).is_ok());
     }
@@ -942,7 +943,7 @@ mod tests {
         for index in 0..AUTOMATIC_SPAWN_TURNS_PER_WINDOW {
             let mut turn = s.runtime.runs[0].clone();
             turn.id = format!("woken-{index}");
-            turn.kind = "agent-completion".into();
+            turn.kind = RunKind::AgentCompletion;
             turn.chat_id = Some(lead.clone());
             turn.status = "running".into();
             s.runtime.runs.push(turn);
@@ -950,7 +951,7 @@ mod tests {
         }
         let mut next = s.runtime.runs[0].clone();
         next.id = "woken-next".into();
-        next.kind = "agent-completion".into();
+        next.kind = RunKind::AgentCompletion;
         assert!(spawn_rate(&s, &next, 1, 10 * SPAWN_WINDOW_MS).is_err(), "unmaterialized reservations from woken turns count");
     }
 }

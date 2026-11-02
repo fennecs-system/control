@@ -85,7 +85,7 @@ pub fn admit(runtime: &Runtime) -> Result<(), &'static str> {
 /// Delegated and spawned agents and automatic bot turns run in the background
 /// lane, whatever their ancestry.
 fn background(run: &crate::runtime::Run) -> bool {
-    run.source == "bot" || run.persona.as_ref().is_some_and(|persona| persona.parent.is_some())
+    matches!(run.kind, crate::runtime::RunKind::BotWake | crate::runtime::RunKind::BotDecision) || run.persona.as_ref().is_some_and(|persona| persona.parent.is_some())
 }
 /// Only each chat's oldest queued turn is a candidate, keeping chat FIFO. Among
 /// candidates, conversation turns start before background agents, and background
@@ -158,6 +158,7 @@ mod qa;
 
 #[cfg(test)]
 mod tests {
+    use crate::runtime::RunKind;
     use super::*;
     use crate::identity::{Action, Actor};
 
@@ -166,7 +167,7 @@ mod tests {
         let mut runtime = Runtime::default();
         runtime.execution.max_parallel_runs = 2;
         for chat in ["a", "a", "b", "c"] {
-            runtime.enqueue("Task".into(), "chat", "test");
+            runtime.enqueue("Task".into(), RunKind::Chat, "test");
             runtime.runs.last_mut().unwrap().chat_id = Some(chat.into());
         }
         assert_eq!(next(&runtime), Some(0));
@@ -271,7 +272,7 @@ mod tests {
             runtime
                 .enqueue_for(
                     format!("Task {n}"),
-                    "chat",
+                    RunKind::Chat,
                     "test",
                     Actor::LocalOperator,
                     Action::Task,
@@ -282,7 +283,7 @@ mod tests {
             runtime
                 .enqueue_for(
                     "Overflow".into(),
-                    "chat",
+                    RunKind::Chat,
                     "test",
                     Actor::LocalOperator,
                     Action::Task
@@ -308,7 +309,7 @@ mod tests {
             parent: parent.map(Into::into),
         });
         let enqueue = |runtime: &mut Runtime, chat: &str, agent: bool| {
-            runtime.enqueue("Task".into(), "chat", "test");
+            runtime.enqueue("Task".into(), RunKind::Chat, "test");
             let run = runtime.runs.last_mut().unwrap();
             run.chat_id = Some(chat.into());
             if agent { run.persona = persona(Some("main")); }
@@ -349,7 +350,7 @@ mod tests {
     #[test]
     fn lane_priority_never_reorders_turns_within_a_chat() {
         let enqueue = |runtime: &mut Runtime, chat: &str, agent: bool| {
-            runtime.enqueue("Task".into(), "chat", "test");
+            runtime.enqueue("Task".into(), RunKind::Chat, "test");
             let run = runtime.runs.last_mut().unwrap();
             run.chat_id = Some(chat.into());
             if agent {
@@ -381,13 +382,13 @@ mod tests {
         let mut runtime = Runtime::default();
         runtime.execution.max_parallel_runs = 2;
         for chat in ["farm", "mine"] {
-            runtime.enqueue("Woke".into(), "chat", "bot");
+            runtime.enqueue("Woke".into(), RunKind::BotWake, "bot");
             runtime.runs.last_mut().unwrap().chat_id = Some(chat.into());
         }
         assert_eq!(next(&runtime), Some(0));
         runtime.runs[0].status = "running".into();
         assert_eq!(next(&runtime), None, "a second bot may not take the last slot");
-        runtime.enqueue("Hello".into(), "chat", "web");
+        runtime.enqueue("Hello".into(), RunKind::Chat, "web");
         runtime.runs.last_mut().unwrap().chat_id = Some("main".into());
         assert_eq!(next(&runtime), Some(2));
     }

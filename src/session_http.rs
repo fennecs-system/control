@@ -393,6 +393,7 @@ pub fn handle(
 
 #[cfg(test)]
 mod tests {
+    use crate::runtime::RunKind;
     #[test]
     fn returning_to_chat_remembers_only_an_existing_authorized_conversation() {
         let mut state=crate::State::default();
@@ -575,7 +576,7 @@ mod tests {
         let child={let mut state=state.lock().unwrap();let mut parent=String::new();
             for index in 0..25 {
                 parent=crate::chat::create(&mut state);state.chats.last_mut().unwrap().title=format!("History thread {index}");
-                state.runtime.enqueue(format!("History run {index}"),"chat","test");state.runtime.runs.last_mut().unwrap().status="completed".into();
+                state.runtime.enqueue(format!("History run {index}"),RunKind::Chat,"test");state.runtime.runs.last_mut().unwrap().status="completed".into();
             }
             let child=crate::chat::create(&mut state);let session=state.chats.last_mut().unwrap();session.parent_chat=Some(parent);session.title="Nested history agent".into();child
         };
