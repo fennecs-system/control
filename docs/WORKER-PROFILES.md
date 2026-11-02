@@ -6,6 +6,10 @@ Existing immutable image pins are replaced only after requested images load.
 New attempts use the new pins; existing services keep their captured images and
 policies. Start a new service to use the new profile.
 
+Both profiles include `ps` and related process-inspection commands from procps.
+Rebuild the images and start new containers to get newly added tools; running
+services keep their captured image.
+
 Lite provides Rust development tools. Full additionally
 bundles Nix, Node/npm, a headless JDK, Python and curl. These third-party runtimes
 execute inside containers. Nix uses pinned local nixpkgs and a seeded single-user
