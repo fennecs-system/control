@@ -17,7 +17,8 @@ fn target<'a>(state: &'a State, port: &Port) -> Option<&'a crate::runtime::Run> 
         || !origin.attempts.iter().any(|attempt|attempt.workspace_id.as_deref()==Some(&port.origin_attempt)) {return None;}
     let root = origin.persona.as_ref().map_or(origin.id.as_str(), |persona|persona.root.as_str());
     let root = state.runtime.runs.iter().find(|run|run.id == root && run.actor == origin.actor && run.action == origin.action)?;
-    if origin.id != root.id && !state.runtime.runs.iter()
+    let continued = origin.chat_id == root.chat_id && origin.persona.as_ref().is_some_and(|persona| persona.parent.is_none());
+    if origin.id != root.id && !continued && !state.runtime.runs.iter()
         .filter(|candidate|candidate.chat_id==root.chat_id && candidate.actor==root.actor)
         .any(|candidate|crate::delegated_results::scope(state,candidate).is_ok_and(|(family,children)|
             family.contains(root.id.as_str()) && (family.contains(origin.id.as_str()) || children.contains(origin.id.as_str())))) { return None; }
@@ -169,6 +170,25 @@ mod tests {
         assert_eq!(state.runtime.runs.len(),3);
         assert_eq!(state.runtime.runs[2].chat_id.as_deref(),Some(chat.as_str()));
         assert_eq!(state.runtime.runs[2].kind,"port-decision");
+    }
+    #[test]
+    fn requests_from_a_resumed_turn_wake_the_conversation_again() {
+        let (mut state,chat)=approved();
+        state.runtime.runs[0].status="completed".into();
+        advance(&mut state,|_|Ok(())).unwrap();
+        let resumed=state.runtime.runs.len()-1;
+        state.runtime.runs[resumed].status="completed".into();
+        state.runtime.runs[resumed].attempts.push(crate::usage::Attempt{workspace_id:Some("attempt-b".into()),..Default::default()});
+        let mut second=state.ports[0].clone();
+        second.id="port-second".to_owned().try_into().unwrap();
+        second.origin_run=state.runtime.runs[resumed].id.clone();
+        second.origin_attempt="attempt-b".into();
+        second.decision=Some(Receipt::pending(true));
+        state.ports.push(second);
+        advance(&mut state,|_|Ok(())).unwrap();
+        assert_eq!(state.runtime.runs.len(),resumed+2,"a second round of approvals resumes the chat");
+        assert_eq!(state.runtime.runs.last().unwrap().chat_id.as_deref(),Some(chat.as_str()));
+        assert!(state.ports[1].decision.as_ref().unwrap().acknowledged);
     }
     #[test]
     fn waiting_chat_does_not_starve_an_independent_ready_callback() {
