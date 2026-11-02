@@ -500,18 +500,16 @@ fn attach_transcript(document: &web_sys::Document) -> Result<(), JsValue> {
 // Refresh only the disclosed picker; keep its scroll and expanded branches.
 fn attach_navigation(document:&web_sys::Document)->Result<(),JsValue> {
     let Some(toggle)=document.query_selector(".conversation-toggle")? else{return Ok(());};
-    // Per-tab presentation state only. Storage may be disabled; native details
-    // still works in that case. Remember clicks before a link changes pages.
-    const OPEN: &str="control.conversations.open";
-    if let Some(storage)=web_sys::window().and_then(|window|window.session_storage().ok().flatten()) {
-        if let Ok(Some(open))=storage.get_item(OPEN) {
-            toggle.toggle_attribute_with_force("open",open=="true")?;
-        }
+    // Presentation state only. The server renders the panel from this cookie,
+    // so the first paint is already correct. Remember clicks before a link
+    // changes pages.
+    if let Ok(html)=document.clone().dyn_into::<web_sys::HtmlDocument>() {
         let target=toggle.clone();
         let remember=Closure::<dyn FnMut(web_sys::Event)>::new(move |event:web_sys::Event| {
             if event.type_()=="click" && event.target().and_then(|node|node.dyn_into::<web_sys::Element>().ok())
                 .and_then(|element|element.closest("a[href]").ok().flatten()).is_none() {return;}
-            let _=storage.set_item(OPEN,if target.has_attribute("open") {"true"}else{"false"});
+            let state=if target.has_attribute("open") {"open"}else{"closed"};
+            let _=html.set_cookie(&format!("control_conversations={state}; Path=/; Max-Age=31536000; SameSite=Strict"));
         });
         for event in ["toggle","click"] {
             toggle.add_event_listener_with_callback(event,remember.as_ref().unchecked_ref())?;

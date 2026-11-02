@@ -8,9 +8,25 @@ fn respond(stream: &mut impl Write, status: &str, mime: &str, body: &str, extra:
 fn respond_chat(stream: &mut impl Write, html: &str) {
     respond_chat_status(stream, "200 OK", html);
 }
+fn cookie<'a>(header: &'a str, name: &str) -> Option<&'a str> {
+    header.lines().filter_map(|line|line.split_once(':'))
+        .filter(|(key,_)|key.eq_ignore_ascii_case("cookie"))
+        .flat_map(|(_,value)|value.split(';'))
+        .filter_map(|cookie|cookie.trim().split_once('='))
+        .find_map(|(key,value)|(key==name).then_some(value))
+}
+/// Render the remembered conversations panel state so it never flashes after load.
+fn session_page(page: &str, header: &str) -> String {
+    let page = page.replace("<body>", "<body class='session-view'>");
+    if cookie(header, "control_conversations") == Some("open") {
+        page.replacen("<details class='conversation-toggle'>", "<details class='conversation-toggle' open>", 1)
+    } else {
+        page
+    }
+}
 /// A chat page; a rejected submission shows its escaped error and keeps the draft.
-fn chat_page(state: &State, lens: &str, id: &str, error: &str, draft: &str) -> String {
-    let page = crate::render(state, "session", lens, id).replace("<body>", "<body class='session-view'>");
+fn chat_page(state: &State, lens: &str, id: &str, error: &str, draft: &str, header: &str) -> String {
+    let page = session_page(&crate::render(state, "session", lens, id), header);
     if error.is_empty() { page } else { chat::rejected(&page, error, draft) }
 }
 fn respond_chat_status(stream: &mut impl Write, status: &str, html: &str) {
@@ -60,7 +76,7 @@ fn send_message(
     if fields.get("message").is_some_and(|message|message.trim()=="/open") {
         match chat::detail(state,id) {
             Ok(_) => respond(stream,"303 See Other","text/plain","",&format!("Location: /chat/{id}/project\r\n")),
-            Err(message) => respond_chat_status(stream,"400 Bad Request",&chat_page(state,lens,id,message,"/open")),
+            Err(message) => respond_chat_status(stream,"400 Bad Request",&chat_page(state,lens,id,message,"/open",header)),
         }
         return;
     }
@@ -79,7 +95,7 @@ fn send_message(
     } else {
         match result {
             Ok(_) => respond(stream,"303 See Other","text/plain","",&format!("Location: /chat/{id}\r\n")),
-            Err(message) => respond_chat_status(stream,"400 Bad Request",&chat_page(state,lens,id,message,fields.get("message").map(String::as_str).unwrap_or(""))),
+            Err(message) => respond_chat_status(stream,"400 Bad Request",&chat_page(state,lens,id,message,fields.get("message").map(String::as_str).unwrap_or(""),header)),
         }
     }
 }
@@ -278,11 +294,7 @@ pub fn handle(
     if path == "/chats" && method == "GET" {
         let query = crate::fields(query);
         if !query.contains_key("new") && !query.contains_key("discuss") && !query.contains_key("improve") {
-            let recent=header.lines().filter_map(|line|line.split_once(':'))
-                .filter(|(name,_)|name.eq_ignore_ascii_case("cookie"))
-                .flat_map(|(_,value)|value.split(';'))
-                .filter_map(|cookie|cookie.trim().split_once('='))
-                .find_map(|(name,id)|(name=="control_recent_chat" && chat::valid_id(id)).then_some(id));
+            let recent=cookie(header,"control_recent_chat").filter(|id|chat::valid_id(id));
             if let Some(id)=recent.filter(|id|chat::detail(state,id).is_ok()) {
                 respond(stream,"303 See Other","text/plain","",&format!("Location: /chat/{id}\r\n"));
                 return true;
@@ -294,9 +306,7 @@ pub fn handle(
             query.get("discuss").map(String::as_str),
             query.get("improve").is_some_and(|v| v == "1"),
         );
-        let page = crate::render(state, "session-list", lens, &html)
-            .replace("<body>", "<body class='session-view'>");
-        respond_chat(stream, &page);
+        respond_chat(stream, &session_page(&crate::render(state, "session-list", lens, &html), header));
         return true;
     }
     if ["/chats", "/chat", "/improve"].contains(&path) && method == "POST" {
@@ -324,7 +334,7 @@ pub fn handle(
             ),
             Err(message) => {
                 let html = chat::rejected(&chat::landing_mode(state, lens, fields.get("design_context").map(String::as_str), false), message, text.map(String::as_str).unwrap_or(""));
-                respond_chat_status(stream, "400 Bad Request", &crate::render(state, "session-list", lens, &html).replace("<body>", "<body class='session-view'>"));
+                respond_chat_status(stream, "400 Bad Request", &session_page(&crate::render(state, "session-list", lens, &html), header));
             }
         }
         return true;
@@ -351,7 +361,7 @@ pub fn handle(
                 "",
                 &format!("Location: /chat/{id}\r\n"),
             ),
-            Err(message) => respond_chat_status(stream, "400 Bad Request", &chat_page(state, lens, id, message, "")),
+            Err(message) => respond_chat_status(stream, "400 Bad Request", &chat_page(state, lens, id, message, "", header)),
         }
     } else if method == "POST" && operation == "messages" {
         let fields = crate::fields(&String::from_utf8_lossy(body));
@@ -381,7 +391,7 @@ pub fn handle(
         }
     } else if method == "GET" && operation.is_empty() {
         match chat::detail(state, id) {
-            Ok(_) => respond_chat_headers(stream,"200 OK",&chat_page(state,lens,id,"",""),
+            Ok(_) => respond_chat_headers(stream,"200 OK",&chat_page(state,lens,id,"","",header),
                 &format!("Set-Cookie: control_recent_chat={id}; Path=/; HttpOnly; SameSite=Strict\r\n")),
             Err(_) if chat::discord_actor(id).is_some_and(|actor|crate::identity::authorize(&actor,crate::identity::Action::Task).is_ok()) => respond(stream,"202 Accepted","text/html; charset=utf-8","<!doctype html><html lang='en'><head><meta http-equiv='refresh' content='2'><title>Control / Chat</title></head><body><p>Waiting for the Discord message…</p></body></html>",""),
             Err(message) => respond(stream, "404 Not Found", "text/plain", message, ""),
@@ -419,6 +429,26 @@ mod tests {
         for header in [&cookie,"Cookie: control_recent_chat=c-missing\r\n","Cookie: control_recent_chat=../../tools\r\n"] {
             let mut response=Vec::new();handle(&mut response,&mut state,"GET","/chats","none",header,&[]);
             assert!(!String::from_utf8(response).unwrap().to_ascii_lowercase().contains("location:"));
+        }
+    }
+    #[test]
+    fn conversations_panel_is_rendered_from_the_remembered_cookie() {
+        let mut state = State::default();
+        let id = chat::create(&mut state);
+        for target in [format!("/chat/{id}"), "/chats?new=1".into()] {
+            for (cookie, open) in [
+                ("", false),
+                ("Cookie: control_conversations=closed\r\n", false),
+                ("Cookie: control_conversations=open'><script>\r\n", false),
+                ("Cookie: lens=x; control_conversations=open\r\n", true),
+            ] {
+                let mut response = Vec::new();
+                handle(&mut response, &mut state, "GET", &target, "none", cookie, &[]);
+                let page = String::from_utf8(response).unwrap();
+                assert_eq!(page.matches("<details class='conversation-toggle").count(), 1, "{target}");
+                assert_eq!(page.contains("<details class='conversation-toggle' open>"), open, "{target} {cookie}");
+                assert!(!page.contains("<script>"));
+            }
         }
     }
     #[test]
