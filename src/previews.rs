@@ -51,7 +51,7 @@ fn name(attempt: &Attempt) -> io::Result<String> {
     ))
 }
 fn query(args: &[&str]) -> io::Result<String> {
-    crate::runtime::docker_query(args)
+    crate::engine::query(args)
 }
 fn launch(preview: &Preview, command: &str, workspace: &Path) -> io::Result<String> {
     if unsafe { libc::getuid() } == 0 {
@@ -422,7 +422,7 @@ fn forward(mut stream: TcpStream, preview: &Preview) -> io::Result<()> {
         .container_id
         .as_deref()
         .ok_or_else(|| fail("Preview container is not captured"))?;
-    let mut child = crate::claude::docker()
+    let mut child = crate::engine::scrubbed()
         .args([
             "exec",
             "--interactive",

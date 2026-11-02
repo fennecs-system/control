@@ -1189,7 +1189,7 @@ mod tests {
                 root.canonicalize().unwrap().display()
             );
 
-            crate::runtime::docker_query(&[
+            crate::engine::query(&[
                 "run",
                 "--rm",
                 "--pull=never",

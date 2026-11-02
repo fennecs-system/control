@@ -44,7 +44,7 @@ pub fn run() -> io::Result<()> {
         crate::web_assets::ready(),
         "use a release binary built with the Rust/WASM assets",
     );
-    let engine = crate::runtime::engine_ready();
+    let engine = crate::engine::ready();
     check(
         "Linux container engine",
         engine,
@@ -72,7 +72,7 @@ pub fn run() -> io::Result<()> {
             },
         );
         if let (true, Some(image)) = (engine, &image) {
-            let installed = crate::runtime::docker_query(&["image", "inspect", image, "--format", "{{.Id}}"]).is_ok();
+            let installed = crate::engine::query(&["image", "inspect", image, "--format", "{{.Id}}"]).is_ok();
             check(&format!("{name}: image installed"), installed, "load the Nix-built image into the engine");
             if installed {
                 // Offline isolation probe with an empty canary credential: no account is mounted and no model is called.

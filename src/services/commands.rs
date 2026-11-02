@@ -476,7 +476,7 @@ fn capture_with(
     })
 }
 pub(super) fn logs(id: &str) -> io::Result<String> {
-    let mut command = Command::new("docker");
+    let mut command = crate::engine::cli();
     command.args(["logs", "--tail", "80", id]);
     let result = capture(command, Duration::from_secs(5), || false, |_| {})?;
     if result.exit_code != Some(0) || result.timed_out {
@@ -562,13 +562,13 @@ fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
             .phase
             .container()
             .ok_or_else(|| fail("Service is not running"))?;
-        let text = crate::runtime::docker_query(&["inspect", "--format", INSPECT, id.as_str()])?;
+        let text = crate::engine::query(&["inspect", "--format", INSPECT, id.as_str()])?;
         let observed: Inspection = serde_json::from_str(text.trim()).map_err(fail)?;
         verify(&service, &observed)?;
         if observed.status != "running" || service.resource.lease.expired(now()) {
             return Err(fail("Service is no longer running"));
         }
-        let mut command = Command::new("docker");
+        let mut command = crate::engine::cli();
         command.args([
             "exec",
             "--user",
