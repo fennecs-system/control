@@ -650,6 +650,7 @@ mod tests {
         ], "lines add up, exits stay a separate reason with the latest code");
     }
 
+    #[cfg(feature = "serde")]
     #[test]
     fn overflowing_streams_are_reported_for_resync_and_survive_persistence() {
         let mut s = Supervisor::default();
