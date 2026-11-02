@@ -93,6 +93,13 @@ impl Watched {
         }
     }
 }
+/// A dropped watch, including during unwinding, never leaves its child running;
+/// the waiter thread still reaps it.
+impl Drop for Watched {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -152,6 +159,23 @@ mod tests {
         assert!(*watched.exited.lock().unwrap());
         watched.kill();
         assert_eq!(observe_exit(1).unwrap_err().raw_os_error(), Some(libc::ECHILD));
+    }
+
+    #[test]
+    fn dropping_a_watch_while_unwinding_kills_and_reaps_the_child() {
+        let child = Command::new("sleep").arg("30").spawn().unwrap();
+        let pid = child.id() as libc::pid_t;
+        let unwound = std::panic::catch_unwind(move || {
+            let _watched = watch(child).unwrap();
+            panic!("supervisor failed");
+        });
+        assert!(unwound.is_err());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            assert!(Instant::now() < deadline, "child still running or unreaped after drop");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
     }
 
     #[test]
