@@ -114,6 +114,7 @@ dependencies = [
  "control-ai",
  "control-context",
  "control-core",
+ "control-effect",
  "control-http",
  "crossterm",
  "libc",
