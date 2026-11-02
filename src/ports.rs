@@ -6,10 +6,13 @@ mod multiplex;
 mod multiplex_transport;
 #[path = "../tools/tcp-relay/protocol.rs"]
 mod protocol;
+mod tools;
+pub use tools::{PortCall, PortOps, Tools};
 use crate::{
     State,
     identity::{self, Action, Actor},
     services::{RelayMode, Service},
+    tool_registry::AttemptRef,
 };
 use control_core::resources::{ContainerId, Generation, NodeId, Phase, ResourceId};
 use serde::{Deserialize, Serialize};
@@ -179,7 +182,7 @@ impl Port {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Input {
+pub struct Input {
     service_id: ResourceId,
     name: Name,
     direction: Direction,
@@ -187,31 +190,6 @@ struct Input {
     target: Option<Endpoint>,
     #[serde(default)]
     peer_port_id: Option<ResourceId>,
-}
-pub struct Tools;
-impl crate::tool_registry::AttemptTools for Tools {
-    fn definitions(&self) -> Vec<Value> {
-        definitions()
-    }
-    fn known(&self, name: &str) -> bool {
-        known(name)
-    }
-    fn call(&self, cx: &crate::tool_registry::AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
-        call(cx.shared, cx.run, cx.generation, cx.nonce, name, args)
-    }
-}
-fn definitions() -> Vec<Value> {
-    vec![
-        json!({"name":"control_port_request","description":"Request operator approval for a named TCP port on an owned or explicitly granted running service. ingress exposes non-HTTP/non-TLS raw service loopback on host 127.0.0.1; HTTP artifacts use control_preview_start. egress exposes a service loopback relay to one approved pinned target, including TLS. Containers remain network=none. To connect two accessible services, request ingress on the listening service, then egress on the connecting service with peer_port_id set to that ingress port_id; the client dials its own 127.0.0.1:service_port. Different owner chats require captured service grants, not just a shared actor. Egress requires exactly one of target or peer_port_id. No traffic until approved; a peer route also needs its ingress approved and ready. Poll control_port_status before connecting. Updated worker images keep one listener alive for up to eight concurrent sessions per port. Start new services from rebuilt images to upgrade older single-session relays. Port lifetime cannot exceed the service lifetime.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"name":{"type":"string","maxLength":48},"direction":{"type":"string","enum":["ingress","egress"]},"service_port":{"type":"integer","minimum":1,"maximum":65535},"target":{"type":"object","properties":{"host":{"type":"string"},"port":{"type":"integer","minimum":1,"maximum":65535}},"required":["host","port"],"additionalProperties":false},"peer_port_id":{"type":"string","description":"Ingress port_id of another owned or explicitly granted service; egress only."}},"required":["service_id","name","direction","service_port"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"openWorldHint":false}}),
-        json!({"name":"control_port_status","description":"Read owned port approvals, readiness, pinned endpoints, assigned loopback addresses and bounded diagnostics. An ingress local_address is reachable only from the host; connect another owned service with an egress peer_port_id route. Omit port_id for active and ten recent terminal records.","inputSchema":{"type":"object","properties":{"port_id":{"type":"string"}},"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
-        json!({"name":"control_port_stop","description":"Persist revocation of an owned port and close its listener/connections. Stopping is intent; inspect until stopped. Never stops the owning service.","inputSchema":{"type":"object","properties":{"port_id":{"type":"string"}},"required":["port_id"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"openWorldHint":false}}),
-    ]
-}
-fn known(name: &str) -> bool {
-    matches!(
-        name,
-        "control_port_request" | "control_port_status" | "control_port_stop"
-    )
 }
 fn accessible(state: &State, port: &Port, run: &crate::runtime::Run, node: &NodeId) -> bool {
     port.node == *node && port.actor == run.actor && state.services.iter().any(|service|
@@ -469,27 +447,15 @@ fn admit(
     }
     Ok(value)
 }
-fn call(
-    shared: &Arc<Mutex<State>>,
-    run: &str,
-    generation: &str,
-    nonce: &str,
-    name: &str,
-    args: &Value,
-) -> io::Result<Value> {
+pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call: PortCall) -> io::Result<Value> {
+    let (run, generation) = (attempt.run, attempt.generation);
     let node = NodeId::try_from(crate::config::node_id().map_err(fail)?).map_err(fail)?;
     let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
-    if name == "control_port_request" {
-        return admit(
-            &mut state,
-            run,
-            generation,
-            nonce,
-            serde_json::from_value(args.clone()).map_err(fail)?,
-            node,
-            crate::storage::save,
-        );
-    }
+    let (stop, port_id) = match call {
+        PortCall::Request(input) => return admit(&mut state, run, generation, attempt.nonce, input, node, crate::storage::save),
+        PortCall::Status(port_id) => (false, port_id),
+        PortCall::Stop(port_id) => (true, port_id),
+    };
     let r = state
         .runtime
         .runs
@@ -505,14 +471,8 @@ fn call(
         return Err(fail("Judge cannot manage ports"));
     }
     r.chat_id.as_ref().ok_or_else(|| fail("A chat is required"))?;
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Id {
-        port_id: Option<ResourceId>,
-    }
-    let id: Id = serde_json::from_value(args.clone()).map_err(fail)?;
     let owned = |p: &&Port| accessible(&state,p,r,&node);
-    if name == "control_port_status" && id.port_id.is_none() {
+    if !stop && port_id.is_none() {
         return Ok(
             json!({"ports":state.ports.iter().filter(owned).filter(|p|p.status!=Status::Stopped).chain(state.ports.iter().rev().filter(owned).filter(|p|p.status==Status::Stopped).take(10)).map(Port::summary).collect::<Vec<_>>()}),
         );
@@ -522,10 +482,10 @@ fn call(
         .iter()
         .position(|p| {
             accessible(&state,p,r,&node)
-                && Some(&p.id) == id.port_id.as_ref()
+                && Some(&p.id) == port_id.as_ref()
         })
         .ok_or_else(|| fail("Owned port not found"))?;
-    if name == "control_port_stop" && state.ports[index].status != Status::Stopped {
+    if stop && state.ports[index].status != Status::Stopped {
         let old = state.ports[index].status;
         state.ports[index].status = Status::Stopping;
         if let Err(e) = crate::storage::save(&state) {

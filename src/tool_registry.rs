@@ -6,11 +6,36 @@ use std::{
 };
 
 pub use control_context::tool_policy::{Bridge, Route};
-pub struct AttemptCall<'a> {
-    pub shared: &'a Arc<Mutex<crate::State>>,
+/// The calling attempt and request identity. Carries no access to state.
+pub struct AttemptRef<'a> {
     pub run: &'a str,
     pub generation: &'a str,
     pub nonce: &'a str,
+}
+/// Typed operations Control offers to tool sets. Authorization, persistence
+/// and fences stay inside the host.
+pub trait Host {
+    fn ports(&self) -> &dyn crate::ports::PortOps;
+    /// Transitional, for tool sets not yet migrated to typed operations.
+    fn legacy_state(&self) -> &Arc<Mutex<crate::State>>;
+}
+pub struct AttemptCall<'a> {
+    pub attempt: AttemptRef<'a>,
+    pub host: &'a dyn Host,
+}
+pub struct LocalHost<'a>(pub &'a Arc<Mutex<crate::State>>);
+impl Host for LocalHost<'_> {
+    fn ports(&self) -> &dyn crate::ports::PortOps {
+        self
+    }
+    fn legacy_state(&self) -> &Arc<Mutex<crate::State>> {
+        self.0
+    }
+}
+impl crate::ports::PortOps for LocalHost<'_> {
+    fn port(&self, attempt: &AttemptRef<'_>, call: crate::ports::PortCall) -> io::Result<Value> {
+        crate::ports::execute(self.0, attempt, call)
+    }
 }
 /// Worker tools bound to one attempt. Calls run without the state lock held.
 pub trait AttemptTools: Sync {
