@@ -592,6 +592,12 @@ mod tests {
         let branch=b.element(".conversation-history .conversation-branch > summary");
         b.post(&format!("/element/{branch}/value"),json!({"text":" "}));
         assert_eq!(b.get(&format!("/element/{nested}/displayed")),true,"The arrow must disclose nested conversations");
+        let parent_row=b.get(&format!("/element/{branch}/rect"));
+        let nested_row=b.get(&format!("/element/{nested}/rect"));
+        assert_eq!(parent_row["x"],nested_row["x"],"Nested highlights must start at the same edge as their parent");
+        assert_eq!(parent_row["width"],nested_row["width"],"Indentation must not narrow the highlighted row");
+        assert!(b.get(&format!("/element/{nested}/css/padding-left")).as_str().unwrap().trim_end_matches("px").parse::<f64>().unwrap()>26.0,"Child labels remain indented inside their full-width rows");
+        assert!((nested_row["y"].as_f64().unwrap()-parent_row["y"].as_f64().unwrap()-parent_row["height"].as_f64().unwrap()).abs()<1.0,"Expanded rows must meet without a vertical gap");
         if let Ok(path)=std::env::var("CONTROL_QA_HISTORY_SCREENSHOT") {
             use base64::Engine;
             let screenshot=b.get("/screenshot");
@@ -620,6 +626,10 @@ mod tests {
             assert!(b.get(&format!("/element/{new_chat}/rect"))["height"].as_f64().unwrap()>=32.0,"New chat must retain its height beside a long expanded team");
             let nav=b.element(".conversation-navigation nav");
             assert!(b.get(&format!("/element/{nav}/property/scrollHeight")).as_i64().unwrap()>b.get(&format!("/element/{nav}/property/clientHeight")).as_i64().unwrap(),"The team list must scroll instead of squeezing controls");
+            let row=b.element(&format!(".conversation-navigation a[href='/chat/{child}']"));
+            let row=b.get(&format!("/element/{row}/rect"));let nav=b.get(&format!("/element/{nav}/rect"));
+            assert_eq!(row["x"],nav["x"],"The active child's highlight spans the picker, including its indentation");
+            assert!((row["width"].as_f64().unwrap()-nav["width"].as_f64().unwrap()).abs()<1.0);
         }
         b.post("/window/rect",json!({"width":1280,"height":900}));
         {let mut state=state.lock().unwrap();crate::chat::create(&mut state);state.chats.last_mut().unwrap().title="Live recent thread".into();}

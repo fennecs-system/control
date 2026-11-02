@@ -121,15 +121,17 @@ fn conversation_window(state:&crate::State,active:&str,older:Option<&str>,newer:
     for (position,entry) in selected.iter().enumerate() {
         while branches.last().is_some_and(|depth| *depth>=entry.depth) {links.push_str("</div></details>");branches.pop();}
         let chat=entry.session;
+        // Keep very deep threads readable without narrowing their row backgrounds.
+        let depth=entry.depth.min(8);
         let title=crate::escape(&chat.title);
         let current=if chat.id==active {" aria-current='page'"}else{""};
         let metadata=latest.get(chat.id.as_str()).map(|run| {
             let model=run.model.as_deref().map(|model|format!(" · {}",crate::escape(model))).unwrap_or_default();
             format!("<span class='conversation-meta'>{} · {}{model}</span>",crate::escape(&run.status),crate::escape(run.backend.label()))
         }).unwrap_or_default();
-        let link=format!("<a class='conversation-link' href='/chat/{}' title='{title}'{current}><span class='conversation-title'>{title}</span>{metadata}</a>",chat.id);
+        let link=format!("<a class='conversation-link' href='/chat/{}' title='{title}' data-conversation-depth='{depth}'{current}><span class='conversation-title'>{title}</span>{metadata}</a>",chat.id);
         if selected.get(position+1).is_some_and(|next|next.depth>entry.depth) {
-            links.push_str(&format!("<details class='conversation-branch' data-chat-branch='{}'{}><summary>{link}</summary><div class='conversation-children'>",chat.id,if expanded.contains(chat.id.as_str()) {" open"}else{""}));
+            links.push_str(&format!("<details class='conversation-branch' data-chat-branch='{}'{}><summary data-conversation-depth='{depth}'>{link}</summary><div class='conversation-children'>",chat.id,if expanded.contains(chat.id.as_str()) {" open"}else{""}));
             branches.push(entry.depth);
         }else{links.push_str(&link);}
     }
@@ -185,7 +187,7 @@ mod tests {
         let html=super::history(&state,None,None);
         assert!(html.contains("&lt;latest&gt;") && html.contains("child-model"));
         assert!(!html.contains("obsolete") && !html.contains("<latest>"));
-        assert!(html.contains(&format!("data-chat-branch='{parent}'><summary><a class='conversation-link'")));
+        assert!(html.contains(&format!("data-chat-branch='{parent}'><summary data-conversation-depth='0'><a class='conversation-link'")));
         assert_eq!(html.matches("class='conversation-meta'").count(),2);
         assert!(!super::conversations(&state,&parent).contains("class='conversation-meta'"),"The compact picker does not need per-turn metadata");
     }
