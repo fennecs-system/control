@@ -8,7 +8,9 @@ control tui --directory /absolute/path/to/project
 
 In an existing TUI or web chat, use `/open /absolute/path/to/project`, or expand
 **Open folder** in the web transcript. Review the folder and confirm **Trust
-folder and open**. The TUI shows `/trust REQUEST` for the same confirmation.
+folder and open**. In the TUI, review the prompt at the end of the conversation
+and enter `/trust` (or `/trust REQUEST`) to confirm without opening a browser.
+`/open` reviews the current request; `/open /another/path` replaces it.
 Requests alone do not read or mount files. An agent can request access with
 `control_project_request`; it cannot approve its own request. External MCP clients
 can use `control.project.request` with a chat ID.

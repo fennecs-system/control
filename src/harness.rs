@@ -234,6 +234,10 @@ fn lens_label(detail: &Value) -> String {
         clean(&lenses.join(" + "))
     }
 }
+fn pending_project(detail: &Value) -> Option<&Value> {
+    let project = detail.get("project").filter(|project| project.is_object())?;
+    (project["grant"].is_null() || project["pending"] == true).then_some(project)
+}
 impl App {
     fn refresh(&mut self, hive: &mut Hive) -> io::Result<()> {
         self.chats = hive
@@ -291,15 +295,25 @@ impl App {
                 self.detail=hive.tool("control.chat.read",json!({"id":self.active}))?;
                 self.status="Port decision saved".into();
             }
-            _ if text.starts_with("/trust ")=>{
-                let request=text[7..].trim();
-                if request!=self.detail["project"]["request"].as_str().unwrap_or("") || (self.detail["project"]["grant"].is_string()&&self.detail["project"]["pending"]!=true) {return Err(failure("Project request changed. Use /open to review it."));}
+            "/open" => {
+                if !self.active.is_empty() {
+                    self.detail=hive.tool("control.chat.read",json!({"id":self.active}))?;
+                }
+                self.inspector=None;self.follow=true;self.scroll=u16::MAX;
+                self.status=if pending_project(&self.detail).is_some() {"Review the folder request below; /trust confirms it"}else{"Use /open /absolute/path or /open --as NAME /absolute/path"}.into();
+            }
+            _ if text=="/trust" || text.starts_with("/trust ")=>{
+                let project=pending_project(&self.detail).ok_or_else(||failure("No folder request to approve. Use /open /absolute/path."))?;
+                let displayed=project["request"].as_str().filter(|request|!request.is_empty()).ok_or_else(||failure("Project request changed. Use /open to review it."))?;
+                let request=text.strip_prefix("/trust ").map(str::trim).unwrap_or(displayed).to_owned();
+                if request!=displayed {return Err(failure("Project request changed. Use /open to review it."));}
                 let url=hive.endpoint.trim_end_matches("/mcp");
                 let response=hive.client.post(format!("{url}/chat/{}/project",self.active)).timeout(Duration::from_secs(120))
-                    .header("Origin",url).form(&[("approve","yes"),("request",request)]).send().map_err(|_|failure("Project approval did not finish; refresh before retrying."))?;
-                if response.status().as_u16()!=303 {return Err(failure("Could not open the project. Review its project page in the web UI."));}
-                self.refresh(hive)?;
-                if self.detail["project"]["pending"]==true||!self.detail["project"]["grant"].is_string() {return Err(failure(self.detail["project"]["error"].as_str().unwrap_or("Folder was not opened; review the request.")));}
+                    .header("Origin",url).form(&[("approve","yes"),("request",request.as_str())]).send().map_err(|_|failure("Project approval did not finish; use /open to refresh before retrying."))?;
+                let status=response.status();
+                self.detail=hive.tool("control.chat.read",json!({"id":self.active}))?;
+                if self.detail["project"]["request"]!=request {return Err(failure("Project request changed. Use /open to review it."));}
+                if status.as_u16()!=303 || pending_project(&self.detail).is_some() || !self.detail["project"]["grant"].is_string() {return Err(failure(self.detail["project"]["error"].as_str().unwrap_or("Folder was not opened. Use /open to review it or /open /absolute/path to change it.")));}
                 self.inspector=None;self.status="Folder ready · isolated worktree".into();
             }
             "/quit" => return Ok(true),
@@ -310,7 +324,7 @@ impl App {
                 let lines=self.chats.iter().map(|c|format!("{}\n  /resume {}",c["title"].as_str().unwrap_or("Chat"),c["id"].as_str().unwrap_or(""))).collect::<Vec<_>>().join("\n\n");
                 self.inspector=Some(("Conversations".into(),lines));self.scroll=0;self.follow=false;self.status="↑ ↓ choose · Enter open · Esc back".into();
             }
-            "/help" => self.status = "/chats · /lenses · /use ID ID · /use none · /context · /chat · /new · /resume ID · /improve request · /improve off · /answer QUESTION_ID choice · /steer direction · /btw question · /spawn task · /listen · /listen off · /cancel · Ctrl+Q quit".into(),
+            "/help" => self.status = "/chats · /lenses · /use ID ID · /use none · /context · /chat · /new · /resume ID · /open /path · /trust · /port allow|deny ID · /improve request · /improve off · /answer QUESTION_ID choice · /steer direction · /btw question · /spawn task · /listen · /listen off · /cancel · Ctrl+Q quit".into(),
             "/lenses"=>{
                 let definitions=hive.tool("control.lenses.list",json!({}))?;
                 let entries=definitions.as_array().ok_or_else(||failure("Invalid lens library response."))?.iter().map(|d| (d["name"].as_str().unwrap_or("Lens").into(), d["includes"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" + ")).unwrap_or_default(), d["id"].as_str().unwrap_or("").into())).collect();
@@ -426,14 +440,9 @@ impl App {
         if let Some(project)=self.detail["project"].as_object() {
             let path=clean(project.get("path").and_then(Value::as_str).unwrap_or(""));
             lines.push(Line::styled(format!("Project · {path}"),Style::default().fg(Color::Rgb(181,160,255))));
-            if project.get("grant").is_none_or(Value::is_null)||project.get("pending")==Some(&json!(true)) {
-                lines.push(Line::from("Trust this folder’s code and allow local previews? An isolated worktree keeps the original unchanged; previews have read-only project access and no external network."));
-                lines.push(Line::from(format!("/trust {}",project.get("request").and_then(Value::as_str).unwrap_or(""))));
-                if let Some(error)=project.get("error").and_then(Value::as_str) {lines.push(Line::from(clean(error)));}
-            }
         }
         if let Some(messages) = self.detail["messages"].as_array() {
-            for message in messages {
+            for (position, message) in messages.iter().enumerate() {
                 lines.push(Line::styled(
                     control_context::agent_policy::MessageSpeaker::for_run_kind(message["kind"].as_str()).label(),
                     Style::default().fg(Color::Rgb(181, 160, 255)),
@@ -450,8 +459,19 @@ impl App {
                     ),
                     Style::default().fg(Color::Rgb(140, 218, 203)),
                 ));
+                let folder_reply = (message["run_id"].is_null()
+                    && commands::tail(message["text"].as_str().unwrap_or("").trim(), commands::Kind::Open).is_some()
+                    && message["reply"].as_str().and_then(|reply|reply.strip_prefix("Review and approve folder access: /chat/")).and_then(|path|path.strip_suffix("/project"))==Some(self.active.as_str())).then(|| {
+                    if let Some(mount)=self.detail["project"]["mounts"].as_array().and_then(|mounts|mounts.iter().find(|mount|mount["message_index"].as_u64()==Some(position as u64))) {
+                        format!("Opened /workspace/{}",clean(mount["name"].as_str().unwrap_or("")))
+                    } else if pending_project(&self.detail).is_some_and(|project|project["message_index"].as_u64()==Some(position as u64)) {
+                        "Folder access requested; review the prompt below.".into()
+                    } else {
+                        "Folder request replaced by a later request.".into()
+                    }
+                });
                 lines.extend(
-                    clean(message["reply"].as_str().unwrap_or(""))
+                    clean(folder_reply.as_deref().unwrap_or_else(||message["reply"].as_str().unwrap_or("")))
                         .lines()
                         .map(|s| Line::from(s.to_owned())),
                 );
@@ -522,6 +542,13 @@ impl App {
             let id=clean(port["port_id"].as_str().unwrap_or(""));
             lines.push(Line::from(format!("/port allow {id}{} · /port deny {id}",if port["loopback_required"]==true {" --loopback"}else{""})));
         }}
+        if let Some(project)=pending_project(&self.detail) {
+            lines.push(Line::styled(format!("Folder access requested · {}",clean(project["path"].as_str().unwrap_or(""))),Style::default().fg(Color::Rgb(181,160,255))));
+            lines.push(Line::from(format!("Open as /workspace/{}",clean(project["name"].as_str().unwrap_or("")))));
+            lines.push(Line::from("Trust this folder’s code and allow local previews? Control copies it into an isolated worktree; credentials, generated directories and symlinks are excluded. The original stays unchanged."));
+            if let Some(error)=project["error"].as_str() {lines.push(Line::from(clean(error)));}
+            lines.push(Line::from(format!("/trust {} to approve · /open /absolute/path to change",clean(project["request"].as_str().unwrap_or("")))));
+        }
         Text::from(lines)
     }
 }
@@ -545,7 +572,7 @@ fn resume_selection(args:&[String])->io::Result<Option<&str>> {
 pub fn run() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|s| s == "--help") {
-        println!("control tui [--server {}] [--resume ID] [--directory PATH] [--check]\nAlso available as control-harness. Starts a fresh chat; --resume ID (or --session ID) explicitly resumes one. CONTROL_ADDR sets the default server.\n\n/resume · /open /absolute/path · /trust REQUEST · /lenses · /use ID ID · /use none · /context · /chat · /help", crate::config::server_url());
+        println!("control tui [--server {}] [--resume ID] [--directory PATH] [--check]\nAlso available as control-harness. Starts a fresh chat; --resume ID (or --session ID) explicitly resumes one. CONTROL_ADDR sets the default server.\n\n/resume · /open /absolute/path · /trust [REQUEST] · /port allow|deny ID · /answer QUESTION_ID choice · /lenses · /use ID ID · /use none · /context · /chat · /help", crate::config::server_url());
         return Ok(());
     }
     let option = |name: &str| {
@@ -825,6 +852,79 @@ pub fn run() -> io::Result<()> {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn folder_prompt_stays_at_the_live_tail_and_tracks_replaced_requests() {
+        let mut app=App {active:"c-fixture".into(),detail:json!({
+            "project":{"request":"p-current","path":"/node/current","name":"current","pending":true,"grant":"previous-grant","message_index":2,"mounts":[{"name":"approved","message_index":0}]},
+            "messages":[
+                {"text":"/open /node/approved","reply":"Review and approve folder access: /chat/c-fixture/project"},
+                {"text":"/open /node/replaced","reply":"Review and approve folder access: /chat/c-fixture/project"},
+                {"text":"/open /node/current","reply":"Review and approve folder access: /chat/c-fixture/project"},
+                {"text":"A later message","reply":"Latest response"},
+                {"text":"/open /node/invalid","reply":"The folder could not be read"}
+            ]
+        }),..Default::default()};
+        let transcript=app.transcript().to_string();
+        assert!(transcript.contains("Opened /workspace/approved"));
+        assert!(transcript.contains("Folder request replaced by a later request."));
+        assert!(transcript.contains("/trust p-current to approve"));
+        assert!(transcript.contains("Open as /workspace/current"));
+        assert!(transcript.contains("The folder could not be read"));
+        assert!(transcript.find("Latest response").unwrap()<transcript.find("Folder access requested · /node/current").unwrap());
+        assert!(!transcript.contains("/chat/c-fixture/project"));
+        app.detail["project"]["pending"]=json!(false);
+        assert!(!app.transcript().to_string().contains("/trust"));
+    }
+
+    #[test]
+    fn terminal_folder_approval_uses_displayed_identity_and_retains_errors_without_a_browser() {
+        use std::io::{BufRead,Read};
+        let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr=listener.local_addr().unwrap();
+        let server=std::thread::spawn(move || {
+            for index in 0..5 {
+                let (mut stream,_)=listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut reader=io::BufReader::new(stream.try_clone().unwrap());
+                let mut line=String::new();reader.read_line(&mut line).unwrap();
+                let path=line.split_whitespace().nth(1).unwrap().to_owned();
+                let mut length=0;let mut origin=String::new();
+                loop {line.clear();reader.read_line(&mut line).unwrap();if line=="\r\n"{break;}
+                    if let Some((name,value))=line.split_once(':') {
+                        if name.eq_ignore_ascii_case("content-length"){length=value.trim().parse::<usize>().unwrap();}
+                        if name.eq_ignore_ascii_case("origin"){origin=value.trim().to_owned();}
+                    }
+                }
+                let mut bytes=vec![0;length];reader.read_exact(&mut bytes).unwrap();
+                if index==0 || index==2 {
+                    assert_eq!(path,"/chat/c-fixture/project");assert_eq!(origin,format!("http://{addr}"));
+                    let fields:std::collections::HashMap<_,_>=Url::parse(&format!("http://fixture/?{}",String::from_utf8(bytes).unwrap())).unwrap().query_pairs().into_owned().collect();
+                    assert_eq!(fields.len(),2);assert_eq!(fields["request"],"p-fixture");assert_eq!(fields["approve"],"yes");
+                    control_http::respond(&mut stream,"303 See Other","text/plain",b"","Location: /chat/c-fixture\r\n",control_http::Policy::Embedded).unwrap();
+                }else {
+                    assert_eq!(path,"/mcp");let request:Value=serde_json::from_slice(&bytes).unwrap();
+                    assert_eq!(request["params"]["name"],"control.chat.read");assert_eq!(request["params"]["arguments"],json!({"id":"c-fixture"}));
+                    let project=if index==1 {json!({"request":"p-fixture","path":"/node/project","name":"project","pending":true,"error":"Source is not a directory"})}else{json!({"request":"p-fixture","path":"/node/project","name":"project","pending":false,"grant":"g-fixture"})};
+                    let response=json!({"jsonrpc":"2.0","id":request["id"],"result":{"isError":false,"structuredContent":{"data":{"id":"c-fixture","project":project}}}});
+                    control_http::respond(&mut stream,"200 OK","application/json",response.to_string().as_bytes(),"",control_http::Policy::Embedded).unwrap();
+                }
+            }
+        });
+        let mut hive=Hive {client:Client::builder().redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(3)).build().unwrap(),endpoint:format!("http://{addr}/mcp"),next:0,operator_cookie:HeaderValue::from_static("fixture")};
+        let mut app=App {active:"c-fixture".into(),detail:json!({"project":{"request":"p-fixture","path":"/node/project","name":"project","pending":true}}),input:"/trust p-obsolete".into(),..Default::default()};
+        assert!(app.submit(&mut hive).unwrap_err().to_string().contains("request changed"));
+        app.input="/trust".into();
+        assert_eq!(app.submit(&mut hive).unwrap_err().to_string(),"Source is not a directory");
+        assert!(app.transcript().to_string().contains("Source is not a directory"));
+        app.input="/trust p-fixture".into();app.submit(&mut hive).unwrap();
+        assert_eq!(app.status,"Folder ready · isolated worktree");
+        assert!(!app.transcript().to_string().contains("/trust"));
+        app.input="/trust".into();assert!(app.submit(&mut hive).unwrap_err().to_string().contains("No folder request"));
+        app.input="/open".into();app.submit(&mut hive).unwrap();
+        assert_eq!(app.status,"Use /open /absolute/path or /open --as NAME /absolute/path");
+        server.join().unwrap();
+    }
+
     #[test]
     fn listen_commands_reach_the_server_and_render_returned_state() {
         use std::io::{BufRead, Read};
