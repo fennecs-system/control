@@ -127,28 +127,11 @@ fn transact(
     operation: impl FnOnce(&mut State) -> Result<Value, &'static str>,
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Result<Value, &'static str> {
-    let count = state.chats.len();
     let targets: std::collections::HashSet<_> = id.into_iter().chain(related).collect();
-    let previous = state
-        .chats
-        .iter()
-        .enumerate()
-        .filter(|(_,s)| targets.contains(s.id.as_str()))
-        .map(|(i,s)| (i,s.clone())).collect::<Vec<_>>();
-    let run_count = state.runtime.runs.len();
-    let pending = crate::runtime::RunStatusCheckpoint::capture(&state.runtime, |run| run.chat_id.as_deref().is_some_and(|chat|targets.contains(chat)));
-    let notice = state.runtime.notice.clone();
-    let post_count = state.collective.posts.len();
+    let checkpoint = crate::chat::Checkpoint::capture(state, &targets);
     let result = operation(state);
     if result.is_err() || save(state).is_err() {
-        state.chats.truncate(count);
-        for (index, session) in previous {
-            state.chats[index] = session;
-        }
-        state.runtime.runs.truncate(run_count);
-        pending.restore(&mut state.runtime);
-        state.runtime.notice = notice;
-        state.collective.posts.truncate(post_count);
+        checkpoint.restore(state);
         return result.and(Err("Could not save the chat. Try again."));
     }
     result

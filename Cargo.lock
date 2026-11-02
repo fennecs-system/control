@@ -112,6 +112,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "control-ai",
+ "control-bot",
  "control-context",
  "control-core",
  "control-effect",

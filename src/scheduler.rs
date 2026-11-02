@@ -82,9 +82,10 @@ pub fn admit(runtime: &Runtime) -> Result<(), &'static str> {
     if scheduling::has_capacity(runtime.runs.iter()) { Ok(()) }
     else { Err("Run queue is full (32 pending tasks). Wait for work to finish or cancel a task.") }
 }
-/// Delegated and spawned agents run in the background lane.
+/// Delegated and spawned agents and automatic bot turns run in the background
+/// lane, whatever their ancestry.
 fn background(run: &crate::runtime::Run) -> bool {
-    run.persona.as_ref().is_some_and(|persona| persona.parent.is_some())
+    run.source == "bot" || run.persona.as_ref().is_some_and(|persona| persona.parent.is_some())
 }
 /// Only each chat's oldest queued turn is a candidate, keeping chat FIFO. Among
 /// candidates, conversation turns start before background agents, and background
@@ -374,5 +375,20 @@ mod tests {
         enqueue(&mut tied, "bob", false);
         for run in &mut tied.runs { run.queue_order = 7; }
         assert_eq!(next(&tied), Some(0), "equal queue order falls back to ledger order within a chat");
+    }
+    #[test]
+    fn automatic_bot_turns_of_root_chats_leave_a_slot_for_people() {
+        let mut runtime = Runtime::default();
+        runtime.execution.max_parallel_runs = 2;
+        for chat in ["farm", "mine"] {
+            runtime.enqueue("Woke".into(), "chat", "bot");
+            runtime.runs.last_mut().unwrap().chat_id = Some(chat.into());
+        }
+        assert_eq!(next(&runtime), Some(0));
+        runtime.runs[0].status = "running".into();
+        assert_eq!(next(&runtime), None, "a second bot may not take the last slot");
+        runtime.enqueue("Hello".into(), "chat", "web");
+        runtime.runs.last_mut().unwrap().chat_id = Some("main".into());
+        assert_eq!(next(&runtime), Some(2));
     }
 }

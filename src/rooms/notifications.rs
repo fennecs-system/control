@@ -131,6 +131,9 @@ pub(super) fn call(
             return Ok(json!({"watching":false}));
         }
         if !enabled {
+            if crate::bots::defined(state, &state.collective.room_watches[existing.unwrap()].chat) {
+                return Err("This chat runs a bot, which owns its room inbox. The owner can stop it with /bot off.");
+            }
             if state.collective.room_watches[existing.unwrap()].listener.is_some() {
                 return Err("The owner enabled persistent listening. Use /listen off in this chat to stop it.");
             }
@@ -220,7 +223,7 @@ fn batch_from<'a>(watch: &Watch, history: &'a [super::Post], cursor: usize) -> B
 
 /// Follow only durable continuation receipts, never shared-root guesses or
 /// independent spawned children. Every edge retains the parent's scope.
-fn continuation_leaf(state: &State, origin: usize, runs: &HashMap<&str, usize>) -> Option<usize> {
+pub(crate) fn continuation_leaf(state: &State, origin: usize, runs: &HashMap<&str, usize>) -> Option<usize> {
     if state.runtime.runs[origin].status != "continued" {
         return Some(origin);
     }
@@ -276,6 +279,26 @@ enum Decision {
     Wait,
     Advance(usize),
     Queue(usize),
+}
+
+/// Gives a bot's chat a durable room inbox from the current position. Idempotent;
+/// chats without a room need none.
+pub(crate) fn ensure_inbox(state: &mut State, chat: &str) -> Result<(), &'static str> {
+    let session = state.chats.iter().find(|session| session.id == chat).ok_or("Chat not found.")?;
+    let Some(room) = session.room.clone().filter(|room| super::valid(room)) else { return Ok(()) };
+    let actor = session.actor.clone();
+    if let Some(watch) = state.collective.room_watches.iter().find(|watch| watch.chat == chat) {
+        return if watch.actor == actor && watch.room == room { Ok(()) } else { Err("Room subscription owner or scope changed. Start a new chat.") };
+    }
+    if state.collective.room_watches.len() >= MAX_WATCHES {
+        return Err("Room subscription limit reached (256 chats).");
+    }
+    let cursor = state.collective.posts.len();
+    state.collective.room_watches.push(Watch { chat: chat.into(), actor, room, cursor, wake: None, delivered: None, listener: None });
+    Ok(())
+}
+pub(crate) fn listening(state: &State, chat: &str) -> bool {
+    state.collective.room_watches.iter().any(|watch| watch.chat == chat && watch.listener.as_ref().is_some_and(|listener| !listener.paused()))
 }
 
 /// Runs in the existing supervisor. Planning borrows history once; only armed
@@ -494,6 +517,40 @@ pub fn reconcile(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_bot_turn_stays_open_until_its_continuation_finishes() {
+        let (mut state, _) = fixture();
+        state.runtime.runs[0].status = "completed".into();
+        let chat = state.chats[0].id.clone();
+        crate::bots::command(&mut state, &chat, "on").unwrap();
+        post(&mut state, "research", "operator: can any agent check the logs?", None);
+        crate::bots::reconcile(&mut state, |_| Ok(())).unwrap();
+        let turn = state.runtime.runs.iter().position(|run| run.bot_turn.is_some()).unwrap();
+        running_attempt(&mut state, turn, "bot-attempt");
+        let continuation = answer_question(&mut state, turn);
+        assert_eq!(state.runtime.runs[turn].status, "continued");
+        post(&mut state, "research", "another message", None);
+        crate::bots::reconcile(&mut state, |_| Ok(())).unwrap();
+        assert!(crate::bots::status(&state, &chat).unwrap().contains("working"), "the continuation keeps the turn open");
+        assert_eq!(state.runtime.runs.iter().filter(|run| run.bot_turn.is_some()).count(), 1);
+        state.runtime.runs[continuation].status = "completed".into();
+        crate::bots::reconcile(&mut state, |_| Ok(())).unwrap();
+        assert!(crate::bots::status(&state, &chat).unwrap().contains("sleeping"), "the finished leaf releases the bot");
+    }
+
+    #[test]
+    fn a_bot_owned_inbox_cannot_be_removed_by_its_agent() {
+        let (mut state, run) = fixture();
+        let chat = state.chats[0].id.clone();
+        crate::bots::command(&mut state, &chat, "on").unwrap();
+        assert!(state.collective.room_watches.iter().any(|watch| watch.chat == chat));
+        assert!(call(&mut state, &run, "control_room_watch", &json!({"enabled": false})).is_err());
+        assert!(state.collective.room_watches.iter().any(|watch| watch.chat == chat), "the inbox survives");
+        post(&mut state, "research", "operator: can any agent check the logs?", None);
+        let read = call(&mut state, &run, "control_room_notifications", &json!({})).unwrap();
+        assert!(read.to_string().contains("check the logs"));
+    }
+
     pub(super) fn fixture() -> (State, String) {
         let mut state = State::default();
         let chat = crate::chat::create(&mut state);

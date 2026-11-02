@@ -329,8 +329,16 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
     if crate::shutdown::requested() {
         return Err("Control is stopping; try again after restart.");
     }
+    if let Some(option)=commands::tail(text.trim(),Kind::Bot) {
+        let reply=crate::bots::command(state,id,option)?;
+        let session=state.chats.iter_mut().find(|session|session.id==id).unwrap();
+        session.messages.push(Message{text:text.trim().into(),run_id:None,reply:reply.into()});
+        session.revision=session.revision.saturating_add(1);
+        return Ok(());
+    }
     if let Some(option)=commands::tail(text.trim(),Kind::Listen) {
         let enabled=match option.trim() {""|"on"=>true,"off"=>false,_=>return Err("Use /listen or /listen off.")};
+        if crate::bots::defined(state,id) {return Err("This chat runs a bot, which owns its room inbox. Use /bot off first.");}
         let reply=crate::rooms::listen(state,id,enabled)?;
         let session=state.chats.iter_mut().find(|session|session.id==id).unwrap();
         session.messages.push(Message{text:text.trim().into(),run_id:None,reply:reply.into()});
@@ -640,6 +648,7 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
         value["port_revision"]=json!(crate::ports::decision_revision(state));
         value["agent_activity"]=json!(agent_activity(state,id));
         value["room_listener"]=crate::rooms::listener_status(state,id).unwrap_or(Value::Null);
+        value["bot"]=crate::bots::status(state,id).map_or(Value::Null,Value::from);
         if let Some(messages)=value["messages"].as_array_mut() {
             for message in messages {
                 if let Some(run)=message["run_id"].as_str() {
@@ -690,6 +699,9 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
     html.push_str(&crate::github::panel(state,id));
     if let Some(listener)=crate::rooms::listener_status(state,id) {
         html.push_str(&format!("<p class='message-status'>Room #{} · {}</p>",escape(listener["room"].as_str().unwrap_or("")),escape(listener["state"].as_str().unwrap_or(""))));
+    }
+    if let Some(bot)=crate::bots::status(state,id) {
+        html.push_str(&format!("<p class='message-status'>{}</p>",escape(&bot)));
     }
     let messages = &session.messages;
     for (position, message) in messages.iter().enumerate() {
@@ -904,6 +916,44 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
     }
 }
 
+/// Everything a chat command may change, restored together when the command or
+/// its save fails, whichever transport delivered it.
+pub(crate) struct Checkpoint {
+    chats: usize,
+    previous: Vec<(usize, Session)>,
+    runs: usize,
+    pending: crate::runtime::RunStatusCheckpoint,
+    notice: String,
+    posts: usize,
+    watches: Vec<crate::rooms::Watch>,
+    bots: crate::bots::Bots,
+}
+impl Checkpoint {
+    pub(crate) fn capture(state: &State, targets: &std::collections::HashSet<&str>) -> Self {
+        Self {
+            chats: state.chats.len(),
+            previous: state.chats.iter().enumerate().filter(|(_, s)| targets.contains(s.id.as_str())).map(|(i, s)| (i, s.clone())).collect(),
+            runs: state.runtime.runs.len(),
+            pending: crate::runtime::RunStatusCheckpoint::capture(&state.runtime, |run| run.chat_id.as_deref().is_some_and(|chat| targets.contains(chat))),
+            notice: state.runtime.notice.clone(),
+            posts: state.collective.posts.len(),
+            watches: state.collective.room_watches.clone(),
+            bots: state.bots.clone(),
+        }
+    }
+    pub(crate) fn restore(self, state: &mut State) {
+        state.collective.room_watches = self.watches;
+        state.bots = self.bots;
+        state.chats.truncate(self.chats);
+        for (index, session) in self.previous {
+            state.chats[index] = session;
+        }
+        state.runtime.runs.truncate(self.runs);
+        self.pending.restore(&mut state.runtime);
+        state.runtime.notice = self.notice;
+        state.collective.posts.truncate(self.posts);
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
