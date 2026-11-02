@@ -158,6 +158,9 @@ pub(crate) fn diff_open_child(directory: &fs::File, name: &std::ffi::OsStr) -> i
     Ok(unsafe{fs::File::from_raw_fd(fd)})
 }
 pub(crate) fn diff_directory_names(directory: &fs::File) -> io::Result<Vec<std::ffi::OsString>> {
+    directory_names(directory, Some(2050))
+}
+pub(crate) fn directory_names(directory: &fs::File, limit: Option<usize>) -> io::Result<Vec<std::ffi::OsString>> {
     use std::os::{fd::IntoRawFd,unix::ffi::OsStrExt};
     let fd=directory.try_clone()?.into_raw_fd();
     // fdopendir owns the duplicated descriptor only on success.
@@ -180,7 +183,7 @@ pub(crate) fn diff_directory_names(directory: &fs::File) -> io::Result<Vec<std::
         }
         let name=unsafe{std::ffi::CStr::from_ptr((*entry).d_name.as_ptr())};
         names.push(std::ffi::OsStr::from_bytes(name.to_bytes()).to_owned());
-        if names.len()>2050 {break;}
+        if limit.is_some_and(|limit|names.len()>limit) {break;}
     }
     Ok(names)
 }

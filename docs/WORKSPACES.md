@@ -34,8 +34,12 @@ links and links into the Nix store, are skipped without following their targets.
 Special files are rejected.
 Control configuration/state, known credential files, environment files and common
 generated directories are excluded from the file import. Git history is retained,
-so only trust repositories whose history you intend to expose. An import is bounded to 1 GiB, 100,000
-entries, depth 64 and 2,048 entries in a directory. A failed import grants nothing.
+so only trust repositories whose history you intend to expose. Project imports and
+checkpoints have no byte or entry-count cap; available node storage is the limit.
+The depth-64 guard remains. A failed import grants nothing. Approved folders are
+mounted separately and do not consume a container writable-layer quota. Isolated
+project copies and checkpoints still use node storage; APFS clones share unchanged
+blocks until modified.
 
 Project checkpoints retain full files, executable modes and private Git metadata.
 They are separate from bounded artifact previews. Successful matching attempts

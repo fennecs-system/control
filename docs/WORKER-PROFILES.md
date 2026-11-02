@@ -6,13 +6,13 @@ Existing immutable image pins are replaced only after requested images load.
 New attempts use the new pins; existing services keep their captured images and
 policies. Start a new service to use the new profile.
 
-Lite retains its read-only root and Rust development tools. Full additionally
+Lite provides Rust development tools. Full additionally
 bundles Nix, Node/npm, a headless JDK, Python and curl. These third-party runtimes
 execute inside containers. Nix uses pinned local nixpkgs and a seeded single-user
 database, without a daemon or host store/socket mounts.
 
-Credential-free workspace commands and persistent services using Full have a
-private writable Docker layer. Only the Nix store directory and Nix state are
+Credential-free workspace commands using Full and new persistent services using
+either profile have a private writable Docker layer. In Full, the Nix store directory and Nix state are
 writable by their non-root user; preinstalled store paths remain root-owned,
 protected by the sticky store directory. Model CLI containers stay read-only,
 including when using a Full image. Use workspace tools for Nix package builds.
@@ -29,10 +29,15 @@ Network access remains separately scoped. Nix's internal build sandbox is disabl
 because the enclosing container supplies the isolation boundary; builds cannot
 obtain privileges, host credentials or host daemon access.
 
-Full persistent services use 2 GiB RAM, 128 processes and a 512 MiB private
-executable workspace; Lite retains 512 MiB RAM, 64 processes and 64 MiB workspace.
-Both retain one CPU, bounded scratch filesystems and their existing service lease.
+Full persistent services use 2 GiB RAM and 128 processes; Lite uses 512 MiB RAM and
+64 processes. New services have a disk-backed executable workspace and home, with
+no default disk cap. `/tmp` remains 128 MiB of RAM-backed disposable scratch.
+Both retain one CPU and their service lease.
+An optional `storage_limit_mb` requires Docker quota support and limits only the
+private writable layer, excluding mounts. Existing services keep their captured
+storage policy. See [persistent tools](PERSISTENT-TOOLS.md).
 Workspace commands retain their existing 2 GiB/256-process limits. Nix's private
-store consumes the container engine's disk; there is no separate store quota or
-cross-container cache in this preset. Large builds may need a different declared
+store consumes the container engine's disk and is included in any service
+writable-layer quota. There is no cross-container cache in this preset.
+Large builds may need a different declared
 build environment rather than these defaults.

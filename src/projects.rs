@@ -243,17 +243,13 @@ fn copy_tree(source: &Path, destination: &Path, metadata: bool) -> io::Result<()
         metadata: bool,
         depth: usize,
         git_metadata: bool,
-        counts: &mut (usize, u64),
     ) -> io::Result<()> {
         use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
         if depth > 64 {
             return Err(fail("Project directory depth exceeds 64"));
         }
         fs::DirBuilder::new().mode(0o700).create(destination)?;
-        let mut names = crate::artifacts::diff_directory_names(source)?;
-        if names.len() > 2048 {
-            return Err(fail("A project directory exceeds 2048 entries"));
-        }
+        let mut names = crate::artifacts::directory_names(source, None)?;
         names.sort();
         for name in names {
             if name == "." || name == ".." {
@@ -264,10 +260,6 @@ fn copy_tree(source: &Path, destination: &Path, metadata: bool) -> io::Result<()
                 .ok_or_else(|| fail("Project filenames must be UTF-8"))?;
             if !git_metadata && skip(label, metadata) {
                 continue;
-            }
-            counts.0 += 1;
-            if counts.0 > 100_000 {
-                return Err(fail("Project exceeds 100000 entries"));
             }
             let mut input=match crate::artifacts::diff_open_child(source,&name) {
                 Ok(input)=>input,
@@ -285,16 +277,8 @@ fn copy_tree(source: &Path, destination: &Path, metadata: bool) -> io::Result<()
                     metadata,
                     depth + 1,
                     git_metadata || matches!(label, ".git" | ".control-git"),
-                    counts,
                 )?;
             } else if info.is_file() {
-                counts.1 = counts
-                    .1
-                    .checked_add(info.len())
-                    .ok_or_else(|| fail("Project size overflow"))?;
-                if counts.1 > 1024 * 1024 * 1024 {
-                    return Err(fail("Project exceeds the 1 GiB checkpoint limit"));
-                }
                 #[cfg(target_os = "macos")]
                 {
                     use std::os::fd::AsRawFd;
@@ -350,7 +334,7 @@ fn copy_tree(source: &Path, destination: &Path, metadata: bool) -> io::Result<()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC)
         .open(source)?;
-    walk(&source, destination, metadata, 0, false, &mut (0, 0))
+    walk(&source, destination, metadata, 0, false)
 }
 fn seed(source: &Path, destination: &Path) -> io::Result<()> {
     let source = source.canonicalize()?;
@@ -516,9 +500,11 @@ fn compose(root: &Path, project: &Project, directory: &Path) -> io::Result<()> {
     // Refuse collisions with scratch files as well as previously opened folders.
     if combined.join(&project.name).try_exists()? {return Err(fail("That name is already used in the workspace. Choose another name."));}
     fs::rename(incoming.join("project"),combined.join(&project.name))?;
-    // Reapply the aggregate checkpoint limits before granting the new workspace.
-    copy_tree(&combined,&directory.join("seed"),true)?;
-    fs::remove_dir_all(combined)?;fs::remove_dir_all(incoming)?;
+    // Each input was already copied and validated. Publish without another full
+    // tree copy; the grant's parent is synced before attachment below.
+    fs::rename(combined,directory.join("seed"))?;
+    fs::remove_dir_all(incoming)?;
+    fs::File::open(directory)?.sync_all()?;
     Ok(())
 }
 pub fn publish(attempt: &mut crate::usage::Attempt, workspace: &Path, id: &str) -> io::Result<()> {
@@ -982,6 +968,28 @@ mod tests {
         assert!(!fixture.0.join("checkpoint/escape").exists());
         seed(&source,&fixture.0.join("seed")).unwrap();
         command(&fixture.0.join("seed"),&["status","--porcelain"]);
+    }
+    #[test]
+    #[cfg_attr(not(target_os = "macos"), ignore = "large sparse copy requires a CoW filesystem to stay cheap")]
+    fn project_copy_accepts_files_over_one_gib() {
+        let fixture = Fixture::new();
+        let source = fixture.source();
+        let large = fs::File::create(source.join("large.bin")).unwrap();
+        let length = 1024 * 1024 * 1024 + 1;
+        large.set_len(length).unwrap();
+        let copied = fixture.0.join("large-copy");
+        copy_tree(&source, &copied, false).unwrap();
+        assert_eq!(fs::metadata(copied.join("large.bin")).unwrap().len(), length);
+    }
+    #[test]
+    fn project_copy_keeps_wide_directories_without_truncation() {
+        let fixture = Fixture::new();
+        let source = fixture.source();
+        for n in 0..2100 { fs::write(source.join(format!("file-{n:04}")), "keep").unwrap(); }
+        let copied = fixture.0.join("wide-copy");
+        copy_tree(&source, &copied, false).unwrap();
+        assert_eq!(fs::read_to_string(copied.join("file-2099")).unwrap(), "keep");
+        assert_eq!(fs::read_dir(copied).unwrap().count(), 2100);
     }
     #[test]
     fn plain_folder_first_turn_and_next_checkpoint_create_fresh_run_directories() {

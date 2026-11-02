@@ -35,12 +35,26 @@ The initial scope is deliberately small:
 - No Docker network, provider credentials, Docker socket or host/attempt mounts.
   [Scoped TCP ports](PORTS.md) require separate operator approval and trusted
   relays; they do not enable the container's network namespace.
-- Lite has a read-only root; Full has a private Nix layer. Both use a non-root user, dropped capabilities, no new privileges and
+- New Lite and Full services have a private writable container layer. Both use a non-root user, dropped capabilities, no new privileges and
   a private PID namespace. No automatic container restart.
-- Private writable tmpfs: `/workspace` 64 MiB (Full: 512 MiB), `/tmp` 128 MiB and `/home/agent`
-  32 MiB. Files survive model turns and a Control process restart while the
-  container stays alive; they are not durable storage across container stops,
-  engine restart or machine restart. Attempt checkpoints do not include them.
+- `/workspace` and `/home/agent` use disk-backed container storage with no
+  Control disk cap by default. Only written data consumes space; there is no
+  up-front capacity reservation. Files survive model turns and Control restart,
+  and remain until the container is removed. Attempt checkpoints do not include them.
+  Shared base images remain immutable. Older services retain their captured tmpfs
+  layout and limits; start a new service to use disk storage.
+- `/tmp` remains a 128 MiB RAM-backed tmpfs for disposable scratch. Its contents
+  disappear on container restart and count against the existing memory limit.
+  Larger temporary builds and downloads can use a scratch folder in `/workspace`.
+- Optional `storage_limit_mb` on `control_service_start` asks Docker to enforce a
+  private writable-layer quota in MiB. It excludes separate mounts, including
+  approved project folders, and never measures or limits the host source folder.
+  This requires a quota-capable storage driver (for example, overlay2 on XFS with
+  project quotas). Unsupported caps fail service creation with a diagnostic;
+  Control never silently drops them. The default works without quota support.
+  The engine's available disk and any daemon-wide limits still apply.
+  New disk-backed service records require this version of Control; older
+  binaries cannot read those records when rolling back node state.
 - Eight reserved service slots per node, each limited to one CPU, 512 MiB RAM
   and 64 processes (Full: 2 GiB and 128 processes). Fenced resources retain their reservation.
 - `lease_seconds: -1` (default) retains a service until stopped; use 1–3600
@@ -73,6 +87,14 @@ Docker client alone would not prove its remote writer stopped. A restart never
 replays an in-flight command. Other services remain running. These tools provide
 no host command execution, arbitrary container selection or new network authority.
 Task-specific adapters and server configuration remain outside Control's source.
+
+Use `/workspace` for task files and worktrees, `/tmp` for disposable scratch builds
+and downloads, and `/home/agent` for tool configuration and caches. No `/scratch`
+alias or host-private directory is needed. `/workspace` and home last until
+container removal; `/tmp` is RAM-backed and disposable across container restarts.
+Export anything worth keeping as an artifact or project checkpoint. A service
+exit can trigger supervisor removal, so the writable layer alone is not crash
+recovery or a backup.
 
 ## Lifecycle and recovery
 
