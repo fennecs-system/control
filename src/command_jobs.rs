@@ -2,6 +2,7 @@
 mod tools;
 pub use tools::{JobCall, JobOps, Tools};
 use crate::{tool_registry::AttemptRef, usage::Attempt, State};
+use control_effect::sync::{CancelToken, Recv};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -484,17 +485,16 @@ fn logs(job: &Job) -> io::Result<String> {
             text
         }
     });
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let success = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status.success(),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+    let success = match crate::child::watch(child) {
+        Ok(watched) => match watched.wait(Some(Instant::now() + Duration::from_secs(5)), &CancelToken::new()) {
+            Recv::Item(status) => status.is_ok_and(|status| status.success()),
             _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break false;
+                watched.kill();
+                let _ = watched.wait(None, &CancelToken::new());
+                false
             }
-        }
+        },
+        Err(_) => false,
     };
     let text = drain
         .join()
@@ -632,6 +632,8 @@ fn supervise(shared: Arc<Mutex<State>>, run: String, mut job: Job) {
     job.status = "running".into();
     activity(&shared, &run, &job, true);
     let mut persisted = Instant::now();
+    let shutdown = crate::shutdown::token();
+    let mut exited = exit_waiter(&job);
     loop {
         let inspection = inspect(&job);
         if let Ok(text) = logs(&job) {
@@ -679,8 +681,27 @@ fn supervise(shared: Arc<Mutex<State>>, run: String, mut job: Job) {
         if persist {
             persisted = Instant::now();
         }
-        std::thread::sleep(Duration::from_millis(250));
+        let tick = Some(Instant::now() + Duration::from_millis(250));
+        match exited.as_ref().map(|waiter| waiter.wait(tick, &shutdown)) {
+            Some(Recv::Item(_) | Recv::Closed) => exited = None,
+            Some(Recv::Cancelled | Recv::Elapsed) => {}
+            None => {
+                let _ = shutdown.wait(tick);
+            }
+        }
     }
+}
+/// Wakes the supervisor as soon as the container exits, instead of at the next tick.
+fn exit_waiter(job: &Job) -> Option<crate::child::Watched> {
+    use std::process::Stdio;
+    let child = crate::claude::docker()
+        .args(["wait", job.container_id.as_deref()?])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    crate::child::watch(child).ok()
 }
 
 /// Before any checkpoint, wait for admitted launches and cancel every writer.
