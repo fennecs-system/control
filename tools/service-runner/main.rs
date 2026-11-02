@@ -126,10 +126,10 @@ mod watches {
         collections::{BTreeMap, VecDeque},
         fs,
         io::{Read, Seek, Write},
-        os::unix::{fs::MetadataExt, process::{CommandExt, ExitStatusExt}},
+        os::unix::{fs::{MetadataExt, OpenOptionsExt}, process::{CommandExt, ExitStatusExt}},
         path::{Path, PathBuf},
         process::{Command, ExitCode, ExitStatus, Stdio},
-        sync::{Arc, Mutex},
+        sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex},
         thread::JoinHandle,
         time::{Duration, Instant, SystemTime},
     };
@@ -186,7 +186,9 @@ mod watches {
     }
 
     /// Appends frames with increasing sequence numbers, rotating to one previous
-    /// file past `LOG_BYTES`. The sequence continues across rotation and restart.
+    /// file past `LOG_BYTES`. One per watch ID for the runner's lifetime, so the
+    /// sequence continues across runs, rotation and restart. Writes only regular
+    /// files and never blocks on a FIFO.
     struct Log {
         id: String,
         seq: u64,
@@ -201,13 +203,29 @@ mod watches {
         }
         fn append(&mut self, event: Event) {
             let path = log_path(&self.id);
-            if fs::metadata(&path).is_ok_and(|m| m.len() >= frame::LOG_BYTES) {
+            if fs::symlink_metadata(&path).is_ok_and(|m| m.is_file() && m.len() >= frame::LOG_BYTES) {
                 let _ = fs::rename(&path, previous_log(&self.id));
             }
+            let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).custom_flags(0o4000).open(&path) else { return };
+            if !file.metadata().is_ok_and(|m| m.is_file()) {
+                return;
+            }
             self.seq += 1;
-            let bytes = Frame { seq: self.seq, event }.encode();
-            if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(&path) {
-                let _ = file.write_all(&bytes);
+            let _ = file.write_all(&Frame { seq: self.seq, event }.encode());
+        }
+    }
+    /// A run's share of its watch log: output after the run's exit frame is dropped.
+    #[derive(Clone)]
+    struct Writer {
+        log: Arc<Mutex<Log>>,
+        closed: Arc<AtomicBool>,
+    }
+    impl Writer {
+        fn line(&self, bytes: Vec<u8>) {
+            if let Ok(mut log) = self.log.lock()
+                && !self.closed.load(Ordering::Relaxed)
+            {
+                log.append(Event::Line(bytes));
             }
         }
     }
@@ -215,7 +233,9 @@ mod watches {
     struct Running {
         pid: i32,
         reader: JoinHandle<()>,
+        writer: Writer,
         exited: Option<(ExitStatus, Instant)>,
+        terminated: Option<Instant>,
     }
     struct Watch {
         spec: Spec,
@@ -229,10 +249,12 @@ mod watches {
     #[derive(Default)]
     pub struct Supervisor {
         watches: BTreeMap<String, Watch>,
+        logs: BTreeMap<String, Arc<Mutex<Log>>>,
         seen: Option<SystemTime>,
         scanned: Option<Instant>,
     }
     impl Supervisor {
+        /// Never blocks: log locks are only tried, and retried on the next tick.
         pub fn tick(&mut self) {
             let changed = fs::metadata(directory()).and_then(|m| m.modified()).ok();
             if changed != self.seen || self.scanned.is_none_or(|at| at.elapsed() >= Duration::from_secs(5)) {
@@ -242,16 +264,26 @@ mod watches {
             }
             let now = Instant::now();
             for (id, watch) in &mut self.watches {
-                if let Some(running) = &watch.running
-                    && let Some((status, at)) = running.exited
-                    && (running.reader.is_finished() || at.elapsed() >= Duration::from_secs(2))
-                {
+                let mut ended = false;
+                if let Some(running) = &mut watch.running {
+                    if running.exited.is_none() && running.terminated.is_some_and(|at| now.duration_since(at) >= Duration::from_secs(5)) {
+                        unsafe { super::kill(-running.pid, 9) };
+                    }
+                    if let Some((status, at)) = running.exited
+                        && (running.reader.is_finished() || now.duration_since(at) >= Duration::from_secs(2))
+                        && let Ok(mut log) = running.writer.log.try_lock()
+                    {
+                        running.writer.closed.store(true, Ordering::Relaxed);
+                        exited(id, watch.spec.restart, &mut watch.restarts, &mut watch.restart_at, &mut watch.removed, &mut log, status.code(), status.signal(), now);
+                        ended = true;
+                    }
+                }
+                if ended {
                     watch.running = None;
-                    finish(id, watch, status, now);
                 }
                 if watch.running.is_none() && !watch.removed && watch.restart_at.is_some_and(|at| at <= now) {
                     watch.restart_at = None;
-                    start(id, watch);
+                    start(id, watch, now);
                 }
             }
             self.watches.retain(|_, watch| !(watch.removed && watch.running.is_none()));
@@ -267,12 +299,14 @@ mod watches {
                     present.insert(id.to_owned(), spec);
                 }
             }
+            let now = Instant::now();
             for (id, watch) in &mut self.watches {
                 if present.get(id) != Some(&watch.spec) && !watch.removed {
                     watch.removed = true;
                     watch.restart_at = None;
-                    if let Some(running) = &watch.running {
+                    if let Some(running) = &mut watch.running {
                         unsafe { super::kill(-running.pid, 15) };
+                        running.terminated = Some(now);
                     }
                 }
             }
@@ -280,8 +314,9 @@ mod watches {
                 if self.watches.contains_key(&id) {
                     continue;
                 }
-                let mut watch = Watch { spec, log: Arc::new(Mutex::new(Log::open(&id))), running: None, restarts: VecDeque::new(), restart_at: None, removed: false };
-                start(&id, &mut watch);
+                let log = self.logs.entry(id.clone()).or_insert_with(|| Arc::new(Mutex::new(Log::open(&id)))).clone();
+                let mut watch = Watch { spec, log, running: None, restarts: VecDeque::new(), restart_at: None, removed: false };
+                start(&id, &mut watch, now);
                 self.watches.insert(id, watch);
             }
         }
@@ -299,7 +334,7 @@ mod watches {
         }
     }
 
-    fn start(id: &str, watch: &mut Watch) {
+    fn start(id: &str, watch: &mut Watch, now: Instant) {
         let spawned = Command::new("bash")
             .args(["-c", &format!("exec 2>&1\n{}", watch.spec.command)])
             .current_dir("/workspace")
@@ -307,14 +342,14 @@ mod watches {
             .stdout(Stdio::piped())
             .process_group(0)
             .spawn();
-        let Ok(mut child) = spawned else {
-            watch.log.lock().unwrap().append(Event::Exit { code: Some(127), signal: None, restarts: watch.restarts.len() as u32, gave_up: false });
-            schedule(id, watch, Instant::now());
-            return;
+        let mut child = match spawned {
+            Ok(child) => child,
+            Err(_) => return failed(id, watch, now),
         };
         let stdout = child.stdout.take();
-        let log = watch.log.clone();
-        let reader = std::thread::spawn(move || {
+        let writer = Writer { log: watch.log.clone(), closed: Arc::new(AtomicBool::new(false)) };
+        let output = writer.clone();
+        let reader = std::thread::Builder::new().spawn(move || {
             let Some(mut stdout) = stdout else { return };
             let mut line = Vec::with_capacity(256);
             let mut overflow = false;
@@ -326,7 +361,7 @@ mod watches {
                 for &b in &chunk[..n] {
                     if b == b'\n' {
                         if !overflow {
-                            log.lock().unwrap().append(Event::Line(std::mem::take(&mut line)));
+                            output.line(std::mem::take(&mut line));
                         }
                         line.clear();
                         overflow = false;
@@ -334,46 +369,51 @@ mod watches {
                         line.push(b);
                     } else if !overflow {
                         overflow = true;
-                        log.lock().unwrap().append(Event::Line(std::mem::take(&mut line)));
+                        output.line(std::mem::take(&mut line));
                     }
                 }
             }
             if !line.is_empty() && !overflow {
-                log.lock().unwrap().append(Event::Line(line));
+                output.line(line);
             }
         });
-        watch.running = Some(Running { pid: child.id() as i32, reader, exited: None });
-    }
-    /// Records an exit after the watch's last lines, then restarts a permanent
-    /// watch with backoff or retires it.
-    fn finish(id: &str, watch: &mut Watch, status: ExitStatus, now: Instant) {
-        while watch.restarts.front().is_some_and(|at| now.duration_since(*at) >= Duration::from_secs(frame::RESTART_WINDOW_SECONDS)) {
-            watch.restarts.pop_front();
+        match reader {
+            Ok(reader) => watch.running = Some(Running { pid: child.id() as i32, reader, writer, exited: None, terminated: None }),
+            Err(_) => {
+                unsafe { super::kill(-(child.id() as i32), 9) };
+                failed(id, watch, now);
+            }
         }
-        let restarts = watch.restarts.len() as u32;
-        let permanent = watch.spec.restart == Restart::Permanent && !watch.removed;
-        let gave_up = permanent && restarts >= frame::MAX_RESTARTS;
-        watch.log.lock().unwrap().append(Event::Exit { code: status.code(), signal: status.signal(), restarts, gave_up });
-        if watch.removed {
+    }
+    /// A run that could not start counts as an exit with code 127.
+    fn failed(id: &str, watch: &mut Watch, now: Instant) {
+        let Ok(mut log) = watch.log.try_lock() else {
+            watch.restart_at = Some(now + Duration::from_secs(1));
+            return;
+        };
+        exited(id, watch.spec.restart, &mut watch.restarts, &mut watch.restart_at, &mut watch.removed, &mut log, Some(127), None, now);
+    }
+    /// Records an exit after the run's last lines, then schedules a permanent
+    /// watch's restart with backoff or retires the watch.
+    #[allow(clippy::too_many_arguments)]
+    fn exited(id: &str, restart: Restart, restarts: &mut VecDeque<Instant>, restart_at: &mut Option<Instant>, removed: &mut bool, log: &mut Log, code: Option<i32>, signal: Option<i32>, now: Instant) {
+        while restarts.front().is_some_and(|at| now.duration_since(*at) >= Duration::from_secs(frame::RESTART_WINDOW_SECONDS)) {
+            restarts.pop_front();
+        }
+        let count = restarts.len() as u32;
+        let permanent = restart == Restart::Permanent && !*removed;
+        let gave_up = permanent && count >= frame::MAX_RESTARTS;
+        log.append(Event::Exit { code, signal, restarts: count, gave_up });
+        if *removed {
             return;
         }
-        if gave_up {
-            retire(id, watch);
+        if permanent && !gave_up {
+            *restart_at = Some(now + Duration::from_secs(frame::backoff(count)));
+            restarts.push_back(now);
         } else {
-            schedule(id, watch, now);
+            *removed = true;
+            let _ = fs::remove_file(spec_path(id));
         }
-    }
-    fn schedule(id: &str, watch: &mut Watch, now: Instant) {
-        if watch.spec.restart == Restart::Transient {
-            retire(id, watch);
-            return;
-        }
-        watch.restart_at = Some(now + Duration::from_secs(frame::backoff(watch.restarts.len() as u32)));
-        watch.restarts.push_back(now);
-    }
-    fn retire(id: &str, watch: &mut Watch) {
-        watch.removed = true;
-        let _ = fs::remove_file(spec_path(id));
     }
 
     /// Streams frames after `after` from the previous and current log, then
@@ -424,6 +464,10 @@ mod watches {
                 return ExitCode::SUCCESS;
             }
             if let Ok(mut file) = fs::File::open(log_path(id)) {
+                // Rotated between the metadata check and open: restart from the new file.
+                if file.metadata().is_ok_and(|m| m.ino() != inode) {
+                    continue;
+                }
                 let mut bytes = Vec::new();
                 if file.seek(std::io::SeekFrom::Start(offset)).is_ok() && file.read_to_end(&mut bytes).is_ok() {
                     let complete = bytes.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
