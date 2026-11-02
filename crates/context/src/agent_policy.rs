@@ -13,7 +13,7 @@ pub enum MessageSpeaker {
 impl MessageSpeaker {
     pub fn for_run_kind(kind: Option<&str>) -> Self {
         match kind {
-            Some("delegation-result" | "agent-completion" | "room-notification" | "port-decision" | "agent-message") => Self::Control,
+            Some("delegation-result" | "agent-completion" | "room-notification" | "port-decision" | "agent-message" | "bot-decision") => Self::Control,
             _ => Self::User,
         }
     }

@@ -18,6 +18,7 @@ pub trait MessageOps {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Sent {
     key: String,
+    origin: String,
     chat: String,
     run: String,
 }
@@ -85,25 +86,36 @@ fn handle(state: &mut State, attempt: &AttemptRef<'_>, call: MessageCall, save: 
     }
     let title = state.chats.iter().find(|session| session.id == sender).map_or("", |session| session.title.as_str()).chars().take(80).collect::<String>();
     let objective = format!("Message from the agent that spawned you ({title}, {sender}):\n{text}").chars().take(2000).collect::<String>();
+    let sent = state.agent_messages.clone();
+    if state.agent_messages.len() >= MAX_SENT {
+        let runs = &state.runtime.runs;
+        state.agent_messages.retain(|sent| runs.iter().any(|run| run.id == sent.origin && run.status == "running"));
+        if state.agent_messages.len() >= MAX_SENT {
+            state.agent_messages = sent;
+            return Err(fail("Too many unanswered agent messages; wait for running turns to finish"));
+        }
+    }
     let runs = state.runtime.runs.len();
     let notice = state.runtime.notice.clone();
-    let id = crate::chat::enqueue_continuation(state, &call.chat_id, from, objective, "agent-message", "agent-message").map_err(fail)?;
+    let id = match crate::chat::enqueue_continuation(state, &call.chat_id, from, objective, "agent-message", "agent-message") {
+        Ok(id) => id,
+        Err(error) => {
+            state.agent_messages = sent;
+            return Err(fail(error));
+        }
+    };
     let session = state.chats.iter_mut().find(|session| session.id == call.chat_id).unwrap();
     let (messages, revision) = (session.messages.len(), session.revision);
     session.messages.push(crate::chat::Message { text: format!("Message from {sender}\n{text}"), run_id: Some(id.clone()), reply: String::new() });
     session.revision = revision.saturating_add(1);
-    let evicted = (state.agent_messages.len() >= MAX_SENT).then(|| state.agent_messages.remove(0));
-    state.agent_messages.push(Sent { key, chat: call.chat_id.clone(), run: id.clone() });
+    state.agent_messages.push(Sent { key, origin: attempt.run.into(), chat: call.chat_id.clone(), run: id.clone() });
     if let Err(error) = save(state) {
         state.runtime.runs.truncate(runs);
         state.runtime.notice = notice;
         let session = state.chats.iter_mut().find(|session| session.id == call.chat_id).unwrap();
         session.messages.truncate(messages);
         session.revision = revision;
-        state.agent_messages.pop();
-        if let Some(evicted) = evicted {
-            state.agent_messages.insert(0, evicted);
-        }
+        state.agent_messages = sent;
         return Err(error);
     }
     Ok(json!({"chat_id":call.chat_id,"run_id":id,"queued":true}))
@@ -176,5 +188,20 @@ mod tests {
         let result = handle(&mut state, &AttemptRef { run: &run, generation: "attempt-a", nonce: "n1" }, MessageCall { chat_id: child.clone(), text: "Retry".into() }, |_| Err(io::Error::other("disk full")));
         assert!(result.is_err());
         assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+    }
+
+    #[test]
+    fn receipts_of_running_attempts_are_never_evicted() {
+        let (mut state, _, child, _) = family();
+        let active = state.runtime.runs[0].id.clone();
+        let first = send(&mut state, "n0", &child).unwrap();
+        state.agent_messages.extend((1..MAX_SENT).map(|index| Sent { key: format!("other/{index}"), origin: active.clone(), chat: child.clone(), run: format!("r{index}") }));
+        assert!(send(&mut state, "n1", &child).is_err(), "a full cache of live receipts refuses instead of evicting");
+        assert_eq!(send(&mut state, "n0", &child).unwrap()["run_id"], first["run_id"]);
+        for sent in state.agent_messages.iter_mut().skip(1) {
+            sent.origin = "finished-run".into();
+        }
+        send(&mut state, "n1", &child).unwrap();
+        assert_eq!(send(&mut state, "n0", &child).unwrap()["run_id"], first["run_id"], "stale receipts of finished attempts go first");
     }
 }

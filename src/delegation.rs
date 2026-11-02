@@ -112,8 +112,8 @@ fn spawn_rate(state: &State, run: &runtime::Run, additional: usize, now: u64) ->
     let recent = state.runtime.runs.iter()
         .filter(|candidate| matches!(candidate.kind.as_str(), "delegated" | "spawned") && candidate.created_ms().is_some_and(|at| at >= cutoff) && mine(candidate))
         .collect::<Vec<_>>();
-    let pending = state.runtime.runs.iter().filter(|candidate| !candidate.spawns.is_empty() && mine(candidate))
-        .map(|candidate| candidate.spawns.iter().map(crate::spawning::Batch::pending).sum::<usize>()).sum::<usize>();
+    let reserved = |candidate: &runtime::Run| candidate.spawns.iter().map(crate::spawning::Batch::pending).sum::<usize>() + usize::from(candidate.delegation.as_ref().is_some_and(|d| d.child.is_none()));
+    let pending = state.runtime.runs.iter().filter(|candidate| (!candidate.spawns.is_empty() || candidate.delegation.is_some()) && mine(candidate)).map(reserved).sum::<usize>();
     if recent.len().saturating_add(pending).saturating_add(additional) > state.runtime.execution.max_agents_per_root {
         return Err("Spawn limit for this conversation reached for the past hour. Report the blocker to the operator, or continue an existing child with control_agent_message.");
     }
@@ -917,5 +917,20 @@ mod tests {
         asked.kind = "chat".into();
         assert!(spawn_rate(&s, &asked, 1, now).is_ok(), "a person asking for more agents is not");
         assert!(spawn_rate(&s, &woken, 1, now + SPAWN_WINDOW_MS).is_ok());
+    }
+
+    #[test]
+    fn reserved_blocking_children_count_against_the_tree_window() {
+        let mut s = active(Action::Task);
+        s.runtime.execution.max_agents_per_root = 2;
+        let id = s.runtime.runs[0].id.clone();
+        request_with_save(&mut s, &id, "n", input(Role::Worker), |_| Ok(())).unwrap();
+        let lead = s.chats[0].id.clone();
+        let sibling = chat::create(&mut s);
+        s.chats.last_mut().unwrap().parent_chat = Some(lead);
+        chat::send(&mut s, &sibling, "A fresh root in the same tree", "test").unwrap();
+        let fresh = s.runtime.runs.last().unwrap().clone();
+        assert!(spawn_rate(&s, &fresh, 1, 10 * SPAWN_WINDOW_MS).is_ok());
+        assert!(spawn_rate(&s, &fresh, 2, 10 * SPAWN_WINDOW_MS).is_err(), "the unmaterialized blocking child is reserved");
     }
 }
