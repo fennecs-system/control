@@ -463,7 +463,7 @@ fn advance(state: &mut State) -> bool {
     for requester in requesters {
         let mine = |a: &&Approval| a.requester == requester;
         if state.bots.approvals.iter().filter(mine).any(|a| a.decision == Decision::Pending)
-            || state.runtime.runs.iter().any(|run| run.chat_id.as_deref() == Some(requester.as_str()) && matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling" | "continued"))
+            || state.runtime.runs.iter().any(|run| run.chat_id.as_deref() == Some(requester.as_str()) && matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling"))
         {
             continue;
         }
@@ -875,5 +875,25 @@ mod tests {
         http_with_save(&mut out, &shared, "POST", "/tools/bots", format!("id={id}&return_chat={parent}&deny=yes").as_bytes(), |_| Ok(()));
         assert!(String::from_utf8_lossy(&out).starts_with("HTTP/1.1 400"), "decided requests are not pending");
         assert!(!http_with_save(&mut Vec::new(), &shared, "POST", "/tools/ports", b"", |_| Ok(())));
+    }
+
+    #[test]
+    fn earlier_continued_runs_do_not_block_resuming_the_requester() {
+        let (mut state, parent, child) = requester();
+        let index = state.runtime.runs.len();
+        crate::chat::send(&mut state, &parent, "Earlier delegated work", "test").unwrap();
+        state.runtime.runs[index].status = "continued".into();
+        let requesting = state.runtime.runs.remove(0);
+        state.runtime.runs.push(requesting);
+        let id = ask_last(&mut state, "n1", &child).unwrap()["request_id"].as_str().unwrap().to_owned();
+        state.runtime.runs.last_mut().unwrap().status = "completed".into();
+        command_at(&mut state, &parent, &format!("deny {id}"), Now(1)).unwrap();
+        reconcile_at(&mut state, 2, |_| Ok(())).unwrap();
+        assert_eq!(state.runtime.runs.last().unwrap().kind, "bot-decision");
+    }
+    fn ask_last(state: &mut State, nonce: &str, chat: &str) -> io::Result<Value> {
+        let run = state.runtime.runs.last().unwrap().id.clone();
+        let attempt = AttemptRef { run: &run, generation: "attempt-a", nonce };
+        handle(state, &attempt, BotCall::Request { chat_id: chat.into(), every_minutes: None, room: true }, |_| Ok(()))
     }
 }
