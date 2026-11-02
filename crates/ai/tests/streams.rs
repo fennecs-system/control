@@ -41,6 +41,37 @@ fn visible_messages_are_emitted_with_stable_identity_and_without_reasoning_block
 }
 
 #[test]
+fn claude_tool_calls_become_bounded_activity() {
+    let large = "z".repeat(5000);
+    let records = [
+        json!({"type":"assistant","message":{"id":"claude-1","content":[{"type":"text","text":"Checking."},{"type":"tool_use","id":"toolu_1","name":"mcp__control__control_port_status","input":{}},{"type":"tool_use","id":"toolu_2","name":"mcp__control__control_port_request","input":{}}]}}),
+        json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"{\"ready\":true}\u{001b}"}]}}),
+        json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_2","is_error":true,"content":[{"type":"text","text":"Peer ingress"},{"type":"tool_reference","tool_name":"x"},{"type":"text","text":"is not owned"}]}]}}),
+        json!({"type":"assistant","message":{"id":"claude-2","content":[{"type":"tool_use","id":"toolu_3","name":"mcp__control__control_service_exec_status","input":{}}]}}),
+        json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_3","content":large}]}}),
+        json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"unknown","content":"ignored"}]}}),
+    ].iter().map(ToString::to_string).collect::<Vec<_>>().join("\n");
+    let mut activity = Vec::new();
+    json_lines(format!("{INIT}{records}\n{FINAL}").as_bytes(), Claude::new(ALLOWED), |event| {
+        if let Event::Activity(a) = event { activity.push(a) }
+    })
+    .unwrap();
+    let summary: Vec<_> = activity.iter().map(|a| (a.id.as_str(), a.kind.as_str(), a.text.as_str(), a.status.as_str())).collect();
+    assert_eq!(summary, [
+        ("claude-1", "message", "Checking.", "running"),
+        ("toolu_1", "mcp_tool_call", "control_port_status", "in_progress"),
+        ("toolu_2", "mcp_tool_call", "control_port_request", "in_progress"),
+        ("toolu_1", "mcp_tool_call", "control_port_status", "completed"),
+        ("toolu_2", "mcp_tool_call", "control_port_request", "failed"),
+        ("toolu_3", "mcp_tool_call", "control_service_exec_status", "in_progress"),
+        ("toolu_3", "mcp_tool_call", "control_service_exec_status", "completed"),
+    ]);
+    assert_eq!(activity[3].output, "{\"ready\":true}");
+    assert_eq!(activity[4].output, "Peer ingress\nis not owned");
+    assert_eq!(activity[6].output.chars().count(), 1000);
+}
+
+#[test]
 fn adapters_share_events_and_usage_without_application_state() {
     let output = json_lines(
         format!("{INIT}{FINAL}").as_bytes(),

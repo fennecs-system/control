@@ -15,6 +15,7 @@ pub struct Claude<'a> {
     bad_tools: bool,
     /// Subtype and error text of an unsuccessful result event, for the user.
     failure: Option<String>,
+    tools: Vec<(String, String)>,
 }
 impl Claude<'_> {
     fn event(&mut self, value: &Value) -> Option<Activity> {
@@ -129,6 +130,51 @@ impl Claude<'_> {
         }
         None
     }
+    fn tools(&mut self, value: &Value, emit: &mut dyn FnMut(Event)) {
+        fn clean<'a>(parts: impl Iterator<Item = &'a str>, limit: usize) -> String {
+            parts
+                .enumerate()
+                .flat_map(|(i, part)| (i > 0).then_some('\n').into_iter().chain(part.chars()))
+                .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+                .take(limit)
+                .collect()
+        }
+        let user = match value["type"].as_str() {
+            Some("assistant") => false,
+            Some("user") => true,
+            _ => return,
+        };
+        for block in value["message"]["content"].as_array().into_iter().flatten() {
+            let (id, name, output, status) = match (user, block["type"].as_str()) {
+                (false, Some("tool_use")) => {
+                    let (Some(id), Some(name)) = (block["id"].as_str(), block["name"].as_str()) else { continue };
+                    let name = clean(std::iter::once(name.strip_prefix("mcp__control__").unwrap_or(name)), 2000);
+                    if self.tools.len() >= 64 { self.tools.remove(0); }
+                    self.tools.push((id.to_owned(), name.clone()));
+                    (id, name, String::new(), "in_progress")
+                }
+                (true, Some("tool_result")) => {
+                    let Some(id) = block["tool_use_id"].as_str() else { continue };
+                    let Some(index) = self.tools.iter().position(|(known, _)| known == id) else { continue };
+                    let name = self.tools.remove(index).1;
+                    let content = &block["content"];
+                    let output = match content.as_str() {
+                        Some(text) => clean(std::iter::once(text), 1000),
+                        None => clean(content.as_array().into_iter().flatten().filter_map(|c| c["text"].as_str()), 1000),
+                    };
+                    (id, name, output, if block["is_error"] == true { "failed" } else { "completed" })
+                }
+                _ => continue,
+            };
+            emit(Event::Activity(Activity {
+                id: id.chars().take(100).collect(),
+                kind: "mcp_tool_call".into(),
+                text: name,
+                output,
+                status: status.into(),
+            }));
+        }
+    }
     fn finish_result(self) -> io::Result<(String, Option<Tokens>)> {
         if let Some(failure) = &self.failure {
             return Err(fail(&format!("{failure}.")));
@@ -162,6 +208,7 @@ impl Decoder for Claude<'_> {
         if let Some(activity) = self.event(value) {
             emit(Event::Activity(activity));
         }
+        self.tools(value, emit);
         if self.bad_tools {
             emit(Event::RejectedTools);
         }
