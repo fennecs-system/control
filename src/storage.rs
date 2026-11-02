@@ -104,6 +104,9 @@ fn interrupt_active(state: &mut State) -> bool {
 }
 pub fn save(state: &State) -> io::Result<()> {
     let data = serde_json::to_vec(state).map_err(io::Error::other)?;
+    write_checkpoint(&crate::config::state_directory().map_err(io::Error::other)?, &data)
+}
+fn write_checkpoint(directory: &std::path::Path, data: &[u8]) -> io::Result<()> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -111,15 +114,12 @@ pub fn save(state: &State) -> io::Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let temporary = crate::config::state("state.json.tmp").map_err(io::Error::other)?;
+    let temporary = directory.join("state.json.tmp");
     let mut file = options.open(&temporary)?;
-    file.write_all(&data)?;
+    file.write_all(data)?;
     file.sync_all()?;
-    fs::rename(
-        temporary,
-        crate::config::state("state.json").map_err(io::Error::other)?,
-    )?;
-    fs::File::open(crate::config::state_directory().map_err(io::Error::other)?)?.sync_all()
+    fs::rename(temporary, directory.join("state.json"))?;
+    fs::File::open(directory)?.sync_all()
 }
 
 #[cfg(test)]
@@ -179,5 +179,93 @@ mod tests {
             .runs
             .iter()
             .all(|r| r.attempts[0].artifact.is_none()));
+    }
+    #[test]
+    #[ignore = "manual benchmark: state lock held by a save at 1/3/10 MB, idle and under fsync load; no containers or models"]
+    fn profile_checkpoint_by_state_size() {
+        use std::sync::{Arc, Mutex, atomic::{AtomicBool, AtomicU64, Ordering}};
+        use std::time::{Duration, Instant};
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup { fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); } }
+        struct Background(Arc<AtomicBool>, Vec<std::thread::JoinHandle<()>>);
+        impl Drop for Background {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Relaxed);
+                let failed = self.1.drain(..).map(std::thread::JoinHandle::join).collect::<Vec<_>>().iter().any(Result::is_err);
+                assert!(!failed || std::thread::panicking(), "benchmark background thread failed");
+            }
+        }
+        let root = Cleanup(std::env::temp_dir().join(format!("control-checkpoint-{}", std::process::id())));
+        let load_root = root.0.join("load");
+        fs::create_dir_all(&load_root).unwrap();
+        let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+        let median = |mut samples: Vec<Duration>| { samples.sort(); ms(samples[samples.len() / 2]) };
+        for megabytes in [1usize, 3, 10] {
+            let mut state = State::initial();
+            for n in 0..megabytes * 4 {
+                state.runtime.enqueue(format!("run {n}"), "task", "test");
+                let mut attempt = crate::usage::Attempt::new();
+                for i in 0..64 {
+                    let mut output = format!("{n}-{i} ");
+                    output.extend(std::iter::repeat_n('o', 4000 - output.len()));
+                    attempt.activity.push(crate::usage::Activity { id: i.to_string(), kind: "command_execution".into(), text: "cargo test".into(), output, status: "completed".into() });
+                }
+                let run = state.runtime.runs.last_mut().unwrap();
+                run.attempts.push(attempt);
+                run.status = "completed".into();
+            }
+            let size = serde_json::to_vec(&state).unwrap().len();
+            assert!((megabytes << 20) * 9 / 10 <= size && size <= (megabytes << 20) * 3 / 2, "fixture is {size} bytes");
+            let state = Arc::new(Mutex::new(state));
+            for loaded in [false, true] {
+                let mut background = Background(Arc::new(AtomicBool::new(false)), Vec::new());
+                let syncs = Arc::new(AtomicU64::new(0));
+                if loaded {
+                    let (stop, counter, load_root) = (background.0.clone(), syncs.clone(), load_root.clone());
+                    let (ready, started) = std::sync::mpsc::sync_channel(1);
+                    background.1.push(std::thread::spawn(move || {
+                        let mut n = 0u64;
+                        while !stop.load(Ordering::Relaxed) {
+                            let mut file = fs::File::create(load_root.join((n % 4096).to_string())).unwrap();
+                            file.write_all(&[b'l'; 1024]).unwrap();
+                            file.sync_all().unwrap();
+                            n += 1;
+                            counter.store(n, Ordering::Relaxed);
+                            if n == 1 { let _ = ready.send(()); }
+                        }
+                    }));
+                    started.recv_timeout(Duration::from_secs(10)).expect("fsync load did not start");
+                }
+                let waits = Arc::new(Mutex::new(Vec::new()));
+                {
+                    let (stop, state, waits) = (background.0.clone(), state.clone(), waits.clone());
+                    background.1.push(std::thread::spawn(move || {
+                        while !stop.load(Ordering::Relaxed) {
+                            let started = Instant::now();
+                            drop(state.lock().unwrap());
+                            waits.lock().unwrap().push(started.elapsed());
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                    }));
+                }
+                let before = syncs.load(Ordering::Relaxed);
+                let (mut serialize, mut held) = (Vec::new(), Vec::new());
+                for _ in 0..7 {
+                    let guard = state.lock().unwrap();
+                    let started = Instant::now();
+                    let data = serde_json::to_vec(&*guard).unwrap();
+                    serialize.push(started.elapsed());
+                    write_checkpoint(&root.0, &data).unwrap();
+                    held.push(started.elapsed());
+                    drop(guard);
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                let progressed = syncs.load(Ordering::Relaxed) - before;
+                assert!(!loaded || progressed > 0, "fsync load made no progress while sampling");
+                drop(background);
+                let worst = waits.lock().unwrap().iter().max().copied().unwrap_or_default();
+                println!("state_bytes={size} fsync_load={loaded} load_syncs={progressed} serialize_ms={:.1} lock_held_ms={:.1} reader_max_wait_ms={:.1}", median(serialize), median(held), ms(worst));
+            }
+        }
     }
 }
