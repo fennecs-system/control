@@ -1,7 +1,7 @@
 //! Workspace job tool schemas and input decoding. Attempt fencing, jobs and
 //! checkpoints stay behind `JobOps`.
 use super::Input;
-use crate::tool_registry::{AttemptCall, AttemptRef, AttemptTools};
+use crate::tool_registry::{AttemptCall, AttemptRef, AttemptTools, LocalHost};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::io;
@@ -27,8 +27,17 @@ impl AttemptTools for Tools {
         matches!(name, "control_workspace_start" | "control_workspace_status" | "control_workspace_cancel")
     }
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
-        cx.host.jobs().job(&cx.attempt, decode(name, args)?)
+        run(cx.host, &cx.attempt, name, args)
     }
+}
+impl JobOps for LocalHost<'_> {
+    fn job(&self, attempt: &AttemptRef<'_>, call: JobCall) -> io::Result<Value> {
+        super::execute(self.0, attempt, call)
+    }
+}
+/// Decodes a call and runs it on whatever provides `JobOps`.
+fn run(ops: &dyn JobOps, attempt: &AttemptRef<'_>, name: &str, args: &Value) -> io::Result<Value> {
+    ops.job(attempt, decode(name, args)?)
 }
 fn decode(name: &str, args: &Value) -> io::Result<JobCall> {
     #[derive(Deserialize)]

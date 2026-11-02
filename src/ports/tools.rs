@@ -1,7 +1,7 @@
 //! Port tool schemas and input decoding. Domain rules, authorization and
 //! checkpoints stay behind `PortOps`.
 use super::Input;
-use crate::tool_registry::{AttemptCall, AttemptRef, AttemptTools};
+use crate::tool_registry::{AttemptCall, AttemptRef, AttemptTools, LocalHost};
 use control_core::resources::ResourceId;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -28,8 +28,17 @@ impl AttemptTools for Tools {
         matches!(name, "control_port_request" | "control_port_status" | "control_port_stop")
     }
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
-        cx.host.ports().port(&cx.attempt, decode(name, args)?)
+        run(cx.host, &cx.attempt, name, args)
     }
+}
+impl PortOps for LocalHost<'_> {
+    fn port(&self, attempt: &AttemptRef<'_>, call: PortCall) -> io::Result<Value> {
+        super::execute(self.0, attempt, call)
+    }
+}
+/// Decodes a call and runs it on whatever provides `PortOps`.
+fn run(ops: &dyn PortOps, attempt: &AttemptRef<'_>, name: &str, args: &Value) -> io::Result<Value> {
+    ops.port(attempt, decode(name, args)?)
 }
 fn decode(name: &str, args: &Value) -> io::Result<PortCall> {
     #[derive(Deserialize)]
@@ -49,29 +58,11 @@ fn decode(name: &str, args: &Value) -> io::Result<PortCall> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tool_registry::Host;
     use std::sync::Mutex;
 
     #[derive(Default)]
     struct Recorder {
         calls: Mutex<Vec<String>>,
-    }
-    impl Host for Recorder {
-        fn jobs(&self) -> &dyn crate::command_jobs::JobOps {
-            unreachable!("port tools must not reach job operations")
-        }
-        fn services(&self) -> &dyn crate::services::ServiceOps {
-            unreachable!("port tools must not reach service operations")
-        }
-        fn ports(&self) -> &dyn PortOps {
-            self
-        }
-        fn bots(&self) -> &dyn crate::bots::BotOps {
-            unreachable!("port tools must not reach bot operations")
-        }
-        fn messages(&self) -> &dyn crate::agent_message::MessageOps {
-            unreachable!("port tools must not reach agent messages")
-        }
     }
     impl PortOps for Recorder {
         fn port(&self, attempt: &AttemptRef<'_>, call: PortCall) -> io::Result<Value> {
@@ -89,21 +80,21 @@ mod tests {
     #[test]
     fn port_tools_decode_typed_calls_and_reach_only_the_host_operations() {
         let host = Recorder::default();
-        let cx = AttemptCall { attempt: AttemptRef { run: "run", generation: "gen", nonce: "n1" }, host: &host };
+        let attempt = AttemptRef { run: "run", generation: "gen", nonce: "n1" };
         let request = json!({"service_id":"svc-a","name":"echo","direction":"ingress","service_port":31000});
-        assert_eq!(Tools.call(&cx, "control_port_request", &request).unwrap(), json!({"recorded":true}));
-        Tools.call(&cx, "control_port_status", &json!({})).unwrap();
-        Tools.call(&cx, "control_port_status", &json!({"port_id":"port-1"})).unwrap();
-        Tools.call(&cx, "control_port_stop", &json!({"port_id":"port-1"})).unwrap();
+        assert_eq!(run(&host, &attempt, "control_port_request", &request).unwrap(), json!({"recorded":true}));
+        run(&host, &attempt, "control_port_status", &json!({})).unwrap();
+        run(&host, &attempt, "control_port_status", &json!({"port_id":"port-1"})).unwrap();
+        run(&host, &attempt, "control_port_stop", &json!({"port_id":"port-1"})).unwrap();
         assert_eq!(*host.calls.lock().unwrap(), [
             "run/gen/n1 request svc-a",
             "run/gen/n1 status -",
             "run/gen/n1 status port-1",
             "run/gen/n1 stop port-1",
         ]);
-        assert!(Tools.call(&cx, "control_port_status", &json!({"port_id":"port-1","extra":1})).is_err());
-        assert!(Tools.call(&cx, "control_port_request", &json!({"service_id":"svc-a"})).is_err());
-        assert!(Tools.call(&cx, "control_port_open", &json!({})).is_err());
+        assert!(run(&host, &attempt, "control_port_status", &json!({"port_id":"port-1","extra":1})).is_err());
+        assert!(run(&host, &attempt, "control_port_request", &json!({"service_id":"svc-a"})).is_err());
+        assert!(run(&host, &attempt, "control_port_open", &json!({})).is_err());
         assert_eq!(host.calls.lock().unwrap().len(), 4);
     }
 }

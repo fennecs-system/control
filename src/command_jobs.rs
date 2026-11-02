@@ -1,6 +1,6 @@
 //! Durable, credential-free commands. Model requests select capabilities, never mounts.
 mod tools;
-pub use tools::{JobCall, JobOps, Tools};
+pub use tools::{JobCall, Tools};
 use crate::{tool_registry::AttemptRef, usage::Attempt, State};
 use control_effect::sync::{CancelToken, Recv};
 use serde::{Deserialize, Serialize};
