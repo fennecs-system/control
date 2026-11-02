@@ -195,9 +195,14 @@ mod watches {
     }
     impl Log {
         fn open(id: &str) -> Self {
-            let last = |path: PathBuf| fs::read(path).ok().and_then(|bytes| {
+            let last = |path: PathBuf| -> Option<u64> {
+                let mut file = fs::OpenOptions::new().read(true).custom_flags(0o4000).open(path).ok()?;
+                let length = file.metadata().ok().filter(|m| m.is_file())?.len();
+                file.seek(std::io::SeekFrom::Start(length.saturating_sub(8192))).ok()?;
+                let mut bytes = Vec::new();
+                file.read_to_end(&mut bytes).ok()?;
                 bytes.split(|&b| b == b'\n').filter_map(|line| Frame::decode(line).map(|(frame, _)| frame.seq)).max()
-            });
+            };
             let seq = last(log_path(id)).or_else(|| last(previous_log(id))).unwrap_or(0);
             Self { id: id.into(), seq }
         }
@@ -286,7 +291,14 @@ mod watches {
                     start(id, watch, now);
                 }
             }
-            self.watches.retain(|_, watch| !(watch.removed && watch.running.is_none()));
+            let logs = &mut self.logs;
+            self.watches.retain(|id, watch| {
+                let keep = !(watch.removed && watch.running.is_none());
+                if !keep {
+                    logs.remove(id);
+                }
+                keep
+            });
         }
         fn scan(&mut self) {
             let mut present = BTreeMap::new();
@@ -354,10 +366,20 @@ mod watches {
             let mut line = Vec::with_capacity(256);
             let mut overflow = false;
             let mut chunk = [0u8; 4096];
-            while let Ok(n) = stdout.read(&mut chunk) {
-                if n == 0 {
+            let fd = { use std::os::fd::AsRawFd; stdout.as_raw_fd() };
+            loop {
+                // An escaped descendant may hold the pipe open; stop once the run is closed.
+                if output.closed.load(Ordering::Relaxed) {
                     break;
                 }
+                let mut ready = super::PollFd { fd, events: 1, revents: 0 };
+                if unsafe { super::poll(&mut ready, 1, 500) } <= 0 {
+                    continue;
+                }
+                let n = match stdout.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => n,
+                };
                 for &b in &chunk[..n] {
                     if b == b'\n' {
                         if !overflow {
@@ -388,7 +410,8 @@ mod watches {
     /// A run that could not start counts as an exit with code 127.
     fn failed(id: &str, watch: &mut Watch, now: Instant) {
         let Ok(mut log) = watch.log.try_lock() else {
-            watch.restart_at = Some(now + Duration::from_secs(1));
+            watch.restart_at = Some(now + Duration::from_secs(frame::backoff(watch.restarts.len() as u32)));
+            watch.restarts.push_back(now);
             return;
         };
         exited(id, watch.spec.restart, &mut watch.restarts, &mut watch.restart_at, &mut watch.removed, &mut log, Some(127), None, now);
