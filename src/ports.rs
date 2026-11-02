@@ -1570,6 +1570,24 @@ pub(crate) mod tests {
         );
     }
     #[test]
+    fn an_operator_service_stop_ends_its_approved_ports() {
+        let (mut state, run, _) = fixture();
+        let time = now();
+        request(&mut state,&run,Direction::Ingress).unwrap();
+        let id = state.ports[0].id.as_str().to_owned();
+        approve(&mut state,&id,60,false,None,time,|_|Ok(())).unwrap();
+        assert!(authorized(&state,&state.ports[0],time).is_ok());
+        let service = state.services[0].resource.id.as_str().to_owned();
+        let before = serde_json::to_vec(&state).unwrap();
+        assert!(crate::services::stop(&mut state,&service,time,|_|Err(fail("disk full"))).is_err());
+        assert_eq!(serde_json::to_vec(&state).unwrap(),before,"a failed save keeps the service");
+        crate::services::stop(&mut state,&service,time,|_|Ok(())).unwrap();
+        assert!(matches!(state.services[0].resource.phase,Phase::Stopping{..}));
+        assert!(authorized(&state,&state.ports[0],time).is_err());
+        crate::services::stop(&mut state,&service,time,|_|panic!("already stopping")).unwrap();
+        assert!(crate::services::stop(&mut state,"svc-missing",time,|_|Ok(())).is_err());
+    }
+    #[test]
     fn service_lifetime_approval_is_explicit_revocable_and_survives_reload() {
         let (mut state, run, _) = fixture();
         let time = now();

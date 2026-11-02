@@ -75,6 +75,7 @@ pub const DEFINITIONS: &[Definition] = &[
     Definition { id:"bot-off", text:"/bot off", description:"Stop this chat's bot", architect:false },
     Definition { id:"room", text:"/room general", description:"Attach this chat to a room", architect:false },
     Definition { id:"room-off", text:"/room off", description:"Detach this chat from its room", architect:false },
+    Definition { id:"cancel-all", text:"/cancel all", description:"Stop runs and bots in this chat and every chat it spawned", architect:false },
 ];
 
 #[derive(Debug, PartialEq, Eq)]

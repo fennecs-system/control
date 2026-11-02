@@ -70,6 +70,20 @@ fn record(state: &mut State, effects: Vec<Planned<BotId, Effect>>) {
 pub(crate) fn defined(state: &State, chat: &str) -> bool {
     state.bots.supervisor.status(&bot(chat)).is_some()
 }
+/// Stops every bot running in `chats`; a running turn finishes first.
+pub(crate) fn stop_all(state: &mut State, chats: &[String]) -> usize {
+    let now = Now(now_ms());
+    let mut stopped = 0;
+    for chat in chats {
+        if !defined(state, chat) {
+            continue;
+        }
+        let effects = state.bots.supervisor.step(Event::Stop(bot(chat)), now);
+        record(state, effects);
+        stopped += 1;
+    }
+    stopped
+}
 
 pub(crate) fn status(state: &State, chat: &str) -> Option<String> {
     let id = bot(chat);

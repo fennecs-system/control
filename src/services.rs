@@ -3,6 +3,8 @@
 mod commands;
 mod page;
 pub use page::http;
+#[cfg(test)]
+pub(crate) use page::stop;
 mod tools;
 pub use tools::{ServiceCall, ServiceOps, Tools};
 pub(crate) use commands::activity as command_activity;

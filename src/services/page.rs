@@ -8,17 +8,38 @@ const RECENT_STOPPED: usize = 5;
 const PROCESSES: usize = 20;
 const BUDGET: Duration = Duration::from_secs(3);
 
-pub fn http(stream: &mut TcpStream, shared: &Arc<Mutex<State>>, method: &str, path: &str) -> bool {
+pub fn http(stream: &mut TcpStream, shared: &Arc<Mutex<State>>, method: &str, path: &str, body: &[u8]) -> bool {
     if path != "/tools/services" {
         return false;
     }
-    let result = if method == "GET" { render(shared) } else { Err(fail("Use GET")) };
-    let (status, page) = match result {
-        Ok(page) => ("200 OK", page),
-        Err(error) => ("400 Bad Request", crate::error_page(&error.to_string(), "/tools/services")),
+    let fields = crate::fields(&String::from_utf8_lossy(body));
+    let back = fields.get("return_chat").filter(|id| crate::chat::valid_id(id)).map_or("/tools/services".to_owned(), |chat| format!("/chat/{chat}"));
+    let result = match method {
+        "GET" => render(shared).map(Some),
+        "POST" => fields.get("id").ok_or_else(|| fail("Missing service ID")).and_then(|id| {
+            let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
+            stop(&mut state, id, now(), crate::storage::save)
+        }).map(|()| None),
+        _ => Err(fail("Use GET or POST")),
     };
-    let _ = control_http::respond(stream, status, "text/html; charset=utf-8", page.as_bytes(), "", control_http::Policy::Page);
+    let _ = match result {
+        Ok(Some(page)) => control_http::respond(stream, "200 OK", "text/html; charset=utf-8", page.as_bytes(), "", control_http::Policy::Page),
+        Ok(None) => control_http::respond(stream, "303 See Other", "text/plain", b"", &format!("Location: {back}\r\n"), control_http::Policy::Page),
+        Err(error) => control_http::respond(stream, "400 Bad Request", "text/html; charset=utf-8", crate::error_page(&error.to_string(), &back).as_bytes(), "", control_http::Policy::Page),
+    };
     true
+}
+
+/// The operator's stop: the same transition an owning agent's stop makes. Ports
+/// bound to the service lose authorization with it.
+pub(crate) fn stop(state: &mut State, id: &str, time: u64, save: impl FnOnce(&State) -> io::Result<()>) -> io::Result<()> {
+    let index = state.services.iter()
+        .position(|service| service.resource.id.as_str() == id && service.resource.phase.reserves_capacity())
+        .ok_or_else(|| fail("No active service with that ID"))?;
+    if matches!(state.services[index].resource.phase, Phase::Stopping { .. }) {
+        return Ok(());
+    }
+    transition(state, index, Event::Stop(StopReason::Requested), time, save).map(|_| ())
 }
 
 struct Live {
@@ -154,8 +175,13 @@ fn card(service: &Service, live: Option<&Live>) -> String {
         format!("<table><thead><tr><th>PID</th><th>User</th><th>Command</th></tr></thead><tbody>{rows}</tbody></table>")
     }).unwrap_or_default();
     let diagnostic = if service.diagnostic.is_empty() { String::new() } else { format!("<p class='muted'>{}</p>", crate::escape(&service.diagnostic)) };
+    let action = if resource.phase.reserves_capacity() && !matches!(resource.phase, Phase::Stopping { .. }) {
+        format!("<form method='post' action='/tools/services'><input type='hidden' name='id' value='{}'><button>Stop service</button></form>", crate::escape(resource.id.as_str()))
+    } else {
+        String::new()
+    };
     format!(
-        "<article class='record service-record'><h3><code>{}</code></h3><p>{} · {:?} profile · {storage} · {lease}</p><p>{conversation}{container}image {}</p>{stats}{processes}{diagnostic}</article>",
+        "<article class='record service-record'><h3><code>{}</code></h3><p>{} · {:?} profile · {storage} · {lease}</p><p>{conversation}{container}image {}</p>{stats}{processes}{diagnostic}{action}</article>",
         crate::escape(&command),
         phase(&resource.phase),
         service.profile,
@@ -177,6 +203,7 @@ mod tests {
         assert!(plain.contains("&lt;script&gt;alert(1)&lt;/script&gt;") && !plain.contains("<script>"));
         assert!(!plain.contains("second line"));
         assert!(plain.contains("Requested") && plain.contains("until stopped") && plain.contains("/chat/"));
+        assert!(plain.contains("action='/tools/services'") && plain.contains("Stop service"));
         assert!(!plain.contains("CPU") && !plain.contains("<table>"));
         let live = Live {
             stats: Some(crate::engine::Stats { cpu: "3.5%".into(), memory: "512MiB / 2GiB".into(), pids: "14".into() }),
