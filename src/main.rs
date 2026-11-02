@@ -2,6 +2,10 @@ mod access;
 mod artifacts;
 mod backend;
 mod bots;
+#[cfg(test)]
+#[path = "../tools/service-runner/frame.rs"]
+#[allow(dead_code)]
+mod watch_frame;
 #[path = "../tools/browser/main.rs"]
 mod browser;
 mod browser_ui;
