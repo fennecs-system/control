@@ -477,6 +477,32 @@ can drive different isolation levels.
   checkpoints stay in Control's domain code. Capability differences (network
   modes, storage, profiles) are declared by the backend and checked at admission.
 
+## Later: unbounded conversation memory as a comonad
+
+Persistent bots keep conversations that never end, so their memory needs bounded
+per-turn context over unbounded history. Borrow the summary tree from
+[UniiChat](https://github.com/VictorTaelin/UniiChat), exposed as a plugin rather
+than built into the core.
+
+- A conversation is a comonad: a Store/zipper focused on its current end.
+  `extract` is the latest message; `extend` gives every position its own view,
+  detailed near the focus and coarser with distance; the summary tree is a
+  lazily materialized `duplicate`. Zooming opens a node into the two it merged,
+  down to the original message, as a lens.
+- Each message gets a one-line summary and neighbouring summaries merge pairwise
+  into a binary tree. A turn's context is a cut through that tree within a byte
+  budget. The cut changes only at its end, so provider prompt caches keep hitting.
+  Detail fades with age but nothing is discarded, giving effectively unbounded
+  context.
+- Verbatim messages and summary nodes live in per-chat append-only JSON-lines
+  files, not a database and not the main state checkpoint. This also moves
+  transcripts out of `state.json`.
+- The tree, cut and zoom are pure; summarizing a message or merging two nodes are
+  effects that a cheaper model interprets in the background, within a budget and
+  off the turn's critical path. Agents get a zoom tool; the plugin supplies the
+  context view through the typed tool host, so other memory strategies can
+  replace it.
+
 ## Deferred
 
 Live federation and remote delegation, other host platforms/NixOS packaging, GPU/microVM
