@@ -15,21 +15,35 @@ pub struct AttemptRef<'a> {
 /// Typed operations Control offers to tool sets. Authorization, persistence
 /// and fences stay inside the host.
 pub trait Host {
+    fn jobs(&self) -> &dyn crate::command_jobs::JobOps;
+    fn services(&self) -> &dyn crate::services::ServiceOps;
     fn ports(&self) -> &dyn crate::ports::PortOps;
-    /// Transitional, for tool sets not yet migrated to typed operations.
-    fn legacy_state(&self) -> &Arc<Mutex<crate::State>>;
 }
 pub struct AttemptCall<'a> {
     pub attempt: AttemptRef<'a>,
     pub host: &'a dyn Host,
 }
+/// Adapts application state to `Host`; the only place tools meet `State`.
 pub struct LocalHost<'a>(pub &'a Arc<Mutex<crate::State>>);
 impl Host for LocalHost<'_> {
+    fn jobs(&self) -> &dyn crate::command_jobs::JobOps {
+        self
+    }
+    fn services(&self) -> &dyn crate::services::ServiceOps {
+        self
+    }
     fn ports(&self) -> &dyn crate::ports::PortOps {
         self
     }
-    fn legacy_state(&self) -> &Arc<Mutex<crate::State>> {
-        self.0
+}
+impl crate::command_jobs::JobOps for LocalHost<'_> {
+    fn job(&self, attempt: &AttemptRef<'_>, call: crate::command_jobs::JobCall) -> io::Result<Value> {
+        crate::command_jobs::execute(self.0, attempt, call)
+    }
+}
+impl crate::services::ServiceOps for LocalHost<'_> {
+    fn service(&self, attempt: &AttemptRef<'_>, call: crate::services::ServiceCall) -> io::Result<Value> {
+        crate::services::execute(self.0, attempt, call)
     }
 }
 impl crate::ports::PortOps for LocalHost<'_> {

@@ -1,12 +1,15 @@
 //! Chat-owned, bounded offline services. Attempts only attach; a pure core
 //! reducer decides effects, and one supervisor interprets durable intents.
 mod commands;
+mod tools;
+pub use tools::{ServiceCall, ServiceOps, Tools};
 pub(crate) use commands::activity as command_activity;
 #[cfg(test)]
 pub(crate) use commands::enqueue_test as enqueue_test_command;
 use crate::{
     State,
     identity::{self, Action, Actor},
+    tool_registry::AttemptRef,
 };
 use control_core::resources::*;
 use serde::{Deserialize, Serialize};
@@ -155,7 +158,7 @@ impl Service {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Input {
+pub struct Input {
     command: CommandText,
     #[serde(default = "default_lease")]
     lease_seconds: i64,
@@ -164,55 +167,6 @@ struct Input {
 }
 fn default_lease() -> i64 {
     -1
-}
-pub struct Tools;
-impl crate::tool_registry::AttemptTools for Tools {
-    fn definitions(&self) -> Vec<Value> {
-        definitions()
-    }
-    fn known(&self, name: &str) -> bool {
-        known(name)
-    }
-    fn call(&self, cx: &crate::tool_registry::AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
-        call(cx.host.legacy_state(), cx.attempt.run, cx.attempt.generation, cx.attempt.nonce, name, args)
-    }
-}
-fn definitions() -> Vec<Value> {
-    let mut tools = vec![
-        json!({"name":"control_service_start","description":"Start a chat-owned offline tool container that survives model turns and Control restart. lease_seconds=-1 (default) retains it until explicitly stopped; a positive duration limits its lifetime. Private disk-backed /workspace for task files and worktrees and /home/agent for tool configuration and caches, with no default disk cap. RAM-backed /tmp is disposable scratch (128 MiB), erased on container restart. Optional storage_limit_mb caps the private writable layer only and requires Docker quota support; mounted folders are excluded. No attempt files, credentials, network or host mounts. Use a foreground command. The immutable worker image needs control-service-runner. Returns a durable handle immediately; inspect status before assuming startup succeeded. Workspace and home files last until container removal.","inputSchema":{"type":"object","properties":{"command":{"type":"string","minLength":1,"maxLength":16000},"lease_seconds":{"type":"integer","oneOf":[{"const":-1},{"minimum":1,"maximum":3600}],"default":-1},"storage_limit_mb":{"type":"integer","minimum":1,"maximum":u32::MAX,"description":"Optional private writable-layer quota in MiB; mounts are excluded. Requires a quota-capable Docker storage driver. Omit for no Control disk cap; unsupported quotas fail creation."}},"required":["command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"openWorldHint":false}}),
-    ];
-    for (name, description, readonly) in [
-        (
-            "control_service_attach",
-            "Attach this turn to one of this chat's services; returns status and bounded logs. Attachment grants no host filesystem access and does not extend the lease.",
-            true,
-        ),
-        (
-            "control_service_status",
-            "Read this chat's service status and bounded logs. Omit service_id to list active services and ten recent completed handles.",
-            true,
-        ),
-        (
-            "control_service_stop",
-            "Request stop of an exact chat-owned service. Stopping is not confirmation of removal; inspect status until Stopped. Does not cancel the model turn.",
-            false,
-        ),
-    ] {
-        tools.push(json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":{"service_id":{"type":"string"}},"required":if name=="control_service_status"{json!([])}else{json!(["service_id"])},"additionalProperties":false},"annotations":{"readOnlyHint":readonly,"openWorldHint":false}}));
-    }
-    tools.extend(commands::definitions());
-    tools
-}
-fn known(name: &str) -> bool {
-    matches!(
-        name,
-        "control_service_start"
-            | "control_service_attach"
-            | "control_service_status"
-            | "control_service_stop"
-            | "control_service_exec"
-            | "control_service_exec_status"
-    )
 }
 fn caller<'a>(
     s: &'a State,
@@ -240,72 +194,25 @@ fn caller<'a>(
             .ok_or_else(|| fail("Service requires a chat"))?,
     ))
 }
-fn call(
-    shared: &Arc<Mutex<State>>,
-    run: &str,
-    generation: &str,
-    nonce: &str,
-    name: &str,
-    args: &Value,
-) -> io::Result<Value> {
+pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call: ServiceCall) -> io::Result<Value> {
+    let (run, generation, nonce) = (attempt.run, attempt.generation, attempt.nonce);
     let node: NodeId = crate::config::node_id()
         .map_err(fail)?
         .try_into()
         .map_err(fail)?;
-    if commands::known(name) {
-        return commands::call(shared, run, generation, nonce, name, args, &node);
-    }
+    let (stop, list, id) = match call {
+        ServiceCall::Start(input) => return start(shared, run, generation, nonce, node, input),
+        ServiceCall::Exec(input) => return commands::exec(shared, run, generation, nonce, &node, input),
+        ServiceCall::ExecStatus(handle) => return commands::status(shared, run, generation, &node, handle),
+        ServiceCall::Status(id) => (false, true, id),
+        ServiceCall::Attach(id) => (false, false, id),
+        ServiceCall::Stop(id) => (true, false, id),
+    };
     let mut s = shared.lock().map_err(|_| fail("State unavailable"))?;
     let (active, _) = caller(&s, run, generation)?;
-    if name == "control_service_start" {
-        let input: Input = serde_json::from_value(args.clone()).map_err(fail)?;
-        let image: ImageId = active
-            .attempts
-            .last()
-            .and_then(|a| a.image.clone())
-            .ok_or_else(|| fail("Missing captured image"))?
-            .try_into()
-            .map_err(fail)?;
-        drop(s);
-        let marker = crate::runtime::docker_query(&[
-            "image",
-            "inspect",
-            "--format",
-            "{{index .Config.Labels \"dev.control.service-runner\"}}",
-            image.as_str(),
-        ])?;
-        if !matches!(marker.trim(), "1" | "2") || (input.lease_seconds == -1 && marker.trim() != "2") {
-            return Err(fail(
-                "Rebuild worker/Claude images with Nix setup before starting persistent services",
-            ));
-        }
-        let profile = crate::worker_profile::Profile::inspect(image.as_str())?;
-        let mut s = shared.lock().map_err(|_| fail("State unavailable"))?;
-        // Revalidate the captured image after the engine query outside the state lock.
-        if caller(&s, run, generation)?.0.attempts.last().and_then(|a| a.image.as_deref()) != Some(image.as_str()) {
-            return Err(fail("Captured service image changed"));
-        }
-        let value = admit_profile(
-            &mut s,
-            Request {
-                run,
-                generation,
-                nonce,
-            },
-            input,
-            node,
-            now(),
-            profile,
-            crate::storage::save,
-        )?;
-        return Ok(value);
-    }
-    if !known(name) {
-        return Err(fail("Unknown service tool"));
-    }
     let owned = |service: &&Service| accessible(service, &node, active);
-    let Some(id) = args.get("service_id").and_then(Value::as_str) else {
-        return if name == "control_service_status" {
+    let Some(id) = id else {
+        return if list {
             Ok(
                 json!({"services":s.services.iter().filter(owned).filter(|service|service.resource.phase.reserves_capacity()).chain(s.services.iter().rev().filter(owned).filter(|service|!service.resource.phase.reserves_capacity()).take(10)).map(Service::summary).collect::<Vec<_>>()}),
             )
@@ -318,7 +225,7 @@ fn call(
         .iter()
         .position(|service| service.resource.id.as_str() == id && owned(&service))
         .ok_or_else(|| fail("Service is not owned by this chat"))?;
-    if name == "control_service_stop" {
+    if stop {
         transition(
             &mut s,
             index,
@@ -342,6 +249,49 @@ fn call(
         }
     }
     Ok(value)
+}
+fn start(shared: &Arc<Mutex<State>>, run: &str, generation: &str, nonce: &str, node: NodeId, input: Input) -> io::Result<Value> {
+    let s = shared.lock().map_err(|_| fail("State unavailable"))?;
+    let (active, _) = caller(&s, run, generation)?;
+    let image: ImageId = active
+        .attempts
+        .last()
+        .and_then(|a| a.image.clone())
+        .ok_or_else(|| fail("Missing captured image"))?
+        .try_into()
+        .map_err(fail)?;
+    drop(s);
+    let marker = crate::runtime::docker_query(&[
+        "image",
+        "inspect",
+        "--format",
+        "{{index .Config.Labels \"dev.control.service-runner\"}}",
+        image.as_str(),
+    ])?;
+    if !matches!(marker.trim(), "1" | "2") || (input.lease_seconds == -1 && marker.trim() != "2") {
+        return Err(fail(
+            "Rebuild worker/Claude images with Nix setup before starting persistent services",
+        ));
+    }
+    let profile = crate::worker_profile::Profile::inspect(image.as_str())?;
+    let mut s = shared.lock().map_err(|_| fail("State unavailable"))?;
+    // Revalidate the captured image after the engine query outside the state lock.
+    if caller(&s, run, generation)?.0.attempts.last().and_then(|a| a.image.as_deref()) != Some(image.as_str()) {
+        return Err(fail("Captured service image changed"));
+    }
+    admit_profile(
+        &mut s,
+        Request {
+            run,
+            generation,
+            nonce,
+        },
+        input,
+        node,
+        now(),
+        profile,
+        crate::storage::save,
+    )
 }
 #[derive(Clone, Copy)]
 struct Request<'a> {

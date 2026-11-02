@@ -50,18 +50,21 @@ fn decode(name: &str, args: &Value) -> io::Result<PortCall> {
 mod tests {
     use super::*;
     use crate::tool_registry::Host;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Mutex;
 
     #[derive(Default)]
     struct Recorder {
         calls: Mutex<Vec<String>>,
     }
     impl Host for Recorder {
+        fn jobs(&self) -> &dyn crate::command_jobs::JobOps {
+            unreachable!("port tools must not reach job operations")
+        }
+        fn services(&self) -> &dyn crate::services::ServiceOps {
+            unreachable!("port tools must not reach service operations")
+        }
         fn ports(&self) -> &dyn PortOps {
             self
-        }
-        fn legacy_state(&self) -> &Arc<Mutex<crate::State>> {
-            unreachable!("port tools must not reach application state")
         }
     }
     impl PortOps for Recorder {

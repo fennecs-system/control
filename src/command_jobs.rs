@@ -1,5 +1,7 @@
 //! Durable, credential-free commands. Model requests select capabilities, never mounts.
-use crate::{usage::Attempt, State};
+mod tools;
+pub use tools::{JobCall, JobOps, Tools};
+use crate::{tool_registry::AttemptRef, usage::Attempt, State};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -80,33 +82,6 @@ fn fail(message: &str) -> io::Error {
     io::Error::other(message)
 }
 
-pub struct Tools;
-impl crate::tool_registry::AttemptTools for Tools {
-    fn definitions(&self) -> Vec<Value> {
-        definitions()
-    }
-    fn known(&self, name: &str) -> bool {
-        known(name)
-    }
-    fn call(&self, cx: &crate::tool_registry::AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
-        call(cx.host.legacy_state(), cx.attempt.run, cx.attempt.generation, cx.attempt.nonce, name, args)
-    }
-}
-fn definitions() -> Vec<Value> {
-    vec![
-        json!({"name":"control_workspace_start","description":"Start a credential-free offline workspace command and return a job handle immediately. Output streams into the chat. Poll status until complete; cancel before editing concurrently. Only one command writer per attempt. worker uses the captured worker image; build uses the operator-declared build environment. No host shell, network, credentials or image mutation. Jobs are cancelled when the attempt ends; await completion before returning your answer.","inputSchema":{"type":"object","properties":{"command":{"type":"string","minLength":1,"maxLength":16000},"timeout_seconds":{"type":"integer","minimum":1,"maximum":1800,"default":600},"environment":{"type":"string","enum":["worker","build"],"default":"worker"}},"required":["command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":false}}),
-        json!({"name":"control_workspace_status","description":"Read the bounded live output, status and exit code of a workspace job in this attempt. Status does not wait for completion.","inputSchema":{"type":"object","properties":{"job_id":{"type":"string"}},"required":["job_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
-        json!({"name":"control_workspace_cancel","description":"Cancel an exact workspace job in this attempt. The job remains stopping until its verified container has exited.","inputSchema":{"type":"object","properties":{"job_id":{"type":"string"}},"required":["job_id"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":false}}),
-    ]
-}
-fn known(name: &str) -> bool {
-    [
-        "control_workspace_start",
-        "control_workspace_status",
-        "control_workspace_cancel",
-    ]
-    .contains(&name)
-}
 fn environment_image(attempt: &Attempt, environment: &str) -> io::Result<String> {
     let image = match environment {
         "worker" => attempt.image.clone().ok_or_else(|| fail("Missing captured worker image"))?,
@@ -137,34 +112,21 @@ fn current<'a>(state: &'a mut State, run: &str, generation: &str) -> io::Result<
         .filter(|a| a.workspace_id.as_deref() == Some(generation))
         .ok_or_else(|| fail("Command belongs to an inactive attempt"))
 }
-fn call(
-    shared: &Arc<Mutex<State>>,
-    run: &str,
-    generation: &str,
-    nonce: &str,
-    name: &str,
-    input: &Value,
-) -> io::Result<Value> {
-    if name == "control_workspace_start" {
-        let input: Input = serde_json::from_value(input.clone())
-            .map_err(|_| fail("Expected command, timeout_seconds and declared environment"))?;
-        return start(shared, run, generation, nonce, input);
-    }
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Handle {
-        job_id: String,
-    }
-    let handle: Handle =
-        serde_json::from_value(input.clone()).map_err(|_| fail("Expected job_id"))?;
+pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call: JobCall) -> io::Result<Value> {
+    let (run, generation) = (attempt.run, attempt.generation);
+    let (cancel, job_id) = match call {
+        JobCall::Start(input) => return start(shared, run, generation, attempt.nonce, input),
+        JobCall::Status(job_id) => (false, job_id),
+        JobCall::Cancel(job_id) => (true, job_id),
+    };
     let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
     let attempt = current(&mut state, run, generation)?;
     let job = attempt
         .command_jobs
         .iter_mut()
-        .find(|j| j.id == handle.job_id)
+        .find(|j| j.id == job_id)
         .ok_or_else(|| fail("Unknown job in this attempt"))?;
-    if name == "control_workspace_cancel" && job.active() {
+    if cancel && job.active() {
         let old = job.status.clone();
         job.status = "stopping".into();
         let summary = job.summary();
@@ -172,7 +134,7 @@ fn call(
             current(&mut state, run, generation)?
                 .command_jobs
                 .iter_mut()
-                .find(|j| j.id == handle.job_id)
+                .find(|j| j.id == job_id)
                 .unwrap()
                 .status = old;
             return Err(e);
@@ -775,6 +737,10 @@ fn quiesce_until(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tool_registry::{AttemptCall, AttemptTools, LocalHost};
+    fn call(shared: &Arc<Mutex<State>>, run: &str, generation: &str, nonce: &str, name: &str, args: &Value) -> io::Result<Value> {
+        Tools.call(&AttemptCall { attempt: AttemptRef { run, generation, nonce }, host: &LocalHost(shared) }, name, args)
+    }
     #[test]
     fn output_is_bounded_utf8_and_strips_terminal_controls() {
         let output = bounded_output(&format!("\x1b{}\0", "é".repeat(20000)));
