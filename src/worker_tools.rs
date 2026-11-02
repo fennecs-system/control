@@ -129,23 +129,12 @@ fn rpc_at(
                     Err(message)=>error(message),
                 };
             }
-            if crate::command_jobs::known(request["params"]["name"].as_str().unwrap_or("")) {
+            if let Some(tools) = crate::tool_registry::attempt_tools(request["params"]["name"].as_str().unwrap_or("")) {
                 let generation=run.attempts.last().and_then(|a|a.workspace_id.clone()).unwrap_or_default();
                 let nonce=envelope["nonce"].as_str().unwrap_or("").to_owned();
                 drop(state);
-                return json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(crate::command_jobs::call(shared,run_id,&generation,&nonce,request["params"]["name"].as_str().unwrap(),&request["params"]["arguments"]))});
-            }
-            if crate::services::known(request["params"]["name"].as_str().unwrap_or("")) {
-                let generation=run.attempts.last().and_then(|a|a.workspace_id.clone()).unwrap_or_default();
-                let nonce=envelope["nonce"].as_str().unwrap_or("").to_owned();
-                drop(state);
-                return json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(crate::services::call(shared,run_id,&generation,&nonce,request["params"]["name"].as_str().unwrap(),&request["params"]["arguments"]))});
-            }
-            if crate::ports::known(request["params"]["name"].as_str().unwrap_or("")) {
-                let generation=run.attempts.last().and_then(|a|a.workspace_id.clone()).unwrap_or_default();
-                let nonce=envelope["nonce"].as_str().unwrap_or("").to_owned();
-                drop(state);
-                return json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(crate::ports::call(shared,run_id,&generation,&nonce,request["params"]["name"].as_str().unwrap(),&request["params"]["arguments"]))});
+                let cx=crate::tool_registry::AttemptCall{shared,run:run_id,generation:&generation,nonce:&nonce};
+                return json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(tools.call(&cx,request["params"]["name"].as_str().unwrap(),&request["params"]["arguments"]))});
             }
             if request["params"]["name"]=="control_github_open_pr" {
                 if run.action != identity::Action::Improve {return error("GitHub publication requires an improvement run");}
@@ -467,7 +456,8 @@ mod tests {
             let response=rpc(&shared,&id,&json!({"nonce":"request-fixture","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":args}}}));
             assert!(response["error"]["message"].as_str().unwrap().contains("pausing for delegated"));
         }
-        let response=crate::command_jobs::call(&shared,&id,"pause-generation","request-fixture","control_workspace_start",&json!({"command":"true"}));
+        let cx=crate::tool_registry::AttemptCall{shared:&shared,run:&id,generation:"pause-generation",nonce:"request-fixture"};
+        let response=crate::tool_registry::attempt_tools("control_workspace_start").unwrap().call(&cx,"control_workspace_start",&json!({"command":"true"}));
         assert!(response.unwrap_err().to_string().contains("pausing for delegated"));
         let state=shared.lock().unwrap();assert!(state.runtime.runs[0].attempts[0].command_jobs.is_empty());assert!(state.github_publications.is_empty());
     }

@@ -188,14 +188,26 @@ struct Input {
     #[serde(default)]
     peer_port_id: Option<ResourceId>,
 }
-pub fn definitions() -> Vec<Value> {
+pub struct Tools;
+impl crate::tool_registry::AttemptTools for Tools {
+    fn definitions(&self) -> Vec<Value> {
+        definitions()
+    }
+    fn known(&self, name: &str) -> bool {
+        known(name)
+    }
+    fn call(&self, cx: &crate::tool_registry::AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
+        call(cx.shared, cx.run, cx.generation, cx.nonce, name, args)
+    }
+}
+fn definitions() -> Vec<Value> {
     vec![
         json!({"name":"control_port_request","description":"Request operator approval for a named TCP port on an owned or explicitly granted running service. ingress exposes non-HTTP/non-TLS raw service loopback on host 127.0.0.1; HTTP artifacts use control_preview_start. egress exposes a service loopback relay to one approved pinned target, including TLS. Containers remain network=none. To connect two accessible services, request ingress on the listening service, then egress on the connecting service with peer_port_id set to that ingress port_id; the client dials its own 127.0.0.1:service_port. Different owner chats require captured service grants, not just a shared actor. Egress requires exactly one of target or peer_port_id. No traffic until approved; a peer route also needs its ingress approved and ready. Poll control_port_status before connecting. Updated worker images keep one listener alive for up to eight concurrent sessions per port. Start new services from rebuilt images to upgrade older single-session relays. Port lifetime cannot exceed the service lifetime.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"name":{"type":"string","maxLength":48},"direction":{"type":"string","enum":["ingress","egress"]},"service_port":{"type":"integer","minimum":1,"maximum":65535},"target":{"type":"object","properties":{"host":{"type":"string"},"port":{"type":"integer","minimum":1,"maximum":65535}},"required":["host","port"],"additionalProperties":false},"peer_port_id":{"type":"string","description":"Ingress port_id of another owned or explicitly granted service; egress only."}},"required":["service_id","name","direction","service_port"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"openWorldHint":false}}),
         json!({"name":"control_port_status","description":"Read owned port approvals, readiness, pinned endpoints, assigned loopback addresses and bounded diagnostics. An ingress local_address is reachable only from the host; connect another owned service with an egress peer_port_id route. Omit port_id for active and ten recent terminal records.","inputSchema":{"type":"object","properties":{"port_id":{"type":"string"}},"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
         json!({"name":"control_port_stop","description":"Persist revocation of an owned port and close its listener/connections. Stopping is intent; inspect until stopped. Never stops the owning service.","inputSchema":{"type":"object","properties":{"port_id":{"type":"string"}},"required":["port_id"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"openWorldHint":false}}),
     ]
 }
-pub fn known(name: &str) -> bool {
+fn known(name: &str) -> bool {
     matches!(
         name,
         "control_port_request" | "control_port_status" | "control_port_stop"
@@ -457,7 +469,7 @@ fn admit(
     }
     Ok(value)
 }
-pub fn call(
+fn call(
     shared: &Arc<Mutex<State>>,
     run: &str,
     generation: &str,

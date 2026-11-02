@@ -80,14 +80,26 @@ fn fail(message: &str) -> io::Error {
     io::Error::other(message)
 }
 
-pub fn definitions() -> Vec<Value> {
+pub struct Tools;
+impl crate::tool_registry::AttemptTools for Tools {
+    fn definitions(&self) -> Vec<Value> {
+        definitions()
+    }
+    fn known(&self, name: &str) -> bool {
+        known(name)
+    }
+    fn call(&self, cx: &crate::tool_registry::AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
+        call(cx.shared, cx.run, cx.generation, cx.nonce, name, args)
+    }
+}
+fn definitions() -> Vec<Value> {
     vec![
         json!({"name":"control_workspace_start","description":"Start a credential-free offline workspace command and return a job handle immediately. Output streams into the chat. Poll status until complete; cancel before editing concurrently. Only one command writer per attempt. worker uses the captured worker image; build uses the operator-declared build environment. No host shell, network, credentials or image mutation. Jobs are cancelled when the attempt ends; await completion before returning your answer.","inputSchema":{"type":"object","properties":{"command":{"type":"string","minLength":1,"maxLength":16000},"timeout_seconds":{"type":"integer","minimum":1,"maximum":1800,"default":600},"environment":{"type":"string","enum":["worker","build"],"default":"worker"}},"required":["command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":false}}),
         json!({"name":"control_workspace_status","description":"Read the bounded live output, status and exit code of a workspace job in this attempt. Status does not wait for completion.","inputSchema":{"type":"object","properties":{"job_id":{"type":"string"}},"required":["job_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
         json!({"name":"control_workspace_cancel","description":"Cancel an exact workspace job in this attempt. The job remains stopping until its verified container has exited.","inputSchema":{"type":"object","properties":{"job_id":{"type":"string"}},"required":["job_id"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":false}}),
     ]
 }
-pub fn known(name: &str) -> bool {
+fn known(name: &str) -> bool {
     [
         "control_workspace_start",
         "control_workspace_status",
@@ -125,7 +137,7 @@ fn current<'a>(state: &'a mut State, run: &str, generation: &str) -> io::Result<
         .filter(|a| a.workspace_id.as_deref() == Some(generation))
         .ok_or_else(|| fail("Command belongs to an inactive attempt"))
 }
-pub fn call(
+fn call(
     shared: &Arc<Mutex<State>>,
     run: &str,
     generation: &str,
