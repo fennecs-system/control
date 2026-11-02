@@ -498,49 +498,23 @@ fn advance(state: &mut State) -> bool {
         .map(|a| a.requester.clone()).collect::<std::collections::BTreeSet<_>>();
     for requester in requesters {
         let mine = |a: &&Approval| a.requester == requester;
-        if state.bots.approvals.iter().filter(mine).any(|a| a.decision == Decision::Pending)
-            || state.runtime.runs.iter().any(|run| run.chat_id.as_deref() == Some(requester.as_str()) && matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling"))
-        {
+        if state.bots.approvals.iter().filter(mine).any(|a| a.decision == Decision::Pending) {
             continue;
         }
-        let decided = state.bots.approvals.iter().filter(mine).filter(|a| a.decision != Decision::Pending && !a.acknowledged).cloned().collect::<Vec<_>>();
-        let latest = state.runtime.runs.iter().rposition(|run| run.chat_id.as_deref() == Some(requester.as_str()));
-        let index = state.runtime.runs.iter().enumerate().map(|(index, run)| (run.id.as_str(), index)).collect::<std::collections::HashMap<_, _>>();
-        let human = |run: &crate::runtime::Run| run.kind.speaker() == control_context::agent_policy::MessageSpeaker::User;
-        let resume = latest.filter(|&latest| state.runtime.runs[latest].status == "completed" && decided.iter().any(|a| index.get(a.origin.as_str()).is_some_and(|&origin| {
-            crate::rooms::continuation_leaf(state, origin, &index) == Some(latest)
-                || !state.runtime.runs[origin + 1..].iter().any(|run| run.chat_id.as_deref() == Some(requester.as_str()) && human(run))
-        })));
+        let decided = state.bots.approvals.iter().filter(mine).filter(|a| !a.acknowledged).cloned().collect::<Vec<_>>();
         let lines = decided.iter().map(|a| {
             let title = state.chats.iter().find(|session| session.id == a.chat).map_or(a.chat.as_str(), |session| session.title.as_str());
             format!("{title} ({}): {}", a.chat, if a.decision == Decision::Approved { "approved, now a persistent bot" } else { "denied" })
         }).collect::<Vec<_>>().join("\n");
-        let mut run_id = None;
-        if let Some(latest) = resume {
-            if crate::scheduler::admit(&state.runtime).is_err() {
-                continue;
-            }
-            let latest = &state.runtime.runs[latest];
-            let objective = format!("Operator bot decisions:\n{lines}\nContinue the original task. Approved chats now sleep until room messages or their timers wake them. Original task:\n{}", latest.objective).chars().take(2000).collect::<String>();
-            let (actor, action, backend, model, context, lenses) = (latest.actor.clone(), latest.action, latest.backend, latest.model.clone(), latest.context.clone(), latest.lenses.clone());
-            let persona = crate::delegation::lineage(latest);
-            let grants = crate::services::grants(state, latest);
-            if state.runtime.enqueue_for(objective, RunKind::BotDecision, "bot", actor, action).is_err() {
-                continue;
-            }
-            let run = state.runtime.runs.last_mut().unwrap();
-            run.chat_id = Some(requester.clone());
-            run.backend = backend;
-            run.model = model;
-            run.context = context;
-            run.lenses = lenses;
-            run.persona = Some(persona);
-            run.resource_grants = grants;
-            run_id = Some(run.id.clone());
-        }
-        if let Some(session) = state.chats.iter_mut().find(|session| session.id == requester) {
-            session.messages.push(crate::chat::Message { text: format!("Bot decisions\n{lines}"), run_id, reply: String::new() });
-            session.revision = session.revision.saturating_add(1);
+        let origins = decided.iter().map(|a| a.origin.as_str()).collect::<Vec<_>>();
+        let task = state.runtime.runs.iter().rev().find(|run| run.chat_id.as_deref() == Some(requester.as_str())).map(|run| run.objective.clone()).unwrap_or_default();
+        let outcome = crate::approvals::resume(state, crate::approvals::Decisions {
+            chat: &requester, origins: &origins, heading: "Bot decisions", lines: &lines,
+            instruction: "Continue the original task. Approved chats now sleep until room messages or their timers wake them.",
+            task: &task, kind: RunKind::BotDecision, source: "bot", grants: Vec::new(),
+        });
+        if outcome == crate::approvals::Outcome::Wait {
+            continue;
         }
         for approval in state.bots.approvals.iter_mut().filter(|a| a.requester == requester && a.decision != Decision::Pending) {
             approval.acknowledged = true;
