@@ -111,8 +111,12 @@ fn append(id: &str, line: &[u8]) -> io::Result<()> {
         fs::rename(&path, path.with_extension("log.1"))?;
     }
     let mut file = fs::OpenOptions::new().create(true).append(true).open(&path)?;
-    file.write_all(line)?;
-    file.write_all(b"\n")
+    let length = file.metadata()?.len();
+    let record = [line, b"\n"].concat();
+    // A partial write is undone so a retry never appends to a broken record.
+    file.write_all(&record).inspect_err(|_| {
+        let _ = file.set_len(length);
+    })
 }
 /// Spooled frames after `after`, oldest first, at most `limit`.
 pub(crate) fn frames(id: &str, after: u64, limit: usize) -> Vec<(Frame, bool)> {
