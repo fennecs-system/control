@@ -1,6 +1,7 @@
 mod access;
 mod artifacts;
 mod backend;
+mod agent_message;
 mod bots;
 #[cfg(test)]
 #[path = "../tools/service-runner/frame.rs"]
@@ -79,6 +80,7 @@ struct State {
     runtime: runtime::Runtime,
     collective: collective::Collective,
     bots: bots::Bots,
+    agent_messages: Vec<agent_message::Sent>,
     documents: Vec<knowledge::Document>,
     lens_library: control_context::Library,
     messages: Vec<String>,

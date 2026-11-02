@@ -416,7 +416,7 @@ mod tests {
         let names=listed["result"]["tools"].as_array().unwrap().iter().map(|t|t["name"].as_str().unwrap()).collect::<Vec<_>>();
         assert!(names.contains(&"control_workspace_run"));assert!(!names.contains(&"control_agent_spawn_blocking"));assert!(!names.contains(&"control_agent_delegate"));assert!(names.contains(&"control_agent_result"));
         assert!(names.contains(&"control_knowledge_read"));assert!(names.contains(&"control_knowledge_search"));
-        for name in ["control_agent_spawn_blocking","control_agent_delegate","control_agent_spawn","control_project_request","control_design_ask","control_preview_start","control_preview_stop","control_github_pr","control_service_start","control_service_attach","control_service_status","control_service_stop","control_service_exec","control_service_exec_status","control_knowledge_propose"] {
+        for name in ["control_agent_spawn_blocking","control_agent_delegate","control_agent_spawn","control_agent_message","control_project_request","control_design_ask","control_preview_start","control_preview_stop","control_github_pr","control_service_start","control_service_attach","control_service_status","control_service_stop","control_service_exec","control_service_exec_status","control_knowledge_propose"] {
             assert!(!names.contains(&name));
             let denied=rpc_at(&shared,&id,&json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":{}}}}),None);
             assert!(denied["error"]["message"].as_str().unwrap().contains("Judge policy"));

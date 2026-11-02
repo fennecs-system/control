@@ -486,9 +486,11 @@ fn advance(state: &mut State) -> bool {
         let decided = state.bots.approvals.iter().filter(mine).filter(|a| a.decision != Decision::Pending && !a.acknowledged).cloned().collect::<Vec<_>>();
         let latest = state.runtime.runs.iter().rposition(|run| run.chat_id.as_deref() == Some(requester.as_str()));
         let index = state.runtime.runs.iter().enumerate().map(|(index, run)| (run.id.as_str(), index)).collect::<std::collections::HashMap<_, _>>();
-        let resume = latest.filter(|&latest| state.runtime.runs[latest].status == "completed" && decided.iter().any(|a| {
-            index.get(a.origin.as_str()).and_then(|&origin| crate::rooms::continuation_leaf(state, origin, &index)) == Some(latest)
-        }));
+        let human = |run: &crate::runtime::Run| control_context::agent_policy::MessageSpeaker::for_run_kind(Some(&run.kind)) == control_context::agent_policy::MessageSpeaker::User;
+        let resume = latest.filter(|&latest| state.runtime.runs[latest].status == "completed" && decided.iter().any(|a| index.get(a.origin.as_str()).is_some_and(|&origin| {
+            crate::rooms::continuation_leaf(state, origin, &index) == Some(latest)
+                || !state.runtime.runs[origin + 1..].iter().any(|run| run.chat_id.as_deref() == Some(requester.as_str()) && human(run))
+        })));
         let lines = decided.iter().map(|a| {
             let title = state.chats.iter().find(|session| session.id == a.chat).map_or(a.chat.as_str(), |session| session.title.as_str());
             format!("{title} ({}): {}", a.chat, if a.decision == Decision::Approved { "approved, now a persistent bot" } else { "denied" })
@@ -929,5 +931,17 @@ mod tests {
         let run = state.runtime.runs.last().unwrap().id.clone();
         let attempt = AttemptRef { run: &run, generation: "attempt-a", nonce };
         handle(state, &attempt, BotCall::Request { chat_id: chat.into(), every_minutes: None, room: true }, |_| Ok(()))
+    }
+
+    #[test]
+    fn control_initiated_turns_after_a_request_do_not_drop_its_resume() {
+        let (mut state, parent, child) = requester();
+        let id = ask(&mut state, "n1", &child, None).unwrap()["request_id"].as_str().unwrap().to_owned();
+        finish_requesting_turn(&mut state);
+        crate::chat::enqueue_continuation(&mut state, &parent, 0, "Message from the lead".into(), "agent-message", "agent-message").unwrap();
+        state.runtime.runs.last_mut().unwrap().status = "completed".into();
+        command_at(&mut state, &parent, &format!("deny {id}"), Now(1)).unwrap();
+        reconcile_at(&mut state, 2, |_| Ok(())).unwrap();
+        assert_eq!(state.runtime.runs.last().unwrap().kind, "bot-decision");
     }
 }

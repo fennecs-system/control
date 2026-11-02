@@ -19,6 +19,7 @@ pub trait Host {
     fn services(&self) -> &dyn crate::services::ServiceOps;
     fn ports(&self) -> &dyn crate::ports::PortOps;
     fn bots(&self) -> &dyn crate::bots::BotOps;
+    fn messages(&self) -> &dyn crate::agent_message::MessageOps;
 }
 pub struct AttemptCall<'a> {
     pub attempt: AttemptRef<'a>,
@@ -37,6 +38,9 @@ impl Host for LocalHost<'_> {
         self
     }
     fn bots(&self) -> &dyn crate::bots::BotOps {
+        self
+    }
+    fn messages(&self) -> &dyn crate::agent_message::MessageOps {
         self
     }
 }
@@ -60,17 +64,23 @@ impl crate::bots::BotOps for LocalHost<'_> {
         crate::bots::execute(self.0, attempt, call)
     }
 }
+impl crate::agent_message::MessageOps for LocalHost<'_> {
+    fn message(&self, attempt: &AttemptRef<'_>, call: crate::agent_message::MessageCall) -> io::Result<Value> {
+        crate::agent_message::execute(self.0, attempt, call)
+    }
+}
 /// Worker tools bound to one attempt. Calls run without the state lock held.
 pub trait AttemptTools: Sync {
     fn definitions(&self) -> Vec<Value>;
     fn known(&self, name: &str) -> bool;
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value>;
 }
-static ATTEMPT_TOOLS: [&dyn AttemptTools; 4] = [
+static ATTEMPT_TOOLS: [&dyn AttemptTools; 5] = [
     &crate::command_jobs::Tools,
     &crate::services::Tools,
     &crate::ports::Tools,
     &crate::bots::Tools,
+    &crate::agent_message::Tools,
 ];
 pub fn attempt_tools(name: &str) -> Option<&'static dyn AttemptTools> {
     ATTEMPT_TOOLS.iter().copied().find(|tools| tools.known(name))

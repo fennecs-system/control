@@ -53,7 +53,7 @@ impl Batch {
     pub(crate) fn reserved(&self) -> usize {
         self.input.objectives.len()
     }
-    fn pending(&self) -> usize {
+    pub(crate) fn pending(&self) -> usize {
         if self.cancelled {
             0
         } else {

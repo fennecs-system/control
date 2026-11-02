@@ -168,6 +168,38 @@ pub fn rejected(page: &str, error: &str, draft: &str) -> String {
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 100 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
+/// Whether `chat` is `ancestor` or was spawned from it, directly or through children.
+pub(crate) fn within(state: &State, chat: &str, ancestor: &str) -> bool {
+    lineage(state, chat).any(|id| id == ancestor)
+}
+/// Every chat under the top-level chat that `chat` was spawned from, itself included.
+pub(crate) fn tree<'a>(state: &'a State, chat: &'a str) -> std::collections::HashSet<&'a str> {
+    let parents = state.chats.iter().map(|session| (session.id.as_str(), session.parent_chat.as_deref())).collect::<std::collections::HashMap<_, _>>();
+    let top = |id: &'a str| std::iter::successors(Some(id), |id| parents.get(id).copied().flatten()).take(64).last().unwrap_or(id);
+    let root = top(chat);
+    std::iter::once(chat).chain(parents.keys().copied().filter(|id| top(id) == root)).collect()
+}
+fn lineage<'a>(state: &'a State, chat: &'a str) -> impl Iterator<Item = &'a str> {
+    std::iter::successors(Some(chat), |id| state.chats.iter().find(|session| session.id == *id).and_then(|session| session.parent_chat.as_deref())).take(64)
+}
+/// Queues a Control-initiated turn in `chat`, inheriting the provider, context,
+/// lineage and grants of the run at `from`.
+pub(crate) fn enqueue_continuation(state: &mut State, chat: &str, from: usize, objective: String, kind: &str, source: &str) -> Result<String, &'static str> {
+    let latest = &state.runtime.runs[from];
+    let (actor, action, backend, model, context, lenses) = (latest.actor.clone(), latest.action, latest.backend, latest.model.clone(), latest.context.clone(), latest.lenses.clone());
+    let persona = crate::delegation::lineage(latest);
+    let grants = crate::services::grants(state, latest);
+    state.runtime.enqueue_for(objective, kind, source, actor, action)?;
+    let run = state.runtime.runs.last_mut().unwrap();
+    run.chat_id = Some(chat.into());
+    run.backend = backend;
+    run.model = model;
+    run.context = context;
+    run.lenses = lenses;
+    run.persona = Some(persona);
+    run.resource_grants = grants;
+    Ok(run.id.clone())
+}
 fn command_menu(actor: &Actor) -> String {
     command_menu_for(identity::authorize(actor, Action::Task).is_ok(), identity::authorize(actor, Action::Improve).is_ok())
 }
