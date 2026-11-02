@@ -24,6 +24,15 @@ Current libraries:
   checkpoint does not make an effect eligible; interpreters revalidate its stamp
   first. Its API follows tokio's shapes, so an async driver can replace a
   blocking one without changing machines. Not a scheduler or an event bus.
+- `control-bot`: persistent, callback-driven bots (agents that manage a
+  collection of services and respond to events) as a pure `Supervisor` machine,
+  a first slice of the [bot-control contract](research/BOT-CONTROL.md). Bot
+  definitions subscribe to room messages, events observed on their services and
+  timers; budgets bound turns; commands pause, resume and stop. Cursors drop
+  replayed events, `TurnId`s make turn requests idempotent and stale completions
+  harmless, and `next_deadline` lets drivers wait instead of polling. Depends only
+  on `control-effect`, with optional Serde. The application owns authority,
+  persistence of state with its intents, and queuing turns.
 - The `control` library currently shares configuration, identity, diff rendering
   and the Discord adapter between executables. Discord is compiled once rather
   than included as source in two binaries. It consumes a typed delivery projection
