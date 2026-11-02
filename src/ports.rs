@@ -30,7 +30,8 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-const MAX_PORTS: usize = 8;
+const MAX_PORTS: usize = 64;
+const PORTS_PER_CHAT: usize = 8;
 const MAX_RECORDS: usize = 128;
 const MAX_CONNECTIONS: usize = 8;
 fn fail(s: impl ToString) -> io::Error {
@@ -374,14 +375,14 @@ fn admit(
         }).ok_or_else(||fail("peer_port_id must be an active ingress of another owned or explicitly granted service"))?;
         self::service(state,port,now()).map(Service::grant)
     }).transpose()?;
-    if state
-        .ports
-        .iter()
-        .filter(|p| p.status != Status::Stopped)
-        .count()
-        >= MAX_PORTS
-    {
-        return Err(fail("Active port limit reached"));
+    let owner = service.resource.owner.chat.as_str();
+    let (active, owned) = state.ports.iter().filter(|p| p.status != Status::Stopped)
+        .fold((0, 0), |(all, chat), p| (all + 1, chat + usize::from(p.chat == owner)));
+    if owned >= PORTS_PER_CHAT {
+        return Err(fail(format!("This chat's services already hold {PORTS_PER_CHAT} active ports. Stop finished routes, such as completed downloads, with control_port_stop")));
+    }
+    if active >= MAX_PORTS {
+        return Err(fail(format!("Control's node-wide limit of {MAX_PORTS} active ports is reached. Stop finished routes with control_port_stop or ask the operator")));
     }
     if state.ports.iter().any(|p| {
         p.service == input.service_id
@@ -395,7 +396,7 @@ fn admit(
             "Service port name or egress listener is already reserved",
         ));
     }
-    let owner_chat = service.resource.owner.chat.as_str().to_owned();
+    let owner_chat = owner.to_owned();
     let port = Port {
         id,
         service: input.service_id,
@@ -1382,6 +1383,35 @@ pub(crate) mod tests {
             "node-a".to_owned().try_into().unwrap(),
             |_| Ok(()),
         )
+    }
+    #[test]
+    fn port_capacity_is_per_chat_with_a_node_wide_cap() {
+        let (mut state, run, chat) = fixture();
+        request(&mut state, &run, Direction::Ingress).unwrap();
+        let template = state.ports[0].clone();
+        let fill = |state: &mut State, owner: &str, count: usize| {
+            for index in 0..count {
+                let mut port = template.clone();
+                port.id = ResourceId::try_from(format!("port-{owner}-{index}")).unwrap();
+                port.chat = owner.into();
+                port.name = Name::try_from(format!("held{index}")).unwrap();
+                state.ports.push(port);
+            }
+        };
+        let ask = |state: &mut State, nonce: &str, name: &str| {
+            let mut input = input(Direction::Ingress);
+            input.name = Name::try_from(name.to_owned()).unwrap();
+            admit(state, &run, "attempt-a", nonce, input, "node-a".to_owned().try_into().unwrap(), |_| Ok(()))
+        };
+        fill(&mut state, &chat, PORTS_PER_CHAT - 1);
+        let error = ask(&mut state, "nonce-b", "extra").unwrap_err().to_string();
+        assert!(error.contains("control_port_stop") && error.contains("This chat"), "{error}");
+        state.ports.retain(|port| port.id == template.id);
+        fill(&mut state, "c-other", PORTS_PER_CHAT * 4);
+        assert!(ask(&mut state, "nonce-c", "second").is_ok(), "another chat at its cap does not block this one");
+        fill(&mut state, "c-third", MAX_PORTS);
+        let error = ask(&mut state, "nonce-d", "third").unwrap_err().to_string();
+        assert!(error.contains("node-wide"), "{error}");
     }
     #[test]
     #[ignore = "requires local Chrome/Firefox WebDriver; isolated fixture, no credentials/models"]
