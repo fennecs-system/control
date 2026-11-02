@@ -144,10 +144,19 @@ pub fn docker_query(arguments: &[&str]) -> std::io::Result<String> {
         std::time::Duration::from_secs(5),
     )
 }
+/// Creation requests here contain no credential mounts or provider arguments.
+/// Retain bounded engine diagnostics so unsupported quotas are distinguishable
+/// from other failures. Other engine queries keep their existing redaction.
+pub(crate) fn docker_create(arguments: &[String]) -> std::io::Result<String> {
+    engine_output_diagnostic(Command::new("docker").args(arguments), std::time::Duration::from_secs(5), true)
+}
 
 // Drain while the process runs: waiting first can deadlock on a full stdout pipe.
 // Ownership inspection must fail closed on oversized output, never use a prefix.
 fn engine_output(command: &mut Command, timeout: std::time::Duration) -> std::io::Result<String> {
+    engine_output_diagnostic(command, timeout, false)
+}
+fn engine_output_diagnostic(command: &mut Command, timeout: std::time::Duration, diagnostic: bool) -> std::io::Result<String> {
     use std::{
         io::Read,
         process::Stdio,
@@ -158,8 +167,17 @@ fn engine_output(command: &mut Command, timeout: std::time::Duration) -> std::io
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(if diagnostic { Stdio::piped() } else { Stdio::null() })
         .spawn()?;
+    let errors = child.stderr.take().map(|stderr| {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let result = stderr.take(4097).read_to_end(&mut bytes).map(|_| bytes);
+            let _ = sender.send(result);
+        });
+        receiver
+    });
     let stdout = child
         .stdout
         .take()
@@ -177,6 +195,12 @@ fn engine_output(command: &mut Command, timeout: std::time::Duration) -> std::io
     loop {
         if let Some(status) = child.try_wait()? {
             if !status.success() {
+                if let Some(errors) = errors {
+                    let bytes = errors.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                        .map_err(|_|std::io::Error::other("Container engine diagnostic timed out"))??;
+                    let message = String::from_utf8_lossy(&bytes[..bytes.len().min(4096)]);
+                    return Err(std::io::Error::other(format!("Container engine request failed: {}", message.trim())));
+                }
                 return Err(std::io::Error::other("Container engine request failed"));
             }
             let output = receiver
@@ -557,6 +581,16 @@ mod tests {
         )
         .is_err());
         assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
+    #[test]
+    fn engine_creation_diagnostics_are_opt_in_and_bounded() {
+        let missing = "/control-qa-missing-storage-probe";
+        let error = engine_output_diagnostic(Command::new("ls").arg(missing), std::time::Duration::from_secs(2), true).unwrap_err();
+        assert!(error.to_string().contains(missing));
+        let redacted = engine_output(Command::new("ls").arg(missing), std::time::Duration::from_secs(2)).unwrap_err();
+        assert_eq!(redacted.to_string(), "Container engine request failed");
+        let error = engine_output_diagnostic(Command::new("sh").args(["-c", "head -c 65536 /dev/zero >&2; exit 1"]), std::time::Duration::from_secs(2), true).unwrap_err();
+        assert!(error.to_string().len() <= 4096 + "Container engine request failed: ".len());
     }
     #[test]
     fn workers_require_content_addressed_images() {

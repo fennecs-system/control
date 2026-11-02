@@ -50,6 +50,24 @@ impl<'de> Deserialize<'de> for CommandText {
             .map_err(serde::de::Error::custom)
     }
 }
+/// Missing durable fields mean the original tmpfs layout. Never reinterpret a
+/// running legacy container when the operator upgrades Control.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum Storage {
+    #[default]
+    Memory,
+    Disk { limit_mb: Option<NonZeroU32> },
+}
+impl Storage {
+    fn is_memory(&self) -> bool { *self == Self::Memory }
+    fn options(self) -> HashMap<String, String> {
+        match self {
+            Self::Disk { limit_mb: Some(limit) } => HashMap::from([("size".into(), format!("{limit}M"))]),
+            _ => HashMap::new(),
+        }
+    }
+}
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Service {
@@ -63,6 +81,8 @@ pub struct Service {
     workspace_exec: bool,
     #[serde(default, skip_serializing_if = "crate::worker_profile::Profile::is_lite")]
     profile: crate::worker_profile::Profile,
+    #[serde(default, skip_serializing_if = "Storage::is_memory")]
+    storage: Storage,
     #[serde(default)]
     diagnostic: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -112,7 +132,7 @@ impl Service {
         Grant { id:self.resource.id.clone(),owner:self.resource.owner.clone(),generation:self.resource.generation }
     }
     pub(crate) fn binding_snapshot(&self)->Self {
-        Self {resource:self.resource.clone(),origin:self.origin.clone(),actor:self.actor.clone(),command:self.command.clone(),uid:self.uid,gid:self.gid,workspace_exec:self.workspace_exec,profile:self.profile,diagnostic:String::new(),output:String::new(),exit_code:None,executions:Vec::new(),command_receipts:Vec::new()}
+        Self {resource:self.resource.clone(),origin:self.origin.clone(),actor:self.actor.clone(),command:self.command.clone(),uid:self.uid,gid:self.gid,workspace_exec:self.workspace_exec,profile:self.profile,storage:self.storage,diagnostic:String::new(),output:String::new(),exit_code:None,executions:Vec::new(),command_receipts:Vec::new()}
     }
     pub(crate) fn owned_by(&self, node: &NodeId, chat: &str, actor: &Actor) -> bool {
         self.resource.owner.node == *node
@@ -126,8 +146,11 @@ impl Service {
             self.resource.generation.get()
         )
     }
+    fn readonly_root(&self) -> bool {
+        self.storage == Storage::Memory && self.profile.readonly_root()
+    }
     fn summary(&self) -> Value {
-        json!({"service_id":self.resource.id,"phase":self.resource.phase,"scope":self.resource.scope,"workspace_executable":self.workspace_exec,"expires_unix":(!self.resource.lease.is_until_stopped()).then(||self.resource.lease.expires()),"until_stopped":self.resource.lease.is_until_stopped(),"diagnostic":self.diagnostic,"output":self.output,"exit_code":self.exit_code,"output_limit_bytes":OUTPUT,"executions":self.executions.iter().map(|e|e.brief()).collect::<Vec<_>>()})
+        json!({"service_id":self.resource.id,"phase":self.resource.phase,"scope":self.resource.scope,"storage":self.storage,"workspace_executable":self.workspace_exec,"expires_unix":(!self.resource.lease.is_until_stopped()).then(||self.resource.lease.expires()),"until_stopped":self.resource.lease.is_until_stopped(),"diagnostic":self.diagnostic,"output":self.output,"exit_code":self.exit_code,"output_limit_bytes":OUTPUT,"executions":self.executions.iter().map(|e|e.brief()).collect::<Vec<_>>()})
     }
 }
 #[derive(Deserialize)]
@@ -136,13 +159,15 @@ struct Input {
     command: CommandText,
     #[serde(default = "default_lease")]
     lease_seconds: i64,
+    #[serde(default)]
+    storage_limit_mb: Option<NonZeroU32>,
 }
 fn default_lease() -> i64 {
     -1
 }
 pub fn definitions() -> Vec<Value> {
     let mut tools = vec![
-        json!({"name":"control_service_start","description":"Start a chat-owned offline tool container that survives model turns and Control restart. lease_seconds=-1 (default) retains it until explicitly stopped; a positive duration limits its lifetime. Private bounded /workspace memory, no attempt files, credentials, network or host mounts. Use a foreground command. The immutable worker image needs control-service-runner. Returns a durable handle immediately; inspect status before assuming startup succeeded. State lasts for this container, not engine/machine restart.","inputSchema":{"type":"object","properties":{"command":{"type":"string","minLength":1,"maxLength":16000},"lease_seconds":{"type":"integer","oneOf":[{"const":-1},{"minimum":1,"maximum":3600}],"default":-1}},"required":["command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"openWorldHint":false}}),
+        json!({"name":"control_service_start","description":"Start a chat-owned offline tool container that survives model turns and Control restart. lease_seconds=-1 (default) retains it until explicitly stopped; a positive duration limits its lifetime. Private disk-backed /workspace for task files and worktrees and /home/agent for tool configuration and caches, with no default disk cap. RAM-backed /tmp is disposable scratch (128 MiB), erased on container restart. Optional storage_limit_mb caps the private writable layer only and requires Docker quota support; mounted folders are excluded. No attempt files, credentials, network or host mounts. Use a foreground command. The immutable worker image needs control-service-runner. Returns a durable handle immediately; inspect status before assuming startup succeeded. Workspace and home files last until container removal.","inputSchema":{"type":"object","properties":{"command":{"type":"string","minLength":1,"maxLength":16000},"lease_seconds":{"type":"integer","oneOf":[{"const":-1},{"minimum":1,"maximum":3600}],"default":-1},"storage_limit_mb":{"type":"integer","minimum":1,"maximum":u32::MAX,"description":"Optional private writable-layer quota in MiB; mounts are excluded. Requires a quota-capable Docker storage driver. Omit for no Control disk cap; unsupported quotas fail creation."}},"required":["command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"openWorldHint":false}}),
     ];
     for (name, description, readonly) in [
         (
@@ -365,8 +390,9 @@ fn admit_profile(
     if let Some(existing) = s.services.iter().find(|service| service.resource.id == id) {
         if existing.command.0 != input.command.0
             || existing.resource.lease.seconds() != lease.seconds()
+            || match existing.storage { Storage::Disk { limit_mb } => limit_mb != input.storage_limit_mb, Storage::Memory => input.storage_limit_mb.is_some() }
         {
-            return Err(fail("Request identity already has a different command"));
+            return Err(fail("Request identity already has a different command or storage policy"));
         }
         return Ok(existing.summary());
     }
@@ -415,6 +441,7 @@ fn admit_profile(
         gid: unsafe { libc::getgid() },
         workspace_exec: true,
         profile,
+        storage: Storage::Disk { limit_mb: input.storage_limit_mb },
         diagnostic: String::new(),
         output: String::new(),
         exit_code: None,
@@ -502,13 +529,16 @@ struct Inspection {
     pids: u64,
     mounts: Vec<Value>,
     tmpfs: HashMap<String, String>,
+    #[serde(default)]
+    storage_opts: Option<HashMap<String, String>>,
     entrypoint: Vec<String>,
     command: Vec<String>,
 }
-const INSPECT: &str = r#"{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Image}},"node":{{json (index .Config.Labels "dev.control.node")}},"resource":{{json (index .Config.Labels "dev.control.resource")}},"chat":{{json (index .Config.Labels "dev.control.chat")}},"generation":{{json (index .Config.Labels "dev.control.generation")}},"status":{{json .State.Status}},"exit_code":{{json .State.ExitCode}},"network":{{json .HostConfig.NetworkMode}},"readonly":{{json .HostConfig.ReadonlyRootfs}},"privileged":{{json .HostConfig.Privileged}},"user":{{json .Config.User}},"pid_mode":{{json .HostConfig.PidMode}},"restart":{{json .HostConfig.RestartPolicy.Name}},"caps":{{json .HostConfig.CapDrop}},"security":{{json .HostConfig.SecurityOpt}},"memory":{{json .HostConfig.Memory}},"cpu":{{json .HostConfig.NanoCpus}},"pids":{{json .HostConfig.PidsLimit}},"mounts":{{json .Mounts}},"tmpfs":{{json .HostConfig.Tmpfs}},"entrypoint":{{json .Config.Entrypoint}},"command":{{json .Config.Cmd}}}"#;
+const INSPECT: &str = r#"{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Image}},"node":{{json (index .Config.Labels "dev.control.node")}},"resource":{{json (index .Config.Labels "dev.control.resource")}},"chat":{{json (index .Config.Labels "dev.control.chat")}},"generation":{{json (index .Config.Labels "dev.control.generation")}},"status":{{json .State.Status}},"exit_code":{{json .State.ExitCode}},"network":{{json .HostConfig.NetworkMode}},"readonly":{{json .HostConfig.ReadonlyRootfs}},"privileged":{{json .HostConfig.Privileged}},"user":{{json .Config.User}},"pid_mode":{{json .HostConfig.PidMode}},"restart":{{json .HostConfig.RestartPolicy.Name}},"caps":{{json .HostConfig.CapDrop}},"security":{{json .HostConfig.SecurityOpt}},"memory":{{json .HostConfig.Memory}},"cpu":{{json .HostConfig.NanoCpus}},"pids":{{json .HostConfig.PidsLimit}},"mounts":{{json .Mounts}},"tmpfs":{{if index .HostConfig "Tmpfs"}}{{json (index .HostConfig "Tmpfs")}}{{else}}{}{{end}},"storage_opts":{{json (index .HostConfig "StorageOpt")}},"entrypoint":{{json .Config.Entrypoint}},"command":{{json .Config.Cmd}}}"#;
 fn tmpfs(service: &Service) -> HashMap<String, String> {
     [("/workspace", service.profile.service_workspace_mb()), ("/tmp", 128), ("/home/agent", 32)]
         .into_iter()
+        .filter(|(path, _)| service.storage == Storage::Memory || *path == "/tmp")
         .map(|(path, size)| {
             (
                 path.to_owned(),
@@ -528,6 +558,7 @@ fn verify<'a>(service: &'a Service, inspection: &Inspection) -> io::Result<Verif
     let r = &service.resource;
     let deadline = r.lease.expires().to_string();
     let expected_tmpfs = tmpfs(service);
+    let expected_storage = service.storage.options();
     // The initial remaining TTL is recorded in the container. Its monotonic PID-1
     // watchdog remains authoritative across Control restart; never extend it.
     if inspection.name != format!("/{}", service.name())
@@ -540,7 +571,7 @@ fn verify<'a>(service: &'a Service, inspection: &Inspection) -> io::Result<Verif
             .container()
             .is_some_and(|id| id.as_str() != inspection.id)
         || inspection.network != "none"
-        || inspection.readonly != service.profile.readonly_root()
+        || inspection.readonly != service.readonly_root()
         || inspection.privileged
         || !inspection.pid_mode.is_empty()
         || inspection.restart != "no"
@@ -551,6 +582,10 @@ fn verify<'a>(service: &'a Service, inspection: &Inspection) -> io::Result<Verif
         || inspection.cpu != 1_000_000_000
         || inspection.pids != service.profile.service_pids()
         || inspection.tmpfs != expected_tmpfs
+        || match &inspection.storage_opts {
+            Some(options) => *options != expected_storage,
+            None => !expected_storage.is_empty(),
+        }
         || inspection.mounts.iter().any(|m| {
             m["Type"] != "tmpfs"
                 || !expected_tmpfs.contains_key(m["Destination"].as_str().unwrap_or(""))
@@ -686,7 +721,10 @@ impl Engine for Docker {
             "--workdir=/workspace".into(),
             "--entrypoint=control-service-runner".into(),
         ];
-        if service.profile.readonly_root() { args.push("--read-only".into()); }
+        if service.readonly_root() { args.push("--read-only".into()); }
+        for (key, value) in service.storage.options() {
+            args.extend(["--storage-opt".into(), format!("{key}={value}")]);
+        }
         for (key, value) in [
             ("node", r.owner.node.as_str().to_owned()),
             ("purpose", "service".into()),
@@ -705,7 +743,12 @@ impl Engine for Docker {
             r.lease.seconds().to_string(),
             service.command.0.to_string(),
         ]);
-        crate::runtime::docker_query(&args.iter().map(String::as_str).collect::<Vec<_>>())?
+        crate::runtime::docker_create(&args)
+            .map_err(|error| if !service.storage.options().is_empty() && ["storage-opt", "quota", "StorageOpt"].iter().any(|word|error.to_string().contains(word)) {
+                fail(format!("Could not create capped service: {error}. storage_limit_mb requires Docker storage-driver quota support; omit it for uncapped disk storage"))
+            } else {
+                error
+            })?
             .trim()
             .to_owned()
             .try_into()
@@ -987,6 +1030,7 @@ mod tests {
         Input {
             command: command.to_owned().try_into().unwrap(),
             lease_seconds: 60,
+            storage_limit_mb: None,
         }
     }
     pub(super) fn admit_fixture(
@@ -1020,7 +1064,7 @@ mod tests {
             status: "created".into(),
             exit_code: None,
             network: "none".into(),
-            readonly: true,
+            readonly: s.readonly_root(),
             privileged: false,
             user: format!("{}:{}", s.uid, s.gid),
             pid_mode: String::new(),
@@ -1032,6 +1076,7 @@ mod tests {
             pids: 64,
             mounts: Vec::new(),
             tmpfs: tmpfs(s),
+            storage_opts: Some(s.storage.options()),
             entrypoint: vec!["control-service-runner".into()],
             command: vec![
                 s.resource.lease.expires().to_string(),
@@ -1424,16 +1469,54 @@ mod tests {
     #[test]
     fn executable_workspace_policy_is_captured_and_legacy_services_remain_unchanged() {
         let(mut state,run,_,time)=fixture();admit_fixture(&mut state,&run,time,|_|Ok(())).unwrap();
-        let mut current=state.services[0].clone();assert!(current.workspace_exec);current.resource.phase=Phase::Creating;
+        let mut current=state.services[0].clone();assert!(current.workspace_exec);current.resource.phase=Phase::Creating;current.storage=Storage::Memory;
         let mut old=serde_json::to_value(&current).unwrap();assert_eq!(old["workspace_exec"],true);old.as_object_mut().unwrap().remove("workspace_exec");let legacy:Service=serde_json::from_value(old).unwrap();assert!(!legacy.workspace_exec);assert!(serde_json::to_value(&legacy).unwrap().get("workspace_exec").is_none());
         assert!(tmpfs(&current)["/workspace"].contains("rw,exec,nosuid,nodev"));assert!(!tmpfs(&legacy)["/workspace"].contains("exec"));assert_eq!(tmpfs(&current)["/tmp"],tmpfs(&legacy)["/tmp"]);
         let old_observation=inspection(&legacy,&"b".repeat(64));let new_observation=inspection(&current,&"b".repeat(64));assert!(verify(&legacy,&old_observation).is_ok());assert!(verify(&current,&new_observation).is_ok());assert!(verify(&legacy,&new_observation).is_err());assert!(verify(&current,&old_observation).is_err());
+    }
+    #[test]
+    fn disk_storage_defaults_and_captured_quota_are_verified() {
+        let (mut state, run, _, time) = fixture();
+        admit_fixture(&mut state, &run, time, |_| Ok(())).unwrap();
+        let mut service = state.services[0].clone();
+        service.resource.phase = Phase::Creating;
+        assert_eq!(service.storage, Storage::Disk { limit_mb: None });
+        assert_eq!(tmpfs(&service).len(), 1);
+        assert!(tmpfs(&service).contains_key("/tmp"));
+        assert!(!service.readonly_root());
+        let observed = inspection(&service, &"b".repeat(64));
+        assert!(verify(&service, &observed).is_ok());
+        service.storage = Storage::Disk { limit_mb: NonZeroU32::new(4096) };
+        assert!(verify(&service, &observed).is_err(), "Missing quota must fail closed");
+        let mut capped = inspection(&service, &"b".repeat(64));
+        assert_eq!(capped.storage_opts.as_ref().unwrap()["size"], "4096M");
+        assert!(verify(&service, &capped).is_ok());
+        capped.storage_opts.as_mut().unwrap().insert("size".into(), "8192M".into());
+        assert!(verify(&service, &capped).is_err());
+        let restored: Service = serde_json::from_value(serde_json::to_value(&service).unwrap()).unwrap();
+        assert_eq!(restored.storage, service.storage);
+        assert_eq!(service.binding_snapshot().storage, service.storage);
+        let mut old = serde_json::to_value(&service).unwrap();
+        old.as_object_mut().unwrap().remove("storage");
+        let legacy: Service = serde_json::from_value(old).unwrap();
+        assert_eq!(legacy.storage, Storage::Memory);
+        assert!(legacy.readonly_root());
+        assert!(verify(&legacy, &inspection(&legacy, &"b".repeat(64))).is_ok());
+        assert!(verify(&legacy, &observed).is_err());
+        for limit in [json!(0), json!(-1), json!(4294967296u64), json!("1g")] {
+            assert!(serde_json::from_value::<Input>(json!({"command":"sleep 30","storage_limit_mb":limit})).is_err());
+        }
+        let request = Request { run: &run, generation: "attempt-a", nonce: "nonce-a" };
+        let mut retry = input("printf counter; sleep 30");
+        retry.storage_limit_mb = NonZeroU32::new(4096);
+        assert!(admit(&mut state, request, retry, "node-a".to_owned().try_into().unwrap(), time, |_| panic!("Quota changes must not save")).is_err());
     }
     #[test]
     fn full_profile_captures_private_store_policy_and_legacy_stays_readonly() {
         let (mut state, run, _, time) = fixture();
         admit_fixture(&mut state, &run, time, |_| Ok(())).unwrap();
         let mut service = state.services[0].clone();
+        service.storage = Storage::Memory;
         assert!(serde_json::to_value(&service).unwrap().get("profile").is_none());
         service.resource.phase = Phase::Creating;
         let mut observed = inspection(&service, &"b".repeat(64));
@@ -1449,6 +1532,57 @@ mod tests {
         assert!(verify(&restored, &observed).is_ok());
         service.profile = crate::worker_profile::Profile::Lite;
         assert!(verify(&service, &observed).is_err());
+    }
+    #[test]
+    #[ignore = "requires CONTROL_QA_SERVICE_IMAGE and local Linux Docker; isolated storage probe, no models or credentials"]
+    fn live_disk_storage_exceeds_old_workspace_limit_and_survives_container_restart() {
+        let image = std::env::var("CONTROL_QA_SERVICE_IMAGE").unwrap();
+        let profile = crate::worker_profile::Profile::inspect(&image).unwrap();
+        let (mut state, run, _, time) = fixture();
+        let node = format!("storage-qa-{}-{}", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos());
+        admit_profile(&mut state, Request { run: &run, generation: "attempt-a", nonce: "disk-probe" }, input("sleep 120"), node.clone().try_into().unwrap(), time, profile, |_| Ok(())).unwrap();
+        let mut service = state.services.remove(0);
+        service.resource.image = image.try_into().unwrap();
+        service.resource.phase = Phase::Creating;
+        let id = Docker.create(&service).unwrap();
+        struct Container(ContainerId);
+        impl Drop for Container {
+            fn drop(&mut self) { let _ = crate::runtime::docker_query(&["rm", "-f", self.0.as_str()]); }
+        }
+        let cleanup = Container(id.clone());
+        let observations = Docker.inventory(&node).unwrap();
+        verify(&service, &observations[id.as_str()]).unwrap();
+        service.resource.phase = Phase::Starting(id.clone());
+        let binding = verify(&service, &observations[id.as_str()]).unwrap();
+        Docker.start(&binding).unwrap();
+        let output = crate::runtime::docker_query(&["exec", id.as_str(), "bash", "-c", "set -eu; test ! -w /bin; test ! -w /bin/control-tcp-relay; dd if=/dev/zero of=/workspace/large.bin bs=1048576 count=540; test \"$(stat -c %s /workspace/large.bin)\" = 566231040; printf persisted > /tmp/marker; printf persisted > /home/agent/marker; printf disk-probe-ok"]).unwrap();
+        assert!(output.contains("disk-probe-ok"));
+        crate::runtime::docker_query(&["stop", "--time=1", id.as_str()]).unwrap();
+        crate::runtime::docker_query(&["start", id.as_str()]).unwrap();
+        let output = crate::runtime::docker_query(&["exec", id.as_str(), "bash", "-c", "set -eu; test \"$(stat -c %s /workspace/large.bin)\" = 566231040; test ! -e /tmp/marker; test \"$(cat /home/agent/marker)\" = persisted; printf restart-ok"]).unwrap();
+        assert_eq!(output.trim(), "restart-ok");
+        let observations = Docker.inventory(&node).unwrap();
+        service.resource.phase = Phase::Running(id.clone());
+        verify(&service, &observations[id.as_str()]).unwrap();
+        assert!(observations[id.as_str()].mounts.iter().all(|m|m["Type"] == "tmpfs" && m["Destination"] == "/tmp"));
+        drop(cleanup);
+        assert!(Docker.inventory(&node).unwrap().is_empty());
+        service.resource.phase = Phase::Creating;
+        service.storage = Storage::Disk { limit_mb: NonZeroU32::new(1024) };
+        match Docker.create(&service) {
+            Ok(id) => {
+                let cleanup = Container(id.clone());
+                let observations = Docker.inventory(&node).unwrap();
+                verify(&service, &observations[id.as_str()]).unwrap();
+                println!("Engine accepted and retained the explicit 1024 MiB quota");
+                drop(cleanup);
+            }
+            Err(error) => {
+                assert!(error.to_string().contains("storage_limit_mb requires Docker storage-driver quota support"), "Unexpected engine failure: {error}");
+                assert!(Docker.inventory(&node).unwrap().is_empty(), "Rejected caps must not create an uncapped container");
+                println!("Engine rejected explicit cap; no uncapped fallback: {error}");
+            }
+        }
     }
     #[test]
     #[ignore = "requires CONTROL_QA_SERVICE_IMAGE (new pinned worker image), CONTROL_QA_CONTROL_BIN and a local Linux engine; no credentials/models"]
@@ -1484,7 +1618,7 @@ mod tests {
         fs::set_permissions(state_dir.join("node-id"), fs::Permissions::from_mode(0o600)).unwrap();
         let (mut s, run, _, time) = fixture();
         let profile = crate::worker_profile::Profile::inspect(&image).unwrap();
-        let value=admit_profile(&mut s,Request{run:&run,generation:"attempt-a",nonce:"live"},Input{command:"printf durable > /workspace/counter; if (exec 3<> /proc/1/mem) 2>/dev/null; then exit 41; fi; kill -STOP 1 2>/dev/null || true; echo ready; sleep 60".to_owned().try_into().unwrap(),lease_seconds:20},node.clone().try_into().unwrap(),time,profile,|_|Ok(())).unwrap();
+        let value=admit_profile(&mut s,Request{run:&run,generation:"attempt-a",nonce:"live"},Input{command:"printf durable > /workspace/counter; if (exec 3<> /proc/1/mem) 2>/dev/null; then exit 41; fi; kill -STOP 1 2>/dev/null || true; echo ready; sleep 60".to_owned().try_into().unwrap(),lease_seconds:20,storage_limit_mb:None},node.clone().try_into().unwrap(),time,profile,|_|Ok(())).unwrap();
         assert!(value["service_id"].is_string());
         s.services[0].resource.image = image.try_into().unwrap();
         s.runtime.runs[0].status = "completed".into();
