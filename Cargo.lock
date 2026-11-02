@@ -149,6 +149,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "control-effect"
+version = "0.1.0"
+
+[[package]]
 name = "control-http"
 version = "0.1.0"
 dependencies = [
