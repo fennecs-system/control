@@ -1244,40 +1244,41 @@ pub fn supervise(shared: Arc<Mutex<State>>) -> JoinHandle<()> {
             return;
         };
         let mut active: HashMap<ResourceId, Active> = HashMap::new();
+        let changes = crate::storage::changes().clone();
+        let shutdown = crate::shutdown::token();
         while !crate::shutdown::requested() {
-            if let Ok(mut state) = shared.lock() {
+            // Saves made during this pass, including its own, cause one more pass.
+            let seen = changes.generation();
+            let (mut start, mut stop) = (Vec::new(), Vec::new());
+            {
+                let Ok(mut state) = shared.lock() else { break };
                 let _ = decisions::advance(&mut state, crate::storage::save);
-            }
-            let ports = match shared.lock() {
-                Ok(s) => s
-                    .ports
-                    .iter()
-                    .filter(|p| p.status != Status::Stopped)
-                    .cloned()
-                    .collect::<Vec<_>>(),
-                Err(_) => break,
-            };
-            for port in ports {
-                let decision = shared
-                    .lock()
-                    .map(|s| intent(&s, &port, &node, now()))
-                    .unwrap_or(Intent::Stop);
-                if decision != Intent::Serve {
-                    if let Some(a) = active.remove(&port.id) {
-                        a.cancel.store(true, Ordering::Release);
-                        let _ = a.handle.join();
+                let time = now();
+                for port in state.ports.iter().filter(|p| p.status != Status::Stopped) {
+                    match intent(&state, port, &node, time) {
+                        Intent::Serve => {
+                            if active.get(&port.id).is_none_or(|a| a.handle.is_finished()) {
+                                start.push(port.clone());
+                            }
+                        }
+                        decision => stop.push((port.id.clone(), decision == Intent::Stop)),
                     }
-                    if decision == Intent::Stop {
-                        stop_record(&shared, &port.id);
-                    }
-                    continue;
                 }
-                if active.get(&port.id).is_some_and(|a| a.handle.is_finished())
-                    && let Some(a) = active.remove(&port.id)
-                {
+            }
+            for (id, record) in stop {
+                if let Some(a) = active.remove(&id) {
+                    a.cancel.store(true, Ordering::Release);
                     let _ = a.handle.join();
                 }
-                if !active.contains_key(&port.id) {
+                if record {
+                    stop_record(&shared, &id);
+                }
+            }
+            for port in start {
+                if let Some(a) = active.remove(&port.id) {
+                    let _ = a.handle.join();
+                }
+                {
                     let cancel = Arc::new(AtomicBool::new(false));
                     let signal = cancel.clone();
                     let state = shared.clone();
@@ -1296,7 +1297,9 @@ pub fn supervise(shared: Arc<Mutex<State>>) -> JoinHandle<()> {
                     active.insert(id, Active { cancel, handle });
                 }
             }
-            crate::shutdown::pause(Duration::from_millis(200));
+            // Approvals, revocations and service changes are saved and wake this
+            // loop at once; the bound covers time-based expiry and relay restarts.
+            let _ = changes.wait_newer(seen, Some(Instant::now() + Duration::from_secs(1)), &shutdown);
         }
         for (_, a) in active {
             a.cancel.store(true, Ordering::Release);
