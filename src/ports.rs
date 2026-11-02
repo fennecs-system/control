@@ -7,7 +7,7 @@ mod multiplex_transport;
 #[path = "../tools/tcp-relay/protocol.rs"]
 mod protocol;
 mod tools;
-pub use tools::{PortCall, PortOps, Tools};
+pub use tools::{PortCall, PortOps, Selection, Tools};
 use crate::{
     State,
     identity::{self, Action, Actor},
@@ -30,9 +30,9 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-const MAX_PORTS: usize = 64;
-const PORTS_PER_CHAT: usize = 8;
-const MAX_RECORDS: usize = 128;
+const MAX_PORTS: usize = 256;
+const PORTS_PER_CHAT: usize = 16;
+const MAX_RECORDS: usize = 2 * MAX_PORTS;
 const MAX_CONNECTIONS: usize = 8;
 fn fail(s: impl ToString) -> io::Error {
     io::Error::other(s.to_string())
@@ -66,7 +66,7 @@ impl From<Name> for String {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum Direction {
+pub enum Direction {
     Ingress,
     Egress,
 }
@@ -454,8 +454,9 @@ pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
     let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
     let (stop, port_id) = match call {
         PortCall::Request(input) => return admit(&mut state, run, generation, attempt.nonce, input, node, crate::storage::save),
-        PortCall::Status(port_id) => (false, port_id),
-        PortCall::Stop(port_id) => (true, port_id),
+        PortCall::Status(port_id) => (None, port_id),
+        PortCall::Stop(Selection::Port(port_id)) => (Some(None), Some(port_id)),
+        PortCall::Stop(Selection::Matching { service, direction }) => (Some(Some((service, direction))), None),
     };
     let r = state
         .runtime
@@ -473,7 +474,14 @@ pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
     }
     r.chat_id.as_ref().ok_or_else(|| fail("A chat is required"))?;
     let owned = |p: &&Port| accessible(&state,p,r,&node);
-    if !stop && port_id.is_none() {
+    if let Some(Some((service, direction))) = stop {
+        let chosen: Vec<usize> = state.ports.iter().enumerate()
+            .filter(|(_, p)| p.status != Status::Stopped && owned(p))
+            .filter(|(_, p)| service.as_ref().is_none_or(|s| &p.service == s) && direction.is_none_or(|d| p.direction == d))
+            .map(|(index, _)| index).collect();
+        return stop_all(&mut state, &chosen, crate::storage::save);
+    }
+    if stop.is_none() && port_id.is_none() {
         return Ok(
             json!({"ports":state.ports.iter().filter(owned).filter(|p|p.status!=Status::Stopped).chain(state.ports.iter().rev().filter(owned).filter(|p|p.status==Status::Stopped).take(10)).map(Port::summary).collect::<Vec<_>>()}),
         );
@@ -486,7 +494,7 @@ pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
                 && Some(&p.id) == port_id.as_ref()
         })
         .ok_or_else(|| fail("Owned port not found"))?;
-    if stop && state.ports[index].status != Status::Stopped {
+    if stop.is_some() && state.ports[index].status != Status::Stopped {
         let old = state.ports[index].status;
         state.ports[index].status = Status::Stopping;
         if let Err(e) = crate::storage::save(&state) {
@@ -497,6 +505,15 @@ pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
     Ok(state.ports[index].summary())
 }
 
+fn stop_all(state: &mut State, chosen: &[usize], save: impl Fn(&State) -> io::Result<()>) -> io::Result<Value> {
+    let old: Vec<Status> = chosen.iter().map(|&i| state.ports[i].status).collect();
+    chosen.iter().for_each(|&i| state.ports[i].status = Status::Stopping);
+    if let Err(e) = save(state) {
+        chosen.iter().zip(old).for_each(|(&i, status)| state.ports[i].status = status);
+        return Err(e);
+    }
+    Ok(json!({"stopped":chosen.iter().map(|&i| state.ports[i].summary()).collect::<Vec<_>>()}))
+}
 fn approve(
     state: &mut State,
     id: &str,
@@ -1412,6 +1429,24 @@ pub(crate) mod tests {
         fill(&mut state, "c-third", MAX_PORTS);
         let error = ask(&mut state, "nonce-d", "third").unwrap_err().to_string();
         assert!(error.contains("node-wide"), "{error}");
+    }
+    #[test]
+    fn stopping_many_ports_is_one_save_and_rolls_back_together() {
+        let (mut state, run, _) = fixture();
+        request(&mut state, &run, Direction::Ingress).unwrap();
+        let mut second = state.ports[0].clone();
+        second.id = ResourceId::try_from("port-second".to_owned()).unwrap();
+        state.ports.push(second);
+        let before: Vec<Status> = state.ports.iter().map(|p| p.status).collect();
+        assert!(stop_all(&mut state, &[0, 1], |_| Err(io::Error::other("disk"))).is_err());
+        assert_eq!(state.ports.iter().map(|p| p.status).collect::<Vec<_>>(), before);
+        let saves = std::cell::Cell::new(0);
+        let stopped = stop_all(&mut state, &[0, 1], |_| {
+            saves.set(saves.get() + 1);
+            Ok(())
+        }).unwrap();
+        assert_eq!((saves.get(), stopped["stopped"].as_array().unwrap().len()), (1, 2));
+        assert!(state.ports.iter().all(|p| p.status == Status::Stopping));
     }
     #[test]
     #[ignore = "requires local Chrome/Firefox WebDriver; isolated fixture, no credentials/models"]
