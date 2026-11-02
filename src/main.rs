@@ -150,7 +150,7 @@ fn render_with_content(state: &State, view: &str, lens: &str, channel: &str, sup
         "providers" => providers::render(&state.runtime),
         "tools" => tool_catalog::render(state, if channel == "general" { "" } else { channel }),
         "session" => chat::render(state,channel).unwrap_or_else(escape),
-        "session-list" | "artifact-page" | "browser" | "tool-page" => channel.to_owned(),
+        "session-list" | "history" | "artifact-page" | "browser" | "tool-page" => channel.to_owned(),
         "editor" | "knowledge" => knowledge::render(state,if view=="editor"{"scratchpad"}else{""},None),
         "knowledge-page" => channel.to_owned(),
         "rooms" => rooms::render(state,channel),
@@ -164,7 +164,7 @@ fn render_with_content(state: &State, view: &str, lens: &str, channel: &str, sup
     page
 }
 /// Views whose `channel` is trusted, pre-rendered HTML from internal routes only.
-const INTERNAL_VIEWS: [&str; 6] = ["session-list", "artifact-page", "browser", "tool-page", "knowledge-page", "lens-page"];
+const INTERNAL_VIEWS: [&str; 7] = ["session-list", "history", "artifact-page", "browser", "tool-page", "knowledge-page", "lens-page"];
 /// `GET /`: query values are untrusted, so internal HTML-carrying views fall back to the hub.
 fn public_render(state: &State, query: &HashMap<String, String>, lens: &str) -> String {
     let view = query.get("view").map(String::as_str).filter(|v| !INTERNAL_VIEWS.contains(v)).unwrap_or("hub");

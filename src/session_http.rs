@@ -271,7 +271,7 @@ pub fn handle(
     if path=="/chats/history" && method=="GET" {
         let query=crate::fields(query);
         let html=crate::navigation::history(state,query.get("older").map(String::as_str),query.get("newer").map(String::as_str));
-        respond(stream,"200 OK","text/html; charset=utf-8",&crate::render(state,"session-list",lens,&html),"");
+        respond(stream,"200 OK","text/html; charset=utf-8",&crate::render(state,"history",lens,&html),"");
         return true;
     }
     if path == "/chats" && method == "GET" {
@@ -583,6 +583,22 @@ mod tests {
         b.post("/url",json!({"url":format!("{server}/chats/history")}));
         assert_eq!(b.post("/elements",json!({"using":"css selector","value":".conversation-history nav a[href^='/chat/']"})).as_array().unwrap().len(),11);
         let nested=b.element(&format!("a[href='/chat/{child}']"));assert_eq!(b.get(&format!("/element/{nested}/displayed")),false,"Child agents start collapsed under their parent");
+        b.element(".sidebar a[href='/chats/history'][aria-current='page']");
+        b.element("nav[aria-label='History'] a[href='/chats/history'][aria-current='page']");
+        let branch=b.element(".conversation-history .conversation-branch > summary");
+        b.post(&format!("/element/{branch}/value"),json!({"text":" "}));
+        assert_eq!(b.get(&format!("/element/{nested}/displayed")),true,"The arrow must disclose nested conversations");
+        if let Ok(path)=std::env::var("CONTROL_QA_HISTORY_SCREENSHOT") {
+            use base64::Engine;
+            let screenshot=b.get("/screenshot");
+            std::fs::write(path,base64::engine::general_purpose::STANDARD.decode(screenshot.as_str().unwrap()).unwrap()).unwrap();
+        }
+        for width in [1280,390] {
+            b.post("/window/rect",json!({"width":width,"height":900}));
+            let body=b.element("body");
+            assert!(b.get(&format!("/element/{body}/property/scrollWidth")).as_i64().unwrap()<=b.get(&format!("/element/{body}/property/clientWidth")).as_i64().unwrap(),"History must fit narrow screens without horizontal scrolling");
+        }
+        b.post("/window/rect",json!({"width":1280,"height":900}));
         let older=b.element(".history-controls a[href*='older=']");b.post(&format!("/element/{older}/click"),json!({}));b.wait("History thread 14");assert!(!b.text("body").contains("History thread 24"));
         let parent={let mut state=state.lock().unwrap();
             let parent=state.chats.iter().find(|session|session.id==child).unwrap().parent_chat.clone().unwrap();

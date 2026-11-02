@@ -155,7 +155,7 @@ fn card(service: &Service, live: Option<&Live>) -> String {
     }).unwrap_or_default();
     let diagnostic = if service.diagnostic.is_empty() { String::new() } else { format!("<p class='muted'>{}</p>", crate::escape(&service.diagnostic)) };
     format!(
-        "<article><h3><code>{}</code></h3><p>{} · {:?} profile · {storage} · {lease}</p><p>{conversation}{container}image {}</p>{stats}{processes}{diagnostic}</article>",
+        "<article class='record service-record'><h3><code>{}</code></h3><p>{} · {:?} profile · {storage} · {lease}</p><p>{conversation}{container}image {}</p>{stats}{processes}{diagnostic}</article>",
         crate::escape(&command),
         phase(&resource.phase),
         service.profile,
