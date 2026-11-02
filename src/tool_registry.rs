@@ -12,62 +12,13 @@ pub struct AttemptRef<'a> {
     pub generation: &'a str,
     pub nonce: &'a str,
 }
-/// Typed operations Control offers to tool sets. Authorization, persistence
-/// and fences stay inside the host.
-pub trait Host {
-    fn jobs(&self) -> &dyn crate::command_jobs::JobOps;
-    fn services(&self) -> &dyn crate::services::ServiceOps;
-    fn ports(&self) -> &dyn crate::ports::PortOps;
-    fn bots(&self) -> &dyn crate::bots::BotOps;
-    fn messages(&self) -> &dyn crate::agent_message::MessageOps;
-}
+/// Application state as seen by tool families. Each family defines its own
+/// operations trait and implements it for `LocalHost` in its module, where it
+/// meets `State`; adding a family only lists its tools below.
+pub struct LocalHost<'a>(pub &'a Arc<Mutex<crate::State>>);
 pub struct AttemptCall<'a> {
     pub attempt: AttemptRef<'a>,
-    pub host: &'a dyn Host,
-}
-/// Adapts application state to `Host`; the only place tools meet `State`.
-pub struct LocalHost<'a>(pub &'a Arc<Mutex<crate::State>>);
-impl Host for LocalHost<'_> {
-    fn jobs(&self) -> &dyn crate::command_jobs::JobOps {
-        self
-    }
-    fn services(&self) -> &dyn crate::services::ServiceOps {
-        self
-    }
-    fn ports(&self) -> &dyn crate::ports::PortOps {
-        self
-    }
-    fn bots(&self) -> &dyn crate::bots::BotOps {
-        self
-    }
-    fn messages(&self) -> &dyn crate::agent_message::MessageOps {
-        self
-    }
-}
-impl crate::command_jobs::JobOps for LocalHost<'_> {
-    fn job(&self, attempt: &AttemptRef<'_>, call: crate::command_jobs::JobCall) -> io::Result<Value> {
-        crate::command_jobs::execute(self.0, attempt, call)
-    }
-}
-impl crate::services::ServiceOps for LocalHost<'_> {
-    fn service(&self, attempt: &AttemptRef<'_>, call: crate::services::ServiceCall) -> io::Result<Value> {
-        crate::services::execute(self.0, attempt, call)
-    }
-}
-impl crate::ports::PortOps for LocalHost<'_> {
-    fn port(&self, attempt: &AttemptRef<'_>, call: crate::ports::PortCall) -> io::Result<Value> {
-        crate::ports::execute(self.0, attempt, call)
-    }
-}
-impl crate::bots::BotOps for LocalHost<'_> {
-    fn bot(&self, attempt: &AttemptRef<'_>, call: crate::bots::BotCall) -> io::Result<Value> {
-        crate::bots::execute(self.0, attempt, call)
-    }
-}
-impl crate::agent_message::MessageOps for LocalHost<'_> {
-    fn message(&self, attempt: &AttemptRef<'_>, call: crate::agent_message::MessageCall) -> io::Result<Value> {
-        crate::agent_message::execute(self.0, attempt, call)
-    }
+    pub host: &'a LocalHost<'a>,
 }
 /// Worker tools bound to one attempt. Calls run without the state lock held.
 pub trait AttemptTools: Sync {

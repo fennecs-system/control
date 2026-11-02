@@ -1,7 +1,7 @@
 //! Messages from an agent to a chat it spawned, queued as that chat's next turn,
 //! so a blocked parent continues an existing child instead of spawning another.
 use crate::runtime::RunKind;
-use crate::{State, identity, tool_registry::{AttemptCall, AttemptRef, AttemptTools}};
+use crate::{State, identity, tool_registry::{AttemptCall, AttemptRef, AttemptTools, LocalHost}};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{io, sync::{Arc, Mutex}};
@@ -33,15 +33,24 @@ impl AttemptTools for Tools {
         name == "control_agent_message"
     }
     fn call(&self, cx: &AttemptCall<'_>, _: &str, args: &Value) -> io::Result<Value> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Input {
-            chat_id: String,
-            text: String,
-        }
-        let input = serde_json::from_value::<Input>(args.clone()).map_err(|_| io::Error::other("Expected chat_id and text"))?;
-        cx.host.messages().message(&cx.attempt, MessageCall { chat_id: input.chat_id, text: input.text })
+        run(cx.host, &cx.attempt, args)
     }
+}
+impl MessageOps for LocalHost<'_> {
+    fn message(&self, attempt: &AttemptRef<'_>, call: MessageCall) -> io::Result<Value> {
+        execute(self.0, attempt, call)
+    }
+}
+/// Decodes a call and runs it on whatever provides `MessageOps`.
+fn run(ops: &dyn MessageOps, attempt: &AttemptRef<'_>, args: &Value) -> io::Result<Value> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Input {
+        chat_id: String,
+        text: String,
+    }
+    let input = serde_json::from_value::<Input>(args.clone()).map_err(|_| io::Error::other("Expected chat_id and text"))?;
+    ops.message(attempt, MessageCall { chat_id: input.chat_id, text: input.text })
 }
 
 fn fail(message: &str) -> io::Error {

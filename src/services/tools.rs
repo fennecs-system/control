@@ -1,7 +1,7 @@
 //! Service tool schemas and input decoding. Ownership, the resource reducer,
 //! container checks and checkpoints stay behind `ServiceOps`.
 use super::{Input, commands};
-use crate::tool_registry::{AttemptCall, AttemptRef, AttemptTools};
+use crate::tool_registry::{AttemptCall, AttemptRef, AttemptTools, LocalHost};
 use serde_json::{Value, json};
 use std::io;
 
@@ -56,8 +56,17 @@ impl AttemptTools for Tools {
         )
     }
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
-        cx.host.services().service(&cx.attempt, decode(name, args)?)
+        run(cx.host, &cx.attempt, name, args)
     }
+}
+impl ServiceOps for LocalHost<'_> {
+    fn service(&self, attempt: &AttemptRef<'_>, call: ServiceCall) -> io::Result<Value> {
+        super::execute(self.0, attempt, call)
+    }
+}
+/// Decodes a call and runs it on whatever provides `ServiceOps`.
+fn run(ops: &dyn ServiceOps, attempt: &AttemptRef<'_>, name: &str, args: &Value) -> io::Result<Value> {
+    ops.service(attempt, decode(name, args)?)
 }
 /// Status, attach and stop read `service_id` only when it is a string; other
 /// fields are ignored, as before typed decoding.
@@ -81,28 +90,10 @@ fn decode(name: &str, args: &Value) -> io::Result<ServiceCall> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tool_registry::Host;
     use std::sync::Mutex;
 
     #[derive(Default)]
     struct Recorder(Mutex<Vec<String>>);
-    impl Host for Recorder {
-        fn jobs(&self) -> &dyn crate::command_jobs::JobOps {
-            unreachable!("service tools must not reach job operations")
-        }
-        fn services(&self) -> &dyn ServiceOps {
-            self
-        }
-        fn ports(&self) -> &dyn crate::ports::PortOps {
-            unreachable!("service tools must not reach port operations")
-        }
-        fn bots(&self) -> &dyn crate::bots::BotOps {
-            unreachable!("service tools must not reach bot operations")
-        }
-        fn messages(&self) -> &dyn crate::agent_message::MessageOps {
-            unreachable!("service tools must not reach agent messages")
-        }
-    }
     impl ServiceOps for Recorder {
         fn service(&self, attempt: &AttemptRef<'_>, call: ServiceCall) -> io::Result<Value> {
             let id = |id: Option<String>| id.unwrap_or_else(|| "-".into());
@@ -122,8 +113,8 @@ mod tests {
     #[test]
     fn service_tools_decode_typed_calls_and_keep_lenient_service_ids() {
         let host = Recorder::default();
-        let cx = AttemptCall { attempt: AttemptRef { run: "run", generation: "gen", nonce: "n1" }, host: &host };
-        let call = |name: &str, args: Value| Tools.call(&cx, name, &args);
+        let attempt = AttemptRef { run: "run", generation: "gen", nonce: "n1" };
+        let call = |name: &str, args: Value| run(&host, &attempt, name, &args);
         call("control_service_start", json!({"command":"sleep infinity"})).unwrap();
         call("control_service_status", json!({})).unwrap();
         call("control_service_status", json!({"service_id":7,"ignored":true})).unwrap();
