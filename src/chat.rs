@@ -398,6 +398,25 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
         let session = state.chats.iter().find(|s| s.id == id).ok_or("Chat not found.")?;
         let actor = session.actor.clone();
         let target = target.trim();
+        if target == "all" {
+            let chats = subtree(state, [id]).into_iter().map(str::to_owned).collect::<Vec<_>>();
+            let runs = state.runtime.runs.iter()
+                .filter(|run| run.chat_id.as_ref().is_some_and(|chat| chats.contains(chat)))
+                .filter(|run| matches!(run.status.as_str(), "queued" | "running" | "waiting"))
+                .filter(|run| actor == crate::identity::Actor::LocalOperator || run.actor == actor)
+                .map(|run| run.id.clone()).collect::<Vec<_>>();
+            for run in &runs {
+                crate::lifecycle::request_cancel(&mut state.runtime, run, &actor)?;
+            }
+            let bots = crate::bots::stop_all(state, &chats);
+            let session = state.chats.iter_mut().find(|s| s.id == id).unwrap();
+            session.messages.push(Message {
+                text: text.trim().into(), run_id: None,
+                reply: format!("Cancelled {} run(s) and stopped {bots} bot(s) across {} chat(s). Services keep running; stop them on the services page.", runs.len(), chats.len()),
+            });
+            session.revision = session.revision.saturating_add(1);
+            return Ok(());
+        }
         let run = state.runtime.runs.iter()
             .filter(|run| run.chat_id.as_deref() == Some(id))
             .filter(|run| ["queued", "running", "cancelling", "waiting"].contains(&run.status.as_str()))
@@ -950,6 +969,21 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
     }
 }
 
+/// The given chats and every chat spawned from them, at any depth.
+pub(crate) fn subtree<'a>(state: &'a State, roots: impl IntoIterator<Item = &'a str>) -> std::collections::HashSet<&'a str> {
+    let mut chats = roots.into_iter().collect::<std::collections::HashSet<_>>();
+    loop {
+        let before = chats.len();
+        for session in &state.chats {
+            if session.parent_chat.as_deref().is_some_and(|parent| chats.contains(parent)) {
+                chats.insert(session.id.as_str());
+            }
+        }
+        if chats.len() == before {
+            return chats;
+        }
+    }
+}
 /// Everything a chat command may change, restored together when the command or
 /// its save fails, whichever transport delivered it.
 pub(crate) struct Checkpoint {
@@ -968,7 +1002,10 @@ impl Checkpoint {
             chats: state.chats.len(),
             previous: state.chats.iter().enumerate().filter(|(_, s)| targets.contains(s.id.as_str())).map(|(i, s)| (i, s.clone())).collect(),
             runs: state.runtime.runs.len(),
-            pending: crate::runtime::RunStatusCheckpoint::capture(&state.runtime, |run| run.chat_id.as_deref().is_some_and(|chat| targets.contains(chat))),
+            pending: {
+                let chats = subtree(state, targets.iter().copied());
+                crate::runtime::RunStatusCheckpoint::capture(&state.runtime, |run| run.chat_id.as_deref().is_some_and(|chat| chats.contains(chat)))
+            },
             notice: state.runtime.notice.clone(),
             posts: state.collective.posts.len(),
             watches: state.collective.room_watches.clone(),
@@ -1527,5 +1564,51 @@ mod tests {
         send(&mut state,&id,"/room off","test").unwrap();
         assert_eq!(state.chats[0].room,None);
         assert!(!state.collective.room_watches.iter().any(|watch|watch.chat==id),"inbox watches of the old room are dropped");
+    }
+
+    fn tree() -> (State, String, String, String, String) {
+        let mut state = State::default();
+        let lead = create(&mut state);
+        send(&mut state, &lead, "Lead the playtest", "test").unwrap();
+        state.runtime.runs[0].status = "completed".into();
+        let spawn = |state: &mut State, parent: &str, status: &str| {
+            let chat = create(state);
+            state.chats.iter_mut().find(|s| s.id == chat).unwrap().parent_chat = Some(parent.into());
+            send(state, &chat, "Work", "test").unwrap();
+            state.runtime.runs.last_mut().unwrap().status = status.into();
+            chat
+        };
+        let child = spawn(&mut state, &lead, "completed");
+        let grandchild = spawn(&mut state, &child, "running");
+        let unrelated = create(&mut state);
+        send(&mut state, &unrelated, "Other work", "test").unwrap();
+        state.runtime.runs.last_mut().unwrap().status = "running".into();
+        crate::bots::command(&mut state, &child, "on every 5").unwrap();
+        (state, lead, child, grandchild, unrelated)
+    }
+    fn status<'a>(state: &'a State, chat: &str) -> &'a str {
+        state.runtime.runs.iter().rev().find(|run| run.chat_id.as_deref() == Some(chat)).unwrap().status.as_str()
+    }
+
+    #[test]
+    fn cancel_all_reaches_descendants_from_an_idle_chat() {
+        let (mut state, lead, child, grandchild, unrelated) = tree();
+        assert!(send(&mut state, &lead, "/cancel", "test").is_err(), "plain /cancel only targets this chat");
+        send(&mut state, &lead, "/cancel all", "test").unwrap();
+        assert_eq!(status(&state, &grandchild), "cancelling");
+        assert_eq!(status(&state, &unrelated), "running");
+        assert!(!crate::bots::defined(&state, &child), "an idle bot stops at once");
+        let reply = &state.chats.iter().find(|s| s.id == lead).unwrap().messages.last().unwrap().reply;
+        assert!(reply.contains("Cancelled 1 run(s) and stopped 1 bot(s) across 3 chat(s)"), "{reply}");
+    }
+
+    #[test]
+    fn cancel_all_rolls_back_descendants_when_the_save_fails() {
+        let (mut state, lead, _, _, _) = tree();
+        let before = serde_json::to_vec(&state).unwrap();
+        let checkpoint = Checkpoint::capture(&state, &std::iter::once(lead.as_str()).collect());
+        send(&mut state, &lead, "/cancel all", "test").unwrap();
+        checkpoint.restore(&mut state);
+        assert_eq!(serde_json::to_vec(&state).unwrap(), before);
     }
 }
