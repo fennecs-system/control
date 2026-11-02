@@ -16,7 +16,7 @@ pub struct Limits {
 impl Default for Limits {
     fn default() -> Self {
         Self {
-            max_parallel_runs: 2,
+            max_parallel_runs: 3,
             max_agents_per_root: 64,
             max_pending_agent_intents: 256,
         }
@@ -82,10 +82,57 @@ pub fn admit(runtime: &Runtime) -> Result<(), &'static str> {
     if scheduling::has_capacity(runtime.runs.iter()) { Ok(()) }
     else { Err("Run queue is full (32 pending tasks). Wait for work to finish or cancel a task.") }
 }
-#[inline]
+/// Delegated and spawned agents run in the background lane.
+fn background(run: &crate::runtime::Run) -> bool {
+    run.persona.as_ref().is_some_and(|persona| persona.parent.is_some())
+}
+/// Only each chat's oldest queued turn is a candidate, keeping chat FIFO. Among
+/// candidates, conversation turns start before background agents, and background
+/// agents use at most all but one slot, so a person is not queued behind them.
 pub fn next(runtime: &Runtime) -> Option<usize> {
     let capacity=Capacity::new(runtime.execution.max_parallel_runs.min(MAX_PARALLEL))?;
-    scheduling::next(runtime.runs.iter(),capacity,runtime.paused.is_some())
+    if runtime.paused.is_some() {
+        return None;
+    }
+    let mut heads=std::collections::HashMap::new();
+    for (index, run) in runtime.runs.iter().enumerate().filter(|(_, run)| run.status == "queued") {
+        if let Some(chat)=run.chat_id.as_deref() {
+            heads.entry(chat).and_modify(|head: &mut (u64, usize)| *head=(*head).min((run.queue_order, index))).or_insert((run.queue_order, index));
+        }
+    }
+    let candidate=|index: usize, run: &crate::runtime::Run| run.status == "queued"
+        && run.chat_id.as_deref().is_none_or(|chat| heads.get(chat).is_some_and(|head| head.1 == index));
+    let mut lanes=runtime.runs.iter().enumerate()
+        .map(|(index, run)| Lane {run, queued: candidate(index, run) && !background(run)})
+        .collect::<Vec<_>>();
+    if let Some(index)=scheduling::next(lanes.iter(),capacity,false) {
+        return Some(index);
+    }
+    let busy=runtime.runs.iter().filter(|run| background(run) && scheduling::RunView::occupies_slot(*run)).count();
+    if busy + usize::from(capacity.slots() > 1) >= capacity.slots() {
+        return None;
+    }
+    for (index, lane) in lanes.iter_mut().enumerate() {
+        lane.queued=candidate(index, lane.run) && background(lane.run);
+    }
+    scheduling::next(lanes.iter(),capacity,false)
+}
+/// One lane's view of the ledger: other lanes' queued runs are hidden, while
+/// every run's slot and chat reservations still count.
+struct Lane<'a> {
+    run: &'a crate::runtime::Run,
+    queued: bool,
+}
+impl scheduling::RunView for Lane<'_> {
+    fn phase(&self) -> Phase {
+        if self.run.status == "queued" && !self.queued { Phase::Inactive } else { phase(self.run) }
+    }
+    fn chat(&self) -> Option<&str> { self.run.chat_id.as_deref() }
+    fn queue_order(&self) -> u64 { self.run.queue_order }
+    fn occupies_slot(&self) -> bool { scheduling::RunView::occupies_slot(self.run) }
+    fn is_queued(&self) -> bool { self.queued }
+    fn is_pending(&self) -> bool { scheduling::RunView::is_pending(self.run) }
+    fn reserves_chat(&self) -> bool { scheduling::RunView::reserves_chat(self.run) }
 }
 impl scheduling::RunView for crate::runtime::Run {
     #[inline]
@@ -116,6 +163,7 @@ mod tests {
     #[test]
     fn slots_overlap_chats_but_never_reorder_or_overlap_a_conversation() {
         let mut runtime = Runtime::default();
+        runtime.execution.max_parallel_runs = 2;
         for chat in ["a", "a", "b", "c"] {
             runtime.enqueue("Task".into(), "chat", "test");
             runtime.runs.last_mut().unwrap().chat_id = Some(chat.into());
@@ -179,7 +227,7 @@ mod tests {
         ));
         std::fs::create_dir(&directory).unwrap();
         let file = directory.join("execution.json");
-        assert_eq!(load_limits_in(&file, None).unwrap().max_parallel_runs, 2);
+        assert_eq!(load_limits_in(&file, None).unwrap().max_parallel_runs, 3);
         assert_eq!(load_limits_in(&file, None).unwrap().max_agents_per_root,64);
         assert_eq!(load_limits_in(&file, None).unwrap().max_pending_agent_intents,256);
         std::fs::write(&file, b"{\"max_parallel_runs\":4}").unwrap();
@@ -210,7 +258,7 @@ mod tests {
         let restored: Runtime =
             serde_json::from_value(serde_json::json!({"execution":{"max_parallel_runs":1000}}))
                 .unwrap();
-        assert_eq!(restored.execution.max_parallel_runs, 2);
+        assert_eq!(restored.execution.max_parallel_runs, 3);
         std::fs::remove_dir_all(directory).unwrap();
     }
 
@@ -249,5 +297,82 @@ mod tests {
         runtime.runs[0].status = "completed".into();
         assert_eq!(next(&runtime), Some(1));
         assert!(admit(&runtime).is_ok());
+    }
+    #[test]
+    fn background_agents_leave_a_slot_for_conversations_and_queue_behind_them() {
+        let persona = |parent: Option<&str>| Some(crate::delegation::Persona {
+            role: crate::delegation::Role::Worker,
+            root: "main".into(),
+            depth: u8::from(parent.is_some()),
+            parent: parent.map(Into::into),
+        });
+        let enqueue = |runtime: &mut Runtime, chat: &str, agent: bool| {
+            runtime.enqueue("Task".into(), "chat", "test");
+            let run = runtime.runs.last_mut().unwrap();
+            run.chat_id = Some(chat.into());
+            if agent { run.persona = persona(Some("main")); }
+        };
+        let mut runtime = Runtime::default();
+        runtime.execution.max_parallel_runs = 3;
+        for chat in ["alice", "cass", "scout"] { enqueue(&mut runtime, chat, true); }
+        enqueue(&mut runtime, "main", false);
+        assert_eq!(next(&runtime), Some(3), "a conversation turn starts before older queued agents");
+        runtime.runs[3].status = "running".into();
+        assert_eq!(next(&runtime), Some(0));
+        runtime.runs[0].status = "running".into();
+        assert_eq!(next(&runtime), Some(1));
+        runtime.runs[1].status = "running".into();
+        assert_eq!(next(&runtime), None);
+        runtime.runs[3].status = "completed".into();
+        assert_eq!(next(&runtime), None, "agents use at most all but one slot");
+        enqueue(&mut runtime, "main", false);
+        runtime.runs[4].persona = persona(None);
+        assert_eq!(next(&runtime), Some(4), "root-chat continuations use the conversation lane");
+        runtime.runs[4].status = "running".into();
+        runtime.runs[0].status = "completed".into();
+        assert_eq!(next(&runtime), Some(2), "agents may fill all but one slot while a conversation runs");
+        runtime.runs[2].status = "running".into();
+        runtime.runs[4].status = "completed".into();
+        assert_eq!(next(&runtime), None);
+        runtime.paused = Some(Default::default());
+        assert_eq!(next(&runtime), None);
+
+        let mut serial = Runtime::default();
+        serial.execution.max_parallel_runs = 1;
+        enqueue(&mut serial, "alice", true);
+        enqueue(&mut serial, "main", false);
+        assert_eq!(next(&serial), Some(1), "a single slot still goes to the conversation first");
+        serial.runs[1].status = "completed".into();
+        assert_eq!(next(&serial), Some(0), "a single slot can still run background agents");
+    }
+    #[test]
+    fn lane_priority_never_reorders_turns_within_a_chat() {
+        let enqueue = |runtime: &mut Runtime, chat: &str, agent: bool| {
+            runtime.enqueue("Task".into(), "chat", "test");
+            let run = runtime.runs.last_mut().unwrap();
+            run.chat_id = Some(chat.into());
+            if agent {
+                run.persona = Some(crate::delegation::Persona { role: crate::delegation::Role::Worker, root: "main".into(), depth: 1, parent: Some("main".into()) });
+            }
+        };
+        let mut runtime = Runtime::default();
+        runtime.execution.max_parallel_runs = 3;
+        enqueue(&mut runtime, "alice", true);
+        enqueue(&mut runtime, "alice", false);
+        enqueue(&mut runtime, "main", false);
+        assert_eq!(next(&runtime), Some(2), "only each chat's oldest queued turn is a candidate");
+        runtime.runs[2].status = "running".into();
+        assert_eq!(next(&runtime), Some(0), "a queued agent turn runs before a later message in its chat");
+        runtime.runs[0].status = "running".into();
+        assert_eq!(next(&runtime), None);
+        runtime.runs[0].status = "completed".into();
+        assert_eq!(next(&runtime), Some(1));
+
+        let mut tied = Runtime::default();
+        tied.execution.max_parallel_runs = 3;
+        enqueue(&mut tied, "bob", true);
+        enqueue(&mut tied, "bob", false);
+        for run in &mut tied.runs { run.queue_order = 7; }
+        assert_eq!(next(&tied), Some(0), "equal queue order falls back to ledger order within a chat");
     }
 }

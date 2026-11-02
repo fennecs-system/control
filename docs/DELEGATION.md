@@ -41,7 +41,7 @@ Private `~/.config/control/execution.json` (mode 0600) configures these separate
 limits; omitted fields retain their defaults:
 
 ```json
-{"max_parallel_runs":2,"max_agents_per_root":64,"max_pending_agent_intents":256}
+{"max_parallel_runs":3,"max_agents_per_root":64,"max_pending_agent_intents":256}
 ```
 
 Agent budgets must be positive integers up to 65,536. The MCP transport's

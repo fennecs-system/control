@@ -1,14 +1,21 @@
 # Bounded execution
 
-The node runs up to two model attempts at once, across independent chats. Each
+The node runs up to three model attempts at once, across independent chats. Each
 chat has one writer and FIFO turn ordering. `/spawn` and `/btw` use independent
 chats and writable workspaces. A parent waiting for a delegated child or a design
 answer releases its model slot while reserving its own chat.
 
+Delegated and spawned agents run in a background lane. Queued conversation turns,
+including root-chat continuations, start before queued background agents, and
+background agents use at most all but one slot. A message sent while agents work
+therefore starts at once instead of waiting for them. Turns within one chat keep
+FIFO order regardless of lane. With one slot, agents still run, behind any queued
+conversation turn; sustained conversation traffic can delay queued agents.
+
 Set a node limit in `~/.config/control/execution.json` (mode `0600`), then restart:
 
 ```json
-{"max_parallel_runs": 2}
+{"max_parallel_runs": 3}
 ```
 
 The supported range is 1–8; 1 restores serial execution. The startup environment
