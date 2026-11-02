@@ -295,7 +295,7 @@ pub fn handle(
     if ["/chats", "/chat", "/improve"].contains(&path) && method == "POST" {
         let fields = crate::fields(&String::from_utf8_lossy(body));
         let chosen = fields.get("lens").map(String::as_str).unwrap_or(lens);
-        let arguments = json!({"lenses":chat::form_lenses(&fields,lens),"room":fields.get("room"),"design_context":fields.get("design_context"),"mode":if path == "/improve" {json!("improve")} else {Value::Null}});
+        let arguments = json!({"lenses":chat::form_lenses(&fields,lens),"room":fields.get("room").filter(|room|!room.is_empty()),"design_context":fields.get("design_context"),"mode":if path == "/improve" {json!("improve")} else {Value::Null}});
         let text = fields
             .get(if path == "/improve" { "objective" } else { "message" })
             .filter(|text| !text.trim().is_empty());
@@ -408,6 +408,9 @@ mod tests {
             let mut response=Vec::new();handle(&mut response,&mut state,"GET",path,"none",&cookie,&[]);
             assert!(String::from_utf8(response).unwrap().starts_with("HTTP/1.1 200 OK"));
         }
+        let mut response=Vec::new();handle(&mut response,&mut state,"GET","/chats?new=1","none",&cookie,&[]);
+        let page=String::from_utf8(response).unwrap();
+        assert!(page.contains("name='room'") && crate::rooms::NAMES.iter().all(|room|page.contains(&format!("value='{room}'"))),"new chats can choose a room");
         state.chats[0].actor=crate::identity::Actor::Unknown;
         for header in [&cookie,"Cookie: control_recent_chat=c-missing\r\n","Cookie: control_recent_chat=../../tools\r\n"] {
             let mut response=Vec::new();handle(&mut response,&mut state,"GET","/chats","none",header,&[]);

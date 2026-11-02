@@ -154,7 +154,7 @@ pub fn landing_mode(state: &State, lens: &str, topic: Option<&str>, improve: boo
     } else {
         Vec::new()
     };
-    html.push_str(&format!("<div class='conversation-empty'><h1>What are we working on?</h1>{context}</div><form class='conversation-composer' id='chat-list-new' method='post' action='/chats'><textarea name='message' maxlength='2000' rows='3' aria-label='First message' placeholder='Message Control…'>{}</textarea>{}{}<div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></section>",escape(&draft),command_menu(&Actor::LocalOperator),discussion.map(|(key,_)|format!("<input type='hidden' name='design_context' value='{key}'>")).unwrap_or_default(),crate::lens_library::choices(state,&selected,"chat-list-new")));
+    html.push_str(&format!("<div class='conversation-empty'><h1>What are we working on?</h1>{context}</div><form class='conversation-composer' id='chat-list-new' method='post' action='/chats'><textarea name='message' maxlength='2000' rows='3' aria-label='First message' placeholder='Message Control…'>{}</textarea>{}{}<div class='composer-footer'>{}<select name='room' class='room-choice' aria-label='Room'><option value=''>No room</option>{rooms}</select><button class='send-message' aria-label='Send message'>↑</button></div></form></section>",escape(&draft),command_menu(&Actor::LocalOperator),discussion.map(|(key,_)|format!("<input type='hidden' name='design_context' value='{key}'>")).unwrap_or_default(),crate::lens_library::choices(state,&selected,"chat-list-new"),rooms=crate::rooms::NAMES.iter().map(|room|format!("<option value='{room}'>#{room}</option>")).collect::<String>()));
     html
 }
 /// Re-show a rejected composer submission: escaped error above the form and the draft restored.
@@ -325,6 +325,31 @@ pub(crate) fn touch(state:&mut State,id:&str) {
     let order=next_activity(state);
     if let Some(chat)=state.chats.iter_mut().find(|chat|chat.id==id) {chat.activity_order=order;}
 }
+/// `/room NAME` attaches an existing chat to a room; `/room off` detaches it.
+/// Chats it spawns later inherit the room. Bots and listeners own the inbox.
+fn attach_room(state: &mut State, id: &str, option: &str) -> Result<String, &'static str> {
+    let session = state.chats.iter().find(|session| session.id == id).ok_or("Chat not found.")?;
+    identity::authorize(&session.actor, Action::Task)?;
+    let room = match option {
+        "" => return Ok(session.room.as_deref().map_or("No room attached. Use /room general, /room engineering or /room research.".to_owned(), |room| format!("Room #{room}. Use /room off to detach."))),
+        "off" => None,
+        name if crate::rooms::valid(name) => Some(name.to_owned()),
+        _ => return Err("Use /room general, /room engineering, /room research or /room off."),
+    };
+    if session.room == room {
+        return Ok(room.map_or("No room attached.".to_owned(), |room| format!("Already in #{room}.")));
+    }
+    if crate::bots::defined(state, id) {
+        return Err("This chat runs a bot, which owns its room inbox. Use /bot off first.");
+    }
+    if crate::rooms::listening(state, id) {
+        return Err("Room listening is on. Use /listen off first.");
+    }
+    state.collective.room_watches.retain(|watch| watch.chat != id);
+    let reply = room.as_deref().map_or("Detached from the room.".to_owned(), |room| format!("Attached to #{room}. Agents here can now use room tools; chats spawned from here join it too."));
+    state.chats.iter_mut().find(|session| session.id == id).unwrap().room = room;
+    Ok(reply)
+}
 fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result<(), &'static str> {
     if crate::shutdown::requested() {
         return Err("Control is stopping; try again after restart.");
@@ -342,6 +367,13 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
         let reply=crate::rooms::listen(state,id,enabled)?;
         let session=state.chats.iter_mut().find(|session|session.id==id).unwrap();
         session.messages.push(Message{text:text.trim().into(),run_id:None,reply:reply.into()});
+        session.revision=session.revision.saturating_add(1);
+        return Ok(());
+    }
+    if let Some(option)=commands::tail(text.trim(),Kind::Room) {
+        let reply=attach_room(state,id,option.trim())?;
+        let session=state.chats.iter_mut().find(|session|session.id==id).unwrap();
+        session.messages.push(Message{text:text.trim().into(),run_id:None,reply});
         session.revision=session.revision.saturating_add(1);
         return Ok(());
     }
@@ -1473,5 +1505,27 @@ mod tests {
         assert!(transcript(&state, &id).unwrap().contains("&lt;script&gt;"));
         assert_eq!(state.runtime.runs[0].actor, Actor::LocalOperator);
         assert!(!valid_id("../../.env"));
+    }
+    #[test]
+    fn existing_chats_attach_to_rooms_unless_a_bot_or_listener_owns_the_inbox() {
+        let mut state=State::default();let id=create(&mut state);
+        send(&mut state,&id,"Watch the farm","test").unwrap();
+        state.runtime.runs[0].status="completed".into();
+        assert!(send(&mut state,&id,"/room lobby","test").is_err());
+        send(&mut state,&id,"/room general","test").unwrap();
+        assert_eq!(state.chats[0].room.as_deref(),Some("general"));
+        assert!(state.chats[0].messages.last().unwrap().reply.contains("#general"));
+        send(&mut state,&id,"/listen","test").unwrap();
+        assert!(send(&mut state,&id,"/room research","test").is_err(),"a listener owns the inbox");
+        send(&mut state,&id,"/listen off","test").unwrap();
+        send(&mut state,&id,"/bot on","test").unwrap();
+        assert!(send(&mut state,&id,"/room off","test").is_err(),"a bot owns the inbox");
+        send(&mut state,&id,"/bot off","test").unwrap();
+        assert!(!crate::bots::defined(&state,&id));
+        crate::rooms::ensure_inbox(&mut state,&id).unwrap();
+        assert!(state.collective.room_watches.iter().any(|watch|watch.chat==id));
+        send(&mut state,&id,"/room off","test").unwrap();
+        assert_eq!(state.chats[0].room,None);
+        assert!(!state.collective.room_watches.iter().any(|watch|watch.chat==id),"inbox watches of the old room are dropped");
     }
 }
