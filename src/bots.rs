@@ -227,24 +227,34 @@ fn reconcile_at(state: &mut State, now: u64, mut save: impl FnMut(&State) -> std
         state.bots.room_cursor = state.collective.posts.len();
         return Ok(());
     }
+    let outstanding = state.bots.supervisor.outstanding().next().is_some();
+    if !outstanding && state.bots.requests.is_empty() && state.bots.room_cursor == state.collective.posts.len()
+        && state.bots.supervisor.next_deadline(Now(now)).is_none_or(|due| due.0 > now)
+    {
+        return Ok(());
+    }
     let previous = state.bots.clone();
     let (runs, notice) = (state.runtime.runs.len(), state.runtime.notice.clone());
     let chats = state.chats.iter().map(|session| (session.messages.len(), session.revision)).collect::<Vec<_>>();
     // Turns requested earlier and now finished; decided before new events so a
     // turn requested in this pass is never mistaken for a finished one.
-    let index = state.runtime.runs.iter().enumerate().map(|(i, run)| (run.id.as_str(), i)).collect::<std::collections::HashMap<_, _>>();
-    let tagged = state.runtime.runs.iter().enumerate()
-        .filter_map(|(i, run)| run.bot_turn.as_ref().map(|turn| ((turn.bot.as_str(), turn.turn), i)))
-        .collect::<std::collections::HashMap<_, _>>();
-    // A turn that delegated or awaited a design answer continues in another run;
-    // it finishes when that chain's leaf does. A broken chain releases the bot.
-    let finished = state.bots.supervisor.outstanding()
-        .filter(|(bot, _, turn)| match tagged.get(&(bot.0.as_str(), turn.0)) {
-            Some(&run) => crate::rooms::continuation_leaf(state, run, &index).is_none_or(|leaf| terminal(&state.runtime.runs[leaf].status)),
-            None => !state.bots.requests.iter().any(|request| &request.bot == *bot && &request.turn == *turn),
-        })
-        .map(|(bot, _, turn)| (bot.clone(), *turn))
-        .collect::<Vec<_>>();
+    let finished = if outstanding {
+        let index = state.runtime.runs.iter().enumerate().map(|(i, run)| (run.id.as_str(), i)).collect::<std::collections::HashMap<_, _>>();
+        let tagged = state.runtime.runs.iter().enumerate()
+            .filter_map(|(i, run)| run.bot_turn.as_ref().map(|turn| ((turn.bot.as_str(), turn.turn), i)))
+            .collect::<std::collections::HashMap<_, _>>();
+        // A turn that delegated or awaited a design answer continues in another run;
+        // it finishes when that chain's leaf does. A broken chain releases the bot.
+        state.bots.supervisor.outstanding()
+            .filter(|(bot, _, turn)| match tagged.get(&(bot.0.as_str(), turn.0)) {
+                Some(&run) => crate::rooms::continuation_leaf(state, run, &index).is_none_or(|leaf| terminal(&state.runtime.runs[leaf].status)),
+                None => !state.bots.requests.iter().any(|request| &request.bot == *bot && &request.turn == *turn),
+            })
+            .map(|(bot, _, turn)| (bot.clone(), *turn))
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     let completed = !finished.is_empty();
     let mut effects = Vec::new();
     for (bot, turn) in finished {
@@ -467,5 +477,17 @@ mod tests {
         let off = serde_json::json!({"id": chat, "message": "/listen off"});
         assert!(crate::session_http::change_with_save(&mut state, "control.chat.send", &off, |_| Ok(())).is_err(), "/listen off cannot remove a bot's inbox");
         assert!(state.collective.room_watches.iter().any(|watch| watch.chat == chat));
+    }
+
+    #[test]
+    fn idle_passes_skip_work_until_an_event_or_deadline() {
+        let (mut state, chat) = fixture();
+        command_at(&mut state, &chat, "on every 5", Now(0)).unwrap();
+        let mut saves = 0;
+        reconcile_at(&mut state, 60_000, |_| { saves += 1; Ok(()) }).unwrap();
+        assert_eq!(saves, 0, "a sleeping bot with nothing due does no work");
+        post(&mut state, Some("c-other"), "news");
+        reconcile_at(&mut state, 61_000, |_| { saves += 1; Ok(()) }).unwrap();
+        assert_eq!(saves, 1, "new room posts are offered");
     }
 }

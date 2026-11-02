@@ -978,21 +978,15 @@ fn receive_with_save(
     receive: impl FnOnce(&mut State) -> Result<(), &'static str>,
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Result<(), &'static str> {
-    let before = state.chats.iter().position(|chat| chat.id == id).map(|index| (index, state.chats[index].clone()));
-    let counts = (state.chats.len(), state.runtime.runs.len(), state.discord_seen.len());
-    let pending = runtime::RunStatusCheckpoint::capture(&state.runtime, |run| run.chat_id.as_deref() == Some(id));
+    let checkpoint = crate::chat::Checkpoint::capture(state, &std::iter::once(id).collect());
+    let seen = state.discord_seen.len();
     let result = receive(state).and_then(|()| {
         state.discord_seen.push(message_id);
         save(state).map_err(|_| "Could not persist Discord task.")
     });
     if result.is_err() {
-        state.chats.truncate(counts.0);
-        if let Some((index, chat)) = before {
-            state.chats[index] = chat;
-        }
-        state.runtime.runs.truncate(counts.1);
-        state.discord_seen.truncate(counts.2);
-        pending.restore(&mut state.runtime);
+        checkpoint.restore(state);
+        state.discord_seen.truncate(seen);
     }
     result
 }
@@ -1757,6 +1751,20 @@ mod tests {
         assert!(receive_with_save(&mut state,&id,"fixture-answer".into(),|state|crate::chat::send(state,&id,"2","test"),|_|Ok(())).is_ok());
         assert_eq!(state.runtime.runs[0].status,"continued");
         assert_eq!(state.discord_seen,vec!["fixture-answer"]);
+    }
+    #[test]
+    fn failed_discord_bot_commands_leave_no_bot_or_inbox() {
+        let mut state = State::default();
+        let id = crate::chat::create(&mut state);
+        state.chats[0].room = Some("general".into());
+        crate::chat::send(&mut state, &id, "Watch the farm", "test").unwrap();
+        state.runtime.runs[0].status = "completed".into();
+        let before = serde_json::to_vec(&state).unwrap();
+        assert!(receive_with_save(&mut state, &id, "fixture-bot".into(), |state| crate::chat::send(state, &id, "/bot on", "test"), |_| Err(std::io::Error::other("disk full"))).is_err());
+        assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+        assert!(!crate::bots::defined(&state, &id));
+        assert!(receive_with_save(&mut state, &id, "fixture-bot".into(), |state| crate::chat::send(state, &id, "/bot on", "test"), |_| Ok(())).is_ok());
+        assert!(crate::bots::defined(&state, &id));
     }
     #[test]
     fn shutdown_fences_success_preserves_diagnostics_queue_and_checkpoint() {

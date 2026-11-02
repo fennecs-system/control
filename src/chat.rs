@@ -916,6 +916,44 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
     }
 }
 
+/// Everything a chat command may change, restored together when the command or
+/// its save fails, whichever transport delivered it.
+pub(crate) struct Checkpoint {
+    chats: usize,
+    previous: Vec<(usize, Session)>,
+    runs: usize,
+    pending: crate::runtime::RunStatusCheckpoint,
+    notice: String,
+    posts: usize,
+    watches: Vec<crate::rooms::Watch>,
+    bots: crate::bots::Bots,
+}
+impl Checkpoint {
+    pub(crate) fn capture(state: &State, targets: &std::collections::HashSet<&str>) -> Self {
+        Self {
+            chats: state.chats.len(),
+            previous: state.chats.iter().enumerate().filter(|(_, s)| targets.contains(s.id.as_str())).map(|(i, s)| (i, s.clone())).collect(),
+            runs: state.runtime.runs.len(),
+            pending: crate::runtime::RunStatusCheckpoint::capture(&state.runtime, |run| run.chat_id.as_deref().is_some_and(|chat| targets.contains(chat))),
+            notice: state.runtime.notice.clone(),
+            posts: state.collective.posts.len(),
+            watches: state.collective.room_watches.clone(),
+            bots: state.bots.clone(),
+        }
+    }
+    pub(crate) fn restore(self, state: &mut State) {
+        state.collective.room_watches = self.watches;
+        state.bots = self.bots;
+        state.chats.truncate(self.chats);
+        for (index, session) in self.previous {
+            state.chats[index] = session;
+        }
+        state.runtime.runs.truncate(self.runs);
+        self.pending.restore(&mut state.runtime);
+        state.runtime.notice = self.notice;
+        state.collective.posts.truncate(self.posts);
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
