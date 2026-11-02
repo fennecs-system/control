@@ -5,6 +5,7 @@ mod backend;
 mod browser;
 mod browser_ui;
 mod chat;
+mod child;
 mod claude;
 mod command_jobs;
 mod collective;

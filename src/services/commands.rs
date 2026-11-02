@@ -1,6 +1,7 @@
 //! Durable commands inside an exact, credential-free service. No host paths or
 //! engine options enter the request. Uncertain effects are never replayed.
 use super::*;
+use control_effect::sync::{CancelToken, Recv};
 use std::{
     io::Read,
     process::{Command, Stdio},
@@ -389,10 +390,20 @@ struct ResultOutput {
     timed_out: bool,
 }
 fn capture(
+    command: Command,
+    timeout: Duration,
+    cancel: impl Fn() -> bool,
+    progress: impl Fn(&Output),
+) -> io::Result<ResultOutput> {
+    capture_with(command, timeout, cancel, progress, &crate::shutdown::token())
+}
+/// Shutdown cancellation interrupts the command like a failed `cancel` check.
+fn capture_with(
     mut command: Command,
     timeout: Duration,
     cancel: impl Fn() -> bool,
     progress: impl Fn(&Output),
+    shutdown: &CancelToken,
 ) -> io::Result<ResultOutput> {
     if timeout.is_zero() || cancel() {
         return Err(fail("Service command is no longer eligible"));
@@ -421,29 +432,38 @@ fn capture(
             }
         }
     });
-    let started = Instant::now();
-    let mut sampled = Instant::now();
+    let deadline = Instant::now() + timeout;
+    let watched = match crate::child::watch(child) {
+        Ok(watched) => watched,
+        Err(error) => {
+            let _ = reader.join();
+            return Err(error);
+        }
+    };
     let mut interrupted = false;
     let mut timed_out = false;
+    let exited = |result: Recv<io::Result<std::process::ExitStatus>>| match result {
+        Recv::Item(status) => Some(status),
+        Recv::Closed => Some(Err(fail("Service command waiter stopped"))),
+        Recv::Cancelled | Recv::Elapsed => None,
+    };
     let status = loop {
-        if let Some(status) = child.try_wait()? {
+        let tick = (Instant::now() + Duration::from_millis(250)).min(deadline);
+        if let Some(status) = exited(watched.wait(Some(tick), shutdown)) {
             break status;
         }
-        if cancel() || started.elapsed() >= timeout {
-            timed_out = started.elapsed() >= timeout;
+        if shutdown.is_cancelled() || cancel() || Instant::now() >= deadline {
+            timed_out = Instant::now() >= deadline;
             interrupted = !timed_out;
-            let _ = child.kill();
-            break child.wait()?;
+            watched.kill();
+            break exited(watched.wait(None, &CancelToken::new())).unwrap_or_else(|| Err(fail("Service command did not exit")));
         }
-        if sampled.elapsed() >= Duration::from_millis(250) {
-            if let Ok(output) = output.lock() {
-                progress(&output);
-            }
-            sampled = Instant::now();
+        if let Ok(output) = output.lock() {
+            progress(&output);
         }
-        std::thread::sleep(Duration::from_millis(25));
     };
     let _ = reader.join();
+    let status = status?;
     let output = Arc::try_unwrap(output)
         .map_err(|_| fail("Output reader did not finish"))?
         .into_inner()
@@ -1186,6 +1206,27 @@ mod tests {
         let result = capture(command, Duration::from_millis(50), || false, |_| {}).unwrap();
         assert!(result.timed_out);
         assert!(start.elapsed() < Duration::from_secs(2));
+    }
+    #[test]
+    fn shutdown_interrupts_capture_without_spinning_or_waiting_for_the_deadline() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "exec sleep 30"]);
+        let shutdown = CancelToken::new();
+        shutdown.cancel();
+        let samples = std::sync::atomic::AtomicUsize::new(0);
+        let start = Instant::now();
+        let result = capture_with(command, Duration::from_secs(20), || false, |_| {
+            samples.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }, &shutdown)
+        .unwrap();
+        assert!(result.interrupted && !result.timed_out);
+        assert_eq!(result.exit_code, None);
+        assert!(start.elapsed() < Duration::from_secs(5));
+        assert_eq!(samples.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 3"]);
+        let result = capture_with(command, Duration::from_secs(5), || false, |_| {}, &CancelToken::new()).unwrap();
+        assert_eq!((result.exit_code, result.interrupted, result.timed_out), (Some(3), false, false));
     }
     #[test]
     fn capture_publishes_output_before_command_exit() {

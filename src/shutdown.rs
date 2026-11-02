@@ -125,6 +125,11 @@ pub fn requested() -> bool {
     REQUESTED.load(Ordering::SeqCst) || root().is_cancelled()
 }
 
+/// A token cancelled when shutdown is requested.
+pub fn token() -> CancelToken {
+    root().child()
+}
+
 /// Sleep for up to `duration`, returning early with `true` once shutdown is requested.
 pub fn pause(duration: Duration) -> bool {
     pause_on(root(), duration) || requested()
