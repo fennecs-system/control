@@ -56,23 +56,35 @@
 .conversation-navigation nav{min-height:0;overflow:auto;flex:1;scrollbar-width:thin;scrollbar-color:#393340 transparent}
 .conversation-navigation nav>*,.conversation-navigation>h2,.conversation-navigation>.conversation-history-link{flex-shrink:0}
 .conversation-navigation nav a{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.conversation-navigation nav a{border:0;border-radius:0}
+.conversation-navigation nav a:hover,.conversation-navigation nav a:focus-visible{color:var(--purple);background:#b5a0ff0d;border-color:transparent}
+.conversation-navigation nav a[aria-current]{color:var(--purple);background:#b5a0ff18;border-color:transparent}
 .conversation-navigation nav>a[href='/chats?new=1']{margin-bottom:12px;color:var(--purple)}
 .conversation-branch>summary{display:flex;align-items:center;cursor:pointer;color:var(--muted);list-style:none;min-width:0}
 .conversation-branch>summary::-webkit-details-marker{display:none}
 .conversation-branch>summary:before{content:'▸';flex:0 0 16px;color:var(--purple);font-size:12px;text-align:center}
 .conversation-branch[open]>summary:before{content:'▾'}
 .conversation-branch>summary>a{flex:1;min-width:0}
+.conversation-branch>summary:hover,.conversation-branch>summary:focus-visible{background:#b5a0ff0d}
+.conversation-branch>summary:focus-visible{outline:1px solid var(--purple);outline-offset:-1px}
+.conversation-branch[open]>summary{background:#b5a0ff08}
 .conversation-navigation nav>a.conversation-link,.conversation-navigation .conversation-children>.conversation-link{padding-left:26px}
 .conversation-title{display:block;overflow:hidden;text-overflow:ellipsis}
 .conversation-meta{display:block;font-size:12px;color:var(--muted);margin-top:6px;overflow-wrap:anywhere}
 .conversation-children{margin-left:10px;padding-left:6px;border-left:1px solid var(--line)}
 .history-controls{display:flex;gap:20px;justify-content:space-between;margin:20px 0}.history-controls a,.conversation-history-link{color:var(--purple);font-size:13px}.conversation-history-link{padding:12px 10px 0}.conversation-history .conversation-navigation{position:static;min-height:0;max-height:none;border:0;padding:0;background:none}.conversation-history .conversation-navigation nav a{white-space:normal}.conversation-history .conversation-navigation nav{overflow:visible}
-.conversation-history .conversation-navigation nav{gap:12px}
-.conversation-history .conversation-navigation nav>a,.conversation-history .conversation-navigation nav>.conversation-branch{border:1px solid var(--line);border-radius:0;background:var(--panel);margin:0}
-.conversation-history .conversation-navigation nav .conversation-link{font-size:14px;padding:14px 12px;border-radius:0}
+.conversation-history .conversation-navigation nav{gap:2px}
+.conversation-history .conversation-navigation nav>a,.conversation-history .conversation-navigation nav>.conversation-branch{border:0;border-radius:0;margin:0}
+.conversation-history .conversation-link,.conversation-history .conversation-branch>summary{background:#b5a0ff04}
+.conversation-history .conversation-branch[open]>summary{background:#b5a0ff08}
+.conversation-history .conversation-branch>summary:hover,.conversation-history .conversation-branch>summary:focus-visible{background:#b5a0ff0d}
+.conversation-history .conversation-branch>summary>.conversation-link{background:transparent}
+.conversation-history .conversation-navigation nav .conversation-link{display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:4px 16px;font-size:14px;padding:7px 12px;border-radius:0}
+.conversation-history .conversation-title{flex:1 1 180px;min-width:0}
+.conversation-history .conversation-meta{margin:0;font-size:12px;max-width:100%}
 .conversation-history .conversation-navigation nav>a.conversation-link,.conversation-history .conversation-navigation .conversation-children>.conversation-link{padding-left:34px}
 .conversation-history .conversation-branch>summary:before{margin-left:6px}
-.conversation-history .conversation-children{margin:0 12px 12px 14px}
+.conversation-history .conversation-children{margin:2px 0 2px 14px}
 .conversation-history .conversation-title{white-space:normal;overflow-wrap:anywhere}
 .session-view .chat-workspace>main{height:100%;min-height:0;margin:0 auto}
 .conversation-heading h2{max-width:100%}
