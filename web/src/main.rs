@@ -570,10 +570,43 @@ fn attach_navigation(document:&web_sys::Document)->Result<(),JsValue> {
     Ok(())
 }
 
+/// Pages that render from state first mark a `data-live-src` region; slow
+/// engine reads arrive afterwards as HTML fragments keyed by `data-live`.
+fn attach_live(document: &web_sys::Document) -> Result<bool, JsValue> {
+    let Some(root) = document.query_selector("[data-live-src]")? else { return Ok(false); };
+    let Some(url) = root.get_attribute("data-live-src") else { return Ok(false); };
+    let request = web_sys::XmlHttpRequest::new()?;
+    request.open("GET", &url)?;
+    request.set_timeout(15_000);
+    let response = request.clone();
+    let finished = Closure::<dyn FnMut(web_sys::Event)>::once(move |_| {
+        let fragments = (response.status().ok() == Some(200))
+            .then(|| response.response_text().ok().flatten())
+            .flatten()
+            .and_then(|text| serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&text).ok())
+            .unwrap_or_default();
+        let Ok(slots) = root.query_selector_all("[data-live]") else { return; };
+        for index in 0..slots.length() {
+            let Some(slot) = slots.item(index).map(|node| node.unchecked_into::<web_sys::Element>()) else { continue; };
+            match slot.get_attribute("data-live").and_then(|id| fragments.get(&id)?.as_str().map(str::to_owned)) {
+                Some(html) => slot.set_inner_html(&html),
+                None => slot.set_inner_html("<p class='muted'>Usage unavailable.</p>"),
+            }
+        }
+    });
+    request.set_onloadend(Some(finished.as_ref().unchecked_ref()));
+    request.send()?;
+    finished.forget();
+    Ok(true)
+}
+
 fn main() -> Result<(), JsValue> {
     let document = web_sys::window()
         .and_then(|w| w.document())
         .ok_or_else(|| JsValue::from_str("No document"))?;
+    if attach_live(&document)? {
+        return Ok(());
+    }
     if let Some(input) = document.query_selector(".conversation-composer textarea[name=message]")? {
         attach_composer(&document, input.dyn_into()?)?;
         attach_transcript(&document)?;

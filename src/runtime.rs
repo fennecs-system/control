@@ -392,8 +392,17 @@ impl Runtime {
     }
 }
 
+/// Attempts and provider-reported tokens for one run, when any were measured.
+fn usage(run: &Run) -> String {
+    let (input, output, measured) = run.attempts.iter().filter_map(|attempt| attempt.tokens).fold((0, 0, 0), |(i, o, n), t| (i + t.input_tokens, o + t.output_tokens, n + 1));
+    match (run.attempts.len(), measured) {
+        (0, _) => String::new(),
+        (attempts, 0) => format!(" · {attempts} attempt(s)"),
+        (attempts, _) => format!(" · {attempts} attempt(s) · {input} input · {output} output tokens"),
+    }
+}
 fn run_record(run: &Run) -> String {
-    let mut html = format!("<article class='record'><span class='tag'>{}</span><span class='eyebrow'>{} / {}</span><h3>{}</h3><p class='muted tiny'>run {} · {}{}</p>", escape(&run.status), escape(run.kind.as_str()), escape(&run.source), escape(&run.objective), escape(&run.id), escape(run.backend.label()), run.model.as_ref().map(|m| format!(" · {}", escape(m))).unwrap_or_default());
+    let mut html = format!("<article class='record'><span class='tag'>{}</span><span class='eyebrow'>{} / {}</span><h3>{}</h3><p class='muted tiny'>run {} · {}{}{}</p>", escape(&run.status), escape(run.kind.as_str()), escape(&run.source), escape(&run.objective), escape(&run.id), escape(run.backend.label()), run.model.as_ref().map(|m| format!(" · {}", escape(m))).unwrap_or_default(), usage(run));
     if let Some(persona)=&run.persona {
         html.push_str(&format!("<span class='tag'>{} · depth {}</span>",if persona.role==crate::delegation::Role::Judge{"judge · read only"}else{"worker"},persona.depth));
     }
@@ -534,6 +543,15 @@ fn integrations() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn run_history_shows_attempts_and_measured_tokens() {
+        let mut runtime = Runtime::default();
+        runtime.enqueue("Count tokens".into(), RunKind::Task, "test");
+        assert!(!run_record(&runtime.runs[0]).contains("attempt"));
+        let tokens = crate::usage::Tokens { input_tokens: 120, cached_input_tokens: 0, output_tokens: 30 };
+        runtime.runs[0].attempts = vec![crate::usage::Attempt { tokens: Some(tokens), ..Default::default() }, crate::usage::Attempt::default()];
+        assert!(run_record(&runtime.runs[0]).contains("2 attempt(s) · 120 input · 30 output tokens"));
+    }
     #[test]
     fn failed_cancel_form_checkpoint_restores_target_run_and_notice() {
         for status in ["queued", "running"] {
