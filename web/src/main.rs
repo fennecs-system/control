@@ -259,7 +259,7 @@ fn attach_submission(composer: &Rc<Composer>) -> Result<(), JsValue> {
                     && let Ok(frame)=frame.dyn_into::<web_sys::HtmlIFrameElement>()
                     && let Some(doc)=frame.content_document()
                     && let Some(scroller)=doc.scrolling_element() {scroller.set_scroll_top(scroller.scroll_height());}
-                if let Ok(event)=web_sys::Event::new("control-transcript-refresh") {let _=target.document.dispatch_event(&event);}
+                if let Ok(event)=web_sys::Event::new("control-transcript-sent") {let _=target.document.dispatch_event(&event);}
                 let _=target.input.focus();
             } else {
                 let message=value.as_ref().and_then(|value|value["error"].as_str()).unwrap_or("Could not confirm delivery. Check the conversation before sending again.");
@@ -426,6 +426,15 @@ fn attach_transcript(document: &web_sys::Document) -> Result<(), JsValue> {
     let frame: web_sys::HtmlIFrameElement = frame.dyn_into()?;
     let following = Rc::new(Cell::new(true));
     let loaded_frame = frame.clone();
+    // A sent message always returns the reader to the end, like a chat client.
+    let sent_following = following.clone();
+    let sent_document = document.clone();
+    let sent = Closure::<dyn FnMut()>::new(move || {
+        sent_following.set(true);
+        if let Ok(event) = web_sys::Event::new("control-transcript-refresh") { let _ = sent_document.dispatch_event(&event); }
+    });
+    document.add_event_listener_with_callback("control-transcript-sent", sent.as_ref().unchecked_ref())?;
+    sent.forget();
     let loaded_following = following.clone();
     let loaded = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
         loaded_following.set(true);
