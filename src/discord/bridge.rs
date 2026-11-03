@@ -608,47 +608,43 @@ impl Bridge {
     fn deliver(&self, routes: &[Route], outbound: &mut Outbound) -> Result<(), &'static str> {
         let events = crate::outbox::read(&crate::outbox::path()?, outbound.cursor).map_err(|_| "Could not read the delivery outbox.")?;
         let mut authorize = identity::authorizer();
+        // Events parked until their authorization or route is available again.
+        for run in std::mem::take(&mut outbound.parked) {
+            if self.deliver_one(&run, routes, outbound, &mut authorize)? != Outcome::Done {
+                outbound.park(run);
+            }
+        }
         for (run, next) in &events {
-            // A transient send failure stops here: the event is retried next poll.
-            if !self.deliver_one(run, routes, outbound, &mut authorize)? {
-                break;
+            match self.deliver_one(run, routes, outbound, &mut authorize)? {
+                Outcome::Done => {}
+                Outcome::Park => outbound.park(run.clone()),
+                // A transient send failure holds the cursor: retried next poll.
+                Outcome::Stop => break,
             }
             outbound.cursor = *next;
         }
         Ok(())
     }
-    /// Whether `run` needs nothing more: skipped, already delivered, delivered
-    /// now or refused for good. False means retry it later.
-    fn deliver_one(&self, run: &crate::outbox::Delivery, routes: &[Route], outbound: &mut Outbound, authorize: &mut impl FnMut(&Actor, Action) -> Result<identity::Workspace, &'static str>) -> Result<bool, &'static str> {
+    fn deliver_one(&self, run: &crate::outbox::Delivery, routes: &[Route], outbound: &mut Outbound, authorize: &mut impl FnMut(&Actor, Action) -> Result<identity::Workspace, &'static str>) -> Result<Outcome, &'static str> {
         {
             {
-                if !run.source.starts_with("discord:") && run.chat.is_none()
-                {
-                    return Ok(true);
-                }
-                let actor = &run.actor;
-                let action = run.action;
-                if authorize(actor, action).is_err() {
-                    return Ok(true);
-                }
+                let (actor, action, status) = (&run.actor, run.action, run.status.as_str());
+                let receipt = format!("{}:{status}", run.run);
                 let (channel, direct) = match actor {
                     Actor::DiscordDm { channel_id, .. } => (*channel_id, true),
-                    _ => return Ok(true),
+                    _ => return Ok(Outcome::Done),
                 };
-                if !routes
-                    .iter()
-                    .any(|r| r.channel == channel && r.recipient.is_some() == direct)
+                if (!run.source.starts_with("discord:") && run.chat.is_none())
+                    || !crate::outbox::DELIVERABLE.contains(&status)
+                    || outbound.delivered.contains(&receipt)
                 {
-                    return Ok(true);
+                    return Ok(Outcome::Done);
                 }
-                let status = run.status.as_str();
-                if !crate::outbox::DELIVERABLE.contains(&status) {
-                    return Ok(true);
-                }
-                let id = run.run.as_str();
-                let receipt = format!("{id}:{status}");
-                if outbound.delivered.contains(&receipt) {
-                    return Ok(true);
+                // Policy files or a DM route can be unavailable for a moment.
+                if authorize(actor, action).is_err()
+                    || !routes.iter().any(|r| r.channel == channel && r.recipient.is_some() == direct)
+                {
+                    return Ok(Outcome::Park);
                 }
                 let decision = (status == "waiting").then(||design_report(&run.question)).flatten();
                 let report = if let Some(report) = decision.as_deref() {
@@ -662,7 +658,7 @@ impl Bridge {
                 };
                 let link = discord::session_link(actor, run.chat.as_deref()).unwrap_or_default();
                 if !self.attempt(&receipt, channel, &delivery_message(run.change.as_ref(),status,&link,report), outbound) {
-                    return Ok(false);
+                    return Ok(Outcome::Stop);
                 }
                 outbound.delivered.insert(receipt);
                 checkpoint(
@@ -670,7 +666,7 @@ impl Bridge {
                     &serde_json::to_vec(&outbound.delivered)
                         .map_err(|_| "Could not encode delivery progress.")?,
                 )?;
-                Ok(true)
+                Ok(Outcome::Done)
             }
         }
     }
@@ -699,14 +695,34 @@ impl Bridge {
         Ok(())
     }
 }
+/// What a delivery attempt left to do.
+#[derive(PartialEq, Eq)]
+enum Outcome {
+    /// Skipped, already delivered, delivered now or refused for good.
+    Done,
+    /// Not deliverable right now (authorization or route unavailable): retry.
+    Park,
+    /// The send failed transiently: retry from this event.
+    Stop,
+}
 #[derive(Default)]
 struct Outbound {
     /// Position in the delivery outbox; starts at the beginning on launch and
     /// relies on receipts to skip what was already sent.
     cursor: crate::outbox::Cursor,
+    /// Events waiting for authorization or a route; bounded, oldest dropped.
+    parked: Vec<crate::outbox::Delivery>,
     delivered: HashSet<String>,
     undelivered: HashSet<String>,
     backoff: HashMap<String, (u64, u32)>,
+}
+impl Outbound {
+    fn park(&mut self, run: crate::outbox::Delivery) {
+        if self.parked.len() >= 256 {
+            self.parked.remove(0);
+        }
+        self.parked.push(run);
+    }
 }
 fn run(check_only: bool) -> Result<(), &'static str> {
     Policy::load()?;
