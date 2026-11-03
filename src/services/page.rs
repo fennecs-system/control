@@ -176,7 +176,7 @@ fn card(service: &Service, live: Option<&Live>) -> String {
     }).unwrap_or_default();
     let diagnostic = if service.diagnostic.is_empty() { String::new() } else { format!("<p class='muted'>{}</p>", crate::escape(&service.diagnostic)) };
     let action = if resource.phase.reserves_capacity() && !matches!(resource.phase, Phase::Stopping { .. }) {
-        format!("<form method='post' action='/tools/services'><input type='hidden' name='id' value='{}'><button>Stop service</button></form>", crate::escape(resource.id.as_str()))
+        format!("<form class='decision-form' method='post' action='/tools/services'><input type='hidden' name='id' value='{}'><button>Stop service</button></form>", crate::escape(resource.id.as_str()))
     } else {
         String::new()
     };
