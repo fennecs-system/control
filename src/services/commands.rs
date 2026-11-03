@@ -186,7 +186,7 @@ pub(crate) fn enqueue_test(
 }
 pub(super) fn definitions() -> Vec<Value> {
     vec![
-        json!({"name":"control_service_exec","description":"Run a command asynchronously inside an exact chat-owned running service, using its private files and approved loopback relays. Use shell commands/heredocs to create task files, configure clients or install dependencies; no host paths, mounts or engine options. Returns an execution_id; inspect control_service_exec_status. One active command per service. Commands survive model turns. Long-lived background programs must redirect their output to private files; the service foreground process must remain alive. Timeout or interrupted execution stops the service to prevent an untracked writer; never automatically replay an uncertain command.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"command":{"type":"string","minLength":1,"maxLength":16000},"timeout_seconds":{"type":"integer","minimum":1,"maximum":1800,"default":120}},"required":["service_id","command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":true}}),
+        json!({"name":"control_service_exec","description":"Run a command asynchronously inside an exact chat-owned running service, using its private files and approved loopback relays. Use shell commands/heredocs to create task files, configure clients or install dependencies; no host paths, mounts or engine options. Returns an execution_id; inspect control_service_exec_status. One active command per service. Commands survive model turns. Long-lived background programs must redirect their output to private files; the service foreground process must remain alive. A timed-out or interrupted command is stopped inside the service, which keeps running; the service is stopped only if that cannot be verified. Run long work such as large downloads as a watch (control_watch_start) instead. Uncertain commands are never replayed.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"command":{"type":"string","minLength":1,"maxLength":16000},"timeout_seconds":{"type":"integer","minimum":1,"maximum":1800,"default":120}},"required":["service_id","command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":true}}),
         json!({"name":"control_service_exec_status","description":"Read a chat-owned service command's bounded live output, exit code and durable outcome. Use a fresh execution_id only for a deliberate new command; retries with the same request identity never replay effects.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"execution_id":{"type":"string"}},"required":["service_id","execution_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
     ]
 }
@@ -554,6 +554,24 @@ fn stop(shared: &Arc<Mutex<State>>, service: &Service) -> io::Result<()> {
     }
     Ok(())
 }
+fn pidfile(execution: &str) -> String {
+    format!("/tmp/.control-exec-{execution}")
+}
+/// Runs the command in its own process group and records the group, so a
+/// command that outlives its Docker client can be stopped inside the service.
+fn launch(command: &str, pidfile: &str) -> String {
+    format!("exec 2>&1\nset -m\n(\n{command}\n) &\necho $! > {pidfile}\nwait $!\nstatus=$?\nrm -f {pidfile}\nexit $status")
+}
+/// Terminates the recorded group, then kills it, and succeeds only once no
+/// member is still running (exited members awaiting their reaper do not count).
+fn reap_script(pidfile: &str) -> String {
+    format!("g=$(cat {pidfile} 2>/dev/null) || exit 0\ncase $g in ''|*[!0-9]*) exit 1;; esac\nalive() {{ while read -r s p; do [ \"$p\" = \"$g\" ] && case $s in Z*) ;; *) return 0;; esac; done < <(ps -eo stat=,pgid=); return 1; }}\nkill -TERM -- -$g 2>/dev/null\nfor _ in 1 2 3 4 5 6 7 8 9 10; do alive || {{ rm -f {pidfile}; exit 0; }}; sleep 0.2; done\nkill -KILL -- -$g 2>/dev/null\nsleep 0.2\n! alive && rm -f {pidfile}")
+}
+fn reap(service: &Service, execution: &str) -> bool {
+    let Some(id) = service.resource.phase.container() else { return false };
+    let command = crate::engine::exec(id.as_str(), &format!("{}:{}", service.uid, service.gid), None, &["bash", "-c", &reap_script(&pidfile(execution))]);
+    capture(command, Duration::from_secs(10), || false, |_| {}).is_ok_and(|r| r.exit_code == Some(0) && !r.timed_out)
+}
 fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
     let result = (|| -> io::Result<ResultOutput> {
         identity::authorize(&service.actor, Action::Task).map_err(fail)?;
@@ -568,18 +586,7 @@ fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
         if observed.status != "running" || service.resource.lease.expired(now()) {
             return Err(fail("Service is no longer running"));
         }
-        let mut command = crate::engine::cli();
-        command.args([
-            "exec",
-            "--user",
-            &format!("{}:{}", service.uid, service.gid),
-            "--workdir",
-            "/workspace",
-            id.as_str(),
-            "bash",
-            "-c",
-            &format!("exec 2>&1\n{}", execution.command),
-        ]);
+        let command = crate::engine::exec(id.as_str(), &format!("{}:{}", service.uid, service.gid), Some("/workspace"), &["bash", "-c", &launch(&execution.command, &pidfile(&execution.id))]);
         let checked = std::cell::Cell::new(Instant::now());
         let authorized = std::cell::Cell::new(true);
         capture(
@@ -614,9 +621,13 @@ fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
             },
         )
     })();
-    let uncertain = !result
+    let unfinished = !result
         .as_ref()
         .is_ok_and(|r| !r.interrupted && !r.timed_out && r.exit_code.is_some());
+    // A command that outlived its client is stopped inside the service; only an
+    // unverifiable stop falls back to stopping the whole service.
+    let reaped = unfinished && result.is_ok() && reap(&service, &execution.id);
+    let uncertain = unfinished && !reaped;
     // Stop intent is durable before releasing an uncertain remote writer. Killing
     // a Docker client alone does not prove the command inside the service exited.
     if uncertain && stop(&shared, &service).is_err() {
@@ -646,6 +657,8 @@ fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
                         e.diagnostic =
                             "Service stop requested because command completion was uncertain"
                                 .into();
+                    } else if reaped {
+                        e.diagnostic = "The command was stopped inside the service, which keeps running. Run long work as a watch (control_watch_start) instead.".into();
                     }
                 }
                 Err(_) => {
@@ -1206,6 +1219,29 @@ mod tests {
         let result = capture(command, Duration::from_millis(50), || false, |_| {}).unwrap();
         assert!(result.timed_out);
         assert!(start.elapsed() < Duration::from_secs(2));
+    }
+    #[test]
+    fn a_command_that_outlives_its_client_is_reaped_with_its_whole_group() {
+        let pidfile = std::env::temp_dir().join(format!("control-exec-test-{}", std::process::id()));
+        let pidfile = pidfile.to_str().unwrap();
+        // Like a killed Docker client: the launcher dies, the command does not.
+        let mut client = Command::new("bash").args(["-c", &launch("sleep 30 & sleep 30; echo never", pidfile)])
+            .stdout(std::process::Stdio::null()).spawn().unwrap();
+        let start = Instant::now();
+        while !std::path::Path::new(pidfile).exists() && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        client.kill().unwrap();
+        client.wait().unwrap();
+        let group = std::fs::read_to_string(pidfile).unwrap().trim().to_owned();
+        let alive = || Command::new("pgrep").args(["-g", &group]).output().unwrap().status.success();
+        assert!(alive(), "killing the client leaves the command running");
+        let reaped = Command::new("bash").args(["-c", &reap_script(pidfile)]).status().unwrap();
+        assert!(reaped.success() && !alive(), "the foreground and background members are gone");
+        assert!(!std::path::Path::new(pidfile).exists());
+        let finished = Command::new("bash").args(["-c", &launch("exit 3", pidfile)]).status().unwrap();
+        assert_eq!(finished.code(), Some(3), "the exit status passes through");
+        assert!(Command::new("bash").args(["-c", &reap_script(pidfile)]).status().unwrap().success(), "nothing to reap after completion");
     }
     #[test]
     fn shutdown_interrupts_capture_without_spinning_or_waiting_for_the_deadline() {
