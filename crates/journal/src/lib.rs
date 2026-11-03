@@ -25,6 +25,9 @@ pub trait Journal {
     /// Durably appends `entry` and returns its position.
     fn append(&mut self, entry: &[u8]) -> io::Result<u64>;
     fn read(&self, pos: u64) -> io::Result<Option<Vec<u8>>>;
+    /// Durably drops every entry from position `len` on: undoing appends whose
+    /// transaction did not commit.
+    fn truncate(&mut self, len: u64) -> io::Result<()>;
 }
 
 fn invalid(message: &str) -> io::Error {
@@ -54,6 +57,10 @@ impl Journal for Memory {
     }
     fn read(&self, pos: u64) -> io::Result<Option<Vec<u8>>> {
         Ok(usize::try_from(pos).ok().and_then(|pos| self.entries.get(pos)).cloned())
+    }
+    fn truncate(&mut self, len: u64) -> io::Result<()> {
+        self.entries.truncate(usize::try_from(len).unwrap_or(usize::MAX));
+        Ok(())
     }
 }
 
@@ -128,6 +135,14 @@ impl Journal for FileJournal {
         let mut entry = vec![0; (end - start) as usize];
         self.file.read_exact_at(&mut entry, start)?;
         Ok(Some(entry))
+    }
+    fn truncate(&mut self, len: u64) -> io::Result<()> {
+        let Some(&end) = usize::try_from(len).ok().and_then(|len| self.starts.get(len)) else { return Ok(()) };
+        self.file.set_len(end).and_then(|()| self.file.sync_data()).inspect_err(|_| self.poisoned = true)?;
+        self.starts.truncate(len as usize);
+        self.end = end;
+        self.poisoned = false;
+        Ok(())
     }
 }
 
@@ -240,6 +255,10 @@ mod tests {
         assert_eq!(journal.read(9).unwrap(), None);
         assert_eq!(read_line(&path, 2).unwrap().as_deref(), Some(&br#"{"turn":2}"#[..]), "readers need no handle");
         assert_eq!(read_line(&path, 3).unwrap(), None);
+        journal.truncate(1).unwrap();
+        assert_eq!((journal.len(), journal.append(br#"{"turn":"again"}"#).unwrap()), (1, 1), "truncation undoes uncommitted appends");
+        drop(journal);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"turn\":0}\n{\"turn\":\"again\"}\n");
     }
 
     #[test]

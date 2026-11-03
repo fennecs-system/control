@@ -92,6 +92,9 @@ pub(crate) fn hydrated(chat: Option<&str>, attempts: &[Attempt]) -> Vec<Attempt>
 pub(crate) fn archive_finished(state: &mut crate::State) -> bool {
     let mut moved = false;
     for run in state.runtime.runs.iter_mut().filter(|run| finished(&run.status)) {
+        if run.objective.at.is_none() || run.result.at.is_none() {
+            moved |= archive_text(run).is_ok();
+        }
         let (chat, id) = (run.chat_id.clone(), run.id.clone());
         for (index, attempt) in run.attempts.iter_mut().enumerate() {
             if !attempt.activity.is_empty() && attempt.journal.is_none() {
@@ -139,4 +142,247 @@ mod tests {
         let entry: serde_json::Value = serde_json::from_str(line.lines().last().unwrap()).unwrap();
         assert_eq!((entry["run"].as_str(), entry["attempt"].as_u64()), (Some(state.runtime.runs[0].id.as_str()), Some(0)), "inspectable JSON lines");
     }
+
+    #[test]
+    fn finished_run_text_saves_as_a_position_and_edits_save_in_full() {
+        let mut state = crate::State::default();
+        let chat = crate::chat::create(&mut state);
+        crate::chat::send(&mut state, &chat, "Write the long report", "test").unwrap();
+        *state.runtime.runs[0].result = "A long finished answer. ".repeat(200);
+        state.runtime.runs[0].status = "completed".into();
+        assert!(archive_finished(&mut state));
+        let saved = persisting(|| serde_json::to_string(&state).unwrap());
+        let runs = persisting(|| serde_json::to_string(&state.runtime.runs).unwrap());
+        assert!(!runs.contains("long finished answer") && !runs.contains("Write the long report"), "a save carries positions, not run text");
+        assert!(serde_json::to_string(&state).unwrap().contains("long finished answer"), "views still see the full value");
+        let mut loaded: crate::State = serde_json::from_str(&saved).unwrap();
+        assert!(loaded.runtime.runs[0].result.is_empty(), "markers load empty");
+        hydrate_text(&mut loaded).unwrap();
+        assert_eq!(*loaded.runtime.runs[0].result, *state.runtime.runs[0].result);
+        assert_eq!(*loaded.runtime.runs[0].objective, *state.runtime.runs[0].objective);
+        loaded.runtime.runs[0].result.push_str(" Edited.");
+        let resaved = persisting(|| serde_json::to_string(&loaded.runtime.runs).unwrap());
+        assert!(resaved.contains("Edited.") && !resaved.contains("Write the long report"), "only the edited field is saved in full");
+    }
+
+    #[test]
+    fn finishing_a_run_is_one_transaction_with_its_save() {
+        let mut state = crate::State::default();
+        let chat = crate::chat::create(&mut state);
+        crate::chat::send(&mut state, &chat, "Finish atomically", "test").unwrap();
+        let mut attempt = Attempt::new();
+        attempt.activity = vec![event("x")];
+        state.runtime.runs[0].attempts.push(attempt);
+        state.runtime.runs[0].status = "completed".into();
+        let before = serde_json::to_value(&state.runtime.runs[0]).unwrap();
+        let len = || with(Some(&chat), |j| Ok(j.len())).unwrap();
+        let start = path(Some(&chat)).unwrap().exists().then(len).unwrap_or(0);
+        // A failed save: undo leaves neither the line nor the positions.
+        let archived = archive_run(&mut state.runtime.runs[0]).unwrap();
+        assert_eq!(len(), start + 1);
+        undo(&mut state.runtime.runs[0], archived).unwrap();
+        assert_eq!((len(), serde_json::to_value(&state.runtime.runs[0]).unwrap()), (start, before));
+        // A crash after the append but before the save: recovery drops the line.
+        let saved = persisting(|| serde_json::to_string(&state).unwrap());
+        archive_run(&mut state.runtime.runs[0]).unwrap();
+        assert_eq!(len(), start + 1);
+        let restarted: crate::State = serde_json::from_str(&saved).unwrap();
+        recover(&restarted).unwrap();
+        assert_eq!(len(), start, "an append whose save never happened is not history");
+    }
+}
+
+/// A run field whose value can live in its chat's journal. In memory it is
+/// always the full value; only a save while `persisting` writes the journal
+/// position in its place. Any mutable access forgets the position, so an
+/// edited value is saved in full again.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Spilled<T> {
+    value: T,
+    at: Option<u64>,
+}
+impl<T> From<T> for Spilled<T> {
+    fn from(value: T) -> Self {
+        Self { value, at: None }
+    }
+}
+impl From<&str> for Spilled<String> {
+    fn from(value: &str) -> Self {
+        value.to_owned().into()
+    }
+}
+impl<T> std::ops::Deref for Spilled<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.value
+    }
+}
+impl<T> std::ops::DerefMut for Spilled<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        self.at = None;
+        &mut self.value
+    }
+}
+impl<T: PartialEq> PartialEq for Spilled<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+}
+impl PartialEq<str> for Spilled<String> {
+    fn eq(&self, other: &str) -> bool {
+        self.value == other
+    }
+}
+impl PartialEq<&str> for Spilled<String> {
+    fn eq(&self, other: &&str) -> bool {
+        self.value == *other
+    }
+}
+impl std::fmt::Display for Spilled<String> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.value)
+    }
+}
+
+thread_local! {
+    static PERSISTING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+/// Runs `f` (a state save) so journal-backed fields write their position.
+pub(crate) fn persisting<R>(f: impl FnOnce() -> R) -> R {
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            PERSISTING.with(|p| p.set(self.0));
+        }
+    }
+    let _reset = Reset(PERSISTING.with(|p| p.replace(true)));
+    f()
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Marker {
+    journal: u64,
+}
+impl<T: Serialize> Serialize for Spilled<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self.at {
+            Some(journal) if PERSISTING.with(|p| p.get()) => Marker { journal }.serialize(serializer),
+            _ => self.value.serialize(serializer),
+        }
+    }
+}
+impl<'de, T: Deserialize<'de> + Default> Deserialize<'de> for Spilled<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Stored<T> {
+            Journal(Marker),
+            Value(T),
+        }
+        Ok(match Stored::<T>::deserialize(deserializer)? {
+            Stored::Journal(Marker { journal }) => Self { value: T::default(), at: Some(journal) },
+            Stored::Value(value) => Self { value, at: None },
+        })
+    }
+}
+
+/// The text of a finished run, kept as one journal line.
+#[derive(Serialize, Deserialize)]
+struct Text<'a> {
+    run: Cow<'a, str>,
+    objective: Cow<'a, str>,
+    result: Cow<'a, str>,
+    context: Cow<'a, Option<control_context::Resolved>>,
+    continuation: Cow<'a, Option<crate::design::Continuation>>,
+}
+/// Moves a finished run's text into its chat's journal; the run keeps it in
+/// memory and saves only the position until the text changes.
+pub(crate) fn archive_text(run: &mut crate::runtime::Run) -> io::Result<()> {
+    if !finished(&run.status) || (run.objective.at.is_some() && run.result.at.is_some()) {
+        return Ok(());
+    }
+    let text = Text { run: Cow::Borrowed(&run.id), objective: Cow::Borrowed(&run.objective), result: Cow::Borrowed(&run.result), context: Cow::Borrowed(&run.context), continuation: Cow::Borrowed(&run.continuation) };
+    let line = serde_json::to_vec(&text).map_err(io::Error::other)?;
+    let at = Some(with(run.chat_id.as_deref(), |journal| journal.append(&line))?);
+    (run.objective.at, run.result.at, run.context.at, run.continuation.at) = (at, at, at, at);
+    Ok(())
+}
+/// Fills journal-backed run text back in after loading.
+pub(crate) fn hydrate_text(state: &mut crate::State) -> io::Result<()> {
+    for run in &mut state.runtime.runs {
+        let Some(at) = run.objective.at.or(run.result.at).or(run.context.at).or(run.continuation.at) else { continue };
+        let line = with(run.chat_id.as_deref(), |journal| journal.read(at))?.ok_or_else(|| io::Error::other("History entry missing"))?;
+        let text: Text<'static> = serde_json::from_slice(&line).map_err(io::Error::other)?;
+        if run.objective.at.is_some() { run.objective.value = text.objective.into_owned(); }
+        if run.result.at.is_some() { run.result.value = text.result.into_owned(); }
+        if run.context.at.is_some() { run.context.value = text.context.into_owned(); }
+        if run.continuation.at.is_some() { run.continuation.value = text.continuation.into_owned(); }
+    }
+    Ok(())
+}
+
+/// What `archive_run` wrote, so a failed save can undo it.
+pub(crate) struct Archived {
+    chat: Option<String>,
+    at: u64,
+    activity: Vec<Activity>,
+}
+/// A run that just finished: its last attempt's activity and its text as one
+/// journal line, so finishing costs one sync. Half of a transaction with the
+/// state save that follows: commit it with that save or `undo` it.
+pub(crate) fn archive_run(run: &mut crate::runtime::Run) -> io::Result<Archived> {
+    #[derive(Serialize)]
+    struct Finished<'a> {
+        run: &'a str,
+        attempt: usize,
+        activity: &'a [Activity],
+        objective: &'a str,
+        result: &'a str,
+        context: &'a Option<control_context::Resolved>,
+        continuation: &'a Option<crate::design::Continuation>,
+    }
+    let index = run.attempts.len().saturating_sub(1);
+    let empty = Attempt::default();
+    let last = run.attempts.last().filter(|a| a.journal.is_none()).unwrap_or(&empty);
+    let line = serde_json::to_vec(&Finished { run: &run.id, attempt: index, activity: &last.activity, objective: &run.objective, result: &run.result, context: &run.context, continuation: &run.continuation }).map_err(io::Error::other)?;
+    let at = with(run.chat_id.as_deref(), |journal| journal.append(&line))?;
+    (run.objective.at, run.result.at, run.context.at, run.continuation.at) = (Some(at), Some(at), Some(at), Some(at));
+    let mut activity = Vec::new();
+    if let Some(last) = run.attempts.last_mut().filter(|a| a.journal.is_none() && !a.activity.is_empty()) {
+        activity = std::mem::take(&mut last.activity);
+        last.journal = Some(at);
+    }
+    Ok(Archived { chat: run.chat_id.clone(), at, activity })
+}
+/// Undoes `archive_run` after its save failed: the run is as it was and the
+/// journal line is gone, so neither half of the transaction remains.
+pub(crate) fn undo(run: &mut crate::runtime::Run, archived: Archived) -> io::Result<()> {
+    (run.objective.at, run.result.at, run.context.at, run.continuation.at) = (None, None, None, None);
+    if let Some(last) = run.attempts.last_mut().filter(|a| a.journal == Some(archived.at)) {
+        last.activity = archived.activity;
+        last.journal = None;
+    }
+    with(archived.chat.as_deref(), |journal| journal.truncate(archived.at))
+}
+/// After a crash between a journal append and its state save, drops journal
+/// lines the saved state never referenced: appends only grow the tail, and every
+/// committed line is referenced by the save that followed it.
+pub(crate) fn recover(state: &crate::State) -> io::Result<()> {
+    // Keyed by file: chats without a valid id share the unscoped journal.
+    let mut referenced: HashMap<PathBuf, (Option<&str>, u64)> = HashMap::new();
+    for chat in &state.chats {
+        referenced.entry(path(Some(&chat.id))?).or_insert((Some(&chat.id), 0));
+    }
+    for run in &state.runtime.runs {
+        let positions = run.attempts.iter().filter_map(|a| a.journal).chain([run.objective.at, run.result.at, run.context.at, run.continuation.at].into_iter().flatten());
+        let (_, end) = referenced.entry(path(run.chat_id.as_deref())?).or_insert((run.chat_id.as_deref(), 0));
+        *end = positions.fold(*end, |end, at| end.max(at + 1));
+    }
+    for (file, (chat, end)) in referenced {
+        if file.exists() {
+            with(chat, |journal| if journal.len() > end { journal.truncate(end) } else { Ok(()) })?;
+        }
+    }
+    Ok(())
 }

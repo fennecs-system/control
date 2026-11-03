@@ -322,7 +322,7 @@ pub fn prepare(state: &State, run_id: &str, args: Value) -> Result<Plan, &'stati
         status: child.status.clone(),
         artifact,
         baseline,
-        report: child.result.clone(),
+        report: child.result.to_string(),
         input,
     })
 }
@@ -545,11 +545,11 @@ pub(crate) mod tests {
         let store = Store::new();
         let mut s = fixture();
         let text = "rust 🦀 café\n".repeat(12000);
-        s.runtime.runs[1].result = "verified 🦀\n".repeat(3000);
+        *s.runtime.runs[1].result = "verified 🦀\n".repeat(3000);
         store.publish("child-attempt-1", &[("src/main.rs", text.as_bytes())]);
         for (section, key, expected) in [
             ("file", "file", text),
-            ("summary", "summary", s.runtime.runs[1].result.clone()),
+            ("summary", "summary", s.runtime.runs[1].result.to_string()),
         ] {
             let mut offset = 0;
             let mut collected = String::new();

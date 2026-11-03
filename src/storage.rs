@@ -72,6 +72,10 @@ pub fn load() -> io::Result<State> {
     };
     crate::providers::load_settings(&mut state.runtime)?;
     state.runtime.execution = crate::scheduler::load_limits()?;
+    // Journal lines from a save that never happened are dropped, then
+    // journal-backed run text is read back before anything uses it.
+    crate::history::recover(&state)?;
+    crate::history::hydrate_text(&mut state)?;
     let mut changed = crate::knowledge::migrate(&mut state);
     changed |= interrupt_active(&mut state);
     // Finished attempts from older state or a crash leave state for journals.
@@ -114,7 +118,7 @@ fn interrupt_active(state: &mut State) -> bool {
     changed
 }
 pub fn save(state: &State) -> io::Result<()> {
-    let data = serde_json::to_vec(state).map_err(io::Error::other)?;
+    let data = crate::history::persisting(|| serde_json::to_vec(state)).map_err(io::Error::other)?;
     write_checkpoint(&crate::config::state_directory().map_err(io::Error::other)?, &data)?;
     changes().bump();
     Ok(())

@@ -578,7 +578,7 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
         run.chat_id = Some(id.into());
         run.resource_grants = resources;
         run.lenses = Some(selected_lenses(&state.chats[index]));
-        run.context = Some(context);
+        *run.context = Some(context);
         Some(run.id.clone())
     } else {
         None
@@ -613,7 +613,7 @@ pub fn prompt(state: &State, run_id: &str) -> Option<String> {
         .clone()
         .unwrap_or_else(|| selected_lenses(session));
     let refs: Vec<_> = names.iter().map(String::as_str).collect();
-    let context = if let Some(context) = &run.context {
+    let context = if let Some(context) = &*run.context {
         if context.roots.is_empty() {
             String::new()
         } else {

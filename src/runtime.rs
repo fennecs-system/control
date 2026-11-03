@@ -45,7 +45,7 @@ pub struct Run {
     #[serde(default)]
     pub question: Option<crate::design::Question>,
     #[serde(default)]
-    pub continuation: Option<crate::design::Continuation>,
+    pub continuation: crate::history::Spilled<Option<crate::design::Continuation>>,
     #[serde(default)]
     pub backend: crate::backend::Backend,
     #[serde(default)]
@@ -53,7 +53,7 @@ pub struct Run {
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
-    pub context: Option<control_context::Resolved>,
+    pub context: crate::history::Spilled<Option<control_context::Resolved>>,
     #[serde(default)]
     pub lenses: Option<Vec<String>>,
     #[serde(default)]
@@ -65,11 +65,11 @@ pub struct Run {
     #[serde(default)]
     pub action: Action,
     pub id: String,
-    pub objective: String,
+    pub objective: crate::history::Spilled<String>,
     pub kind: RunKind,
     pub status: String,
     pub source: String,
-    pub result: String,
+    pub result: crate::history::Spilled<String>,
 }
 impl Run {
     /// Milliseconds since the epoch when the run was queued, from its identifier.
@@ -100,7 +100,7 @@ impl RunStatusCheckpoint {
         Self {
             runs: runtime.runs.iter()
                 .filter(|run| ["queued", "running", "cancelling", "waiting"].contains(&run.status.as_str()) && selected.contains(run.id.as_str()))
-                .map(|run| (run.id.clone(), run.status.clone(), run.result.clone(), run.question.clone())).collect(),
+                .map(|run| (run.id.clone(), run.status.clone(), run.result.to_string(), run.question.clone())).collect(),
             notice: runtime.notice.clone(),
         }
     }
@@ -108,7 +108,7 @@ impl RunStatusCheckpoint {
         for (id, status, result, question) in self.runs {
             if let Some(run) = runtime.runs.iter_mut().find(|run| run.id == id) {
                 run.status = status;
-                run.result = result;
+                *run.result = result;
                 run.question = question;
             }
         }
@@ -260,7 +260,7 @@ impl Runtime {
             persona: None,
             delegation: None,
             question: None,
-            continuation: None,
+            continuation: None.into(),
             backend: self.backend,
             queue_order: self
                 .runs
@@ -270,18 +270,18 @@ impl Runtime {
                 .unwrap_or(0)
                 .saturating_add(1),
             model: Some(self.configured_model()),
-            context: None,
+            context: None.into(),
             lenses: None,
             chat_id: None,
             attempts: Vec::new(),
             actor,
             action,
             id: format!("{stamp:x}-{}", self.runs.len()),
-            objective,
+            objective: objective.into(),
             kind,
             source: source.into(),
             status: "queued".into(),
-            result: String::new(),
+            result: String::new().into(),
         });
         self.notice = "Run queued.".into();
         crate::worker::wake();

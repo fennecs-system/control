@@ -482,7 +482,7 @@ fn start_with(state: Arc<Mutex<State>>, execute: fn(Arc<Mutex<State>>, Task)) ->
                         (
                             run.id.clone(),
                             crate::chat::prompt(&s, &run.id)
-                                .unwrap_or_else(|| run.objective.clone()),
+                                .unwrap_or_else(|| run.objective.to_string()),
                             run.actor.clone(),
                             run.action,
                             run.attempts.last().unwrap().clone(),
@@ -699,23 +699,18 @@ fn commit(
         ),
     };
     let previous_status = std::mem::replace(&mut r.status, status.into());
-    let previous_result = std::mem::replace(&mut r.result, result);
+    let previous_result = std::mem::replace(&mut *r.result, result);
     attempt.status.clone_from(&r.status);
     let previous_attempt = r.attempts.last_mut().map(|last| {
         attempt.activity = std::mem::take(&mut last.activity);
         attempt.command_jobs = std::mem::take(&mut last.command_jobs);
         std::mem::replace(last, attempt)
     });
-    // A finished attempt's activity moves to its chat's journal before the save,
-    // so the save carries only live work; a failed save restores it below.
-    let archived = crate::history::finished(status).then(|| {
-        let index = r.attempts.len().saturating_sub(1);
-        let (chat, id) = (r.chat_id.clone(), r.id.clone());
-        r.attempts.last_mut().and_then(|last| {
-            let kept = last.activity.clone();
-            crate::history::archive(chat.as_deref(), &id, index, last).ok().map(|()| kept)
-        })
-    }).flatten();
+    // A finished run's text and last attempt's activity move to its chat's
+    // journal as one line before the save, so the save carries only live work.
+    // Text positions stay valid (edits clear them); a failed save restores the
+    // activity below.
+    let archived = crate::history::finished(status).then(|| crate::history::archive_run(r).ok()).flatten();
     let previous_chat = chat_index.map(|index| {
         let chat = &s.chats[index];
         (
@@ -742,10 +737,10 @@ fn commit(
     if save(s).is_err() {
         let run = &mut s.runtime.runs[run_index];
         run.status = previous_status;
-        run.result = previous_result;
-        if let (Some(last), Some(kept)) = (run.attempts.last_mut(), archived) {
-            last.activity = kept;
-            last.journal = None;
+        *run.result = previous_result;
+        if let Some(archived) = archived {
+            // Neither half of the transaction remains.
+            let _ = crate::history::undo(run, archived);
         }
         if let (Some(last), Some(mut previous)) = (run.attempts.last_mut(), previous_attempt) {
             previous.activity = std::mem::take(&mut last.activity);
@@ -777,7 +772,7 @@ fn checkpoint_next(
     let parent = {
         if let Some(previous) = state.runtime.runs[index].attempts.last() {
             previous.parent_artifact.clone()
-        } else if let Some(continuation) = &state.runtime.runs[index].continuation {
+        } else if let Some(continuation) = &*state.runtime.runs[index].continuation {
             Some(continuation.checkpoint.clone())
         } else {
             state
@@ -820,7 +815,7 @@ fn checkpoint_next(
         .filter(|_|state.runtime.runs[index].action==Action::Task).and_then(|c|c.project.as_ref()).filter(|p|p.grant.is_some()).cloned();
     let project_parent = if let Some(previous)=state.runtime.runs[index].attempts.last() {
         previous.project_parent.clone()
-    } else if let Some(continuation)=&state.runtime.runs[index].continuation {
+    } else if let Some(continuation)=&*state.runtime.runs[index].continuation {
         project.as_ref().map(|_|continuation.checkpoint.clone())
     } else {project.as_ref().and_then(|p|p.head.clone())};
     let project_base=state.runtime.runs[index].attempts.last().map(|a|a.project_base.clone())

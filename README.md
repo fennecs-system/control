@@ -32,6 +32,9 @@ follow-up about the same files. Open **Artifacts** to inspect the result.
 Configuration lives in `~/.config/control/`; chats and outputs live in
 `~/.local/state/control/`. Setup preserves both. Repeat `nix run .#setup` to
 rebuild after pulling updates. [Configuration and background services →](docs/setup.md)
+To start with fresh history, stop Control and delete `state.json`, `history/`,
+`runs/` and `artifacts/` from `~/.local/state/control/`; configuration, node
+identity and pinned images stay.
 
 The default **lite** worker includes Rust tools. For Nix, Node/npm, a headless
 JDK, Python and curl inside worker containers, use `nix run .#setup -- --full`

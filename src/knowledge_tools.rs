@@ -379,7 +379,7 @@ mod tests {
             workspace_id: Some("knowledge-attempt".into()),
             ..Default::default()
         });
-        run.context = Some(control_context::Resolved {
+        *run.context = Some(control_context::Resolved {
             documents: vec![control_context::DocumentInput {
                 id: "selected".into(),
                 title: "Selected.md".into(),

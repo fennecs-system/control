@@ -413,13 +413,12 @@ mod tests {
                 assert!(super::handle(&mut out, &mut state, "POST", &format!("/chat/{id}/messages"), "engineering", "Accept: application/json\r\n", body.as_bytes()));
                 let run = state.runtime.runs.iter_mut().rev().find(|run| run.chat_id.as_deref() == Some(id.as_str())).unwrap();
                 run.status = "completed".into();
-                run.result = reply.clone();
+                *run.result = reply.clone();
                 let mut attempt = crate::usage::Attempt::new();
                 attempt.activity = (0..20).map(|i| crate::usage::Activity { id: format!("tool-{i}"), kind: "command_execution".into(), text: format!("cargo test --workspace -p crate-{i}"), output: "test result: ok. 412 passed; 0 failed\n".repeat(8), status: "completed".into() }).collect();
-                // As commit does when an attempt finishes.
-                let (chat, run_id) = (run.chat_id.clone(), run.id.clone());
-                crate::history::archive(chat.as_deref(), &run_id, 0, &mut attempt).unwrap();
                 run.attempts.push(attempt);
+                // As commit does when a run finishes.
+                crate::history::archive_run(run).unwrap();
                 crate::storage::save(&state).unwrap();
                 for page in ["transcript", ""] {
                     out.clear();
@@ -429,7 +428,7 @@ mod tests {
             }
         }
         let turns = conversations * 15;
-        println!("{turns} turns in {:?} = {:?}/turn; state {} KiB", start.elapsed(), start.elapsed() / turns as u32, serde_json::to_vec(&state).unwrap().len() / 1024);
+        println!("{turns} turns in {:?} = {:?}/turn; saved state {} KiB", start.elapsed(), start.elapsed() / turns as u32, crate::history::persisting(|| serde_json::to_vec(&state)).unwrap().len() / 1024);
     }
     #[test]
     fn returning_to_chat_remembers_only_an_existing_authorized_conversation() {
@@ -567,7 +566,7 @@ mod tests {
                     send_message(&mut stream,&mut state,id,"engineering",&headers,&fields,|_|if reject.load(Ordering::Relaxed){Err(std::io::Error::other("fixture disk full"))}else{Ok(())});
                     for run in &mut state.runtime.runs {if run.chat_id.as_deref()==Some(id) && run.status=="queued" {
                         run.status="completed".into();
-                        run.result=format!("{}\n\n{}",run.objective.replace("Prompt","Response"),"A retained paragraph exercises a longer conversation, including **formatted text**, `code`, and evidence without navigating the composer.\n\n".repeat(32));
+                        *run.result=format!("{}\n\n{}",run.objective.replace("Prompt","Response"),"A retained paragraph exercises a longer conversation, including **formatted text**, `code`, and evidence without navigating the composer.\n\n".repeat(32));
                     }}
                 }
                 else if let Some(query)=path.strip_prefix("/?") {

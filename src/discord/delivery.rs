@@ -30,12 +30,41 @@ pub(super) struct Run {
     pub actor: Actor,
     pub action: Action,
     pub status: String,
-    pub result: Option<String>,
+    #[serde(deserialize_with = "stored_text")]
+    pub result: Option<Stored>,
     pub question: Value,
     #[serde(rename = "attempts", deserialize_with = "last_attempt")]
     pub latest: Option<Attempt>,
 }
+/// Run text as saved: inline, or the position of its history-journal line.
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub(super) enum Stored {
+    Text(String),
+    Journal { journal: u64 },
+}
+fn stored_text<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Stored>, D::Error> {
+    Option::<Stored>::deserialize(d)
+}
 impl Run {
+    /// The run's report, inline or from its chat's history journal.
+    pub fn report(&self) -> Option<String> {
+        match self.result.as_ref()? {
+            Stored::Text(text) => Some(text.clone()),
+            Stored::Journal { journal } => {
+                #[derive(Deserialize)]
+                struct Text {
+                    result: String,
+                }
+                let line = control_journal::read_line(&self.history().ok()?, *journal).ok()??;
+                serde_json::from_slice::<Text>(&line).ok().map(|text| text.result)
+            }
+        }
+    }
+    fn history(&self) -> Result<std::path::PathBuf, &'static str> {
+        let name = self.chat_id.as_deref().filter(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')).unwrap_or("_runs");
+        crate::config::state(&format!("history/{name}.jsonl"))
+    }
     /// The latest attempt's last edit, from state or, once the attempt has
     /// finished, from its chat's history journal (read without a lock).
     pub fn change(&self) -> Option<Change> {
@@ -43,8 +72,7 @@ impl Run {
         if attempt.change.is_some() {
             return attempt.change.clone();
         }
-        let name = self.chat_id.as_deref().filter(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')).unwrap_or("_runs");
-        let path = crate::config::state(&format!("history/{name}.jsonl")).ok()?;
+        let path = self.history().ok()?;
         #[derive(Deserialize)]
         struct Entry {
             activity: Vec<Change>,
