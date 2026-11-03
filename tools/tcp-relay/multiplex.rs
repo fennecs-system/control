@@ -14,7 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub const CONNECTIONS: usize = 8;
+pub const CONNECTIONS: usize = 32;
 type Payload = Option<Vec<u8>>;
 struct Channel {
     outgoing: Credit,
@@ -64,6 +64,12 @@ impl Transport {
     }
     pub fn alive(&self) -> bool {
         self.alive.load(Ordering::Acquire)
+    }
+    /// Whether another stream fits; listeners leave further connections in
+    /// their accept backlog until one closes instead of resetting them.
+    #[allow(dead_code)] // Listener-side API; shared with the host binary.
+    pub fn has_capacity(&self) -> bool {
+        self.channels.lock().is_ok_and(|channels| channels.len() < CONNECTIONS)
     }
     #[allow(dead_code)] // Listener-side API; shared with the host binary.
     pub fn heartbeat_age(&self) -> Duration {
@@ -263,9 +269,11 @@ impl Transport {
                     return Err(fail("Invalid relay stream sequence"));
                 }
                 self.last_id.store(id, Ordering::Release);
-                incoming
-                    .try_send(self.reserve(id)?)
-                    .map_err(|_| fail("Relay accept queue full"))?;
+                // A peer with a larger stream limit loses only the excess stream.
+                match self.reserve(id) {
+                    Ok(stream) => incoming.try_send(stream).map_err(|_| fail("Relay accept queue full"))?,
+                    Err(_) => self.send(id, Kind::Close, &[])?,
+                }
                 continue;
             }
             if kind == Kind::Close {
@@ -362,7 +370,7 @@ mod tests {
         }
     }
     #[test]
-    fn eight_streams_transfer_independently_and_preserve_half_close() {
+    fn every_stream_slot_transfers_independently_and_preserves_half_close() {
         let pair = Pair::new();
         let mut clients = Vec::new();
         let mut servers = Vec::new();
@@ -380,6 +388,7 @@ mod tests {
             }));
             clients.push(client);
         }
+        assert!(!pair.listener.has_capacity(), "a full transport admits no more streams");
         let (_, overflow) = sockets();
         assert!(pair.listener.open(overflow).is_err());
         let clients = clients
@@ -399,6 +408,11 @@ mod tests {
             task.join().unwrap();
         }
         assert!(pair.listener.alive() && pair.host.alive());
+        let freed = Instant::now();
+        while !pair.listener.has_capacity() && freed.elapsed() < Duration::from_secs(2) {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(pair.listener.has_capacity(), "closed streams free their slots for waiting connections");
         let start = Instant::now();
         while !pair.listener.channels.lock().unwrap().is_empty() {
             assert!(start.elapsed() < Duration::from_secs(1));
@@ -452,6 +466,31 @@ mod tests {
             reader.join().unwrap();
             assert!(!link.alive());
         }
+    }
+    #[test]
+    fn a_stream_beyond_the_limit_is_closed_alone() {
+        #[derive(Clone, Default)]
+        struct Shared(Arc<Mutex<Vec<u8>>>);
+        impl Write for Shared {
+            fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(data);
+                Ok(data.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut bytes = Vec::new();
+        for id in 1..=CONNECTIONS as u32 + 1 {
+            bytes.extend_from_slice(&id.to_be_bytes());
+            protocol::write(&mut bytes, Kind::Open, b"").unwrap();
+        }
+        let output = Shared::default();
+        let (_link, incoming, reader) = Transport::start(std::io::Cursor::new(bytes), output.clone(), true);
+        reader.join().unwrap();
+        assert_eq!(incoming.try_iter().count(), CONNECTIONS, "every stream within the limit is admitted");
+        let written = output.0.lock().unwrap().clone();
+        assert!(written.starts_with(&(CONNECTIONS as u32 + 1).to_be_bytes()), "only the excess stream is closed");
     }
     #[test]
     fn closing_one_connection_keeps_the_listener_and_other_streams_alive() {
