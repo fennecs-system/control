@@ -64,6 +64,16 @@ pub struct Budget {
     pub turns_per_window: u32,
 }
 
+/// Like an OTP child spec: a permanent bot keeps waking; a temporary one ends
+/// after its first turn completes, a one-shot wake.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(rename_all = "snake_case"))]
+pub enum Restart {
+    #[default]
+    Permanent,
+    Temporary,
+}
+
 /// A bot's identity, the conversation its turns run in, its subscriptions and
 /// budget. Configuration, not a grant: authority is checked by the application.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -73,6 +83,8 @@ pub struct Definition {
     pub chat: ChatId,
     pub sources: Vec<Source>,
     pub budget: Budget,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub restart: Restart,
 }
 impl Definition {
     pub fn validate(&self) -> Result<(), &'static str> {
@@ -349,7 +361,7 @@ impl<I: Info> Supervisor<I> {
                     && bot.turn.as_ref().is_some_and(|(id, _)| *id == turn)
                 {
                     bot.turn = None;
-                    if bot.stopping {
+                    if bot.stopping || bot.definition.restart == Restart::Temporary {
                         self.bots.remove(&id);
                     }
                 }
@@ -458,7 +470,7 @@ mod tests {
         Budget { cooldown_ms, window_ms, turns_per_window }
     }
     fn define(s: &mut S, name: &str, sources: Vec<Source>, budget: Budget, now: u64) {
-        let definition = Definition { bot: bot(name), chat: ChatId(format!("chat-{name}")), sources, budget };
+        let definition = Definition { bot: bot(name), chat: ChatId(format!("chat-{name}")), sources, budget, restart: Restart::Permanent };
         assert!(s.step(Event::Define(definition), Now(now)).is_empty());
     }
     fn topic(kind: &str, name: &str) -> Topic {
@@ -503,6 +515,22 @@ mod tests {
         assert!(s.step(message(None, 2), Now(60)).is_empty(), "an older cursor is a replay");
         assert!(s.eligible(&bot("alice"), &alice));
         assert_eq!(s.outstanding().count(), 2);
+    }
+
+    #[test]
+    fn temporary_bots_end_after_their_first_turn_and_redefinition_can_make_them_permanent() {
+        let mut s = S::default();
+        let once = Definition { bot: bot("once"), chat: ChatId("chat-once".into()), sources: vec![room("general")], budget: budget(0, 60_000, 1), restart: Restart::Temporary };
+        assert!(s.step(Event::Define(once.clone()), Now(0)).is_empty());
+        let turn = turns(&s.step(message(None, 1), Now(1)))[0].1;
+        assert!(s.step(message(None, 2), Now(2)).is_empty());
+        assert!(s.step(done("once", turn), Now(3)).is_empty(), "pending messages after the wake are not a second turn");
+        assert_eq!(s.status(&bot("once")), None);
+        s.step(Event::Define(once.clone()), Now(4));
+        s.step(Event::Define(Definition { restart: Restart::Permanent, ..once }), Now(5));
+        let turn = turns(&s.step(message(None, 3), Now(6)))[0].1;
+        s.step(done("once", turn), Now(7));
+        assert_eq!(s.status(&bot("once")), Some(Status::Ready));
     }
 
     #[test]
@@ -625,10 +653,10 @@ mod tests {
     fn pause_stop_and_validation_follow_the_command_contract() {
         let mut s = S::default();
         for definition in [
-            Definition { bot: bot("x"), chat: ChatId("c".into()), sources: vec![], budget: budget(0, 1, 1) },
-            Definition { bot: bot("x"), chat: ChatId("c".into()), sources: vec![room("general")], budget: budget(0, 0, 1) },
-            Definition { bot: bot("x"), chat: ChatId("c".into()), sources: vec![Source::Timer { every_ms: 0 }], budget: budget(0, 1, 1) },
-            Definition { bot: bot("x"), chat: ChatId("c".into()), sources: vec![room("general")], budget: budget(0, 1, 257) },
+            Definition { bot: bot("x"), chat: ChatId("c".into()), sources: vec![], budget: budget(0, 1, 1), restart: Restart::Permanent },
+            Definition { bot: bot("x"), chat: ChatId("c".into()), sources: vec![room("general")], budget: budget(0, 0, 1), restart: Restart::Permanent },
+            Definition { bot: bot("x"), chat: ChatId("c".into()), sources: vec![Source::Timer { every_ms: 0 }], budget: budget(0, 1, 1), restart: Restart::Permanent },
+            Definition { bot: bot("x"), chat: ChatId("c".into()), sources: vec![room("general")], budget: budget(0, 1, 257), restart: Restart::Permanent },
         ] {
             assert!(definition.validate().is_err());
             assert!(s.step(Event::Define(definition), Now(0)).is_empty());
@@ -673,7 +701,7 @@ mod tests {
         let mut s = S::default();
         define(&mut s, "bot", vec![room("general"), Source::Timer { every_ms: 100 }], budget(0, 60_000, 10), 0);
         let turn = turns(&s.step(message(None, 0), Now(1)))[0].1;
-        let moved = Definition { bot: bot("bot"), chat: ChatId("chat-moved".into()), sources: vec![room("general"), Source::Timer { every_ms: 100 }], budget: budget(0, 60_000, 10) };
+        let moved = Definition { bot: bot("bot"), chat: ChatId("chat-moved".into()), sources: vec![room("general"), Source::Timer { every_ms: 100 }], budget: budget(0, 60_000, 10), restart: Restart::Permanent };
         assert!(s.step(Event::Define(moved), Now(2)).is_empty());
         assert_eq!(s.outstanding().map(|(_, chat, t)| (chat.0.as_str(), *t)).collect::<Vec<_>>(), [("chat-bot", turn)], "recovery uses the chat the turn was requested for");
         assert!(s.step(Event::Stop(bot("bot")), Now(3)).is_empty());

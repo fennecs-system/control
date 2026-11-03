@@ -20,7 +20,7 @@ pub const TOOLS: [Tool; 22] = [
     Tool {
         name: "service.watch", title: "Watches", description: "Program output that wakes bots",
         href: None, aliases: "watch monitor stream stdout events wake tail websocket ssh",
-        mcp_names: &["control_watch_start", "control_watch_events", "control_watch_status", "control_watch_stop"], execution: "service PID 1 supervisor / Rust follower", surface: "chat / worker MCP", available: true,
+        mcp_names: &["control_watch_start", "control_watch_events", "control_watch_status", "control_watch_stop", "control_watch_wake"], execution: "service PID 1 supervisor / Rust follower", surface: "chat / worker MCP", available: true,
     },
     Tool {
         name: "agent.bot", title: "Persistent bot", description: "Event-woken agents · operator approval",
