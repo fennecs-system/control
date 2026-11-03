@@ -670,7 +670,7 @@ pub(crate) fn http_with_save(
             let detail=route(&state,p);
             let action=if p.status==Status::Pending{format!("<label>Allow for<select name='seconds'><option value='-1'>Service lifetime</option><option value='900'>Up to 15 minutes</option><option value='3600'>Up to 1 hour</option></select></label><p class='muted'>Access ends when this service stops. You can revoke it at any time.</p>{}<button class='primary'>Allow port</button><button name='revoke' value='yes' formnovalidate>Deny</button>",if p.target.is_some(){"<label><input type='checkbox' name='loopback' value='yes'> Allow this exact literal loopback target</label>"}else{""})}else{"<button name='revoke' value='yes'>Revoke</button>".into()};
             let address=p.approval.as_ref().filter(|a|a.host_port!=0).map(|a|format!(" · 127.0.0.1:{}",a.host_port)).unwrap_or_default();
-            format!("<article><h3>{}</h3><p>{detail}{address}</p><p>{:?} · {} · {} · {}</p><p>{}</p><form method='post' action='/tools/ports'><input type='hidden' name='id' value='{}'>{action}</form></article>",crate::escape(&p.name.0),p.status,crate::escape(&p.chat),if p.ready{"ready"}else{"waiting"},crate::escape(p.service.as_str()),crate::escape(&p.diagnostic),crate::escape(p.id.as_str()))
+            format!("<article><h3>{}</h3><p>{detail}{address}</p><p>{:?} · {} · {} · {}</p><p>{}</p><form class='decision-form' method='post' action='/tools/ports'><input type='hidden' name='id' value='{}'>{action}</form></article>",crate::escape(&p.name.0),p.status,crate::escape(&p.chat),if p.ready{"ready"}else{"waiting"},crate::escape(p.service.as_str()),crate::escape(&p.diagnostic),crate::escape(p.id.as_str()))
         }).collect::<String>();
         Ok(crate::render(
             &state,
@@ -715,8 +715,9 @@ pub(crate) fn pending_for_chat<'a>(state: &'a State, id: &str) -> Vec<&'a Port> 
         runs.insert(run.id.as_str());
         if let Ok((_,children))=crate::delegated_results::scope(state,run){runs.extend(children);}
     }
+    let requester=|port: &Port| state.runtime.runs.iter().find(|run| run.id==port.origin_run).and_then(|run| run.chat_id.as_deref());
     state.ports.iter().filter(|port|port.status==Status::Pending && port.actor==chat.actor
-        && (port.chat==id || runs.contains(port.origin_run.as_str()))).collect()
+        && (crate::chat::within(state,&port.chat,id) || runs.contains(port.origin_run.as_str()) || requester(port).is_some_and(|c| crate::chat::within(state,c,id)))).collect()
 }
 
 pub(crate) fn pending_json(state: &State,id: &str)->Vec<Value> {
@@ -749,7 +750,7 @@ pub(crate) fn pending_panel(state:&State,id:&str)->String {
         let loopback=if port.target.as_ref().is_some_and(|target|target.host.parse::<IpAddr>().is_ok_and(|ip|ip.is_loopback())) {
             "<label><input type='checkbox' name='loopback' value='yes' required> Allow this exact loopback target</label>"
         }else{""};
-        format!("<article class='assistant-message port-request' data-transcript-key='port-{}'><h3>Port access · {}</h3><p>{detail}</p><form method='post' action='/tools/ports' target='_top'><input type='hidden' name='id' value='{}'><input type='hidden' name='return_chat' value='{}'><label>Allow for<select name='seconds'><option value='-1'>Service lifetime</option><option value='900'>Up to 15 minutes</option><option value='3600'>Up to 1 hour</option></select></label>{loopback}<button class='primary'>Allow port</button><button name='revoke' value='yes' formnovalidate>Deny</button><p role='alert' hidden></p></form></article>",port.id.as_str(),crate::escape(&port.name.0),port.id.as_str(),crate::escape(id))
+        format!("<article class='assistant-message port-request' data-transcript-key='port-{}'><h3>Port access · {}</h3><p>{detail}</p><form class='decision-form' method='post' action='/tools/ports' target='_top'><input type='hidden' name='id' value='{}'><input type='hidden' name='return_chat' value='{}'><label>Allow for<select name='seconds'><option value='-1'>Service lifetime</option><option value='900'>Up to 15 minutes</option><option value='3600'>Up to 1 hour</option></select></label>{loopback}<button class='primary'>Allow port</button><button name='revoke' value='yes' formnovalidate>Deny</button><p role='alert' hidden></p></form></article>",port.id.as_str(),crate::escape(&port.name.0),port.id.as_str(),crate::escape(id))
     }).collect()
 }
 
@@ -1346,6 +1347,28 @@ pub(crate) mod tests {
         assert!(html.contains("class='assistant-message port-request'"));
         assert!(html.contains("value='-1'>Service lifetime"));
         assert!(html.contains("target='_top'"));
+    }
+    #[test]
+    fn requests_from_spawned_descendants_surface_in_the_top_level_chat() {
+        let (mut state,run,chat)=pending_fixture();
+        let mut parent=chat.clone();
+        for _ in 0..2 {
+            let child=crate::chat::create(&mut state);
+            state.chats.last_mut().unwrap().parent_chat=Some(parent.clone());
+            parent=child;
+        }
+        let mut wake=state.runtime.runs[0].clone();
+        (wake.id,wake.chat_id,wake.kind)=("bot-wake".into(),Some(parent.clone()),crate::runtime::RunKind::BotWake);
+        state.runtime.runs.push(wake);
+        let mut port=state.ports[0].clone();
+        (port.id,port.chat,port.origin_run)=("port-grandchild".to_owned().try_into().unwrap(),parent.clone(),"bot-wake".into());
+        state.ports.push(port);
+        let ids=|id: &str| pending_json(&state,id).iter().map(|p| p["port_id"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+        assert!(ids(&chat).contains(&"port-grandchild".to_owned()), "{:?}", ids(&chat));
+        assert_eq!(ids(&parent),["port-grandchild"], "a descendant sees only its own requests");
+        let unrelated=crate::chat::create(&mut state);
+        assert!(pending_json(&state,&unrelated).is_empty());
+        let _=run;
     }
     pub(crate) fn fixture() -> (State, String, String) {
         let mut state = State::default();

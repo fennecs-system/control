@@ -661,7 +661,7 @@ pub(crate) fn pending_panel(state: &State, chat: &str) -> String {
         let mut sources = Vec::new();
         if a.room { sources.push("room messages".to_owned()); }
         if let Some(minutes) = a.every_minutes { sources.push(format!("every {minutes} min")); }
-        format!("<article class='assistant-message port-request' data-transcript-key='bot-{}'><h3>Bot request · {}</h3><p>Run this chat as a persistent bot, woken by {}. Up to {TURNS_PER_WINDOW} turns per hour.</p><form method='post' action='/tools/bots' target='_top'><input type='hidden' name='id' value='{}'><input type='hidden' name='return_chat' value='{}'><button class='primary' name='allow' value='yes'>Allow bot</button><button name='deny' value='yes'>Deny</button><p role='alert' hidden></p></form><p class='muted'>Or reply /bot allow {} · /bot deny {}</p></article>",
+        format!("<article class='assistant-message port-request' data-transcript-key='bot-{}'><h3>Bot request · {}</h3><p>Run this chat as a persistent bot, woken by {}. Up to {TURNS_PER_WINDOW} turns per hour.</p><form class='decision-form' method='post' action='/tools/bots' target='_top'><input type='hidden' name='id' value='{}'><input type='hidden' name='return_chat' value='{}'><button class='primary' name='allow' value='yes'>Allow bot</button><button name='deny' value='yes' formnovalidate>Deny</button><p role='alert' hidden></p></form><p class='muted'>Or reply /bot allow {} · /bot deny {}</p></article>",
             crate::escape(&a.id), crate::escape(title), crate::escape(&sources.join(" and ")), crate::escape(&a.id), crate::escape(chat), crate::escape(&a.id), crate::escape(&a.id))
     }).collect()
 }
