@@ -43,3 +43,12 @@
 .project-picker button:hover{background:#c6b5ff;border-color:#c6b5ff}
 .project-picker button:focus-visible{outline:2px solid var(--purple);outline-offset:3px}
 .project-picker textarea{display:block;width:100%;min-height:6em;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:0;padding:7px 9px;font:inherit}
+.room-tabs{display:inline-flex;flex-shrink:0;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--panel)}
+.room-tab{position:relative;margin:0!important;font-size:12px!important;cursor:pointer}
+.room-tab input{position:absolute;opacity:0;width:1px;height:1px;margin:0;padding:0}
+.room-tab span{display:block;padding:5px 10px;line-height:1.5;color:var(--muted);border-left:1px solid var(--line);white-space:nowrap}
+.room-tab:first-child span{border-left:0}
+.room-tab:hover span{color:var(--text)}
+.room-tab input:checked+span{color:var(--purple);background:#b5a0ff14}
+.room-tab input:focus-visible+span{outline:2px solid var(--purple);outline-offset:-2px}
+@media(max-width:580px){.composer-footer{flex-wrap:wrap}.room-tabs{order:2;width:100%;overflow-x:auto}}
