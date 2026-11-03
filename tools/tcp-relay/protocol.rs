@@ -17,8 +17,6 @@ pub enum Kind {
     Close = 4,
     Credit = 5,
     Open = 6,
-    /// Sent once by a host that knows its peer supports WINDOW credits.
-    Window = 7,
 }
 pub fn read(reader: &mut impl Read, buffer: &mut [u8; LIMIT]) -> io::Result<(Kind, usize)> {
     let mut header = [0; 5];
@@ -30,7 +28,6 @@ pub fn read(reader: &mut impl Read, buffer: &mut [u8; LIMIT]) -> io::Result<(Kin
         4 => Kind::Close,
         5 => Kind::Credit,
         6 => Kind::Open,
-        7 => Kind::Window,
         _ => return Err(io::Error::other("Invalid relay frame")),
     };
     let size = u32::from_be_bytes(header[1..].try_into().unwrap()) as usize;
@@ -111,7 +108,7 @@ mod tests {
         assert!(read(&mut input, &mut buffer).is_err());
         assert!(write(&mut data, Kind::Data, &vec![0; LIMIT + 1]).is_err());
         assert!(read(&mut [1, 0, 1, 0, 0].as_slice(), &mut buffer).is_err());
-        assert!(read(&mut [8, 0, 0, 0, 0].as_slice(), &mut buffer).is_err());
+        assert!(read(&mut [7, 0, 0, 0, 0].as_slice(), &mut buffer).is_err());
     }
     #[test]
     fn credit_is_bounded_by_the_window_and_never_reused() {

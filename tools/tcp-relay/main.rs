@@ -104,25 +104,6 @@ fn run() -> io::Result<()> {
             io::stdout().flush()?;
             stream
         }
-        "listen" => {
-            let listener = TcpListener::bind(("127.0.0.1", port))?;
-            listener.set_nonblocking(true)?;
-            println!("CONTROL_RELAY_V2_READY");
-            io::stdout().flush()?;
-            loop {
-                match listener.accept() {
-                    Ok((stream, _)) => {
-                        println!("CONTROL_RELAY_V2_CONNECTED");
-                        io::stdout().flush()?;
-                        break stream;
-                    }
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(Duration::from_millis(25))
-                    }
-                    Err(error) => return Err(error),
-                }
-            }
-        }
         _ => return Err(io::Error::other("Invalid mode")),
     };
     stream.set_nodelay(true)?;

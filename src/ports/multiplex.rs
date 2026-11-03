@@ -45,12 +45,6 @@ fn listen(shared: &Arc<Mutex<State>>, port: &Port, cancel: &Arc<AtomicBool>) -> 
         return Err(fail("Relay input unavailable"));
     };
     let (transport, incoming, reader) = Transport::start(output, input, true);
-    if crate::services::relay_windowed(&service)? && transport.widen().is_err() {
-        transport.stop();
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(fail("Relay closed during setup"));
-    }
     let ping = transport.clone();
     let heartbeat = thread::spawn(move || {
         while ping.alive() {
