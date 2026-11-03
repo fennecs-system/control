@@ -113,6 +113,7 @@ dependencies = [
  "base64 0.22.1",
  "control-ai",
  "control-bot",
+ "control-comonad",
  "control-context",
  "control-core",
  "control-effect",
