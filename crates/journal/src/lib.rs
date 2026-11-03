@@ -59,15 +59,24 @@ impl Journal for Memory {
 
 /// A JSON-lines file with an in-memory index of line offsets, built once when
 /// the file is opened. A crash can leave at most a torn final line, which
-/// opening removes.
+/// opening removes. A handle holds an exclusive lock on its file, so one writer
+/// owns each journal.
 pub struct FileJournal {
     file: File,
     starts: Vec<u64>,
     end: u64,
+    /// Set when a failed append could not be rolled back; reopen to repair.
+    poisoned: bool,
 }
 impl FileJournal {
     pub fn open(path: &Path) -> io::Result<Self> {
+        let created = !path.exists();
         let mut file = OpenOptions::new().read(true).append(true).create(true).mode(0o600).open(path)?;
+        file.try_lock().map_err(|_| io::Error::new(io::ErrorKind::WouldBlock, "Journal is open elsewhere"))?;
+        if created {
+            // Make the new file's directory entry durable with its first lines.
+            File::open(path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new(".")))?.sync_all()?;
+        }
         let mut starts = Vec::new();
         let (mut offset, mut line) = (0u64, 0u64);
         let mut buffer = vec![0; 1 << 16];
@@ -90,7 +99,7 @@ impl FileJournal {
             file.set_len(line)?;
             file.sync_data()?;
         }
-        Ok(Self { file, starts, end: line })
+        Ok(Self { file, starts, end: line, poisoned: false })
     }
 }
 impl Journal for FileJournal {
@@ -99,12 +108,16 @@ impl Journal for FileJournal {
     }
     fn append(&mut self, entry: &[u8]) -> io::Result<u64> {
         check(entry)?;
+        if self.poisoned {
+            return Err(io::Error::other("Journal needs reopening after a failed append"));
+        }
         let mut line = Vec::with_capacity(entry.len() + 1);
         line.extend_from_slice(entry);
         line.push(b'\n');
         if let Err(error) = self.file.write_all(&line).and_then(|()| self.file.sync_data()) {
-            // Keep the file a whole number of lines for the next append.
-            let _ = self.file.set_len(self.end);
+            // Keep the file a whole number of lines for the next append; if
+            // that fails, refuse appends until reopening repairs the tail.
+            self.poisoned = self.file.set_len(self.end).and_then(|()| self.file.sync_data()).is_err();
             return Err(error);
         }
         self.starts.push(self.end);
@@ -202,6 +215,15 @@ mod tests {
         assert_eq!((journal.len(), journal.read(1).unwrap().as_deref()), (2, Some(&br#"{"turn":1,"text":"hi"}"#[..])));
         assert_eq!(journal.append(br#"{"turn":2}"#).unwrap(), 2);
         assert_eq!(journal.read(9).unwrap(), None);
+    }
+
+    #[test]
+    fn one_handle_owns_a_journal_at_a_time() {
+        let path = scratch("lock");
+        let journal = FileJournal::open(&path).unwrap();
+        assert_eq!(FileJournal::open(&path).err().map(|e| e.kind()), Some(io::ErrorKind::WouldBlock));
+        drop(journal);
+        assert!(FileJournal::open(&path).is_ok(), "the lock ends with the handle");
     }
 
     #[test]

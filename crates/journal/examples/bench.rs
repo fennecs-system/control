@@ -29,6 +29,7 @@ fn main() {
                 file.write_all(b"\n").unwrap();
             }
             file.sync_all().unwrap();
+            drop(journal);
             journal = FileJournal::open(&path).unwrap();
         }
         let rounds = 50;
@@ -58,10 +59,12 @@ fn main() {
         }
         let read = start.elapsed() / 1000;
         black_box(bytes);
+        let len = journal.len();
+        drop(journal);
         let start = Instant::now();
-        let reopened = FileJournal::open(&path).unwrap();
+        journal = FileJournal::open(&path).unwrap();
         let open = start.elapsed();
-        assert_eq!(reopened.len(), journal.len());
+        assert_eq!(journal.len(), len);
         println!("{:>8}  {:>14?}  {:>16?}  {:>10?}  {:>10?}", journal.len(), append, rewrite, read, open);
     }
     let _ = fs::remove_dir_all(&dir);
