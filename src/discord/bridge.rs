@@ -606,37 +606,49 @@ impl Bridge {
     /// Follows Control's delivery outbox from this bridge's cursor; receipts make
     /// at-least-once events exactly-once messages.
     fn deliver(&self, routes: &[Route], outbound: &mut Outbound) -> Result<(), &'static str> {
-        let (events, cursor) = crate::outbox::read(&crate::outbox::path()?, outbound.cursor).map_err(|_| "Could not read the delivery outbox.")?;
+        let events = crate::outbox::read(&crate::outbox::path()?, outbound.cursor).map_err(|_| "Could not read the delivery outbox.")?;
         let mut authorize = identity::authorizer();
+        for (run, next) in &events {
+            // A transient send failure stops here: the event is retried next poll.
+            if !self.deliver_one(run, routes, outbound, &mut authorize)? {
+                break;
+            }
+            outbound.cursor = *next;
+        }
+        Ok(())
+    }
+    /// Whether `run` needs nothing more: skipped, already delivered, delivered
+    /// now or refused for good. False means retry it later.
+    fn deliver_one(&self, run: &crate::outbox::Delivery, routes: &[Route], outbound: &mut Outbound, authorize: &mut impl FnMut(&Actor, Action) -> Result<identity::Workspace, &'static str>) -> Result<bool, &'static str> {
         {
-            for run in &events {
+            {
                 if !run.source.starts_with("discord:") && run.chat.is_none()
                 {
-                    continue;
+                    return Ok(true);
                 }
                 let actor = &run.actor;
                 let action = run.action;
                 if authorize(actor, action).is_err() {
-                    continue;
+                    return Ok(true);
                 }
                 let (channel, direct) = match actor {
                     Actor::DiscordDm { channel_id, .. } => (*channel_id, true),
-                    _ => continue,
+                    _ => return Ok(true),
                 };
                 if !routes
                     .iter()
                     .any(|r| r.channel == channel && r.recipient.is_some() == direct)
                 {
-                    continue;
+                    return Ok(true);
                 }
                 let status = run.status.as_str();
-                if !["completed", "blocked", "failed", "interrupted", "waiting", "cancelled"].contains(&status) {
-                    continue;
+                if !crate::outbox::DELIVERABLE.contains(&status) {
+                    return Ok(true);
                 }
                 let id = run.run.as_str();
                 let receipt = format!("{id}:{status}");
                 if outbound.delivered.contains(&receipt) {
-                    continue;
+                    return Ok(true);
                 }
                 let decision = (status == "waiting").then(||design_report(&run.question)).flatten();
                 let report = if let Some(report) = decision.as_deref() {
@@ -649,18 +661,18 @@ impl Bridge {
                     run.report.as_str()
                 };
                 let link = discord::session_link(actor, run.chat.as_deref()).unwrap_or_default();
-                if self.attempt(&receipt, channel, &delivery_message(run.change.as_ref(),status,&link,report), outbound) {
-                    outbound.delivered.insert(receipt);
-                    checkpoint(
-                        config::state("discord-delivered.json")?,
-                        &serde_json::to_vec(&outbound.delivered)
-                            .map_err(|_| "Could not encode delivery progress.")?,
-                    )?;
+                if !self.attempt(&receipt, channel, &delivery_message(run.change.as_ref(),status,&link,report), outbound) {
+                    return Ok(false);
                 }
+                outbound.delivered.insert(receipt);
+                checkpoint(
+                    config::state("discord-delivered.json")?,
+                    &serde_json::to_vec(&outbound.delivered)
+                        .map_err(|_| "Could not encode delivery progress.")?,
+                )?;
+                Ok(true)
             }
         }
-        outbound.cursor = cursor;
-        Ok(())
     }
     /// Worker-queued notices (for example a DM that could not become a task).
     fn outbox(&self, routes: &[Route], outbound: &mut Outbound) -> Result<(), &'static str> {
@@ -689,9 +701,9 @@ impl Bridge {
 }
 #[derive(Default)]
 struct Outbound {
-    /// Byte offset into the delivery outbox; starts at 0 on launch and relies
-    /// on receipts to skip what was already sent.
-    cursor: u64,
+    /// Position in the delivery outbox; starts at the beginning on launch and
+    /// relies on receipts to skip what was already sent.
+    cursor: crate::outbox::Cursor,
     delivered: HashSet<String>,
     undelivered: HashSet<String>,
     backoff: HashMap<String, (u64, u32)>,

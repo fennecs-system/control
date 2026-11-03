@@ -191,7 +191,7 @@ mod tests {
         crate::chat::send(&mut state, &chat, "Tell me when done", "test").unwrap();
         let chat = own(&mut state, &chat, "outbox");
         let outbox = outbox_path().unwrap();
-        let events = || control::outbox::read(&outbox, 0).unwrap().0.into_iter().filter(|e| e.chat.as_deref() == Some(chat.as_str())).collect::<Vec<_>>();
+        let events = || control::outbox::read(&outbox, control::outbox::Cursor::default()).unwrap().into_iter().map(|(e, _)| e).filter(|e| e.chat.as_deref() == Some(chat.as_str())).collect::<Vec<_>>();
         emit(&mut state, |_| Ok(())).unwrap();
         assert!(events().is_empty(), "queued runs are not deliverable");
         state.runtime.runs[0].status = "waiting".into();

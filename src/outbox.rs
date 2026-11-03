@@ -42,22 +42,50 @@ pub fn path() -> Result<PathBuf, &'static str> {
     crate::config::state("history/_outbox.jsonl")
 }
 
-/// Whole events after byte `offset`, and the offset to continue from. A torn
-/// final line is left for the next read.
-pub fn read(path: &Path, offset: u64) -> io::Result<(Vec<Delivery>, u64)> {
+/// Where a follower is: just past a line it consumed, and that line's length
+/// and hash, so a rewritten tail is noticed rather than misread.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Cursor {
+    pub offset: u64,
+    len: u64,
+    hash: u64,
+}
+fn hash(line: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    line.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Whole events after `cursor`, each with the cursor just past it. If the line
+/// before the cursor is no longer the one consumed (a fresh history, or an
+/// append the writer rolled back), reading restarts from the beginning and
+/// followers rely on their receipts. A torn final line waits for the next read.
+pub fn read(path: &Path, cursor: Cursor) -> io::Result<Vec<(Delivery, Cursor)>> {
     let mut file = match File::open(path) {
         Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok((Vec::new(), 0)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(error),
     };
-    // A shorter file means a fresh history: start again from the beginning.
-    let offset = if file.metadata()?.len() < offset { 0 } else { offset };
-    file.seek(SeekFrom::Start(offset))?;
+    let intact = cursor.offset == 0 || (file.metadata()?.len() >= cursor.offset && {
+        let mut last = vec![0; cursor.len as usize];
+        file.seek(SeekFrom::Start(cursor.offset - cursor.len))?;
+        file.read_exact(&mut last).is_ok() && hash(&last) == cursor.hash
+    });
+    let start = if intact { cursor.offset } else { 0 };
+    file.seek(SeekFrom::Start(start))?;
     let mut data = Vec::new();
     file.read_to_end(&mut data)?;
-    let complete = data.iter().rposition(|b| *b == b'\n').map_or(0, |end| end + 1);
-    let events = data[..complete].split(|b| *b == b'\n').filter(|line| !line.is_empty()).filter_map(|line| serde_json::from_slice(line).ok()).collect();
-    Ok((events, offset + complete as u64))
+    let mut events = Vec::new();
+    let mut offset = start;
+    for line in data.split_inclusive(|b| *b == b'\n').filter(|line| line.ends_with(b"\n")) {
+        offset += line.len() as u64;
+        let next = Cursor { offset, len: line.len() as u64, hash: hash(line) };
+        if let Ok(event) = serde_json::from_slice(&line[..line.len() - 1]) {
+            events.push((event, next));
+        }
+    }
+    Ok(events)
 }
 
 #[cfg(test)]
@@ -66,19 +94,22 @@ mod tests {
     use std::io::Write;
 
     #[test]
-    fn followers_read_whole_events_from_their_cursor() {
+    fn followers_read_whole_events_from_their_cursor_and_notice_rewrites() {
         let path = std::env::temp_dir().join(format!("control-outbox-{}.jsonl", std::process::id()));
-        let event = |run: &str| serde_json::to_string(&Delivery { run: run.into(), source: "discord:dm".into(), chat: None, actor: Actor::LocalOperator, action: Action::Task, status: "completed".into(), report: "done".into(), question: Value::Null, change: None }).unwrap();
-        std::fs::write(&path, format!("{}\n{}\n{{\"run\":\"tor", event("a"), event("b"))).unwrap();
-        let (events, cursor) = read(&path, 0).unwrap();
-        assert_eq!(events.iter().map(|e| e.run.as_str()).collect::<Vec<_>>(), ["a", "b"]);
+        let event = |run: &str, status: &str| serde_json::to_string(&Delivery { run: run.into(), source: "discord:dm".into(), chat: None, actor: Actor::LocalOperator, action: Action::Task, status: status.into(), report: "done".into(), question: Value::Null, change: None }).unwrap();
+        let runs = |events: &[(Delivery, Cursor)]| events.iter().map(|(e, _)| e.run.clone()).collect::<Vec<_>>();
+        std::fs::write(&path, format!("{}\n{}\n{{\"run\":\"tor", event("a", "completed"), event("b", "waiting"))).unwrap();
+        let events = read(&path, Cursor::default()).unwrap();
+        assert_eq!(runs(&events), ["a", "b"], "a torn final line waits");
+        let after_b = events[1].1;
+        // The writer rolls back b and appends a longer, different event in its place.
         let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
-        file.set_len(cursor).unwrap();
+        file.set_len(events[0].1.offset).unwrap();
         file.seek(SeekFrom::End(0)).unwrap();
-        writeln!(file, "{}", event("c")).unwrap();
-        let (events, next) = read(&path, cursor).unwrap();
-        assert_eq!((events.len(), events[0].run.as_str()), (1, "c"));
-        assert_eq!(read(&path, next).unwrap().0.len(), 0);
+        writeln!(file, "{}", event("c", "completed-after-a-long-wait")).unwrap();
+        assert_eq!(runs(&read(&path, after_b).unwrap()), ["a", "c"], "a rewritten tail restarts reading; receipts skip a");
+        let all = read(&path, Cursor::default()).unwrap();
+        assert!(read(&path, all.last().unwrap().1).unwrap().is_empty());
         let _ = std::fs::remove_file(&path);
     }
 }
