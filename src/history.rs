@@ -160,6 +160,8 @@ mod tests {
         hydrate_text(&mut loaded).unwrap();
         assert_eq!(*loaded.runtime.runs[0].result, *state.runtime.runs[0].result);
         assert_eq!(*loaded.runtime.runs[0].objective, *state.runtime.runs[0].objective);
+        let copy = loaded.runtime.runs[0].clone();
+        assert!(persisting(|| serde_json::to_string(&copy).unwrap()).contains("long finished answer"), "a copy never borrows another run's journal position");
         loaded.runtime.runs[0].result.push_str(" Edited.");
         let resaved = persisting(|| serde_json::to_string(&loaded.runtime.runs).unwrap());
         assert!(resaved.contains("Edited.") && !resaved.contains("Write the long report"), "only the edited field is saved in full");
@@ -177,13 +179,16 @@ mod tests {
         let before = serde_json::to_value(&state.runtime.runs[0]).unwrap();
         let len = || with(Some(&chat), |j| Ok(j.len())).unwrap();
         let start = path(Some(&chat)).unwrap().exists().then(len).unwrap_or(0);
-        // A failed save: undo leaves neither the line nor the positions.
+        // A failed save: the run is as it was in memory; the unreferenced line is
+        // dropped by recovery from the state that was actually saved.
+        let saved = persisting(|| serde_json::to_string(&state).unwrap());
         let archived = archive_run(&mut state.runtime.runs[0]).unwrap();
         assert_eq!(len(), start + 1);
-        undo(&mut state.runtime.runs[0], archived).unwrap();
-        assert_eq!((len(), serde_json::to_value(&state.runtime.runs[0]).unwrap()), (start, before));
+        undo(&mut state.runtime.runs[0], archived);
+        assert_eq!(serde_json::to_value(&state.runtime.runs[0]).unwrap(), before);
+        recover(&serde_json::from_str(&saved).unwrap()).unwrap();
+        assert_eq!(len(), start);
         // A crash after the append but before the save: recovery drops the line.
-        let saved = persisting(|| serde_json::to_string(&state).unwrap());
         archive_run(&mut state.runtime.runs[0]).unwrap();
         assert_eq!(len(), start + 1);
         let restarted: crate::State = serde_json::from_str(&saved).unwrap();
@@ -196,10 +201,16 @@ mod tests {
 /// always the full value; only a save while `persisting` writes the journal
 /// position in its place. Any mutable access forgets the position, so an
 /// edited value is saved in full again.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub(crate) struct Spilled<T> {
     value: T,
     at: Option<u64>,
+}
+/// A copy is a new value: positions belong to one run in one chat's journal.
+impl<T: Clone> Clone for Spilled<T> {
+    fn clone(&self) -> Self {
+        self.value.clone().into()
+    }
 }
 impl<T> From<T> for Spilled<T> {
     fn from(value: T) -> Self {
@@ -324,7 +335,6 @@ pub(crate) fn hydrate_text(state: &mut crate::State) -> io::Result<()> {
 
 /// What `archive_run` wrote, so a failed save can undo it.
 pub(crate) struct Archived {
-    chat: Option<String>,
     at: u64,
     activity: Vec<Activity>,
 }
@@ -353,17 +363,18 @@ pub(crate) fn archive_run(run: &mut crate::runtime::Run) -> io::Result<Archived>
         activity = std::mem::take(&mut last.activity);
         last.journal = Some(at);
     }
-    Ok(Archived { chat: run.chat_id.clone(), at, activity })
+    Ok(Archived { at, activity })
 }
-/// Undoes `archive_run` after its save failed: the run is as it was and the
-/// journal line is gone, so neither half of the transaction remains.
-pub(crate) fn undo(run: &mut crate::runtime::Run, archived: Archived) -> io::Result<()> {
+/// Undoes `archive_run` in memory after its save failed, so the next save writes
+/// the run in full. The journal line stays: a failed save may still have
+/// published state that references it, and `recover` decides at load from what
+/// was actually saved.
+pub(crate) fn undo(run: &mut crate::runtime::Run, archived: Archived) {
     (run.objective.at, run.result.at, run.context.at, run.continuation.at) = (None, None, None, None);
     if let Some(last) = run.attempts.last_mut().filter(|a| a.journal == Some(archived.at)) {
         last.activity = archived.activity;
         last.journal = None;
     }
-    with(archived.chat.as_deref(), |journal| journal.truncate(archived.at))
 }
 /// After a crash between a journal append and its state save, drops journal
 /// lines the saved state never referenced: appends only grow the tail, and every

@@ -740,7 +740,7 @@ fn commit(
         *run.result = previous_result;
         if let Some(archived) = archived {
             // Neither half of the transaction remains.
-            let _ = crate::history::undo(run, archived);
+            crate::history::undo(run, archived);
         }
         if let (Some(last), Some(mut previous)) = (run.attempts.last_mut(), previous_attempt) {
             previous.activity = std::mem::take(&mut last.activity);
