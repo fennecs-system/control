@@ -8,15 +8,22 @@
 /// Something addressable by position: a timeline, a tree, a spool.
 pub trait Space {
     type Pos: Copy + Eq;
-    type Item;
-    fn at(&self, pos: Self::Pos) -> Option<&Self::Item>;
+    /// What a position yields: a reference for in-memory spaces, an owned
+    /// value for spaces read from storage.
+    type Item<'a>
+    where
+        Self: 'a;
+    fn at(&self, pos: Self::Pos) -> Option<Self::Item<'_>>;
     /// Every position, in the space's natural order.
     fn positions(&self) -> impl Iterator<Item = Self::Pos> + '_;
 }
 
 impl<T> Space for [T] {
     type Pos = usize;
-    type Item = T;
+    type Item<'a>
+        = &'a T
+    where
+        T: 'a;
     #[inline]
     fn at(&self, pos: usize) -> Option<&T> {
         self.get(pos)
@@ -54,12 +61,12 @@ impl<'a, S: Space + ?Sized> Store<'a, S> {
     }
     /// The focused item. Always present: a store is only built on a valid position.
     #[inline]
-    pub fn extract(&self) -> &'a S::Item {
+    pub fn extract(&self) -> S::Item<'a> {
         self.space.at(self.pos).expect("a store focuses a valid position")
     }
     /// The item at another position, seen from here.
     #[inline]
-    pub fn peek(&self, pos: S::Pos) -> Option<&'a S::Item> {
+    pub fn peek(&self, pos: S::Pos) -> Option<S::Item<'a>> {
         self.space.at(pos)
     }
     /// The same space focused elsewhere.
