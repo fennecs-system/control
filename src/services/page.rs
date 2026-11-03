@@ -9,6 +9,14 @@ const PROCESSES: usize = 20;
 const BUDGET: Duration = Duration::from_secs(3);
 
 pub fn http(stream: &mut TcpStream, shared: &Arc<Mutex<State>>, method: &str, path: &str, body: &[u8]) -> bool {
+    if path == "/tools/services/live" {
+        let body = if method == "GET" { live(shared) } else { Err(fail("Use GET")) };
+        let _ = match body {
+            Ok(body) => control_http::respond(stream, "200 OK", "application/json", body.as_bytes(), "", control_http::Policy::Page),
+            Err(error) => control_http::respond(stream, "400 Bad Request", "text/plain", error.to_string().as_bytes(), "", control_http::Policy::Page),
+        };
+        return true;
+    }
     if path != "/tools/services" {
         return false;
     }
@@ -47,18 +55,26 @@ struct Live {
     processes: Vec<crate::engine::Process>,
 }
 
+/// The page renders from state at once; engine reads arrive through `live`,
+/// which the web client fetches after the page is shown.
 fn render(shared: &Arc<Mutex<State>>) -> io::Result<String> {
-    let services = {
-        let state = shared.lock().map_err(|_| fail("State unavailable"))?;
-        let active = state.services.iter().rev().filter(|s| s.resource.phase.reserves_capacity());
-        let stopped = state.services.iter().rev().filter(|s| !s.resource.phase.reserves_capacity()).take(RECENT_STOPPED);
-        active.chain(stopped).map(snapshot).collect::<Vec<_>>()
-    };
-    let live = observe(&services);
     let state = shared.lock().map_err(|_| fail("State unavailable"))?;
-    let cards = services.iter().map(|service| card(service, live.get(service.resource.id.as_str()))).collect::<String>();
+    let services = listed(&state);
+    let cards = services.iter().map(card).collect::<String>();
     let empty = if services.is_empty() { "<p class='muted'>No persistent services yet. Agents start them from chat.</p>" } else { "" };
-    Ok(crate::render(&state, "tool-page", "none", &format!("<h2>Persistent services</h2>{empty}{cards}")))
+    let page = crate::render(&state, "tool-page", "none", &format!("<h2>Persistent services</h2><div data-live-src='/tools/services/live'>{empty}{cards}</div>"));
+    Ok(page.replacen("</head>", "<script type='module' src='/tool-window/chat-bootstrap.js'></script></head>", 1))
+}
+fn listed(state: &State) -> Vec<Service> {
+    let active = state.services.iter().rev().filter(|s| s.resource.phase.reserves_capacity());
+    let stopped = state.services.iter().rev().filter(|s| !s.resource.phase.reserves_capacity()).take(RECENT_STOPPED);
+    active.chain(stopped).map(snapshot).collect()
+}
+/// Live usage per service ID as HTML fragments, read outside the state lock.
+fn live(shared: &Arc<Mutex<State>>) -> io::Result<String> {
+    let services = listed(&*shared.lock().map_err(|_| fail("State unavailable"))?);
+    let fragments = observe(&services).iter().map(|(id, live)| (id.clone(), Value::String(usage(live)))).collect::<serde_json::Map<_, _>>();
+    Ok(Value::Object(fragments).to_string())
 }
 
 /// The binding snapshot plus the diagnostic the page shows.
@@ -148,7 +164,20 @@ fn phase(phase: &Phase) -> &'static str {
     }
 }
 
-fn card(service: &Service, live: Option<&Live>) -> String {
+fn usage(live: &Live) -> String {
+    let stats = live.stats.as_ref().map(|stats| {
+        format!("<p>CPU {} · Memory {} · {} processes</p>", crate::escape(&stats.cpu), crate::escape(&stats.memory), crate::escape(&stats.pids))
+    }).unwrap_or_default();
+    if live.processes.is_empty() {
+        return stats;
+    }
+    let rows = live.processes.iter().map(|process| {
+        format!("<tr><td>{}</td><td>{}</td><td><code>{}</code></td></tr>", crate::escape(&process.pid), crate::escape(&process.user), crate::escape(&process.command.chars().take(200).collect::<String>()))
+    }).collect::<String>();
+    format!("{stats}<table><thead><tr><th>PID</th><th>User</th><th>Command</th></tr></thead><tbody>{rows}</tbody></table>")
+}
+
+fn card(service: &Service) -> String {
     let resource = &service.resource;
     let command = service.command.0.lines().next().unwrap_or_default().chars().take(160).collect::<String>();
     let lease = if resource.lease.is_until_stopped() {
@@ -165,15 +194,7 @@ fn card(service: &Service, live: Option<&Live>) -> String {
     let conversation = if crate::chat::valid_id(chat) { format!("<a href='/chat/{chat}'>Conversation</a> · ") } else { String::new() };
     let container = resource.phase.container().map(|id| format!("container {} · ", crate::escape(&id.as_str().chars().take(12).collect::<String>()))).unwrap_or_default();
     let image = resource.image.as_str().trim_start_matches("sha256:").chars().take(12).collect::<String>();
-    let stats = live.and_then(|live| live.stats.as_ref()).map(|stats| {
-        format!("<p>CPU {} · Memory {} · {} processes</p>", crate::escape(&stats.cpu), crate::escape(&stats.memory), crate::escape(&stats.pids))
-    }).unwrap_or_default();
-    let processes = live.filter(|live| !live.processes.is_empty()).map(|live| {
-        let rows = live.processes.iter().map(|process| {
-            format!("<tr><td>{}</td><td>{}</td><td><code>{}</code></td></tr>", crate::escape(&process.pid), crate::escape(&process.user), crate::escape(&process.command.chars().take(200).collect::<String>()))
-        }).collect::<String>();
-        format!("<table><thead><tr><th>PID</th><th>User</th><th>Command</th></tr></thead><tbody>{rows}</tbody></table>")
-    }).unwrap_or_default();
+    let live = if matches!(resource.phase, Phase::Running(_)) { format!("<div class='service-live' data-live='{}'><p class='muted'>Loading usage…</p></div>", crate::escape(resource.id.as_str())) } else { String::new() };
     let diagnostic = if service.diagnostic.is_empty() { String::new() } else { format!("<p class='muted'>{}</p>", crate::escape(&service.diagnostic)) };
     let action = if resource.phase.reserves_capacity() && !matches!(resource.phase, Phase::Stopping { .. }) {
         format!("<form class='decision-form' method='post' action='/tools/services'><input type='hidden' name='id' value='{}'><button>Stop service</button></form>", crate::escape(resource.id.as_str()))
@@ -181,7 +202,7 @@ fn card(service: &Service, live: Option<&Live>) -> String {
         String::new()
     };
     format!(
-        "<article class='record service-record'><h3><code>{}</code></h3><p>{} · {:?} profile · {storage} · {lease}</p><p>{conversation}{container}image {}</p>{stats}{processes}{diagnostic}{action}</article>",
+        "<article class='record service-record'><h3><code>{}</code></h3><p>{} · {:?} profile · {storage} · {lease}</p><p>{conversation}{container}image {}</p>{live}{diagnostic}{action}</article>",
         crate::escape(&command),
         phase(&resource.phase),
         service.profile,
@@ -199,17 +220,18 @@ mod tests {
         let input = Input { command: "<script>alert(1)</script>\nsecond line".to_owned().try_into().unwrap(), lease_seconds: -1, storage_limit_mb: None };
         admit(&mut state, Request { run: &run, generation: "attempt-a", nonce: "n1" }, input, "node-a".to_owned().try_into().unwrap(), time, |_| Ok(())).unwrap();
         let service = state.services[0].binding_snapshot();
-        let plain = card(&service, None);
+        let plain = card(&service);
         assert!(plain.contains("&lt;script&gt;alert(1)&lt;/script&gt;") && !plain.contains("<script>"));
         assert!(!plain.contains("second line"));
         assert!(plain.contains("Requested") && plain.contains("until stopped") && plain.contains("/chat/"));
         assert!(plain.contains("action='/tools/services'") && plain.contains("Stop service"));
+        assert!(!plain.contains("data-live="), "only running services wait for live usage");
         assert!(!plain.contains("CPU") && !plain.contains("<table>"));
         let live = Live {
             stats: Some(crate::engine::Stats { cpu: "3.5%".into(), memory: "512MiB / 2GiB".into(), pids: "14".into() }),
             processes: vec![crate::engine::Process { pid: "77".into(), user: "502".into(), command: "java -jar server.jar <nogui>".into() }],
         };
-        let observed = card(&service, Some(&live));
+        let observed = usage(&live);
         assert!(observed.contains("CPU 3.5% · Memory 512MiB / 2GiB · 14 processes"));
         assert!(observed.contains("<td>77</td>") && observed.contains("java -jar server.jar &lt;nogui&gt;"));
     }
@@ -221,7 +243,7 @@ mod tests {
         admit(&mut state, Request { run: &run, generation: "attempt-a", nonce: "n1" }, input, "node-a".to_owned().try_into().unwrap(), time, |_| Ok(())).unwrap();
         state.services[0].diagnostic = "Engine said <no>".into();
         assert!(state.services[0].binding_snapshot().diagnostic.is_empty());
-        let shown = card(&snapshot(&state.services[0]), None);
+        let shown = card(&snapshot(&state.services[0]));
         assert!(shown.contains("Engine said &lt;no&gt;"));
     }
 

@@ -189,29 +189,7 @@ pub fn render(runtime: &Runtime) -> String {
     html.push_str(&table("By person", &people));
     html.push_str(&table("By provider / requested model", &models));
     html.push_str(&table("By day (UTC)", &days));
-    html.push_str("<details class='record'><summary>Runs and attempts</summary>");
-    for run in runtime.runs.iter().rev().filter(|r| !r.attempts.is_empty()) {
-        html.push_str(&format!("<h3>{}</h3>", escape(&run.objective)));
-        for (index, attempt) in run.attempts.iter().enumerate() {
-            let counts = attempt
-                .tokens
-                .map(|t| {
-                    format!(
-                        "{} input · {} cached · {} output",
-                        t.input_tokens, t.cached_input_tokens, t.output_tokens
-                    )
-                })
-                .unwrap_or_else(|| "tokens unknown".into());
-            html.push_str(&format!(
-                "<p>#{} · {} · {} · {} ms · {counts}</p>",
-                index + 1,
-                escape(&attempt.status),
-                escape(&attempt.model),
-                attempt.elapsed_ms
-            ));
-        }
-    }
-    html.push_str("</details>");
+    html.push_str("<p class='muted'>Per-run attempts and tokens are in <a href='/?view=runs'>Run history ↗</a>.</p>");
     html
 }
 
@@ -345,8 +323,8 @@ mod tests {
         assert!(html.contains("<b>150</b><span>INPUT"));
         assert!(html.contains("<b>25</b><span>OUTPUT"));
         assert!(html.contains("2/2"));
-        assert!(html.contains("Review &lt;script&gt;bad&lt;/script&gt;"));
-        assert!(!html.contains("<script>bad"));
+        assert!(!html.contains("script&gt;bad") && !html.contains("<script>bad"), "run objectives stay in run history");
+        assert!(html.contains("href='/?view=runs'"));
         if let Ok(directory) = std::env::var("CONTROL_PREVIEW_DIR") {
             std::fs::create_dir_all(&directory).unwrap();
             for (view, file) in [
