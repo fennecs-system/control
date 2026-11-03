@@ -554,22 +554,28 @@ fn stop(shared: &Arc<Mutex<State>>, service: &Service) -> io::Result<()> {
     }
     Ok(())
 }
-fn pidfile(execution: &str) -> String {
-    format!("/tmp/.control-exec-{execution}")
+/// Marks every process the command starts, detached ones included, so a
+/// command that outlives its engine client can be found inside the service.
+/// Execution IDs are hex digests.
+fn launch(command: &str, execution: &str) -> String {
+    format!("export CONTROL_EXEC={execution}\nexec 2>&1\n{command}")
 }
-/// Runs the command in its own process group and records the group, so a
-/// command that outlives its Docker client can be stopped inside the service.
-fn launch(command: &str, pidfile: &str) -> String {
-    format!("exec 2>&1\nset -m\n(\n{command}\n) &\necho $! > {pidfile}\nwait $!\nstatus=$?\nrm -f {pidfile}\nexit $status")
-}
-/// Terminates the recorded group, then kills it, and succeeds only once no
-/// member is still running (exited members awaiting their reaper do not count).
-fn reap_script(pidfile: &str) -> String {
-    format!("g=$(cat {pidfile} 2>/dev/null) || exit 0\ncase $g in ''|*[!0-9]*) exit 1;; esac\nalive() {{ while read -r s p; do [ \"$p\" = \"$g\" ] && case $s in Z*) ;; *) return 0;; esac; done < <(ps -eo stat=,pgid=); return 1; }}\nkill -TERM -- -$g 2>/dev/null\nfor _ in 1 2 3 4 5 6 7 8 9 10; do alive || {{ rm -f {pidfile}; exit 0; }}; sleep 0.2; done\nkill -KILL -- -$g 2>/dev/null\nsleep 0.2\n! alive && rm -f {pidfile}")
+/// Terminates, then kills, every running process carrying the command's
+/// marker, and succeeds only once none remains. Exited processes awaiting
+/// their reaper do not count, and no marker means nothing is running.
+fn reap_script(execution: &str) -> String {
+    format!(r#"m=CONTROL_EXEC={execution}
+members() {{ for d in /proc/[0-9]*; do read -r s 2>/dev/null < "$d/stat" || continue; s=${{s##*) }}; [ "${{s%% *}}" = Z ] && continue; while IFS= read -r -d '' v; do [ "$v" = "$m" ] && {{ echo "${{d#/proc/}}"; break; }}; done 2>/dev/null < "$d/environ"; done; }}
+signal() {{ for p in $(members); do kill -"$1" "$p" 2>/dev/null; done; }}
+signal TERM
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -z "$(members)" ] && exit 0; sleep 0.2; done
+signal KILL
+sleep 0.2
+[ -z "$(members)" ]"#)
 }
 fn reap(service: &Service, execution: &str) -> bool {
     let Some(id) = service.resource.phase.container() else { return false };
-    let command = crate::engine::exec(id.as_str(), &format!("{}:{}", service.uid, service.gid), None, &["bash", "-c", &reap_script(&pidfile(execution))]);
+    let command = crate::engine::exec(id.as_str(), &format!("{}:{}", service.uid, service.gid), None, &["bash", "-c", &reap_script(execution)]);
     capture(command, Duration::from_secs(10), || false, |_| {}).is_ok_and(|r| r.exit_code == Some(0) && !r.timed_out)
 }
 fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
@@ -586,7 +592,7 @@ fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
         if observed.status != "running" || service.resource.lease.expired(now()) {
             return Err(fail("Service is no longer running"));
         }
-        let command = crate::engine::exec(id.as_str(), &format!("{}:{}", service.uid, service.gid), Some("/workspace"), &["bash", "-c", &launch(&execution.command, &pidfile(&execution.id))]);
+        let command = crate::engine::exec(id.as_str(), &format!("{}:{}", service.uid, service.gid), Some("/workspace"), &["bash", "-c", &launch(&execution.command, &execution.id)]);
         let checked = std::cell::Cell::new(Instant::now());
         let authorized = std::cell::Cell::new(true);
         capture(
@@ -1221,27 +1227,30 @@ mod tests {
         assert!(start.elapsed() < Duration::from_secs(2));
     }
     #[test]
-    fn a_command_that_outlives_its_client_is_reaped_with_its_whole_group() {
-        let pidfile = std::env::temp_dir().join(format!("control-exec-test-{}", std::process::id()));
-        let pidfile = pidfile.to_str().unwrap();
-        // Like a killed Docker client: the launcher dies, the command does not.
-        let mut client = Command::new("bash").args(["-c", &launch("sleep 30 & sleep 30; echo never", pidfile)])
-            .stdout(std::process::Stdio::null()).spawn().unwrap();
+    #[cfg(target_os = "linux")]
+    fn a_command_that_outlives_its_client_is_reaped_with_detached_descendants() {
+        let id = format!("{:064x}", std::process::id());
+        let other = format!("{:064x}", u64::from(std::process::id()) + 1);
+        // Like a killed engine client: the launcher dies, the command does not.
+        let mut client = Command::new("bash").args(["-c", &launch("setsid sleep 30 & sleep 30", &id)]).stdout(std::process::Stdio::null()).spawn().unwrap();
+        let mut bystander = Command::new("bash").args(["-c", &launch("sleep 30", &other)]).spawn().unwrap();
+        let members = |id: &str| Command::new("bash").args(["-c", &format!("{}\nmembers | wc -l", reap_script(id).lines().take(2).collect::<Vec<_>>().join("\n"))]).output().unwrap();
+        let count = |id: &str| String::from_utf8_lossy(&members(id).stdout).trim().parse::<usize>().unwrap();
         let start = Instant::now();
-        while !std::path::Path::new(pidfile).exists() && start.elapsed() < Duration::from_secs(5) {
+        while count(&id) < 2 && start.elapsed() < Duration::from_secs(5) {
             std::thread::sleep(Duration::from_millis(20));
         }
         client.kill().unwrap();
         client.wait().unwrap();
-        let group = std::fs::read_to_string(pidfile).unwrap().trim().to_owned();
-        let alive = || Command::new("pgrep").args(["-g", &group]).output().unwrap().status.success();
-        assert!(alive(), "killing the client leaves the command running");
-        let reaped = Command::new("bash").args(["-c", &reap_script(pidfile)]).status().unwrap();
-        assert!(reaped.success() && !alive(), "the foreground and background members are gone");
-        assert!(!std::path::Path::new(pidfile).exists());
-        let finished = Command::new("bash").args(["-c", &launch("exit 3", pidfile)]).status().unwrap();
+        assert!(count(&id) >= 2, "killing the client leaves the command and its detached child running");
+        assert!(Command::new("bash").args(["-c", &reap_script(&id)]).status().unwrap().success());
+        assert_eq!(count(&id), 0, "every marked process is gone, setsid included");
+        assert_eq!(count(&other), 1, "another execution is untouched");
+        bystander.kill().unwrap();
+        let _ = bystander.wait();
+        assert!(Command::new("bash").args(["-c", &reap_script(&other)]).status().unwrap().success());
+        let finished = Command::new("bash").args(["-c", &launch("exit 3", &id)]).status().unwrap();
         assert_eq!(finished.code(), Some(3), "the exit status passes through");
-        assert!(Command::new("bash").args(["-c", &reap_script(pidfile)]).status().unwrap().success(), "nothing to reap after completion");
     }
     #[test]
     fn shutdown_interrupts_capture_without_spinning_or_waiting_for_the_deadline() {
