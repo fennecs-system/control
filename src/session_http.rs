@@ -394,6 +394,37 @@ pub fn handle(
 #[cfg(test)]
 mod tests {
     use crate::runtime::RunKind;
+    /// Control's own work around a conversation, without model calls: send,
+    /// record the run's reply, save durably, then load the transcript and page,
+    /// for many 15-turn conversations in one growing state. Profile with perf.
+    #[test]
+    #[ignore = "profiling workload; set CONTROL_STATE_DIR to a scratch directory and optionally CONTROL_PROFILE_CONVERSATIONS"]
+    fn fifteen_turn_conversations_workload() {
+        assert!(std::env::var_os("CONTROL_STATE_DIR").is_some(), "saves write to CONTROL_STATE_DIR");
+        let conversations = std::env::var("CONTROL_PROFILE_CONVERSATIONS").ok().and_then(|n| n.parse().ok()).unwrap_or(20);
+        let reply = "## Result\n\nThe server is **ready** and both bots joined.\n\n- `server.jar` verified\n- ViaProxy listening on 25566\n- Alice and Cass in the player list\n\n```sh\njava -jar server.jar nogui\n```\n\n".repeat(12);
+        let mut state = crate::State::default();
+        let start = std::time::Instant::now();
+        for _ in 0..conversations {
+            let id = crate::chat::create(&mut state);
+            for turn in 0..15 {
+                let mut out = Vec::new();
+                let body = format!("message=Turn+{turn}%3A+keep+building+the+house+and+report+progress");
+                assert!(super::handle(&mut out, &mut state, "POST", &format!("/chat/{id}/messages"), "engineering", "Accept: application/json\r\n", body.as_bytes()));
+                let run = state.runtime.runs.iter_mut().rev().find(|run| run.chat_id.as_deref() == Some(id.as_str())).unwrap();
+                run.status = "completed".into();
+                run.result = reply.clone();
+                crate::storage::save(&state).unwrap();
+                for page in ["transcript", ""] {
+                    out.clear();
+                    let target = if page.is_empty() { format!("/chat/{id}") } else { format!("/chat/{id}/{page}") };
+                    assert!(super::handle(&mut out, &mut state, "GET", &target, "engineering", "", b""));
+                }
+            }
+        }
+        let turns = conversations * 15;
+        println!("{turns} turns in {:?} = {:?}/turn; state {} KiB", start.elapsed(), start.elapsed() / turns as u32, serde_json::to_vec(&state).unwrap().len() / 1024);
+    }
     #[test]
     fn returning_to_chat_remembers_only_an_existing_authorized_conversation() {
         let mut state=crate::State::default();
