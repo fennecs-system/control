@@ -1201,15 +1201,6 @@ fn execute(
             .filter(|r| crate::rooms::valid(r))
     });
     if bridge.is_some() {
-        let skill = absolute.join(".agents/skills/control-rooms");
-        fs::create_dir_all(&skill).map_err(|_| failed("Could not prepare room skill."))?;
-        fs::write(
-            skill.join("SKILL.md"),
-            include_str!("../tools/room-mcp/control-rooms/SKILL.md"),
-        )
-        .map_err(|_| failed("Could not prepare room skill."))?;
-    }
-    if bridge.is_some() {
         command.args([
             "-c",
             "mcp_servers.control_rooms.command=\"/bin/control-room-mcp\"",

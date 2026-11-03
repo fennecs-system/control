@@ -836,11 +836,17 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
             }
         }
         if let Some(run)=message.run_id.as_deref() {
-            for event in crate::services::command_activity(state,run) { html.push_str(&command_html(&event)); }
+            let live=run_status=="running";
+            let commands:Vec<_>=crate::services::command_activity(state,run).collect();
+            if let Some(last)=commands.len().checked_sub(1) {
+                html.push_str(&format!("<details class='run-activity' data-transcript-key='{position}-commands'{}><summary>Commands · {}</summary>",if live {" open"} else {""},commands.len()));
+                for (index,event) in commands.iter().enumerate() { html.push_str(&command_html(event,live && index==last)); }
+                html.push_str("</details>");
+            }
         }
     }
     for entry in agent_activity(state,id) {
-        html.push_str(&format!("<p class='message-status'><a target='_top' href='/chat/{}'>Agent activity ↗</a></p>{}",escape(entry.chat),command_html(&entry.activity)));
+        html.push_str(&format!("<p class='message-status'><a target='_top' href='/chat/{}'>Agent activity ↗</a></p>{}",escape(entry.chat),command_html(&entry.activity,false)));
     }
     if project_message.is_none() && session.project.is_some() {html.push_str(&crate::projects::panel(state,id));}
     for run in crate::design::pending(state, id).into_iter().filter(|run|run.chat_id.as_deref()!=Some(id)) {

@@ -1466,6 +1466,22 @@ pub(crate) mod tests {
         assert_ne!(get(&format!("/element/{checkbox}/css/background-color")),before);
     }
     #[test]
+    fn service_commands_collapse_once_their_run_finishes() {
+        let (mut state, run, chat) = fixture();
+        let mut second = serde_json::to_value(&state.services[0]).unwrap();
+        second["resource"]["id"] = json!("svc-b");
+        state.services.push(serde_json::from_value(second).unwrap());
+        for service in ["svc-a","svc-b"] { crate::services::enqueue_test_command(&mut state,&run,service,service,"echo probe",60).unwrap(); }
+        let live = crate::chat::transcript(&state,&chat).unwrap();
+        assert!(live.contains("Commands · 2</summary>"));
+        assert_eq!(live.matches("class='command-activity' data-transcript-key='service-command-").count(),2);
+        assert_eq!(live.matches("' open><summary><span>").count(),1,"Only the newest live command is expanded");
+        state.runtime.runs[0].status = "completed".into();
+        let done = crate::chat::transcript(&state,&chat).unwrap();
+        assert!(!done.contains("-commands' open"));
+        assert!(!done.contains("' open><summary><span>"));
+    }
+    #[test]
     fn captured_resource_handoff_is_exact_and_does_not_reown_ports() {
         let (mut state, parent, parent_chat) = fixture();
         let node: NodeId = "node-a".to_owned().try_into().unwrap();
