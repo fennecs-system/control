@@ -414,6 +414,12 @@ mod tests {
                 let run = state.runtime.runs.iter_mut().rev().find(|run| run.chat_id.as_deref() == Some(id.as_str())).unwrap();
                 run.status = "completed".into();
                 run.result = reply.clone();
+                let mut attempt = crate::usage::Attempt::new();
+                attempt.activity = (0..20).map(|i| crate::usage::Activity { id: format!("tool-{i}"), kind: "command_execution".into(), text: format!("cargo test --workspace -p crate-{i}"), output: "test result: ok. 412 passed; 0 failed\n".repeat(8), status: "completed".into() }).collect();
+                // As commit does when an attempt finishes.
+                let (chat, run_id) = (run.chat_id.clone(), run.id.clone());
+                crate::history::archive(chat.as_deref(), &run_id, 0, &mut attempt).unwrap();
+                run.attempts.push(attempt);
                 crate::storage::save(&state).unwrap();
                 for page in ["transcript", ""] {
                     out.clear();

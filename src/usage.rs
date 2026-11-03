@@ -25,6 +25,10 @@ pub struct Attempt {
     pub artifact: Option<String>,
     pub workspace_id: Option<String>,
     pub activity: Vec<Activity>,
+    /// Line of the chat's history journal holding this finished attempt's
+    /// activity, once it has left state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub journal: Option<u64>,
     pub omitted_history: usize,
     pub started_unix: u64,
     pub elapsed_ms: u64,

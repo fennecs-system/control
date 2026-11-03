@@ -723,7 +723,7 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
         json!({"id":session.id,"title":session.title,"previews":state.previews.iter().filter(|p|p.chat==id && p.status!="stopped").map(|p|json!({"id":p.id,"url":p.url,"status":p.status})).collect::<Vec<_>>(),"project":session.project,"project_worktree":session.project.as_ref().and_then(|p|p.head.as_deref()).and_then(|id|crate::runtime::workspace(id).ok()),"parent_chat":session.parent_chat,"mode":if session.improve_mode {"improve"} else {"chat"},"room":session.room,"lens":session.lens,"lenses":selected_lenses(session),"design_context":session.design_context,"revision":session.revision,"messages": session.messages.iter().map(|m| {
         let run = m.run_id.as_deref().and_then(|id|runs.get(id).copied().flatten());
         let (status, reply) = response_from_run(m,run);
-        json!({"text":m.text,"reply":reply,"status":status,"run_id":m.run_id,"kind":run.map(|r| &r.kind),"persona":run.and_then(|r|r.persona.as_ref()),"delegation":run.and_then(|r|r.delegation.as_ref()),"question":run.and_then(|r|r.question.as_ref()),"attempts":run.map(|r| &r.attempts)})
+        json!({"text":m.text,"reply":reply,"status":status,"run_id":m.run_id,"kind":run.map(|r| &r.kind),"persona":run.and_then(|r|r.persona.as_ref()),"delegation":run.and_then(|r|r.delegation.as_ref()),"question":run.and_then(|r|r.question.as_ref()),"attempts":run.map(|r| crate::history::hydrated(r.chat_id.as_deref(),&r.attempts))})
     }).collect::<Vec<_>>(),"pending_questions":pending_questions,"decision_revision":crate::design::decision_revision(state)}),
     )
     .map(|mut value: Value| {
@@ -843,7 +843,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
                 if let Some(count) = Some(attempt.omitted_history).filter(|n| *n > 0) {
                     html.push_str(&format!("<p class='message-status'>Context window · {count} earlier exchanges excluded from attempt {}. Chat history retained.</p>", index + 1));
                 }
-                let events=&attempt.activity;
+                let events=crate::history::activity(run.and_then(|r|r.chat_id.as_deref()),attempt);
                 for event in events.iter().filter(|event|event.kind == "file_change") {
                     let patch=&event.output;
                     if patch.is_empty() {continue;}

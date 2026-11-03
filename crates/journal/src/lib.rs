@@ -131,6 +131,17 @@ impl Journal for FileJournal {
     }
 }
 
+/// Reads one line of a journal file without opening it for writing: no lock,
+/// no repair, a torn final line ignored. For other processes that only inspect.
+pub fn read_line(path: &Path, pos: u64) -> io::Result<Option<Vec<u8>>> {
+    let data = match std::fs::read(path) {
+        Ok(data) => data,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    Ok(data.split_inclusive(|b| *b == b'\n').filter(|line| line.ends_with(b"\n")).nth(pos as usize).map(|line| line[..line.len() - 1].to_vec()))
+}
+
 /// A journal of `T`, serialized as JSON.
 pub struct Typed<J, T> {
     journal: J,
@@ -213,6 +224,8 @@ mod tests {
         assert_eq!((journal.len(), journal.read(1).unwrap().as_deref()), (2, Some(&br#"{"turn":1,"text":"hi"}"#[..])));
         assert_eq!(journal.append(br#"{"turn":2}"#).unwrap(), 2);
         assert_eq!(journal.read(9).unwrap(), None);
+        assert_eq!(read_line(&path, 2).unwrap().as_deref(), Some(&br#"{"turn":2}"#[..]), "readers need no handle");
+        assert_eq!(read_line(&path, 3).unwrap(), None);
     }
 
     #[test]
