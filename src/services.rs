@@ -626,17 +626,27 @@ pub(crate) fn relay_capable(service: &Service) -> io::Result<()> {
     relay_version(service).map(|_|())
 }
 pub(crate) fn relay_version(service: &Service) -> io::Result<u8> {
+    relay_capabilities(service).map(|(version, _)| version)
+}
+/// Whether the image's relay accepts windowed credit. A separate label, so
+/// hosts that predate it still accept newer images at the single-credit rate.
+pub(crate) fn relay_windowed(service: &Service) -> io::Result<bool> {
+    relay_capabilities(service).map(|(_, windowed)| windowed)
+}
+fn relay_capabilities(service: &Service) -> io::Result<(u8, bool)> {
     // Image IDs are immutable. Avoid an extra engine query on every connection.
-    static CAPABILITIES:std::sync::OnceLock<Mutex<HashMap<ImageId,u8>>>=std::sync::OnceLock::new();
+    static CAPABILITIES:std::sync::OnceLock<Mutex<HashMap<ImageId,(u8,bool)>>>=std::sync::OnceLock::new();
     let cache=CAPABILITIES.get_or_init(Mutex::default);
     let cached=cache.lock().map_err(|_|fail("Relay capability cache unavailable"))?.get(&service.resource.image).copied();
-    if let Some(version)=cached{return Ok(version);}
-    let marker = crate::engine::query(&["image", "inspect", service.resource.image.as_str(), "--format", "{{index .Config.Labels \"dev.control.tcp-relay\"}}"])?;
-    let version=marker.trim().parse::<u8>().ok().filter(|version|matches!(version,2..=5))
+    if let Some(capabilities)=cached{return Ok(capabilities);}
+    let marker = crate::engine::query(&["image", "inspect", service.resource.image.as_str(), "--format", "{{index .Config.Labels \"dev.control.tcp-relay\"}} {{index .Config.Labels \"dev.control.tcp-relay-window\"}}"])?;
+    let mut labels = marker.split_whitespace();
+    let version=labels.next().and_then(|label|label.parse::<u8>().ok()).filter(|version|matches!(version,2..=4))
         .ok_or_else(||fail("Rebuild the immutable worker images with Nix setup, then start a new service to enable TCP relays"))?;
+    let capabilities=(version, labels.next()==Some("1"));
     let mut cached=cache.lock().map_err(|_|fail("Relay capability cache unavailable"))?;
-    if cached.len()<MAX_RECORDS{cached.insert(service.resource.image.clone(),version);}
-    Ok(version)
+    if cached.len()<MAX_RECORDS{cached.insert(service.resource.image.clone(),capabilities);}
+    Ok(capabilities)
 }
 pub(crate) fn port_binding(service: &Service, expected: &ContainerId) -> io::Result<PortBinding> {
     if !matches!(&service.resource.phase, Phase::Running(id) if id == expected) || service.resource.lease.expired(now()) { return Err(fail("Service is not running under this lease and generation")); }

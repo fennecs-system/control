@@ -61,7 +61,7 @@ pkgs.dockerTools.buildLayeredImage {
     chmod 0755 nix/var/nix/profiles/per-user nix/var/nix/gcroots/per-user
   '';
   config = {
-    Labels = { "dev.control.service-runner" = "3"; "dev.control.tcp-relay" = "5"; }
+    Labels = { "dev.control.service-runner" = "3"; "dev.control.tcp-relay" = "4"; "dev.control.tcp-relay-window" = "1"; }
       // pkgs.lib.optionalAttrs (profile == "full") { "dev.control.worker-profile" = "full-v1"; };
     WorkingDir = "/workspace";
     Env = [
