@@ -38,6 +38,9 @@ pub struct Run {
     pub spawns: Vec<crate::spawning::Batch>,
     #[serde(default)]
     pub room_wake_used: bool,
+    /// The last status sent to frontends through the outbox.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emitted: Option<String>,
     #[serde(default)]
     pub persona: Option<crate::delegation::Persona>,
     #[serde(default)]
@@ -257,6 +260,7 @@ impl Runtime {
             resource_grants: Vec::new(),
             spawns: Vec::new(),
             room_wake_used: false,
+            emitted: None,
             persona: None,
             delegation: None,
             question: None,

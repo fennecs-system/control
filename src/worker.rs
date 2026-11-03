@@ -455,6 +455,11 @@ fn start_with(state: Arc<Mutex<State>>, execute: fn(Arc<Mutex<State>>, Task)) ->
                             crate::shutdown::request();
                             break 'supervisor;
                         };
+                        // Frontends hear about finished and waiting runs through the
+                        // outbox, whether or not a worker slot is free.
+                        if crate::history::emit(&mut s, storage::save).is_err() {
+                            s.runtime.notice = "Could not record deliveries; they will be retried.".into();
+                        }
                         if workers.handles.len()
                             >= s.runtime
                                 .execution
