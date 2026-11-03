@@ -120,6 +120,8 @@ These chat commands work on the web, in the TUI and in authorized Discord DMs:
   graph and [review agent-proposed claims](docs/KNOWLEDGE-TOOLS.md).
 - **Rooms.** Shared updates, durable inboxes and opt-in
   [room-triggered turns](docs/ROOM-NOTIFICATIONS.md).
+  Bots can pause their own automatic wakes with `control_bot_pause`;
+  use `/bot resume` in that chat to resume them.
 - **Services.** Persistent Nix tool containers with separately approved,
   [scoped TCP ports](docs/PORTS.md) and [commands in their private workspace](docs/PERSISTENT-TOOLS.md).
 - **Tools.** Search the catalogue by tool name, MCP name or `lens:engineering`.

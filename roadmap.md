@@ -1,6 +1,6 @@
 # Control roadmap
 
-Reviewed 2026-11-01 against the implementation and feedback from the first users.
+Reviewed 2026-11-03 against main through #128, the playtest and #129.
 Keep the normal macOS/Nix release useful to friends; improve reliability before
 adding autonomous operation. Each node supplies its own configuration and model
 access. Federation remains lower priority.
@@ -172,6 +172,47 @@ The synthetic delivery-reader comparison measured about 44% less decode time and
 Web folder access is opt-in through `/open`, with separate approved named folders.
 See [library boundaries and measurements](docs/CRATE-BOUNDARIES.md).
 
+## ✓ Supervised bots, watches and conversation journals
+
+- Pure `control-bot` state/event/effect transitions, durable room/watch/timer
+  callbacks, operator-approved bot requests and `/bot on|pause|resume|off`.
+  Watches run in persistent services and report output across model turns.
+- `control-comonad` supplies Store/zipper and lens primitives. The shared
+  conversation interface supports Recent, Passthrough and Lens compactors.
+  Background summaries are still planned; the primitives alone do not preserve
+  all older context in every prompt.
+- Append-only journals retain completed activity and run text; typed outbox
+  events separate frontend delivery from application state (#118–#124).
+  Run text is still hydrated at startup and messages remain in state. This
+  reduces checkpoint size without claiming bounded resident history.
+- Watches wake by default, services expose their platform, and full images carry
+  archive tools (#126). Wake guidance encourages owned next steps rather than
+  repeated permission questions (#127); redundant room skill installation is
+  removed and service output is folded in chat (#128).
+
+## Next: deploy and retest turn continuity
+
+**✓ Implemented and locally verified on #129; merge/deployment pending.**
+Automatic turns retain omitted user instructions and recent execution evidence
+through the shared provider-neutral projection. Explicit one-shot watch requests
+re-arm the next callback, completed/pending evidence survives new watches, and
+failed saves restore observation counters. `control_bot_pause` durably pauses
+the caller's own wakes; the operator resumes it with `/bot resume`.
+
+After merge, deploy the binary/WASM and refreshed worker images, check node
+health, then run a fresh small playtest. Verify that the original goal and later
+steering survive callbacks, setup advances without manual "continue", and room
+updates reflect actual progress. Waiting on a peer should end a turn quietly;
+an explicit pause should stop automatic wakes. Inspect wake reasons and tool
+evidence if progress stops. Fresh provider processes alone are not a defect;
+the context and callback contract is what must hold.
+
+Local workspace/web checks, Chrome's fifteen-turn regression, release builds
+and before/after flamegraphs pass. Prompt construction adds measured work for
+retained evidence; see [performance results](docs/PERFORMANCE.md). The workload's
+connection/protocol issue remains unproven and belongs in tool containers.
+Keep broader extraction and the review follow-ups below out of this test's path.
+
 ## Later: core, web and terminal boundaries
 
 Build on the persistent-tool lifecycle/ownership rules already extracted below.
@@ -222,9 +263,13 @@ Rust watchdog enforces expiry while Control is offline. Model turns attach to a
 resource rather than owning its lifetime. Live restart and missing-receipt tests
 passed. See [persistent tools](docs/PERSISTENT-TOOLS.md).
 
+Subsequent work uses private disk-backed service storage with tmpfs scratch;
+until-stopped services retain files across model turns.
+
 Resource-bound commands now provide private file/setup access after service start
-and port approval. Durable receipts prevent retry replay; uncertain execution
-stops its service. Final logs survive short-lived service removal. Two-service
+and port approval. Durable receipts prevent retry replay; timed-out commands
+are reaped independently, stopping the service only when that cannot be verified
+(#116). Final logs survive short-lived service removal. Two-service
 routes reuse separately approved ingress and loopback egress rather than a new
 container network or host mount capability.
 
@@ -250,17 +295,17 @@ deterministic Rust supervision remains responsible for scheduling.
    Nonblocking task batches are implemented below; they are not persistent bot
    identities or tool connections. New batches queue deduplicated completion
    responses without reserving the parent chat. Explicit delegation still awaits
-   its dependency. Directed child steering and persistent bot event subscriptions
-   remain follow-ups. Preserve the bounded
+   its dependency. Chat-bound bots now subscribe to rooms, watches and timers.
+   Preserve the bounded
    scheduler and measure resource use before increasing concurrency.
 4. **Shared evidence and coordination.** Knowledge admission and durable room
    inboxes/one-shot follow-ups are implemented below.
-   Persistent bot wake policies and team event subscriptions still need explicit
-   finite budgets; reuse existing human questions and Discord delivery for steering.
+   Persistent bot subscriptions and wake budgets are implemented; reuse existing
+   human questions and Discord delivery for steering.
 5. **Tool construction and first demonstration.** Agents request/select a pinned
    tool runtime, write their own task-specific code and coordinate through normal
    tools and rooms. Operator-selected lite/full images provide an initial runtime
-   choice. Agent-built images and persistent bot identity need their own contracts;
+   choice. Agent-built images and reusable persona definitions need their own contracts;
    generic ports alone do not supply an arbitrary runtime image.
    Keep domain-specific adapters and server setup outside Control's source.
 
@@ -269,12 +314,11 @@ bounded status projections alongside existing command-job behavior; do not claim
 an extraction improves performance without evidence. Full web/TUI extraction can
 continue where it reduces coupling, without delaying usable tool workloads.
 
-Before longer-running demonstrations, add explicit renewal of both service and
-port leases without restarting connections. Preserve the approved owner, scope,
-endpoint and resource limits. Add bounded concurrent egress connections per
-endpoint and keep the listener available during reconnects; connection limits
-remain separate from model-turn slots. The first slice has a one-hour maximum
-and one active connection per egress port.
+**✓ Service-lifetime ports and concurrent relays.** Services can use an explicit
+until-stopped lifetime; port grants can follow that lifetime and remain revocable.
+Relays retain listeners across reconnects and queue excess connections. The old
+one-hour/one-connection limitation is superseded. Resource and transport limits
+remain separate from model-turn slots; see [ports](docs/PORTS.md).
 
 ## ✓ Scoped web and collective tools
 
@@ -309,13 +353,31 @@ the entry points. No authored JavaScript/Python or new orchestration framework.
   admission/restart test passes without model calls. [Contract](docs/DELEGATION.md).
 
 Next usability checks: run the basic page task through a real model, then a
-meaningful revision/reconnect. Roll child design questions into the parent chat's
-pending-question view; today they remain in their own chats, with actor-bound
-Discord question delivery. A parent agent cannot grant itself additional access.
+meaningful revision/reconnect. Child design questions and descendant approvals
+are surfaced in the parent chat (#107); actor-bound Discord delivery remains.
+A parent agent cannot grant itself additional access.
 
 ## Next: reliability and real-user feedback
 
 Finish these before increasing fan-out further, unattended operation or spending.
+
+Review triage, after the next small playtest:
+
+1. **Visible history-read failures (new):** distinguish unavailable/corrupt
+   activity from an empty record in UI and model context. Preserve the cause;
+   test missing entries and decode failures without hiding retained evidence.
+2. **Bounded HTTP admission (new):** limit concurrent request handlers and reject
+   excess work predictably. Request deadlines alone do not bound thread count;
+   verify slow-client saturation and recovery without disrupting workers.
+3. **Shorter state-lock scope (existing extraction work):** move expensive
+   projection/journal reads and eventually checkpoint I/O behind explicit runtime
+   effects, using narrow immutable inputs and revision fencing. Keep atomicity
+   and rollback guarantees; measure lock hold time before adding domain locks.
+4. **Lazy history and explicit persistence (existing S1/S2 follow-up):** measure
+   startup hydration, whole-record decoding and journal-cache eviction. Prefer
+   bounded observation reads and explicit checkpoint projections; runtime-owned
+   journal services can replace global/thread-local machinery incrementally.
+   Background summaries remain the separate context-budget task below.
 
 - **Storage bounds:** enforce hard writable workspace/scratch limits on the
   supported macOS engine, plus retained checkpoint/artifact budgets and admission
@@ -393,7 +455,7 @@ where useful; do not claim types can prove arbitrary model behavior. Keep single
 node reliability and the tool/bot demonstrations ahead of distributed
 frameworks or broad rewrites.
 
-## Later: personas as persistent bots
+## Later: reusable personas and richer bot policies
 
 [Bot-control research and the version-0 contract draft](docs/research/BOT-CONTROL.md)
 recommend ordinary versioned configuration, pure transitions and typed effects
@@ -408,18 +470,18 @@ declarative-directive model; keep its configuration distinct from its chat histo
   composition, model selection and limits. Validate structure and enforceable
   policy before launch. Clearly separate mechanically enforced constraints from
   natural-language preferences; do not claim to verify arbitrary model behavior.
-- **Durable callbacks:** a small declarative workflow/event interface with typed
-  inputs, timers/subscriptions, bounded retries, deadlines and explicit transitions.
-  The Rust supervisor handles scheduling, deduplication, leases/fencing, restart
-  and cancellation; a model decides only where judgment is needed. No generic
-  programming framework until concrete workflows require it.
+- **Richer callback definitions:** extend the implemented room/watch/timer
+  supervisor with declarative workflow definitions only when a concrete task
+  needs them. Reuse its typed events, scheduling, deduplication and cancellation;
+  a model decides where judgment is needed. Retry/deadline policies should remain
+  explicit. No generic programming framework is required for the next playtest.
 - **Bot spawning:** give bots a tool to request children with bounded depth,
   concurrency, token/spend/storage budgets and inherited authority ceilings.
   A child cannot grant itself or its parent more access. Existing human `/spawn`
   and bounded worker-to-worker delegation are implemented, with bounded parallel
   model runs. Independent service lifetimes are implemented; nonblocking task
-  batches are implemented above. Persistent autonomous bot identities
-  and their event/resource policies remain planned.
+  batches and operator-approved chat-bound bots are implemented above. Reusable
+  versioned persona definitions and richer resource/spend policies remain planned.
 - **Human questions:** reuse durable design/approval requests and Discord delivery,
   with recipient/run identity, expiry and restart-safe answers. Important missing
   information can reach the operator away from the browser; channel messages or
@@ -478,6 +540,10 @@ can drive different isolation levels.
   modes, storage, profiles) are declared by the backend and checked at admission.
 
 ## Later: unbounded conversation memory as a comonad
+
+The locally verified #129 continuity fix is described above. Background summaries
+remain separate: retained human inputs can grow and excerpts still hydrate the
+previous journal record.
 
 Persistent bots keep conversations that never end, so their memory needs bounded
 per-turn context over unbounded history. Borrow the summary tree from

@@ -61,6 +61,28 @@ small indexes into journals), so a save costs the active set, not the past.
 
 Each phase is profiled with the 15-turn workload (`fifteen_turn_conversations_workload`).
 
+## Turn continuity
+
+Codex and Claude CLI attempts start fresh processes. Their shared conversation
+projection supplies context; neither provider's native session is the source of
+truth. Automatic callbacks and continuations retain user inputs omitted by the
+selected compactor, in chronological order, so later steering accompanies the
+original assignment. They do not retain omitted assistant chatter. This input
+list grows with human instructions; it is not a substitute for the planned
+summary plugin.
+
+Turns also receive the previous attempt's last six nonempty command, tool or
+file-change observations (128 characters of label and 384 of output each).
+These are untrusted evidence, not authority or private model reasoning. They
+provide a handoff, not the entire tool transcript; tools remain available to
+inspect current resource state.
+
+Projection is pure; the prompt adapter reads archived activity through the
+existing journal interface. The output limit does not bound that read: activity
+hydration currently decodes the entire prior record, and a cold journal open
+scans the file for offsets. Large observations and cold histories therefore
+remain separate performance concerns. See [performance checks](PERFORMANCE.md).
+
 ## Measured (phase A)
 
 Recording one ~1.7 KB turn as history grows, in the pinned build image:
