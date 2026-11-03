@@ -186,7 +186,7 @@ pub(crate) fn enqueue_test(
 }
 pub(super) fn definitions() -> Vec<Value> {
     vec![
-        json!({"name":"control_service_exec","description":"Run a command asynchronously inside an exact chat-owned running service, using its private files and approved loopback relays. Use shell commands/heredocs to create task files, configure clients or install dependencies; no host paths, mounts or engine options. Returns an execution_id; inspect control_service_exec_status. One active command per service. Commands survive model turns. Long-lived background programs must redirect their output to private files; the service foreground process must remain alive. Timeout or interrupted execution stops the service to prevent an untracked writer; never automatically replay an uncertain command.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"command":{"type":"string","minLength":1,"maxLength":16000},"timeout_seconds":{"type":"integer","minimum":1,"maximum":1800,"default":120}},"required":["service_id","command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":true}}),
+        json!({"name":"control_service_exec","description":"Run a command asynchronously inside an exact chat-owned running service, using its private files and approved loopback relays. Use shell commands/heredocs to create task files, configure clients or install dependencies; no host paths, mounts or engine options. Returns an execution_id; inspect control_service_exec_status. One active command per service. Commands survive model turns. Long-lived background programs must redirect their output to private files; the service foreground process must remain alive. A timed-out or interrupted command is stopped inside the service, which keeps running; the service is stopped only if that cannot be verified. Run long work such as large downloads as a watch (control_watch_start) instead. Uncertain commands are never replayed.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"command":{"type":"string","minLength":1,"maxLength":16000},"timeout_seconds":{"type":"integer","minimum":1,"maximum":1800,"default":120}},"required":["service_id","command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":true}}),
         json!({"name":"control_service_exec_status","description":"Read a chat-owned service command's bounded live output, exit code and durable outcome. Use a fresh execution_id only for a deliberate new command; retries with the same request identity never replay effects.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"execution_id":{"type":"string"}},"required":["service_id","execution_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
     ]
 }
@@ -554,6 +554,31 @@ fn stop(shared: &Arc<Mutex<State>>, service: &Service) -> io::Result<()> {
     }
     Ok(())
 }
+/// The command runs with `CONTROL_EXEC=<execution id>` set at exec, so it and
+/// every process it starts, detached ones included, can be found inside the
+/// service if it outlives its engine client. Execution IDs are hex digests.
+const MARKER: &str = "CONTROL_EXEC";
+fn launch(command: &str) -> String {
+    format!("exec 2>&1\n{command}")
+}
+/// Terminates, then kills, every running process carrying the command's
+/// marker, and succeeds only once none remains. Exited processes awaiting
+/// their reaper do not count, and no marker means nothing is running.
+fn reap_script(execution: &str) -> String {
+    format!(r#"m={MARKER}={execution}
+members() {{ for d in /proc/[0-9]*; do read -r s 2>/dev/null < "$d/stat" || continue; s=${{s##*) }}; [ "${{s%% *}}" = Z ] && continue; while IFS= read -r -d '' v; do [ "$v" = "$m" ] && {{ echo "${{d#/proc/}}"; break; }}; done 2>/dev/null < "$d/environ"; done; }}
+signal() {{ for p in $(members); do kill -"$1" "$p" 2>/dev/null; done; }}
+signal TERM
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -z "$(members)" ] && exit 0; sleep 0.2; done
+signal KILL
+sleep 0.2
+[ -z "$(members)" ]"#)
+}
+fn reap(service: &Service, execution: &str) -> bool {
+    let Some(id) = service.resource.phase.container() else { return false };
+    let command = crate::engine::exec(id.as_str(), &format!("{}:{}", service.uid, service.gid), None, &[], &["bash", "-c", &reap_script(execution)]);
+    capture(command, Duration::from_secs(10), || false, |_| {}).is_ok_and(|r| r.exit_code == Some(0) && !r.timed_out)
+}
 fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
     let result = (|| -> io::Result<ResultOutput> {
         identity::authorize(&service.actor, Action::Task).map_err(fail)?;
@@ -568,18 +593,7 @@ fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
         if observed.status != "running" || service.resource.lease.expired(now()) {
             return Err(fail("Service is no longer running"));
         }
-        let mut command = crate::engine::cli();
-        command.args([
-            "exec",
-            "--user",
-            &format!("{}:{}", service.uid, service.gid),
-            "--workdir",
-            "/workspace",
-            id.as_str(),
-            "bash",
-            "-c",
-            &format!("exec 2>&1\n{}", execution.command),
-        ]);
+        let command = crate::engine::exec(id.as_str(), &format!("{}:{}", service.uid, service.gid), Some("/workspace"), &[(MARKER, &execution.id)], &["bash", "-c", &launch(&execution.command)]);
         let checked = std::cell::Cell::new(Instant::now());
         let authorized = std::cell::Cell::new(true);
         capture(
@@ -614,9 +628,13 @@ fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
             },
         )
     })();
-    let uncertain = !result
+    let unfinished = !result
         .as_ref()
         .is_ok_and(|r| !r.interrupted && !r.timed_out && r.exit_code.is_some());
+    // A command that outlived its client is stopped inside the service; only an
+    // unverifiable stop falls back to stopping the whole service.
+    let reaped = unfinished && result.is_ok() && reap(&service, &execution.id);
+    let uncertain = unfinished && !reaped;
     // Stop intent is durable before releasing an uncertain remote writer. Killing
     // a Docker client alone does not prove the command inside the service exited.
     if uncertain && stop(&shared, &service).is_err() {
@@ -646,6 +664,8 @@ fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
                         e.diagnostic =
                             "Service stop requested because command completion was uncertain"
                                 .into();
+                    } else if reaped {
+                        e.diagnostic = "The command was stopped inside the service, which keeps running. Run long work as a watch (control_watch_start) instead.".into();
                     }
                 }
                 Err(_) => {
@@ -1206,6 +1226,32 @@ mod tests {
         let result = capture(command, Duration::from_millis(50), || false, |_| {}).unwrap();
         assert!(result.timed_out);
         assert!(start.elapsed() < Duration::from_secs(2));
+    }
+    #[test]
+    #[cfg_attr(not(target_os = "linux"), ignore = "reads /proc")]
+    fn a_command_that_outlives_its_client_is_reaped_with_detached_descendants() {
+        let id = format!("{:064x}", std::process::id());
+        let other = format!("{:064x}", u64::from(std::process::id()) + 1);
+        // Like a killed engine client: the launcher dies, the command does not.
+        let mut client = Command::new("bash").args(["-c", &launch("setsid sleep 30 & sleep 30")]).env(MARKER, &id).stdout(std::process::Stdio::null()).spawn().unwrap();
+        let mut bystander = Command::new("bash").args(["-c", &launch("sleep 30")]).env(MARKER, &other).spawn().unwrap();
+        let members = |id: &str| Command::new("bash").args(["-c", &format!("{}\nmembers | wc -l", reap_script(id).lines().take(2).collect::<Vec<_>>().join("\n"))]).output().unwrap();
+        let count = |id: &str| String::from_utf8_lossy(&members(id).stdout).trim().parse::<usize>().unwrap();
+        let start = Instant::now();
+        while count(&id) < 2 && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        client.kill().unwrap();
+        client.wait().unwrap();
+        assert!(count(&id) >= 2, "killing the client leaves the command and its detached child running");
+        assert!(Command::new("bash").args(["-c", &reap_script(&id)]).status().unwrap().success());
+        assert_eq!(count(&id), 0, "every marked process is gone, setsid included");
+        assert_eq!(count(&other), 1, "another execution is untouched");
+        bystander.kill().unwrap();
+        let _ = bystander.wait();
+        assert!(Command::new("bash").args(["-c", &reap_script(&other)]).status().unwrap().success());
+        let finished = Command::new("bash").args(["-c", &launch("exit 3")]).env(MARKER, &id).status().unwrap();
+        assert_eq!(finished.code(), Some(3), "the exit status passes through");
     }
     #[test]
     fn shutdown_interrupts_capture_without_spinning_or_waiting_for_the_deadline() {

@@ -36,6 +36,21 @@ pub fn ready() -> bool {
     crate::runtime::engine_output(cli().args(["info", "--format", "{{.OSType}}"]), Duration::from_secs(20))
         .is_ok_and(|output| output.trim() == "linux")
 }
+/// A program run as `user` inside a running container, optionally from `workdir`,
+/// with `env` set when it starts.
+/// The caller owns its I/O and lifetime; process semantics stay in the program.
+pub(crate) fn exec(container: &str, user: &str, workdir: Option<&str>, env: &[(&str, &str)], program: &[&str]) -> Command {
+    let mut command = cli();
+    command.args(["exec", "--user", user]);
+    for (name, value) in env {
+        command.args(["--env", &format!("{name}={value}")]);
+    }
+    if let Some(workdir) = workdir {
+        command.args(["--workdir", workdir]);
+    }
+    command.arg(container).args(program);
+    command
+}
 pub fn query(arguments: &[&str]) -> io::Result<String> {
     crate::runtime::engine_output(cli().args(arguments), Duration::from_secs(5))
 }
