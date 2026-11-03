@@ -190,6 +190,7 @@ pub const TOOLS: [Tool; 22] = [
             "control.rooms.list",
             "control.room.read",
             "control.room.post",
+            "control_room_list",
             "control_room_read",
             "control_room_post",
             "control_room_watch",

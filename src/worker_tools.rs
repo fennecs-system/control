@@ -52,9 +52,6 @@ fn rpc_at(
             return error("Mailbox belongs to an inactive attempt");
         }
     }
-    let has_room = state.chats.iter().any(|c| {
-        Some(&c.id) == run.chat_id.as_ref() && c.room.as_deref().is_some_and(rooms::valid)
-    });
     let claude = run.backend == crate::backend::Backend::Claude;
     let judge = crate::delegation::is_judge(run);
     let result = match request["method"].as_str().unwrap_or("") {
@@ -82,16 +79,14 @@ fn rpc_at(
                     other => other,
                 });
             }
-            if has_room {
-                let response = rooms::worker_rpc(&mut state, run_id, envelope);
-                if let Some(room_tools) = response["result"]["tools"].as_array() {
-                    tools.extend(room_tools.clone());
-                }
+            let response = rooms::worker_rpc(&mut state, run_id, envelope);
+            if let Some(room_tools) = response["result"]["tools"].as_array() {
+                tools.extend(room_tools.clone());
             }
             json!({"tools":tools})
         }
         "tools/call" => {
-            if judge && !matches!(request["params"]["name"].as_str(),Some("control_workspace_run"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_web_search"|"control_rust_run"|"control_rust_bench"|"control_room_read"|"control_room_post"|"control_agent_result"|"control_knowledge_read"|"control_knowledge_search")) {
+            if judge && !matches!(request["params"]["name"].as_str(),Some("control_workspace_run"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_web_search"|"control_rust_run"|"control_rust_bench"|"control_room_list"|"control_room_read"|"control_room_post"|"control_agent_result"|"control_knowledge_read"|"control_knowledge_search")) {
                 return error("Judge policy permits read-only source inspection, isolated verification and room collaboration only.");
             }
             let blocking_spawn=request["params"]["name"]=="control_agent_spawn_blocking";
@@ -318,7 +313,7 @@ fn rpc_at(
             } else if name == "control_browser_capture" {
                 drop(state);
                 crate::web_access::capture_tool(&request["params"]["arguments"]).unwrap_or_else(|error|crate::toolbox::result(Err(error)))
-            } else if has_room && ["control_room_read", "control_room_post", "control_room_watch", "control_room_notifications", "control_room_ack"].contains(&name) {
+            } else if ["control_room_list", "control_room_read", "control_room_post", "control_room_watch", "control_room_notifications", "control_room_ack"].contains(&name) {
                 return rooms::checkpoint(&mut state, run_id, envelope, crate::storage::save);
             } else {
                 return error("Tool is not allowed for this worker");
