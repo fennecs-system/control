@@ -1,6 +1,6 @@
 //! Bounded independent TCP streams over one trusted stdio connection.
 //! The parser never writes to TCP or waits for a stream's payload queue.
-use super::protocol::{self, Credit, Kind, LIMIT};
+use super::protocol::{self, Credit, Kind, LIMIT, WINDOW};
 use std::{
     collections::HashMap,
     io::{self, Read, Write},
@@ -18,7 +18,8 @@ pub const CONNECTIONS: usize = 32;
 type Payload = Option<Vec<u8>>;
 struct Channel {
     outgoing: Credit,
-    receiving: AtomicBool,
+    /// Frames the peer may still send before more credit is granted.
+    receiving: AtomicU32,
     fin: AtomicBool,
     alive: AtomicBool,
     read_done: AtomicBool,
@@ -37,6 +38,9 @@ pub struct Transport {
     alive: AtomicBool,
     last_id: AtomicU32,
     heartbeat: Mutex<Instant>,
+    /// Credits each new stream grants its peer: 1 until the peer is known to
+    /// accept WINDOW, so older relays keep their single-frame protocol.
+    window: AtomicU32,
 }
 fn fail(message: &str) -> io::Error {
     io::Error::other(message)
@@ -52,6 +56,7 @@ impl Transport {
             channels: Mutex::new(HashMap::new()),
             alive: AtomicBool::new(true),
             last_id: AtomicU32::new(0),
+            window: AtomicU32::new(1),
             heartbeat: Mutex::new(Instant::now()),
         });
         let (tx, rx) = mpsc::sync_channel(CONNECTIONS);
@@ -61,6 +66,14 @@ impl Transport {
             link.stop();
         });
         (transport, rx, task)
+    }
+    /// Called by a host whose peer advertises windowed credit: both sides then
+    /// grant WINDOW credits to streams opened afterwards.
+    #[allow(dead_code)] // Host-side API; shared with the container binary.
+    pub fn widen(&self) -> io::Result<()> {
+        self.send(0, Kind::Window, &[])?;
+        self.window.store(WINDOW, Ordering::Release);
+        Ok(())
     }
     pub fn alive(&self) -> bool {
         self.alive.load(Ordering::Acquire)
@@ -96,10 +109,10 @@ impl Transport {
         if id == 0 || channels.len() >= CONNECTIONS || channels.contains_key(&id) {
             return Err(fail("Relay stream limit or duplicate ID"));
         }
-        let (tx, rx) = mpsc::sync_channel(1);
+        let (tx, rx) = mpsc::sync_channel(WINDOW as usize);
         let channel = Arc::new(Channel {
             outgoing: Credit::default(),
-            receiving: AtomicBool::new(false),
+            receiving: AtomicU32::new(0),
             fin: AtomicBool::new(false),
             alive: AtomicBool::new(true),
             read_done: AtomicBool::new(false),
@@ -144,8 +157,11 @@ impl Transport {
                 .lock()
                 .map_err(|_| fail("Relay socket unavailable"))? = Some(socket.try_clone()?);
             let mut reading = socket.try_clone()?;
-            channel.receiving.store(true, Ordering::Release);
-            self.send(id, Kind::Credit, &[])?;
+            let window = self.window.load(Ordering::Acquire);
+            channel.receiving.store(window, Ordering::Release);
+            for _ in 0..window {
+                self.send(id, Kind::Credit, &[])?;
+            }
             let link = self.clone();
             let stream = channel.clone();
             thread::spawn(move || {
@@ -179,7 +195,7 @@ impl Transport {
                         match input.recv_timeout(Duration::from_millis(100)) {
                             Ok(Some(data)) => {
                                 socket.write_all(&data)?;
-                                stream.receiving.store(true, Ordering::Release);
+                                stream.receiving.fetch_add(1, Ordering::AcqRel);
                                 link.send(id, Kind::Credit, &[])?;
                             }
                             Ok(None) => {
@@ -255,6 +271,10 @@ impl Transport {
             let id = u32::from_be_bytes(id);
             let (kind, n) = protocol::read(&mut reader, &mut buffer)?;
             if id == 0 {
+                if kind == Kind::Window && !accept_remote {
+                    self.window.store(WINDOW, Ordering::Release);
+                    continue;
+                }
                 if kind != Kind::Ping {
                     return Err(fail("Invalid relay control frame"));
                 }
@@ -299,7 +319,7 @@ impl Transport {
                 Kind::Credit => channel.outgoing.grant()?,
                 Kind::Data | Kind::Fin
                     if !channel.fin.load(Ordering::Acquire)
-                        && channel.receiving.swap(false, Ordering::AcqRel) =>
+                        && channel.receiving.try_update(Ordering::AcqRel, Ordering::Acquire, |left| left.checked_sub(1)).is_ok() =>
                 {
                     let data = if kind == Kind::Fin {
                         channel.fin.store(true, Ordering::Release);
@@ -336,10 +356,20 @@ mod tests {
     }
     impl Pair {
         fn new() -> Self {
+            Self::with(true)
+        }
+        fn with(widen: bool) -> Self {
             let (a, b) = sockets();
             let closing = [a.try_clone().unwrap(), b.try_clone().unwrap()];
             let (listener, _, left) = Transport::start(a.try_clone().unwrap(), a, false);
             let (host, incoming, right) = Transport::start(b.try_clone().unwrap(), b, true);
+            if widen {
+                host.widen().unwrap();
+                let start = Instant::now();
+                while listener.window.load(Ordering::Acquire) != WINDOW && start.elapsed() < Duration::from_secs(2) {
+                    thread::sleep(Duration::from_millis(5));
+                }
+            }
             Self {
                 listener,
                 host,
@@ -451,6 +481,30 @@ mod tests {
         }
         drop(pair);
         blocked.join().unwrap();
+    }
+    #[test]
+    fn windowed_and_single_credit_peers_both_transfer_and_only_hosts_widen() {
+        for widen in [false, true] {
+            let pair = Pair::with(widen);
+            assert_eq!(pair.listener.window.load(Ordering::Acquire), if widen { WINDOW } else { 1 });
+            let (mut client, mut server) = pair.connect();
+            let payload = vec![9u8; LIMIT * (WINDOW as usize + 3)];
+            let expected = payload.clone();
+            let sender = thread::spawn(move || {
+                server.write_all(&payload).unwrap();
+                server.shutdown(Shutdown::Write).unwrap();
+            });
+            client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut received = Vec::new();
+            client.read_to_end(&mut received).unwrap();
+            sender.join().unwrap();
+            assert_eq!(received, expected);
+        }
+        let mut bytes = 0u32.to_be_bytes().to_vec();
+        protocol::write(&mut bytes, Kind::Window, b"").unwrap();
+        let (link, _, reader) = Transport::start(std::io::Cursor::new(bytes), Vec::new(), true);
+        reader.join().unwrap();
+        assert_eq!(link.window.load(Ordering::Acquire), 1, "a container cannot widen the host");
     }
     #[test]
     fn malformed_or_uncredited_frames_close_the_transport() {

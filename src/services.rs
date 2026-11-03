@@ -632,7 +632,7 @@ pub(crate) fn relay_version(service: &Service) -> io::Result<u8> {
     let cached=cache.lock().map_err(|_|fail("Relay capability cache unavailable"))?.get(&service.resource.image).copied();
     if let Some(version)=cached{return Ok(version);}
     let marker = crate::engine::query(&["image", "inspect", service.resource.image.as_str(), "--format", "{{index .Config.Labels \"dev.control.tcp-relay\"}}"])?;
-    let version=marker.trim().parse::<u8>().ok().filter(|version|matches!(version,2..=4))
+    let version=marker.trim().parse::<u8>().ok().filter(|version|matches!(version,2..=5))
         .ok_or_else(||fail("Rebuild the immutable worker images with Nix setup, then start a new service to enable TCP relays"))?;
     let mut cached=cache.lock().map_err(|_|fail("Relay capability cache unavailable"))?;
     if cached.len()<MAX_RECORDS{cached.insert(service.resource.image.clone(),version);}
