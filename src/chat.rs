@@ -1,7 +1,7 @@
 use crate::{
     discord, escape,
     identity::{self, Action, Actor},
-    runtime::{RunKind, Runtime},
+    runtime::RunKind,
     State,
 };
 use serde::{Deserialize, Serialize};
@@ -307,7 +307,8 @@ pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -
         return Err("Enter an agent task of 1–2000 characters.");
     }
     crate::scheduler::admit(&state.runtime)?;
-    let context = history_window(&parent, parent.messages.len(), &state.runtime).0.concat();
+    let conversation = crate::conversation::Conversation::of(state, &parent);
+    let context = crate::conversation::compactor().window(&conversation, parent.messages.len()).render(&conversation).concat();
     let child = create(state);
     let session = state.chats.last_mut().unwrap();
     session.actor = parent.actor;
@@ -603,11 +604,9 @@ pub fn prompt(state: &State, run_id: &str) -> Option<String> {
         .chats
         .iter()
         .find(|s| Some(&s.id) == run.chat_id.as_ref())?;
-    let current = session
-        .messages
-        .iter()
-        .position(|m| m.run_id.as_deref() == Some(run_id))?;
-    let (history, _) = history_window(session, current, &state.runtime);
+    let conversation = crate::conversation::Conversation::of(state, session);
+    let current = conversation.position(run_id)?;
+    let history = crate::conversation::compactor().window(&conversation, current).render(&conversation);
     let names = run
         .lenses
         .clone()
@@ -651,27 +650,6 @@ pub fn prompt(state: &State, run_id: &str) -> Option<String> {
         run.objective
     ))
 }
-fn history_window(session: &Session, current: usize, runtime: &Runtime) -> (Vec<String>, usize) {
-    let mut history = Vec::new();
-    let mut count = 0;
-    for message in session.messages[..current].iter().rev() {
-        let run = message.run_id.as_deref().and_then(|id| runtime.runs.iter().find(|r| r.id == id));
-        let response = response_from_run(message, run);
-        let label = match run.map_or(control_context::agent_policy::MessageSpeaker::User, |r| r.kind.speaker()) {
-            control_context::agent_policy::MessageSpeaker::User => "User",
-            control_context::agent_policy::MessageSpeaker::Control => "Control event",
-        };
-        let entry = format!("{label}: {}\nAssistant: {}\n", message.text, response.1);
-        count += entry.chars().count();
-        if count > 20000 {
-            break;
-        }
-        history.push(entry);
-    }
-    let omitted = current - history.len();
-    history.reverse();
-    (history, omitted)
-}
 pub fn omitted_history(state: &State, run: &str) -> usize {
     state
         .chats
@@ -681,11 +659,11 @@ pub fn omitted_history(state: &State, run: &str) -> usize {
                 .messages
                 .iter()
                 .position(|m| m.run_id.as_deref() == Some(run))
-                .map(|current| history_window(session, current, &state.runtime).1)
+                .map(|current| crate::conversation::compactor().window(&crate::conversation::Conversation::of(state, session), current).omitted)
         })
         .unwrap_or(0)
 }
-fn response_from_run<'a>(message:&'a Message,run:Option<&'a crate::runtime::Run>)->(&'a str,&'a str) {
+pub(crate) fn response_from_run<'a>(message:&'a Message,run:Option<&'a crate::runtime::Run>)->(&'a str,&'a str) {
     run
         .map(|r| {
             (
@@ -698,18 +676,6 @@ fn response_from_run<'a>(message:&'a Message,run:Option<&'a crate::runtime::Run>
         })
         .unwrap_or(("completed", &message.reply))
 }
-fn indexed_runs<'a>(runtime:&'a Runtime,messages:&'a [Message])->std::collections::HashMap<&'a str,Option<&'a crate::runtime::Run>> {
-    // Index only the requested conversation, without cloning IDs or retaining
-    // every unrelated historical run. First match keeps the old lookup semantics.
-    let mut runs=messages.iter().filter_map(|m|m.run_id.as_deref()).map(|id|(id,None)).collect::<std::collections::HashMap<_,_>>();
-    let mut remaining=runs.len();
-    if remaining==0 {return runs;}
-    for run in &runtime.runs {
-        if let Some(slot)=runs.get_mut(run.id.as_str()).filter(|slot|slot.is_none()) {*slot=Some(run);remaining-=1;}
-        if remaining==0 {break;}
-    }
-    runs
-}
 pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
     let session = state
         .chats
@@ -717,11 +683,11 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
         .find(|s| s.id == id)
         .ok_or("Chat not found.")?;
     identity::authorize(&session.actor, Action::Task)?;
-    let runs=indexed_runs(&state.runtime,&session.messages);
+    let runs=crate::conversation::Conversation::of(state,session);
     let pending_questions = crate::design::pending_json(state, id);
     Ok(
         json!({"id":session.id,"title":session.title,"previews":state.previews.iter().filter(|p|p.chat==id && p.status!="stopped").map(|p|json!({"id":p.id,"url":p.url,"status":p.status})).collect::<Vec<_>>(),"project":session.project,"project_worktree":session.project.as_ref().and_then(|p|p.head.as_deref()).and_then(|id|crate::runtime::workspace(id).ok()),"parent_chat":session.parent_chat,"mode":if session.improve_mode {"improve"} else {"chat"},"room":session.room,"lens":session.lens,"lenses":selected_lenses(session),"design_context":session.design_context,"revision":session.revision,"messages": session.messages.iter().map(|m| {
-        let run = m.run_id.as_deref().and_then(|id|runs.get(id).copied().flatten());
+        let run = m.run_id.as_deref().and_then(|id|runs.run(id));
         let (status, reply) = response_from_run(m,run);
         json!({"text":m.text,"reply":reply,"status":status,"run_id":m.run_id,"kind":run.map(|r| &r.kind),"persona":run.and_then(|r|r.persona.as_ref()),"delegation":run.and_then(|r|r.delegation.as_ref()),"question":run.and_then(|r|r.question.as_ref()),"attempts":run.map(|r| crate::history::hydrated(r.chat_id.as_deref(),&r.attempts))})
     }).collect::<Vec<_>>(),"pending_questions":pending_questions,"decision_revision":crate::design::decision_revision(state)}),
@@ -776,7 +742,7 @@ fn command_text(text: &str) -> String {
 pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
     let session=state.chats.iter().find(|c|c.id==id).ok_or("Chat not found.")?;
     identity::authorize(&session.actor,Action::Task)?;
-    let runs=indexed_runs(&state.runtime,&session.messages);
+    let runs=crate::conversation::Conversation::of(state,session);
     let mut html = "<!doctype html><html lang='en'><head><meta charset='utf-8'><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'></head><body class='transcript'>".to_owned();
     let project_message=crate::projects::message_index(session);
     html.push_str(&crate::previews::links(state,id));
@@ -789,7 +755,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
     }
     let messages = &session.messages;
     for (position, message) in messages.iter().enumerate() {
-        let run=message.run_id.as_deref().and_then(|id|runs.get(id).copied().flatten());
+        let run=message.run_id.as_deref().and_then(|id|runs.run(id));
         let (run_status,run_reply)=response_from_run(message,run);
         let status = match run_status {
             "queued" if run.is_some_and(|r|r.kind==RunKind::Steering) => "Queued · next turn",
@@ -1068,8 +1034,8 @@ mod tests {
         let mut duplicate=state.runtime.runs[0].clone();duplicate.result="Later duplicate".into();state.runtime.runs.push(duplicate);
         state.chats[0].messages.push(Message{text:"Missing run".into(),run_id:Some("missing".into()),reply:"Retained reply".into()});
         state.chats[0].messages.push(Message{text:"No run".into(),run_id:None,reply:"Local reply".into()});
-        let index=indexed_runs(&state.runtime,&state.chats[0].messages);
-        assert_eq!(index.len(),2);
+        let conversation=crate::conversation::Conversation::of(&state,&state.chats[0]);
+        assert!(conversation.entry(0).unwrap().run.is_some() && conversation.entry(1).unwrap().run.is_none() && conversation.entry(2).unwrap().run.is_none());
         let data=detail(&state,&id).unwrap();
         assert_eq!(data["messages"][0]["reply"],"First & original");
         assert_eq!(data["messages"][1]["reply"],"Retained reply");
@@ -1554,12 +1520,12 @@ mod tests {
         let html = transcript(&state, &id).unwrap();
         assert!(html.contains("aria-label='Control update'>Delegated task · completed"));
         assert!(!html.contains("aria-label='You'"));
-        assert!(history_window(&state.chats[0], 1, &state.runtime).0[0].starts_with("Control event:"));
+        assert!(crate::conversation::Conversation::of(&state, &state.chats[0]).entry(0).unwrap().render().starts_with("Control event:"));
         state.runtime.runs[0].kind = RunKind::RoomNotification;
         assert!(!transcript(&state, &id).unwrap().contains("aria-label='You'"));
         state.runtime.runs[0].kind = RunKind::DesignAnswer;
         assert!(transcript(&state, &id).unwrap().contains("aria-label='You'"));
-        assert!(history_window(&state.chats[0], 1, &state.runtime).0[0].starts_with("User:"));
+        assert!(crate::conversation::Conversation::of(&state, &state.chats[0]).entry(0).unwrap().render().starts_with("User:"));
     }
     #[test]
     fn html_escapes_chat_and_api_does_not_accept_actor_overrides() {

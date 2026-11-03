@@ -16,6 +16,7 @@ mod child;
 mod claude;
 mod command_jobs;
 mod collective;
+mod conversation;
 mod conversations;
 mod pagination;
 mod design;
