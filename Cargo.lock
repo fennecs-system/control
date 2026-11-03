@@ -117,6 +117,7 @@ dependencies = [
  "control-core",
  "control-effect",
  "control-http",
+ "control-journal",
  "crossterm",
  "libc",
  "ratatui",

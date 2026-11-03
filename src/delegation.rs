@@ -461,7 +461,7 @@ fn feedback(child: &runtime::Run) -> String {
         .attempts
         .last()
         .map(|a| {
-            a.activity
+            crate::history::activity(child.chat_id.as_deref(), a)
                 .iter()
                 .filter(|e| e.kind == "file_change")
                 .map(|e| e.output.as_str())

@@ -35,13 +35,33 @@ pub(super) struct Run {
     #[serde(rename = "attempts", deserialize_with = "last_attempt")]
     pub latest: Option<Attempt>,
 }
+impl Run {
+    /// The latest attempt's last edit, from state or, once the attempt has
+    /// finished, from its chat's history journal (read without a lock).
+    pub fn change(&self) -> Option<Change> {
+        let attempt = self.latest.as_ref()?;
+        if attempt.change.is_some() {
+            return attempt.change.clone();
+        }
+        let name = self.chat_id.as_deref().filter(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')).unwrap_or("_runs");
+        let path = crate::config::state(&format!("history/{name}.jsonl")).ok()?;
+        #[derive(Deserialize)]
+        struct Entry {
+            activity: Vec<Change>,
+        }
+        let line = control_journal::read_line(&path, attempt.journal?).ok()??;
+        serde_json::from_slice::<Entry>(&line).ok()?.activity.into_iter().rev().find(|c| c.kind == "file_change" && !c.output.is_empty())
+    }
+}
 #[derive(Default, Deserialize)]
 #[serde(default)]
 pub(super) struct Attempt {
     #[serde(rename = "activity", deserialize_with = "last_change")]
     pub change: Option<Change>,
+    /// History-journal line holding a finished attempt's activity.
+    pub journal: Option<u64>,
 }
-#[derive(Default, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 #[serde(default)]
 pub(super) struct Change {
     pub kind: String,

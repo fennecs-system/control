@@ -74,6 +74,8 @@ pub fn load() -> io::Result<State> {
     state.runtime.execution = crate::scheduler::load_limits()?;
     let mut changed = crate::knowledge::migrate(&mut state);
     changed |= interrupt_active(&mut state);
+    // Finished attempts from older state or a crash leave state for journals.
+    changed |= crate::history::archive_finished(&mut state);
     if changed {
         save(&state)?;
     }

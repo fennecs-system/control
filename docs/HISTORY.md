@@ -39,8 +39,12 @@ small indexes into journals), so a save costs the active set, not the past.
    journal as it happens; state keeps counts and the transcript reads the tail.
 3. **C — finished runs**: terminal runs move to their chat's journal, leaving a
    slim index (id, chat, kind, status, times) for lineage lookups.
-4. **D — messages**: chat messages and results live in the journal; the
-   transcript reads through `lens::cut`, and summaries make history unbounded.
+4. **D — conversation history interface**: chat messages and results live in
+   the journal behind one frontend-neutral interface (append, read a range or
+   tail, follow). Web, TUI, Discord and future bridges (Telegram, Matrix, Stoat)
+   are adapters over it and never read storage files; Discord stops reading
+   `state.json` directly. The transcript reads through `lens::cut`, and
+   summaries make history unbounded.
 
 Each phase is profiled with the 15-turn workload (`fifteen_turn_conversations_workload`).
 
@@ -56,3 +60,17 @@ Recording one ~1.7 KB turn as history grows, in the pinned build image:
 
 Appends stay flat (one fsync); the rewrite grows linearly. Opening scans the
 file once for line offsets; a sidecar offset index can make that constant.
+
+## Measured (phase B)
+
+600 turns (40 × 15) with 20 tool events per turn, macOS release build:
+
+| | per turn | state after 600 turns |
+|---|---|---|
+| before | 26.3 ms | 7.1 MB |
+| phase B | 26.6 ms | 2.0 MB |
+
+On macOS a durable sync is a full flush and syncs dominate a turn, so moving
+activity out trades serialization for one small journal sync: time holds while
+state shrinks 71%. On Linux (pinned images, same workload) a turn went from
+14.0–15.0 ms to 11.7–13.3 ms.

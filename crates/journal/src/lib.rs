@@ -131,6 +131,31 @@ impl Journal for FileJournal {
     }
 }
 
+/// Reads one line of a journal file without opening it for writing: no lock,
+/// no repair, a torn final line ignored. For other processes that only inspect.
+pub fn read_line(path: &Path, pos: u64) -> io::Result<Option<Vec<u8>>> {
+    use std::io::BufRead;
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    // Streams to the wanted line: memory stays one line, reading stops there.
+    let mut lines = io::BufReader::new(file);
+    let mut line = Vec::new();
+    for current in 0..=pos {
+        line.clear();
+        if current < pos {
+            if lines.skip_until(b'\n')? == 0 {
+                return Ok(None);
+            }
+        } else if lines.read_until(b'\n', &mut line)? == 0 || line.pop() != Some(b'\n') {
+            return Ok(None);
+        }
+    }
+    Ok(Some(line))
+}
+
 /// A journal of `T`, serialized as JSON.
 pub struct Typed<J, T> {
     journal: J,
@@ -213,6 +238,8 @@ mod tests {
         assert_eq!((journal.len(), journal.read(1).unwrap().as_deref()), (2, Some(&br#"{"turn":1,"text":"hi"}"#[..])));
         assert_eq!(journal.append(br#"{"turn":2}"#).unwrap(), 2);
         assert_eq!(journal.read(9).unwrap(), None);
+        assert_eq!(read_line(&path, 2).unwrap().as_deref(), Some(&br#"{"turn":2}"#[..]), "readers need no handle");
+        assert_eq!(read_line(&path, 3).unwrap(), None);
     }
 
     #[test]

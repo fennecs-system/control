@@ -121,8 +121,8 @@ fn design_report(question: &Value) -> Option<String> {
 }
 fn delivery_message(run: &Run, status: &str, link: &str, report: &str) -> String {
     let prefix=format!("Control: {status}.\nContinue on this laptop: {link}\n\n");
-    let edits = if status == "waiting" { None } else { run.latest.as_ref().and_then(|a| a.change.as_ref()) };
-    let suffix=edits.map(|event|format!("\n\nChanges · {}\n{}",event.text.chars().take(100).collect::<String>(),crate::diff::discord_preview(&event.output))).unwrap_or_default();
+    let edits = if status == "waiting" { None } else { run.change() };
+    let suffix=edits.as_ref().map(|event|format!("\n\nChanges · {}\n{}",event.text.chars().take(100).collect::<String>(),crate::diff::discord_preview(&event.output))).unwrap_or_default();
     let budget=1800usize.saturating_sub(prefix.chars().count()+suffix.chars().count());
     let body=if report.chars().count()>budget {
         format!("{}\n… Full reply in chat.",report.chars().take(budget.saturating_sub(23)).collect::<String>())

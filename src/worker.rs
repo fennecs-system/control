@@ -706,6 +706,16 @@ fn commit(
         attempt.command_jobs = std::mem::take(&mut last.command_jobs);
         std::mem::replace(last, attempt)
     });
+    // A finished attempt's activity moves to its chat's journal before the save,
+    // so the save carries only live work; a failed save restores it below.
+    let archived = crate::history::finished(status).then(|| {
+        let index = r.attempts.len().saturating_sub(1);
+        let (chat, id) = (r.chat_id.clone(), r.id.clone());
+        r.attempts.last_mut().and_then(|last| {
+            let kept = last.activity.clone();
+            crate::history::archive(chat.as_deref(), &id, index, last).ok().map(|()| kept)
+        })
+    }).flatten();
     let previous_chat = chat_index.map(|index| {
         let chat = &s.chats[index];
         (
@@ -733,6 +743,10 @@ fn commit(
         let run = &mut s.runtime.runs[run_index];
         run.status = previous_status;
         run.result = previous_result;
+        if let (Some(last), Some(kept)) = (run.attempts.last_mut(), archived) {
+            last.activity = kept;
+            last.journal = None;
+        }
         if let (Some(last), Some(mut previous)) = (run.attempts.last_mut(), previous_attempt) {
             previous.activity = std::mem::take(&mut last.activity);
             previous.command_jobs = std::mem::take(&mut last.command_jobs);
@@ -1472,7 +1486,7 @@ mod tests {
         assert_eq!(serde_json::to_vec(&state).unwrap(), before);
         commit(&mut state, &id, Action::Task, attempt, Ok("done".into()), false, |_|Ok(())).unwrap();
         assert_eq!(serde_json::to_value(&state.runtime.runs[0].attempts[0]).unwrap(), serde_json::to_value(historical).unwrap());
-        assert_eq!(state.runtime.runs[0].attempts[1].activity[0].output, "retained diagnostics");
+        assert_eq!(crate::history::activity(state.runtime.runs[0].chat_id.as_deref(), &state.runtime.runs[0].attempts[1])[0].output, "retained diagnostics");
         assert_eq!(state.chats[0].workspace.as_deref(), Some("published"));
     }
     #[test]
@@ -1788,7 +1802,7 @@ mod tests {
         assert_eq!(serde_json::to_vec(&state).unwrap(), before);
         commit(&mut state, &id, Action::Task, attempt, Ok("done".into()), true, |_| Ok(())).unwrap();
         assert_eq!(state.runtime.runs[0].status, "interrupted");
-        assert_eq!(state.runtime.runs[0].attempts[0].activity[0].output, "retained diagnostics");
+        assert_eq!(crate::history::activity(state.runtime.runs[0].chat_id.as_deref(), &state.runtime.runs[0].attempts[0])[0].output, "retained diagnostics");
         assert_eq!(state.runtime.runs[1].status, "queued");
         assert!(state.runtime.runs[1].attempts.is_empty());
         assert_eq!(state.chats[0].workspace.as_deref(), Some("previous-output"));

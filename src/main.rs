@@ -21,6 +21,7 @@ mod pagination;
 mod design;
 mod delegation;
 mod delegated_results;
+mod history;
 use control::config;
 use control::{discord, identity};
 use control::discord::bridge as discord_bridge;
