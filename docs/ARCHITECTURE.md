@@ -75,6 +75,14 @@ context and tool descriptions without ownership or effects. The execution layer
 enforces which selected tools may actually run. Personas guide behavior; policy
 and deterministic supervision enforce authority.
 
+Domain transitions operate on narrow typed state and return effect descriptions.
+The runtime interprets those effects: checkpointing, containers, networking and
+model calls. This follows the state/effect separation of a state monad without
+requiring a monad framework: clients submit commands and consume projections or
+events, rather than threading the application's complete state through every
+interface. Keep transitions deterministic and test interpreters separately;
+extract shared components when an actual caller needs them.
+
 ## A deployable collective tool
 
 Imagine distributing Control together with a Nix configuration and an optional

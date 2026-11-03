@@ -479,6 +479,13 @@ can drive different isolation levels.
 
 ## Later: unbounded conversation memory as a comonad
 
+Turn-continuity prerequisite: automatic callbacks retain omitted user inputs
+and recent execution observations through the shared conversation projection.
+Explicit one-shot watch requests made during a callback re-arm its next stage;
+completed watch evidence survives subsequent starts. A bot can pause its own
+wakes with `control_bot_pause`; operator `/bot resume` resumes it. These focused
+fixes are under validation; background summaries remain separate work below.
+
 Persistent bots keep conversations that never end, so their memory needs bounded
 per-turn context over unbounded history. Borrow the summary tree from
 [UniiChat](https://github.com/VictorTaelin/UniiChat), exposed as a plugin rather

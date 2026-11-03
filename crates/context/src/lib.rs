@@ -25,7 +25,7 @@ pub const TOOLS: [Tool; 22] = [
     Tool {
         name: "agent.bot", title: "Persistent bot", description: "Event-woken agents · operator approval",
         href: None, aliases: "bot persistent callback wake listen timer swarm",
-        mcp_names: &["control_bot_request", "control_bot_status"], execution: "Rust supervisor / continuation runs", surface: "chat / worker MCP", available: true,
+        mcp_names: &["control_bot_request", "control_bot_status", "control_bot_pause"], execution: "Rust supervisor / continuation runs", surface: "chat / worker MCP", available: true,
     },
     Tool {
         name:"service.ports",title:"TCP ports",description:"Scoped service connections · operator approval",

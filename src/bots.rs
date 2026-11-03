@@ -82,6 +82,11 @@ pub struct Bots {
     /// Bot requests from agents, decided by the operator.
     approvals: Vec<Approval>,
 }
+impl Bots {
+    pub(crate) fn retains_watch(&self, id: &str) -> bool {
+        self.supervisor.retains(&watch(id))
+    }
+}
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -263,8 +268,15 @@ pub(crate) fn arm(state: &mut State, chat: &str) -> Result<bool, &'static str> {
     arm_at(state, chat, Now(now_ms()))
 }
 fn arm_at(state: &mut State, chat: &str, now: Now) -> Result<bool, &'static str> {
-    if defined(state, chat) {
-        return Ok(false);
+    let id = bot(chat);
+    let restart = state.bots.supervisor.definitions().find(|d| d.bot == id).map(|d| d.restart);
+    if let Some(restart) = restart {
+        let rearm = restart == Restart::Temporary && state.bots.supervisor.status(&id) == Some(Status::WaitingTurn);
+        if rearm {
+            let effects = state.bots.supervisor.step(Event::Rearm(id), now);
+            record(state, effects);
+        }
+        return Ok(rearm);
     }
     let sources = watch_sources(state, chat);
     if sources.is_empty() {
@@ -558,6 +570,19 @@ fn handle(state: &mut State, attempt: &AttemptRef<'_>, call: BotCall, save: impl
     let requester = run.chat_id.clone().ok_or_else(|| fail("A chat is required"))?;
     let (origin, actor) = (run.id.clone(), run.actor.clone());
     match call {
+        BotCall::Pause => {
+            if !defined(state, &requester) { return Err(fail("This chat has no bot to pause")); }
+            let previous = state.bots.clone();
+            let notice = state.runtime.notice.clone();
+            let effects = state.bots.supervisor.step(Event::Pause(bot(&requester)), Now(now_ms()));
+            record(state, effects);
+            if let Err(error) = save(state) {
+                state.bots = previous;
+                state.runtime.notice = notice;
+                return Err(error);
+            }
+            Ok(json!({"paused":true,"chat_id":requester,"resume":"The operator can use /bot resume in this chat. Services and pending events are retained."}))
+        }
         BotCall::Status { chat_id } => {
             let chat = chat_id.unwrap_or_else(|| requester.clone());
             if !related(state, &chat, &requester, &actor) {
@@ -1072,6 +1097,41 @@ mod tests {
         let run = state.runtime.runs.last().unwrap().id.clone();
         let attempt = AttemptRef { run: &run, generation: "attempt-a", nonce };
         handle(state, &attempt, BotCall::Request { chat_id: chat.into(), every_minutes: None, room: true }, |_| Ok(()))
+    }
+
+    #[test]
+    fn a_one_shot_callback_can_request_the_next_stage_and_pause_is_durable() {
+        let (mut state, chat) = fixture();
+        watching(&mut state,&chat,"w-chain");
+        assert!(arm_at(&mut state,&chat,Now(0)).unwrap());
+        state.watches[0].observe_for_test(1,None);
+        reconcile_at(&mut state,1, |_|Ok(())).unwrap();
+        let first = state.runtime.runs.len()-1;
+        assert!(arm_at(&mut state,&chat,Now(2)).unwrap());
+        state.watches[0].observe_for_test(2,None);
+        state.runtime.runs[first].status="completed".into();
+        let mut restored:State=serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        reconcile_at(&mut restored,3, |_|Ok(())).unwrap();
+        assert_eq!(bot_runs(&restored).len(),2,"the explicit next callback survives restart");
+        restored.runtime.runs.last_mut().unwrap().status="completed".into();
+        reconcile_at(&mut restored,4, |_|Ok(())).unwrap();
+        assert!(!defined(&restored,&chat),"one rearm does not turn into a permanent bot");
+
+        command_at(&mut state,&chat,"off",Now(5)).unwrap();
+        reconcile_at(&mut state,6, |_|Ok(())).unwrap();
+        command_at(&mut state,&chat,"on every 1",Now(7)).unwrap();
+        let run=state.runtime.runs.last_mut().unwrap();
+        run.status="running".into();
+        let mut attempt=crate::usage::Attempt::new();attempt.workspace_id=Some("pause-attempt".into());run.attempts.push(attempt);
+        let run=run.id.clone();let attempt=AttemptRef {run:&run,generation:"pause-attempt",nonce:"pause"};
+        assert!(handle(&mut state,&attempt,BotCall::Pause, |_|Err(io::Error::other("disk full"))).is_err());
+        assert_ne!(state.bots.supervisor.status(&bot(&chat)),Some(Status::Paused));
+        handle(&mut state,&attempt,BotCall::Pause, |_|Ok(())).unwrap();
+        assert_eq!(state.bots.supervisor.status(&bot(&chat)),Some(Status::Paused));
+        state.runtime.runs.last_mut().unwrap().status="completed".into();
+        let count=state.runtime.runs.len();
+        reconcile_at(&mut state,1_000_000, |_|Ok(())).unwrap();
+        assert_eq!(state.runtime.runs.len(),count,"a real pause stops timer wakes");
     }
 
     #[test]

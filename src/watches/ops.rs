@@ -51,6 +51,48 @@ fn wakes(armed: bool, bot: bool) -> &'static str {
     }
 }
 
+/// A failed arm must restore observations as well as the bot subscription.
+struct Pending(Vec<(String, u64, Vec<super::Exit>)>);
+impl Pending {
+    fn capture(watches: &[Watch], chat: &str) -> Self {
+        Self(watches.iter().filter(|w| w.chat == chat).map(|w| (w.id.clone(), w.lines, w.exits.clone())).collect())
+    }
+    fn restore(self, watches: &mut [Watch]) {
+        for (id, lines, exits) in self.0 {
+            if let Some(w) = watches.iter_mut().find(|w| w.id == id) { w.lines = lines; w.exits = exits; }
+        }
+    }
+}
+
+/// Keep recent completed evidence, and never retire unoffered observations.
+fn retire(watches: &mut Vec<Watch>, chat: &str, protected: impl Fn(&str) -> bool) -> Vec<Watch> {
+    let mut retired = Vec::new();
+    let mut finished = 0;
+    for watch in std::mem::take(watches).into_iter().rev() {
+        if watch.chat == chat && !watch.active() { finished += 1; }
+        if watch.chat == chat && !watch.active() && finished > 16 && watch.lines == 0 && watch.exits.is_empty() && !protected(&watch.id) {
+            retired.push(watch);
+        } else { watches.push(watch); }
+    }
+    watches.reverse();
+    retired.reverse();
+    retired
+}
+
+fn arm_saved(state: &mut State, chat: &str, save: impl FnOnce(&State) -> io::Result<()>) -> io::Result<bool> {
+    let bots = state.bots.clone();
+    let notice = state.runtime.notice.clone();
+    let pending = Pending::capture(&state.watches, chat);
+    let armed = crate::bots::arm(state, chat).map_err(fail)?;
+    if armed && let Err(error) = save(state) {
+        state.bots = bots;
+        state.runtime.notice = notice;
+        pending.restore(&mut state.watches);
+        return Err(error);
+    }
+    Ok(armed)
+}
+
 pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call: WatchCall) -> io::Result<Value> {
     let node = node()?;
     let caller = {
@@ -95,10 +137,14 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
             let watch = Watch { id: id.clone(), name, chat: chat.clone(), service: service_id, generation: service.resource.generation.get(), permanent, command: command.chars().take(200).collect(), stopped: false, seen: 0, lines: 0, line_seq: 0, exits: Vec::new(), last_exit: None, recent: Vec::new() };
             let summary = watch.summary();
             let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
-            let (finished, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut state.watches).into_iter().partition(|old| old.chat == chat && !old.active());
-            state.watches = kept;
+            let finished = {
+                let State { watches, bots, .. } = &mut *state;
+                retire(watches, &chat, |id| bots.retains_watch(id))
+            };
             state.watches.push(watch);
             let bots = wake.then(|| state.bots.clone());
+            let notice = state.runtime.notice.clone();
+            let pending = Pending::capture(&state.watches, &chat);
             let saved = if wake { crate::bots::arm(&mut state, &chat).map_err(fail) } else { Ok(false) }
                 .and_then(|armed| crate::storage::save(&state).map(|()| armed));
             let armed = match saved {
@@ -107,8 +153,10 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
                     if let Some(bots) = bots {
                         state.bots = bots;
                     }
+                    state.runtime.notice = notice;
                     state.watches.retain(|watch| watch.id != id);
                     state.watches.extend(finished);
+                    pending.restore(&mut state.watches);
                     drop(state);
                     let _ = runner(&service, &["watch-rm", &id], "");
                     return Err(error);
@@ -123,12 +171,7 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
         }
         WatchCall::Wake => {
             let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
-            let bots = state.bots.clone();
-            let armed = crate::bots::arm(&mut state, &chat).map_err(fail)?;
-            if armed && let Err(error) = crate::storage::save(&state) {
-                state.bots = bots;
-                return Err(error);
-            }
+            let armed = arm_saved(&mut state, &chat, crate::storage::save)?;
             Ok(json!({"armed":armed,"wakes":wakes(armed, true)}))
         }
         WatchCall::Status { watch_id } => {
@@ -175,5 +218,42 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
             }
             Ok(state.watches[index].summary())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn watched(id: &str, chat: &str) -> Watch {
+        Watch { id:id.into(),name:"task".into(),chat:chat.into(),service:"svc-test".into(),generation:1,permanent:false,command:"task".into(),stopped:false,seen:0,lines:0,line_seq:0,exits:Vec::new(),last_exit:None,recent:Vec::new() }
+    }
+    #[test]
+    fn a_failed_arm_restores_unoffered_terminal_evidence() {
+        let mut state=State::default();
+        let chat=crate::chat::create(&mut state);
+        crate::chat::send(&mut state,&chat,"Process each stage","test").unwrap();
+        let mut watch=watched("w-live",&chat);
+        watch.permanent=true;
+        watch.observe_for_test(1,None);
+        watch.observe_for_test(2,Some(1));
+        state.watches.push(watch);
+        assert!(arm_saved(&mut state,&chat, |_|Err(io::Error::other("disk full"))).is_err());
+        assert!(!crate::bots::defined(&state,&chat));
+        assert_eq!(state.watches[0].lines,1);
+        assert_eq!(state.watches[0].exits.len(),1);
+        assert!(arm_saved(&mut state,&chat, |_|Ok(())).unwrap());
+    }
+    #[test]
+    fn completed_evidence_is_retained_until_old_and_unreferenced() {
+        let mut watches=(0..18).map(|i| {
+            let mut w=watched(&format!("w-{i}"),"c-owner");w.observe_for_test(1,Some(0));w.exits.clear();w
+        }).collect::<Vec<_>>();
+        watches[0].lines=1;
+        assert!(retire(&mut watches,"c-owner", |id|id=="w-1").is_empty(),"unoffered and held evidence survives beside the last sixteen records");
+        let retired=retire(&mut watches,"c-owner", |_|false);
+        assert_eq!(retired.len(),1);
+        assert_eq!(retired[0].id,"w-1");
+        assert!(watches.iter().any(|w|w.id=="w-0"));
+        assert!(retire(&mut watches,"c-other", |_|false).is_empty(),"another chat's history is unaffected");
     }
 }

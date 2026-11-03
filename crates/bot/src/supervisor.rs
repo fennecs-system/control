@@ -119,6 +119,8 @@ pub enum Event<I> {
     Define(Definition),
     Pause(BotId),
     Resume(BotId),
+    /// Explicitly request one more callback after a temporary bot's current turn.
+    Rearm(BotId),
     Stop(BotId),
     /// A message on `topic`. `from` names the chat that caused it, so a bot is
     /// not woken by its own posts.
@@ -172,6 +174,10 @@ struct Bot<I> {
     exhausted: bool,
     paused: bool,
     stopping: bool,
+    #[cfg_attr(feature = "serde", serde(default))]
+    rearm: bool,
+    #[cfg_attr(feature = "serde", serde(default))]
+    held: Vec<Topic>,
 }
 impl<I: Info> Bot<I> {
     /// Admits a reason. Replays at or below the topic cursor are ignored. When
@@ -262,6 +268,14 @@ impl<I> Default for Supervisor<I> {
     }
 }
 impl<I: Info> Supervisor<I> {
+    /// Evidence referenced by a pending or outstanding callback must remain readable.
+    pub fn retains(&self, topic: &Topic) -> bool {
+        self.bots.values().any(|bot| bot.held.contains(topic) || bot.overflowed.contains(topic) || bot.pending.iter().any(|reason| match reason {
+            Reason::Info { topic: pending, .. } => pending == topic,
+            Reason::Overflow { topics, .. } => topics.contains(topic),
+            Reason::Timer => false,
+        }))
+    }
     pub fn definitions(&self) -> impl Iterator<Item = &Definition> {
         self.bots.values().map(|bot| &bot.definition)
     }
@@ -318,6 +332,8 @@ impl<I: Info> Supervisor<I> {
                     exhausted: false,
                     paused: false,
                     stopping: false,
+                    rearm: false,
+                    held: Vec::new(),
                 };
                 self.bots.insert(bot.definition.bot.clone(), bot);
             }
@@ -334,6 +350,14 @@ impl<I: Info> Supervisor<I> {
             Event::Resume(bot) => {
                 if let Some(bot) = self.bots.get_mut(&bot) {
                     bot.paused = false;
+                }
+            }
+            Event::Rearm(id) => {
+                if let Some(bot) = self.bots.get_mut(&id)
+                    && bot.definition.restart == Restart::Temporary && bot.turn.is_some()
+                    && !bot.stopping && !bot.paused
+                {
+                    bot.rearm = true;
                 }
             }
             Event::Stop(id) => {
@@ -361,8 +385,14 @@ impl<I: Info> Supervisor<I> {
                     && bot.turn.as_ref().is_some_and(|(id, _)| *id == turn)
                 {
                     bot.turn = None;
-                    if bot.stopping || bot.definition.restart == Restart::Temporary {
+                    bot.held.clear();
+                    if bot.stopping || (bot.definition.restart == Restart::Temporary && !bot.rearm && !bot.paused) {
                         self.bots.remove(&id);
+                    } else if bot.rearm || (bot.paused && bot.definition.restart == Restart::Temporary) {
+                        bot.rearm = false;
+                        bot.turns.clear();
+                        bot.last_turn = None;
+                        bot.exhausted = false;
                     }
                 }
             }
@@ -406,6 +436,11 @@ impl<I: Info> Supervisor<I> {
                 if bot.dropped > 0 {
                     reasons.push(Reason::Overflow { dropped: std::mem::take(&mut bot.dropped), topics: std::mem::take(&mut bot.overflowed) });
                 }
+                bot.held = reasons.iter().flat_map(|reason| match reason {
+                    Reason::Info { topic, .. } => std::slice::from_ref(topic),
+                    Reason::Overflow { topics, .. } => topics.as_slice(),
+                    Reason::Timer => &[],
+                }).cloned().collect();
                 Effect::RequestTurn { bot: id.clone(), chat: bot.definition.chat.clone(), turn, reasons }
             } else if bot.recent(now).count() >= bot.definition.budget.turns_per_window as usize && !bot.exhausted {
                 bot.exhausted = true;
@@ -546,6 +581,43 @@ mod tests {
         assert_eq!(s.status(&bot("bot")), Some(Status::WaitingTurn));
         assert!(!s.eligible(&bot("bot"), &first) && s.eligible(&bot("bot"), &second));
         assert_eq!(turns(&s.step(done("bot", second), Now(6))).len(), 1);
+    }
+
+    #[test]
+    fn explicit_rearm_keeps_exactly_one_next_callback_and_stop_still_wins() {
+        let mut s = S::default();
+        let once = Definition { bot: bot("once"), chat: ChatId("chat-once".into()), sources: vec![room("general")], budget: budget(0, 60_000, 1), restart: Restart::Temporary };
+        s.step(Event::Define(once.clone()), Now(0));
+        let first = turns(&s.step(message(None, 1), Now(1)))[0].1;
+        assert!(s.retains(&Topic::new("room", "general")));
+        s.step(Event::Rearm(bot("once")), Now(2));
+        s.step(Event::Rearm(bot("once")), Now(2));
+        assert!(s.step(message(None, 2), Now(3)).is_empty());
+        let effects = s.step(done("once", first), Now(4));
+        let next = turns(&effects);
+        assert_eq!(next.len(), 1, "an explicit request survives the previous callback");
+        assert!(s.step(done("once", next[0].1), Now(5)).is_empty());
+        assert_eq!(s.status(&bot("once")), None);
+        assert!(!s.retains(&Topic::new("room", "general")));
+
+        s.step(Event::Define(once), Now(6));
+        let turn = turns(&s.step(message(None,3), Now(7)))[0].1;
+        s.step(Event::Rearm(bot("once")), Now(8));
+        s.step(Event::Stop(bot("once")), Now(9));
+        s.step(done("once",turn), Now(10));
+        assert_eq!(s.status(&bot("once")), None);
+    }
+
+    #[test]
+    fn a_paused_temporary_callback_keeps_its_mailbox_until_explicit_resume() {
+        let mut s=S::default();
+        s.step(Event::Define(Definition {bot:bot("once"),chat:ChatId("chat-once".into()),sources:vec![room("general")],budget:budget(0,60_000,1),restart:Restart::Temporary}),Now(0));
+        let first=turns(&s.step(message(None,1),Now(1)))[0].1;
+        s.step(Event::Pause(bot("once")),Now(2));
+        s.step(message(None,2),Now(3));
+        assert!(s.step(done("once",first),Now(4)).is_empty());
+        assert_eq!(s.status(&bot("once")),Some(Status::Paused));
+        assert_eq!(turns(&s.step(Event::Resume(bot("once")),Now(5))).len(),1);
     }
 
     #[test]

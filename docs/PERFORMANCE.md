@@ -1,5 +1,54 @@
 # Performance checks
 
+## Bot turn continuity
+
+The continuity fix was compared with `8f170c7`, using identical synthetic
+fixtures, Rust release builds with debug symbols, the same offline Linux ARM
+build image and a two-CPU container limit. No credentials or model calls were
+used. Nine batches of 20,000 prompt constructions include hydration of the
+previous attempt's archived observations:
+
+| Context workload | Before | After |
+| --- | ---: | ---: |
+| 15 turns, 16 prior observations | 8.42 µs | 35.72 µs |
+| 150 turns, 16 prior observations | 26.36 µs | 61.05 µs |
+
+This is an intentional correctness cost, not a performance improvement: later
+turns now receive execution evidence and omitted user instructions. Genuine
+`perf` sampling flamegraphs were captured before and after with
+`cpu-clock:u`, 499 Hz and DWARF call stacks. Archived activity hydration appears
+in approximately 34% of weighted after-context samples; JSON decoding overlaps
+that stack. The new handoff formatting appears in approximately 16%.
+
+The existing 600-turn HTTP/save/render workload measured 6.85 ms/turn before
+and 6.47 ms after, with 582 KiB saved state in both cases. This single paired
+sample suggests no regression in that path; it does not prove a speedup or
+measure model throughput. It does not construct model prompts, so it cannot
+hide the extra prompt cost above. Both workloads have before/after flamegraphs.
+
+On macOS ARM, a separate release benchmark with 64 archived observations of
+4,000 Unicode characters each measured 0.360 ms per prompt over nine batches
+of 100 calls. Excerpt limits bound prompt output, not the journal decode;
+the existing reader hydrates the entire previous record. Cold journal opening
+also scans offsets and was not isolated by these warm-loop timings. Retained
+user input grows with human instructions; the future summary plugin addresses
+that separately.
+
+Reproduce the synthetic prompt checks:
+
+```sh
+nix develop --command cargo test --release --locked --bin control \
+  conversation::tests::continuity_profile -- --ignored --exact --nocapture
+nix develop --command cargo test --release --locked --bin control \
+  conversation::tests::large_observation_profile -- --ignored --exact --nocapture
+```
+
+For Linux sampling, build the test binary with `CARGO_PROFILE_RELEASE_DEBUG=1`,
+then run that binary under `perf record -e cpu-clock:u -F 499
+--call-graph dwarf,8192` with the same test filter. Convert `perf script` through
+`inferno-collapse-perf` and `inferno-flamegraph`. Only the isolated profiling
+container receives kernel profiling privileges; application workers do not.
+
 ## Core scheduling extraction
 
 The initial `control-core` scheduling boundary uses borrowed, statically
