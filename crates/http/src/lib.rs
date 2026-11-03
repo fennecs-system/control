@@ -7,6 +7,8 @@ pub enum Policy {
     Page,
     Embedded,
     Chat,
+    /// A top-level page that runs the Rust/WASM client; never framed.
+    Client,
     Restricted,
     RestrictedEmbedded,
     Access,
@@ -19,6 +21,7 @@ impl Policy {
             Self::Page => "default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
             Self::Embedded => "default-src 'self'; script-src 'none'; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'",
             Self::Chat => "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'",
+            Self::Client => "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
             Self::Restricted => "default-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
             Self::RestrictedEmbedded => "default-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'self'",
             Self::Access => "default-src 'none'; frame-ancestors 'none'",
@@ -118,6 +121,7 @@ mod tests {
             Policy::Page,
             Policy::Embedded,
             Policy::Chat,
+            Policy::Client,
             Policy::Restricted,
             Policy::RestrictedEmbedded,
             Policy::Access,
@@ -149,8 +153,9 @@ mod tests {
             );
             assert_eq!(
                 header.contains("'wasm-unsafe-eval'"),
-                matches!(policy, Policy::ToolWindow | Policy::Chat)
+                matches!(policy, Policy::ToolWindow | Policy::Chat | Policy::Client)
             );
+            assert_eq!(header.contains("frame-ancestors 'none'"), matches!(policy, Policy::Page | Policy::Client | Policy::Restricted | Policy::Access));
         }
     }
     #[test]

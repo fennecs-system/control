@@ -31,7 +31,7 @@ pub fn http(stream: &mut TcpStream, shared: &Arc<Mutex<State>>, method: &str, pa
         _ => Err(fail("Use GET or POST")),
     };
     let _ = match result {
-        Ok(Some(page)) => control_http::respond(stream, "200 OK", "text/html; charset=utf-8", page.as_bytes(), "", control_http::Policy::Page),
+        Ok(Some(page)) => control_http::respond(stream, "200 OK", "text/html; charset=utf-8", page.as_bytes(), "", control_http::Policy::Client),
         Ok(None) => control_http::respond(stream, "303 See Other", "text/plain", b"", &format!("Location: {back}\r\n"), control_http::Policy::Page),
         Err(error) => control_http::respond(stream, "400 Bad Request", "text/html; charset=utf-8", crate::error_page(&error.to_string(), &back).as_bytes(), "", control_http::Policy::Page),
     };
