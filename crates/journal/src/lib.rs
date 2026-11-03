@@ -134,12 +134,26 @@ impl Journal for FileJournal {
 /// Reads one line of a journal file without opening it for writing: no lock,
 /// no repair, a torn final line ignored. For other processes that only inspect.
 pub fn read_line(path: &Path, pos: u64) -> io::Result<Option<Vec<u8>>> {
-    let data = match std::fs::read(path) {
-        Ok(data) => data,
+    use std::io::BufRead;
+    let file = match File::open(path) {
+        Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
-    Ok(data.split_inclusive(|b| *b == b'\n').filter(|line| line.ends_with(b"\n")).nth(pos as usize).map(|line| line[..line.len() - 1].to_vec()))
+    // Streams to the wanted line: memory stays one line, reading stops there.
+    let mut lines = io::BufReader::new(file);
+    let mut line = Vec::new();
+    for current in 0..=pos {
+        line.clear();
+        if current < pos {
+            if lines.skip_until(b'\n')? == 0 {
+                return Ok(None);
+            }
+        } else if lines.read_until(b'\n', &mut line)? == 0 || line.pop() != Some(b'\n') {
+            return Ok(None);
+        }
+    }
+    Ok(Some(line))
 }
 
 /// A journal of `T`, serialized as JSON.
