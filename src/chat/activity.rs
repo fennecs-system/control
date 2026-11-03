@@ -88,7 +88,7 @@ pub(super) fn agent_activity<'a>(state: &'a State, id: &str) -> Vec<AgentActivit
         .collect()
 }
 
-pub(super) fn command_html(event: &Activity) -> String {
+pub(super) fn command_html(event: &Activity, open: bool) -> String {
     if event.kind == "message" {
         return format!(
             "<article class='assistant-message' data-transcript-key='message-{}'><p class='preserve'>{}</p></article>",
@@ -97,8 +97,9 @@ pub(super) fn command_html(event: &Activity) -> String {
         );
     }
     format!(
-        "<details class='command-activity' data-transcript-key='{}' open><summary><span>{}</span> <code>{}</code></summary><pre>{}</pre></details>",
+        "<details class='command-activity' data-transcript-key='{}'{}><summary><span>{}</span> <code>{}</code></summary><pre>{}</pre></details>",
         escape(&event.id),
+        if open { " open" } else { "" },
         escape(&event.status),
         escape(&event.text),
         escape(&event.output)
