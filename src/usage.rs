@@ -163,6 +163,7 @@ pub fn render(runtime: &Runtime) -> String {
     let mut people = BTreeMap::<String, Summary>::new();
     let mut models = BTreeMap::<String, Summary>::new();
     let mut days = BTreeMap::<String, Summary>::new();
+    let mut daily = BTreeMap::<u64, u64>::new();
     let mut legacy = 0;
     for run in &runtime.runs {
         if run.attempts.is_empty() && !["queued", "running"].contains(&run.status.as_str()) {
@@ -181,9 +182,14 @@ pub fn render(runtime: &Runtime) -> String {
             days.entry(day_label(attempt.started_unix))
                 .or_default()
                 .add(attempt);
+            if let Some(tokens) = attempt.tokens {
+                *daily.entry(attempt.started_unix / 86400).or_default() += tokens.input_tokens + tokens.output_tokens;
+            }
         }
     }
     let mut html = String::from("<h2>Usage</h2>");
+    let today = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() / 86400);
+    html.push_str(&heatmap(&daily, today));
     html.push_str(&outcomes(&models));
     html.push_str(&format!("<details class='record'><summary>Token accounting</summary><div class='metrics'><div><b>{}</b><span>INPUT</span></div><div><b>{}</b><span>OUTPUT</span></div><div><b>{}/{}</b><span>MEASURED ATTEMPTS</span></div></div><p class='muted'>Cached input: {} · unknown attempts: {} · older runs without tracking: {legacy}</p><p class='muted'>Cached tokens are part of input. Counts are provider-reported; subscription billing is not estimated.</p></details>", overall.tokens.input_tokens, overall.tokens.output_tokens, overall.measured, overall.attempts, overall.tokens.cached_input_tokens, overall.attempts - overall.measured));
     html.push_str(&table("By person", &people));
@@ -191,6 +197,22 @@ pub fn render(runtime: &Runtime) -> String {
     html.push_str(&table("By day (UTC)", &days));
     html.push_str("<p class='muted'>Per-run attempts and tokens are in <a href='/?view=runs'>Run history ↗</a>.</p>");
     html
+}
+
+const WEEKS: u64 = 26;
+/// Tokens per UTC day over recent weeks as a contribution grid: one column per
+/// week starting Sunday, shaded in five purple levels relative to the busiest day.
+fn heatmap(daily: &BTreeMap<u64, u64>, today: u64) -> String {
+    // Unix day 0 was a Thursday; columns start on Sunday.
+    let start = today.saturating_sub((today + 4) % 7 + (WEEKS - 1) * 7);
+    let max = daily.range(start..=today).map(|(_, tokens)| *tokens).max().unwrap_or(0);
+    let cells = (start..=today).map(|day| {
+        let tokens = daily.get(&day).copied().unwrap_or(0);
+        let level = if tokens == 0 { 0 } else { 1 + (3 * tokens / max.max(1)).min(3) };
+        format!("<span class='l{level}' title='{}: {tokens} tokens'></span>", day_label(day * 86400))
+    }).collect::<String>();
+    let legend = (0..5).map(|level| format!("<span class='l{level}'></span>")).collect::<String>();
+    format!("<section class='usage-graph'><div class='usage-heatmap' role='img' aria-label='Tokens per day over the last {WEEKS} weeks'>{cells}</div><p class='usage-legend muted'>Less {legend} More · tokens per day (UTC)</p></section>")
 }
 
 // Gregorian civil date from Unix days; display grouping is explicitly UTC.
@@ -211,6 +233,18 @@ pub(crate) fn day_label(timestamp: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn heatmap_spans_whole_weeks_and_shades_relative_to_the_busiest_day() {
+        // 2026-11-03 is a Tuesday: 25 full weeks plus Sunday..Tuesday.
+        let today = 20_760;
+        assert_eq!(day_label(today * 86400), "2026-11-03");
+        let daily = BTreeMap::from([(today, 400), (today - 1, 100), (today - 400, 9_999)]);
+        let html = heatmap(&daily, today);
+        assert_eq!(html.matches("<span class='l").count() - 5, 25 * 7 + 3, "cells excluding the legend");
+        assert!(html.contains("title='2026-11-03: 400 tokens'") && html.contains("class='l4' title='2026-11-03"));
+        assert!(html.contains("class='l1' title='2026-11-02: 100 tokens'"), "older out-of-range days do not set the scale");
+        assert!(html.contains("<span class='l0' title='2026-05-10"), "the first column starts on a Sunday");
+    }
     #[test]
     fn outcomes_keep_statuses_exact_and_bound_visible_models() {
         let mut models = BTreeMap::<String, Summary>::new();
