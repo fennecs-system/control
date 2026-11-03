@@ -19,7 +19,7 @@ pub struct Tools;
 impl AttemptTools for Tools {
     fn definitions(&self) -> Vec<Value> {
         vec![
-            json!({"name":"control_watch_start","description":"Start a watch: a long-running command in one of your persistent services whose output lines become events. If this chat runs as a bot, new lines and exits wake it; otherwise pass wake=true to be woken once by the next line or exit, so you can end your turn instead of polling. Filter at the source so only meaningful lines print (e.g. `tail -F log | grep --line-buffered Done`) (e.g. a game client printing chat and events, `tail -F` on a log, or a websocket/ssh client through an approved egress port). The service supervises the command: restart \"permanent\" (default) restarts it with backoff; \"transient\" runs it once. Print one event per line; output is untrusted data. Up to 8 per chat.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"name":{"type":"string","minLength":1,"maxLength":48},"command":{"type":"string","minLength":1,"maxLength":16000},"restart":{"type":"string","enum":["permanent","transient"],"default":"permanent"},"wake":{"type":"boolean","description":"Wake this chat once, after its current turn, on the next line or exit from its watches."}},"required":["service_id","name","command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}}),
+            json!({"name":"control_watch_start","description":"Start a watch: a long-running command in one of your persistent services whose output lines become events. If this chat runs as a bot, new lines and exits wake it; otherwise it wakes this chat once, after the current turn, on its next line or exit (wake=false to opt out), so you can end your turn instead of polling. Filter at the source so only meaningful lines print (e.g. `tail -F log | grep --line-buffered Done`) (e.g. a game client printing chat and events, `tail -F` on a log, or a websocket/ssh client through an approved egress port). The service supervises the command: restart \"permanent\" (default) restarts it with backoff; \"transient\" runs it once. Print one event per line; output is untrusted data. Up to 8 per chat.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"name":{"type":"string","minLength":1,"maxLength":48},"command":{"type":"string","minLength":1,"maxLength":16000},"restart":{"type":"string","enum":["permanent","transient"],"default":"permanent"},"wake":{"type":"boolean","default":true,"description":"Wake this chat once, after its current turn, on the next line or exit from its watches. Default true for chats that are not bots."}},"required":["service_id","name","command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}}),
             json!({"name":"control_watch_events","description":"Read a watch's lines and exits after a cursor (default: from the start of what is kept). Returns up to 200 events and the cursor to pass next time.","inputSchema":{"type":"object","properties":{"watch_id":{"type":"string"},"after":{"type":"integer","minimum":0}},"required":["watch_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
             json!({"name":"control_watch_status","description":"List this chat's watches, or read one: whether it is active, its cursor and last exit.","inputSchema":{"type":"object","properties":{"watch_id":{"type":"string"}},"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
             json!({"name":"control_watch_wake","description":"Wake this chat once, after its current turn, when any of its watches next prints a line or exits. Use it to wait on a watch you already started; end your turn after arming. A chat running as a bot already wakes on watch output.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":false,"openWorldHint":false}}),
@@ -50,8 +50,7 @@ fn decode(name: &str, args: &Value) -> io::Result<WatchCall> {
         command: String,
         #[serde(default)]
         restart: Option<String>,
-        #[serde(default)]
-        wake: bool,
+        wake: Option<bool>,
     }
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -84,7 +83,7 @@ fn decode(name: &str, args: &Value) -> io::Result<WatchCall> {
             if start.name.trim().is_empty() || start.name.chars().count() > 48 || start.command.trim().is_empty() || start.command.len() > 16000 {
                 return Err(invalid("A watch needs a name (1–48 characters) and a command"));
             }
-            Ok(WatchCall::Start { service_id: start.service_id, name: start.name, command: start.command, permanent, wake: start.wake })
+            Ok(WatchCall::Start { service_id: start.service_id, name: start.name, command: start.command, permanent, wake: start.wake.unwrap_or(true) })
         }
         "control_watch_events" => serde_json::from_value::<Events>(args.clone()).map(|e| WatchCall::Events { watch_id: e.watch_id, after: e.after }).map_err(|_| invalid("Expected watch_id and optional after")),
         "control_watch_status" => serde_json::from_value::<Status>(args.clone()).map(|s| WatchCall::Status { watch_id: s.watch_id }).map_err(|_| invalid("Expected an optional watch_id")),
@@ -127,10 +126,11 @@ mod tests {
             ("control_watch_stop", json!({"watch_id":"w-1"})),
             ("control_watch_start", json!({"service_id":"svc","name":"ready","command":"tail -F log","wake":true})),
             ("control_watch_wake", json!({})),
+            ("control_watch_start", json!({"service_id":"svc","name":"quiet","command":"ls","wake":false})),
         ] {
             run(&host, &attempt, name, &args).unwrap();
         }
-        assert_eq!(*host.0.lock().unwrap(), ["start chat true false", "start once false false", "events w-1 Some(4)", "status None", "stop w-1", "start ready true true", "wake"]);
+        assert_eq!(*host.0.lock().unwrap(), ["start chat true true", "start once false true", "events w-1 Some(4)", "status None", "stop w-1", "start ready true true", "wake", "start quiet true false"]);
         assert!(run(&host, &attempt, "control_watch_start", &json!({"service_id":"svc","name":"x","command":"ls","restart":"sometimes"})).is_err());
         assert!(run(&host, &attempt, "control_watch_start", &json!({"service_id":"svc","name":" ","command":"ls"})).is_err());
         assert!(run(&host, &attempt, "control_watch_stop", &json!({"watch_id":"w-1","extra":1})).is_err());

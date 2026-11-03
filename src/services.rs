@@ -157,7 +157,7 @@ impl Service {
         self.storage == Storage::Memory && self.profile.readonly_root()
     }
     fn summary(&self) -> Value {
-        json!({"service_id":self.resource.id,"phase":self.resource.phase,"scope":self.resource.scope,"storage":self.storage,"workspace_executable":self.workspace_exec,"expires_unix":(!self.resource.lease.is_until_stopped()).then(||self.resource.lease.expires()),"until_stopped":self.resource.lease.is_until_stopped(),"diagnostic":self.diagnostic,"output":self.output,"exit_code":self.exit_code,"output_limit_bytes":OUTPUT,"executions":self.executions.iter().map(|e|e.brief()).collect::<Vec<_>>()})
+        json!({"service_id":self.resource.id,"platform":format!("linux/{}", std::env::consts::ARCH),"phase":self.resource.phase,"scope":self.resource.scope,"storage":self.storage,"workspace_executable":self.workspace_exec,"expires_unix":(!self.resource.lease.is_until_stopped()).then(||self.resource.lease.expires()),"until_stopped":self.resource.lease.is_until_stopped(),"diagnostic":self.diagnostic,"output":self.output,"exit_code":self.exit_code,"output_limit_bytes":OUTPUT,"executions":self.executions.iter().map(|e|e.brief()).collect::<Vec<_>>()})
     }
 }
 #[derive(Deserialize)]
