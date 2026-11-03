@@ -407,10 +407,10 @@ fn run_record(run: &Run) -> String {
         html.push_str(&format!("<a href='/chat/{}'>Open chat ↗</a>", escape(chat)));
     }
     if ["queued", "running", "waiting"].contains(&run.status.as_str()) {
-        html.push_str(&format!("<form method='post' action='/cancel-run'><input type='hidden' name='id' value='{}'><button>Cancel</button></form>",escape(&run.id)));
+        html.push_str(&format!("<form class='decision-form' method='post' action='/cancel-run'><input type='hidden' name='id' value='{}'><button>Cancel</button></form>",escape(&run.id)));
     }
     if ["blocked", "failed", "interrupted", "cancelled"].contains(&run.status.as_str()) {
-        html.push_str(&format!("<form method='post' action='/retry-run'><input type='hidden' name='id' value='{}'><button class='primary'>Retry</button></form>",escape(&run.id)));
+        html.push_str(&format!("<form class='decision-form' method='post' action='/retry-run'><input type='hidden' name='id' value='{}'><button class='primary'>Retry</button></form>",escape(&run.id)));
     }
     html.push_str("</article>");
     html
