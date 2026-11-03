@@ -347,7 +347,7 @@ fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
     let grants = crate::services::grants(state, latest);
     let woke = describe(state, &request.reasons);
     let objective = format!(
-        "You are running as a persistent bot. You woke because of: {woke}. Read what changed (control_room_notifications for room messages, control_watch_events for watch output, service status for your services), act on it, coordinate with other agents through control_room_post when useful, and acknowledge processed room updates. Then end your turn; new events will wake you again. Do not loop, poll or sleep inside commands."
+        "You are running as a persistent bot. You woke because of: {woke}. Read what changed (control_room_notifications for room messages, control_watch_events for watch output, service status for your services), act on it, and acknowledge processed room updates. Post with control_room_post only when something changed that another agent needs; if nothing did, end the turn without posting, since every post wakes the other bots. Then end your turn; new events will wake you again. Do not loop, poll or sleep inside commands."
     );
     let objective = objective.chars().take(2000).collect::<String>();
     state.runtime.enqueue_for(objective, RunKind::BotWake, "bot", actor, action)?;
