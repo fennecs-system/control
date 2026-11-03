@@ -145,6 +145,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "control-comonad"
+version = "0.1.0"
+
+[[package]]
 name = "control-context"
 version = "0.1.0"
 dependencies = [
