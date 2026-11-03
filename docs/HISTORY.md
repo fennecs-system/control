@@ -37,8 +37,13 @@ small indexes into journals), so a save costs the active set, not the past.
    `Memory`, `Typed<T>`; comonad `Space` generalized to owned items.
 2. **B — activity**: per-attempt tool activity is appended to the chat's
    journal as it happens; state keeps counts and the transcript reads the tail.
-3. **C — finished runs**: terminal runs move to their chat's journal, leaving a
-   slim index (id, chat, kind, status, times) for lineage lookups.
+3. **C — finished run text**: run records stay in state (many lookups depend on
+   finished runs: spawn batches, lineage, approvals, inheritance), but their
+   bulky text (objective, result, lens context, continuation) moves to the
+   journal. Fields are `Spilled<T>`: always full in memory, saved as a journal
+   position, and saved in full again after any edit. A finished run is one
+   journal line (text and last activity) committed atomically with its save:
+   a failed save truncates the line, and load drops lines no save referenced.
 4. **D — conversation history interface**: chat messages and results live in
    the journal behind one frontend-neutral interface (append, read a range or
    tail, follow). Web, TUI, Discord and future bridges (Telegram, Matrix, Stoat)
@@ -74,3 +79,15 @@ On macOS a durable sync is a full flush and syncs dominate a turn, so moving
 activity out trades serialization for one small journal sync: time holds while
 state shrinks 71%. On Linux (pinned images, same workload) a turn went from
 14.0–15.0 ms to 11.7–13.3 ms.
+
+## Measured (phase C)
+
+Same workload on Linux, four alternating runs each:
+
+| | per turn (mean) | saved state after 600 turns |
+|---|---|---|
+| phase B | 11.0 ms | 2.0 MB |
+| phase C | 10.4 ms | 0.58 MB |
+
+Finishing a run is one journal line and one sync, so the smaller save is a net
+win that grows with history.

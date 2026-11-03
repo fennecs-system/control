@@ -641,12 +641,13 @@ impl Bridge {
                     continue;
                 }
                 let decision = (status == "waiting").then(||design_report(&run.question)).flatten();
+                let stored = run.report();
                 let report = if let Some(report) = decision.as_deref() {
                     report
                 } else if action == Action::Improve && !direct {
                     "Architect report: open the authenticated operator website."
                 } else {
-                    run.result.as_deref().unwrap_or("No report was produced.")
+                    stored.as_deref().unwrap_or("No report was produced.")
                 };
                 let link = discord::session_link(actor, run.chat_id.as_deref()).unwrap_or_default();
                 if self.attempt(&receipt, channel, &delivery_message(run,status,&link,report), outbound) {

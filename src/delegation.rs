@@ -315,7 +315,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
         next.context = parent.context.clone();
         next.lenses = parent.lenses.clone();
         next.persona = Some(lineage(&parent));
-        next.continuation = Some(crate::design::Continuation {
+        *next.continuation = Some(crate::design::Continuation {
             checkpoint,
             published_parent: baseline,
             project_base: attempt.project_base.clone(),
@@ -323,7 +323,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
                 .continuation
                 .as_ref()
                 .map(|c| c.objective.clone())
-                .unwrap_or_else(|| parent.objective.clone()),
+                .unwrap_or_else(|| parent.objective.to_string()),
             decision: crate::design::Input {
                 question: feedback.clone(),
                 options: Vec::new(),
@@ -336,7 +336,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
             .as_mut()
             .unwrap()
             .continuation = Some(next_id.clone());
-        state.runtime.runs[index].result = format!(
+        *state.runtime.runs[index].result = format!(
             "Delegated {} finished ({}). Continuing in this conversation.",
             child.id, child.status
         );
@@ -410,7 +410,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
                 reply: String::new(),
             });
         state.runtime.runs[index].delegation.as_mut().unwrap().child = Some(child_id.clone());
-        state.runtime.runs[index].result = format!(
+        *state.runtime.runs[index].result = format!(
             "Waiting for {} {child_id}.",
             if d.input.role == Role::Judge {
                 "independent review"

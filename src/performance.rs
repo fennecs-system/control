@@ -27,7 +27,7 @@ fn fixture(messages: usize, unrelated: usize) -> State {
         );
         run.status = ["completed", "running", "failed", "queued", "cancelled"][index % 5].into();
         run.kind = if index % 7 == 0 { RunKind::Steering } else { RunKind::Chat };
-        run.result = format!("Answer {index}: Unicode λ & <code> \"text\".");
+        *run.result = format!("Answer {index}: Unicode λ & <code> \"text\".");
         run.attempts.push(Attempt {
             omitted_history: index % 3,
             activity: vec![

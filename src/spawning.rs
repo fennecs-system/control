@@ -182,7 +182,7 @@ pub fn request(
     let action = run.action;
     let backend = run.backend;
     let model = run.model.clone();
-    let context = run.context.clone();
+    let context = (*run.context).clone();
     let lenses = run.lenses.clone();
     let lineage = delegation::lineage(run);
     let baseline = attempt.parent_artifact.clone();
@@ -305,7 +305,7 @@ fn materialize(state: &mut State, index: usize, batch_index: usize) -> Result<()
         run.resource_grants = seed.resource_grants.clone();
         run.backend = seed.backend;
         run.model = seed.model.clone();
-        run.context = seed.context.clone();
+        *run.context = seed.context.clone();
         run.lenses = seed.lenses.clone();
         run.persona = Some(Persona {
             role: Role::Worker,

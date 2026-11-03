@@ -328,7 +328,7 @@ pub fn answer(
     let lenses = run.lenses.clone();
     let queue_order = run.queue_order;
     let resources = run.resource_grants.clone();
-    let objective = run.continuation.as_ref().map(|c|c.objective.clone()).unwrap_or_else(||run.objective.clone());
+    let objective = run.continuation.as_ref().map(|c|c.objective.clone()).unwrap_or_else(|| run.objective.to_string());
     let continuation = Continuation {
         project_base: attempt.project_base.clone(), checkpoint,
         published_parent: baseline.clone(), objective, decision: question.input.clone(),
@@ -356,12 +356,12 @@ pub fn answer(
     next.lenses = lenses;
     next.chat_id = Some(chat_id.into());
     next.queue_order = queue_order;
-    next.continuation = Some(continuation);
+    *next.continuation = Some(continuation);
     let next_id = next.id.clone();
     let question = state.runtime.runs[index].question.as_mut().unwrap();
     question.answer = Some(answer.clone());
     question.continuation = Some(next_id.clone());
-    state.runtime.runs[index].result =
+    *state.runtime.runs[index].result =
         summary(state.runtime.runs[index].question.as_ref().unwrap());
     let session = &mut state.chats[session_index];
     session.messages.push(chat::Message {
@@ -453,7 +453,7 @@ pub(crate) mod tests {
         run.status = "waiting".into();
         run.attempts[0].status = "waiting".into();
         run.attempts[0].artifact = Some("paused-workspace".into());
-        run.result = summary(run.question.as_ref().unwrap());
+        *run.result = summary(run.question.as_ref().unwrap());
         (state, chat)
     }
     #[test]
