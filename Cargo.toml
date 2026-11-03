@@ -23,5 +23,5 @@ libc = "0.2"
 
 
 [workspace]
-members = ["crates/context", "crates/http", "crates/ai", "crates/core", "crates/effect", "crates/bot"]
+members = ["crates/context", "crates/http", "crates/ai", "crates/core", "crates/effect", "crates/bot", "crates/comonad"]
 exclude = ["web"]
