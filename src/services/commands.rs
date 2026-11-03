@@ -554,17 +554,18 @@ fn stop(shared: &Arc<Mutex<State>>, service: &Service) -> io::Result<()> {
     }
     Ok(())
 }
-/// Marks every process the command starts, detached ones included, so a
-/// command that outlives its engine client can be found inside the service.
-/// Execution IDs are hex digests.
-fn launch(command: &str, execution: &str) -> String {
-    format!("export CONTROL_EXEC={execution}\nexec 2>&1\n{command}")
+/// The command runs with `CONTROL_EXEC=<execution id>` set at exec, so it and
+/// every process it starts, detached ones included, can be found inside the
+/// service if it outlives its engine client. Execution IDs are hex digests.
+const MARKER: &str = "CONTROL_EXEC";
+fn launch(command: &str) -> String {
+    format!("exec 2>&1\n{command}")
 }
 /// Terminates, then kills, every running process carrying the command's
 /// marker, and succeeds only once none remains. Exited processes awaiting
 /// their reaper do not count, and no marker means nothing is running.
 fn reap_script(execution: &str) -> String {
-    format!(r#"m=CONTROL_EXEC={execution}
+    format!(r#"m={MARKER}={execution}
 members() {{ for d in /proc/[0-9]*; do read -r s 2>/dev/null < "$d/stat" || continue; s=${{s##*) }}; [ "${{s%% *}}" = Z ] && continue; while IFS= read -r -d '' v; do [ "$v" = "$m" ] && {{ echo "${{d#/proc/}}"; break; }}; done 2>/dev/null < "$d/environ"; done; }}
 signal() {{ for p in $(members); do kill -"$1" "$p" 2>/dev/null; done; }}
 signal TERM
@@ -575,7 +576,7 @@ sleep 0.2
 }
 fn reap(service: &Service, execution: &str) -> bool {
     let Some(id) = service.resource.phase.container() else { return false };
-    let command = crate::engine::exec(id.as_str(), &format!("{}:{}", service.uid, service.gid), None, &["bash", "-c", &reap_script(execution)]);
+    let command = crate::engine::exec(id.as_str(), &format!("{}:{}", service.uid, service.gid), None, &[], &["bash", "-c", &reap_script(execution)]);
     capture(command, Duration::from_secs(10), || false, |_| {}).is_ok_and(|r| r.exit_code == Some(0) && !r.timed_out)
 }
 fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
@@ -592,7 +593,7 @@ fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
         if observed.status != "running" || service.resource.lease.expired(now()) {
             return Err(fail("Service is no longer running"));
         }
-        let command = crate::engine::exec(id.as_str(), &format!("{}:{}", service.uid, service.gid), Some("/workspace"), &["bash", "-c", &launch(&execution.command, &execution.id)]);
+        let command = crate::engine::exec(id.as_str(), &format!("{}:{}", service.uid, service.gid), Some("/workspace"), &[(MARKER, &execution.id)], &["bash", "-c", &launch(&execution.command)]);
         let checked = std::cell::Cell::new(Instant::now());
         let authorized = std::cell::Cell::new(true);
         capture(
@@ -1227,13 +1228,13 @@ mod tests {
         assert!(start.elapsed() < Duration::from_secs(2));
     }
     #[test]
-    #[cfg(target_os = "linux")]
+    #[cfg_attr(not(target_os = "linux"), ignore = "reads /proc")]
     fn a_command_that_outlives_its_client_is_reaped_with_detached_descendants() {
         let id = format!("{:064x}", std::process::id());
         let other = format!("{:064x}", u64::from(std::process::id()) + 1);
         // Like a killed engine client: the launcher dies, the command does not.
-        let mut client = Command::new("bash").args(["-c", &launch("setsid sleep 30 & sleep 30", &id)]).stdout(std::process::Stdio::null()).spawn().unwrap();
-        let mut bystander = Command::new("bash").args(["-c", &launch("sleep 30", &other)]).spawn().unwrap();
+        let mut client = Command::new("bash").args(["-c", &launch("setsid sleep 30 & sleep 30")]).env(MARKER, &id).stdout(std::process::Stdio::null()).spawn().unwrap();
+        let mut bystander = Command::new("bash").args(["-c", &launch("sleep 30")]).env(MARKER, &other).spawn().unwrap();
         let members = |id: &str| Command::new("bash").args(["-c", &format!("{}\nmembers | wc -l", reap_script(id).lines().take(2).collect::<Vec<_>>().join("\n"))]).output().unwrap();
         let count = |id: &str| String::from_utf8_lossy(&members(id).stdout).trim().parse::<usize>().unwrap();
         let start = Instant::now();
@@ -1249,7 +1250,7 @@ mod tests {
         bystander.kill().unwrap();
         let _ = bystander.wait();
         assert!(Command::new("bash").args(["-c", &reap_script(&other)]).status().unwrap().success());
-        let finished = Command::new("bash").args(["-c", &launch("exit 3", &id)]).status().unwrap();
+        let finished = Command::new("bash").args(["-c", &launch("exit 3")]).env(MARKER, &id).status().unwrap();
         assert_eq!(finished.code(), Some(3), "the exit status passes through");
     }
     #[test]
