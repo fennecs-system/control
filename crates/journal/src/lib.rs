@@ -70,13 +70,11 @@ pub struct FileJournal {
 }
 impl FileJournal {
     pub fn open(path: &Path) -> io::Result<Self> {
-        let created = !path.exists();
         let mut file = OpenOptions::new().read(true).append(true).create(true).mode(0o600).open(path)?;
         file.try_lock().map_err(|_| io::Error::new(io::ErrorKind::WouldBlock, "Journal is open elsewhere"))?;
-        if created {
-            // Make the new file's directory entry durable with its first lines.
-            File::open(path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new(".")))?.sync_all()?;
-        }
+        // The directory entry must be durable before any append is acknowledged,
+        // including after a crash between creating the file and syncing it.
+        File::open(path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new(".")))?.sync_all()?;
         let mut starts = Vec::new();
         let (mut offset, mut line) = (0u64, 0u64);
         let mut buffer = vec![0; 1 << 16];
