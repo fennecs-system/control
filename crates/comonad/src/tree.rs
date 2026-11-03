@@ -107,7 +107,10 @@ impl<T> Tree<T> {
 
 impl<T> Space for Tree<T> {
     type Pos = NodeId;
-    type Item = T;
+    type Item<'a>
+        = &'a T
+    where
+        T: 'a;
     #[inline]
     fn at(&self, pos: NodeId) -> Option<&T> {
         self.get(pos)

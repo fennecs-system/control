@@ -175,6 +175,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "control-journal"
+version = "0.1.0"
+dependencies = [
+ "control-comonad",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cpufeatures"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
