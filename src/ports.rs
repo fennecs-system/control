@@ -715,8 +715,9 @@ pub(crate) fn pending_for_chat<'a>(state: &'a State, id: &str) -> Vec<&'a Port> 
         runs.insert(run.id.as_str());
         if let Ok((_,children))=crate::delegated_results::scope(state,run){runs.extend(children);}
     }
+    let requester=|port: &Port| state.runtime.runs.iter().find(|run| run.id==port.origin_run).and_then(|run| run.chat_id.as_deref());
     state.ports.iter().filter(|port|port.status==Status::Pending && port.actor==chat.actor
-        && (port.chat==id || runs.contains(port.origin_run.as_str()))).collect()
+        && (crate::chat::within(state,&port.chat,id) || runs.contains(port.origin_run.as_str()) || requester(port).is_some_and(|c| crate::chat::within(state,c,id)))).collect()
 }
 
 pub(crate) fn pending_json(state: &State,id: &str)->Vec<Value> {
@@ -1346,6 +1347,28 @@ pub(crate) mod tests {
         assert!(html.contains("class='assistant-message port-request'"));
         assert!(html.contains("value='-1'>Service lifetime"));
         assert!(html.contains("target='_top'"));
+    }
+    #[test]
+    fn requests_from_spawned_descendants_surface_in_the_top_level_chat() {
+        let (mut state,run,chat)=pending_fixture();
+        let mut parent=chat.clone();
+        for _ in 0..2 {
+            let child=crate::chat::create(&mut state);
+            state.chats.last_mut().unwrap().parent_chat=Some(parent.clone());
+            parent=child;
+        }
+        let mut wake=state.runtime.runs[0].clone();
+        (wake.id,wake.chat_id,wake.kind)=("bot-wake".into(),Some(parent.clone()),crate::runtime::RunKind::BotWake);
+        state.runtime.runs.push(wake);
+        let mut port=state.ports[0].clone();
+        (port.id,port.chat,port.origin_run)=("port-grandchild".to_owned().try_into().unwrap(),parent.clone(),"bot-wake".into());
+        state.ports.push(port);
+        let ids=|id: &str| pending_json(&state,id).iter().map(|p| p["port_id"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+        assert!(ids(&chat).contains(&"port-grandchild".to_owned()), "{:?}", ids(&chat));
+        assert_eq!(ids(&parent),["port-grandchild"], "a descendant sees only its own requests");
+        let unrelated=crate::chat::create(&mut state);
+        assert!(pending_json(&state,&unrelated).is_empty());
+        let _=run;
     }
     pub(crate) fn fixture() -> (State, String, String) {
         let mut state = State::default();
