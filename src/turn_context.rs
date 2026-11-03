@@ -588,11 +588,30 @@ pub(crate) fn recover(state: &State) -> io::Result<()> {
 mod tests {
     use super::*;
     #[test]
+    fn maximum_unicode_instructions_reach_both_native_adapters_at_admission() {
+        for backend in [crate::backend::Backend::Codex, crate::backend::Backend::Claude] {
+            let mut state = State::default();
+            let chat = crate::chat::create(&mut state);
+            let initial = "🦊".repeat(control_context::limits::CHAT_MESSAGE_CHARS);
+            let followup = "🐶".repeat(control_context::limits::CHAT_MESSAGE_CHARS);
+            for instruction in [&initial, &followup] {
+                crate::chat::send(&mut state, &chat, instruction, "test").unwrap();
+                state.runtime.runs.last_mut().unwrap().backend = backend;
+                let index = crate::worker::checkpoint_next(&mut state, |_| Ok(())).unwrap();
+                let attempt = state.runtime.runs[index].attempts.last().unwrap();
+                let input = super::input(attempt).unwrap().unwrap();
+                assert!(input.contains(&initial), "original assignment must remain intact");
+                assert!(input.contains(instruction), "current request must remain intact");
+                state.runtime.runs[index].status = "completed".into();
+            }
+        }
+    }
+    #[test]
     fn passthrough_preserves_selected_history_beyond_the_framing_budget() {
         let (mut state, chat) = fixture();
         for index in 0..70 {
             wake(&mut state, &chat, crate::runtime::RunKind::Chat,
-                &format!("instruction {index}: {}", "x".repeat(1500)));
+                &format!("instruction {index}: {}", "x".repeat(control_context::turn_context::MAX_REQUIRED_BYTES / 70 + 100)));
         }
         let id = wake(&mut state, &chat, crate::runtime::RunKind::BotWake, "new callback");
         let projected = project_with(&state, &id, &crate::conversation::Passthrough).unwrap();

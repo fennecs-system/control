@@ -86,6 +86,17 @@ pub fn direct_command(content: &str) -> Option<(Action, &str)> {
     if text.is_empty() || text.chars().count() > 2000 {
         return None;
     }
+    chat_command(text)
+}
+/// Local chat accepts longer input; Discord ingress retains its own bound.
+pub fn chat_command(content: &str) -> Option<(Action, &str)> {
+    let text = content.trim();
+    if text.is_empty() || control_context::limits::message_too_long(text) {
+        return None;
+    }
+    if let Some(task) = text.strip_prefix("!control ").map(str::trim) {
+        return (!task.is_empty()).then(|| command_task(task));
+    }
     if text == "/improve" {
         return Some((Action::Improve, "on"));
     }
@@ -112,14 +123,17 @@ pub fn direct_rejection(content: &str, attachments: bool) -> Option<&'static str
 }
 pub fn command(content: &str) -> Option<(Action, &str)> {
     let task = task(content)?;
+    Some(command_task(task))
+}
+fn command_task(task: &str) -> (Action, &str) {
     if let Some(objective) = task
         .strip_prefix("improve ")
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        Some((Action::Improve, objective))
+        (Action::Improve, objective)
     } else {
-        Some((Action::Task, task))
+        (Action::Task, task)
     }
 }
 pub fn task(content: &str) -> Option<&str> {

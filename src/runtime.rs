@@ -248,8 +248,8 @@ impl Runtime {
     ) -> Result<(), &'static str> {
         identity::authorize(&actor, action)?;
         crate::scheduler::admit(self)?;
-        if objective.is_empty() || objective.chars().count() > 2000 {
-            return Err("An objective must contain 1–2000 characters.");
+        if objective.is_empty() || control_context::limits::message_too_long(&objective) {
+            return Err(control_context::limits::CHAT_MESSAGE_ERROR);
         }
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)

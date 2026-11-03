@@ -2,7 +2,9 @@
 use serde::{Deserialize, Serialize};
 
 pub const VERSION: u8 = 1;
-pub const MAX_REQUIRED_BYTES: usize = 64 * 1024;
+// Reserve room for both the original assignment and current 20,000-scalar
+// request (up to four UTF-8 bytes each), plus policy and recovery notes.
+pub const MAX_REQUIRED_BYTES: usize = 256 * 1024;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "u8", into = "u8")]

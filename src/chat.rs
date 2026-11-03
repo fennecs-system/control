@@ -156,7 +156,7 @@ pub fn landing_mode(state: &State, lens: &str, topic: Option<&str>, improve: boo
     } else {
         Vec::new()
     };
-    html.push_str(&format!("<div class='conversation-empty'><h1>What are we working on?</h1>{context}</div><form class='conversation-composer' id='chat-list-new' method='post' action='/chats'><textarea name='message' maxlength='2000' rows='3' aria-label='First message' placeholder='Message Control…'>{}</textarea>{}{}<div class='composer-footer'>{}<div class='room-tabs' role='radiogroup' aria-label='Room'><label class='room-tab'><input type='radio' name='room' value='' checked><span>No room</span></label>{rooms}</div><button class='send-message' aria-label='Send message'>↑</button></div></form></section>",escape(&draft),command_menu(&Actor::LocalOperator),discussion.map(|(key,_)|format!("<input type='hidden' name='design_context' value='{key}'>")).unwrap_or_default(),crate::lens_library::choices(state,&selected,"chat-list-new"),rooms=crate::rooms::NAMES.iter().map(|room|format!("<label class='room-tab'><input type='radio' name='room' value='{room}'><span>#{room}</span></label>")).collect::<String>()));
+    html.push_str(&format!("<div class='conversation-empty'><h1>What are we working on?</h1>{context}</div><form class='conversation-composer' id='chat-list-new' method='post' action='/chats'><textarea name='message' rows='3' aria-label='First message' placeholder='Message Control…'>{}</textarea>{}{}<div class='composer-footer'>{}<div class='room-tabs' role='radiogroup' aria-label='Room'><label class='room-tab'><input type='radio' name='room' value='' checked><span>No room</span></label>{rooms}</div><button class='send-message' aria-label='Send message'>↑</button></div></form></section>",escape(&draft),command_menu(&Actor::LocalOperator),discussion.map(|(key,_)|format!("<input type='hidden' name='design_context' value='{key}'>")).unwrap_or_default(),crate::lens_library::choices(state,&selected,"chat-list-new"),rooms=crate::rooms::NAMES.iter().map(|room|format!("<label class='room-tab'><input type='radio' name='room' value='{room}'><span>#{room}</span></label>")).collect::<String>()));
     html
 }
 /// Re-show a rejected composer submission: escaped error above the form and the draft restored.
@@ -307,8 +307,8 @@ pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -
     let parent = state.chats.iter().find(|s| s.id == parent_id).ok_or("Chat not found.")?.clone();
     identity::authorize(&parent.actor, Action::Task)?;
     let objective = objective.trim();
-    if objective.is_empty() || objective.chars().count() > 2000 {
-        return Err("Enter an agent task of 1–2000 characters.");
+    if objective.is_empty() || control_context::limits::message_too_long(objective) {
+        return Err(control_context::limits::CHAT_MESSAGE_ERROR);
     }
     crate::scheduler::admit(&state.runtime)?;
     let conversation = crate::conversation::Conversation::of(state, &parent);
@@ -353,6 +353,9 @@ pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -
 }
 
 pub fn send(state: &mut State, id: &str, text: &str, source: &str) -> Result<(), &'static str> {
+    if control_context::limits::message_too_long(text) {
+        return Err(control_context::limits::CHAT_MESSAGE_ERROR);
+    }
     send_command(state,id,text,source)?;
     touch(state,id);
     Ok(())
@@ -473,8 +476,8 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
         return Ok(());
     }
     if let Some(question) = commands::tail(text.trim(), Kind::Btw) {
-        if question.trim().is_empty() || text.trim().chars().count() > 2000 {
-            return Err("Use /btw followed by a side question (up to 2000 characters).");
+        if question.trim().is_empty() {
+            return Err("Use /btw followed by a side question.");
         }
         let child = fork(state, id, question.trim(), source)?;
         let session = state.chats.iter_mut().find(|s| s.id == id).unwrap();
@@ -536,15 +539,15 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
     if steering.is_some_and(|s| s.trim().is_empty()) {
         return Err("Use /steer followed by a direction for the next turn.");
     }
-    if text.trim().chars().count() > 2000 {
-        return Err("Enter 1–2000 characters.");
+    if control_context::limits::message_too_long(text) {
+        return Err(control_context::limits::CHAT_MESSAGE_ERROR);
     }
     let (requested, objective) = if literal {
         (Action::Task, text)
     } else if let Some(direction) = steering {
         (Action::Task, direction.trim())
     } else {
-        discord::direct_command(text).ok_or("Enter 1–2000 characters.")?
+        discord::chat_command(text).ok_or(control_context::limits::CHAT_MESSAGE_ERROR)?
     };
     let action = if requested == Action::Improve || state.chats[index].improve_mode {
         Action::Improve
@@ -751,7 +754,7 @@ pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
     } else {
         ""
     };
-    Ok(format!("<section class='conversation'><div class='conversation-heading'>{}<h2>{}</h2>{mode}<span class='conversation-links'>{room}<a href='/chat/{id}/artifacts'>Artifacts ↗</a></span><details class='chat-requests'><summary>Requests <span class='request-count' aria-live='polite'></span></summary><aside class='request-drawer' aria-label='Pending requests'><iframe class='chat-requests-frame' data-live-chat src='/chat/{id}/requests' title='Pending requests'></iframe></aside></details></div><div class='conversation-main'><iframe class='chat-transcript' data-live-chat src='/chat/{id}/transcript#latest' title='Conversation'></iframe><form class='conversation-composer' id='session-message' method='post' action='/chat/{id}/messages'><textarea name='message' required maxlength='2000' rows='3' aria-label='Message' placeholder='Message Control…'></textarea>{}<div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></div></section>",crate::navigation::conversation_button(state,id),escape(&session.title),command_menu(&session.actor),crate::lens_library::choices(state,&lenses,"session-message")))
+    Ok(format!("<section class='conversation'><div class='conversation-heading'>{}<h2>{}</h2>{mode}<span class='conversation-links'>{room}<a href='/chat/{id}/artifacts'>Artifacts ↗</a></span><details class='chat-requests'><summary>Requests <span class='request-count' aria-live='polite'></span></summary><aside class='request-drawer' aria-label='Pending requests'><iframe class='chat-requests-frame' data-live-chat src='/chat/{id}/requests' title='Pending requests'></iframe></aside></details></div><div class='conversation-main'><iframe class='chat-transcript' data-live-chat src='/chat/{id}/transcript#latest' title='Conversation'></iframe><form class='conversation-composer' id='session-message' method='post' action='/chat/{id}/messages'><textarea name='message' required rows='3' aria-label='Message' placeholder='Message Control…'></textarea>{}<div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></div></section>",crate::navigation::conversation_button(state,id),escape(&session.title),command_menu(&session.actor),crate::lens_library::choices(state,&lenses,"session-message")))
 }
 fn command_text(text: &str) -> String {
     if let Some(command) = commands::parse(text) {
@@ -1079,6 +1082,39 @@ impl Checkpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn long_unicode_messages_reach_runs_and_reject_overflow_without_changes() {
+        let mut state = State::default();
+        let id = create(&mut state);
+        let text = format!("{} END", "🦊".repeat(control_context::limits::CHAT_MESSAGE_CHARS - 4));
+        tool(&mut state, "control.chat.send", &json!({"id":id,"message":text})).unwrap();
+        assert_eq!(state.chats[0].messages[0].text, text);
+        assert_eq!(state.runtime.runs[0].objective.as_str(), text);
+        for backend in [crate::backend::Backend::Codex, crate::backend::Backend::Claude] {
+            state.runtime.runs[0].backend = backend;
+            assert!(prompt(&state, &state.runtime.runs[0].id).unwrap().contains(&text));
+        }
+        let before = serde_json::to_vec(&state).unwrap();
+        for invalid in [format!("{text}x"), format!("/spawn {text}"), format!("/btw {text}")] {
+            assert!(tool(&mut state, "control.chat.send", &json!({"id":id,"message":invalid,"mode":"improve"})).is_err());
+            assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+        }
+        assert!(!render(&state, &id).unwrap().contains("maxlength='2000'"));
+        assert!(!landing_mode(&state, "engineering", None, false).contains("maxlength='2000'"));
+        assert_eq!(crate::tool_registry::lookup("control.chat.send").unwrap().definition["inputSchema"]["properties"]["message"]["maxLength"], control_context::limits::CHAT_MESSAGE_CHARS);
+    }
+
+    #[test]
+    fn long_command_objectives_keep_their_complete_tail() {
+        let text = format!("{} final constraint", "λ".repeat(4000));
+        for prefix in ["/spawn ", "/btw ", "/steer ", "/improve ", "!control improve "] {
+            let mut state = State::default();
+            let id = create(&mut state);
+            send(&mut state, &id, &format!("{prefix}{text}"), "test").unwrap();
+            assert_eq!(state.runtime.runs.last().unwrap().objective.as_str(), text, "{prefix}");
+        }
+        assert!(discord::direct_command(&text).is_none(), "Discord retains its transport-specific bound");
+    }
     #[test]
     fn conversation_index_preserves_first_matches_and_missing_run_replies() {
         let mut state=State::default();let id=create(&mut state);

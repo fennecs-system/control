@@ -527,6 +527,14 @@ mod tests {
     #[test]
     #[ignore = "requires built WASM and a local Chrome or Firefox WebDriver; isolated in-memory fixture, no credentials or models"]
     fn live_transcript_updates_without_navigation() {
+        browser_fixture(false);
+    }
+    #[test]
+    #[ignore = "requires built WASM and a local Chrome or Firefox WebDriver; isolated in-memory fixture, no credentials or models"]
+    fn live_long_messages_validate_and_deliver_without_truncation() {
+        browser_fixture(true);
+    }
+    fn browser_fixture(long_messages_only: bool) {
         use std::io::{BufRead, Read, Write};
         use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
         let (mut initial, chat) = crate::design::tests::paused();
@@ -635,6 +643,45 @@ mod tests {
         impl Drop for Browser {fn drop(&mut self){let _=self.client.delete(&self.url).send();}}
         let b=Browser{client,url:format!("{driver}/session/{id}")};
         b.post("/timeouts",json!({"implicit":5000,"pageLoad":15000}));
+        // Browser defaults differ; narrow layouts deliberately overlay the
+        // composer with the open request drawer. Use the same desktop size
+        // for both composer tests, then exercise responsive sizes below.
+        b.post("/window/rect",json!({"width":1280,"height":900}));
+        if long_messages_only {
+            b.post("/url", json!({"url":format!("{server}/chat/{chat}")}));
+            let input = b.element("textarea[data-enter-sends=true]");
+            let text = format!("{} END", "long instructions ".repeat(250));
+            b.post(&format!("/element/{input}/value"), json!({"text":text}));
+            assert_eq!(b.get(&format!("/element/{input}/property/value")), text);
+            let send = b.element(".send-message");
+            b.post(&format!("/element/{send}/click"), json!({}));
+            let started = Instant::now();
+            while b.get(&format!("/element/{input}/property/value")) != "" {
+                assert!(started.elapsed() < Duration::from_secs(10), "Long message was not acknowledged");
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            assert_eq!(state.lock().unwrap().chats.iter().find(|c|c.id==chat).unwrap().messages.last().unwrap().text, text);
+            for _ in 0..(control_context::limits::CHAT_MESSAGE_CHARS / 4000) {
+                b.post(&format!("/element/{input}/value"), json!({"text":"x".repeat(4000)}));
+            }
+            assert_eq!(b.get(&format!("/element/{input}/property/validationMessage")), "");
+            b.post(&format!("/element/{input}/value"), json!({"text":"x"}));
+            assert_eq!(b.get(&format!("/element/{input}/property/validationMessage")), control_context::limits::CHAT_MESSAGE_ERROR);
+            let count = state.lock().unwrap().chats.iter().find(|c|c.id==chat).unwrap().messages.len();
+            b.post(&format!("/element/{send}/click"), json!({}));
+            assert_eq!(state.lock().unwrap().chats.iter().find(|c|c.id==chat).unwrap().messages.len(), count);
+            assert_eq!(b.get(&format!("/element/{input}/property/value")).as_str().unwrap().len(), control_context::limits::CHAT_MESSAGE_CHARS + 1);
+            b.post(&format!("/element/{input}/value"), json!({"text":"\u{e003}"}));
+            assert_eq!(b.get(&format!("/element/{input}/property/validationMessage")), "");
+            b.post(&format!("/element/{send}/click"), json!({}));
+            let started = Instant::now();
+            while b.get(&format!("/element/{input}/property/value")) != "" {
+                assert!(started.elapsed() < Duration::from_secs(10), "Maximum message was not acknowledged");
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            assert_eq!(state.lock().unwrap().chats.iter().find(|c|c.id==chat).unwrap().messages.last().unwrap().text, "x".repeat(control_context::limits::CHAT_MESSAGE_CHARS));
+            return;
+        }
         let child={let mut state=state.lock().unwrap();let mut parent=String::new();
             for index in 0..25 {
                 parent=crate::chat::create(&mut state);state.chats.last_mut().unwrap().title=format!("History thread {index}");
@@ -922,6 +969,31 @@ mod tests {
         assert!(String::from_utf8(response).unwrap().to_ascii_lowercase().contains(&format!("location: /chat/{id}/project")));
         let mut response=Vec::new();send_message(&mut response,&mut state,&id,"engineering","",&crate::fields("message=%2Fcancel"),|_|Ok(()));
         assert!(String::from_utf8(response).unwrap().starts_with("HTTP/1.1 303 See Other"));
+    }
+    #[test]
+    fn long_form_messages_checkpoint_completely_or_restore_the_draft() {
+        let text = format!("{} END", "🦊".repeat(control_context::limits::CHAT_MESSAGE_CHARS - 4));
+        let encoded = format!("message={}%20END", "%F0%9F%A6%8A".repeat(control_context::limits::CHAT_MESSAGE_CHARS - 4));
+        let fields = crate::fields(&encoded);
+        for header in ["", "Accept: application/json\r\n"] {
+            let mut state = State::default();
+            let id = chat::create(&mut state);
+            let mut response = Vec::new();
+            send_message(&mut response, &mut state, &id, "none", header, &fields, |saved| {
+                let restored: State = serde_json::from_slice(&serde_json::to_vec(saved)?).unwrap();
+                assert_eq!(restored.chats[0].messages[0].text, text);
+                assert_eq!(restored.runtime.runs[0].objective.as_str(), text);
+                Ok(())
+            });
+            assert!(String::from_utf8(response).unwrap().starts_with(if header.is_empty() { "HTTP/1.1 303" } else { "HTTP/1.1 200" }));
+            let before = serde_json::to_vec(&state).unwrap();
+            let mut response = Vec::new();
+            send_message(&mut response, &mut state, &id, "none", header, &fields, |_| Err(std::io::Error::other("fixture disk full")));
+            let response = String::from_utf8(response).unwrap();
+            assert!(response.starts_with("HTTP/1.1 400"));
+            if header.is_empty() { assert!(response.contains(&text)); }
+            assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+        }
     }
 
     #[test]

@@ -94,6 +94,9 @@ Run `./target/release/control <command>`:
 | `browser capture FILE [WIDTH HEIGHT]` | Capture an offline HTML preview. |
 | `--help` | List commands, including Claude and offline federation helpers. |
 
+Web, TUI and operator MCP chats accept messages up to 20,000 Unicode characters.
+Discord messages and shared room posts keep their separate 2,000-character limits.
+
 These chat commands work on the web, in the TUI and in authorized Discord DMs:
 
 | Command | Purpose |
