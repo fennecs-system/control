@@ -475,6 +475,10 @@ fn start_with(state: Arc<Mutex<State>>, execute: fn(Arc<Mutex<State>>, Task)) ->
                         if let Err(message) = crate::spawning::reconcile(&mut s, storage::save) {
                             s.runtime.notice = message.into();
                         }
+                        // Frontends hear about finished and waiting runs through the outbox.
+                        if crate::history::emit(&mut s, storage::save).is_err() {
+                            s.runtime.notice = "Could not record deliveries; they will be retried.".into();
+                        }
                         let Some(index) = checkpoint_next(&mut s, storage::save) else {
                             break;
                         };

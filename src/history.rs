@@ -36,8 +36,10 @@ pub(crate) fn path(chat: Option<&str>) -> io::Result<PathBuf> {
 }
 
 fn with<T>(chat: Option<&str>, f: impl FnOnce(&mut FileJournal) -> io::Result<T>) -> io::Result<T> {
+    with_path(path(chat)?, f)
+}
+fn with_path<T>(path: PathBuf, f: impl FnOnce(&mut FileJournal) -> io::Result<T>) -> io::Result<T> {
     static JOURNALS: OnceLock<Mutex<HashMap<PathBuf, FileJournal>>> = OnceLock::new();
-    let path = path(chat)?;
     let mut open = JOURNALS.get_or_init(Mutex::default).lock().map_err(|_| io::Error::other("History unavailable"))?;
     if !open.contains_key(&path) {
         if open.len() >= OPEN {
@@ -113,6 +115,19 @@ pub(crate) fn finished(status: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// A chat whose journal no parallel test shares (clock-based ids can collide).
+    fn own(state: &mut crate::State, chat: &str, name: &str) -> String {
+        let id = format!("c-test-{name}");
+        for session in state.chats.iter_mut().filter(|s| s.id == chat) {
+            session.id = id.clone();
+        }
+        for run in state.runtime.runs.iter_mut().filter(|r| r.chat_id.as_deref() == Some(chat)) {
+            run.chat_id = Some(id.clone());
+        }
+        let _ = std::fs::remove_file(path(Some(&id)).unwrap());
+        id
+    }
+
     fn event(id: &str) -> Activity {
         Activity { id: id.into(), kind: "command_execution".into(), text: "cargo test".into(), output: "ok".repeat(50), status: "completed".into() }
     }
@@ -122,6 +137,7 @@ mod tests {
         let mut state = crate::State::default();
         let chat = crate::chat::create(&mut state);
         crate::chat::send(&mut state, &chat, "Build it", "test").unwrap();
+        let chat = own(&mut state, &chat, "attempts");
         let run = &mut state.runtime.runs[0];
         let mut attempt = Attempt::new();
         attempt.activity = vec![event("a"), event("b")];
@@ -148,6 +164,7 @@ mod tests {
         let mut state = crate::State::default();
         let chat = crate::chat::create(&mut state);
         crate::chat::send(&mut state, &chat, "Write the long report", "test").unwrap();
+        own(&mut state, &chat, "text");
         *state.runtime.runs[0].result = "A long finished answer. ".repeat(200);
         state.runtime.runs[0].status = "completed".into();
         assert!(archive_finished(&mut state));
@@ -168,10 +185,34 @@ mod tests {
     }
 
     #[test]
+    fn deliveries_are_emitted_once_per_status_and_retried_after_a_failed_save() {
+        let mut state = crate::State::default();
+        let chat = crate::chat::create(&mut state);
+        crate::chat::send(&mut state, &chat, "Tell me when done", "test").unwrap();
+        let chat = own(&mut state, &chat, "outbox");
+        let outbox = outbox_path().unwrap();
+        let events = || control::outbox::read(&outbox, 0).unwrap().0.into_iter().filter(|e| e.chat.as_deref() == Some(chat.as_str())).collect::<Vec<_>>();
+        emit(&mut state, |_| Ok(())).unwrap();
+        assert!(events().is_empty(), "queued runs are not deliverable");
+        state.runtime.runs[0].status = "waiting".into();
+        emit(&mut state, |_| Err(io::Error::other("disk"))).unwrap_err();
+        assert_eq!(state.runtime.runs[0].emitted, None, "a failed save re-emits next pass");
+        emit(&mut state, |_| Ok(())).unwrap();
+        emit(&mut state, |_| Ok(())).unwrap();
+        state.runtime.runs[0].status = "completed".into();
+        *state.runtime.runs[0].result = "Finished.\n\nReview workspace: x".into();
+        emit(&mut state, |_| Ok(())).unwrap();
+        let statuses: Vec<_> = events().iter().map(|e| (e.status.clone(), e.report.clone())).collect();
+        assert_eq!(statuses.iter().filter(|(s, _)| s == "waiting").count(), 2, "at least once: the failed save's event and its retry");
+        assert_eq!(statuses.last(), Some(&("completed".to_owned(), "Finished.".to_owned())), "one event per new status, without the review footer");
+    }
+
+    #[test]
     fn finishing_a_run_is_one_transaction_with_its_save() {
         let mut state = crate::State::default();
         let chat = crate::chat::create(&mut state);
         crate::chat::send(&mut state, &chat, "Finish atomically", "test").unwrap();
+        let chat = own(&mut state, &chat, "transaction");
         let mut attempt = Attempt::new();
         attempt.activity = vec![event("x")];
         state.runtime.runs[0].attempts.push(attempt);
@@ -396,4 +437,54 @@ pub(crate) fn recover(state: &crate::State) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+fn outbox_path() -> io::Result<PathBuf> {
+    #[cfg(test)]
+    return Ok(std::env::temp_dir().join(format!("control-history-test-{}", std::process::id())).join("_outbox.jsonl"));
+    #[cfg(not(test))]
+    control::outbox::path().map_err(io::Error::other)
+}
+/// Appends a delivery event for every run that reached a new deliverable
+/// status, for frontends following the outbox. Events are at least once; the
+/// caller's save records what was emitted, and followers deduplicate by run
+/// and status.
+pub(crate) fn emit(state: &mut crate::State, save: impl FnOnce(&crate::State) -> io::Result<()>) -> io::Result<()> {
+    use control::outbox::{Change, DELIVERABLE, Delivery};
+    let mut emitted = Vec::new();
+    for (index, run) in state.runtime.runs.iter().enumerate() {
+        if !DELIVERABLE.contains(&run.status.as_str()) || run.emitted.as_deref() == Some(run.status.as_str()) {
+            continue;
+        }
+        let change = run.attempts.last().and_then(|attempt| {
+            activity(run.chat_id.as_deref(), attempt).iter().rev().find(|e| e.kind == "file_change" && !e.output.is_empty()).map(|e| Change { text: e.text.clone(), output: e.output.clone() })
+        });
+        let delivery = Delivery {
+            run: run.id.clone(),
+            source: run.source.clone(),
+            chat: run.chat_id.clone(),
+            actor: run.actor.clone(),
+            action: run.action,
+            status: run.status.clone(),
+            report: run.result.split_once("\n\nReview workspace: ").map_or(run.result.as_str(), |(reply, _)| reply).to_owned(),
+            question: serde_json::to_value(&run.question).unwrap_or_default(),
+            change,
+        };
+        let line = serde_json::to_vec(&delivery).map_err(io::Error::other)?;
+        with_path(outbox_path()?, |journal| journal.append(&line))?;
+        emitted.push((index, run.emitted.clone()));
+    }
+    if emitted.is_empty() {
+        return Ok(());
+    }
+    for (index, _) in &emitted {
+        let run = &mut state.runtime.runs[*index];
+        run.emitted = Some(run.status.clone());
+    }
+    save(state).inspect_err(|_| {
+        // Re-emitted next pass; followers deduplicate by run and status.
+        for (index, previous) in emitted {
+            state.runtime.runs[index].emitted = previous;
+        }
+    })
 }

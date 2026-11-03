@@ -1,6 +1,6 @@
 use crate::identity::{Action, Actor, DiscordId, DmBinding, DmBindings, Policy};
 use crate::{config, discord, identity};
-use super::{permissions as discord_permissions, delivery::{Snapshot, Run}};
+use super::{permissions as discord_permissions, delivery::Snapshot};
 use reqwest::{
     blocking::Client,
     header::{HeaderMap, HeaderValue, AUTHORIZATION},
@@ -119,19 +119,15 @@ fn design_report(question: &Value) -> Option<String> {
     }
     Some(report)
 }
-fn delivery_message(run: &Run, status: &str, link: &str, report: &str) -> String {
+fn delivery_message(change: Option<&crate::outbox::Change>, status: &str, link: &str, report: &str) -> String {
     let prefix=format!("Control: {status}.\nContinue on this laptop: {link}\n\n");
-    let edits = if status == "waiting" { None } else { run.change() };
-    let suffix=edits.as_ref().map(|event|format!("\n\nChanges · {}\n{}",event.text.chars().take(100).collect::<String>(),crate::diff::discord_preview(&event.output))).unwrap_or_default();
+    let edits = if status == "waiting" { None } else { change };
+    let suffix=edits.map(|event|format!("\n\nChanges · {}\n{}",event.text.chars().take(100).collect::<String>(),crate::diff::discord_preview(&event.output))).unwrap_or_default();
     let budget=1800usize.saturating_sub(prefix.chars().count()+suffix.chars().count());
     let body=if report.chars().count()>budget {
         format!("{}\n… Full reply in chat.",report.chars().take(budget.saturating_sub(23)).collect::<String>())
     }else{report.to_owned()};
     format!("{prefix}{body}{suffix}")
-}
-fn cancelled_receipts(state: &Snapshot) -> Vec<String> {
-    state.runtime.runs.iter().filter(|run| run.status == "cancelled")
-        .map(|run| format!("{}:cancelled", run.id)).collect()
 }
 fn now() -> u64 {
     SystemTime::now()
@@ -607,12 +603,14 @@ impl Bridge {
             }
         }
     }
+    /// Follows Control's delivery outbox from this bridge's cursor; receipts make
+    /// at-least-once events exactly-once messages.
     fn deliver(&self, routes: &[Route], outbound: &mut Outbound) -> Result<(), &'static str> {
-        let state = self.snapshot()?;
+        let (events, cursor) = crate::outbox::read(&crate::outbox::path()?, outbound.cursor).map_err(|_| "Could not read the delivery outbox.")?;
         let mut authorize = identity::authorizer();
         {
-            for run in &state.runtime.runs {
-                if !run.source.starts_with("discord:") && run.chat_id.is_none()
+            for run in &events {
+                if !run.source.starts_with("discord:") && run.chat.is_none()
                 {
                     continue;
                 }
@@ -635,22 +633,23 @@ impl Bridge {
                 if !["completed", "blocked", "failed", "interrupted", "waiting", "cancelled"].contains(&status) {
                     continue;
                 }
-                let id = run.id.as_str();
+                let id = run.run.as_str();
                 let receipt = format!("{id}:{status}");
                 if outbound.delivered.contains(&receipt) {
                     continue;
                 }
                 let decision = (status == "waiting").then(||design_report(&run.question)).flatten();
-                let stored = run.report();
                 let report = if let Some(report) = decision.as_deref() {
                     report
                 } else if action == Action::Improve && !direct {
                     "Architect report: open the authenticated operator website."
+                } else if run.report.is_empty() {
+                    "No report was produced."
                 } else {
-                    stored.as_deref().unwrap_or("No report was produced.")
+                    run.report.as_str()
                 };
-                let link = discord::session_link(actor, run.chat_id.as_deref()).unwrap_or_default();
-                if self.attempt(&receipt, channel, &delivery_message(run,status,&link,report), outbound) {
+                let link = discord::session_link(actor, run.chat.as_deref()).unwrap_or_default();
+                if self.attempt(&receipt, channel, &delivery_message(run.change.as_ref(),status,&link,report), outbound) {
                     outbound.delivered.insert(receipt);
                     checkpoint(
                         config::state("discord-delivered.json")?,
@@ -660,6 +659,7 @@ impl Bridge {
                 }
             }
         }
+        outbound.cursor = cursor;
         Ok(())
     }
     /// Worker-queued notices (for example a DM that could not become a task).
@@ -689,6 +689,9 @@ impl Bridge {
 }
 #[derive(Default)]
 struct Outbound {
+    /// Byte offset into the delivery outbox; starts at 0 on launch and relies
+    /// on receipts to skip what was already sent.
+    cursor: u64,
     delivered: HashSet<String>,
     undelivered: HashSet<String>,
     backoff: HashMap<String, (u64, u32)>,
@@ -727,11 +730,6 @@ fn run(check_only: bool) -> Result<(), &'static str> {
         undelivered: load_json(config::state("discord-undelivered.json")?),
         ..Default::default()
     };
-    if outbound.delivered.insert("migration:cancelled".into()) {
-        // Cancellations became deliverable later; do not announce historical ones.
-        outbound.delivered.extend(cancelled_receipts(&*bridge.snapshot()?));
-        checkpoint(config::state("discord-delivered.json")?, &serde_json::to_vec(&outbound.delivered).map_err(|_| "Could not encode delivery progress.")?)?;
-    }
     let mut refresh = now();
     loop {
         if now().saturating_sub(refresh) >= 60 {
@@ -843,12 +841,12 @@ mod tests {
     }
     #[test]
     fn delivery_reserves_space_for_actual_changes_without_greening_or_losing_link() {
-        let run: Run=serde_json::from_value(json!({"attempts":[{"activity":[{"kind":"file_change","text":"1 file · +1 −1","output":"@@ -1 +1 @@\n-old\n+new\n"}]}]})).unwrap();
-        let message=delivery_message(&run,"completed","http://localhost/chat/test",&"reply ".repeat(1000));
+        let change=crate::outbox::Change{text:"1 file · +1 −1".into(),output:"@@ -1 +1 @@\n-old\n+new\n".into()};
+        let message=delivery_message(Some(&change),"completed","http://localhost/chat/test",&"reply ".repeat(1000));
         assert!(message.chars().count()<=1800);
         assert!(message.contains("http://localhost/chat/test") && message.contains("```text\n"));
         assert!(message.contains("-old\n+new") && message.ends_with("```"));
-        assert!(!delivery_message(&run,"waiting","link","Question").contains("```"));
+        assert!(!delivery_message(Some(&change),"waiting","link","Question").contains("```"));
     }
     #[test]
     fn design_reports_keep_answer_identity_and_all_options_within_dm_budget() {
@@ -889,7 +887,7 @@ mod tests {
         assert!(incoming(&row, &route, id("99")).is_none());
     }
     #[test]
-    fn oversized_and_attachment_only_dms_get_a_reason_and_cancellations_are_seeded() {
+    fn oversized_and_attachment_only_dms_get_a_reason() {
         let route = Route { channel: id("100"), recipient: Some(id("2")) };
         let mut row = json!({"id":"10","channel_id":"100","author":{"id":"2"},"content":"x".repeat(2001)});
         assert!(incoming(&row, &route, id("99")).is_none());
@@ -899,8 +897,6 @@ mod tests {
         assert!(rejected(&row, &route, id("99")).unwrap().contains("attachments"));
         row["author"]["id"] = json!("3");
         assert!(rejected(&row, &route, id("99")).is_none());
-        let state = json!({"runtime":{"runs":[{"id":"r1","status":"cancelled"},{"id":"r2","status":"completed"}]}});
-        assert_eq!(cancelled_receipts(&serde_json::from_value(state).unwrap()), ["r1:cancelled"]);
     }
     #[test]
     fn state_cache_reparses_only_after_the_file_changes() {

@@ -44,12 +44,17 @@ small indexes into journals), so a save costs the active set, not the past.
    position, and saved in full again after any edit. A finished run is one
    journal line (text and last activity) committed atomically with its save:
    a failed save truncates the line, and load drops lines no save referenced.
-4. **D — conversation history interface**: chat messages and results live in
-   the journal behind one frontend-neutral interface (append, read a range or
-   tail, follow). Web, TUI, Discord and future bridges (Telegram, Matrix, Stoat)
-   are adapters over it and never read storage files; Discord stops reading
-   `state.json` directly. The transcript reads through `lens::cut`, and
-   summaries make history unbounded.
+4. **D1 — conversation interface** (`src/conversation.rs`): the one way to read a
+   chat. `Conversation` indexes its runs once and is a comonad `Space`;
+   `Compactor` chooses what a model turn sees: `Recent` (default, the
+   existing 20,000-character window), `Passthrough` (provider compaction
+   decides) or `Lens` (unbounded history over `lens::cut`, older blocks shown
+   by summaries through a `Summaries` hook). Set per node in `history.json`.
+5. **D2 — outbox** (`src/outbox.rs`, `history/_outbox.jsonl`): typed delivery
+   events Control appends when a run finishes or waits; frontends (Discord now;
+   Telegram, Matrix, Stoat later) follow it with their own cursor and never
+   read state or chat journals. Events are at least once; followers deduplicate
+   by run and status.
 
 Each phase is profiled with the 15-turn workload (`fifteen_turn_conversations_workload`).
 
