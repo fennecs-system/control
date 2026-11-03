@@ -253,6 +253,10 @@ fn arm_at(state: &mut State, chat: &str, now: Now) -> Result<bool, &'static str>
     if sources.is_empty() {
         return Err("Start a watch before arming a wake.");
     }
+    for w in state.watches.iter_mut().filter(|w| w.chat == chat) {
+        w.lines = 0;
+        w.exits.clear();
+    }
     if state.bots.supervisor.definitions().next().is_none() {
         state.bots.room_cursor = state.collective.posts.len();
     }
@@ -1108,11 +1112,12 @@ mod tests {
         state.chats[0].room = None;
         assert!(arm_at(&mut state, &chat, Now(0)).is_err(), "a wake needs a watch");
         watching(&mut state, &chat, "w-server");
+        state.watches[0].lines = 4;
         assert_eq!(arm_at(&mut state, &chat, Now(0)), Ok(true));
         assert_eq!(arm_at(&mut state, &chat, Now(0)), Ok(false), "already armed");
         assert!(status(&state, &chat).unwrap().starts_with("Wake once"));
         reconcile_at(&mut state, 1, |_| Ok(())).unwrap();
-        assert!(bot_runs(&state).is_empty(), "no output yet");
+        assert!(bot_runs(&state).is_empty(), "output from before the arm does not spend the wake");
         let w = state.watches.iter_mut().find(|w| w.id == "w-server").unwrap();
         (w.lines, w.line_seq) = (1, 1);
         reconcile_at(&mut state, 2, |_| Ok(())).unwrap();
