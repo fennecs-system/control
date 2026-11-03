@@ -52,19 +52,6 @@ fn with_path<T>(path: PathBuf, f: impl FnOnce(&mut FileJournal) -> io::Result<T>
     f(open.get_mut(&path).expect("just opened"))
 }
 
-/// Moves a finished attempt's activity into its chat's journal. On failure the
-/// activity stays in state, so nothing is lost.
-pub(crate) fn archive(chat: Option<&str>, run: &str, index: usize, attempt: &mut Attempt) -> io::Result<()> {
-    if attempt.activity.is_empty() || attempt.journal.is_some() {
-        return Ok(());
-    }
-    let entry = Entry { run: run.into(), attempt: index, activity: Cow::Borrowed(&attempt.activity) };
-    let line = serde_json::to_vec(&entry).map_err(io::Error::other)?;
-    attempt.journal = Some(with(chat, |journal| journal.append(&line))?);
-    attempt.activity.clear();
-    Ok(())
-}
-
 /// An attempt's activity, from state while it runs or from its journal after.
 pub(crate) fn activity<'a>(chat: Option<&str>, attempt: &'a Attempt) -> Cow<'a, [Activity]> {
     match attempt.journal {
@@ -89,23 +76,6 @@ pub(crate) fn hydrated(chat: Option<&str>, attempts: &[Attempt]) -> Vec<Attempt>
     }).collect()
 }
 
-/// Archives every finished run's attempts, e.g. after loading older state or
-/// recovering runs a crash interrupted. Returns whether anything moved.
-pub(crate) fn archive_finished(state: &mut crate::State) -> bool {
-    let mut moved = false;
-    for run in state.runtime.runs.iter_mut().filter(|run| finished(&run.status)) {
-        if run.objective.at.is_none() || run.result.at.is_none() {
-            moved |= archive_text(run).is_ok();
-        }
-        let (chat, id) = (run.chat_id.clone(), run.id.clone());
-        for (index, attempt) in run.attempts.iter_mut().enumerate() {
-            if !attempt.activity.is_empty() && attempt.journal.is_none() {
-                moved |= archive(chat.as_deref(), &id, index, attempt).is_ok();
-            }
-        }
-    }
-    moved
-}
 /// Statuses after which an attempt's activity no longer changes.
 pub(crate) fn finished(status: &str) -> bool {
     !matches!(status, "queued" | "running" | "cancelling" | "waiting")
@@ -142,10 +112,8 @@ mod tests {
         let mut attempt = Attempt::new();
         attempt.activity = vec![event("a"), event("b")];
         run.attempts.push(attempt);
-        run.status = "running".into();
-        assert!(!archive_finished(&mut state), "live attempts stay in state");
-        state.runtime.runs[0].status = "completed".into();
-        assert!(archive_finished(&mut state));
+        run.status = "completed".into();
+        archive_run(&mut state.runtime.runs[0]).unwrap();
         let attempt = &state.runtime.runs[0].attempts[0];
         assert!(attempt.activity.is_empty() && attempt.journal.is_some());
         let saved = serde_json::to_string(&state).unwrap();
@@ -153,7 +121,6 @@ mod tests {
         let read = activity(Some(&chat), attempt);
         assert_eq!(read.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["a", "b"]);
         assert_eq!(hydrated(Some(&chat), &state.runtime.runs[0].attempts)[0].activity.len(), 2);
-        assert!(!archive_finished(&mut state), "archiving is idempotent");
         let line = std::fs::read_to_string(path(Some(&chat)).unwrap()).unwrap();
         let entry: serde_json::Value = serde_json::from_str(line.lines().last().unwrap()).unwrap();
         assert_eq!((entry["run"].as_str(), entry["attempt"].as_u64()), (Some(state.runtime.runs[0].id.as_str()), Some(0)), "inspectable JSON lines");
@@ -167,7 +134,7 @@ mod tests {
         own(&mut state, &chat, "text");
         *state.runtime.runs[0].result = "A long finished answer. ".repeat(200);
         state.runtime.runs[0].status = "completed".into();
-        assert!(archive_finished(&mut state));
+        archive_run(&mut state.runtime.runs[0]).unwrap();
         let saved = persisting(|| serde_json::to_string(&state).unwrap());
         let runs = persisting(|| serde_json::to_string(&state.runtime.runs).unwrap());
         assert!(!runs.contains("long finished answer") && !runs.contains("Write the long report"), "a save carries positions, not run text");
@@ -347,18 +314,6 @@ struct Text<'a> {
     result: Cow<'a, str>,
     context: Cow<'a, Option<control_context::Resolved>>,
     continuation: Cow<'a, Option<crate::design::Continuation>>,
-}
-/// Moves a finished run's text into its chat's journal; the run keeps it in
-/// memory and saves only the position until the text changes.
-pub(crate) fn archive_text(run: &mut crate::runtime::Run) -> io::Result<()> {
-    if !finished(&run.status) || (run.objective.at.is_some() && run.result.at.is_some()) {
-        return Ok(());
-    }
-    let text = Text { run: Cow::Borrowed(&run.id), objective: Cow::Borrowed(&run.objective), result: Cow::Borrowed(&run.result), context: Cow::Borrowed(&run.context), continuation: Cow::Borrowed(&run.continuation) };
-    let line = serde_json::to_vec(&text).map_err(io::Error::other)?;
-    let at = Some(with(run.chat_id.as_deref(), |journal| journal.append(&line))?);
-    (run.objective.at, run.result.at, run.context.at, run.continuation.at) = (at, at, at, at);
-    Ok(())
 }
 /// Fills journal-backed run text back in after loading.
 pub(crate) fn hydrate_text(state: &mut crate::State) -> io::Result<()> {

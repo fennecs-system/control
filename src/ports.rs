@@ -631,11 +631,8 @@ pub(crate) fn http_with_save(
                 if request.node.as_str() != crate::config::node_id().map_err(fail)? {
                     return Err(fail("Port belongs to another node"));
                 }
+                // The image must speak this host's relay version, for any lifetime.
                 crate::services::relay_capable(&service)?;
-                if service.resource.lease.is_until_stopped() && fields.get("seconds").is_some_and(|v|v == "-1") {
-                    let marker = crate::engine::query(&["image","inspect",service.resource.image.as_str(),"--format","{{index .Config.Labels \"dev.control.tcp-relay\"}}"])?;
-                    if !matches!(marker.trim(),"3"|"4") {return Err(fail("Rebuild worker images before approving service-lifetime ports"));}
-                }
                 crate::services::port_binding(&service, &request.container)?;
                 let allow_loopback = fields.get("loopback").is_some_and(|v| v == "yes");
                 let pinned = match peer {
