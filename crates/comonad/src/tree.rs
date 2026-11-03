@@ -5,6 +5,8 @@ use crate::store::Space;
 
 const NONE: u32 = u32::MAX;
 
+/// An index into the tree that produced it. Like any arena index it carries no
+/// tree identity: another tree reads whatever node has the same index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NodeId(u32);
 impl NodeId {
@@ -50,7 +52,7 @@ impl<T> Tree<T> {
         self.items.is_empty()
     }
     /// Appends `item` as the last child of `parent`, or as a new root.
-    /// Panics if `parent` is not a node of this tree or the arena is full.
+    /// Panics if `parent` is out of range or the arena is full.
     pub fn push(&mut self, parent: Option<NodeId>, item: T) -> NodeId {
         let id = u32::try_from(self.items.len()).ok().filter(|id| *id != NONE).expect("tree arena is full");
         let parent = parent.map_or(NONE, |p| {

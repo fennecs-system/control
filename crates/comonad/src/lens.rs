@@ -43,7 +43,8 @@ impl Block {
     #[inline]
     pub fn parent(&self) -> Option<Block> {
         let level = self.level.checked_add(1).filter(|l| *l < 64)?;
-        Some(Block { start: self.start & !((1u64 << level) - 1), level })
+        let start = self.start & !((1u64 << level) - 1);
+        start.checked_add(1 << level).map(|_| Block { start, level })
     }
 }
 
@@ -140,5 +141,6 @@ mod tests {
         let [l, r] = b.children().unwrap();
         assert_eq!((l.parent(), r.parent(), l.end(), r.start), (Some(b), Some(b), r.start, 576));
         assert!(Block { start: 3, level: 0 }.children().is_none());
+        assert!(cut(u64::MAX, 0).next().unwrap().parent().is_none(), "no parent past the end of u64");
     }
 }
