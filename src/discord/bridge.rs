@@ -618,6 +618,10 @@ impl Bridge {
     /// Follows Control's delivery outbox from this bridge's cursor; receipts make
     /// at-least-once events exactly-once messages.
     fn deliver(&self, routes: &[Route], outbound: &mut Outbound) -> Result<(), &'static str> {
+        // Receipts that could not be saved are retried until they are.
+        if outbound.unsaved {
+            let _ = outbound.save_receipts();
+        }
         let events = crate::outbox::read(&crate::outbox::path()?, outbound.cursor).map_err(|_| "Could not read the delivery outbox.")?;
         let mut authorize = identity::authorizer();
         // Events parked until their authorization or route is available again;
@@ -682,11 +686,8 @@ impl Bridge {
                     return Ok(Outcome::Stop);
                 }
                 outbound.delivered.insert(receipt);
-                checkpoint(
-                    config::state("discord-delivered.json")?,
-                    &serde_json::to_vec(&outbound.delivered)
-                        .map_err(|_| "Could not encode delivery progress.")?,
-                )?;
+                outbound.unsaved = true;
+                let _ = outbound.save_receipts();
                 Ok(Outcome::Done)
             }
         }
@@ -735,9 +736,19 @@ struct Outbound {
     cursor: crate::outbox::Cursor,
     /// Events waiting for authorization or a route, at most `PARKED`.
     parked: Vec<crate::outbox::Delivery>,
+    /// Delivered receipts not yet saved; saving is retried every poll.
+    unsaved: bool,
     delivered: HashSet<String>,
     undelivered: HashSet<String>,
     backoff: HashMap<String, (u64, u32)>,
+}
+impl Outbound {
+    fn save_receipts(&mut self) -> Result<(), &'static str> {
+        let bytes = serde_json::to_vec(&self.delivered).map_err(|_| "Could not encode delivery progress.")?;
+        checkpoint(config::state("discord-delivered.json")?, &bytes)?;
+        self.unsaved = false;
+        Ok(())
+    }
 }
 fn run(check_only: bool) -> Result<(), &'static str> {
     Policy::load()?;
