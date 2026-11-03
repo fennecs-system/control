@@ -6,7 +6,7 @@ mod tools;
 pub use tools::{BotCall, BotOps, Tools};
 use crate::runtime::RunKind;
 use crate::{State, identity, tool_registry::AttemptRef};
-use control_bot::{BotId, Budget, ChatId, Definition, Event, Source, Status, Topic, TurnId};
+use control_bot::{BotId, Budget, ChatId, Definition, Event, Restart, Source, Status, Topic, TurnId};
 use control_effect::machine::{Machine, Now, Planned};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -141,7 +141,8 @@ pub(crate) fn status(state: &State, chat: &str) -> Option<String> {
         Status::Paused => "paused",
         Status::Stopping => "stopping",
     };
-    Some(format!("Bot · {state} · {sources}"))
+    let label = if definition.restart == Restart::Temporary { "Wake once" } else { "Bot" };
+    Some(format!("{label} · {state} · {sources}"))
 }
 
 /// `/bot on [every N]`, `/bot off`, `/bot pause` and `/bot resume`. Reached only
@@ -216,6 +217,7 @@ fn start(state: &mut State, chat: &str, minutes: Option<u64>, room: bool, now: N
         chat: ChatId(chat.into()),
         sources,
         budget: Budget { cooldown_ms: COOLDOWN_MS, window_ms: WINDOW_MS, turns_per_window: TURNS_PER_WINDOW },
+        restart: Restart::Permanent,
     };
     definition.validate()?;
     let effects = state.bots.supervisor.step(Event::Define(definition), now);
@@ -236,6 +238,34 @@ pub(crate) fn link_room(state: &mut State, chat: &str, name: &str) -> Result<(),
     let effects = state.bots.supervisor.step(Event::Define(Definition { sources, ..definition }), Now(now_ms()));
     record(state, effects);
     Ok(())
+}
+
+/// Arms a one-shot wake: a temporary bot on the chat's watches that ends after
+/// one turn. Returns false when the chat already runs as a bot.
+pub(crate) fn arm(state: &mut State, chat: &str) -> Result<bool, &'static str> {
+    arm_at(state, chat, Now(now_ms()))
+}
+fn arm_at(state: &mut State, chat: &str, now: Now) -> Result<bool, &'static str> {
+    if defined(state, chat) {
+        return Ok(false);
+    }
+    let sources = watch_sources(state, chat);
+    if sources.is_empty() {
+        return Err("Start a watch before arming a wake.");
+    }
+    if state.bots.supervisor.definitions().next().is_none() {
+        state.bots.room_cursor = state.collective.posts.len();
+    }
+    let definition = Definition {
+        bot: bot(chat),
+        chat: ChatId(chat.into()),
+        sources,
+        budget: Budget { cooldown_ms: 0, window_ms: WINDOW_MS, turns_per_window: 1 },
+        restart: Restart::Temporary,
+    };
+    let effects = state.bots.supervisor.step(Event::Define(definition), now);
+    record(state, effects);
+    Ok(true)
 }
 
 /// Every active watch a chat owns is a topic of its bot; `pending` also keeps
@@ -1070,6 +1100,33 @@ mod tests {
         state.watches.iter_mut().find(|w| w.id == "w-logs").unwrap().stopped = true;
         reconcile_at(&mut state, 40_002, |_| Ok(())).unwrap();
         assert_eq!(subscribed(&state, &chat), ["w-game"], "stopped watches unsubscribe it");
+    }
+
+    #[test]
+    fn an_armed_wake_fires_once_on_watch_output_then_ends() {
+        let (mut state, chat) = fixture();
+        state.chats[0].room = None;
+        assert!(arm_at(&mut state, &chat, Now(0)).is_err(), "a wake needs a watch");
+        watching(&mut state, &chat, "w-server");
+        assert_eq!(arm_at(&mut state, &chat, Now(0)), Ok(true));
+        assert_eq!(arm_at(&mut state, &chat, Now(0)), Ok(false), "already armed");
+        assert!(status(&state, &chat).unwrap().starts_with("Wake once"));
+        reconcile_at(&mut state, 1, |_| Ok(())).unwrap();
+        assert!(bot_runs(&state).is_empty(), "no output yet");
+        let w = state.watches.iter_mut().find(|w| w.id == "w-server").unwrap();
+        (w.lines, w.line_seq) = (1, 1);
+        reconcile_at(&mut state, 2, |_| Ok(())).unwrap();
+        assert_eq!(bot_runs(&state).len(), 1);
+        let w = state.watches.iter_mut().find(|w| w.id == "w-server").unwrap();
+        (w.lines, w.line_seq) = (5, 6);
+        let turn = state.runtime.runs.iter().position(|run| run.bot_turn.is_some()).unwrap();
+        state.runtime.runs[turn].status = "completed".into();
+        reconcile_at(&mut state, 3, |_| Ok(())).unwrap();
+        assert!(!defined(&state, &chat), "the wake ends with its turn");
+        reconcile_at(&mut state, 4, |_| Ok(())).unwrap();
+        assert_eq!(bot_runs(&state).len(), 1, "later output does not wake an unarmed chat");
+        command_at(&mut state, &chat, "on", Now(5)).unwrap();
+        assert_eq!(arm_at(&mut state, &chat, Now(5)), Ok(false), "a bot already wakes on output");
     }
 
     #[test]

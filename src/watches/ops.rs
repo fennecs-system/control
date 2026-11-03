@@ -43,6 +43,14 @@ fn runner(service: &crate::services::Service, arguments: &[&str], input: &str) -
     }
 }
 
+fn wakes(armed: bool, bot: bool) -> &'static str {
+    match (armed, bot) {
+        (true, _) => "The next line or exit from this chat's watches wakes it once, after the current turn. End your turn now.",
+        (false, true) => "New lines and exits already wake this chat.",
+        (false, false) => "This chat is not a bot; pass wake=true or call control_watch_wake to be woken once, or read events with control_watch_events.",
+    }
+}
+
 pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call: WatchCall) -> io::Result<Value> {
     let node = node()?;
     let caller = {
@@ -61,7 +69,7 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
     let reachable = |state: &State, watch: &Watch| watch.chat == chat
         || state.services.iter().any(|service| service.resource.id.as_str() == watch.service && crate::services::accessible(service, &node, &caller));
     match call {
-        WatchCall::Start { service_id, name, command, permanent } => {
+        WatchCall::Start { service_id, name, command, permanent, wake } => {
             let id = format!("w-{}", digest(&[attempt.run, attempt.generation, attempt.nonce, &service_id, &name]));
             let service = {
                 let state = shared.lock().map_err(|_| fail("State unavailable"))?;
@@ -90,19 +98,38 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
             let (finished, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut state.watches).into_iter().partition(|old| old.chat == chat && !old.active());
             state.watches = kept;
             state.watches.push(watch);
-            if let Err(error) = crate::storage::save(&state) {
-                state.watches.retain(|watch| watch.id != id);
-                state.watches.extend(finished);
-                drop(state);
-                let _ = runner(&service, &["watch-rm", &id], "");
-                return Err(error);
-            }
+            let bots = wake.then(|| state.bots.clone());
+            let saved = if wake { crate::bots::arm(&mut state, &chat).map_err(fail) } else { Ok(false) }
+                .and_then(|armed| crate::storage::save(&state).map(|()| armed));
+            let armed = match saved {
+                Ok(armed) => armed,
+                Err(error) => {
+                    if let Some(bots) = bots {
+                        state.bots = bots;
+                    }
+                    state.watches.retain(|watch| watch.id != id);
+                    state.watches.extend(finished);
+                    drop(state);
+                    let _ = runner(&service, &["watch-rm", &id], "");
+                    return Err(error);
+                }
+            };
             let bot = crate::bots::defined(&state, &chat);
             drop(state);
             super::discard(&finished.iter().map(|old| old.id.clone()).collect::<Vec<_>>());
             let mut value = summary;
-            value["wakes"] = json!(if bot { "New lines and exits wake this chat's bot." } else { "This chat is not a bot; read events with control_watch_events, or ask for a bot with control_bot_request." });
+            value["wakes"] = json!(wakes(armed, bot));
             Ok(value)
+        }
+        WatchCall::Wake => {
+            let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
+            let bots = state.bots.clone();
+            let armed = crate::bots::arm(&mut state, &chat).map_err(fail)?;
+            if armed && let Err(error) = crate::storage::save(&state) {
+                state.bots = bots;
+                return Err(error);
+            }
+            Ok(json!({"armed":armed,"wakes":wakes(armed, true)}))
         }
         WatchCall::Status { watch_id } => {
             let state = shared.lock().map_err(|_| fail("State unavailable"))?;

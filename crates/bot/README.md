@@ -9,5 +9,5 @@ Future expansion, without changing the core:
 - New event sources (watches, webhooks, SSH, game events) are new `Info`
   variants and topic kinds in the application.
 - Links between bots: a bot's stop or exhaustion as a message to subscribers.
-- Restart specs for bots themselves, like OTP child specs.
+- Richer restart specs: `Restart` has permanent and temporary (one-shot) bots.
 - Selective receive: priorities or filters per topic.
