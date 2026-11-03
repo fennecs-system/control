@@ -226,6 +226,18 @@ fn start(state: &mut State, chat: &str, minutes: Option<u64>, room: bool, now: N
     Ok("Bot started. It sleeps until room messages or its timer wake it.")
 }
 
+/// A bot whose unlinked chat links itself to a room by posting also hears
+/// that room, with the inbox room tools read.
+pub(crate) fn link_room(state: &mut State, chat: &str, name: &str) -> Result<(), &'static str> {
+    let Some(definition) = state.bots.supervisor.definitions().find(|d| d.chat.0 == chat).cloned() else { return Ok(()) };
+    crate::rooms::ensure_inbox(state, chat)?;
+    let mut sources = definition.sources.into_iter().filter(|s| !matches!(s, Source::Topic(t) if t.kind == "room")).collect::<Vec<_>>();
+    sources.push(Source::Topic(room(name)));
+    let effects = state.bots.supervisor.step(Event::Define(Definition { sources, ..definition }), Now(now_ms()));
+    record(state, effects);
+    Ok(())
+}
+
 /// Every active watch a chat owns is a topic of its bot; `pending` also keeps
 /// finished watches whose last output and exit are not yet offered.
 fn watch_sources(state: &State, chat: &str) -> Vec<Source> {

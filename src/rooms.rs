@@ -177,18 +177,16 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
                                 s.len() <= 100 && s.bytes().all(|b| b.is_ascii_digit() || b == b'-')
                             })
                             .ok_or("Invalid request nonce.")?;
-                        let key = format!("{}:{nonce}", run.id);
-                        if !state.collective.posts.iter().any(|p| p.key == key) {
-                            state.collective.posts.push(Post {
-                                room: room.clone(),
-                                text: text.into(),
-                                chat: Some(chat.id.clone()),
-                                run: Some(run.id.clone()),
-                                key,
-                            });
-                        }
+                        let (key, text, chat, run) = (format!("{}:{nonce}", run.id), text.to_owned(), chat.id.clone(), run.id.clone());
                         if attached.is_none() {
                             state.chats[chat_index].room = Some(room.clone());
+                            if let Err(error) = crate::bots::link_room(state, &chat, &room) {
+                                state.chats[chat_index].room = None;
+                                return Err(error);
+                            }
+                        }
+                        if !state.collective.posts.iter().any(|p| p.key == key) {
+                            state.collective.posts.push(Post { room: room.clone(), text, chat: Some(chat), run: Some(run), key });
                         }
                         json!({"posted":true,"room":room})
                     }
@@ -221,6 +219,7 @@ pub fn checkpoint(
         .map(|index| (index, state.collective.room_watches[index].clone()));
     let budget = state.runtime.runs[run_index].room_wake_used;
     let linked = state.chats.iter().position(|c| Some(c.id.as_str()) == chat).map(|index| (index, state.chats[index].room.clone()));
+    let bots = linked.as_ref().filter(|(_, room)| room.is_none()).map(|_| state.bots.clone());
     let response = worker_rpc(state, run_id, envelope);
     let current = state.collective.room_watches.iter().position(|watch| Some(watch.chat.as_str()) == state.runtime.runs[run_index].chat_id.as_deref());
     let changed = state.collective.posts.len() != post_count || budget != state.runtime.runs[run_index].room_wake_used
@@ -232,6 +231,7 @@ pub fn checkpoint(
         if let Some(index) = current { state.collective.room_watches.remove(index); }
         if let Some((index, watch)) = previous { state.collective.room_watches.insert(index, watch); }
         if let Some((index, room)) = linked { state.chats[index].room = room; }
+        if let Some(bots) = bots { state.bots = bots; }
         return json!({"jsonrpc":"2.0","id":envelope["request"]["id"],"error":{"code":-32603,"message":"Could not save room update. Try again."}});
     }
     response
@@ -330,6 +330,21 @@ mod tests {
         checkpoint(&mut state, &run, &call("control_room_post", json!({"room":"research","message":"also"}), "1-6"), |_| Ok(()));
         assert_eq!(state.chats[0].room.as_deref(), Some("general"), "posting elsewhere keeps the link");
         assert_eq!(text(worker_rpc(&mut state, &run, &call("control_room_read", json!({}), "1-7")))["room"], "general");
+    }
+    #[test]
+    fn a_bot_whose_chat_links_by_posting_hears_that_room() {
+        let mut state = State::default();
+        let id = crate::chat::create(&mut state);
+        crate::chat::send(&mut state, &id, "Keep watch", "test").unwrap();
+        crate::bots::command(&mut state, &id, "on every 10").unwrap();
+        state.runtime.runs[0].status = "running".into();
+        let run = state.runtime.runs[0].id.clone();
+        let post = json!({"nonce":"2-1","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_room_post","arguments":{"room":"research","message":"here"}}}});
+        assert!(checkpoint(&mut state, &run, &post, |_| Err(std::io::Error::other("disk"))).get("error").is_some());
+        assert!(!crate::bots::status(&state, &id).unwrap().contains("research"), "a failed save keeps the bot unchanged");
+        checkpoint(&mut state, &run, &post, |_| Ok(()));
+        assert!(crate::bots::status(&state, &id).unwrap().contains("room #research"));
+        assert!(state.collective.room_watches.iter().any(|w| w.chat == id), "the bot reads replies from an inbox");
     }
     #[test]
     fn mailbox_rejects_symlinks_and_oversized_requests() {
