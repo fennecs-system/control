@@ -1,7 +1,7 @@
 # Control roadmap
 
-Reviewed 2026-11-04 against main through #129 and the continuity review;
-the next playtest remains pending.
+Reviewed 2026-11-04 against main through #129, the continuity review and
+the Cass playtest evidence; implementation and comparative retest remain pending.
 Keep the normal macOS/Nix release useful to friends; improve reliability before
 adding autonomous operation. Each node supplies its own configuration and model
 access. Federation remains lower priority.
@@ -191,7 +191,7 @@ See [library boundaries and measurements](docs/CRATE-BOUNDARIES.md).
   repeated permission questions (#127); redundant room skill installation is
   removed and service output is folded in chat (#128).
 
-## Next: deploy and retest turn continuity
+## Baseline: deployed revision and turn continuity checks
 
 **✓ Merged in #129 with local verification; deployment status unverified here.**
 Automatic turns retain omitted user instructions and recent execution evidence
@@ -200,8 +200,8 @@ re-arm the next callback, completed/pending evidence survives new watches, and
 failed saves restore observation counters. `control_bot_pause` durably pauses
 the caller's own wakes; the operator resumes it with `/bot resume`.
 
-Confirm the deployed binary/WASM and worker images include #129 and check node
-health before the fresh small playtest. Verify that the original goal and later
+Record whether the playtest binary/WASM and worker images include #129 and check
+node health before comparative testing. Verify that the original goal and later
 steering survive callbacks, setup advances without manual "continue", and room
 updates reflect actual progress. Waiting on a peer should end a turn quietly;
 an explicit pause should stop automatic wakes. Inspect wake reasons and tool
@@ -211,16 +211,18 @@ the context and callback contract is what must hold.
 Local workspace/web checks, Chrome's fifteen-turn regression, release builds
 and before/after flamegraphs pass. Prompt construction adds measured work for
 retained evidence; see [performance results](docs/PERFORMANCE.md). The workload's
-connection/protocol issue remains unproven and belongs in tool containers.
-Keep broader extraction and the review follow-ups below out of this test's path.
+connection/protocol work belongs in tool containers and must be distinguished
+from the stop/start overhead measured below. Keep broader extraction out of the
+continuity implementation's path.
 
-## Pending next playtest: Control-owned turn continuity
+## Next priority: reduce stop/start context pollution
 
-**Scheduled for triage after the next small playtest; not implemented.** Keep
-the existing wake mechanism for the baseline test. Its evidence determines the
-scope and priority of the slices below, alongside the reliability review. Do not
-delay that test for a context rewrite or assume fresh provider processes caused
-every stall.
+**Implementation design ready for Sol; not implemented.** The Cass playtest
+shows 17 consecutive monitoring turns in ten minutes, repeating 68 tool calls
+without a gameplay action. Their exchanges occupy about 52% of the reconstructed
+next recent-history window. See the scoped measurements, concrete contracts,
+code map and acceptance tests in [Turn continuity implementation handoff](docs/TURN-CONTINUITY.md).
+Keep the current playtest unchanged as baseline evidence.
 
 Control's JSON state, journals and resource/checkpoint records remain the source
 of truth. Separate retained evidence, explicit working state and the bounded
@@ -228,38 +230,28 @@ context projected into a model turn. Keep the continuation contract independent
 of provider sessions, with the same meaning for Codex, Claude and later API-key
 or local-model adapters. Preserve the existing scheduling and authority rules.
 
-1. **Baseline and context visibility.** Record the test revision, provider/model,
-   wake reason and relevant run/evidence references. Classify repeated diagnostics,
-   lost resource handles, forgotten pending actions and lost steering separately
-   from tool/protocol failures. In the first implementation slice, retain the
-   exact Control context sent to the harness, its projection version and omitted
-   evidence references, so missing context can be distinguished from ignored
-   context. This does not capture provider-internal prompts or hidden state.
-2. **Evidence-linked handoff experiment.** Add versioned working state for the
-   current goal and constraints, established facts with evidence references,
-   attempted approaches and outcomes, pending actions/resource handles, expected
-   events and conditional next actions. Distinguish Control-observed lifecycle
-   facts from model-proposed interpretations and uncertainty. Validate references
-   and commit updates with the matching turn; stale or failed attempts must not
-   overwrite newer state. Model claims never become authority or admitted shared
-   knowledge merely by appearing in a handoff.
-3. **Relevant wakes and recoverable detail.** Project the event delta alongside
-   the pending work it relates to, using recorded relationships and marking
-   unknown ones. Provide bounded retrieval by evidence/decision/history reference
-   so an agent can expand omitted detail without repeating completed work. Make
-   unavailable evidence explicit, reusing the history-read failure work below.
-4. **Consistent instructions and total context bounds.** Carry standing goals and
-   user constraints consistently across human, timer, watch and continuation
-   turns. Preserve later steering and provenance; budget the complete projection,
-   including handoff, pinned instructions, lenses and history. Expose omissions
-   instead of treating the current recent-history window as a total prompt cap.
-5. **Evaluate before broader memory work.** Compare the baseline with the small
-   handoff experiment on equivalent tasks: repeated diagnostics, handle reuse,
-   pending-action completion, steering retention, context size, token use and
-   turn latency. Include provider differences and restart continuity. Report
-   evidence and remaining failure modes before expanding scope. Cached comonad
-   summaries remain the later memory work below; direct API/local-model execution
-   remains in the existing adapter workstream.
+1. **Useful task context.** Preserve lifecycle evidence for inspection, but keep
+   repeated wake/status bookkeeping out of managed task history. Capture exact
+   Control input, projection version and evidence selection. Preserve standing
+   instructions across trigger types and bound the whole context projection.
+2. **Reliable working-state handoffs.** Version goals/progress, evidence-linked
+   findings, rejected approaches, pending actions/handles and conditional next
+   steps. Stage model claims separately from Control-observed facts; atomically
+   commit handoff, processed-event cursors and matching workspace publication.
+3. **Longer active slices and event deltas.** Allow several related actions in
+   one attempt, consuming deltas at action boundaries. Yield on genuine waits or
+   budgets; retain at most one durable successor for unfinished runnable work.
+   Events already processed by that attempt must not create redundant wakes.
+4. **Selective admission.** Separate recorded telemetry from wake eligibility.
+   Use generic watch milestone/exit policies and scoped wait conditions, preserving
+   unread evidence, finite rechecks and human/failure delivery. No game-specific
+   logic belongs in Control. Idle agents release their model slots.
+5. **Preserve recovery and measure progress.** Keep one writer, durable admission,
+   generation fencing, cancellation, pause and delegation chains. Restart still
+   interrupts attempts; never replay ambiguous effects. Compare useful actions,
+   model admissions, monitoring turns, context bytes, token usage and task time
+   on equivalent tasks explicitly permitting longer slices. Cached comonad
+   summaries and API/local-model adapters remain separate later workstreams.
 
 ## Later: core, web and terminal boundaries
 
@@ -589,8 +581,8 @@ can drive different isolation levels.
 
 ## Later: unbounded conversation memory as a comonad
 
-The merged #129 continuity fix and the pending playtest/handoff experiment are
-described above. Background summaries follow that evidence: retained human
+The merged #129 continuity fix and the prioritized active-slice/handoff design are
+described above. Background summaries follow that implementation's evidence: retained human
 inputs can grow and excerpts still hydrate the previous journal record. The
 current production Lens compactor uses `NoSummaries`; older multi-entry blocks
 are omitted, not backed by a computed summary cache.
