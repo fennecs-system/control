@@ -269,9 +269,11 @@ impl Transport {
                     return Err(fail("Invalid relay stream sequence"));
                 }
                 self.last_id.store(id, Ordering::Release);
-                incoming
-                    .try_send(self.reserve(id)?)
-                    .map_err(|_| fail("Relay accept queue full"))?;
+                // A peer with a larger stream limit loses only the excess stream.
+                match self.reserve(id) {
+                    Ok(stream) => incoming.try_send(stream).map_err(|_| fail("Relay accept queue full"))?,
+                    Err(_) => self.send(id, Kind::Close, &[])?,
+                }
                 continue;
             }
             if kind == Kind::Close {
@@ -464,6 +466,31 @@ mod tests {
             reader.join().unwrap();
             assert!(!link.alive());
         }
+    }
+    #[test]
+    fn a_stream_beyond_the_limit_is_closed_alone() {
+        #[derive(Clone, Default)]
+        struct Shared(Arc<Mutex<Vec<u8>>>);
+        impl Write for Shared {
+            fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(data);
+                Ok(data.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut bytes = Vec::new();
+        for id in 1..=CONNECTIONS as u32 + 1 {
+            bytes.extend_from_slice(&id.to_be_bytes());
+            protocol::write(&mut bytes, Kind::Open, b"").unwrap();
+        }
+        let output = Shared::default();
+        let (_link, incoming, reader) = Transport::start(std::io::Cursor::new(bytes), output.clone(), true);
+        reader.join().unwrap();
+        assert_eq!(incoming.try_iter().count(), CONNECTIONS, "every stream within the limit is admitted");
+        let written = output.0.lock().unwrap().clone();
+        assert!(written.starts_with(&(CONNECTIONS as u32 + 1).to_be_bytes()), "only the excess stream is closed");
     }
     #[test]
     fn closing_one_connection_keeps_the_listener_and_other_streams_alive() {
