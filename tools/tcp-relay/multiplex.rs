@@ -1,6 +1,6 @@
 //! Bounded independent TCP streams over one trusted stdio connection.
 //! The parser never writes to TCP or waits for a stream's payload queue.
-use super::protocol::{self, Credit, Kind, LIMIT};
+use super::protocol::{self, Credit, Kind, LIMIT, WINDOW};
 use std::{
     collections::HashMap,
     io::{self, Read, Write},
@@ -18,7 +18,8 @@ pub const CONNECTIONS: usize = 32;
 type Payload = Option<Vec<u8>>;
 struct Channel {
     outgoing: Credit,
-    receiving: AtomicBool,
+    /// Frames the peer may still send before more credit is granted.
+    receiving: AtomicU32,
     fin: AtomicBool,
     alive: AtomicBool,
     read_done: AtomicBool,
@@ -96,10 +97,10 @@ impl Transport {
         if id == 0 || channels.len() >= CONNECTIONS || channels.contains_key(&id) {
             return Err(fail("Relay stream limit or duplicate ID"));
         }
-        let (tx, rx) = mpsc::sync_channel(1);
+        let (tx, rx) = mpsc::sync_channel(WINDOW as usize);
         let channel = Arc::new(Channel {
             outgoing: Credit::default(),
-            receiving: AtomicBool::new(false),
+            receiving: AtomicU32::new(0),
             fin: AtomicBool::new(false),
             alive: AtomicBool::new(true),
             read_done: AtomicBool::new(false),
@@ -144,8 +145,10 @@ impl Transport {
                 .lock()
                 .map_err(|_| fail("Relay socket unavailable"))? = Some(socket.try_clone()?);
             let mut reading = socket.try_clone()?;
-            channel.receiving.store(true, Ordering::Release);
-            self.send(id, Kind::Credit, &[])?;
+            channel.receiving.store(WINDOW, Ordering::Release);
+            for _ in 0..WINDOW {
+                self.send(id, Kind::Credit, &[])?;
+            }
             let link = self.clone();
             let stream = channel.clone();
             thread::spawn(move || {
@@ -179,7 +182,7 @@ impl Transport {
                         match input.recv_timeout(Duration::from_millis(100)) {
                             Ok(Some(data)) => {
                                 socket.write_all(&data)?;
-                                stream.receiving.store(true, Ordering::Release);
+                                stream.receiving.fetch_add(1, Ordering::AcqRel);
                                 link.send(id, Kind::Credit, &[])?;
                             }
                             Ok(None) => {
@@ -299,7 +302,7 @@ impl Transport {
                 Kind::Credit => channel.outgoing.grant()?,
                 Kind::Data | Kind::Fin
                     if !channel.fin.load(Ordering::Acquire)
-                        && channel.receiving.swap(false, Ordering::AcqRel) =>
+                        && channel.receiving.try_update(Ordering::AcqRel, Ordering::Acquire, |left| left.checked_sub(1)).is_ok() =>
                 {
                     let data = if kind == Kind::Fin {
                         channel.fin.store(true, Ordering::Release);
@@ -451,6 +454,24 @@ mod tests {
         }
         drop(pair);
         blocked.join().unwrap();
+    }
+    #[test]
+    fn a_stream_transfers_more_than_its_credit_window() {
+        {
+            let pair = Pair::new();
+            let (mut client, mut server) = pair.connect();
+            let payload = vec![9u8; LIMIT * (WINDOW as usize + 3)];
+            let expected = payload.clone();
+            let sender = thread::spawn(move || {
+                server.write_all(&payload).unwrap();
+                server.shutdown(Shutdown::Write).unwrap();
+            });
+            client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut received = Vec::new();
+            client.read_to_end(&mut received).unwrap();
+            sender.join().unwrap();
+            assert_eq!(received, expected);
+        }
     }
     #[test]
     fn malformed_or_uncredited_frames_close_the_transport() {

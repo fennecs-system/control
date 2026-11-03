@@ -1156,72 +1156,7 @@ fn ingress(shared: Arc<Mutex<State>>, mut port: Port, cancel: Arc<AtomicBool>) -
     Ok(())
 }
 fn egress(shared: Arc<Mutex<State>>, port: Port, cancel: Arc<AtomicBool>) -> io::Result<()> {
-    let service=live_service(&shared,&port,&cancel)?;
-    if crate::services::relay_version(&service)? >= 4 {return multiplex::egress(shared,port,cancel);}
-    while let Ok(service) = live_service(&shared, &port, &cancel) {
-        let result = (|| {
-            let binding = crate::services::port_binding(&service, &port.container)?;
-            live_service(&shared, &port, &cancel)?;
-            let approval = port.approval.as_ref().unwrap();
-            let mut child = Relay::new(binding.spawn(
-                RelayMode::Listen,
-                port.service_port,
-                approval.expires,
-            )?)?;
-            let output = handshake(
-                &mut child,
-                b"CONTROL_RELAY_V2_READY\n",
-                Duration::from_secs(3),
-                &shared,
-                &port,
-                &cancel,
-            )?;
-            child.stdout = Some(output);
-            receipt(&shared, &port, true, "");
-            let output = handshake(
-                &mut child,
-                b"CONTROL_RELAY_V2_CONNECTED\n",
-                Duration::from_secs(approval.expires.saturating_sub(now())),
-                &shared,
-                &port,
-                &cancel,
-            )?;
-            receipt(&shared, &port, false, "");
-            live_service(&shared, &port, &cancel)?;
-            if !shared.lock().is_ok_and(|state| peer_listening(&state, &port)) {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(fail("Peer ingress is not listening"));
-            }
-            let socket = match TcpStream::connect_timeout(
-                &approval
-                    .pinned
-                    .ok_or_else(|| fail("Missing pinned target"))?,
-                Duration::from_secs(2),
-            ) {
-                Ok(s) => s,
-                Err(e) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(e);
-                }
-            };
-            bridge(socket, child, output, &shared, &port, &cancel)
-        })();
-        // A successful connection needs a new helper listener immediately.
-        // Back off only on failures; an unconditional pause made consecutive
-        // dependency downloads hit a needless refusal window.
-        let Err(error) = result else {continue;};
-        receipt(&shared, &port, false, &error.to_string());
-        for _ in 0..10 {
-            if live_service(&shared, &port, &cancel).is_err() {
-                break;
-            }
-            thread::sleep(Duration::from_millis(50));
-        }
-    }
-    receipt(&shared, &port, false, "");
-    Ok(())
+    multiplex::egress(shared, port, cancel)
 }
 struct Active {
     cancel: Arc<AtomicBool>,

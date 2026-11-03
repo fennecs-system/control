@@ -6,6 +6,9 @@ use std::sync::{
 };
 use std::time::Duration;
 pub const LIMIT: usize = 16 * 1024;
+/// Frames a multiplexed stream may have in flight before the receiver returns
+/// credit; bounds each stream to WINDOW * LIMIT buffered bytes.
+pub const WINDOW: u32 = 64;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Data = 1,
@@ -34,11 +37,11 @@ pub fn read(reader: &mut impl Read, buffer: &mut [u8; LIMIT]) -> io::Result<(Kin
     reader.read_exact(&mut buffer[..size])?;
     Ok((kind, size))
 }
-/// At most one payload can be outstanding in either direction. Waiting for a
-/// slow TCP peer never occupies the frame parser or its heartbeat path.
+/// Up to WINDOW payloads can be outstanding per direction. Waiting for a slow
+/// TCP peer never occupies the frame parser or its heartbeat path.
 #[derive(Default)]
 pub struct Credit {
-    available: Mutex<bool>,
+    available: Mutex<u32>,
     changed: Condvar,
 }
 impl Credit {
@@ -47,10 +50,10 @@ impl Credit {
             .available
             .lock()
             .map_err(|_| io::Error::other("Credit unavailable"))?;
-        if *available {
-            return Err(io::Error::other("Duplicate relay credit"));
+        if *available >= WINDOW {
+            return Err(io::Error::other("Excess relay credit"));
         }
-        *available = true;
+        *available += 1;
         self.changed.notify_one();
         Ok(())
     }
@@ -59,7 +62,7 @@ impl Credit {
             .available
             .lock()
             .map_err(|_| io::Error::other("Credit unavailable"))?;
-        while !*available {
+        while *available == 0 {
             if !alive.load(Ordering::Acquire) {
                 return Err(io::Error::other("Relay closed"));
             }
@@ -69,7 +72,7 @@ impl Credit {
                 .map_err(|_| io::Error::other("Credit unavailable"))?
                 .0;
         }
-        *available = false;
+        *available -= 1;
         Ok(())
     }
 }
@@ -108,12 +111,16 @@ mod tests {
         assert!(read(&mut [7, 0, 0, 0, 0].as_slice(), &mut buffer).is_err());
     }
     #[test]
-    fn credit_cannot_accumulate_or_be_reused() {
+    fn credit_is_bounded_by_the_window_and_never_reused() {
         let credit = Credit::default();
         let alive = AtomicBool::new(true);
-        credit.grant().unwrap();
-        assert!(credit.grant().is_err());
-        credit.take(&alive).unwrap();
+        for _ in 0..WINDOW {
+            credit.grant().unwrap();
+        }
+        assert!(credit.grant().is_err(), "a peer cannot grant more than the window");
+        for _ in 0..WINDOW {
+            credit.take(&alive).unwrap();
+        }
         credit.grant().unwrap();
         credit.take(&alive).unwrap();
         alive.store(false, Ordering::Release);
