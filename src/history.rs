@@ -208,21 +208,6 @@ mod tests {
     }
 
     #[test]
-    fn a_new_outbox_starts_without_announcing_finished_history() {
-        let mut state = crate::State::default();
-        let chat = crate::chat::create(&mut state);
-        crate::chat::send(&mut state, &chat, "Long done", "test").unwrap();
-        state.runtime.runs[0].status = "cancelled".into();
-        let outbox = outbox_path().unwrap();
-        if outbox.exists() {
-            assert!(!baseline_outbox(&mut state).unwrap(), "an existing feed never re-baselines");
-            return;
-        }
-        assert!(baseline_outbox(&mut state).unwrap());
-        assert_eq!(state.runtime.runs[0].emitted.as_deref(), Some("cancelled"));
-    }
-
-    #[test]
     fn finishing_a_run_is_one_transaction_with_its_save() {
         let mut state = crate::State::default();
         let chat = crate::chat::create(&mut state);
@@ -502,25 +487,4 @@ pub(crate) fn emit(state: &mut crate::State, save: impl FnOnce(&crate::State) ->
             state.runtime.runs[index].emitted = previous;
         }
     })
-}
-
-/// A feed starts when it is created: before the outbox exists, runs that have
-/// already finished are marked as sent rather than announced. Call
-/// [`open_outbox`] once this state is saved.
-pub(crate) fn baseline_outbox(state: &mut crate::State) -> io::Result<bool> {
-    if outbox_path()?.exists() {
-        return Ok(false);
-    }
-    let mut changed = false;
-    for run in state.runtime.runs.iter_mut().filter(|run| control::outbox::DELIVERABLE.contains(&run.status.as_str()) && run.emitted.is_none()) {
-        run.emitted = Some(run.status.clone());
-        changed = true;
-    }
-    Ok(changed)
-}
-/// Creates the outbox, ending the baseline.
-pub(crate) fn open_outbox() -> io::Result<()> {
-    let path = outbox_path()?;
-    std::fs::create_dir_all(path.parent().expect("the outbox lives in a directory"))?;
-    with_path(path, |_| Ok(()))
 }

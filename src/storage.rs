@@ -80,11 +80,9 @@ pub fn load() -> io::Result<State> {
     changed |= interrupt_active(&mut state);
     // Finished attempts from older state or a crash leave state for journals.
     changed |= crate::history::archive_finished(&mut state);
-    changed |= crate::history::baseline_outbox(&mut state)?;
     if changed {
         save(&state)?;
     }
-    crate::history::open_outbox()?;
     Ok(state)
 }
 fn interrupt_active(state: &mut State) -> bool {

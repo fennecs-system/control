@@ -54,7 +54,9 @@ small indexes into journals), so a save costs the active set, not the past.
    events Control appends when a run finishes or waits; frontends (Discord now;
    Telegram, Matrix, Stoat later) follow it with their own cursor and never
    read state or chat journals. Events are at least once; followers deduplicate
-   by run and status.
+   by run and status (Discord also sends a per-receipt message nonce, so a send
+   repeated after a crash is dropped by Discord). Start with fresh state when
+   upgrading: there is no load-time baseline of older runs.
 
 Each phase is profiled with the 15-turn workload (`fifteen_turn_conversations_workload`).
 

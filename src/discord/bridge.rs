@@ -129,6 +129,13 @@ fn delivery_message(change: Option<&crate::outbox::Change>, status: &str, link: 
     }else{report.to_owned()};
     format!("{prefix}{body}{suffix}")
 }
+/// A Discord message nonce (at most 25 characters) for one delivery receipt.
+fn nonce(receipt: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    receipt.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -429,12 +436,14 @@ impl Bridge {
         Ok(routes)
     }
     fn reply(&self, channel: DiscordId, content: &str) -> bool {
-        self.send(channel, content).is_ok()
+        self.send(channel, content, None).is_ok()
     }
     fn snapshot(&self) -> Result<std::rc::Rc<Snapshot>, &'static str> {
         Ok(self.state.borrow_mut().load(&config::state("state.json")?))
     }
-    fn send(&self, channel: DiscordId, content: &str) -> Sent {
+    /// Posts a message. A `nonce` makes Discord drop a repeat of the same send
+    /// (a retry after a crash or a lost response) instead of posting it twice.
+    fn send(&self, channel: DiscordId, content: &str, nonce: Option<&str>) -> Sent {
         let bindings = DmBindings::load().map_err(|_| Some(Duration::from_secs(5)))?;
         let mut authorize = identity::authorizer();
         let allowed = {
@@ -458,7 +467,10 @@ impl Bridge {
         match self
             .client
             .post(format!("{API}/channels/{channel}/messages"))
-            .json(&json!({"content":content,"allowed_mentions":{"parse":[]}}))
+            .json(&match nonce {
+                Some(nonce) => json!({"content":content,"allowed_mentions":{"parse":[]},"nonce":nonce,"enforce_nonce":true}),
+                None => json!({"content":content,"allowed_mentions":{"parse":[]}}),
+            })
             .send()
         {
             Ok(r) if r.status().is_success() => Ok(()),
@@ -581,7 +593,7 @@ impl Bridge {
         if outbound.backoff.get(receipt).is_some_and(|(until, _)| now() < *until) {
             return false;
         }
-        match self.send(channel, content) {
+        match self.send(channel, content, Some(&nonce(receipt))) {
             Ok(()) => {
                 outbound.backoff.remove(receipt);
                 true
@@ -608,18 +620,27 @@ impl Bridge {
     fn deliver(&self, routes: &[Route], outbound: &mut Outbound) -> Result<(), &'static str> {
         let events = crate::outbox::read(&crate::outbox::path()?, outbound.cursor).map_err(|_| "Could not read the delivery outbox.")?;
         let mut authorize = identity::authorizer();
-        // Events parked until their authorization or route is available again.
-        for run in std::mem::take(&mut outbound.parked) {
-            if self.deliver_one(&run, routes, outbound, &mut authorize)? != Outcome::Done {
-                outbound.park(run);
+        // Events parked until their authorization or route is available again;
+        // anything not yet retried stays parked if a receipt cannot be saved.
+        let mut parked = std::mem::take(&mut outbound.parked).into_iter();
+        while let Some(run) = parked.next() {
+            match self.deliver_one(&run, routes, outbound, &mut authorize) {
+                Ok(Outcome::Done) => {}
+                Ok(_) => outbound.parked.push(run),
+                Err(error) => {
+                    outbound.parked.push(run);
+                    outbound.parked.extend(parked);
+                    return Err(error);
+                }
             }
         }
         for (run, next) in &events {
             match self.deliver_one(run, routes, outbound, &mut authorize)? {
                 Outcome::Done => {}
-                Outcome::Park => outbound.park(run.clone()),
+                // Parking never drops an event: with the set full, the cursor holds.
+                Outcome::Park if outbound.parked.len() < PARKED => outbound.parked.push(run.clone()),
                 // A transient send failure holds the cursor: retried next poll.
-                Outcome::Stop => break,
+                Outcome::Park | Outcome::Stop => break,
             }
             outbound.cursor = *next;
         }
@@ -695,6 +716,8 @@ impl Bridge {
         Ok(())
     }
 }
+/// Deliveries kept for retry while authorization or a route is unavailable.
+const PARKED: usize = 256;
 /// What a delivery attempt left to do.
 #[derive(PartialEq, Eq)]
 enum Outcome {
@@ -710,19 +733,11 @@ struct Outbound {
     /// Position in the delivery outbox; starts at the beginning on launch and
     /// relies on receipts to skip what was already sent.
     cursor: crate::outbox::Cursor,
-    /// Events waiting for authorization or a route; bounded, oldest dropped.
+    /// Events waiting for authorization or a route, at most `PARKED`.
     parked: Vec<crate::outbox::Delivery>,
     delivered: HashSet<String>,
     undelivered: HashSet<String>,
     backoff: HashMap<String, (u64, u32)>,
-}
-impl Outbound {
-    fn park(&mut self, run: crate::outbox::Delivery) {
-        if self.parked.len() >= 256 {
-            self.parked.remove(0);
-        }
-        self.parked.push(run);
-    }
 }
 fn run(check_only: bool) -> Result<(), &'static str> {
     Policy::load()?;
