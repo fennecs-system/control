@@ -132,6 +132,8 @@ These chat commands work on the web, in the TUI and in authorized Discord DMs:
   MCP also offers [optimized Rust microbenchmarks](docs/PERFORMANCE.md).
 - **Design decisions.** Agents can pause for a choice or your own direction,
   then continue from the saved workspace when you answer.
+  Chat's Requests panel groups pending decisions, ports, folders and bot requests
+  from that conversation and its agents.
 - **Discord.** DM your node through a bot with explicit numeric-ID bindings.
   User and architect roles are separate; server-channel messages are ignored.
 - **Usage.** Inspect provider-reported tokens by person, model, day and run.

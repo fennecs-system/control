@@ -254,7 +254,8 @@ impl App {
             && (self.detail["id"] != self.active
                 || revision.as_ref() != Some(&self.detail["revision"])
                 || self.chats.iter().find(|s|s["id"] == self.active).map(|s|&s["decision_revision"]) != Some(&self.detail["decision_revision"])
-                || self.chats.iter().find(|s|s["id"]==self.active).map(|s|&s["port_revision"]) != Some(&self.detail["port_revision"]))
+                || self.chats.iter().find(|s|s["id"]==self.active).map(|s|&s["port_revision"]) != Some(&self.detail["port_revision"])
+                || self.chats.iter().find(|s|s["id"]==self.active).map(|s|&s["bot_revision"]) != Some(&self.detail["bot_revision"]))
         {
             self.detail = hive.tool("control.chat.read", json!({"id":self.active}))?;
         }
@@ -969,13 +970,14 @@ mod tests {
     #[test]
     fn parent_transcript_exposes_child_decisions_and_answer_command() {
         let app = super::App {
-            detail:serde_json::json!({"room_listener":{"room":"research","state":"listening"},"messages":[{"text":"Earlier prompt","reply":"Earlier response"}],"pending_questions":[{"summary":"Choose a route\n1. Relay\n2. Stop\n/answer q-child YOUR_ANSWER"}]}),
+            detail:serde_json::json!({"room_listener":{"room":"research","state":"listening"},"messages":[{"text":"Earlier prompt","reply":"Earlier response"}],"pending_questions":[{"summary":"Choose a route\n1. Relay\n2. Stop\n/answer q-child YOUR_ANSWER"}],"pending_bots":[{"request_id":"bot-child","chat_id":"c-child"}]}),
             ..Default::default()
         };
         let transcript = app.transcript().to_string();
         assert!(transcript.contains("Choose a route"));
         assert!(transcript.contains("/answer q-child YOUR_ANSWER"));
         assert!(transcript.contains("Room #research · listening"));
+        assert!(transcript.contains("Bot request · c-child") && transcript.contains("/bot allow bot-child"));
         assert!(transcript.find("Earlier response").unwrap()<transcript.find("Decision requested").unwrap(),"Pending decisions must remain visible at the live tail");
     }
     #[test]

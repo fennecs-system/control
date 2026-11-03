@@ -768,7 +768,7 @@ mod tests {
         assert!(crate::design::pending(&state,&other).is_empty());
         assert!(crate::design::answer(&mut state,&other,Some(&question),"1","test").is_err());
         assert_eq!(crate::design::pending(&state,&parent_chat).len(),1);
-        assert!(chat::transcript(&state,&parent_chat).unwrap().contains(&format!("value='/answer {question} 1'")));
+        assert!(chat::requests(&state,&parent_chat).unwrap().contains(&format!("value='/answer {question} 1'")));
         assert_eq!(chat::detail(&state,&parent_chat).unwrap()["pending_questions"][0]["chat_id"],child_chat);
         let before = serde_json::to_vec(&state).unwrap();
         assert!(crate::session_http::change_with_save(&mut state,"control.chat.send",

@@ -264,6 +264,16 @@ or local-model adapters. Preserve the existing scheduling and authority rules.
    on equivalent tasks explicitly permitting longer slices. Cached comonad
    summaries and API/local-model adapters remain separate later workstreams.
 
+Live feedback prioritizes repeated stop/start context pollution: let an active
+controller perform several related steps and consume queued event deltas before
+yielding on genuine idle/dependency waits. Compare with the current one-action
+slices; prior native sessions also stalled, so session reuse alone is not the
+solution. Project wake bookkeeping as current metadata rather than repeatedly
+carrying it as conversational instructions. Preserve task/steering provenance,
+evidence retrieval, cancellation and durable recovery; sleeping monitors must
+not monopolize model slots. This experiment remains separate from the request
+panel fix and does not change the current playtest midway.
+
 ## Later: core, web and terminal boundaries
 
 Build on the persistent-tool lifecycle/ownership rules already extracted below.

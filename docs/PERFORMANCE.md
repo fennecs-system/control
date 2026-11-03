@@ -69,6 +69,25 @@ was removed or deferred to obtain those results.
 These synthetic checks do not establish the quality or latency of a live bot
 playtest, nor do they measure a provider's private context management.
 
+## Chat request panel
+
+Rechecked after rebasing onto `d665d60`. Compared with `fcc76fc`, the isolated Linux ARM release fixture renders a chat
+with zero or 32 pending bot approvals. Before: one transcript containing the
+forms. After: transcript plus the independently embeddable request document.
+Nine batches of 5,000 calls measured 0.82 → 1.01 µs with no approvals and
+24.02 → 21.79 µs with 32. The latter also reflects shorter bot-card text;
+it does not isolate an architectural speedup. Request content is now outside
+the conversation's scroll area. Actual browser
+latency also includes the additional small request-document poll each second.
+Unchanged snapshots preserve DOM nodes and active approval forms.
+
+Real before/after `perf` flamegraphs use the same offline build image, two-CPU
+limit, 499 Hz CPU sampling and DWARF stacks as the continuity comparison below.
+No model calls, credentials or running-node mutations are involved. Reproduce
+with `cargo test --release --locked --bin control bots::tests::requests_profile
+-- --ignored --exact --nocapture`. Chrome and Firefox exercise automatic panel disclosure
+for a new child request, retained collapse state/drafts and slow/retried approvals.
+
 ## Bot turn continuity
 
 The continuity fix was compared with `8f170c7`, using identical synthetic

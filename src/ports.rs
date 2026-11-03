@@ -1275,7 +1275,7 @@ pub(crate) mod tests {
         state.chats.last_mut().unwrap().parent_chat=Some(chat.clone());
         assert!(pending_json(&state,&other).is_empty());
         assert_eq!(pending_json(&state,&chat).len(),1);
-        let html=crate::chat::transcript(&state,&chat).unwrap();
+        let html=crate::chat::requests(&state,&chat).unwrap();
         assert!(html.contains("class='assistant-message port-request'"));
         assert!(html.contains("value='-1'>Service lifetime"));
         assert!(html.contains("target='_top'"));
