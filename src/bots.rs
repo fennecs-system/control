@@ -145,6 +145,23 @@ pub(crate) fn status(state: &State, chat: &str) -> Option<String> {
     Some(format!("{label} · {state} · {sources}"))
 }
 
+/// Every defined bot with its state, including sleeping ones, for the Bots page.
+pub(crate) fn overview(state: &State) -> String {
+    let mut html = "<div class='section-heading'><h2>Bots</h2></div>".to_owned();
+    let mut any = false;
+    for definition in state.bots.supervisor.definitions() {
+        let chat = definition.chat.0.as_str();
+        let Some(status) = status(state, chat) else { continue };
+        any = true;
+        let title = state.chats.iter().find(|session| session.id == chat).map_or(chat, |session| session.title.as_str());
+        html.push_str(&format!("<article class='record'><h3>{}</h3><p>{}</p><a href='/chat/{}'>Open chat ↗</a></article>", crate::escape(title), crate::escape(&status), crate::escape(chat)));
+    }
+    if !any {
+        html.push_str("<div class='empty'>No bots. Use /bot on in a chat or approve a bot request.</div>");
+    }
+    html
+}
+
 /// `/bot on [every N]`, `/bot off`, `/bot pause` and `/bot resume`. Reached only
 /// through the authenticated chat command route, never from room text or tools.
 pub(crate) fn command(state: &mut State, chat: &str, option: &str) -> Result<&'static str, &'static str> {
@@ -1104,6 +1121,15 @@ mod tests {
         state.watches.iter_mut().find(|w| w.id == "w-logs").unwrap().stopped = true;
         reconcile_at(&mut state, 40_002, |_| Ok(())).unwrap();
         assert_eq!(subscribed(&state, &chat), ["w-game"], "stopped watches unsubscribe it");
+    }
+
+    #[test]
+    fn the_bots_page_lists_sleeping_bots() {
+        let (mut state, chat) = fixture();
+        assert!(overview(&state).contains("No bots"));
+        command_at(&mut state, &chat, "on every 10", Now(0)).unwrap();
+        let page = overview(&state);
+        assert!(page.contains("sleeping") && page.contains(&format!("/chat/{chat}")), "{page}");
     }
 
     #[test]
