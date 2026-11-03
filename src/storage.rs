@@ -78,8 +78,6 @@ pub fn load() -> io::Result<State> {
     crate::history::hydrate_text(&mut state)?;
     let mut changed = crate::knowledge::migrate(&mut state);
     changed |= interrupt_active(&mut state);
-    // Finished attempts from older state or a crash leave state for journals.
-    changed |= crate::history::archive_finished(&mut state);
     if changed {
         save(&state)?;
     }
@@ -106,6 +104,9 @@ fn interrupt_active(state: &mut State) -> bool {
                     }
                 }
             }
+            // A run a crash interrupted is finished: its text and activity leave
+            // state for its journal like any other (on failure they stay).
+            let _ = crate::history::archive_run(run);
             if let Some(session) = state
                 .chats
                 .iter_mut()
@@ -189,7 +190,7 @@ mod tests {
             vec!["interrupted", "interrupted", "queued", "completed"]
         );
         assert_eq!(state.runtime.runs[1].attempts[0].status, "interrupted");
-        assert_eq!(state.runtime.runs[1].attempts[0].activity[0].status, "interrupted");
+        assert_eq!(crate::history::activity(state.runtime.runs[1].chat_id.as_deref(), &state.runtime.runs[1].attempts[0])[0].status, "interrupted", "recorded in the journal");
         assert_eq!(state.runtime.runs[2].attempts[0].activity[0].status, "in_progress");
         assert!(!interrupt_active(&mut state));
         assert!(state
