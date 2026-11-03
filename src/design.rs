@@ -187,8 +187,9 @@ pub fn waiting<'a>(state: &'a State, chat_id: &str) -> Option<&'a runtime::Run> 
     })
 }
 
-/// Only recorded, validated delegation edges surface another chat's decisions.
-/// A matching actor, parent_chat or persona root alone grants no access.
+/// Another chat's decisions surface through recorded delegation edges or a
+/// Control-recorded spawn lineage, always for the same actor; a persona root
+/// alone grants no access.
 pub fn pending<'a>(state: &'a State, chat_id: &str) -> Vec<&'a runtime::Run> {
     let Some(chat) = state.chats.iter().find(|chat| chat.id == chat_id) else { return vec![]; };
     let mut visible = std::collections::HashSet::new();
@@ -201,7 +202,8 @@ pub fn pending<'a>(state: &'a State, chat_id: &str) -> Vec<&'a runtime::Run> {
         }
     }
     state.runtime.runs.iter().filter(|run|
-        visible.contains(run.id.as_str()) && run.actor == chat.actor
+        (visible.contains(run.id.as_str()) || run.chat_id.as_deref().is_some_and(|chat| crate::chat::within(state, chat, chat_id)))
+        && run.actor == chat.actor
         && run.status == "waiting" && run.question.as_ref().is_some_and(|q| q.answer.is_none())
     ).collect()
 }
@@ -453,6 +455,19 @@ pub(crate) mod tests {
         run.attempts[0].artifact = Some("paused-workspace".into());
         run.result = summary(run.question.as_ref().unwrap());
         (state, chat)
+    }
+    #[test]
+    fn questions_from_spawned_descendants_surface_in_the_top_level_chat() {
+        let (mut state, child) = paused();
+        let root = chat::create(&mut state);
+        let middle = chat::create(&mut state);
+        state.chats.iter_mut().find(|s| s.id == middle).unwrap().parent_chat = Some(root.clone());
+        state.chats.iter_mut().find(|s| s.id == child).unwrap().parent_chat = Some(middle.clone());
+        let question = state.runtime.runs[0].question.as_ref().unwrap().id.clone();
+        assert_eq!(pending(&state, &root).len(), 1);
+        assert_eq!(answer_target(&state, &root, &question), Ok(child.as_str()));
+        let unrelated = chat::create(&mut state);
+        assert!(pending(&state, &unrelated).is_empty());
     }
     #[test]
     fn question_requires_valid_active_identity_and_durable_admission() {
