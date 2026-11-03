@@ -67,10 +67,6 @@ fn listen(shared: &Arc<Mutex<State>>, port: &Port, cancel: &Arc<AtomicBool>) -> 
         sessions.retain(|task| !task.is_finished());
         match incoming.recv_timeout(Duration::from_millis(50)) {
             Ok(connection) => {
-                if sessions.len() >= MAX_CONNECTIONS {
-                    process.transport.reject(connection);
-                    continue;
-                }
                 let shared = shared.clone();
                 let port = port.clone();
                 let cancel = cancel.clone();

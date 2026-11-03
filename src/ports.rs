@@ -33,7 +33,7 @@ use std::{
 const MAX_PORTS: usize = 256;
 const PORTS_PER_CHAT: usize = 16;
 const MAX_RECORDS: usize = 2 * MAX_PORTS;
-const MAX_CONNECTIONS: usize = 8;
+const MAX_CONNECTIONS: usize = 32;
 fn fail(s: impl ToString) -> io::Error {
     io::Error::other(s.to_string())
 }
@@ -1120,12 +1120,12 @@ fn ingress(shared: Arc<Mutex<State>>, mut port: Port, cancel: Arc<AtomicBool>) -
     let mut sessions: Vec<JoinHandle<()>> = Vec::new();
     while live_service(&shared, &port, &cancel).is_ok() {
         sessions.retain(|s| !s.is_finished());
+        if active.load(Ordering::Acquire) >= MAX_CONNECTIONS {
+            thread::sleep(Duration::from_millis(25));
+            continue;
+        }
         match listener.accept() {
             Ok((socket, _)) => {
-                if active.load(Ordering::Acquire) >= MAX_CONNECTIONS {
-                    drop(socket);
-                    continue;
-                }
                 active.fetch_add(1, Ordering::AcqRel);
                 let active = active.clone();
                 let shared = shared.clone();

@@ -204,6 +204,7 @@ fn multiplex_listener(port:u16,lifetime:Duration) -> io::Result<()> {
     println!("CONTROL_RELAY_V3_READY");io::stdout().flush()?;
     let started=Instant::now();
     while transport.alive() && transport.heartbeat_age()<Duration::from_secs(5) && started.elapsed()<lifetime {
+        if !transport.has_capacity() {std::thread::sleep(Duration::from_millis(10));continue;}
         match listener.accept() {
             Ok((socket,_)) => {let _=transport.open(socket);}
             Err(error) if error.kind()==io::ErrorKind::WouldBlock=>std::thread::sleep(Duration::from_millis(10)),

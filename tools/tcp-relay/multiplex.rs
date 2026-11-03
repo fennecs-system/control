@@ -14,7 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub const CONNECTIONS: usize = 8;
+pub const CONNECTIONS: usize = 32;
 type Payload = Option<Vec<u8>>;
 struct Channel {
     outgoing: Credit,
@@ -64,6 +64,12 @@ impl Transport {
     }
     pub fn alive(&self) -> bool {
         self.alive.load(Ordering::Acquire)
+    }
+    /// Whether another stream fits; listeners leave further connections in
+    /// their accept backlog until one closes instead of resetting them.
+    #[allow(dead_code)] // Listener-side API; shared with the host binary.
+    pub fn has_capacity(&self) -> bool {
+        self.channels.lock().is_ok_and(|channels| channels.len() < CONNECTIONS)
     }
     #[allow(dead_code)] // Listener-side API; shared with the host binary.
     pub fn heartbeat_age(&self) -> Duration {
@@ -362,7 +368,7 @@ mod tests {
         }
     }
     #[test]
-    fn eight_streams_transfer_independently_and_preserve_half_close() {
+    fn every_stream_slot_transfers_independently_and_preserves_half_close() {
         let pair = Pair::new();
         let mut clients = Vec::new();
         let mut servers = Vec::new();
@@ -380,6 +386,7 @@ mod tests {
             }));
             clients.push(client);
         }
+        assert!(!pair.listener.has_capacity(), "a full transport admits no more streams");
         let (_, overflow) = sockets();
         assert!(pair.listener.open(overflow).is_err());
         let clients = clients
@@ -399,6 +406,11 @@ mod tests {
             task.join().unwrap();
         }
         assert!(pair.listener.alive() && pair.host.alive());
+        let freed = Instant::now();
+        while !pair.listener.has_capacity() && freed.elapsed() < Duration::from_secs(2) {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(pair.listener.has_capacity(), "closed streams free their slots for waiting connections");
         let start = Instant::now();
         while !pair.listener.channels.lock().unwrap().is_empty() {
             assert!(start.elapsed() < Duration::from_secs(1));
