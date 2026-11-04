@@ -1,5 +1,17 @@
 //! Pure MCP transport metadata, shared by the server and standalone TUI.
 //! This classifies calls; execution and actor authorization stay in the brokers.
+/// Host policy, never a caller-supplied MCP annotation. Unknown tools fail
+/// closed. Isolated execution still starts work, so it is fenced after yield.
+pub fn after_handoff(name:&str)->bool {
+    matches!(name,
+        "control_turn_context"|"control_turn_handoff"|
+        "control_service_status"|"control_service_exec_status"|
+        "control_port_status"|"control_bot_status"|
+        "control_workspace_status"|"control_watch_status"|"control_watch_events"|
+        "control_room_list"|"control_room_read"|"control_room_notifications"|
+        "control_knowledge_read"|"control_knowledge_search"|
+        "control_agent_result"|"control_agent_spawn_status")
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Route {
     Chat,

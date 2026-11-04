@@ -258,6 +258,7 @@ pub fn execute(
 ) -> Outcome {
     let blocked = |message: &str| ("blocked", message.into());
     let failed = |message: &str| ("failed", message.into());
+    let captured=crate::turn_context::input(attempt).map_err(|e|failed(&e.to_string()))?;
     let auth = credential().map_err(|_| blocked("Claude login unavailable. Run control claude login; host keychain credentials are never extracted."))?;
     let root = workspace
         .parent()
@@ -300,10 +301,7 @@ pub fn execute(
                 }
         }, &flag)
     });
-    let environment = crate::worker::ENVIRONMENT_GUIDANCE;
-    let access=if attempt.review_only {"Source is read-only. Inspect files and verify findings, using /tmp for disposable outputs. Report defects and evidence; no source changes or publication."} else {"Use it to read/write task files. Work freely within the sandbox for routine edits, builds and tests. Use control_agent_spawn for background work; control_agent_spawn_blocking pauses this conversation for a bounded worker or isolated read-only review. Stop after blocking-spawn acknowledgement and Control resumes you. Use control_design_ask for consequential architecture, scope or behavior decisions requiring user direction: offer concrete options and a recommendation, then stop work."};
-    let language = control_context::agent_policy::CODE_LANGUAGE_GUIDANCE;
-    let prompt = format!("You are working on a task in Control. Project access uses credential-free offline workspace tools at /workspace, with Rust, rg and fd. Use control_workspace_run for short commands, or control_workspace_start with status/cancel for longer builds and declared build environments. Await job completion before finishing; outstanding jobs are cancelled before checkpoint publication. {access} {environment} You cannot read the harness filesystem or credentials. {language} This is not permission escalation. Keep replies direct; omit empty report sections. You may use public search without private text. Control node policy determines authority; tools cannot administer it. Objective:\n{objective}");
+    let prompt = captured.unwrap_or_else(|| render_prompt(objective,attempt.review_only));
     let sent = child
         .stdin
         .take()
@@ -326,7 +324,7 @@ pub fn execute(
             if s.is_poisoned() {
                 break false;
             }
-            crate::worker_tools::pump_at(s, r, &mailbox, workspace);
+            crate::worker_tools::pump_at(s, r, &mailbox, workspace,attempt.context_trace.is_some());
         }
         if crate::design::requested(bridge) { break false; }
         match child.try_wait() {
@@ -428,6 +426,14 @@ pub fn command(args: &[String]) -> io::Result<()> {
         }
         _ => Err(fail("Use control claude login | check")),
     }
+}
+
+
+pub(crate) fn render_prompt(objective: &str, review_only: bool) -> String {
+    let environment = crate::worker::ENVIRONMENT_GUIDANCE;
+    let access=if review_only {"Source is read-only. Inspect files and verify findings, using /tmp for disposable outputs. Report defects and evidence; no source changes or publication."} else {"Use it to read/write task files. Work freely within the sandbox for routine edits, builds and tests. Use control_agent_spawn for background work; control_agent_spawn_blocking pauses this conversation for a bounded worker or isolated read-only review. Stop after blocking-spawn acknowledgement and Control resumes you. Use control_design_ask for consequential architecture, scope or behavior decisions requiring user direction: offer concrete options and a recommendation, then stop work."};
+    let language = control_context::agent_policy::CODE_LANGUAGE_GUIDANCE;
+    format!("You are working on a task in Control. Project access uses credential-free offline workspace tools at /workspace, with Rust, rg and fd. Use control_workspace_run for short commands, or control_workspace_start with status/cancel for longer builds and declared build environments. Await job completion before finishing; outstanding jobs are cancelled before checkpoint publication. {access} {environment} You cannot read the harness filesystem or credentials. {language} This is not permission escalation. Keep replies direct; omit empty report sections. You may use public search without private text. Control node policy determines authority; tools cannot administer it. Objective:\n{objective}")
 }
 
 #[cfg(test)]

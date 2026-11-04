@@ -7,6 +7,20 @@ use std::{
 };
 
 fn rpc_at(
+    shared:&Arc<Mutex<State>>,run_id:&str,envelope:&Value,workspace:Option<&Path>,
+)->Value {
+    let mut response=dispatch_at(shared,run_id,envelope,workspace);
+    if envelope["request"]["method"]=="tools/call"
+        && !matches!(envelope["request"]["params"]["name"].as_str(),Some("control_turn_context"|"control_turn_handoff"))
+        && let Some(content)=response["result"]["content"].as_array_mut()
+        && let Ok(mut state)=shared.lock()
+        && crate::turn_context::callback_notice(&mut state,run_id)
+    {
+        content.push(json!({"type":"text","text":"Use control_turn_context at the next action boundary for new callbacks or remaining attempt time. Keep this session active while useful work remains; hand off before the hard deadline."}));
+    }
+    response
+}
+fn dispatch_at(
     shared: &Arc<Mutex<State>>,
     run_id: &str,
     envelope: &Value,
@@ -54,6 +68,10 @@ fn rpc_at(
     }
     let claude = run.backend == crate::backend::Backend::Claude;
     let judge = crate::delegation::is_judge(run);
+    // Enabling a bot affects the next admission, not the protocol of an
+    // already-running provider session whose input was captured earlier.
+    let managed=crate::turn_context::managed(&state,run)
+        && run.attempts.last().is_some_and(|attempt|attempt.turn_mailbox.is_some());
     let result = match request["method"].as_str().unwrap_or("") {
         "initialize" => {
             json!({"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"control-worker","version":"0.1"}})
@@ -61,6 +79,9 @@ fn rpc_at(
         "ping" => json!({}),
         "tools/list" => {
             let mut tools = crate::tool_registry::worker_definitions(run.action == identity::Action::Improve);
+            if !managed {
+                tools.retain(|tool|!matches!(tool["name"].as_str(),Some("control_turn_context"|"control_turn_handoff")));
+            }
             if judge {
                 tools.retain(|tool|matches!(tool["name"].as_str(),Some("control.web.search"|"control.rust.run"|"control.rust.bench"|"control_agent_result"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_knowledge_read"|"control_knowledge_search")));
             }
@@ -83,9 +104,17 @@ fn rpc_at(
             if let Some(room_tools) = response["result"]["tools"].as_array() {
                 tools.extend(room_tools.clone());
             }
+            if managed {tools.retain(|tool|tool["name"]!="control_room_ack");}
             json!({"tools":tools})
         }
         "tools/call" => {
+            if run.attempts.last().and_then(|a|a.turn_mailbox.as_ref()).and_then(|m|m.accepted()).is_some()
+                && !control_context::tool_policy::after_handoff(request["params"]["name"].as_str().unwrap_or("")) {
+                return error("A handoff is staged; only observations and handoff corrections may run before this attempt finishes.");
+            }
+            if request["params"]["name"]=="control_room_ack" && managed {
+                return error("Managed sessions acknowledge delivered callback receipts through control_turn_handoff after processing; use control_turn_context with source=room.");
+            }
             if judge && !matches!(request["params"]["name"].as_str(),Some("control_workspace_run"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_web_search"|"control_rust_run"|"control_rust_bench"|"control_room_list"|"control_room_read"|"control_room_post"|"control_agent_result"|"control_knowledge_read"|"control_knowledge_search")) {
                 return error("Judge policy permits read-only source inspection, isolated verification and room collaboration only.");
             }
@@ -323,15 +352,15 @@ fn rpc_at(
     };
     json!({"jsonrpc":"2.0","id":id,"result":result})
 }
-pub fn pump(state: &Arc<Mutex<State>>, run: &str, workspace: &Path) {
-    pump_at(state, run, workspace, workspace);
+pub fn pump(state: &Arc<Mutex<State>>, run: &str, workspace: &Path, managed:bool) {
+    pump_at(state, run, workspace, workspace,managed);
 }
-pub fn pump_at(state: &Arc<Mutex<State>>, run: &str, mailbox: &Path, workspace: &Path) {
+pub fn pump_at(state: &Arc<Mutex<State>>, run: &str, mailbox: &Path, workspace: &Path, managed:bool) {
     let path = mailbox.join(".control-room-request");
     let Ok(envelope) = rooms::read_request(&path) else {
         return;
     };
-    let response = rpc_at(state, run, &envelope, Some(workspace));
+    let response = if managed {rpc_at(state, run, &envelope, Some(workspace))}else{dispatch_at(state,run,&envelope,Some(workspace))};
     rooms::reply(mailbox, &response);
 }
 
@@ -339,6 +368,34 @@ pub fn pump_at(state: &Arc<Mutex<State>>, run: &str, mailbox: &Path, workspace: 
 mod tests {
     use crate::runtime::RunKind;
     use super::*;
+    #[test]
+    fn staged_handoffs_fence_mutators_by_host_policy_and_legacy_chats_hide_continuity_tools() {
+        use control_context::{turn_mailbox::{Mailbox,Handoff,Disposition},working_state::Payload};
+        let mut state=State::default();
+        let chat=crate::chat::create(&mut state);
+        crate::chat::send(&mut state,&chat,"Work","test").unwrap();
+        state.runtime.runs[0].status="running".into();
+        let id=state.runtime.runs[0].id.clone();
+        let shared=Arc::new(Mutex::new(state));
+        let list=json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/list"}});
+        let legacy=rpc_at(&shared,&id,&list,None);
+        assert!(!legacy["result"]["tools"].as_array().unwrap().iter().any(|t|t["name"]=="control_turn_context"));
+        {
+            let mut state=shared.lock().unwrap();
+            state.chats[0].continuity=Some(Box::new(crate::turn_context::Managed::default()));
+            let mut mailbox=Mailbox::default();
+            mailbox.stage("draft".into(),Handoff{base_revision:0,payload:Payload{subgoal:"Keep the goal".into(),..Default::default()},processed:vec![],resynchronised:vec![],disposition:Disposition::Continue,progress:None},0).unwrap();
+            state.runtime.runs[0].attempts.push(crate::usage::Attempt{workspace_id:Some(format!("{id}-attempt-1")),turn_mailbox:Some(Box::new(mailbox)).into(),..Default::default()});
+        }
+        let managed=rpc_at(&shared,&id,&list,None);
+        assert!(managed["result"]["tools"].as_array().unwrap().iter().any(|t|t["name"]=="control_turn_context"));
+        let before=serde_json::to_value(&*shared.lock().unwrap()).unwrap();
+        for name in ["control_agent_spawn","control_agent_spawn_blocking","control_design_ask","control_service_start","control_port_request","control_room_post","control_room_ack","control_workspace_run","unknown"] {
+            let denied=rpc_at(&shared,&id,&json!({"request":{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":name,"arguments":{},"annotations":{"readOnlyHint":true}}}}),None);
+            assert!(denied["error"]["message"].as_str().unwrap().contains("handoff is staged"),"{name}");
+        }
+        assert_eq!(serde_json::to_value(&*shared.lock().unwrap()).unwrap(),before);
+    }
     fn design_transport_envelope() -> Value {
         // Reproduce the recorded successful transport shape with generic task
         // arguments, not the literal user conversation. Identities are timestamp-count.

@@ -1,6 +1,7 @@
 # Control roadmap
 
-Reviewed 2026-11-03 against main through #128, the playtest and #129.
+Reviewed 2026-11-04 against main through #129, the continuity review and
+the Cass playtest evidence; implementation and comparative retest remain pending.
 Keep the normal macOS/Nix release useful to friends; improve reliability before
 adding autonomous operation. Each node supplies its own configuration and model
 access. Federation remains lower priority.
@@ -190,17 +191,17 @@ See [library boundaries and measurements](docs/CRATE-BOUNDARIES.md).
   repeated permission questions (#127); redundant room skill installation is
   removed and service output is folded in chat (#128).
 
-## Next: deploy and retest turn continuity
+## Baseline: deployed revision and turn continuity checks
 
-**✓ Implemented and locally verified on #129; merge/deployment pending.**
+**✓ Merged in #129 with local verification; deployment status unverified here.**
 Automatic turns retain omitted user instructions and recent execution evidence
 through the shared provider-neutral projection. Explicit one-shot watch requests
 re-arm the next callback, completed/pending evidence survives new watches, and
 failed saves restore observation counters. `control_bot_pause` durably pauses
 the caller's own wakes; the operator resumes it with `/bot resume`.
 
-After merge, deploy the binary/WASM and refreshed worker images, check node
-health, then run a fresh small playtest. Verify that the original goal and later
+Record whether the playtest binary/WASM and worker images include #129 and check
+node health before comparative testing. Verify that the original goal and later
 steering survive callbacks, setup advances without manual "continue", and room
 updates reflect actual progress. Waiting on a peer should end a turn quietly;
 an explicit pause should stop automatic wakes. Inspect wake reasons and tool
@@ -210,8 +211,58 @@ the context and callback contract is what must hold.
 Local workspace/web checks, Chrome's fifteen-turn regression, release builds
 and before/after flamegraphs pass. Prompt construction adds measured work for
 retained evidence; see [performance results](docs/PERFORMANCE.md). The workload's
-connection/protocol issue remains unproven and belongs in tool containers.
-Keep broader extraction and the review follow-ups below out of this test's path.
+connection/protocol work belongs in tool containers and must be distinguished
+from the stop/start overhead measured below. Keep broader extraction out of the
+continuity implementation's path.
+
+## Next priority: reduce stop/start context pollution
+
+**Implementation in progress; not deployed.** The Cass playtest
+shows 17 consecutive monitoring turns in ten minutes, repeating 68 tool calls
+without a gameplay action. Their exchanges occupy about 52% of the reconstructed
+next recent-history window. See the scoped measurements, concrete contracts,
+code map and acceptance tests in [Turn continuity implementation handoff](docs/TURN-CONTINUITY.md).
+Keep the current playtest unchanged as baseline evidence.
+
+Bot = agent + supervisor + callbacks. Keep a progressing session active; resume
+unfinished runnable work automatically when that session ends. Do not impose a
+short periodic handoff target. The feature branch has bounded captured input,
+typed working notes and conversation/room receipts, atomic publication, idle
+waits and budgeted successors. Bot approval enables the next admission without
+restarting an active session. A missing handoff can recover from a successful
+published checkpoint; failures and approval waits retain their separate paths.
+See the design's implementation checkpoint for the supported subset. Watch
+receipt expansion, evidence/resource resolvers and prefix/exit wake selection
+remain follow-ups, not prerequisites for this continuous-agent playtest.
+
+Control's JSON state, journals and resource/checkpoint records remain the source
+of truth. Separate retained evidence, explicit working state and the bounded
+context projected into a model turn. Keep the continuation contract independent
+of provider sessions, with the same meaning for Codex, Claude and later API-key
+or local-model adapters. Preserve the existing scheduling and authority rules.
+
+1. **Useful task context.** Preserve lifecycle evidence for inspection, but keep
+   repeated wake/status bookkeeping out of managed task history. Capture exact
+   Control input, projection version and evidence selection. Preserve standing
+   instructions across trigger types and bound the whole context projection.
+2. **Reliable working-state handoffs.** Version goals/progress, evidence-linked
+   findings, rejected approaches, pending actions/handles and conditional next
+   steps. Stage model claims separately from Control-observed facts; atomically
+   commit handoff, processed-event cursors and matching workspace publication.
+3. **Active sessions and event deltas.** Allow several related actions in
+   one attempt, consuming deltas at action boundaries. Yield on genuine waits or
+   budgets; retain at most one durable successor for unfinished runnable work.
+   Events already processed by that attempt must not create redundant wakes.
+4. **Selective admission.** Separate recorded telemetry from wake eligibility.
+   Use generic watch milestone/exit policies and scoped wait conditions, preserving
+   unread evidence, finite rechecks and human/failure delivery. No game-specific
+   logic belongs in Control. Idle agents release their model slots.
+5. **Preserve recovery and measure progress.** Keep one writer, durable admission,
+   generation fencing, cancellation, pause and delegation chains. Restart still
+   interrupts attempts; never replay ambiguous effects. Compare useful actions,
+   model admissions, monitoring turns, context bytes, token usage and task time
+   on equivalent tasks explicitly permitting longer slices. Cached comonad
+   summaries and API/local-model adapters remain separate later workstreams.
 
 ## Later: core, web and terminal boundaries
 
@@ -541,9 +592,11 @@ can drive different isolation levels.
 
 ## Later: unbounded conversation memory as a comonad
 
-The locally verified #129 continuity fix is described above. Background summaries
-remain separate: retained human inputs can grow and excerpts still hydrate the
-previous journal record.
+The merged #129 continuity fix and the prioritized active-slice/handoff design are
+described above. Background summaries follow that implementation's evidence: retained human
+inputs can grow and excerpts still hydrate the previous journal record. The
+current production Lens compactor uses `NoSummaries`; older multi-entry blocks
+are omitted, not backed by a computed summary cache.
 
 Persistent bots keep conversations that never end, so their memory needs bounded
 per-turn context over unbounded history. Borrow the summary tree from
@@ -557,9 +610,14 @@ than built into the core.
   down to the original message, as a lens.
 - Each message gets a one-line summary and neighbouring summaries merge pairwise
   into a binary tree. A turn's context is a cut through that tree within a byte
-  budget. The cut changes only at its end, so provider prompt caches keep hitting.
-  Detail fades with age but nothing is discarded, giving effectively unbounded
-  context.
+  budget. Cache summaries against immutable source blocks and summarizer versions;
+  retain provenance and access to the original evidence. Measure provider prompt
+  cache reuse separately; stable blocks do not guarantee cache hits or semantic
+  preservation. This bounds the history view over growing retained history.
+- Combine distance-based detail with explicit standing constraints and unresolved
+  work from the continuation state. Old pending actions may matter more than
+  recent routine output. Budget the whole context projection, allow focused
+  expansion by reference, and keep summaries distinct from authoritative facts.
 - Verbatim messages and summary nodes live in per-chat append-only JSON-lines
   files, not a database and not the main state checkpoint. This also moves
   transcripts out of `state.json`.
@@ -570,6 +628,10 @@ than built into the core.
   replace it.
 
 ## Deferred
+
+`control migrate` for deliberate state upgrades after the schema settles.
+Development uses explicit fresh-state resets, never an automatic wipe of an
+active node or a migration prerequisite for bot continuity.
 
 Live federation and remote delegation, other host platforms/NixOS packaging, GPU/microVM
 tiers, bundled inference and model routing follow demonstrated local needs.

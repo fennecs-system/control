@@ -367,6 +367,11 @@ pub fn handle(
             ),
             Err(message) => respond(stream, "404 Not Found", "text/plain", message, ""),
         }
+    } else if method == "GET" && operation == "context" {
+        match crate::turn_context::view(state,id,&crate::fields(query)) {
+            Ok(html)=>respond(stream,"200 OK","text/html; charset=utf-8",&crate::render(state,"artifact-page",lens,&html),""),
+            Err(error)=>respond(stream,"404 Not Found","text/plain",&error.to_string(),""),
+        }
     } else if method == "GET" && operation == "transcript" {
         match chat::transcript(state, id) {
             Ok(html) => respond(stream, "200 OK", "text/html; charset=utf-8", &html, ""),
@@ -400,6 +405,24 @@ mod tests {
     #[test]
     #[ignore = "profiling workload; set CONTROL_STATE_DIR to a scratch directory and optionally CONTROL_PROFILE_CONVERSATIONS"]
     fn fifteen_turn_conversations_workload() {
+        #[derive(Default)]
+        struct Stage { wall_ns:u128, cpu_ns:u128, calls:u64 }
+        fn cpu_ns() -> u128 {
+            let mut time=libc::timespec{tv_sec:0,tv_nsec:0};
+            assert_eq!(unsafe {libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID,&mut time)},0);
+            time.tv_sec as u128*1_000_000_000+time.tv_nsec as u128
+        }
+        fn measure<T>(stage:&mut Stage, action:impl FnOnce()->T)->T {
+            let wall=std::time::Instant::now();
+            let cpu=cpu_ns();
+            let result=action();
+            stage.cpu_ns+=cpu_ns()-cpu;
+            stage.wall_ns+=wall.elapsed().as_nanos();
+            stage.calls+=1;
+            result
+        }
+        let mut stages:[Stage;5]=std::array::from_fn(|_|Stage::default());
+        println!("{}",serde_json::json!({"layout":{"session_bytes":std::mem::size_of::<crate::chat::Session>(),"run_bytes":std::mem::size_of::<crate::runtime::Run>(),"attempt_bytes":std::mem::size_of::<crate::usage::Attempt>()}}));
         assert!(std::env::var_os("CONTROL_STATE_DIR").is_some(), "saves write to CONTROL_STATE_DIR");
         let conversations = std::env::var("CONTROL_PROFILE_CONVERSATIONS").ok().and_then(|n| n.parse().ok()).unwrap_or(20);
         let reply = "## Result\n\nThe server is **ready** and both bots joined.\n\n- `server.jar` verified\n- ViaProxy listening on 25566\n- Alice and Cass in the player list\n\n```sh\njava -jar server.jar nogui\n```\n\n".repeat(12);
@@ -410,7 +433,7 @@ mod tests {
             for turn in 0..15 {
                 let mut out = Vec::new();
                 let body = format!("message=Turn+{turn}%3A+keep+building+the+house+and+report+progress");
-                assert!(super::handle(&mut out, &mut state, "POST", &format!("/chat/{id}/messages"), "engineering", "Accept: application/json\r\n", body.as_bytes()));
+                assert!(measure(&mut stages[0],||super::handle(&mut out, &mut state, "POST", &format!("/chat/{id}/messages"), "engineering", "Accept: application/json\r\n", body.as_bytes())));
                 let run = state.runtime.runs.iter_mut().rev().find(|run| run.chat_id.as_deref() == Some(id.as_str())).unwrap();
                 run.status = "completed".into();
                 *run.result = reply.clone();
@@ -418,16 +441,19 @@ mod tests {
                 attempt.activity = (0..20).map(|i| crate::usage::Activity { id: format!("tool-{i}"), kind: "command_execution".into(), text: format!("cargo test --workspace -p crate-{i}"), output: "test result: ok. 412 passed; 0 failed\n".repeat(8), status: "completed".into() }).collect();
                 run.attempts.push(attempt);
                 // As commit does when a run finishes.
-                crate::history::archive_run(run).unwrap();
-                crate::storage::save(&state).unwrap();
-                for page in ["transcript", ""] {
+                measure(&mut stages[1],||crate::history::archive_run(run)).unwrap();
+                measure(&mut stages[2],||crate::storage::save(&state)).unwrap();
+                for (stage,page) in ["transcript", ""].into_iter().enumerate() {
                     out.clear();
                     let target = if page.is_empty() { format!("/chat/{id}") } else { format!("/chat/{id}/{page}") };
-                    assert!(super::handle(&mut out, &mut state, "GET", &target, "engineering", "", b""));
+                    assert!(measure(&mut stages[stage+3],||super::handle(&mut out, &mut state, "GET", &target, "engineering", "", b"")));
                 }
             }
         }
         let turns = conversations * 15;
+        for (name,stage) in ["send_and_save","archive","save","transcript","page"].into_iter().zip(stages) {
+            println!("{}",serde_json::json!({"stage":name,"calls":stage.calls,"mean_wall_ns":stage.wall_ns/u128::from(stage.calls),"mean_cpu_ns":stage.cpu_ns/u128::from(stage.calls)}));
+        }
         println!("{turns} turns in {:?} = {:?}/turn; saved state {} KiB", start.elapsed(), start.elapsed() / turns as u32, crate::history::persisting(|| serde_json::to_vec(&state)).unwrap().len() / 1024);
     }
     #[test]

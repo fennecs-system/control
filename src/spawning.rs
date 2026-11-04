@@ -51,6 +51,12 @@ struct Seed {
     design: Option<String>,
 }
 impl Batch {
+    /// A missing handoff must not turn a normal asynchronous dependency into
+    /// repeated parent admissions. Explicit runnable handoffs remain separate.
+    pub(crate) fn awaits_callback(&self,state:&State)->bool {
+        !self.cancelled && self.notify && (self.pending()>0 || self.children.iter().any(|id|
+            delegation::leaf(state,id).is_ok_and(|run|!matches!(run.status.as_str(),"completed"|"failed"|"interrupted"|"blocked"|"cancelled"))))
+    }
     pub(crate) fn reserved(&self) -> usize {
         self.input.objectives.len()
     }
@@ -75,7 +81,7 @@ impl Batch {
     }
 }
 pub fn definition() -> Value {
-    json!({"name":"control_agent_spawn","description":"Start independent or background worker objectives without pausing this conversation. Return the handles and finish your turn; Control queues completion updates automatically. Use control_agent_spawn_status only when a current status check is needed, never in a polling loop. Configured team budget (default 64), pending-intent budget and 24000-byte payload apply independently of model slots. Children inherit captured model, lenses, actor, linked room and immutable baseline, never live edits. Mentioning a room in an objective does not link it. First Improve turns without a published baseline must checkpoint via control_agent_spawn_blocking or finish first. Depth limit 2; children and blocking spawns share one root budget. Cancellation fences backlog and descendants; later originating-chat turns can inspect or cancel retained batches.","inputSchema":{"type":"object","properties":{"objectives":{"type":"array","description":"One concise task per child, 1–2000 characters each and 24000 UTF-8 bytes total. Example: [\"Inspect the API\",\"Review the tests\"]. Request identity comes from the transport; do not supply nonce or identity fields.","minItems":1,"items":{"type":"string","minLength":1,"maxLength":2000}}},"required":["objectives"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
+    json!({"name":"control_agent_spawn","description":"Start independent or background worker objectives without pausing this conversation. Continue useful work in this session; spawning does not require ending it. Control queues completion updates automatically. Yield when genuinely waiting with no independent work remaining. Use control_agent_spawn_status only when a current status check is needed, never in a polling loop. Configured team budget (default 64), pending-intent budget and 24000-byte payload apply independently of model slots. Children inherit captured model, lenses, actor, linked room and immutable baseline, never live edits. Mentioning a room in an objective does not link it. First Improve turns without a published baseline must checkpoint via control_agent_spawn_blocking or finish first. Depth limit 2; children and blocking spawns share one root budget. Cancellation fences backlog and descendants; later originating-chat turns can inspect or cancel retained batches.","inputSchema":{"type":"object","properties":{"objectives":{"type":"array","description":"One concise task per child, 1–2000 characters each and 24000 UTF-8 bytes total. Example: [\"Inspect the API\",\"Review the tests\"]. Request identity comes from the transport; do not supply nonce or identity fields.","minItems":1,"items":{"type":"string","minLength":1,"maxLength":2000}}},"required":["objectives"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
 }
 pub fn management_definitions() -> Vec<Value> {
     vec![

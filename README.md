@@ -114,6 +114,8 @@ These chat commands work on the web, in the TUI and in authorized Discord DMs:
   purple/red diff previews. Browse published files in a read-only viewer.
 - **Bots and runs.** See active tasks, the queue and execution history. Cancel
   work, retry an interrupted attempt, or spawn background tasks with queued completion updates.
+  Approved bots keep useful sessions active; durable handoffs continue runnable
+  work or wait for relevant events while their services keep running.
 - **Lenses.** Compose knowledge, instructions and tool selections per chat.
   Engineering and Research are built from smaller reusable lenses.
 - **Knowledge.** Write Markdown notes, connect them with `[[links]]`, explore the

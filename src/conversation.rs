@@ -14,7 +14,8 @@ use std::collections::HashMap;
 /// A chat's entries, with every answering run indexed once.
 pub(crate) struct Conversation<'a> {
     session: &'a Session,
-    runs: HashMap<&'a str, &'a Run>,
+    runs: HashMap<&'a str, Option<&'a Run>>,
+    task_view: bool,
 }
 
 /// One message and the run that answered it, if any.
@@ -22,6 +23,7 @@ pub(crate) struct Conversation<'a> {
 pub(crate) struct Entry<'a> {
     pub message: &'a Message,
     pub run: Option<&'a Run>,
+    task_view: bool,
 }
 
 /// Borrowed continuity inputs; reading archived observations stays in the adapter.
@@ -67,6 +69,19 @@ impl<'a> Entry<'a> {
     }
     /// The entry as prompt history shows it.
     pub fn render(&self) -> String {
+        if self.task_view {
+            use control_context::agent_policy::PromptRole;
+            if let Some(run) = self.run.filter(|run| run.kind.prompt_role() == PromptRole::Wake) {
+                return if matches!(run.status.as_str(), "blocked" | "failed" | "interrupted" | "cancelled") {
+                    format!("Failure from {}:\n{}\n", run.id, self.response().1)
+                } else if run.status=="completed" {
+                    run.attempts.last().and_then(|a| a.task_progress())
+                        .filter(|progress| !progress.trim().is_empty())
+                        .map(|progress| format!("Task progress from {}:\n{progress}\n", run.id))
+                        .unwrap_or_default()
+                } else {String::new()};
+            }
+        }
         format!("{}: {}\nAssistant: {}\n", self.speaker(), self.message.text, self.response().1)
     }
 }
@@ -97,19 +112,29 @@ impl<'a> Conversation<'a> {
                 remaining -= 1;
             }
         }
-        Self { session, runs: wanted.into_iter().filter_map(|(id, run)| Some((id, run?))).collect() }
+        if remaining>0 {
+            wanted.retain(|_,run|run.is_some());
+            wanted.shrink_to_fit();
+        }
+        Self { session, runs: wanted, task_view: false }
+    }
+    /// Change only what entries render for model selection. Source positions,
+    /// the append-only conversation and the configured compactor stay intact.
+    pub fn task_view(mut self) -> Self {
+        self.task_view = true;
+        self
     }
     pub fn len(&self) -> usize {
         self.session.messages.len()
     }
     pub fn entry(&self, index: usize) -> Option<Entry<'a>> {
         let message = self.session.messages.get(index)?;
-        Some(Entry { message, run: message.run_id.as_deref().and_then(|id| self.runs.get(id).copied()) })
+        Some(Entry { message, run: message.run_id.as_deref().and_then(|id| self.runs.get(id).copied().flatten()), task_view: self.task_view })
     }
     /// Where the message answered by `run` sits.
     /// The run answering one of this chat's messages.
     pub fn run(&self, id: &str) -> Option<&'a Run> {
-        self.runs.get(id).copied()
+        self.runs.get(id).copied().flatten()
     }
     pub fn position(&self, run: &str) -> Option<usize> {
         self.session.messages.iter().position(|m| m.run_id.as_deref() == Some(run))
@@ -143,7 +168,7 @@ pub(crate) struct Window {
 impl Window {
     pub fn render(&self, conversation: &Conversation<'_>) -> Vec<String> {
         self.items.iter().filter_map(|item| match item {
-            Item::Entry(index) => conversation.entry(*index).map(|entry| entry.render()),
+            Item::Entry(index) => conversation.entry(*index).map(|entry| entry.render()).filter(|text| !text.is_empty()),
             Item::Summary(block, text) => Some(format!("Summary of entries {}–{}: {text}\n", block.start + 1, block.end())),
         }).collect()
     }
@@ -170,7 +195,9 @@ impl Compactor for Recent {
         let mut count = 0;
         for index in (0..current.min(conversation.len())).rev() {
             let Some(entry) = conversation.entry(index) else { break };
-            count += entry.render().chars().count();
+            let text = entry.render();
+            if text.is_empty() { continue; }
+            count += text.chars().count();
             if count > self.chars {
                 break;
             }

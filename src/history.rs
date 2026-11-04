@@ -38,7 +38,7 @@ pub(crate) fn path(chat: Option<&str>) -> io::Result<PathBuf> {
 fn with<T>(chat: Option<&str>, f: impl FnOnce(&mut FileJournal) -> io::Result<T>) -> io::Result<T> {
     with_path(path(chat)?, f)
 }
-fn with_path<T>(path: PathBuf, f: impl FnOnce(&mut FileJournal) -> io::Result<T>) -> io::Result<T> {
+pub(crate) fn with_path<T>(path: PathBuf, f: impl FnOnce(&mut FileJournal) -> io::Result<T>) -> io::Result<T> {
     static JOURNALS: OnceLock<Mutex<HashMap<PathBuf, FileJournal>>> = OnceLock::new();
     let mut open = JOURNALS.get_or_init(Mutex::default).lock().map_err(|_| io::Error::other("History unavailable"))?;
     if !open.contains_key(&path) {
@@ -102,6 +102,30 @@ mod tests {
         Activity { id: id.into(), kind: "command_execution".into(), text: "cargo test".into(), output: "ok".repeat(50), status: "completed".into() }
     }
 
+    #[test]
+    fn finished_handoffs_spill_with_activity_and_failed_saves_restore_the_inline_value() {
+        use control_context::turn_mailbox::Mailbox;
+        let mut state=crate::State::default();
+        let chat=crate::chat::create(&mut state);
+        crate::chat::send(&mut state,&chat,"Retain a handoff","test").unwrap();
+        own(&mut state,&chat,"handoff-spill");
+        let mut mailbox=Mailbox::default();
+        mailbox.deliver("receipt".into(),control_context::turn_mailbox::Delivery{ranges:vec![],gap:false,request:"x".repeat(8000)}).unwrap();
+        let run=&mut state.runtime.runs[0];
+        run.attempts.push(Attempt{turn_mailbox:Some(Box::new(mailbox.clone())).into(),..Default::default()});
+        run.status="completed".into();
+        let inline=persisting(||serde_json::to_vec(&state)).unwrap();
+        let archived=archive_run(&mut state.runtime.runs[0]).unwrap();
+        let compact=persisting(||serde_json::to_vec(&state)).unwrap();
+        assert!(compact.len()+7000 < inline.len(),"finished receipts must not be rewritten on every checkpoint");
+        let mut restored:crate::State=serde_json::from_slice(&compact).unwrap();
+        recover(&restored).unwrap();
+        hydrate_text(&mut restored).unwrap();
+        assert_eq!(restored.runtime.runs[0].attempts[0].turn_mailbox.as_deref(),Some(&mailbox));
+        assert_eq!(persisting(||serde_json::to_vec(&restored)).unwrap(),compact);
+        undo(&mut state.runtime.runs[0],archived);
+        assert_eq!(persisting(||serde_json::to_vec(&state)).unwrap(),inline);
+    }
     #[test]
     fn finished_attempts_move_to_journals_and_read_back_unchanged() {
         let mut state = crate::State::default();
@@ -214,6 +238,9 @@ pub(crate) struct Spilled<T> {
     value: T,
     at: Option<u64>,
 }
+impl<T> Spilled<Option<T>> {
+    pub(crate) fn is_unset(&self) -> bool { self.at.is_none() && self.value.is_none() }
+}
 /// A copy is a new value: positions belong to one run in one chat's journal.
 impl<T: Clone> Clone for Spilled<T> {
     fn clone(&self) -> Self {
@@ -318,13 +345,22 @@ struct Text<'a> {
 /// Fills journal-backed run text back in after loading.
 pub(crate) fn hydrate_text(state: &mut crate::State) -> io::Result<()> {
     for run in &mut state.runtime.runs {
-        let Some(at) = run.objective.at.or(run.result.at).or(run.context.at).or(run.continuation.at) else { continue };
-        let line = with(run.chat_id.as_deref(), |journal| journal.read(at))?.ok_or_else(|| io::Error::other("History entry missing"))?;
-        let text: Text<'static> = serde_json::from_slice(&line).map_err(io::Error::other)?;
-        if run.objective.at.is_some() { run.objective.value = text.objective.into_owned(); }
-        if run.result.at.is_some() { run.result.value = text.result.into_owned(); }
-        if run.context.at.is_some() { run.context.value = text.context.into_owned(); }
-        if run.continuation.at.is_some() { run.continuation.value = text.continuation.into_owned(); }
+        if let Some(at) = run.objective.at.or(run.result.at).or(run.context.at).or(run.continuation.at) {
+            let line = with(run.chat_id.as_deref(), |journal| journal.read(at))?.ok_or_else(|| io::Error::other("History entry missing"))?;
+            let text: Text<'static> = serde_json::from_slice(&line).map_err(io::Error::other)?;
+            if run.objective.at.is_some() { run.objective.value = text.objective.into_owned(); }
+            if run.result.at.is_some() { run.result.value = text.result.into_owned(); }
+            if run.context.at.is_some() { run.context.value = text.context.into_owned(); }
+            if run.continuation.at.is_some() { run.continuation.value = text.continuation.into_owned(); }
+        }
+        for attempt in &mut run.attempts {
+            if let Some(at) = attempt.turn_mailbox.at {
+                #[derive(Deserialize)]
+                struct Saved { turn_mailbox: Option<Box<control_context::turn_mailbox::Mailbox>> }
+                let line = with(run.chat_id.as_deref(), |journal|journal.read(at))?.ok_or_else(||io::Error::other("Handoff journal entry missing"))?;
+                attempt.turn_mailbox.value = serde_json::from_slice::<Saved>(&line).map_err(io::Error::other)?.turn_mailbox;
+            }
+        }
     }
     Ok(())
 }
@@ -347,14 +383,18 @@ pub(crate) fn archive_run(run: &mut crate::runtime::Run) -> io::Result<Archived>
         result: &'a str,
         context: &'a Option<control_context::Resolved>,
         continuation: &'a Option<crate::design::Continuation>,
+        turn_mailbox: &'a Option<Box<control_context::turn_mailbox::Mailbox>>,
     }
     let index = run.attempts.len().saturating_sub(1);
     let empty = Attempt::default();
     let last = run.attempts.last().filter(|a| a.journal.is_none()).unwrap_or(&empty);
-    let line = serde_json::to_vec(&Finished { run: &run.id, attempt: index, activity: &last.activity, objective: &run.objective, result: &run.result, context: &run.context, continuation: &run.continuation }).map_err(io::Error::other)?;
+    let line = serde_json::to_vec(&Finished { run: &run.id, attempt: index, activity: &last.activity, objective: &run.objective, result: &run.result, context: &run.context, continuation: &run.continuation, turn_mailbox: &last.turn_mailbox }).map_err(io::Error::other)?;
     let at = with(run.chat_id.as_deref(), |journal| journal.append(&line))?;
     (run.objective.at, run.result.at, run.context.at, run.continuation.at) = (Some(at), Some(at), Some(at), Some(at));
     let mut activity = Vec::new();
+    if let Some(last) = run.attempts.last_mut().filter(|a| a.turn_mailbox.value.is_some()) {
+        last.turn_mailbox.at = Some(at);
+    }
     if let Some(last) = run.attempts.last_mut().filter(|a| a.journal.is_none() && !a.activity.is_empty()) {
         activity = std::mem::take(&mut last.activity);
         last.journal = Some(at);
@@ -367,6 +407,9 @@ pub(crate) fn archive_run(run: &mut crate::runtime::Run) -> io::Result<Archived>
 /// was actually saved.
 pub(crate) fn undo(run: &mut crate::runtime::Run, archived: Archived) {
     (run.objective.at, run.result.at, run.context.at, run.continuation.at) = (None, None, None, None);
+    if let Some(last) = run.attempts.last_mut().filter(|a|a.turn_mailbox.at == Some(archived.at)) {
+        last.turn_mailbox.at = None;
+    }
     if let Some(last) = run.attempts.last_mut().filter(|a| a.journal == Some(archived.at)) {
         last.activity = archived.activity;
         last.journal = None;
@@ -382,7 +425,7 @@ pub(crate) fn recover(state: &crate::State) -> io::Result<()> {
         referenced.entry(path(Some(&chat.id))?).or_insert((Some(&chat.id), 0));
     }
     for run in &state.runtime.runs {
-        let positions = run.attempts.iter().filter_map(|a| a.journal).chain([run.objective.at, run.result.at, run.context.at, run.continuation.at].into_iter().flatten());
+        let positions = run.attempts.iter().flat_map(|a| [a.journal, a.turn_mailbox.at].into_iter().flatten()).chain([run.objective.at, run.result.at, run.context.at, run.continuation.at].into_iter().flatten());
         let (_, end) = referenced.entry(path(run.chat_id.as_deref())?).or_insert((run.chat_id.as_deref(), 0));
         *end = positions.fold(*end, |end, at| end.max(at + 1));
     }

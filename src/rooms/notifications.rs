@@ -298,6 +298,13 @@ pub(crate) fn ensure_inbox(state: &mut State, chat: &str) -> Result<(), &'static
     state.collective.room_watches.push(Watch { chat: chat.into(), actor, room, cursor, wake: None, delivered: None, listener: None });
     Ok(())
 }
+/// Subscription origin for a new continuity protocol, not an acknowledgement
+/// of messages delivered by that protocol.
+pub(crate) fn inbox_cursor(state:&State, chat:&str)->Option<usize> {
+    let session=state.chats.iter().find(|session|session.id==chat)?;
+    state.collective.room_watches.iter().find(|watch|watch.chat==chat
+        && watch.actor==session.actor && Some(&watch.room)==session.room.as_ref()).map(|watch|watch.cursor)
+}
 pub(crate) fn listening(state: &State, chat: &str) -> bool {
     state.collective.room_watches.iter().any(|watch| watch.chat == chat && watch.listener.as_ref().is_some_and(|listener| !listener.paused()))
 }

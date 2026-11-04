@@ -53,6 +53,8 @@ pub trait Info: Clone + Debug + PartialEq {
     /// Folds `newer` into `self` and returns true, or returns false to keep
     /// both as distinct reasons.
     fn merge(&mut self, newer: &Self) -> bool;
+    /// Failures may interrupt an idle wait; ordinary telemetry does not.
+    fn urgent(&self) -> bool { false }
 }
 
 /// Bounds automatic turns: a minimum gap between turns and a cap per window.
@@ -121,6 +123,16 @@ pub enum Event<I> {
     Resume(BotId),
     /// Explicitly request one more callback after a temporary bot's current turn.
     Rearm(BotId),
+    /// Runnable work remains after a successfully published handoff. Coalesces
+    /// with pending callbacks and obeys the existing budget; never rearms a
+    /// temporary bot or resurrects a stopped one.
+    Continue(BotId),
+    /// Narrow an idle bot's wake conditions without changing its subscriptions.
+    /// The host validates the deadline and topic authority before admission.
+    Wait { bot: BotId, topics: Vec<Topic>, until: u64 },
+    /// Processing is distinct from ingestion. Clear only reasons whose exact
+    /// source watermark was committed with the agent's workspace.
+    Processed { bot: BotId, topic: Topic, through: u64 },
     Stop(BotId),
     /// A message on `topic`. `from` names the chat that caused it, so a bot is
     /// not woken by its own posts.
@@ -134,6 +146,7 @@ pub enum Event<I> {
 pub enum Reason<I> {
     Info { topic: Topic, through: u64, info: I },
     Timer,
+    Continue,
     /// More distinct messages arrived than a turn carries. Dropped messages are
     /// acknowledged, not replayed: the bot resynchronises from these topics.
     Overflow { dropped: u64, topics: Vec<Topic> },
@@ -168,6 +181,8 @@ struct Bot<I> {
     timer_due: Option<u64>,
     cursors: BTreeMap<String, u64>,
     #[cfg_attr(feature = "serde", serde(default))]
+    processed: BTreeMap<String, u64>,
+    #[cfg_attr(feature = "serde", serde(default))]
     dropped: u64,
     #[cfg_attr(feature = "serde", serde(default))]
     overflowed: Vec<Topic>,
@@ -178,14 +193,20 @@ struct Bot<I> {
     rearm: bool,
     #[cfg_attr(feature = "serde", serde(default))]
     held: Vec<Topic>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    wait: Option<Wait>,
 }
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+struct Wait { topics: Vec<Topic>, until: u64 }
 impl<I: Info> Bot<I> {
     /// Admits a reason. Replays at or below the topic cursor are ignored. When
     /// the pending set is full a new distinct reason is counted as dropped and
     /// its topic is reported for resynchronisation in the next turn.
     fn accept(&mut self, cursor: Option<(String, u64)>, reason: Reason<I>) {
         if let Some((key, cursor)) = &cursor
-            && self.cursors.get(key).is_some_and(|seen| cursor <= seen)
+            && (self.cursors.get(key).is_some_and(|seen| cursor <= seen)
+                || self.processed.get(key).is_some_and(|seen| cursor <= seen))
         {
             return;
         }
@@ -218,6 +239,7 @@ impl<I: Info> Bot<I> {
                 _ => false,
             }),
             Reason::Timer => self.pending.contains(&Reason::Timer),
+            Reason::Continue => self.pending.contains(&Reason::Continue),
             Reason::Overflow { .. } => false,
         }
     }
@@ -233,7 +255,7 @@ impl<I: Info> Bot<I> {
     /// When pending reasons could next become a turn, if blocked only by time.
     /// `None` also covers deadlines beyond the representable range.
     fn ready_at(&self, now: u64) -> Option<u64> {
-        if self.pending.is_empty() || self.turn.is_some() || self.paused || self.stopping || self.definition.validate().is_err() {
+        if self.pending.is_empty() || self.turn.is_some() || self.paused || self.stopping || self.wait.is_some() || self.definition.validate().is_err() {
             return None;
         }
         let budget = self.definition.budget;
@@ -273,7 +295,7 @@ impl<I: Info> Supervisor<I> {
         self.bots.values().any(|bot| bot.held.contains(topic) || bot.overflowed.contains(topic) || bot.pending.iter().any(|reason| match reason {
             Reason::Info { topic: pending, .. } => pending == topic,
             Reason::Overflow { topics, .. } => topics.contains(topic),
-            Reason::Timer => false,
+            Reason::Timer | Reason::Continue => false,
         }))
     }
     pub fn definitions(&self) -> impl Iterator<Item = &Definition> {
@@ -299,7 +321,7 @@ impl<I: Info> Supervisor<I> {
     /// The earliest time a `Tick` could produce an effect; drivers wait until
     /// then or the next event instead of polling.
     pub fn next_deadline(&self, now: Now) -> Option<Now> {
-        self.bots.values().flat_map(|bot| [bot.timer_due.filter(|_| !bot.paused), bot.ready_at(now.0)]).flatten().min().map(Now)
+        self.bots.values().flat_map(|bot| [bot.timer_due.filter(|_| !bot.paused), bot.wait.as_ref().filter(|_| !bot.paused).map(|wait| wait.until), bot.ready_at(now.0)]).flatten().min().map(Now)
     }
     fn define(&mut self, definition: Definition, now: u64) {
         if definition.validate().is_err() {
@@ -327,6 +349,7 @@ impl<I: Info> Supervisor<I> {
                     last_turn: None,
                     turns: VecDeque::new(),
                     cursors: BTreeMap::new(),
+                    processed: BTreeMap::new(),
                     dropped: 0,
                     overflowed: Vec::new(),
                     exhausted: false,
@@ -334,6 +357,7 @@ impl<I: Info> Supervisor<I> {
                     stopping: false,
                     rearm: false,
                     held: Vec::new(),
+                    wait: None,
                 };
                 self.bots.insert(bot.definition.bot.clone(), bot);
             }
@@ -350,6 +374,7 @@ impl<I: Info> Supervisor<I> {
             Event::Resume(bot) => {
                 if let Some(bot) = self.bots.get_mut(&bot) {
                     bot.paused = false;
+                    bot.wait = None;
                 }
             }
             Event::Rearm(id) => {
@@ -360,6 +385,37 @@ impl<I: Info> Supervisor<I> {
                     bot.rearm = true;
                 }
             }
+            Event::Continue(id) => {
+                if let Some(bot)=self.bots.get_mut(&id)
+                    && bot.definition.restart==Restart::Permanent && !bot.stopping {
+                    bot.wait = None;
+                    bot.accept(None,Reason::Continue);
+                }
+            }
+            Event::Wait { bot:id, topics, until } => {
+                if let Some(bot) = self.bots.get_mut(&id)
+                    && !bot.stopping && until > now
+                    && topics.len() <= 16 && topics.iter().all(|topic| bot.definition.subscribes(topic)) {
+                    bot.pending.retain(|reason| !matches!(reason, Reason::Continue));
+                    bot.wait = (!bot.pending.iter().any(|reason| match reason {
+                        Reason::Info{topic,info,..} => info.urgent() || topics.contains(topic),
+                        Reason::Timer => true,
+                        _ => false,
+                    })).then_some(Wait{topics,until});
+                }
+            }
+            Event::Processed { bot:id,topic,through } => {
+                if let Some(bot)=self.bots.get_mut(&id) {
+                    let cursor = bot.processed.entry(topic.key()).or_default();
+                    *cursor = (*cursor).max(through);
+                    bot.pending.retain(|reason| !matches!(reason,Reason::Info{topic:t,through:pending,..} if t==&topic && *pending<=through));
+                    // A later ingestion watermark keeps its gap visible.
+                    if bot.cursors.get(&topic.key()).is_some_and(|seen|*seen<=through) {
+                        bot.overflowed.retain(|t|t!=&topic);
+                        if bot.overflowed.is_empty(){bot.dropped=0;}
+                    }
+                }
+            }
             Event::Stop(id) => {
                 if let Some(bot) = self.bots.get_mut(&id) {
                     bot.stopping = true;
@@ -367,6 +423,7 @@ impl<I: Info> Supervisor<I> {
                     bot.dropped = 0;
                     bot.overflowed.clear();
                     bot.timer_due = None;
+                    bot.wait = None;
                     if bot.turn.is_none() {
                         self.bots.remove(&id);
                     }
@@ -376,6 +433,11 @@ impl<I: Info> Supervisor<I> {
                 let key = topic.key();
                 for bot in self.bots.values_mut().filter(|bot| !bot.stopping) {
                     if bot.definition.subscribes(&topic) && !bot.own(from.as_ref()) {
+                        if bot.cursors.get(&key).is_none_or(|seen| cursor > *seen)
+                            && bot.processed.get(&key).is_none_or(|seen| cursor > *seen)
+                            && bot.wait.as_ref().is_some_and(|wait| info.urgent() || wait.topics.contains(&topic)) {
+                            bot.wait = None;
+                        }
                         bot.accept(Some((key.clone(), cursor)), Reason::Info { topic: topic.clone(), through: cursor, info: info.clone() });
                     }
                 }
@@ -399,10 +461,15 @@ impl<I: Info> Supervisor<I> {
             Event::Tick => {}
         }
         for bot in self.bots.values_mut().filter(|bot| !bot.stopping && !bot.paused) {
+            if bot.wait.as_ref().is_some_and(|wait| wait.until <= now) {
+                bot.wait = None;
+                bot.accept(None, Reason::Timer);
+            }
             if let (Some(due), Some(every)) = (bot.timer_due, bot.definition.timer())
                 && due <= now
             {
                 bot.accept(None, Reason::Timer);
+                bot.wait = None;
                 bot.timer_due = now.checked_add(every);
             }
         }
@@ -411,7 +478,7 @@ impl<I: Info> Supervisor<I> {
         let mut planned = Vec::new();
         for (id, bot) in &mut self.bots {
             let Some(ready) = bot.ready_at(now) else {
-                if !bot.pending.is_empty() && bot.turn.is_none() && !bot.paused && !bot.stopping && !bot.exhausted {
+                if !bot.pending.is_empty() && bot.turn.is_none() && bot.wait.is_none() && !bot.paused && !bot.stopping && !bot.exhausted {
                     bot.exhausted = true;
                     self.revision += 1;
                     planned.push(Planned {
@@ -439,7 +506,7 @@ impl<I: Info> Supervisor<I> {
                 bot.held = reasons.iter().flat_map(|reason| match reason {
                     Reason::Info { topic, .. } => std::slice::from_ref(topic),
                     Reason::Overflow { topics, .. } => topics.as_slice(),
-                    Reason::Timer => &[],
+                    Reason::Timer | Reason::Continue => &[],
                 }).cloned().collect();
                 Effect::RequestTurn { bot: id.clone(), chat: bot.definition.chat.clone(), turn, reasons }
             } else if bot.recent(now).count() >= bot.definition.budget.turns_per_window as usize && !bot.exhausted {
@@ -479,6 +546,7 @@ mod tests {
         Kind(String),
     }
     impl Info for Msg {
+        fn urgent(&self) -> bool { matches!(self, Self::Exit(_)) }
         fn merge(&mut self, newer: &Self) -> bool {
             match (self, newer) {
                 (Msg::Post, Msg::Post) => true,
@@ -550,6 +618,112 @@ mod tests {
         assert!(s.step(message(None, 2), Now(60)).is_empty(), "an older cursor is a replay");
         assert!(s.eligible(&bot("alice"), &alice));
         assert_eq!(s.outstanding().count(), 2);
+    }
+    #[test]
+    fn active_turns_are_not_restarted_by_callbacks_or_clock_ticks() {
+        let mut s = S::default();
+        define(&mut s,"agent",vec![room("general")],budget(0,3_600_000,60),0);
+        let active=turns(&s.step(message(None,1),Now(1)))[0].1;
+        for cursor in 2..100 {
+            assert!(turns(&s.step(message(None,cursor),Now(cursor*10_000))).is_empty());
+            assert!(turns(&s.step(Event::Tick,Now(cursor*10_000))).is_empty());
+            assert!(s.eligible(&bot("agent"),&active));
+        }
+        s.step(Event::Processed{bot:bot("agent"),topic:topic("room","general"),through:99},Now(1_000_000));
+        s.step(Event::Continue(bot("agent")),Now(1_000_001));
+        let successor=s.step(done("agent",active),Now(1_000_002));
+        assert_eq!(turns(&successor).len(),1);
+        assert_eq!(turns(&successor)[0].2,[Reason::Continue],"processed callbacks do not create another wake");
+    }
+    #[test]
+    fn idle_waits_coalesce_noise_and_resume_on_relevant_events_or_recheck() {
+        let mut s = S::default();
+        define(&mut s,"agent",vec![room("general"),room("work")],budget(0,60_000,10),0);
+        let active=turns(&s.step(message(None,1),Now(1)))[0].1;
+        s.step(Event::Wait{bot:bot("agent"),topics:vec![topic("room","work")],until:10_000},Now(2));
+        assert!(s.step(done("agent",active),Now(3)).is_empty());
+        for cursor in 2..50 {
+            assert!(s.step(message(None,cursor),Now(cursor*100)).is_empty(),"irrelevant telemetry remains pending without model churn");
+        }
+        assert_eq!(s.next_deadline(Now(5000)),Some(Now(10_000)));
+        let relevant=s.step(Event::Info{topic:topic("room","work"),cursor:1,from:None,info:Msg::Post},Now(5001));
+        let next=turns(&relevant)[0].1;
+        assert_eq!(turns(&relevant).len(),1);
+        s.step(Event::Wait{bot:bot("agent"),topics:vec![],until:6000},Now(5002));
+        s.step(done("agent",next),Now(5003));
+        assert!(s.step(Event::Tick,Now(5999)).is_empty());
+        let recheck=s.step(Event::Tick,Now(6000));
+        assert_eq!(turns(&recheck)[0].2,[Reason::Timer]);
+    }
+    #[test]
+    fn idle_waits_preserve_operator_timers_failures_and_explicit_pause() {
+        for urgent in [false,true] {
+            let mut s = S::default();
+            define(&mut s,"agent",vec![room("general"),Source::Timer{every_ms:100}],budget(0,60_000,10),0);
+            let active=turns(&s.step(message(None,1),Now(1)))[0].1;
+            s.step(Event::Wait{bot:bot("agent"),topics:vec![],until:1000},Now(2));
+            s.step(done("agent",active),Now(3));
+            let wake = if urgent {
+                s.step(Event::Info{topic:topic("room","general"),cursor:2,from:None,info:Msg::Exit(Some(1))},Now(4))
+            } else {
+                assert_eq!(s.next_deadline(Now(4)),Some(Now(100)),"a model cannot lengthen the operator's timer");
+                s.step(Event::Tick,Now(100))
+            };
+            let active=turns(&wake)[0].1;
+            s.step(Event::Wait{bot:bot("agent"),topics:vec![],until:2000},Now(101));
+            s.step(Event::Pause(bot("agent")),Now(102));
+            s.step(done("agent",active),Now(103));
+            assert!(s.step(Event::Tick,Now(3000)).is_empty());
+            assert_eq!(s.status(&bot("agent")),Some(Status::Paused));
+            assert_eq!(turns(&s.step(Event::Resume(bot("agent")),Now(3001))).len(),1);
+        }
+    }
+    #[test]
+    fn runnable_continuations_coalesce_obey_budget_and_do_not_resurrect_temporary_bots() {
+        let mut s=S::default();
+        define(&mut s,"agent",vec![room("general")],budget(0,60_000,2),0);
+        let first=turns(&s.step(message(None,1),Now(1)))[0].1;
+        assert!(s.step(Event::Continue(bot("agent")),Now(2)).is_empty());
+        assert!(s.step(Event::Continue(bot("agent")),Now(3)).is_empty());
+        s.step(message(None,2),Now(4));
+        let next=s.step(done("agent",first),Now(5));
+        assert_eq!(turns(&next).len(),1);
+        assert_eq!(turns(&next)[0].2,[Reason::Continue,posted(2)]);
+        let second=turns(&next)[0].1;
+        s.step(Event::Continue(bot("agent")),Now(6));
+        assert!(turns(&s.step(done("agent",second),Now(7))).is_empty(),"continuations cannot bypass the two-turn budget");
+        assert_eq!(turns(&s.step(Event::Tick,Now(60_001))).len(),1);
+        s.step(Event::Stop(bot("agent")),Now(60_002));
+        assert!(turns(&s.step(Event::Continue(bot("agent")),Now(60_003))).is_empty());
+
+        let mut once=S::default();
+        once.step(Event::Define(Definition{bot:bot("once"),chat:ChatId("once-chat".into()),sources:vec![room("general")],budget:budget(0,60_000,10),restart:Restart::Temporary}),Now(0));
+        let first=turns(&once.step(message(None,1),Now(1)))[0].1;
+        once.step(Event::Continue(bot("once")),Now(2));
+        assert!(once.step(done("once",first),Now(3)).is_empty());
+        assert_eq!(once.status(&bot("once")),None,"temporary callbacks still need explicit rearm");
+    }
+    #[test]
+    fn published_processing_can_precede_supervisor_ingestion_without_replaying_it() {
+        let mut s=S::default();
+        define(&mut s,"agent",vec![room("general")],budget(0,60_000,10),0);
+        s.step(Event::Processed{bot:bot("agent"),topic:topic("room","general"),through:8},Now(1));
+        for cursor in 1..=8 { assert!(s.step(message(None,cursor),Now(cursor+1)).is_empty()); }
+        assert_eq!(turns(&s.step(message(None,9),Now(10)))[0].2,[posted(9)]);
+    }
+    #[test]
+    fn committed_processing_retires_only_matching_pending_watermarks() {
+        for (newest,expect_next) in [(2,false),(3,true)] {
+            let mut s=S::default();
+            define(&mut s,"agent",vec![room("general")],budget(0,60_000,10),0);
+            let first=turns(&s.step(message(None,1),Now(1)))[0].1;
+            s.step(message(None,2),Now(2));
+            if newest==3 {s.step(message(None,3),Now(3));}
+            s.step(Event::Processed{bot:bot("agent"),topic:topic("room","general"),through:2},Now(4));
+            let next=s.step(done("agent",first),Now(5));
+            assert_eq!(!turns(&next).is_empty(),expect_next,"newer events survive a racing acknowledgement");
+            if expect_next {assert_eq!(turns(&next)[0].2,[posted(3)]);}
+        }
     }
 
     #[test]

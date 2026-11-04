@@ -31,7 +31,7 @@ pub struct Runtime {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Run {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bot_turn: Option<crate::bots::Turn>,
+    pub bot_turn: Option<Box<crate::bots::Turn>>,
     #[serde(default, skip_serializing_if="Vec::is_empty")]
     pub resource_grants: Vec<crate::services::Grant>,
     #[serde(default)]

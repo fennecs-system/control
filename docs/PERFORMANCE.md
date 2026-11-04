@@ -1,5 +1,74 @@
 # Performance checks
 
+## Active sessions and durable bot handoffs
+
+The active-session implementation was compared with `fcc76fc` using identical
+600-turn HTTP/save/render fixtures, separate release build directories, the
+same offline Linux ARM image and a two-CPU limit. Six pairs alternate execution
+order after builds finish. No credentials, live node state or model calls are
+used. Ordinary chat medians are 6.575 ms/turn before and 6.535 ms after; median
+measured thread CPU across the five stages is 5.164 ms and 5.097 ms respectively.
+Both save 582 KiB. Samples range from 6.481–9.955 ms before and 6.038–7.253 ms
+after. This supports no observed ordinary-path regression, not a throughput
+speedup claim. Host load and filesystem latency still affect these timings.
+
+The initial prototype regressed this fixture. Optional managed state now lives
+behind boxes, finished receipt mailboxes use the existing history journal, and
+progress is derived from the accepted handoff instead of duplicated per attempt.
+Managed admission also avoids constructing an unused legacy prompt. On this
+Linux build, `Attempt`/`Run`/`Session` sizes change from 512/1104/504 bytes to
+544/1080/512 bytes. These are compiler/layout observations, not wire contracts.
+
+The context benchmark separately compares the managed task view with this
+branch's legacy prompt path over the same synthetic monitoring history. It
+measures construction, not provider execution or persistence. Raw history is
+retained; only the projected model input is bounded. Before/after HTTP workloads,
+both context paths, journal capture and durable saves have real `perf` sampling
+flamegraphs (`cpu-clock:u`, 499 Hz, DWARF call stacks), rather than diagrams
+inferred from elapsed times. Only the isolated profiler container is privileged.
+
+| Monitoring exchanges | Legacy construction | Managed construction | Managed input |
+| --- | ---: | ---: | ---: |
+| 15 | 9.43 µs | 2.30 µs | 4,192 bytes |
+| 150 | 76.55 µs | 12.76 µs | 4,193 bytes |
+| 1,000 | 183.08 µs | 101.79 µs | 4,194 bytes |
+
+Construction still indexes retained history; bounded input does not imply
+constant construction time. This fixture's repeated wake text is deliberately
+unhelpful, so these reductions are not a general compression ratio.
+
+Reproduce with fresh scratch state directories; never use a running node's state:
+
+```sh
+CONTROL_STATE_DIR=/tmp/control-http-bench CONTROL_PROFILE_CONVERSATIONS=40 \
+  nix develop --command cargo test --release --locked --bin control \
+  session_http::tests::fifteen_turn_conversations_workload -- --ignored --exact --nocapture
+CONTROL_PROFILE_PROJECTION=managed \
+  nix develop --command cargo test --release --locked --bin control \
+  turn_context::tests::active_context_profile -- --ignored --exact --nocapture
+CONTROL_STATE_DIR=/tmp/control-save-bench \
+  nix develop --command cargo test --release --locked --bin control \
+  storage::tests::profile_durable_save_stages -- --ignored --exact --nocapture
+nix develop --command cargo test --release --locked --bin control \
+  turn_context::tests::trace_persistence_profile -- --ignored --exact --nocapture
+```
+
+The save fixture separates serialization, overwrite plus fsync, atomic replacement
+plus file/directory fsync, and the complete save across 31 rotated-order samples.
+It tests 1/100/1000 finished runs with and without archived handoff receipts.
+Journal capture appends and syncs exact inputs off the global state lock; normal
+checkpoint saves retain their existing atomic replacement and fsync contract.
+On native macOS storage, 1,000 archived handoff attempts leave an 897,525-byte
+checkpoint: median serialization is 1.93 ms, atomic file/directory replacement
+and fsync is 9.07 ms, and complete save is 10.00 ms (p95 12.02 ms). These stages
+are independently timed and their medians need not add. Overwrite plus fsync
+alone is 4.14 ms; it provides weaker crash guarantees than atomic replacement.
+Exact-input journal appends measure 4.08 ms median for 4,404-byte records over
+nine batches of 100 durable writes, close to the overwrite/fsync floor. No fsync
+was removed or deferred to obtain those results.
+These synthetic checks do not establish the quality or latency of a live bot
+playtest, nor do they measure a provider's private context management.
+
 ## Bot turn continuity
 
 The continuity fix was compared with `8f170c7`, using identical synthetic
