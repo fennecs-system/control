@@ -76,6 +76,7 @@ pub fn load() -> io::Result<State> {
     // journal-backed run text is read back before anything uses it.
     crate::history::recover(&state)?;
     crate::history::hydrate_text(&mut state)?;
+    crate::turn_context::recover(&state)?;
     let mut changed = crate::knowledge::migrate(&mut state);
     changed |= interrupt_active(&mut state);
     if changed {
@@ -198,6 +199,71 @@ mod tests {
             .runs
             .iter()
             .all(|r| r.attempts[0].artifact.is_none()));
+    }
+    #[test]
+    #[ignore = "release benchmark: use a scratch CONTROL_STATE_DIR on the filesystem being measured; no models"]
+    fn profile_durable_save_stages() {
+        use std::{hint::black_box, time::Instant};
+        // Run this test in its own process. Never point it at an existing node.
+        let directory = crate::config::state_directory().unwrap();
+        assert!(std::env::var_os("CONTROL_STATE_DIR").is_some());
+        assert!(!directory.join("state.json").exists(), "use a fresh scratch directory");
+        fs::create_dir_all(&directory).unwrap();
+        let samples = |values: &mut Vec<u128>| {
+            values.sort_unstable();
+            serde_json::json!({"median_ns":values[values.len()/2], "p95_ns":values[(values.len()-1)*95/100]})
+        };
+        for handoffs in [false, true] {
+          let mut state = State::initial();
+          for count in [1, 100, 1000] {
+            while state.runtime.runs.len() < count {
+                state.runtime.enqueue("Synthetic completed task".into(), RunKind::Task, "benchmark");
+                let run = state.runtime.runs.last_mut().unwrap();
+                run.status = "completed".into();
+                *run.result = "A bounded synthetic result.\n".repeat(16);
+                if handoffs {
+                    let mut mailbox=control_context::turn_mailbox::Mailbox::default();
+                    mailbox.deliver("receipt".into(),control_context::turn_mailbox::Delivery{ranges:vec![],gap:false,request:"s".repeat(8000)}).unwrap();
+                    run.attempts.push(crate::usage::Attempt{turn_mailbox:Some(Box::new(mailbox)).into(),..Default::default()});
+                    crate::history::archive_run(run).unwrap();
+                }
+            }
+            let bytes = crate::history::persisting(|| serde_json::to_vec(&state)).unwrap();
+            let mut raw = fs::OpenOptions::new().create_new(true).read(true).write(true)
+                .open(directory.join(format!("sync-{handoffs}-{count}"))).unwrap();
+            // Establish file size and directory entry before the warm samples.
+            raw.write_all(&bytes).unwrap();
+            raw.sync_all().unwrap();
+            fs::File::open(&directory).unwrap().sync_all().unwrap();
+            save(&state).unwrap();
+            let (mut encode, mut sync, mut atomic, mut complete) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+            for round in 0..31 {
+                // Rotate stage order to avoid systematically favouring one path
+                // under changing filesystem load. Every write still fsyncs.
+                for offset in 0..4 {
+                    let stage = (round + offset) % 4;
+                    let start = Instant::now();
+                    match stage {
+                        0 => { black_box(crate::history::persisting(|| serde_json::to_vec(black_box(&state))).unwrap()); }
+                        1 => {
+                            use std::io::{Seek, SeekFrom};
+                            raw.seek(SeekFrom::Start(0)).unwrap();
+                            raw.write_all(black_box(&bytes)).unwrap();
+                            raw.sync_all().unwrap();
+                        }
+                        2 => { write_checkpoint(&directory, black_box(&bytes)).unwrap(); }
+                        _ => { save(black_box(&state)).unwrap(); }
+                    }
+                    [&mut encode, &mut sync, &mut atomic, &mut complete][stage].push(start.elapsed().as_nanos());
+                }
+            }
+            println!("{}", serde_json::json!({
+                "case":"durable_save_stages", "runs":count, "finished_handoffs":handoffs, "state_bytes":bytes.len(), "samples":31,
+                "serialization":samples(&mut encode), "overwrite_fsync":samples(&mut sync),
+                "atomic_replace_file_and_directory_fsync":samples(&mut atomic), "storage_save":samples(&mut complete),
+            }));
+          }
+        }
     }
     #[test]
     #[ignore = "manual benchmark: state lock held by a save at 1/3/10 MB, idle and under fsync load; no containers or models"]

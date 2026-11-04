@@ -217,12 +217,23 @@ continuity implementation's path.
 
 ## Next priority: reduce stop/start context pollution
 
-**Implementation design ready for Sol; not implemented.** The Cass playtest
+**Implementation in progress; not deployed.** The Cass playtest
 shows 17 consecutive monitoring turns in ten minutes, repeating 68 tool calls
 without a gameplay action. Their exchanges occupy about 52% of the reconstructed
 next recent-history window. See the scoped measurements, concrete contracts,
 code map and acceptance tests in [Turn continuity implementation handoff](docs/TURN-CONTINUITY.md).
 Keep the current playtest unchanged as baseline evidence.
+
+Bot = agent + supervisor + callbacks. Keep a progressing session active; resume
+unfinished runnable work automatically when that session ends. Do not impose a
+short periodic handoff target. The feature branch has bounded captured input,
+typed working notes and conversation/room receipts, atomic publication, idle
+waits and budgeted successors. Bot approval enables the next admission without
+restarting an active session. A missing handoff can recover from a successful
+published checkpoint; failures and approval waits retain their separate paths.
+See the design's implementation checkpoint for the supported subset. Watch
+receipt expansion, evidence/resource resolvers and prefix/exit wake selection
+remain follow-ups, not prerequisites for this continuous-agent playtest.
 
 Control's JSON state, journals and resource/checkpoint records remain the source
 of truth. Separate retained evidence, explicit working state and the bounded
@@ -238,7 +249,7 @@ or local-model adapters. Preserve the existing scheduling and authority rules.
    findings, rejected approaches, pending actions/handles and conditional next
    steps. Stage model claims separately from Control-observed facts; atomically
    commit handoff, processed-event cursors and matching workspace publication.
-3. **Longer active slices and event deltas.** Allow several related actions in
+3. **Active sessions and event deltas.** Allow several related actions in
    one attempt, consuming deltas at action boundaries. Yield on genuine waits or
    budgets; retain at most one durable successor for unfinished runnable work.
    Events already processed by that attempt must not create redundant wakes.
@@ -617,6 +628,10 @@ than built into the core.
   replace it.
 
 ## Deferred
+
+`control migrate` for deliberate state upgrades after the schema settles.
+Development uses explicit fresh-state resets, never an automatic wipe of an
+active node or a migration prerequisite for bot continuity.
 
 Live federation and remote delegation, other host platforms/NixOS packaging, GPU/microVM
 tiers, bundled inference and model routing follow demonstrated local needs.

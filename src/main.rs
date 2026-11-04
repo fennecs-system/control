@@ -17,6 +17,7 @@ mod claude;
 mod command_jobs;
 mod collective;
 mod conversation;
+mod turn_context;
 mod conversations;
 mod pagination;
 mod design;

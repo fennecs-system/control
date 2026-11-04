@@ -1,6 +1,6 @@
 # Turn continuity implementation handoff
 
-Design for Sol, 2026-11-04. Status: proposed implementation, not deployed.
+Design for Sol, 2026-11-04. Status: implementation in progress, not deployed.
 
 The next priority is reducing stop/start context pollution: longer active slices,
 event deltas, and reliable working-state handoffs, while preserving Control's
@@ -11,6 +11,53 @@ Control owns task state, evidence, permissions and recovery. A provider process
 may perform several related steps before yielding; the next process reconstructs
 its task from Control. Provider session reuse, API/local-model adapters and
 background summary generation are outside this implementation.
+
+The runtime model is **bot = agent + supervisor + callbacks**. While meaningful
+activity is advancing the goal, preserve the active provider session. If that
+session ends with runnable work remaining, the supervisor should resume it
+without another human "continue". A real dependency or a scheduled condition is
+different from runnable work. Neither callbacks nor a short elapsed interval
+justify periodically restarting an agent.
+
+### Implementation checkpoint
+
+Scope correction: prioritize bot handoffs, supervisor admission and bot context.
+Keep the existing append-only chat tape, comonad positions and configured
+compactor/lenses. A task view may omit typed wake bookkeeping without deleting
+history or keeping every old instruction in the model prompt forever. General
+context browsing, new evidence expansion and a new scheduling language are not
+prerequisites for the next continuity playtest. Do not grow those features while
+the core lifecycle remains incomplete.
+
+The feature branch contains the private bounded projection and captured-input
+path, typed working notes, attempt-scoped deliveries/drafts, atomic publication,
+conversation/room delta prototypes, host-tool yield fencing, and a budgeted,
+deduplicated runnable-successor path. Callback hints can reach an active session
+on normal MCP responses. The prompt guidance no longer demands termination after
+each event. Ordinary chats retain their projection and transport fast path.
+Committed idle waits narrow existing topics, preserve operator timers, wake for
+process exits and have a bounded recheck. Active sessions are never restarted
+just because those callbacks arrive. Captured inputs reuse the append-only
+journal component; finished handoff receipts leave the mutable state checkpoint
+with finished tool activity instead of being rewritten on every save.
+
+Approving a permanent bot or using `/bot on` enables managed context on its next
+admission. It does not retrofit a running provider session. Captured typed
+triggers identify why that turn exists; conversation and room reads issue exact
+delivery receipts. Managed room processing uses handoffs instead of the ordinary
+room-ack tool. A successful published session that omits a handoff can resume
+once through the normal supervisor budget, retaining its last report. Explicit
+wait/done, unanswered approvals, newer input and unsuccessful/interrupted
+publication prevent that fallback; it does not guess completion from prose.
+
+The first implementation deliberately supports bounded text working notes and
+conversation/room receipts. Evidence/resource expansion, off-lock watch receipts
+and watch prefix/exit selection remain follow-up work; their unsupported fields
+are rejected rather than acknowledged. Existing cursor-based watch tools remain
+available. Idle waits can ignore telemetry while retaining it until a relevant
+event or recheck. MCP yield fencing does not intercept a native CLI's private
+built-in shell; container isolation remains authoritative there. This branch is
+not deployed and has not replaced any current provider session or service.
 
 ## Evidence and diagnosis
 
@@ -75,10 +122,12 @@ size. Summarizing the ritual alone would still pay for the ritual.
 7. Raw evidence and lifecycle history remain inspectable under existing retention
    rules, even when omitted from model context. Missing evidence is explicit.
 
-## One active slice per attempt
+## Bot = agent + supervisor + callbacks
 
-An active slice is an existing model attempt, not a new scheduler or a provider
-session persisted across wakes. Within that attempt, the agent can inspect,
+Keep the agent's provider session active while useful work is progressing. The
+supervisor owns lifecycle and recovery; callbacks supply events and steering to
+that active session. A callback is not a request to restart the agent. Within
+an existing model attempt, the agent can inspect,
 act, verify and take the next related action. Remove Control-generated guidance
 that requires one action and immediate termination at every watch start.
 Keep explicit user-imposed limits effective and visible.
@@ -89,15 +138,16 @@ while the chat's writer was active. Do not inject arbitrary text into a provider
 stdin after launch or depend on native session-resume protocols.
 
 Yield when there is a genuine unresolved dependency, an approval/design question,
-task completion, cancellation, or a slice budget boundary. A short asynchronous
+task completion, cancellation, or the configured attempt deadline. A short asynchronous
 operation does not by itself require yielding if independent useful work remains.
 Do not add model sleep loops, long-poll tools or a permanently occupied slot.
 
-Initial soft active-slice target: 180 seconds, capped by the configured attempt
-deadline. Report elapsed/remaining allowance in context and request a handoff at
-the next action boundary. This is cooperative guidance, not guaranteed preemption;
-the existing hard timeout remains authoritative. Record overruns. Do not promise
-token-budget enforcement from end-of-attempt CLI usage telemetry.
+Do not introduce a periodic soft handoff timer. Report elapsed/remaining allowance
+under the configured hard attempt deadline, which remains authoritative. The
+agent should checkpoint before that boundary when practical, but useful progress
+must not be interrupted merely because a short interval elapsed. Durable handoffs
+support recovery and genuinely idle agents; they are not the normal action loop.
+Do not promise token-budget enforcement from end-of-attempt CLI usage telemetry.
 
 ## State and tool contract
 
@@ -301,14 +351,14 @@ with what was actually projected; it does not expose hidden provider reasoning.
 | `src/design.rs`, `src/delegation.rs`, `src/approvals.rs` | Existing paused-checkpoint and continuation chains retain handoff provenance |
 | Chat/web/TUI views | Compact current disposition and trace access; retained lifecycle activity stays inspectable |
 
-Use optional Serde fields and an explicit per-chat continuity version. Old saved
-chats load with legacy behavior. Enable managed continuity only between attempts
-through an operator setting; do not retrofit running attempts or reinterpret
-their cursors. Start on isolated test chats for both providers. Unknown future
-versions fail visibly. A rollback to older binaries is not promised to preserve
-new fields; retain a state backup and a documented upgrade/rollback boundary.
-Keep early slices test-only until the handoff and receipt contract is complete;
-the projection slice alone must not opt live chats into managed behavior.
+Use an explicit continuity schema version. During development, start with fresh
+state rather than building a legacy-chat migration path. A future `control
+migrate` is roadmap work. Do not wipe a running playtest or retrofit its attempts
+and cursors. Start on isolated test chats for both providers; unknown versions
+fail visibly. Ordinary chats and supervised bots may select different context
+views, but they share the same append-only history and compactor/lens interface.
+Enable the tested text-handoff/room-receipt contract through bot approval only;
+do not advertise the broader reference/watch-receipt contract until implemented.
 
 ## Acceptance tests
 

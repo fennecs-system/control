@@ -45,7 +45,7 @@ fn runner(service: &crate::services::Service, arguments: &[&str], input: &str) -
 
 fn wakes(armed: bool, bot: bool) -> &'static str {
     match (armed, bot) {
-        (true, _) => "The next line or exit from this chat's watches wakes it once, after the current turn. End your turn now.",
+        (true, _) => "The next line or exit from this chat's watches wakes it once, after the current turn. Keep working while useful independent actions remain; yield when genuinely waiting rather than busy-polling.",
         (false, true) => "New lines and exits already wake this chat.",
         (false, false) => "This chat is not a bot; pass wake=true or call control_watch_wake to be woken once, or read events with control_watch_events.",
     }

@@ -11,6 +11,10 @@ pub use control_ai::{Activity, Tokens};
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Attempt {
+    #[serde(skip_serializing_if = "crate::history::Spilled::is_unset")]
+    pub turn_mailbox: crate::history::Spilled<Option<Box<control_context::turn_mailbox::Mailbox>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_trace: Option<Box<crate::turn_context::TraceRef>>,
     pub github_source: Option<crate::github::Source>,
     pub command_jobs: Vec<crate::command_jobs::Job>,
     pub review_only: bool,
@@ -38,6 +42,11 @@ pub struct Attempt {
     pub tokens: Option<Tokens>,
 }
 impl Attempt {
+    /// Callers expose this only for successfully completed runs. The accepted
+    /// handoff is the single retained source, not a duplicated summary field.
+    pub(crate) fn task_progress(&self)->Option<&str> {
+        self.turn_mailbox.as_ref()?.accepted()?.progress.as_deref()
+    }
     pub fn new() -> Self {
         let model = default_model();
         Self {
