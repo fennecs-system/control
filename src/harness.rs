@@ -356,7 +356,7 @@ impl App {
             _ if text.starts_with("/resume ") => { self.active = text[8..].trim().into(); self.inspector=None;self.refresh(hive)?; }
             _ if text.starts_with('/') && commands::parse(&text).is_none()=>return Err(failure("Unknown command. Use /help.")),
             _ if !text.is_empty() => {
-                if text.chars().count() > 2000 { return Err(failure("Messages are limited to 2000 characters.")); }
+                if control_context::limits::message_too_long(&text) { return Err(failure(control_context::limits::CHAT_MESSAGE_ERROR)); }
                 if self.active.is_empty() { self.new_chat(hive)?; }
                 self.detail = hive.tool("control.chat.send",json!({"id":self.active,"message":text}))?;
                 self.inspector=None;

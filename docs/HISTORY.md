@@ -47,8 +47,8 @@ small indexes into journals), so a save costs the active set, not the past.
 4. **D1 — conversation interface** (`src/conversation.rs`): the one way to read a
    chat. `Conversation` indexes its runs once and is a comonad `Space`;
    `Compactor` chooses what a model turn sees: `Recent` (default, the
-   existing 20,000-character window), `Passthrough` (provider compaction
-   decides) or `Lens` (unbounded history over `lens::cut`, older blocks shown
+   20,000-character budget),
+   `Passthrough` (provider compaction decides) or `Lens` (unbounded history over `lens::cut`, older blocks shown
    by summaries through a `Summaries` hook). Set per node in `history.json`.
 5. **D2 — outbox** (`src/outbox.rs`, `history/_outbox.jsonl`): typed delivery
    events Control appends when a run finishes or waits; frontends (Discord now;
@@ -71,6 +71,11 @@ retains every event at its original position. The original assignment and
 committed working notes accompany the configured compactor's chronological
 selection. Assembly does not trim its selection a second time. Passthrough
 therefore still delegates compression to the provider.
+
+Local messages accept up to 20,000 Unicode characters without truncating the
+saved instruction or the current request.
+Web, TUI and operator MCP accept this limit; Discord and room posts retain their
+separate bounds. HTTP chat forms and operator MCP allow 256 KiB for encoded input.
 
 Legacy attempts without the continuity protocol receive the previous attempt's last six nonempty command, tool or
 file-change observations (128 characters of label and 384 of output each).

@@ -194,6 +194,19 @@ fn legacy_session_location(state: &State, query: &HashMap<String, String>) -> Op
     })
 }
 const MAX_HEADER: usize = 65536;
+fn body_limit(target: &str) -> usize {
+    let path = target.split('?').next().unwrap_or(target);
+    if ["/knowledge/save", "/save", "/lenses/save"].contains(&path) {
+        512 * 1024
+    } else if ["/chats", "/mcp"].contains(&path)
+        || path.strip_prefix("/chat/").and_then(|p| p.strip_suffix("/messages"))
+            .is_some_and(chat::valid_id)
+    {
+        control_context::limits::CHAT_REQUEST_BYTES
+    } else {
+        32768
+    }
+}
 enum Body { Length(usize), Invalid, Chunked }
 fn body_length(header: &str) -> Body {
     let values = |name: &str| header.lines().skip(1).filter_map(|l| l.split_once(':')).filter(|(k, _)| k.trim().eq_ignore_ascii_case(name)).map(|(_, v)| v.trim()).collect::<Vec<_>>();
@@ -274,15 +287,7 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
             return;
         }
     };
-    let limit = if target
-        .split('?')
-        .next()
-        .is_some_and(|p| ["/knowledge/save", "/save", "/lenses/save"].contains(&p))
-    {
-        524288
-    } else {
-        32768
-    };
+    let limit = body_limit(target);
     if length > limit {
         let _ = control_http::respond(&mut stream, "413 Content Too Large", "text/plain", b"Request too large", "", control_http::Policy::Page);
         return;
@@ -740,5 +745,22 @@ mod responsiveness_tests {
         let mut stylesheet = Vec::new();
         assert!(serve_stylesheet(&mut stylesheet, "/style.css"));
         assert!(stylesheet.starts_with(b"HTTP/1.1 200 OK\r\n"));
+    }
+    #[test]
+    fn encoded_maximum_chat_messages_fit_their_transport_limits() {
+        let text = "🦊".repeat(control_context::limits::CHAT_MESSAGE_CHARS);
+        let form = format!("message={}", "%F0%9F%A6%8A".repeat(control_context::limits::CHAT_MESSAGE_CHARS));
+        assert_eq!(fields(&form)["message"], text);
+        for target in ["/chats", "/chats?new=1", "/chat/c-test/messages"] {
+            assert!(form.len() < body_limit(target));
+        }
+        let request = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control.chat.send","arguments":{"id":"c-test","message":text}}}).to_string();
+        assert!(request.len() < body_limit("/mcp"));
+        assert!(request.len() + 1 < control_context::limits::CHAT_REQUEST_BYTES);
+        assert_eq!(body_limit("/rooms/general"), 32768);
+        assert_eq!(body_limit("/knowledge/save"), 512 * 1024);
+        assert_eq!(body_limit("/save"), 512 * 1024);
+        assert_eq!(body_limit("/lenses/save"), 512 * 1024);
+        assert_eq!(body_limit("/chat/invalid/path/messages"), 32768);
     }
 }

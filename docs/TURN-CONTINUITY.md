@@ -335,7 +335,7 @@ history and lenses; current request. Use the structured handoff instead of blind
 reinjecting the previous six status observations for managed turns. Preserve the
 legacy projection only for already running attempts without a captured mailbox.
 
-Required Control framing has a 64 KiB guard, including adapter policy, original
+Required Control framing has a 256 KiB guard, including adapter policy, original
 assignment, working notes, lenses and current request. History selection belongs
 solely to the configured `Compactor`: Recent supplies its bounded window,
 Passthrough supplies all selected task history for provider-native compaction,

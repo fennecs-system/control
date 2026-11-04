@@ -21,6 +21,9 @@ struct Composer {
 impl Composer {
     fn refresh(&self) -> Result<(), JsValue> {
         let value = self.input.value();
+        self.input.set_custom_validity(if control_context::limits::message_too_long(&value) {
+            control_context::limits::CHAT_MESSAGE_ERROR
+        } else { "" });
         self.mirror.set_text_content(None);
         let length = command_length(&value);
         if length > 0 {
