@@ -125,6 +125,9 @@ fn record(state: &mut State, effects: Vec<Planned<BotId, Effect>>) {
 pub(crate) fn defined(state: &State, chat: &str) -> bool {
     state.bots.supervisor.status(&bot(chat)).is_some()
 }
+pub(crate) fn continuation_enabled(state: &State, chat: &str) -> bool {
+    state.bots.supervisor.definitions().any(|definition| definition.chat.0 == chat && definition.restart == Restart::Permanent)
+}
 /// Host-owned subscriptions a handoff may narrow while idle. Working notes
 /// cannot create subscriptions, resource access or a new timer authority.
 pub(crate) fn wait_topics(state: &State, chat: &str) -> Vec<String> {
@@ -257,6 +260,9 @@ fn start(state: &mut State, chat: &str, minutes: Option<u64>, room: bool, now: N
         return Err("Link a room, start a watch or give an interval, for example /bot on every 10.");
     }
     crate::rooms::ensure_inbox(state, chat)?;
+    if fresh {
+        crate::rooms::start_at_edge(state, chat)?;
+    }
     if state.bots.supervisor.definitions().next().is_none() {
         state.bots.room_cursor = state.collective.posts.len();
     }
@@ -273,11 +279,10 @@ fn start(state: &mut State, chat: &str, minutes: Option<u64>, room: bool, now: N
     if state.bots.supervisor.status(&bot(chat)) == Some(Status::Stopping) {
         return Err("The previous bot is still finishing its turn. Try again shortly.");
     }
-    let baseline=crate::rooms::inbox_cursor(state,chat).filter(|cursor|*cursor>0)
-        .zip(state.chats.iter().find(|session|session.id==chat).and_then(|session|session.room.clone()))
-        .map(|(cursor,room)|control_context::turn_mailbox::Range::Room{room,after:0,through:cursor as u64}).into_iter().collect();
-    state.chats.iter_mut().find(|session|session.id==chat).unwrap()
-        .continuity.get_or_insert_with(||Box::new(crate::turn_context::Managed{baseline,..Default::default()}));
+    if fresh && let Some(name) = state.chats.iter().find(|c|c.id==chat).and_then(|c|c.room.as_deref()) {
+        let effects=state.bots.supervisor.step(Event::StartAt{bot:bot(chat),topic:self::room(name),after:state.collective.posts.len() as u64},now);
+        record(state,effects);
+    }
     if bootstrap {
         let effects=state.bots.supervisor.step(Event::Continue(bot(chat)),now);
         record(state,effects);
@@ -293,6 +298,8 @@ pub(crate) fn link_room(state: &mut State, chat: &str, name: &str) -> Result<(),
     let mut sources = definition.sources.into_iter().filter(|s| !matches!(s, Source::Topic(t) if t.kind == "room")).collect::<Vec<_>>();
     sources.push(Source::Topic(room(name)));
     let effects = state.bots.supervisor.step(Event::Define(Definition { sources, ..definition }), Now(now_ms()));
+    record(state, effects);
+    let effects = state.bots.supervisor.step(Event::StartAt { bot: bot(chat), topic: room(name), after: state.collective.posts.len() as u64 }, Now(now_ms()));
     record(state, effects);
     Ok(())
 }
@@ -478,18 +485,27 @@ fn needs_recovery(state:&State, index:usize) -> bool {
 
 fn reconcile_at(state: &mut State, now: u64, mut save: impl FnMut(&State) -> std::io::Result<()>) -> Result<(), &'static str> {
     let recoveries=state.chats.iter().enumerate().filter_map(|(chat_index,chat)| {
+        if !defined(state,&chat.id) { return None; }
         let continuity=chat.continuity.as_ref()?;
         let index=state.runtime.runs.iter().rposition(|run|run.chat_id.as_deref()==Some(&chat.id))?;
         let generation=state.runtime.runs[index].attempts.last()?.workspace_id.as_ref()?;
-        (defined(state,&chat.id) && continuity.recovered.as_ref()!=Some(generation) && needs_recovery(state,index))
+        (continuity.recovered.as_ref()!=Some(generation) && needs_recovery(state,index))
             .then(||(chat_index,generation.clone()))
     }).collect::<Vec<_>>();
     let publications=state.chats.iter().filter_map(|chat| {
+        if !defined(state,&chat.id) { return None; }
         let working=chat.continuity.as_ref()?.working.as_ref()?;
+        if state.bots.continuations.get(&chat.id)==Some(&working.revision) { return None; }
         let run=state.runtime.runs.iter().position(|run|run.id==working.run && run.status=="completed" && run.chat_id.as_deref()==Some(&chat.id))?;
         let head=if state.runtime.runs[run].action==identity::Action::Improve {&chat.improve_workspace}else{&chat.workspace};
-        let later_input=state.runtime.runs[run+1..].iter().any(|r|r.chat_id.as_deref()==Some(&chat.id) && r.kind.prompt_role()==control_context::agent_policy::PromptRole::Instruction);
-        (head.as_deref()==Some(&working.checkpoint) && !later_input && defined(state,&chat.id) && state.bots.continuations.get(&chat.id)!=Some(&working.revision)).then(||(chat.id.clone(),working.clone()))
+        let processed=working.processed.iter().filter_map(|range|match range {
+            control_context::turn_mailbox::Range::Conversation{chat:id,through,..} if id==&chat.id=>Some(*through as usize),_=>None,
+        }).max().unwrap_or(0);
+        let conversation=crate::conversation::Conversation::of(state,chat);
+        let later_input=state.runtime.runs[run+1..].iter().any(|r|r.chat_id.as_deref()==Some(&chat.id)
+            && r.kind.prompt_role()==control_context::agent_policy::PromptRole::Instruction
+            && (r.status!="completed" || conversation.position(&r.id).is_none_or(|position|position>=processed)));
+        (head.as_deref()==Some(&working.checkpoint)).then(||(chat.id.clone(),working.clone(),!later_input))
     }).collect::<Vec<_>>();
     let resumable = state.bots.approvals.iter().any(|approval| approval.decision != Decision::Pending && !approval.acknowledged);
     if state.bots.supervisor.definitions().next().is_none() && state.bots.requests.is_empty() && !resumable {
@@ -533,7 +549,7 @@ fn reconcile_at(state: &mut State, now: u64, mut save: impl FnMut(&State) -> std
     // Publication, not a read or draft, authorises retiring pending callbacks.
     // Offer runnable continuation before completing the old turn so it folds
     // with already pending events into one budgeted successor.
-    for (chat,working) in &publications {
+    for (chat,working,resume) in &publications {
         for range in &working.processed {
             let topic=match range {
                 control_context::turn_mailbox::Range::Room{room:name,..}=>Some(room(name)),
@@ -542,14 +558,14 @@ fn reconcile_at(state: &mut State, now: u64, mut save: impl FnMut(&State) -> std
             };
             if let Some(topic)=topic {effects.extend(state.bots.supervisor.step(Event::Processed{bot:bot(chat),topic,through:range.through()},Now(now)));}
         }
-        match &working.disposition {
+        if *resume { match &working.disposition {
             control_context::turn_mailbox::Disposition::Continue => effects.extend(state.bots.supervisor.step(Event::Continue(bot(chat)),Now(now))),
             control_context::turn_mailbox::Disposition::Wait{topics,recheck_seconds} => {
                 let topics = topics.iter().filter_map(|source| source.split_once(':').map(|(kind,name)|Topic::new(kind,name))).collect();
                 effects.extend(state.bots.supervisor.step(Event::Wait{bot:bot(chat),topics,until:now.saturating_add(u64::from(*recheck_seconds)*1000)},Now(now)));
             }
             control_context::turn_mailbox::Disposition::Done => {}
-        }
+        } }
         state.bots.continuations.insert(chat.clone(),working.revision);
     }
     for (chat,generation) in &recoveries {
@@ -883,6 +899,34 @@ mod tests {
     }
     fn bot_runs(state: &State) -> Vec<&crate::runtime::Run> {
         state.runtime.runs.iter().filter(|run| run.bot_turn.is_some()).collect()
+    }
+    #[test]
+    fn one_shot_wakes_do_not_enable_unattended_continuation() {
+        let (mut state, chat) = fixture();
+        command_at(&mut state, &chat, "on every 5", Now(0)).unwrap();
+        assert!(continuation_enabled(&state, &chat));
+        let mut definition = state.bots.supervisor.definitions().next().unwrap().clone();
+        definition.restart = Restart::Temporary;
+        state.bots.supervisor.step(Event::Define(definition), Now(1));
+        assert!(defined(&state, &chat));
+        assert!(!continuation_enabled(&state, &chat));
+    }
+    #[test]
+    fn a_new_bot_does_not_receive_another_bots_undrained_backlog() {
+        let (mut state, first) = fixture();
+        command_at(&mut state, &first, "on", Now(0)).unwrap();
+        post(&mut state, None, "Only the first bot was subscribed");
+        let second = crate::chat::create(&mut state);
+        state.chats.iter_mut().find(|c| c.id == second).unwrap().room = Some("general".into());
+        crate::chat::send(&mut state, &second, "Start a fresh playtest", "test").unwrap();
+        state.runtime.runs.last_mut().unwrap().status = "completed".into();
+        command_at(&mut state, &second, "on", Now(1)).unwrap();
+        reconcile_at(&mut state, 2, |_| Ok(())).unwrap();
+        assert_eq!(bot_runs(&state).len(), 1);
+        assert_eq!(bot_runs(&state)[0].chat_id.as_deref(), Some(first.as_str()));
+        post(&mut state, None, "Both are now subscribed");
+        reconcile_at(&mut state, 3, |_| Ok(())).unwrap();
+        assert!(bot_runs(&state).iter().any(|r| r.chat_id.as_deref() == Some(second.as_str())));
     }
     #[test]
     fn missing_handoff_recovery_is_durable_once_and_never_replays_failed_effects() {

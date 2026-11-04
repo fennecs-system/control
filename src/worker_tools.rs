@@ -104,7 +104,7 @@ fn dispatch_at(
             if let Some(room_tools) = response["result"]["tools"].as_array() {
                 tools.extend(room_tools.clone());
             }
-            if managed {tools.retain(|tool|tool["name"]!="control_room_ack");}
+            if managed {tools.retain(|tool|!matches!(tool["name"].as_str(),Some("control_room_ack"|"control_room_notifications")));}
             json!({"tools":tools})
         }
         "tools/call" => {
@@ -112,7 +112,7 @@ fn dispatch_at(
                 && !control_context::tool_policy::after_handoff(request["params"]["name"].as_str().unwrap_or("")) {
                 return error("A handoff is staged; only observations and handoff corrections may run before this attempt finishes.");
             }
-            if request["params"]["name"]=="control_room_ack" && managed {
+            if matches!(request["params"]["name"].as_str(),Some("control_room_ack"|"control_room_notifications")) && managed {
                 return error("Managed sessions acknowledge delivered callback receipts through control_turn_handoff after processing; use control_turn_context with source=room.");
             }
             if judge && !matches!(request["params"]["name"].as_str(),Some("control_workspace_run"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_web_search"|"control_rust_run"|"control_rust_bench"|"control_room_list"|"control_room_read"|"control_room_post"|"control_agent_result"|"control_knowledge_read"|"control_knowledge_search")) {
@@ -368,6 +368,29 @@ pub fn pump_at(state: &Arc<Mutex<State>>, run: &str, mailbox: &Path, workspace: 
 mod tests {
     use crate::runtime::RunKind;
     use super::*;
+    #[test]
+    fn ordinary_agents_receive_the_shared_continuity_mcp_without_bot_authority() {
+        for backend in [crate::backend::Backend::Codex, crate::backend::Backend::Claude] {
+            let mut state = State::default();
+            let chat = crate::chat::create(&mut state);
+            crate::chat::send(&mut state, &chat, "Carry out the assigned work", "test").unwrap();
+            state.runtime.runs[0].backend = backend;
+            crate::worker::checkpoint_next(&mut state, |_| Ok(())).unwrap();
+            assert!(!crate::bots::defined(&state, &chat));
+            let id = state.runtime.runs[0].id.clone();
+            let attempt = &state.runtime.runs[0].attempts[0];
+            assert!(attempt.turn_mailbox.is_some() && attempt.context_trace.is_some());
+            let shared = Arc::new(Mutex::new(state));
+            let listed = rpc_at(&shared, &id, &json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/list"}}), None);
+            let tools = listed["result"]["tools"].as_array().unwrap();
+            for name in ["control_turn_context", "control_turn_handoff", "control_room_read"] {
+                assert!(tools.iter().any(|t| t["name"] == name), "{backend:?}: {name}");
+            }
+            for name in ["control_room_ack", "control_room_notifications"] {
+                assert!(!tools.iter().any(|t| t["name"] == name));
+            }
+        }
+    }
     #[test]
     fn staged_handoffs_fence_mutators_by_host_policy_and_legacy_chats_hide_continuity_tools() {
         use control_context::{turn_mailbox::{Mailbox,Handoff,Disposition},working_state::Payload};

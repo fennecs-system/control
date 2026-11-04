@@ -71,7 +71,7 @@ impl Range {
         if id.is_empty()
             || id.len() > 128
             || id.bytes().any(|b| b.is_ascii_control())
-            || after >= through
+            || after > through
         {
             return Err("Invalid delivery source or range");
         }
@@ -330,6 +330,18 @@ mod tests {
             gap: false,
             request: String::new(),
         }
+    }
+    #[test]
+    fn empty_source_positions_cannot_acknowledge_unseen_data() {
+        let mut mailbox = Mailbox::default();
+        mailbox.deliver("empty".into(), page(0, 0)).unwrap();
+        mailbox.stage("draft".into(), handoff(&["empty"]), 0).unwrap();
+        let state = mailbox.publication(None, "r", "g", "cp").unwrap().unwrap();
+        assert_eq!(state.processed[0].through(), 0);
+        let mut unseen = Mailbox::default();
+        unseen.deliver("empty".into(), page(10, 10)).unwrap();
+        unseen.stage("draft".into(), handoff(&["empty"]), 0).unwrap();
+        assert!(unseen.publication(None, "r", "g", "cp").is_err());
     }
     #[test]
     fn a_new_admission_baseline_can_follow_an_older_committed_conversation_cursor() {

@@ -133,6 +133,9 @@ pub enum Event<I> {
     /// Processing is distinct from ingestion. Clear only reasons whose exact
     /// source watermark was committed with the agent's workspace.
     Processed { bot: BotId, topic: Topic, through: u64 },
+    /// Host-selected origin of a new subscription. Earlier retained events
+    /// were never subscribed to; this is not a processing acknowledgement.
+    StartAt { bot: BotId, topic: Topic, after: u64 },
     Stop(BotId),
     /// A message on `topic`. `from` names the chat that caused it, so a bot is
     /// not woken by its own posts.
@@ -366,6 +369,12 @@ impl<I: Info> Supervisor<I> {
     fn deliver(&mut self, event: Event<I>, now: u64) {
         match event {
             Event::Define(definition) => self.define(definition, now),
+            Event::StartAt { bot, topic, after } => {
+                if let Some(bot) = self.bots.get_mut(&bot) {
+                    let cursor = bot.cursors.entry(topic.key()).or_default();
+                    *cursor = (*cursor).max(after);
+                }
+            }
             Event::Pause(bot) => {
                 if let Some(bot) = self.bots.get_mut(&bot) {
                     bot.paused = true;

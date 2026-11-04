@@ -21,7 +21,8 @@ justify periodically restarting an agent.
 
 ### Implementation checkpoint
 
-Scope correction: prioritize bot handoffs, supervisor admission and bot context.
+Scope correction: agents own handoffs, callback delivery and context; bots add
+supervisor admission and approved unattended scheduling.
 Keep the existing append-only chat tape, comonad positions and configured
 compactor/lenses. A task view may omit typed wake bookkeeping without deleting
 history or keeping every old instruction in the model prompt forever. General
@@ -29,35 +30,51 @@ context browsing, new evidence expansion and a new scheduling language are not
 prerequisites for the next continuity playtest. Do not grow those features while
 the core lifecycle remains incomplete.
 
-The feature branch contains the private bounded projection and captured-input
+The feature branch contains the private projection and captured-input
 path, typed working notes, attempt-scoped deliveries/drafts, atomic publication,
 conversation/room delta prototypes, host-tool yield fencing, and a budgeted,
 deduplicated runnable-successor path. Callback hints can reach an active session
 on normal MCP responses. The prompt guidance no longer demands termination after
-each event. Ordinary chats retain their projection and transport fast path.
+each event. Ordinary and spawned agents use this same path at their next admission.
 Committed idle waits narrow existing topics, preserve operator timers, wake for
 process exits and have a bounded recheck. Active sessions are never restarted
 just because those callbacks arrive. Captured inputs reuse the append-only
 journal component; finished handoff receipts leave the mutable state checkpoint
 with finished tool activity instead of being rewritten on every save.
 
-Approving a permanent bot or using `/bot on` enables managed context on its next
-admission. It does not retrofit a running provider session. Captured typed
+Approving a permanent bot or using `/bot on` enables unattended scheduling; the
+agent already owns its continuity. Pre-existing provider attempts without a
+mailbox retain their protocol until the next admission. Captured typed
 triggers identify why that turn exists; conversation and room reads issue exact
 delivery receipts. Managed room processing uses handoffs instead of the ordinary
-room-ack tool. A successful published session that omits a handoff can resume
+room-ack tool. A successful published bot session that omits a handoff can resume
 once through the normal supervisor budget, retaining its last report. Explicit
 wait/done, unanswered approvals, newer input and unsuccessful/interrupted
 publication prevent that fallback; it does not guess completion from prose.
 
 The first implementation deliberately supports bounded text working notes and
-conversation/room receipts. Evidence/resource expansion, off-lock watch receipts
-and watch prefix/exit selection remain follow-up work; their unsupported fields
-are rejected rather than acknowledged. Existing cursor-based watch tools remain
+conversation/room receipts. Unsupported evidence/resource reference types are
+absent from the core and tool schemas. Saved notes from #133 can still decode
+its empty reference arrays; those placeholders are omitted on subsequent saves.
+Off-lock watch receipts and watch
+prefix/exit selection remain outside this slice. Existing cursor-based watch tools remain
 available. Idle waits can ignore telemetry while retaining it until a relevant
 event or recheck. MCP yield fencing does not intercept a native CLI's private
 built-in shell; container isolation remains authoritative there. This branch is
 not deployed and has not replaced any current provider session or service.
+
+Fresh bot activation starts at the current room tail, even if the chat has an
+older inbox. First room linkage records the same origin in the session, active
+mailbox and supervisor ingestion cursor. Reconfiguration, pause/resume and reload
+preserve the origin. This excludes prior playtests from automatic delivery and
+wakes; it does not delete posts or prevent explicit `control_room_read` browsing.
+Empty deltas return a reusable source-position receipt. Repeated idle reads at
+that position neither consume additional delivery slots nor rewrite state.
+Fresh reads default to the last delivered position, so callers receive new
+events without repeatedly injecting earlier batches. Delivery is still separate
+from processing; only committed handoff receipts advance the room inbox.
+Processing a delivered steering message retires its queued run without suppressing
+the handoff's requested continuation; genuinely newer input still takes precedence.
 
 ## Evidence and diagnosis
 
@@ -117,7 +134,7 @@ size. Summarizing the ritual alone would still pay for the ritual.
 5. Restart interrupts an in-flight provider attempt as today. Never silently
    replay model requests or ambiguous external effects. A later explicit retry
    or independently admitted wake uses committed state and retained evidence.
-6. Model-written facts remain attributed claims with evidence references. They
+6. Model-written facts remain attributed claims with checkpoint provenance. They
    cannot alter user instructions, grants, resource truth or admitted knowledge.
 7. Raw evidence and lifecycle history remain inspectable under existing retention
    rules, even when omitted from model context. Missing evidence is explicit.
@@ -159,31 +176,36 @@ receipts and self-continuations require it. Avoid a broad crate extraction.
 | --- | --- |
 | WorkingState | Schema version, monotonic revision, chat, originating run/attempt generation, published checkpoint reference; model-proposed goal progress, findings, rejected approaches, pending work and conditional next actions |
 | Instruction references | Control-owned original assignment and later user/authorized steering references, in order; never replaced by the model's summary |
-| EvidenceRef | Typed source, owner/scope, immutable revision or sequence range, and availability; resolve through existing journals, rooms, watches, artifacts or command receipts |
-| ResourceRef | Service/watch/port/job ID and generation; resolve current authorized state separately from the model's last observation |
 | EventReceipt | Opaque ID tied to chat/run/attempt generation and exact delivered per-source ranges; records gaps and pagination |
 | PendingHandoff | Attempt-scoped candidate WorkingState, base revision, acknowledged receipt IDs, disposition, optional task-progress summary, and idempotency identity |
 | ContextTrace | Projection version, exact Control text sent to the harness, section sizes and selected/omitted evidence references; privately retained with the attempt |
 
 Working-state fields include: current subgoal; findings with confidence/uncertainty
-and evidence; tried approaches and outcomes; pending actions with their handles;
+as text claims; tried approaches and outcomes; pending actions and expected results;
 expected event conditions; and next actions conditional on results. Control fills
 identity, checkpoint and instruction provenance; the model cannot forge them.
 
 Start with a 12 KiB UTF-8 JSON limit for the model-authored working-state payload,
-16 findings, 16 attempted approaches, 16 pending actions, 8 next actions and
-64 evidence references total. Reject oversized writes with actionable errors;
+16 findings, 16 attempted approaches, 16 pending actions and 8 next actions.
+Reject oversized writes with actionable errors;
 do not silently truncate claims or instructions. Cap each free-text field at
 1,000 characters within the total limit. Schema versions and unknown fields
 must be validated, not accepted as arbitrary executable configuration.
 
 Expose two attempt-scoped MCP tools through the shared registry and BotOps-style
-host boundary. Both providers receive identical semantics:
+host boundary. Both providers and ordinary spawned agents receive identical
+semantics. They are advertised as `agent.continuity`, independently of `agent.bot`.
+The worker MCP transport supplies run/attempt identity; the operator HTTP/stdio
+catalog does not advertise these attempt-bound tools or accept model-supplied
+attempt identities. This shared transport is the integration boundary for native
+adapters, not a new public session-authentication protocol.
 
 - `control_turn_context`: returns committed working state (or this attempt's
-  staged candidate), standing instructions, relevant event deltas, compact
-  resource changes, slice budget and opaque delivery receipts. Accept an optional
-  previous receipt for idempotent pagination and bounded EvidenceRefs to expand.
+  staged candidate), conversation/room deltas, remaining attempt time,
+  `continuation_enabled`, allowed wake topics and opaque delivery receipts.
+  Accept an optional previous receipt for pagination, including an empty read's
+  source-position receipt. Nonempty request identities replay their exact range;
+  an empty poll is a fresh observation and shares its cursor with other empty polls.
   Default delta page: at most 16 items and 8 KiB, with `more` and explicit gap
   markers. A read stages delivery receipts but does not acknowledge processing.
 - `control_turn_handoff`: accepts the base working-state revision, candidate
@@ -200,6 +222,8 @@ continuation. Explicit bot pause remains distinct and requires operator resume.
 operator's bot subscription or stop services. Maintenance belongs in `wait` with
 explicit conditions. The optional progress summary is task progress, not a
 mandatory wake/sleep report.
+Without an approved bot, dispositions are saved with the agent's workspace for
+its next requested turn; they cannot create a supervisor or schedule a recheck.
 
 After a handoff is accepted, the provider should finish naturally. Fence further
 mutating tools for that attempt, allowing only reads and correction of the draft;
@@ -309,13 +333,17 @@ Projection order: policy and original/steering instructions; committed working
 state with provenance; relevant current deltas/resource changes; selected task
 history and lenses; current request. Use the structured handoff instead of blindly
 reinjecting the previous six status observations for managed turns. Preserve the
-legacy projection until a chat is opted into this contract.
+legacy projection only for already running attempts without a captured mailbox.
 
-Initial total Control-authored input budget: 64 KiB, including adapter framing,
-instructions, handoff, deltas, lenses and history. This does not bound provider
-system prompts, tool schemas or later tool responses. Reserve instructions and
-current state before optional history; paginate evidence and return explicit
-omissions. If required instructions alone cannot fit, stop admission with an
+Required Control framing has a 64 KiB guard, including adapter policy, original
+assignment, working notes, lenses and current request. History selection belongs
+solely to the configured `Compactor`: Recent supplies its bounded window,
+Passthrough supplies all selected task history for provider-native compaction,
+and Lens supplies its chosen verbatim entries and summary blocks. Assembly
+preserves that selection in chronological order without a second truncation
+pass. This does not bound provider system prompts, tool schemas or later tool
+responses. Callback pages retain their separate byte/item bounds.
+If required framing cannot fit, stop admission with an
 actionable context-budget error, not silent truncation or instruction loss.
 Do not replace a human constraint with an unchecked model summary.
 
@@ -357,8 +385,9 @@ migrate` is roadmap work. Do not wipe a running playtest or retrofit its attempt
 and cursors. Start on isolated test chats for both providers; unknown versions
 fail visibly. Ordinary chats and supervised bots may select different context
 views, but they share the same append-only history and compactor/lens interface.
-Enable the tested text-handoff/room-receipt contract through bot approval only;
-do not advertise the broader reference/watch-receipt contract until implemented.
+Enable the tested text-handoff/room-receipt contract for agent admissions;
+bot approval controls unattended scheduling only. Do not advertise the broader
+reference/watch-receipt contract until implemented.
 
 ## Acceptance tests
 
@@ -384,7 +413,7 @@ do not advertise the broader reference/watch-receipt contract until implemented.
   bounds, missing references and over-budget required inputs are explicit.
 - **Provider parity:** the same committed state/deltas produce the same neutral
   envelope under Codex and Claude; adapter framing is captured separately within
-  the total Control input budget. No provider-session ID is required for recovery.
+  the required-framing guard. No provider-session ID is required for recovery.
 - **Live comparison:** repeat equivalent tasks with explicit permission for
   multi-action slices. Record launches, useful actions per slice, monitoring-only
   turns, context bytes, cached/uncached input, output, model-slot time, elapsed

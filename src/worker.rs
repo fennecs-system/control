@@ -458,7 +458,7 @@ fn start_with(state: Arc<Mutex<State>>, execute: fn(Arc<Mutex<State>>, Task)) ->
                         for reconcile in [crate::delegation::reconcile, crate::rooms::reconcile, crate::spawning::reconcile, crate::bots::reconcile] {
                             if let Err(message)=reconcile(&mut s, storage::save) {s.runtime.notice=message.into();}
                         }
-                        let managed_index=if s.chats.iter().any(|c|c.continuity.is_some()) {crate::scheduler::next(&s.runtime).filter(|&i|crate::turn_context::managed(&s,&s.runtime.runs[i]))}else{None};
+                        let managed_index=crate::scheduler::next(&s.runtime).filter(|&i|crate::turn_context::managed(&s,&s.runtime.runs[i]));
                         match managed_index {
                             Some(index)=>match crate::turn_context::PlannedContext::prepare(&s,index) {
                                 Ok(plan)=>Some(plan),
@@ -767,6 +767,11 @@ fn commit(
             chat.continuity.clone(),
         )
     });
+    let previous_inbox = s.collective.room_watches.iter().position(|w| Some(&w.chat) == chat_id.as_ref())
+        .map(|i| (i, s.collective.room_watches[i].clone()));
+    if let (Some(chat), Some(working)) = (&chat_id, &working) {
+        crate::rooms::processed(s, chat, &working.processed);
+    }
     if let Some(session) = s.chats.iter_mut().find(|c| Some(&c.id) == chat_id.as_ref()) {
         if let (Some(continuity),Some(working))=(&mut session.continuity,working){continuity.working=Some(working);}
         if let (Some(project), Some(checkpoint)) = (&mut session.project, published_project) {
@@ -787,6 +792,7 @@ fn commit(
         run.result=format!("Processed in active run {id}; see that session's response.").into();
     }
     if save(s).is_err() {
+        if let Some((i, inbox)) = previous_inbox { s.collective.room_watches[i] = inbox; }
         for (index,status,result) in retired {s.runtime.runs[index].status=status;s.runtime.runs[index].result=result;}
         let run = &mut s.runtime.runs[run_index];
         run.status = previous_status;
@@ -817,11 +823,15 @@ fn commit(
     Ok(())
 }
 #[cfg(test)]
-fn checkpoint_next(
+pub(crate) fn checkpoint_next(
     state: &mut State,
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Option<usize> {
-    checkpoint_prepared(state,None,save)
+    let index = crate::scheduler::next(&state.runtime)?;
+    let captured = if crate::turn_context::managed(state, &state.runtime.runs[index]) {
+        Some(crate::turn_context::PlannedContext::prepare(state, index).ok()?.persist().ok()?)
+    } else { None };
+    checkpoint_prepared(state,captured,save)
 }
 fn checkpoint_prepared(
     state:&mut State,
@@ -893,6 +903,17 @@ fn checkpoint_prepared(
     }
     let github_source = state.runtime.runs[index].attempts.last().and_then(|a|a.github_source.clone())
         .or_else(||crate::github::inherit(state,parent.as_deref()));
+    let continuity_index = state.chats.iter().position(|c| Some(&c.id) == state.runtime.runs[index].chat_id.as_ref() && c.continuity.is_none() && captured.is_some());
+    if let Some(i) = continuity_index {
+        // Every agent owns its continuity; a bot adds scheduling permission.
+        // Existing live attempts keep their protocol until their next admission.
+        let chat = &state.chats[i];
+        let baseline = chat.room.as_ref().filter(|r| crate::rooms::valid(r)).map(|room| {
+            control_context::turn_mailbox::Range::Room { room: room.clone(), after: 0,
+                through: crate::rooms::inbox_cursor(state, &chat.id).unwrap_or(state.collective.posts.len()) as u64 }
+        }).into_iter().collect();
+        state.chats[i].continuity = Some(Box::new(crate::turn_context::Managed { baseline, ..Default::default() }));
+    }
     let turn_mailbox=if captured.is_some() {
         let run=&state.runtime.runs[index];
         let mut mailbox=control_context::turn_mailbox::Mailbox::default();
@@ -940,6 +961,7 @@ fn checkpoint_prepared(
         let run = &mut state.runtime.runs[index];
         run.status = "queued".into();
         run.attempts.pop();
+        if let Some(i) = continuity_index { state.chats[i].continuity = None; }
         if let Some((id, old)) = previous_revision {
             state
                 .chats
@@ -1506,6 +1528,28 @@ mod tests {
     use crate::runtime::RunKind;
     use super::*;
     #[test]
+    fn consumed_steering_does_not_drop_requested_continuation() {
+        use control_context::{turn_mailbox::{Handoff,Disposition,Delivery,Range},working_state::Payload};
+        let mut state=State::default();
+        let chat=crate::chat::create(&mut state);
+        state.chats[0].room=Some("general".into());
+        crate::chat::send(&mut state,&chat,"Build the tool","test").unwrap();
+        crate::bots::command(&mut state,&chat,"on").unwrap();
+        let trace=crate::turn_context::PlannedContext::prepare(&state,0).unwrap().persist().unwrap();
+        checkpoint_prepared(&mut state,Some(trace), |_|Ok(())).unwrap();
+        crate::chat::send(&mut state,&chat,"/steer Keep the public API stable","test").unwrap();
+        let mailbox=state.runtime.runs[0].attempts[0].turn_mailbox.as_mut().unwrap();
+        mailbox.deliver("steering".into(),Delivery{ranges:vec![Range::Conversation{chat:chat.clone(),after:1,through:2}],gap:false,request:String::new()}).unwrap();
+        mailbox.stage("handoff".into(),Handoff{base_revision:0,payload:Payload{subgoal:"Finish the implementation".into(),..Default::default()},processed:vec!["steering".into()],resynchronised:vec![],disposition:Disposition::Continue,progress:None},0).unwrap();
+        let id=state.runtime.runs[0].id.clone();
+        let mut attempt=state.runtime.runs[0].attempts[0].clone();
+        attempt.artifact=Some("checkpoint".into());
+        commit(&mut state,&id,Action::Task,attempt,Ok("Made progress; more work remains".into()),false, |_|Ok(())).unwrap();
+        assert_eq!(state.runtime.runs[1].status,"completed");
+        crate::bots::reconcile(&mut state, |_|Ok(())).unwrap();
+        assert!(state.runtime.runs.iter().any(|r|r.kind==RunKind::BotWake && r.status=="queued"),"A committed continue was lost after consuming steering");
+    }
+    #[test]
     fn bot_activation_keeps_the_live_protocol_and_captures_only_the_next_admission() {
         let mut state=State::default();
         let chat=crate::chat::create(&mut state);
@@ -1513,6 +1557,9 @@ mod tests {
         crate::chat::send(&mut state,&chat,"Build a small tool and keep improving it","test").unwrap();
         checkpoint_next(&mut state, |_|Ok(())).unwrap();
         let first=state.runtime.runs[0].id.clone();
+        // Simulate an already running pre-continuity provider process.
+        state.runtime.runs[0].attempts[0].context_trace = None;
+        state.runtime.runs[0].attempts[0].turn_mailbox = None.into();
         state.collective.posts.push(crate::rooms::Post{room:"general".into(),text:"Old room history".into(),chat:Some("peer".into()),run:None,key:"old".into()});
         crate::bots::command(&mut state,&chat,"on").unwrap();
         assert!(state.runtime.runs[0].attempts[0].context_trace.is_none());
@@ -1598,7 +1645,12 @@ mod tests {
             let mut state=State::default();
             let chat=crate::chat::create(&mut state);
             crate::chat::send(&mut state,&chat,"Keep working toward the goal","test").unwrap();
+            state.chats[0].room = Some("general".into());
+            crate::rooms::ensure_inbox(&mut state, &chat).unwrap();
             checkpoint_next(&mut state, |_|Ok(())).unwrap();
+            for i in 0..8 {
+                state.collective.posts.push(crate::rooms::Post { room: "general".into(), text: format!("event {i}"), chat: None, run: None, key: String::new() });
+            }
             state.chats[0].continuity=Some(Box::new(crate::turn_context::Managed::default()));
             let run=&mut state.runtime.runs[0];
             let id=run.id.clone();
@@ -1618,11 +1670,16 @@ mod tests {
                 assert_eq!(working.unwrap().checkpoint,"matching-workspace");
                 assert_eq!(working.unwrap().processed[0].through(),8);
                 assert_eq!(state.runtime.runs[0].attempts[0].task_progress(),Some("Verified a useful milestone"));
+                assert_eq!(crate::rooms::inbox_cursor(&state, &chat), Some(8));
             } else {
                 assert!(working.is_none(),"unsuccessful attempts retain a draft without processing receipts");
                 assert!(state.chats[0].workspace.is_none());
                 assert!(state.runtime.runs[0].attempts[0].turn_mailbox.as_ref().unwrap().accepted().is_some());
+                assert_eq!(crate::rooms::inbox_cursor(&state, &chat), Some(0));
             }
+            crate::bots::reconcile(&mut state, |_| Ok(())).unwrap();
+            assert!(!crate::bots::defined(&state, &chat));
+            assert_eq!(state.runtime.runs.len(), 1, "agent notes cannot enable unattended scheduling");
         }
     }
     #[test]

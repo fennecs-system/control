@@ -385,6 +385,7 @@ fn attach_room(state: &mut State, id: &str, option: &str) -> Result<String, &'st
     state.collective.room_watches.retain(|watch| watch.chat != id);
     let reply = room.as_deref().map_or("Detached from the room.".to_owned(), |room| format!("Attached to #{room}. Agents here can now use room tools; chats spawned from here join it too."));
     state.chats.iter_mut().find(|session| session.id == id).unwrap().room = room;
+    crate::rooms::start_at_edge(state, id)?;
     Ok(reply)
 }
 fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result<(), &'static str> {
@@ -1019,6 +1020,7 @@ pub(crate) struct Checkpoint {
     posts: usize,
     watches: Vec<crate::rooms::Watch>,
     bots: crate::bots::Bots,
+    mailbox_origins: Vec<(usize, Vec<control_context::turn_mailbox::Range>)>,
 }
 impl Checkpoint {
     pub(crate) fn capture(state: &State, targets: &std::collections::HashSet<&str>) -> Self {
@@ -1034,11 +1036,20 @@ impl Checkpoint {
             posts: state.collective.posts.len(),
             watches: state.collective.room_watches.clone(),
             bots: state.bots.clone(),
+            mailbox_origins: state.runtime.runs.iter().enumerate()
+                .filter(|(_, r)| r.status == "running" && r.chat_id.as_deref().is_some_and(|id| targets.contains(id)))
+                .filter_map(|(i, r)| r.attempts.last()?.turn_mailbox.as_ref().map(|m| (i, m.baseline.clone())))
+                .collect(),
         }
     }
     pub(crate) fn restore(self, state: &mut State) {
         state.collective.room_watches = self.watches;
         state.bots = self.bots;
+        for (i, baseline) in self.mailbox_origins {
+            if let Some(mailbox) = state.runtime.runs[i].attempts.last_mut().and_then(|a| a.turn_mailbox.as_mut()) {
+                mailbox.baseline = baseline;
+            }
+        }
         state.chats.truncate(self.chats);
         for (index, session) in self.previous {
             state.chats[index] = session;

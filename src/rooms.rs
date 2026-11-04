@@ -11,7 +11,7 @@ use std::{
 pub const NAMES: [&str; 3] = ["general", "engineering", "research"];
 mod notifications;
 pub use notifications::{Watch, reconcile};
-pub(crate) use notifications::{continuation_leaf, ensure_inbox, inbox_cursor, listen, listener_status, listening};
+pub(crate) use notifications::{continuation_leaf, ensure_inbox, inbox_cursor, start_at_edge, processed, listen, listener_status, listening};
 pub fn valid(room: &str) -> bool {
     NAMES.contains(&room)
 }
@@ -180,7 +180,7 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
                         let (key, text, chat, run) = (format!("{}:{nonce}", run.id), text.to_owned(), chat.id.clone(), run.id.clone());
                         if attached.is_none() {
                             state.chats[chat_index].room = Some(room.clone());
-                            if let Err(error) = crate::bots::link_room(state, &chat, &room) {
+                            if let Err(error) = start_at_edge(state, &chat).and_then(|()| crate::bots::link_room(state, &chat, &room)) {
                                 state.chats[chat_index].room = None;
                                 return Err(error);
                             }
@@ -220,6 +220,8 @@ pub fn checkpoint(
     let budget = state.runtime.runs[run_index].room_wake_used;
     let linked = state.chats.iter().position(|c| Some(c.id.as_str()) == chat).map(|index| (index, state.chats[index].room.clone()));
     let bots = linked.as_ref().filter(|(_, room)| room.is_none()).map(|_| state.bots.clone());
+    let continuity = linked.as_ref().map(|(i, _)| (state.chats[*i].continuity.clone(), state.chats[*i].revision));
+    let mailbox = state.runtime.runs[run_index].attempts.last().map(|a| a.turn_mailbox.clone());
     let response = worker_rpc(state, run_id, envelope);
     let current = state.collective.room_watches.iter().position(|watch| Some(watch.chat.as_str()) == state.runtime.runs[run_index].chat_id.as_deref());
     let changed = state.collective.posts.len() != post_count || budget != state.runtime.runs[run_index].room_wake_used
@@ -230,7 +232,14 @@ pub fn checkpoint(
         state.runtime.runs[run_index].room_wake_used = budget;
         if let Some(index) = current { state.collective.room_watches.remove(index); }
         if let Some((index, watch)) = previous { state.collective.room_watches.insert(index, watch); }
-        if let Some((index, room)) = linked { state.chats[index].room = room; }
+        if let Some((index, room)) = linked {
+            state.chats[index].room = room;
+            if let Some((continuity, revision)) = continuity {
+                state.chats[index].continuity = continuity;
+                state.chats[index].revision = revision;
+            }
+        }
+        if let Some(mailbox) = mailbox { state.runtime.runs[run_index].attempts.last_mut().unwrap().turn_mailbox = mailbox; }
         if let Some(bots) = bots { state.bots = bots; }
         return json!({"jsonrpc":"2.0","id":envelope["request"]["id"],"error":{"code":-32603,"message":"Could not save room update. Try again."}});
     }

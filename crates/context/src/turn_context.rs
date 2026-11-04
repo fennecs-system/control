@@ -1,8 +1,8 @@
-//! Pure, byte-bounded Control input projection. No provider, storage or runtime effects.
+//! Pure input assembly and trace. Selection belongs to the configured compactor.
 use serde::{Deserialize, Serialize};
 
 pub const VERSION: u8 = 1;
-pub const MAX_INPUT_BYTES: usize = 64 * 1024;
+pub const MAX_REQUIRED_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "u8", into = "u8")]
@@ -84,29 +84,14 @@ impl std::fmt::Display for BudgetExceeded {
 }
 impl std::error::Error for BudgetExceeded {}
 
-/// Required sections are reserved first. Optional sections are whole units, in
-/// priority order. Retained evidence stays addressable through the trace.
-pub fn prepare(
+/// Preserve the selected history exactly and in order. Required Control
+/// framing has a separate guard; this is not a second history compactor.
+/// In particular, passthrough leaves history compression to the provider.
+pub fn compose(
     prefix: &str,
     sections: &[Section<'_>],
     limit: usize,
 ) -> Result<PreparedContext, BudgetExceeded> {
-    prepare_ordered(prefix, sections, 0..sections.len(), limit)
-}
-
-/// Select optional sections by priority, then render in source order. Recency
-/// can decide what fits without reversing the chronology of user instructions.
-pub fn prepare_ordered(
-    prefix: &str,
-    sections: &[Section<'_>],
-    priority: impl IntoIterator<Item = usize>,
-    limit: usize,
-) -> Result<PreparedContext, BudgetExceeded> {
-    let limit = limit.min(MAX_INPUT_BYTES);
-    // A fixed notice reservation makes omissions explicit without a second
-    // selection pass or any byte/UTF-8 truncation of instructions/evidence.
-    const NOTICE: &str =
-        "\nSome optional context was omitted; inspect the retained context trace for references.\n";
     let required = sections
         .iter()
         .filter(|s| s.required)
@@ -120,46 +105,17 @@ pub fn prepare_ordered(
     let total = sections
         .iter()
         .fold(prefix.len(), |n, s| n.saturating_add(s.text.len()));
-    let mut remaining = limit - required;
-    if total > limit {
-        remaining = remaining.checked_sub(NOTICE.len()).ok_or(BudgetExceeded {
-            required_bytes: required.saturating_add(NOTICE.len()),
-            limit_bytes: limit,
-        })?;
-    }
-    let mut text = String::with_capacity(total.min(limit));
+    let mut text = String::with_capacity(total);
     text.push_str(prefix);
     let mut trace = Vec::with_capacity(sections.len());
-    let mut omitted = false;
-    // Priority chooses what survives pressure; it is not an inclusion filter.
-    // If everything fits, avoid omissions (and an unreserved omission notice)
-    // even when the caller supplies a partial priority order.
-    let mut selected = vec![total <= limit; sections.len()];
-    for index in priority {
-        let Some(section) = sections.get(index) else {
-            continue;
-        };
-        if !section.required && !selected[index] && section.text.len() <= remaining {
-            selected[index] = true;
-            remaining -= section.text.len();
-        }
-    }
-    for (index, section) in sections.iter().enumerate() {
-        let included = section.required || selected[index];
-        if included {
-            text.push_str(section.text);
-        } else {
-            omitted = true;
-        }
+    for section in sections {
+        text.push_str(section.text);
         trace.push(SectionTrace {
             kind: section.kind,
             bytes: section.text.len(),
-            included,
+            included: true,
             reference: section.reference.clone(),
         });
-    }
-    if omitted {
-        text.push_str(NOTICE);
     }
     Ok(PreparedContext {
         version: VERSION,
@@ -172,27 +128,16 @@ pub fn prepare_ordered(
 mod tests {
     use super::*;
     #[test]
-    fn partial_priority_cannot_overflow_the_budget_with_an_omission_notice() {
+    fn assembly_preserves_the_selected_chronology() {
         let sections = ["earlier", "later"].map(|text| Section {
             kind: SectionKind::History,
             text,
             required: false,
             reference: None,
         });
-        let prepared = prepare_ordered("", &sections, [1], 12).unwrap();
+        let prepared = compose("", &sections, 12).unwrap();
         assert_eq!(prepared.text, "earlierlater");
         assert!(prepared.sections.iter().all(|section| section.included));
-    }
-    #[test]
-    fn selection_priority_never_reverses_instruction_chronology() {
-        let sections = ["earlier", "later"].map(|text| Section {
-            kind: SectionKind::History,
-            text,
-            required: false,
-            reference: None,
-        });
-        let prepared = prepare_ordered("", &sections, [1, 0], MAX_INPUT_BYTES).unwrap();
-        assert_eq!(prepared.text, "earlierlater");
     }
     #[test]
     fn required_instructions_survive_unicode_history_and_framing_counts() {
@@ -220,14 +165,14 @@ mod tests {
                 reference: None,
             },
         ];
-        let value = prepare("Policy\n", &sections, 130).unwrap();
-        assert!(value.text.len() <= 130);
+        let value = compose("Policy\n", &sections, 130).unwrap();
+        assert!(value.text.len() > 130, "selected history has its own compaction policy");
         assert!(value.text.contains("Observe only.") && value.text.contains("Current event"));
         assert!(
-            !value.sections[0].included
+            value.sections[0].included
                 && value.sections[0].reference.as_ref().unwrap().run == "old"
         );
-        assert!(value.text.contains("omitted"));
+        assert!(value.text.contains(&old));
     }
     #[test]
     fn required_input_fails_instead_of_silent_truncation() {
@@ -237,7 +182,7 @@ mod tests {
             required: true,
             reference: None,
         }];
-        let error = prepare("adapter framing ", &sections, 16).unwrap_err();
+        let error = compose("adapter framing ", &sections, 16).unwrap_err();
         assert!(error.required_bytes > error.limit_bytes);
     }
     #[test]
@@ -248,7 +193,7 @@ mod tests {
             required: true,
             reference: None,
         }];
-        let prepared = prepare("frame\n", &sections, MAX_INPUT_BYTES).unwrap();
+        let prepared = compose("frame\n", &sections, MAX_REQUIRED_BYTES).unwrap();
         let bytes = serde_json::to_vec(&prepared).unwrap();
         assert_eq!(prepared, serde_json::from_slice(&bytes).unwrap());
         assert_eq!(prepared.text, "frame\nbuild");
