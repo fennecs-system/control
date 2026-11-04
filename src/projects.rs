@@ -1073,21 +1073,24 @@ mod tests {
         }
     }
     #[test]
-    fn repeated_folder_requests_render_at_their_own_message_and_replace_stale_approval() {
+    fn repeated_folder_requests_keep_message_provenance_and_replace_panel_approval() {
         let mut state=State::default();let id=crate::chat::create(&mut state);
         crate::chat::send(&mut state,&id,"Discuss first","test").unwrap();
         crate::chat::send(&mut state,&id,"/open /first","test").unwrap();
         let first=state.chats[0].project.clone().unwrap();
         state.chats[0].project.as_mut().unwrap().error=Some("Synthetic import failure".into());
-        let failed=crate::chat::transcript(&state,&id).unwrap();
+        let failed=crate::chat::requests(&state,&id).unwrap();
         assert!(failed.contains("role='alert'>Synthetic import failure"));
         crate::chat::send(&mut state,&id,"/open /second","test").unwrap();
         let project=state.chats[0].project.as_ref().unwrap();
         assert_ne!(first.request,project.request);assert_eq!(project.path,"/second");
         assert!(project.error.is_none());assert_eq!(message_index(&state.chats[0]),Some(2));
         let rendered=crate::chat::transcript(&state,&id).unwrap();
-        assert!(rendered.find("/open</span> /second").unwrap()<rendered.find("Trust folder and open").unwrap());
-        assert_eq!(rendered.matches("Trust folder and open").count(),1);
+        assert!(rendered.contains("/open</span> /second"));
+        assert!(!rendered.contains("Trust folder and open"));
+        let panel=crate::chat::requests(&state,&id).unwrap();
+        assert_eq!(panel.matches("Trust folder and open").count(),1);
+        assert!(!panel.contains(&format!("value='{}'",first.request)));
         assert!(rendered.contains("Folder request replaced by a later request."));
         assert!(!rendered.contains(&format!("value='{}'",first.request)));
         assert!(!rendered.contains("Synthetic import failure"));

@@ -534,7 +534,7 @@ pub(crate) mod tests {
         assert!(answer(&mut state, &other, Some(&question), "1", "test").is_err());
         assert!(answer(&mut state, &chat, Some("q-stale"), "1", "test").is_err());
         assert!(answer(&mut state, &chat, Some(&question), "9", "test").is_err());
-        let html = chat::transcript(&state, &chat).unwrap();
+        let html = chat::requests(&state, &chat).unwrap();
         assert!(
             html.contains("Which format? &lt;script&gt;") && html.contains("JSON · recommended")
         );

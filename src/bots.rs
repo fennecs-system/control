@@ -634,7 +634,7 @@ fn reconcile_at(state: &mut State, now: u64, mut save: impl FnMut(&State) -> std
 
 const MAX_APPROVALS: usize = 64;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 enum Decision {
     Pending,
     Approved,
@@ -777,7 +777,7 @@ fn bump(state: &mut State, chat: &str) {
 /// requesting or target chat. Approval starts the bot; the requester resumes later.
 fn decide(state: &mut State, id: &str, allow: bool, chat: Option<&str>, now: Now) -> Result<&'static str, &'static str> {
     let index = state.bots.approvals.iter()
-        .position(|a| a.id == id && a.decision == Decision::Pending && chat.is_none_or(|chat| a.chat == chat || a.requester == chat))
+        .position(|a| a.id == id && a.decision == Decision::Pending && chat.is_none_or(|chat| visible(state, a, chat)))
         .ok_or("No pending bot request with that ID in this conversation.")?;
     let approval = state.bots.approvals[index].clone();
     let session = state.chats.iter().find(|session| session.id == approval.requester).ok_or("Requesting chat is missing.")?;
@@ -826,19 +826,34 @@ fn advance(state: &mut State) -> bool {
     changed
 }
 
-/// Pending requests shown to the operator in the requesting chat.
+fn visible(state: &State, approval: &Approval, chat: &str) -> bool {
+    let Some(viewer) = state.chats.iter().find(|session| session.id == chat) else { return false; };
+    state.chats.iter().any(|requester| requester.id == approval.requester && requester.actor == viewer.actor)
+        && (approval.chat == chat || crate::chat::within(state, &approval.requester, chat))
+}
+fn pending<'a>(state: &'a State, chat: &'a str) -> impl Iterator<Item = &'a Approval> {
+    state.bots.approvals.iter().filter(move |a| a.decision == Decision::Pending && visible(state, a, chat))
+}
+pub(crate) fn pending_count(state: &State, chat: &str) -> usize { pending(state,chat).count() }
+pub(crate) fn decision_revision(state: &State) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    for approval in &state.bots.approvals { (&approval.id, &approval.requester, &approval.chat, approval.decision).hash(&mut hash); }
+    hash.finish()
+}
+/// Pending requests from this chat and its same-actor descendants.
 pub(crate) fn pending_panel(state: &State, chat: &str) -> String {
-    state.bots.approvals.iter().filter(|a| a.requester == chat && a.decision == Decision::Pending).map(|a| {
+    pending(state, chat).map(|a| {
         let title = state.chats.iter().find(|session| session.id == a.chat).map_or(a.chat.as_str(), |session| session.title.as_str());
         let mut sources = Vec::new();
         if a.room { sources.push("room messages".to_owned()); }
         if let Some(minutes) = a.every_minutes { sources.push(format!("every {minutes} min")); }
-        format!("<article class='assistant-message port-request' data-transcript-key='bot-{}'><h3>Bot request · {}</h3><p>Run this chat as a persistent bot, woken by {}. Up to {TURNS_PER_WINDOW} turns per hour.</p><form class='decision-form' method='post' action='/tools/bots' target='_top'><input type='hidden' name='id' value='{}'><input type='hidden' name='return_chat' value='{}'><button class='primary' name='allow' value='yes'>Allow bot</button><button name='deny' value='yes' formnovalidate>Deny</button><p role='alert' hidden></p></form><p class='muted'>Or reply /bot allow {} · /bot deny {}</p></article>",
-            crate::escape(&a.id), crate::escape(title), crate::escape(&sources.join(" and ")), crate::escape(&a.id), crate::escape(chat), crate::escape(&a.id), crate::escape(&a.id))
+        format!("<article class='assistant-message port-request' data-transcript-key='bot-{}'><h3>Bot request · {}</h3><p>{} · up to {TURNS_PER_WINDOW} turns/hour</p><form class='decision-form' method='post' action='/tools/bots' target='_top'><input type='hidden' name='id' value='{}'><input type='hidden' name='return_chat' value='{}'><button class='primary' name='allow' value='yes'>Allow bot</button><button name='deny' value='yes' formnovalidate>Deny</button><p role='alert' hidden></p></form></article>",
+            crate::escape(&a.id), crate::escape(title), crate::escape(&sources.join(" and ")), crate::escape(&a.id), crate::escape(chat))
     }).collect()
 }
 pub(crate) fn pending_json(state: &State, chat: &str) -> Value {
-    Value::from(state.bots.approvals.iter().filter(|a| a.requester == chat && a.decision == Decision::Pending).map(Approval::summary).collect::<Vec<_>>())
+    Value::from(pending(state, chat).map(Approval::summary).collect::<Vec<_>>())
 }
 
 /// `POST /tools/bots` from the chat panel: allow or deny, then return to the chat.
@@ -885,6 +900,31 @@ fn http_with_save(stream: &mut impl io::Write, shared: &Arc<Mutex<State>>, metho
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "synthetic release request-view benchmark, no credentials or models"]
+    fn requests_profile() {
+        use std::{hint::black_box,time::Instant};
+        for count in [0,32] {
+            let (mut state,parent,_)=requester();
+            for index in 0..count {
+                let child=spawned(&mut state,&parent,&format!("Worker {index}"));
+                ask(&mut state,&format!("bench-{index}"),&child,Some(5)).unwrap();
+            }
+            let iterations=std::env::var("CONTROL_PROFILE_ITERATIONS").ok().and_then(|s|s.parse::<u32>().ok()).unwrap_or(200);
+            let mut samples=Vec::new();
+            for _ in 0..9 {
+                let start=Instant::now();
+                for _ in 0..iterations {
+                    black_box(crate::chat::transcript(black_box(&state),&parent).unwrap());
+                    black_box(crate::chat::requests(black_box(&state),&parent).unwrap());
+                }
+                samples.push(start.elapsed().as_nanos()/u128::from(iterations));
+            }
+            samples.sort_unstable();
+            println!("{}",json!({"case":"chat_and_requests","pending":count,"median_ns":samples[4],"min_ns":samples[0]}));
+        }
+    }
 
     fn fixture() -> (State, String) {
         let mut state = State::default();
@@ -1234,6 +1274,43 @@ mod tests {
         let attempt = AttemptRef { run: &run, generation: "attempt-a", nonce };
         handle(state, &attempt, BotCall::Request { chat_id: chat.into(), every_minutes, room: true }, |_| Ok(()))
     }
+    #[test]
+    fn descendant_bot_requests_reach_ancestors_and_fence_other_actors_and_trees() {
+        let (mut state,parent,child)=requester();
+        let grandchild=spawned(&mut state,&child,"Grandchild");
+        let index=state.runtime.runs.len()-1;
+        state.runtime.runs[index].status="running".into();
+        state.runtime.runs[index].attempts.push(crate::usage::Attempt {workspace_id:Some("child-attempt".into()),..Default::default()});
+        let run=state.runtime.runs[index].id.clone();
+        let before=decision_revision(&state);
+        let value=handle(&mut state,&AttemptRef {run:&run,generation:"child-attempt",nonce:"nested-bot"},BotCall::Request {chat_id:grandchild.clone(),every_minutes:Some(5),room:true}, |_|Ok(())).unwrap();
+        let id=value["request_id"].as_str().unwrap();
+        assert_ne!(before,decision_revision(&state));
+        assert_eq!(pending_count(&state,&parent),1);
+        assert_eq!(pending_count(&state,&child),1);
+        assert!(crate::chat::requests(&state,&parent).unwrap().contains(id));
+        assert!(crate::chat::detail(&state,&parent).unwrap()["pending_bots"].as_array().unwrap().iter().any(|v|v["request_id"]==id));
+        let unrelated=crate::chat::create(&mut state);
+        assert_eq!(pending_count(&state,&unrelated),0);
+        assert!(decide(&mut state,id,true,Some(&unrelated),Now(0)).is_err());
+        let parent_index=state.chats.iter().position(|c|c.id==parent).unwrap();
+        state.chats[parent_index].actor=identity::Actor::Unknown;
+        assert_eq!(pending_count(&state,&parent),0);
+        assert!(decide(&mut state,id,true,Some(&parent),Now(0)).is_err());
+        state.chats[parent_index].actor=identity::Actor::LocalOperator;
+        let shared=Arc::new(Mutex::new(state));
+        let payload=format!("id={id}&return_chat={parent}&allow=yes&response=json");
+        let mut response=Vec::new();
+        http_with_save(&mut response,&shared,"POST","/tools/bots",payload.as_bytes(), |_|Err(io::Error::other("full")));
+        assert!(String::from_utf8(response).unwrap().starts_with("HTTP/1.1 400"));
+        assert_eq!(pending_count(&shared.lock().unwrap(),&parent),1);
+        let mut response=Vec::new();
+        http_with_save(&mut response,&shared,"POST","/tools/bots",payload.as_bytes(), |_|Ok(()));
+        assert!(String::from_utf8(response).unwrap().starts_with("HTTP/1.1 200"));
+        let state=shared.lock().unwrap();
+        assert!(defined(&state,&grandchild));
+        assert_eq!(pending_count(&state,&parent),0);
+    }
     fn finish_requesting_turn(state: &mut State) {
         state.runtime.runs[0].status = "completed".into();
     }
@@ -1248,7 +1325,7 @@ mod tests {
         assert!(ask(&mut state, "n2", &child, None).is_err(), "one pending request per chat");
         let second = ask(&mut state, "n3", &other, Some(10)).unwrap()["request_id"].as_str().unwrap().to_owned();
         assert!(!defined(&state, &child), "a request grants nothing");
-        assert!(pending_panel(&state, &parent).contains(&format!("/bot allow {id}")));
+        assert!(pending_panel(&state, &parent).contains(&format!("value='{id}'")));
         assert_eq!(pending_json(&state, &parent).as_array().unwrap().len(), 2);
 
         crate::chat::send(&mut state, &parent, &format!("/bot allow {id}"), "discord").unwrap();

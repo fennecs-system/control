@@ -372,8 +372,8 @@ pub fn handle(
             Ok(html)=>respond(stream,"200 OK","text/html; charset=utf-8",&crate::render(state,"artifact-page",lens,&html),""),
             Err(error)=>respond(stream,"404 Not Found","text/plain",&error.to_string(),""),
         }
-    } else if method == "GET" && operation == "transcript" {
-        match chat::transcript(state, id) {
+    } else if method == "GET" && matches!(operation, "transcript" | "requests") {
+        match if operation == "requests" { chat::requests(state,id) } else { chat::transcript(state, id) } {
             Ok(html) => respond(stream, "200 OK", "text/html; charset=utf-8", &html, ""),
             Err(message) => respond(stream, "404 Not Found", "text/plain", message, ""),
         }
@@ -514,9 +514,9 @@ mod tests {
         assert!(response.starts_with("HTTP/1.1 303 See Other\r\n"));
         assert!(response.lines().filter_map(|line|line.split_once(':')).any(|(name,value)|name.eq_ignore_ascii_case("location") && value.trim()==format!("/chat/{id}/project")));
         assert_eq!(serde_json::to_vec(&state).unwrap(), before);
-        // An explicit path still produces an approval next to its own message.
+        // An explicit path produces an approval in the separate request panel.
         chat::send(&mut state, &id, "/open /fixture/source", "test").unwrap();
-        let transcript = chat::transcript(&state, &id).unwrap();
+        let transcript = chat::requests(&state, &id).unwrap();
         assert_eq!(transcript.matches("project-picker").count(), 1);
         assert!(transcript.contains("Trust folder and open"));
         assert!(state.chats[0].project.as_ref().unwrap().grant.is_none());
@@ -725,9 +725,36 @@ mod tests {
         assert_eq!(b.text(".composer-highlight .chat-command"),"/open");
         b.post(&format!("/element/{input}/clear"),json!({}));
         b.post(&format!("/element/{input}/value"),json!({"text":"Keep this unfinished draft"}));
+        // A descendant's new request opens the stable panel without navigating
+        // the parent or touching the draft. Once closed it stays closed while
+        // the same requests are still pending.
+        let page_body=b.element("body");
+        let request_toggle=b.element(".chat-requests > summary");
+        let toggle=b.element(".chat-requests");
+        if b.get(&format!("/element/{toggle}/property/open"))==true {b.post(&format!("/element/{request_toggle}/click"),json!({}));}
+        {
+            let mut state=state.lock().unwrap();
+            let child=crate::chat::create(&mut state);
+            state.chats.last_mut().unwrap().parent_chat=Some(chat.clone());
+            let mut bots=serde_json::to_value(&state.bots).unwrap();
+            bots["approvals"]=json!([{"id":"bot-browser-child","chat":child,"requester":child,"origin":"fixture","every_minutes":5,"room":true,"decision":"Pending","acknowledged":false}]);
+            state.bots=serde_json::from_value(bots).unwrap();
+        }
+        let start=Instant::now();while b.get(&format!("/element/{toggle}/property/open"))!=true {assert!(start.elapsed()<Duration::from_secs(8));std::thread::sleep(Duration::from_millis(100));}
+        assert_eq!(b.get(&format!("/element/{page_body}/name")),"body");
+        assert_eq!(b.get(&format!("/element/{input}/property/value")),"Keep this unfinished draft");
+        b.post(&format!("/element/{request_toggle}/click"),json!({}));
+        std::thread::sleep(Duration::from_millis(1200));
+        assert_eq!(b.get(&format!("/element/{toggle}/property/open")),false);
+        b.post(&format!("/element/{request_toggle}/click"),json!({}));
         let frame=b.element("iframe.chat-transcript");
         b.post("/frame",json!({"id":{"element-6066-11e4-a52e-4f735466cecf":frame}}));
         let body=b.element("body");
+        b.post("/frame",json!({"id":null}));
+        let requests=b.element("iframe.chat-requests-frame");
+        b.post("/frame",json!({"id":{"element-6066-11e4-a52e-4f735466cecf":requests}}));
+        b.wait("Trust folder and open");
+        b.wait("Bot request");
         let approval=b.element(".project-picker button[name=approve]");
         let approval_color=b.get(&format!("/element/{approval}/css/background-color"));
         assert!(approval_color=="rgb(181, 160, 255)"||approval_color=="rgba(181, 160, 255, 1)","Approval must use the theme purple: {approval_color}");
@@ -736,8 +763,10 @@ mod tests {
         b.post(&format!("/element/{previous_project}/click"),json!({}));
         {crate::chat::send(&mut state.lock().unwrap(),&chat,"/open /fixture/replacement","test").unwrap();}
         b.wait("/fixture/replacement");
-        let replacement=b.element(".assistant-message .project-picker");
+        let replacement=b.element(".project-picker");
         assert_eq!(b.get(&format!("/element/{replacement}/property/open")),true,"A new request must not inherit the old collapsed state");
+        b.post("/frame",json!({"id":null}));
+        b.post("/frame",json!({"id":{"element-6066-11e4-a52e-4f735466cecf":frame}}));
         assert_eq!(b.get(&format!("/element/{body}/name")),"body");
         {let mut state=state.lock().unwrap();state.runtime.runs[0].attempts[0].activity.push(crate::usage::Activity{id:"command-1".into(),kind:"command_execution".into(),text:"cargo test".into(),output:"Streaming output alpha".into(),status:"running".into()});}
         b.wait("Streaming output alpha");
@@ -778,9 +807,12 @@ mod tests {
         std::thread::sleep(Duration::from_millis(2200));
         assert_eq!(b.get(&format!("/element/{article}/name")),"article","Unchanged polls must retain DOM nodes");
         {let mut state=state.lock().unwrap();let run=&mut state.runtime.runs[0];run.status="waiting".into();run.question=Some(question);}
-        b.wait("Which format?");
+        b.wait("Decision requested");
         let activity=b.element(".run-activity");
         assert_eq!(b.get(&format!("/element/{activity}/property/open")),false,"Collapsed activity must survive a changed transcript in both browser realms");
+        b.post("/frame",json!({"id":null}));
+        b.post("/frame",json!({"id":{"element-6066-11e4-a52e-4f735466cecf":requests}}));
+        b.wait("Which format?");
         assert!(b.text("body").contains("Plain text"));
         let answer=b.element("form");
         assert_eq!(b.get(&format!("/element/{answer}/attribute/target")),"_top");
@@ -792,7 +824,7 @@ mod tests {
         b.post("/url",json!({"url":format!("{server}/chat/{port_chat}")}));
         let port_page=b.element("body");let draft=b.element("textarea[data-enter-sends=true]");
         b.post(&format!("/element/{draft}/value"),json!({"text":"Keep this draft while denying a port"}));
-        let port_frame=b.element("iframe.chat-transcript");
+        let port_frame=b.element("iframe.chat-requests-frame");
         b.post("/frame",json!({"id":{"element-6066-11e4-a52e-4f735466cecf":port_frame}}));
         b.wait("Port access");
         let request=b.element(".port-request");

@@ -52,3 +52,26 @@
 .room-tab input:checked+span{color:var(--purple);background:#b5a0ff14}
 .room-tab input:focus-visible+span{outline:2px solid var(--purple);outline-offset:-2px}
 @media(max-width:580px){.composer-footer{flex-wrap:wrap}.room-tabs{order:2;width:100%;overflow-x:auto}}
+.conversation-main{display:flex;flex:1;flex-direction:column;min-height:0;min-width:0}
+.chat-requests{flex-shrink:0}
+.chat-requests>summary{list-style:none;cursor:pointer;color:var(--purple);padding:5px 7px;font-size:13px;white-space:nowrap}
+.chat-requests>summary::-webkit-details-marker{display:none}
+.chat-requests[open]>summary,.chat-requests>summary:hover{background:#b5a0ff12}
+.request-count{color:var(--muted)}
+.request-drawer{position:absolute;right:38px;top:76px;bottom:24px;width:310px;border-left:1px solid var(--line);background:var(--bg);z-index:2}
+.request-drawer iframe{width:100%;height:100%;border:0;display:block}
+.conversation:has(.chat-requests[open])>.conversation-main{margin-right:326px}
+.requests-panel{padding:4px 12px;margin:0;background:var(--bg);font:13px/1.45 'SFMono-Regular',Consolas,'Liberation Mono',monospace;scrollbar-width:thin;scrollbar-color:#393340 transparent}
+.requests-panel .assistant-message{padding:10px 0;margin:0;border:0;border-bottom:1px solid var(--line);background:transparent;font:inherit}
+.requests-panel h3{font:inherit;color:var(--purple);overflow-wrap:anywhere}
+.requests-panel p{font:inherit;margin:5px 0;overflow-wrap:anywhere}
+.requests-panel .decision-form{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.requests-panel .decision-form label{width:100%;font:inherit;margin:0;display:flex;align-items:center;gap:8px}
+.requests-panel .decision-form select{flex:1;min-width:0;font:inherit;padding:4px;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:0}
+.requests-panel .decision-form button{flex:1;margin:0;padding:5px 8px;border:1px solid #484052;border-radius:0;background:#b5a0ff0d;color:var(--purple);font:inherit}
+.requests-panel .decision-form button:disabled{opacity:.6;cursor:wait}
+.requests-panel .design-question{padding-left:8px}
+.requests-panel .design-question button{width:100%;font:inherit;padding:5px 7px}
+.requests-panel .project-picker{font:inherit;margin:0;padding:10px 0}
+@media(max-width:1100px){.conversation:has(.chat-requests[open])>.conversation-main{margin-right:0}.request-drawer{width:min(330px,100%);box-shadow:-10px 0 22px #0006}}
+@media(max-width:700px){.request-drawer{right:16px;top:68px;bottom:16px;width:min(330px,calc(100% - 32px))}}

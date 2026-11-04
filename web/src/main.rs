@@ -422,32 +422,51 @@ fn restore_port_form(form:&web_sys::HtmlFormElement,controls:&[web_sys::Element]
     if let Some((button,label))=button {button.set_text_content(Some(label));}
 }
 fn attach_transcript(document: &web_sys::Document) -> Result<(), JsValue> {
-    let Some(frame) = document.query_selector("iframe.chat-transcript")? else { return Ok(()); };
-    let frame: web_sys::HtmlIFrameElement = frame.dyn_into()?;
-    let following = Rc::new(Cell::new(true));
+    let frames = document.query_selector_all("iframe[data-live-chat]")?;
+    for index in 0..frames.length() {
+        if let Some(frame) = frames.item(index) { attach_chat_frame(document,frame.unchecked_into())?; }
+    }
+    Ok(())
+}
+fn update_request_count(document:&web_sys::Document, body:&web_sys::HtmlElement) {
+    let Some(count) = body.get_attribute("data-request-count") else { return; };
+    let Ok(Some(toggle)) = document.query_selector(".chat-requests") else { return; };
+    let previous = toggle.get_attribute("data-count").and_then(|v|v.parse::<usize>().ok()).unwrap_or(0);
+    let current = count.parse::<usize>().unwrap_or(0);
+    if let Ok(Some(label)) = toggle.query_selector(".request-count") { label.set_text_content(Some(&count)); }
+    if current > previous { let _=toggle.set_attribute("open",""); }
+    let _=toggle.set_attribute("data-count",&count);
+}
+fn attach_chat_frame(document: &web_sys::Document, frame:web_sys::HtmlIFrameElement) -> Result<(), JsValue> {
+    let transcript = frame.matches(".chat-transcript")?;
+    let following = Rc::new(Cell::new(transcript));
     let loaded_frame = frame.clone();
     // A sent message always returns the reader to the end, like a chat client.
     let sent_following = following.clone();
     let sent_document = document.clone();
     let sent = Closure::<dyn FnMut()>::new(move || {
-        sent_following.set(true);
+        sent_following.set(transcript);
         if let Ok(event) = web_sys::Event::new("control-transcript-refresh") { let _ = sent_document.dispatch_event(&event); }
     });
     document.add_event_listener_with_callback("control-transcript-sent", sent.as_ref().unchecked_ref())?;
     sent.forget();
     let loaded_following = following.clone();
+    let parent_document=document.clone();
     let loaded = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
-        loaded_following.set(true);
-        let _ = follow_transcript(&loaded_frame,loaded_following.clone());
+        loaded_following.set(transcript);
+        if transcript { let _ = follow_transcript(&loaded_frame,loaded_following.clone()); }
         let _ = attach_port_approvals(&loaded_frame);
+        if let Some(body)=loaded_frame.content_document().and_then(|d|d.body()) { update_request_count(&parent_document,&body); }
     });
     frame.add_event_listener_with_callback("load",loaded.as_ref().unchecked_ref())?;
     loaded.forget();
-    follow_transcript(&frame,following.clone())?;
+    if transcript { follow_transcript(&frame,following.clone())?; }
     attach_port_approvals(&frame)?;
+    if let Some(body)=frame.content_document().and_then(|d|d.body()) { update_request_count(document,&body); }
     let url = frame.get_attribute("src").unwrap_or_default().split('#').next().unwrap_or_default().to_owned();
     let busy = Rc::new(Cell::new(false));
     let previous = Rc::new(RefCell::new(String::new()));
+    let parent_document=document.clone();
     let poll = Closure::<dyn FnMut()>::new(move || {
         if busy.replace(true) { return; }
         let Ok(request) = web_sys::XmlHttpRequest::new() else { busy.set(false); return; };
@@ -458,6 +477,7 @@ fn attach_transcript(document: &web_sys::Document) -> Result<(), JsValue> {
         let following = following.clone();
         let previous = previous.clone();
         let completed = busy.clone();
+        let parent_document=parent_document.clone();
         let finished = Closure::<dyn FnMut(web_sys::Event)>::once(move |_| {
             completed.set(false);
             if response.status().ok() != Some(200) { return; }
@@ -468,6 +488,7 @@ fn attach_transcript(document: &web_sys::Document) -> Result<(), JsValue> {
             let Ok(parser) = web_sys::DomParser::new() else { return; };
             let Ok(parsed) = parser.parse_from_string(&text, web_sys::SupportedType::TextHtml) else { return; };
             let Some(new_body) = parsed.body() else { return; };
+            update_request_count(&parent_document,&new_body);
             let Some(scroller) = doc.scrolling_element() else { return; };
             let top = scroller.scroll_top();
             let at_end = following.get();
