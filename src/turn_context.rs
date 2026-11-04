@@ -1,4 +1,4 @@
-//! Context effects live here; bounded projection/validation lives in control-context.
+//! History selection and context effects. Pure assembly/validation lives in control-context.
 mod tools;
 use crate::{State, usage::Attempt};
 #[cfg(test)]
@@ -21,10 +21,10 @@ pub struct Managed {
     pub working: Option<control_context::turn_mailbox::WorkingState>,
 }
 pub(crate) fn managed(state: &State, run: &crate::runtime::Run) -> bool {
-    state
+    !crate::delegation::is_judge(run) && state
         .chats
         .iter()
-        .any(|c| Some(&c.id) == run.chat_id.as_ref() && c.continuity.is_some())
+        .any(|c| Some(&c.id) == run.chat_id.as_ref())
 }
 /// A small hint on a normal tool response makes new input visible without
 /// restarting the provider or injecting unsupported stdin messages. Announcing
@@ -119,7 +119,7 @@ pub struct TraceRef {
     pub bytes: usize,
     pub version: u8,
 }
-/// A bounded admission projection. File I/O is interpreted outside shared state;
+/// An admission projection. File I/O is interpreted outside shared state;
 /// the runtime rechecks this stamp before committing the matching attempt.
 pub(crate) struct PlannedContext {
     pub run: String,
@@ -197,7 +197,7 @@ struct Captured {
 }
 
 /// Capture exactly the complete text sent by the selected adapter. Ordinary
-/// chats retain their existing projection; managed projection is a separate view.
+/// read-only judges retain their existing projection; task projection is a separate view.
 #[cfg(test)]
 pub(crate) fn capture(state: &State, index: usize) -> io::Result<TraceRef> {
     let run = &state.runtime.runs[index];
@@ -279,11 +279,14 @@ fn write_prepared(generation: &str, prepared: &PreparedContext) -> io::Result<Tr
     })
 }
 
-/// Bot admission selects a bounded model view; raw history remains untouched.
+/// Agent admission uses the configured history view; raw positions are stable.
 fn project(state: &State, id: &str) -> io::Result<PreparedContext> {
+    project_with(state, id, crate::conversation::compactor())
+}
+fn project_with(state: &State, id: &str, compactor: &dyn crate::conversation::Compactor) -> io::Result<PreparedContext> {
     use control_context::{
         agent_policy::PromptRole,
-        turn_context::{MAX_INPUT_BYTES, Reference, Section, prepare_ordered},
+        turn_context::{MAX_REQUIRED_BYTES, Reference, Section, compose},
     };
     let run = state
         .runtime
@@ -352,7 +355,7 @@ fn project(state: &State, id: &str) -> io::Result<PreparedContext> {
     });
     let instruction =
         assignment.map(|(_, entry)| format!("Original assignment:\n{}\n", entry.message.text));
-    let window = crate::conversation::compactor().window(&conversation, current);
+    let window = compactor.window(&conversation, current);
     let omitted = (window.omitted > 0).then(|| format!(
         "{} earlier entries are outside the selected history view. The append-only conversation is retained; older instructions and evidence have not been deleted.\n",
         window.omitted
@@ -453,12 +456,7 @@ fn project(state: &State, id: &str) -> io::Result<PreparedContext> {
             section: SectionKind::Request,
         }),
     });
-    prepare_ordered(
-        &prefix,
-        &sections,
-        (0..sections.len()).rev(),
-        MAX_INPUT_BYTES,
-    )
+    compose(&prefix, &sections, MAX_REQUIRED_BYTES)
     .map_err(io::Error::other)
 }
 fn trace_path() -> io::Result<PathBuf> {
@@ -589,6 +587,21 @@ pub(crate) fn recover(state: &State) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn passthrough_preserves_selected_history_beyond_the_framing_budget() {
+        let (mut state, chat) = fixture();
+        for index in 0..70 {
+            wake(&mut state, &chat, crate::runtime::RunKind::Chat,
+                &format!("instruction {index}: {}", "x".repeat(1500)));
+        }
+        let id = wake(&mut state, &chat, crate::runtime::RunKind::BotWake, "new callback");
+        let projected = project_with(&state, &id, &crate::conversation::Passthrough).unwrap();
+        assert!(projected.text.len() > control_context::turn_context::MAX_REQUIRED_BYTES);
+        assert!(projected.sections.iter().all(|s| s.included));
+        for index in 0..70 {
+            assert!(projected.text.contains(&format!("instruction {index}:")));
+        }
+    }
     fn fixture() -> (State, String) {
         let mut state = State::default();
         let chat = crate::chat::create(&mut state);
@@ -695,7 +708,7 @@ mod tests {
             "New callback",
         );
         let prepared = project(&state, &id).unwrap();
-        assert!(prepared.text.len() <= control_context::turn_context::MAX_INPUT_BYTES);
+        assert!(prepared.text.len() < 64 * 1024, "the default recent window remains bounded");
         assert!(prepared.text.contains("Build a useful tool"));
         assert!(prepared.text.contains("Earlier instruction 199:"));
         assert!(

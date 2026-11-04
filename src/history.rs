@@ -84,6 +84,45 @@ pub(crate) fn finished(status: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn space_focus_and_edge_summaries_survive_handoff_journal_reload() {
+        use crate::conversation::{Conversation,Compactor,Lens,Summaries};
+        use control_comonad::{Space,Store,Block};
+        use control_context::{turn_mailbox::{Mailbox,Handoff,Disposition},working_state::Payload};
+        struct Edges;
+        impl Summaries for Edges { fn summary(&self,block:Block)->Option<String>{Some(format!("retained block {}:{}",block.start,block.level))} }
+        let snapshot=|state:&crate::State| {
+            let raw=Conversation::of(state,&state.chats[0]);
+            let task=Conversation::of(state,&state.chats[0]).task_view();
+            let focus=Store::new(&task,7).unwrap();
+            let focused=focus.seek(31).unwrap().extract().message.text.clone();
+            let summaries=Lens{verbatim:8,summaries:&Edges}.window(&task,task.len()).render(&task);
+            (raw.positions().collect::<Vec<_>>(),task.positions().collect::<Vec<_>>(),focused,summaries,(0..task.len()).map(|i|task.entry(i).unwrap().render()).collect::<Vec<_>>())
+        };
+        let mut state=crate::State::default();
+        let id=crate::chat::create(&mut state);
+        let chat=own(&mut state,&id,"review-space-reload");
+        for index in 0..64 {
+            crate::chat::send(&mut state,&chat,&format!("event {index}"),"test").unwrap();
+            let run=state.runtime.runs.last_mut().unwrap();
+            run.status="completed".into();
+            if index%2==1 {run.kind=crate::runtime::RunKind::BotWake;}
+            let mut mailbox=Mailbox::default();
+            mailbox.stage("note".into(),Handoff{base_revision:0,payload:Payload{subgoal:"Keep working".into(),..Default::default()},processed:vec![],resynchronised:vec![],disposition:Disposition::Continue,progress:Some(format!("verified progress {index}"))},0).unwrap();
+            run.attempts.push(Attempt{turn_mailbox:Some(Box::new(mailbox)).into(),activity:vec![event(&index.to_string())],..Default::default()});
+            archive_run(run).unwrap();
+        }
+        let before=snapshot(&state);
+        let saved=persisting(||serde_json::to_vec(&state)).unwrap();
+        let mut restored:crate::State=serde_json::from_slice(&saved).unwrap();
+        recover(&restored).unwrap();
+        hydrate_text(&mut restored).unwrap();
+        assert_eq!(before,snapshot(&restored));
+        assert_eq!(before.0,before.1,"projection cannot renumber the space");
+        assert_eq!(before.2,"event 31");
+        assert!(before.3.iter().any(|s|s.contains("retained block")));
+        assert!(before.4.iter().any(|s|s.contains("verified progress 63")));
+    }
 
     /// A chat whose journal no parallel test shares (clock-based ids can collide).
     fn own(state: &mut crate::State, chat: &str, name: &str) -> String {

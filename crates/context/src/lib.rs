@@ -19,7 +19,7 @@ pub struct Tool {
     pub aliases: &'static str,
     pub mcp_names: &'static [&'static str],
 }
-pub const TOOLS: [Tool; 22] = [
+pub const TOOLS: [Tool; 23] = [
     Tool {
         name: "service.watch", title: "Watches", description: "Program output that wakes bots",
         href: None, aliases: "watch monitor stream stdout events wake tail websocket ssh",
@@ -28,7 +28,12 @@ pub const TOOLS: [Tool; 22] = [
     Tool {
         name: "agent.bot", title: "Persistent bot", description: "Event-woken agents · operator approval",
         href: None, aliases: "bot persistent callback wake listen timer swarm",
-        mcp_names: &["control_bot_request", "control_bot_status", "control_bot_pause", "control_turn_context", "control_turn_handoff"], execution: "Rust supervisor / continuation runs", surface: "chat / worker MCP", available: true,
+        mcp_names: &["control_bot_request", "control_bot_status", "control_bot_pause"], execution: "Rust supervisor / continuation runs", surface: "chat / worker MCP", available: true,
+    },
+    Tool {
+        name: "agent.continuity", title: "Agent continuity", description: "Callback deltas and checkpointed working notes",
+        href: None, aliases: "session context handoff callbacks delta continuity recovery",
+        mcp_names: &["control_turn_context", "control_turn_handoff"], execution: "Rust attempt mailbox / workspace checkpoint", surface: "agent MCP", available: true,
     },
     Tool {
         name:"service.ports",title:"TCP ports",description:"Scoped service connections · operator approval",

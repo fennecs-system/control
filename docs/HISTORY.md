@@ -65,17 +65,27 @@ Each phase is profiled with the 15-turn workload (`fifteen_turn_conversations_wo
 
 Codex and Claude CLI attempts start fresh processes. Their shared conversation
 projection supplies context; neither provider's native session is the source of
-truth. Automatic callbacks and continuations retain user inputs omitted by the
-selected compactor, in chronological order, so later steering accompanies the
-original assignment. They do not retain omitted assistant chatter. This input
-list grows with human instructions; it is not a substitute for the planned
-summary plugin.
+truth. At admission, ordinary agents and bots use the same task view: typed
+monitoring wakes contribute explicit progress or failures while raw history
+retains every event at its original position. The original assignment and
+committed working notes accompany the configured compactor's chronological
+selection. Assembly does not trim its selection a second time. Passthrough
+therefore still delegates compression to the provider.
 
-Turns also receive the previous attempt's last six nonempty command, tool or
+Legacy attempts without the continuity protocol receive the previous attempt's last six nonempty command, tool or
 file-change observations (128 characters of label and 384 of output each).
 These are untrusted evidence, not authority or private model reasoning. They
 provide a handoff, not the entire tool transcript; tools remain available to
-inspect current resource state.
+inspect current resource state. New admissions use checkpointed working notes
+and callback receipts instead of this heuristic tail.
+
+Neither the task view nor saved subscription origins renumber the conversation
+`Space`. `Store::seek` can refocus retained positions after a journal reload;
+`Lens` and its `Summaries` hook keep the same fixed block coordinates for an edge
+compacter. Saving notes does not replace the tape with a summary. The persistence
+regression covers focus, raw/task positions, synthetic edge summaries and progress
+before and after archive/save/recover/hydration. Background summary generation is
+not implemented by this continuity change.
 
 Projection is pure; the prompt adapter reads archived activity through the
 existing journal interface. The output limit does not bound that read: activity
