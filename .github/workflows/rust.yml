@@ -59,10 +59,10 @@ jobs:
             target
             web/target
           # Save fresh outputs per revision; fall back to compatible dependencies.
-          key: targets-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', '.github/workflows/rust.yml') }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'web/Cargo.lock', 'web/Cargo.toml', 'crates/*/Cargo.toml') }}-${{ github.sha }}
+          key: targets-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'flake.nix', '.cargo/**') }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'web/Cargo.lock', 'web/Cargo.toml', 'crates/*/Cargo.toml') }}-${{ github.sha }}
           restore-keys: |
-            targets-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', '.github/workflows/rust.yml') }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'web/Cargo.lock', 'web/Cargo.toml', 'crates/*/Cargo.toml') }}-
-            targets-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', '.github/workflows/rust.yml') }}-
+            targets-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'flake.nix', '.cargo/**') }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'web/Cargo.lock', 'web/Cargo.toml', 'crates/*/Cargo.toml') }}-
+            targets-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'flake.nix', '.cargo/**') }}-
       - name: Cache finished WASM UI
         id: wasm
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

@@ -211,7 +211,9 @@ impl Transport {
     }
     fn finish(&self, id: u32, channel: &Channel) {
         if channel.read_done.load(Ordering::Acquire) && channel.write_done.load(Ordering::Acquire) {
-            self.close(id, true);
+            // Each peer retires after draining its own FIN. A Close here would
+            // abort the other peer while its earlier data/FIN is still queued.
+            self.close(id, false);
         }
     }
     fn close(&self, id: u32, notify: bool) {
