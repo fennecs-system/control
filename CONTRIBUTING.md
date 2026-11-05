@@ -38,6 +38,34 @@ relevant to changes in those boundaries. Report what was tested and any remainin
 limits in the pull request. Keep credentials and personal node configuration
 outside the checkout.
 
+CI restores separate caches for the Nix store and evaluation data, Cargo registry
+archives and Git downloads, Trunk tools, both workspaces' compiled targets, and
+the finished WASM bundle. Keys separate runner OS/architecture and toolchains.
+Target caches save each revision and restore compatible dependencies from earlier
+revisions, including when a lockfile changes. Cargo still checks freshness and all
+tests and Clippy checks always run. CI disables debug symbols and incremental
+compilation to reduce build time and cache size.
+
+Only an exact bundle cache hit skips Trunk. Its key covers the UI sources,
+configuration, lockfile, shared context crate, Nix environment and workflow; a
+backend-only change can reuse the UI. There is no fallback for finished bundles.
+Nix caches have one immutable key per environment rather than per source commit;
+they retain flake inputs as well as tool outputs without garbage collecting the
+inputs before upload. The first run fills caches; later runs still rebuild any
+changed Rust code. GitHub can evict caches when the repository quota is reached.
+
+The current workflow does not build Docker images, so Docker/BuildKit layer
+caching would add no benefit here. If image jobs are added, cache their Nix store
+derivations (the images are declared in Nix). Compiler caches such as sccache are
+another option if timings show target-cache transfers cost more than they save;
+avoid duplicating both caches without measuring. A shared Cachix/FlakeHub binary
+cache can also share Nix outputs outside GitHub, but needs separate configuration.
+
+Dependabot checks action pins and both Cargo workspaces weekly, grouping version
+updates by ecosystem to reduce redundant CI runs. Security updates have separate
+groups when Dependabot security updates are enabled in repository settings.
+Action versions stay pinned to release commits; Dependabot can update those pins.
+
 Require the `Rust (ubuntu-24.04)` and `Rust (macos-15)` checks on `main` in GitHub
 branch rules, along with pull requests, no force pushes and no branch deletion.
 Branch rules are repository settings; the workflow file does not enable them.
