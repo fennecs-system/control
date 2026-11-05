@@ -2,16 +2,25 @@
 
 Reviewed 2026-11-05 against main `2d3492e` (#138), the continuity plans,
 local fix inventory and lead chat `c-18e4b7cadfa33158-11`.
-Keep the normal macOS/Nix release useful to friends; improve reliability before
-adding autonomous operation. Each node supplies its own configuration and model
-access. Federation remains lower priority.
+Keep the normal macOS/Nix release useful to friends while making coordinated
+agent teams more reliable and less noisy. Each node supplies its own configuration
+and model access. Federation remains lower priority.
 
 ## Delivery order: a persistent swarm that learns
 
-Control's unit of work is a coordinated swarm: agents with distinct roles,
-shared evidence, durable conversations and independently managed services.
-The next useful improvement is reliable coordination and reuse of verified
-learning. More simultaneous model calls alone do not provide either.
+**Control is a swarm management platform for agent teams.** Its ambition is to
+let a person direct an entire engineering team of agents: planning, building,
+reviewing, testing and operating systems together. Inter-agent communication,
+computer-use tools, an effective coordination UI and self-improvement make that
+team useful. Replacing a team's full responsibilities is a product ambition to
+validate on engineering tasks, not an already demonstrated capability.
+
+Preserve the successful steering-chat pattern: a person sets direction, a lead
+coordinates workers, agents communicate through rooms, and persistent services
+retain their work. The Minecraft team progressed through building and farming to
+diamonds and responded to new direction. That supports incremental reliability
+and noise fixes around the existing coordination model. Borrow useful contracts
+from other projects while developing Control around this team-level purpose.
 
 The [swarm implementation roadmap](docs/SWARM-ROADMAP.md) is the current triage
 and dependency order. It reconciles the historical sections below with
@@ -23,20 +32,25 @@ All unchecked work is proposed, not implemented or deployed by this review.
 | Priority | Work | First useful result | Dependency / exit gate |
 | --- | --- | --- | --- |
 | P0 | R1 deadline wind-down and interrupted recovery; R2 selective watch wakes; R3 visible history failures; R4 bounded HTTP admission | Productive sessions publish; routine telemetry does not wake itself; failures remain inspectable | Separate small changes; fake-clock/fault tests and a fresh controlled playtest |
+| P1 | U1 coordination UI, existing A2A flows and W1 cron-style schedules | Keep steering chat and Rooms central; make progress, ownership, blockers and next runs clear | Preserve ad hoc coordination; schedules reuse existing supervisor admission |
 | P1 | E1 upward escalation and consistent prompting | Worker asks lead; lead resolves within scope or forwards to operator; waiting agents resume durably | Preserve checkpoint/authority rules; prove no parent-child wait deadlock |
-| P1 | A1–A4 state/effect separation and tool/runtime interfaces, alongside reliability work | Typed application operations; shorter lock holds; bounded lazy history; thin adapters | Preserve atomic commits; benchmark before splitting locks or storage |
+| Supporting | A1–A4 state/effect separation and tool/runtime interfaces, alongside feature work | Typed application operations; shorter lock holds; bounded lazy history; thin adapters | Extract the seam needed by each feature; preserve atomic commits; benchmark before splitting locks or storage |
+| P2 | U2 computer-use tools and W2 reusable team workflows | Agents operate a scoped browser and run inspectable multi-step team recipes | Browser/resource contracts and durable step identities; no mandatory workflow language |
 | P2 | M1 native API/local model adapters and role-specific selection | Independent worker, reviewer and compactor models | Same cancellation, budgets, provenance and tool contracts as CLI adapters |
 | P2 | C1–C3 infinite chat and selectable compaction | Cached comonadic history views; choose a hosted or local summary model independently | A bounded history reader and M1 summary-call path; retention/recall and failure tests |
 | P2 | L1 versioned lenses, personas and optional `SOUL.md` | Reusable specialist definitions with visible effective context and separate grants | Narrow tool host; deterministic composition; captured revisions |
-| P3 | L2 reviewed procedural learning; L3 source/tool improvement | Swarm proposes, verifies, reviews and reuses a lesson or patch | Provenance, evaluation, admission and rollback; existing draft-PR flow |
-| Later | Remote execution/federation, broader workflow languages, optional inference bundles | Extend proven local contracts | Demonstrated local need; no prerequisite for the swarm loop |
+| P2 | L2 reviewed procedural learning; L3 source/tool improvement | Swarm proposes, verifies, reviews and reuses a lesson or patch | Provenance, evaluation, admission and rollback; existing draft-PR flow |
+| Later | Remote execution/federation, general-purpose workflow languages, optional inference bundles | Extend proven local contracts | Demonstrated local need; no prerequisite for the swarm loop |
 
 R1 and R2 can be reviewed independently. A1 begins now where it removes coupling,
 but a complete adapter extraction must not delay those fixes. M1's bounded
 summary-call path can enable C1 before general local-model tool execution is
 complete. L1 can proceed alongside M1/C1; L2 needs neither a full provider rewrite
 nor model-weight training. Each item has scope and acceptance criteria in the
-linked roadmap.
+linked roadmap. U1/W1 and the first reusable learning demonstration can progress
+without completing A1–A4, local models or infinite-chat compaction. E1 adds a
+tracked path for blockers requiring a decision; ordinary agent conversation and
+successful steering remain lightweight.
 
 ### Reconciled status
 
@@ -55,7 +69,7 @@ linked roadmap.
   revisions and a measured reusable learning loop remain planned.
 
 **Augment, don't intermediate.** Control supplies tools, isolated environments,
-knowledge and review around a person's model access. Web, TUI, Discord and MCP
+knowledge and review around a team's model access. Web, TUI, Discord and MCP
 are interfaces to shared capabilities. Tool availability, resource grants and
 transport are separate. Lenses are pure, composable context/tool selections;
 personas describe behavior and policy, not additional authority.
@@ -322,7 +336,7 @@ evidence retrieval, cancellation and durable recovery; sleeping monitors must
 not monopolize model slots. This experiment remains separate from the request
 panel fix and does not change the current playtest midway.
 
-## P1: core, web and terminal boundaries
+## Supporting work: core, web and terminal boundaries
 
 Build on the persistent-tool lifecycle/ownership rules already extracted below.
 Extract narrow application operations where they remove coupling; keep usable
@@ -564,15 +578,17 @@ where useful; do not claim types can prove arbitrary model behavior. Keep single
 node reliability and the tool/bot demonstrations ahead of distributed
 frameworks or broad rewrites.
 
-## P2: reusable personas; later richer bot policies
+## P2: reusable personas and team workflows
 
 See [L1–L3 in the swarm roadmap](docs/SWARM-ROADMAP.md#l1-versioned-lenses-personas-and-soulmd)
 for versioned `SOUL.md`, prompt composition and the reviewed learning loop.
 
 [Bot-control research and the version-0 contract draft](docs/research/BOT-CONTROL.md)
 recommend ordinary versioned configuration, pure transitions and typed effects
-first. Callback/language experiments belong in an optional separate project over
-the tool contract; they do not block the five-bot gameplay milestone.
+first. Cron-style schedules and a small declarative team recipe layer are now
+explicit near-term work in [W1/W2](docs/SWARM-ROADMAP.md#w1w2-schedules-and-a-small-workflow-layer).
+General-purpose language experiments can remain separate; they do not block
+ordinary steering or the next team demonstration.
 
 A bot is a supervised instance using a persona, tools, state and explicit grants,
 not a second agent runtime. Preserve the original personality + policy +
@@ -605,13 +621,12 @@ declarative-directive model; keep its configuration distinct from its chat histo
 - **First workflow:** watch an explicitly selected release/source, propose a patch
   in an approved isolated project, run deterministic checks, request independent
   review and notify the owner. Merge/deploy remains an explicit grant.
-- **Later external actions:** a travel watcher could report a Qantas sale and
-  prepare a booking proposal. Buying requires explicit, scoped authorization for
-  the concrete itinerary, passenger, price/budget and action; broad chat intent,
-  website text or persona instructions are not payment authority. Retain effect
-  intent, receipts and ambiguous-outcome handling; do not blindly retry purchases.
+- **Operations workflow:** a team diagnoses a service regression, prepares a
+  tested repair and proposes a rollout. Execution follows the deployment grant
+  for that environment and revision. Retain intent, receipts, health evidence
+  and ambiguous-outcome handling; inspect uncertain effects before retrying.
 
-## Later: interactive browser as a tool
+## P2: computer use, starting with an interactive browser
 
 Extend capture into a sandboxed browser session only when the execution and
 permission boundaries are ready. Keep the session lifecycle, browser profile,

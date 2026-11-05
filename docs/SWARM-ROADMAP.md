@@ -6,20 +6,37 @@ gates. Stable IDs below identify independently reviewable increments.
 
 ## Direction and comparison
 
-Control manages a persistent swarm. Agents specialize through lenses, personas,
+Control is a **swarm management platform**. The product ambition is an entire
+engineering team of agents that can plan, implement, review, test and operate
+systems under a person's direction. Agents specialize through lenses, personas,
 tools and model choices; chats retain their work; rooms coordinate; services keep
 running independently; admitted knowledge carries lessons between tasks.
 Deterministic Rust supervision handles scheduling, ownership and budgets.
+
+Lead with team coordination, inter-agent communication (A2A), computer use (CUA),
+the steering/Rooms UI and self-improvement. Here A2A describes agent communication;
+support for a particular external A2A protocol would need a separate adapter and
+interoperability tests. CUA is a product workstream whose current capture tool and
+planned interactive capabilities must be described accurately.
+
+The steering-chat pattern worked: the operator redirected a lead and its workers,
+and the team progressed from a house and renewable food to cobble walls, expanded
+farming and diamonds. Preserve that interaction. Reliability and noise work should
+improve productive sessions and quiet maintenance, with no compulsory redesign
+of how every task is coordinated. The engineering-team ambition needs further
+evidence on software delivery and operations; the playtest establishes useful
+coordination, not complete replacement of all engineering responsibilities.
 
 | Reference | Useful idea | Application to Control |
 | --- | --- | --- |
 | Hermes | Reusable procedural knowledge with progressive disclosure | Extend admitted claims into reviewed procedures, lens/persona revisions and tool proposals; measure reuse across agents. |
 | Pi / Pi Durable | Small interfaces between models, storage, tools and execution; explicit recovery and background compaction | Separate Control's state transitions from effects; retain evidence and classify replay safety; use the existing continuation and context seams. |
 | tinygrad | Small internal vocabulary, separate transformation and execution layers | Typed commands/events/effects with thin interpreters and measurable boundaries; tool implementations form a standard library. |
-| Control playtest | Agents coordinated services and achieved a shared goal, then spent excessive turns on maintenance and recovery | Fix admission, finish/publication and escalation before increasing fan-out or treating summaries as the solution. |
+| Control playtest | Steering chat and communicating workers achieved successive goals, including diamonds; maintenance and recovery were noisy | Keep the working coordination pattern and make targeted admission, publication and visibility improvements. |
 
-“Hermes: single agent; Control: swarm” describes the intended product emphasis.
-Hermes also supports [delegation](https://hermes-agent.nousresearch.com/docs/user-guide/features/delegation).
+These projects supply useful ideas; Control's feature priorities come from the
+needs of an agent team. Hermes also supports
+[delegation](https://hermes-agent.nousresearch.com/docs/user-guide/features/delegation).
 Its [skills](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills)
 provide a useful procedural-memory reference, rather than evidence that Control
 already learns reusable procedures.
@@ -90,6 +107,11 @@ nudge a productive builder. Advertise finish-phase instructions only after R1a.
 
 ## P1: upward escalation and prompting
 
+E1 complements the existing steering chat, room messages and direct follow-ups.
+Agents continue routine decisions within their role. Use a tracked request when
+a blocker needs an answer and durable resumption; ordinary collaboration does
+not require a request form or a formal workflow.
+
 E1 adds a durable worker-to-lead request and scoped resolution path alongside
 existing human design questions. Today descendant questions can appear in the
 ancestor UI; `control_agent_message` sends downward follow-ups. Neither supplies
@@ -119,12 +141,90 @@ the same request visibly to the operator under a bounded policy.
 E1's prompt review spans tool descriptions, ordinary/spawned agents, bot wakes,
 judges and continuation prompts. Replace the blanket “take your recommended
 option” instruction with a scope-aware rule: decide routine authorized steps;
-ask the lead about owned uncertainty; ask the operator when mandate or preference
+ask the lead when a blocker exceeds the worker's remit; ask the operator when mandate or preference
 is missing; use the permission path for access. Waiting for a healthy peer is
 not itself an escalation. Check scenario fixtures across those entry points;
 prompt text never substitutes for deterministic policy tests.
 
-## P1: decouple state and execution incrementally
+## U1/U2: coordination UI, A2A and computer use
+
+**U1: retain the steering chat as the team's control surface.** Keep the current
+Rooms layout and theme: room selection, broad conversation area, participants
+and useful links. Make ownership, current objective, progress, blocked dependency
+and the latest changed fact easy to inspect. Collapse routine activity while
+retaining logs and evidence. Keep steering, pause/cancel and actionable questions
+close to the work; show whether a message was queued, delivered or processed
+where the existing receipt contract can establish it. Avoid a new dashboard
+that forces users to abandon the useful chat flow.
+
+A2A work builds on rooms, child results and directed messages. Preserve attribution,
+lineage, evidence links and explicit destinations. E1 fills the decision/resumption
+gap. First improve the user's ability to see and direct this communication; remote
+protocol interoperability is separately scoped. Acceptance: steer an active team,
+follow a handoff, find one real blocker amid retained telemetry, and resume without
+duplicate tasks or missed human direction.
+
+**U2: make computer use a visible product capability.** Start from offline browser
+capture and the [browser demonstration](DEMONSTRATIONS.md), then add scoped
+interactive browser observation and actions with visible evidence, persistent
+session handles and human handoff. Wider desktop control can follow a demonstrated
+need. Existing capture is not yet an interactive browser or desktop CUA runtime.
+Reuse resource, transport, tool and policy contracts; do not wait for all A1–A4
+extractions. Acceptance: an agent builds a page, another exercises it in a browser,
+reports a reproducible defect, and verifies the fix in the steering conversation.
+
+## W1/W2: schedules and a small workflow layer
+
+Make recurring team work easy to configure. Start with **W1 cron-style schedules**
+over the existing supervisor/timer machinery: choose a team or chat, goal, schedule
+and time zone, then inspect the next run, recent outcomes, pause/resume and run-now.
+Capture the definition revision and a stable scheduled-occurrence ID so restart
+does not submit the same occurrence twice. Existing model slots, bot approval,
+budgets and per-chat ordering still govern admission.
+
+Make overlap and missed-run behavior explicit. Start with skip/coalesce when work
+is already active and skip missed occurrences after downtime; show what was skipped.
+Specify behavior for daylight-saving gaps/repeats and test next-run previews,
+restart, clock changes, edits and pause racing a due trigger. Do not infer safe
+external replay from a deduplicated schedule. W1 needs no new scheduler or workflow
+language and must not restart a progressing provider session on each timer tick.
+
+**W2 is a small declarative recipe layer** for repeated team patterns: triggers,
+roles, named steps, dependencies, bounded parallel branches, completion checks,
+failure handling and result destinations. Reuse existing spawn/message/wait/tool
+operations and typed supervisor effects. A simple form and versioned configuration
+can expose the same definition; defer choosing a new custom syntax until real
+recipes establish what people need. No authored JavaScript/Python integration.
+
+Example recipe, illustrative rather than supported syntax:
+
+```text
+Trigger: weekdays at 09:00 in the team's time zone, or run now
+Lead: select one issue from the approved project scope
+Builder: implement in an isolated workspace
+Reviewer + tester: review the diff and run checks in parallel
+On failure: return evidence to the builder, within the retry budget
+On success: prepare a draft PR and post one result to steering chat
+On unresolved blocker: request a decision; resume this step after the answer
+```
+
+Persist instance/step identities, inputs, results and wait reasons with the
+existing intent/receipt rules. Capture approved definition revisions for active
+instances; edits affect future instances unless explicitly applied at a safe
+boundary. Retry only classified safe operations or reconcile uncertain outcomes.
+Users can inspect, steer, pause and cancel through the same chat/UI. Workflow
+definitions describe work within existing grants; they do not grant access.
+
+First acceptance: a scheduled inspect/build/review recipe survives a restart and
+a human decision wait, posts one outcome and leaves unrelated work running.
+Ad hoc teams continue to work without recipes. Keep generalized workflow languages,
+distributed scheduling and arbitrary executable hooks outside this first layer.
+
+## Supporting work: decouple state and execution incrementally
+
+Use A1–A4 to remove coupling encountered while delivering the product work above.
+The full extraction is not a prerequisite for improving the successful team flow,
+adding schedules or demonstrating learning.
 
 Target dependency direction:
 
@@ -272,7 +372,7 @@ Acceptance: stable composition and source traces, bounded progressive disclosure
 conflicting lens/persona inputs, revision changes during a run, rejection of
 capability escalation, independent sibling identities and restart/reuse.
 
-## P3: a reviewed self-improvement loop
+## P2: a reviewed self-improvement loop
 
 Separate working notes, factual knowledge, reusable procedures and source changes.
 All can inform improvement, but they have different admission and rollback paths.
@@ -329,8 +429,9 @@ Map the old inventory into current work rather than copying its whole PR sequenc
 | Disk quotas, launch-to-record crash window, aggregate resource/spend budgets | Existing reliability gates before higher fan-out/unattended scale; not waived by this roadmap. |
 | V2 ingress credit / relay aggregate memory | Measure separately; #138 FIN-drain fix is merged and requires rebuilt images when deployed. |
 
-Keep interactive browser work, remote execution/federation, inference bundles,
-workflow languages and weight training behind demonstrated local need. Local
+U1/U2 and W1/W2 make coordination, computer use and recurring team work explicit
+product increments. Keep remote execution/federation, inference bundles,
+general-purpose workflow languages and weight training behind demonstrated local need. Local
 models through a bounded adapter are P2; bundling every runtime/hardware target is
 later. Preserve plain-file storage and explicit migrations, not automatic wipes.
 
@@ -349,8 +450,11 @@ Record milestones, useful actions, admission causes, deadline/publication failur
 committed-state age, context bytes, reported usage and missing usage. Report sample
 size and response to real failures/new steering, not just reduced wake count.
 
-The first implementation batch is R1a/R1b and R2 as separate reviewable changes,
-with R3/R4 small reliability fixes. E1 and narrow A1 operations follow. C1 can begin
-with pure cache/cut fixtures while M1 is built, and L1 definitions can proceed
-without a broad rewrite. No implementation, new model spend or deployment is
-performed by this roadmap update.
+The first implementation batch is targeted R1a/R1b and R2 changes, with R3/R4 small
+reliability fixes. U1/W1 improve the visible team experience; E1 fills a specific
+coordination gap. Apply narrow A1–A4 extractions where those changes need them.
+U2, W2 and the first L2/L3 engineering demonstration can proceed independently of
+the full architecture/model/compaction program. C1 can begin with pure cache/cut
+fixtures while M1 is built. Measure delivery quality, useful coordination, human
+interventions, noise and reuse. No implementation, new model spend or deployment
+is performed by this roadmap update.
