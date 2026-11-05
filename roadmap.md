@@ -1,10 +1,58 @@
 # Control roadmap
 
-Reviewed 2026-11-04 against main through #129, the continuity review and
-the Cass playtest evidence; implementation and comparative retest remain pending.
+Reviewed 2026-11-05 against main `2d3492e` (#138), the continuity plans,
+local fix inventory and lead chat `c-18e4b7cadfa33158-11`.
 Keep the normal macOS/Nix release useful to friends; improve reliability before
 adding autonomous operation. Each node supplies its own configuration and model
 access. Federation remains lower priority.
+
+## Delivery order: a persistent swarm that learns
+
+Control's unit of work is a coordinated swarm: agents with distinct roles,
+shared evidence, durable conversations and independently managed services.
+The next useful improvement is reliable coordination and reuse of verified
+learning. More simultaneous model calls alone do not provide either.
+
+The [swarm implementation roadmap](docs/SWARM-ROADMAP.md) is the current triage
+and dependency order. It reconciles the historical sections below with
+`fix.tmp`, the uncommitted `docs/LONG-RUN-CONTINUITY.md` draft, self-development
+plans and the playtest. Those local planning sources remain unchanged; the
+linked roadmap includes the conclusions needed without access to private chats.
+All unchecked work is proposed, not implemented or deployed by this review.
+
+| Priority | Work | First useful result | Dependency / exit gate |
+| --- | --- | --- | --- |
+| P0 | R1 deadline wind-down and interrupted recovery; R2 selective watch wakes; R3 visible history failures; R4 bounded HTTP admission | Productive sessions publish; routine telemetry does not wake itself; failures remain inspectable | Separate small changes; fake-clock/fault tests and a fresh controlled playtest |
+| P1 | E1 upward escalation and consistent prompting | Worker asks lead; lead resolves within scope or forwards to operator; waiting agents resume durably | Preserve checkpoint/authority rules; prove no parent-child wait deadlock |
+| P1 | A1–A4 state/effect separation and tool/runtime interfaces, alongside reliability work | Typed application operations; shorter lock holds; bounded lazy history; thin adapters | Preserve atomic commits; benchmark before splitting locks or storage |
+| P2 | M1 native API/local model adapters and role-specific selection | Independent worker, reviewer and compactor models | Same cancellation, budgets, provenance and tool contracts as CLI adapters |
+| P2 | C1–C3 infinite chat and selectable compaction | Cached comonadic history views; choose a hosted or local summary model independently | A bounded history reader and M1 summary-call path; retention/recall and failure tests |
+| P2 | L1 versioned lenses, personas and optional `SOUL.md` | Reusable specialist definitions with visible effective context and separate grants | Narrow tool host; deterministic composition; captured revisions |
+| P3 | L2 reviewed procedural learning; L3 source/tool improvement | Swarm proposes, verifies, reviews and reuses a lesson or patch | Provenance, evaluation, admission and rollback; existing draft-PR flow |
+| Later | Remote execution/federation, broader workflow languages, optional inference bundles | Extend proven local contracts | Demonstrated local need; no prerequisite for the swarm loop |
+
+R1 and R2 can be reviewed independently. A1 begins now where it removes coupling,
+but a complete adapter extraction must not delay those fixes. M1's bounded
+summary-call path can enable C1 before general local-model tool execution is
+complete. L1 can proceed alongside M1/C1; L2 needs neither a full provider rewrite
+nor model-weight training. Each item has scope and acceptance criteria in the
+linked roadmap.
+
+### Reconciled status
+
+- ✓ Continuity composition is on main through #134: shared handoffs,
+  conversation/room receipts, active-session deltas and bounded successors.
+  Older “branch-only” descriptions of that subset are superseded. Deadline
+  reserve, interrupted-draft recovery and prefix/exit wake selection remain open.
+- ✓ Ancestor request visibility (#131), longer local messages (#132), request
+  styling (#135), Rooms layout (#136), CI caching/Dependabot and relay FIN
+  draining (#138) are merged. These are regression coverage, not new backlog.
+- Production was verified after the requested #136 deployment. #138 is merged
+  with green main CI; its deployment is not claimed by this planning update.
+- Journals/outbox and compactor selection are implemented; lazy resident history
+  and computed Lens summaries remain open. Production Lens uses `NoSummaries`.
+- Shared claims have an admission path. Reviewed procedures, persona/lens
+  revisions and a measured reusable learning loop remain planned.
 
 **Augment, don't intermediate.** Control supplies tools, isolated environments,
 knowledge and review around a person's model access. Web, TUI, Discord and MCP
@@ -193,15 +241,15 @@ See [library boundaries and measurements](docs/CRATE-BOUNDARIES.md).
 
 ## Baseline: deployed revision and turn continuity checks
 
-**✓ Merged in #129 with local verification; deployment status unverified here.**
+**✓ Merged in #129; included in the verified #136 deployment.**
 Automatic turns retain omitted user instructions and recent execution evidence
 through the shared provider-neutral projection. Explicit one-shot watch requests
 re-arm the next callback, completed/pending evidence survives new watches, and
 failed saves restore observation counters. `control_bot_pause` durably pauses
 the caller's own wakes; the operator resumes it with `/bot resume`.
 
-Record whether the playtest binary/WASM and worker images include #129 and check
-node health before comparative testing. Verify that the original goal and later
+Capture the exact binary/WASM revision and worker images and check node health
+before each comparative test. Verify that the original goal and later
 steering survive callbacks, setup advances without manual "continue", and room
 updates reflect actual progress. Waiting on a peer should end a turn quietly;
 an explicit pause should stop automatic wakes. Inspect wake reasons and tool
@@ -215,9 +263,9 @@ connection/protocol work belongs in tool containers and must be distinguished
 from the stop/start overhead measured below. Keep broader extraction out of the
 continuity implementation's path.
 
-## Next priority: reduce stop/start context pollution
+## Continuity baseline and remaining follow-ups
 
-**Implementation in progress; not deployed.** The Cass playtest
+**Core composition merged through #134; comparative retest remains open.** The earlier Cass playtest
 shows 17 consecutive monitoring turns in ten minutes, repeating 68 tool calls
 without a gameplay action. Their exchanges occupy about 52% of the reconstructed
 next recent-history window. See the scoped measurements, concrete contracts,
@@ -226,7 +274,7 @@ Keep the current playtest unchanged as baseline evidence.
 
 Bot = agent + supervisor + callbacks. Keep a progressing session active; resume
 unfinished runnable work automatically when that session ends. Do not impose a
-short periodic handoff target. The feature branch has bounded captured input,
+short periodic handoff target. Main has bounded captured input,
 typed working notes and conversation/room receipts, atomic publication, idle
 waits and budgeted successors. Bot approval enables the next admission without
 restarting an active session. A missing handoff can recover from a successful
@@ -264,9 +312,9 @@ or local-model adapters. Preserve the existing scheduling and authority rules.
    on equivalent tasks explicitly permitting longer slices. Cached comonad
    summaries and API/local-model adapters remain separate later workstreams.
 
-Live feedback prioritizes repeated stop/start context pollution: let an active
+Live feedback prioritized repeated stop/start context pollution: let an active
 controller perform several related steps and consume queued event deltas before
-yielding on genuine idle/dependency waits. Compare with the current one-action
+yielding on genuine idle/dependency waits. Compare with the earlier one-action
 slices; prior native sessions also stalled, so session reuse alone is not the
 solution. Project wake bookkeeping as current metadata rather than repeatedly
 carrying it as conversational instructions. Preserve task/steering provenance,
@@ -274,7 +322,7 @@ evidence retrieval, cancellation and durable recovery; sleeping monitors must
 not monopolize model slots. This experiment remains separate from the request
 panel fix and does not change the current playtest midway.
 
-## Later: core, web and terminal boundaries
+## P1: core, web and terminal boundaries
 
 Build on the persistent-tool lifecycle/ownership rules already extracted below.
 Extract narrow application operations where they remove coupling; keep usable
@@ -516,7 +564,10 @@ where useful; do not claim types can prove arbitrary model behavior. Keep single
 node reliability and the tool/bot demonstrations ahead of distributed
 frameworks or broad rewrites.
 
-## Later: reusable personas and richer bot policies
+## P2: reusable personas; later richer bot policies
+
+See [L1–L3 in the swarm roadmap](docs/SWARM-ROADMAP.md#l1-versioned-lenses-personas-and-soulmd)
+for versioned `SOUL.md`, prompt composition and the reviewed learning loop.
 
 [Bot-control research and the version-0 contract draft](docs/research/BOT-CONTROL.md)
 recommend ordinary versioned configuration, pure transitions and typed effects
@@ -600,7 +651,13 @@ can drive different isolation levels.
   checkpoints stay in Control's domain code. Capability differences (network
   modes, storage, profiles) are declared by the backend and checked at admission.
 
-## Later: unbounded conversation memory as a comonad
+## P2: unbounded conversation memory as a comonad
+
+See [C1–C3 in the swarm roadmap](docs/SWARM-ROADMAP.md#c1c3-infinite-chat-and-compaction-model-selection)
+for the independent compaction-model selector, hosted/local choices, cache
+identity, fallback, budgets and acceptance tests. “Infinite” means continued
+conversation over retained history with bounded context and working memory;
+it does not promise infinite disk or perfect recall.
 
 The merged #129 continuity fix and the prioritized active-slice/handoff design are
 described above. Background summaries follow that implementation's evidence: retained human
@@ -648,8 +705,8 @@ tiers, bundled inference and model routing follow demonstrated local needs.
 Keep the pure Rust context core and offline federation boundary.
 
 Broader work can include a typed run state machine, deterministic supervisor
-simulation, parser fuzzing, scoped capability tokens/session expiry, a transactional
-store when JSON costs warrant it, artifact editing/highlighting and removal of
+simulation, parser fuzzing, scoped capability tokens/session expiry, an atomic
+file-manifest layout when measurements warrant it, artifact editing/highlighting and removal of
 remaining simulated UI. A Nix `packages.control` derivation is still future work;
 Nix setup and image builds already exist.
 

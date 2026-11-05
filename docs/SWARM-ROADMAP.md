@@ -1,0 +1,356 @@
+# Persistent swarm and self-improvement roadmap
+
+Triaged 2026-11-05 against main `2d3492e` (#138). This is a plan, not a runtime
+change. [The main roadmap](../roadmap.md) tracks shipped capabilities and release
+gates. Stable IDs below identify independently reviewable increments.
+
+## Direction and comparison
+
+Control manages a persistent swarm. Agents specialize through lenses, personas,
+tools and model choices; chats retain their work; rooms coordinate; services keep
+running independently; admitted knowledge carries lessons between tasks.
+Deterministic Rust supervision handles scheduling, ownership and budgets.
+
+| Reference | Useful idea | Application to Control |
+| --- | --- | --- |
+| Hermes | Reusable procedural knowledge with progressive disclosure | Extend admitted claims into reviewed procedures, lens/persona revisions and tool proposals; measure reuse across agents. |
+| Pi / Pi Durable | Small interfaces between models, storage, tools and execution; explicit recovery and background compaction | Separate Control's state transitions from effects; retain evidence and classify replay safety; use the existing continuation and context seams. |
+| tinygrad | Small internal vocabulary, separate transformation and execution layers | Typed commands/events/effects with thin interpreters and measurable boundaries; tool implementations form a standard library. |
+| Control playtest | Agents coordinated services and achieved a shared goal, then spent excessive turns on maintenance and recovery | Fix admission, finish/publication and escalation before increasing fan-out or treating summaries as the solution. |
+
+“Hermes: single agent; Control: swarm” describes the intended product emphasis.
+Hermes also supports [delegation](https://hermes-agent.nousresearch.com/docs/user-guide/features/delegation).
+Its [skills](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills)
+provide a useful procedural-memory reference, rather than evidence that Control
+already learns reusable procedures.
+[Pi Durable](https://earendil.com/posts/pi-durable/) separates storage and
+execution and retains raw history during compaction. Its runtime/storage choices
+are not dependencies of this plan. The
+[tinygrad layers](https://docs.tinygrad.org/developer/developer/) are an analogy
+for separation, not an agent scheduler or a required inference backend.
+Control remains Rust/WASM/Nix with plain files and atomic commits. Upstream
+non-Rust runtimes stay in explicitly configured tool/agent containers.
+
+## Evidence and reconciliation
+
+Inputs: `fix.tmp` (local ignored planning inventory, preserved), the uncommitted
+`docs/LONG-RUN-CONTINUITY.md` draft (preserved),
+[turn continuity](TURN-CONTINUITY.md), [architecture](ARCHITECTURE.md),
+[crate boundaries](CRATE-BOUNDARIES.md), [knowledge](KNOWLEDGE-TOOLS.md),
+[delegation](DELEGATION.md) and lead chat `c-18e4b7cadfa33158-11` with its Alice/Cass
+children. Private chat content and workload scripts are not copied into this plan.
+
+The lead chat was read during this review. It contains repeated maintenance
+responses to room/watch/timer wakes, later steering for cobble walls, diamonds
+and farm expansion, and a final `/cancel all` that stopped bots while retaining
+services. Those reports support the coordination diagnosis; prose alone does
+not independently verify the world state. The draft's deeper trace measurements
+below are attributed to that earlier analysis, not recomputed from the bounded
+activity API in this review.
+
+| Evidence | Triage decision |
+| --- | --- |
+| Draft: during 03:25–04:09 UTC maintenance, Alice started 55 attempts; starting prompt stayed approximately 14 KB. Her own callback-status output caused a wake. | R2: stop self-generated admissions. A smaller prompt or cheaper model would still waste those turns. |
+| Draft: three redirected Alice attempts hit the 600-second deadline; a staged handoff did not become committed state. | R1: reserve finish time and expose uncommitted recovery evidence; do not replay uncertain effects. |
+| Draft: lead made 36 attempts in about 39 minutes after redirection; 13.59M recorded input tokens, 1.20M excluding cache hits. | Tighten lead prompting and coordination. These are cumulative reported inputs, not prompt size or a billing estimate; failed-attempt usage is incomplete. |
+| Lead record: repeated no-change maintenance replies and occasional requests to verify footing. | Separate changed facts and actionable failures from routine audits; preserve real alerts and human steering. |
+| Draft: inventory loss, movement/crafting failures and surprising placement responses. | Keep a separate workload/protocol investigation; no confirmed general harness root cause or game-specific core fix. |
+| Current source: `history::activity` defaults failed reads to empty; HTTP accept spawns a handler thread per request. | R3/R4 remain concrete reliability work. Model slot limits do not bound HTTP threads. |
+| Current source: Lens selection uses `NoSummaries`; the server still owns broad mutable `State`. | C1 and A1–A4 remain real gaps despite journal/core-crate progress. |
+
+Do not reimplement shipped P10/P11b/P12/P14/P16, journal/outbox work, ancestor
+request visibility or #134 continuity composition. The historical inventory's
+“open”, “branch” and prerequisite labels are not authoritative today. In
+particular, bot callbacks already exist without completing the proposed off-lock
+writer: that writer is a coupling/performance improvement, not a prerequisite
+for introducing a second supervisor. Historical restrictions such as “never
+touch control-core” applied to those slices; current domain placement follows
+the documented crate contracts.
+
+## P0: continuity and observable failures
+
+| ID | Small implementation slice | Acceptance |
+| --- | --- | --- |
+| R1a | Derived active/finishing/ended phase, with an initial measured finish reserve of 60 seconds within the existing 600-second limit. Advertise it on ordinary responses without needing a callback. Fence new host workload mutations while allowing bounded status, cancellation and handoff. | Fake-clock boundaries, no new mutating host work in finishing, successful publication for both CLI providers; ignored wind-down still times out normally. Native CLI private tools and independently running services are outside this fence. |
+| R1b | Retain failed generation, last committed checkpoint, termination cause and draft/log references as explicitly uncommitted recovery evidence. Present it at the next authorized turn. | Failed publication leaves committed notes/cursors intact; missing drafts visible; reconciliation markers commit with the next matching checkpoint. Cancel/pause does not auto-retry; ambiguous effects are inspected, never blindly replayed. |
+| R2 | Retain full watch output while selecting wakes by any-line, exit-only or bounded literal-prefix-plus-exit policy. Preserve source sequences and eligible event references. | Status-query output alone causes zero admissions; real exits, human input and source loss remain visible. Restart, policy changes, coalescing and missing spool tested. Reading is not acknowledgement. |
+| R3 | Distinguish missing/corrupt history from an empty activity record in UI and model context. | Missing/decode-failed records preserve cause and references; ordinary empty records remain empty. |
+| R4 | Bound HTTP handler admission and return a predictable overload response; retain request deadlines. | Slow-client saturation and recovery stay within the bound; worker progress and shutdown remain responsive. |
+
+R1a/R1b form the recovery increment; R2 is independently testable. R3 and R4 can
+ship as isolated fixes. Keep typed delivery-retirement bookkeeping out of task
+context while retaining lifecycle records. Continue the existing shared agent
+contract: a bot adds approved scheduling, not a different memory/runtime system.
+
+Change workload guidance separately: act while useful work remains, check deltas
+at meaningful boundaries, publish before expiry, send changed facts/milestones/
+blockers, and wait after completion. A lead intervenes for changed goals,
+dependencies, evidence or stalled progress. Routine audits should not repeatedly
+nudge a productive builder. Advertise finish-phase instructions only after R1a.
+
+## P1: upward escalation and prompting
+
+E1 adds a durable worker-to-lead request and scoped resolution path alongside
+existing human design questions. Today descendant questions can appear in the
+ancestor UI; `control_agent_message` sends downward follow-ups. Neither supplies
+a structured child-to-lead decision/resumption contract.
+
+| Request | Resolver | Result |
+| --- | --- | --- |
+| Help, owned blocker, task tradeoff within delegated scope | Assigned lead | Evidence-linked answer or narrower task direction |
+| Goal/scope change beyond the lead's mandate, or unresolved human preference | Operator through the existing question UI/Discord path | Attributed direction for the same request |
+| Additional access, resource or capability | Existing permission broker/operator | Separate scoped grant or denial; a lead's answer is never a grant |
+| Reusable lesson or procedure revision | Knowledge/procedure review | Candidate revision with evidence, evaluated and admitted separately |
+
+Persist request ID/type, originating actor/chat/run/generation, parent lineage,
+question, evidence references, proposed options, resolver, status, resolution
+and continuation reference. Reuse durable pause/checkpoint and resume machinery.
+Only the blocked dependency pauses; unrelated swarm work can continue. Deduplicate
+requests by identity rather than fuzzy prose; a repeated blocker updates the
+same request instead of spawning more repair children.
+
+A parent waiting on its child must be able to receive and resolve that child's
+request. Test the one-model-slot case, a full queue, restart, duplicate/stale
+answers, reparented or cancelled work, authority revocation and answer-save
+failure. Resolution must neither create a second writer nor deadlock behind the
+child it must unblock. If the lead cannot resolve or is unavailable, forward
+the same request visibly to the operator under a bounded policy.
+
+E1's prompt review spans tool descriptions, ordinary/spawned agents, bot wakes,
+judges and continuation prompts. Replace the blanket “take your recommended
+option” instruction with a scope-aware rule: decide routine authorized steps;
+ask the lead about owned uncertainty; ask the operator when mandate or preference
+is missing; use the permission path for access. Waiting for a healthy peer is
+not itself an escalation. Check scenario fixtures across those entry points;
+prompt text never substitutes for deterministic policy tests.
+
+## P1: decouple state and execution incrementally
+
+Target dependency direction:
+
+```text
+web / TUI / Discord / MCP
+          ↓ typed commands, bounded queries
+application operations + authorization + durable acceptance
+          ↓
+pure domain transitions → stamped effects
+                              ↓
+             persistence / tools / engine / model adapters
+```
+
+| ID | Work | Exit gate |
+| --- | --- | --- |
+| A1 | Unify command/approval/continuation operations across transports; handlers take narrow typed inputs and projections. Group state by domain with borrowed views before changing lock ownership. | Same authorization, lineage, rollback and checkpoint outcomes from each transport; no new public `Arc<Mutex<State>>` dependency. |
+| A2 | Move expensive rendering/reads and selected persistence work outside the broad lock. For writes, explicitly distinguish pending intent from durable completion and revalidate generation/authority before effects. | Concurrent save/failure/cancel tests, no rollback over newer changes, durable-before-effect, visible degraded persistence; benchmark under concurrent fsync load. Migrate callers incrementally. |
+| A3 | Lazy bounded transcript/activity reads and explicit checkpoint projections; runtime-owned journal readers, bounded caches and visible source gaps. | Startup and resident memory scale with working set, not full transcript hydration; stable source positions, restart and disk-full tests. JSON/JSONL plus atomic file manifests; preserve cross-domain commit atomicity. |
+| A4 | Finish narrow Host/ToolSet operations and the common execution Engine per area; built-in tools form a standard library. Extract web/TUI/MCP crates only once their application interface is real. | Dispatch parity including denials, cancellation and ownership; live engine tests per migrated area; removal of legacy full-state access measured per slice. |
+
+The existing `control-core`, `control-effect`, `control-bot`, `control-ai`,
+comonad and context crates are the starting point. No mandatory async rewrite,
+global event bus, second tool catalogue or crate-per-file split. Domain locks
+come only after narrow borrows and measured contention, with a fixed order.
+Storage-layout changes preserve durability and require fault tests; plain-file
+storage is the chosen direction. Architectural work should yield usable slices.
+
+A4 enables operator-registered container-backed tools through the same catalogue.
+Registration/discovery does not authorize execution. Schema/version checks,
+namespacing, duplicate detection and scoped resource grants precede activation.
+Task-specific game adapters remain in their granted workload containers.
+
+## P2: model roles and local inference
+
+M1 defines separate captured selections for worker, lead, reviewer and compactor.
+Start with a bounded model request/result/usage interface usable by the summary
+worker, then add native API and configured local inference through Rust adapters.
+CLI providers continue to work. A provider choice does not change tools,
+permissions, workspace publication or the supervisor.
+
+Record provider/model revision, parameters, context/output limits, capabilities,
+usage semantics and opaque credential reference in execution provenance. Verify
+availability and fail visibly; listing a model does not establish access. Local
+endpoints declare supported streaming, tools and structured output instead of
+assuming API compatibility. Pin model/runtime/quantization identity where
+available. Bound concurrency, memory and context; report missing usage honestly.
+
+Use Nix-declared isolated inference services where supported. Benchmark available
+hardware, latency, memory and task quality before choosing a runtime; tinygrad
+is an optional experiment, not a migration prerequisite. Do not introduce a host
+Python/Node adapter or treat local inference as zero-cost. Tool-capable local
+agents must pass cancellation, malformed-output, authority and recovery contract
+tests. A text-only summarizer can ship sooner, with no tool execution rights.
+
+## C1–C3: infinite chat and compaction model selection
+
+“Infinite chat” means a continuous conversation with bounded active context over
+growing retained history. Disk retention, artifact budgets and explicit gaps are
+still necessary. Compaction is a derived view, never deletion or automatic
+knowledge admission. Keep append-only positions and the existing Store/zipper,
+`Summaries`, Lens cut and zoom seams; preserve Recent/Passthrough options.
+
+- **C1: summary storage and worker.** Immutable source blocks acquire leaf and
+  pairwise merged summaries in a lazy tree. Background effects call the selected
+  model; pure code selects a budgeted cut. Publish complete validated nodes
+  atomically at a turn boundary. Deduplicate work and retain the last usable view
+  on failure. The worker needs A3's bounded reads and M1's summary-call path,
+  not a complete provider/runtime rewrite.
+- **C2: user controls.** A node default and permitted per-chat override expose
+  automatic compaction on/off, history strategy, compaction provider/model,
+  context reserve, summary output bound and cost/concurrency budget. Use an
+  explicit selector: configured hosted model, configured local model, or an
+  available same-provider/model adapter. Disabling automatic summaries stops
+  new jobs; it does not erase existing summaries or raw history. Keep bounded
+  deterministic history selection and show omissions.
+- **C3: inspect and expand.** Show selected model and revision, source ranges,
+  summary age/status, usage/cost where known, and omitted/unavailable evidence.
+  A bounded zoom/read tool expands by stable reference down to original text.
+  Pin standing human constraints, unresolved requests, committed working state
+  and recovery warnings outside lossy summaries, within the whole input budget.
+
+The compaction model is independent of the conversation model. For the requested
+OpenAI 5.6 example, evaluate
+[`gpt-5.6-luna`](https://developers.openai.com/api/docs/models/gpt-5.6-luna), which
+official documentation describes as cost-sensitive. It is a candidate, not a
+hard-coded cheapest/default promise: choose using current account availability,
+measured recall and total cost. Local-model selection is equally explicit.
+[Pi's custom compaction](https://pi.dev/docs/latest/compaction) also demonstrates
+using a separate summarizer; Control implements its own typed boundary.
+
+Cache identity includes access scope, immutable source IDs/hashes and ranges,
+child-summary hashes, model/provider revision, prompt/schema version and relevant
+generation settings. Capture that configuration per summary job. Switching models
+creates a new cache namespace; old nodes retain provenance. Do not rewrite raw
+history or rebuild every historical node immediately. Prevent mixed-revision
+publication and cross-chat/actor evidence leakage.
+
+If a model is offline, slow, unaffordable or returns malformed output, retain the
+prior view and show the failure. A preconfigured permitted fallback may run;
+never silently send local-only history to a cloud provider. Switching compaction
+off does not turn a bounded model into an unlimited one. If mandatory constraints
+and selected evidence cannot fit, surface a context-budget condition rather than
+silently dropping them. Schedule summary jobs below interactive work with separate
+bounded queues/budgets and cancellation; no unbounded background model loop.
+
+This selector controls **Control's summary service**. It does not promise to
+replace a CLI provider's private auto-compaction model. Configure the projection
+sent to that provider and report those two layers distinctly. A configured native
+API/local summarizer is usable even while the chat runs through a CLI adapter.
+
+Acceptance: large synthetic history with bounded memory/context; lookup of old
+constraints and evidence after multiple merges; unresolved actions and late
+steering retained; corrupted/missing source and summary nodes; model switch,
+restart, stale completion, cancellation, queue exhaustion and local outage.
+Evaluate hosted/local candidates on identical recall and contradiction fixtures,
+including prompt injection embedded in old tool output. Summaries preserve source
+trust labels and cannot turn quoted text into policy. Measure fidelity, latency,
+total summarization plus conversation cost and provider cache hits separately.
+“Cheaper per token” alone is not success.
+
+## L1: versioned lenses, personas and SOUL.md
+
+Keep four distinct things: a lens selects context/tool descriptions; a persona
+describes behavior and role; a procedure explains how to do a class of work;
+policy grants enforceable capabilities. Complete lens-based execution filtering
+through the tool host where intended; a descriptor or persona cannot grant access.
+
+Add versioned persona bundles referencing composable lenses, optional `SOUL.md`
+prose, procedure revisions, model-role preferences and proposed resource needs.
+`SOUL.md` supplies persistent identity, tone and collaboration preferences. It is
+inert, reviewed content with explicit ownership and scope, not a mutable secret
+system prompt or a permission file. Personal definitions live under configured
+home roots; shared examples must contain no private configuration.
+
+Define deterministic composition and display effective context: enforced node
+policy; current authorized task/steering and standing constraints; selected
+persona/soul; relevant procedures/knowledge; attributed evidence. Conflicts stay
+visible. Stale persona prose cannot override newer user direction; tool/page
+content cannot promote itself to instruction. Capture resolved revisions per
+attempt, apply accepted changes at a boundary and retain rollback. Children get
+explicit role/identity bindings; do not copy every parent's identity or entire
+history by default.
+
+Acceptance: stable composition and source traces, bounded progressive disclosure,
+conflicting lens/persona inputs, revision changes during a run, rejection of
+capability escalation, independent sibling identities and restart/reuse.
+
+## P3: a reviewed self-improvement loop
+
+Separate working notes, factual knowledge, reusable procedures and source changes.
+All can inform improvement, but they have different admission and rollback paths.
+Model-weight training is a later research track, not required for this loop.
+
+```text
+task → action → evidence → verification → lesson proposal
+                                         ↓
+                              review / evaluate / admit
+                                         ↓
+                        versioned knowledge / procedure / lens
+                                         ↓
+                              reuse on a subsequent task
+```
+
+**L2: procedural learning.** Extend the existing knowledge proposal/review pattern
+with typed procedure/lens/persona candidates: motivation, applicability,
+preconditions, steps, failure modes, counterexamples, source attempts and test
+evidence. Use deduplication, revision/supersession, expiry/recheck and rollback.
+Reviewers receive bounded evidence and can disagree. No admission solely because
+an agent declares success. Retrieval loads relevant accepted revisions, not every
+lesson into every prompt. Preserve individual and shared scope.
+
+First demonstration: two agents encounter the same generic setup/verification
+problem. One proposes a procedure after deterministic verification; review admits
+it; a fresh agent retrieves it, succeeds with fewer redundant actions, and records
+the revision used. Also test a stale/revoked procedure and a misleading proposal.
+Measure failure recurrence, useful reuse, review burden, task cost and regression
+rate against a baseline. Minecraft protocol details stay in workload knowledge.
+
+**L3: source and tool self-development.** Use existing architect-authorized
+improvement workspaces, offline builds, child review and GitHub draft publication.
+Capture a reproducer and baseline, propose a bounded patch, run deterministic
+checks, obtain review evidence, publish a reviewable change, and retain provenance.
+Tool/persona changes follow their respective admission paths. Merge/deploy remains
+under existing maintainer/operator authority; neither a judge nor a learned skill
+can expand it. Add selectable reviewers with M1 availability checks before claiming
+independent multi-model review. Runtime registration never auto-installs agent code.
+
+## Regression lanes, deferrals and delivery evidence
+
+Map the old inventory into current work rather than copying its whole PR sequence:
+
+| Existing area | Disposition |
+| --- | --- |
+| R3/R4 in `fix.tmp` | R3/R4 above; reproduced at source boundaries in this review. |
+| PR 3, 4/4b, 13a–c, engine E1–E5 | A1–A4; audit already extracted operations per slice; measurements gate lock/storage changes. |
+| P11/P11b and buried blockers | E1; ancestor UI and routine-step guidance already exist; upward resolution is the gap. |
+| P17 and continuity follow-ups | R1/R2 plus workload guidance and existing #134 regressions. |
+| S1/S2, B6 and retained instruction growth | A3 and C1–C3; journals shipped, computed summaries remain open. |
+| B5/PR 11 and self-improvement ideas | L1–L3; reuse approved bot identities, knowledge and source-improvement tools. |
+| Child-result lineage, typed activity, room discovery/focus and historical approval hypotheses | Reproduce against main before reopening; preserve existing tests and scope boundaries. |
+| K1 knowledge graph rescans, transcript invalidation and remaining polling | Follow measured hot paths after A1; independent small fixes when evidence justifies them. |
+| Disk quotas, launch-to-record crash window, aggregate resource/spend budgets | Existing reliability gates before higher fan-out/unattended scale; not waived by this roadmap. |
+| V2 ingress credit / relay aggregate memory | Measure separately; #138 FIN-drain fix is merged and requires rebuilt images when deployed. |
+
+Keep interactive browser work, remote execution/federation, inference bundles,
+workflow languages and weight training behind demonstrated local need. Local
+models through a bounded adapter are P2; bundling every runtime/hardware target is
+later. Preserve plain-file storage and explicit migrations, not automatic wipes.
+
+Each implementation PR states its ID, observed problem, contract changed,
+dependencies, checks and remaining limits. Run the relevant
+[contribution checks](../CONTRIBUTING.md); engine changes additionally need live
+resource tests. Fault/cancellation tests precede claims of recovery correctness.
+Planning-only changes require document/link/diff checks, not model calls.
+
+For R1/R2, follow the continuity draft's controlled test: fresh isolated worlds,
+rooms and chats with seed `-6834438708894114399`, pinned revisions/models/resources
+and identical objectives. Preserve the existing playtest. Compare deadline and
+wake changes separately before combining; label a combined-only run exploratory.
+Observe 30 minutes of maintenance after completion, then the same redirected work.
+Record milestones, useful actions, admission causes, deadline/publication failures,
+committed-state age, context bytes, reported usage and missing usage. Report sample
+size and response to real failures/new steering, not just reduced wake count.
+
+The first implementation batch is R1a/R1b and R2 as separate reviewable changes,
+with R3/R4 small reliability fixes. E1 and narrow A1 operations follow. C1 can begin
+with pure cache/cut fixtures while M1 is built, and L1 definitions can proceed
+without a broad rewrite. No implementation, new model spend or deployment is
+performed by this roadmap update.
