@@ -66,7 +66,7 @@ pub fn tool(state: &mut State, name: &str, args: &Value) -> Result<Value, &'stat
 }
 pub fn render(state: &State, room: &str) -> String {
     let room = if valid(room) { room } else { "general" };
-    let mut html = String::from("<h2>Rooms</h2><div class='tabs'>");
+    let mut html = String::from("<div class='rooms-layout'><aside class='rooms-menu'><h2>Rooms</h2><nav aria-label='Rooms'>");
     for name in NAMES {
         html.push_str(&format!(
             "<a href='/?view=rooms&channel={name}'{}>#{name}</a>",
@@ -77,19 +77,14 @@ pub fn render(state: &State, room: &str) -> String {
             }
         ));
     }
-    html.push_str(&format!("</div><h3>#{room}</h3><p class='muted'>Shared updates from people and agents.</p><form method='post' action='/chats'><input type='hidden' name='room' value='{room}'><input type='hidden' name='lens' value='{}'><button class='primary'>New chat in #{room} ↗</button></form><div class='room-chats'>",if room=="general"{"none"}else{room}));
+    html.push_str(&format!("</nav></aside><section class='room-conversation' aria-label='#{room}'><div class='room-heading'><h2>#{room}</h2><p class='muted'>Shared updates from people and agents.</p></div><div class='room-feed transcript' role='region' aria-label='Room messages' tabindex='0'>"));
     let data = read(state, room);
-    for chat in data["chats"].as_array().unwrap() {
-        html.push_str(&format!(
-            "<a class='room-chat' href='/chat/{}'>↗ {}</a>",
-            escape(chat["id"].as_str().unwrap()),
-            escape(chat["title"].as_str().unwrap())
-        ));
+    if data["posts"].as_array().unwrap().is_empty() {
+        html.push_str("<div class='conversation-empty'><p class='muted'>No updates yet. Start the conversation.</p></div>");
     }
-    html.push_str("</div><div class='room-feed'>");
     for post in data["posts"].as_array().unwrap().iter().rev() {
         html.push_str(&format!(
-            "<article class='record'><span class='eyebrow'>{}</span><p class='preserve'>{}</p>",
+            "<article class='assistant-message'><span class='eyebrow'>{}</span><p class='preserve'>{}</p>",
             escape(post["author"].as_str().unwrap()),
             escape(post["text"].as_str().unwrap())
         ));
@@ -98,7 +93,37 @@ pub fn render(state: &State, room: &str) -> String {
         }
         html.push_str("</article>");
     }
-    html.push_str(&format!("</div><form method='post' action='/room'><input type='hidden' name='channel' value='{room}'><label>Shared update<textarea name='message' required maxlength='2000' rows='3'></textarea></label><button class='primary'>Post ↗</button></form>"));
+    html.push_str(&format!("</div><form class='conversation-composer' method='post' action='/room'><input type='hidden' name='channel' value='{room}'><textarea name='message' aria-label='Shared update' placeholder='Message #{room}…' required maxlength='2000' rows='3'></textarea><div class='composer-footer'><span class='muted'>Shared update</span><button class='send-message' aria-label='Post update'>↑</button></div></form></section><aside class='room-details' aria-label='Room details'><h2>Active participants</h2><ul class='room-participants'>"));
+    let mut active = std::collections::HashSet::new();
+    let mut activity = std::collections::HashMap::new();
+    for run in state.runtime.runs.iter().rev().filter(|run| matches!(run.status.as_str(), "running" | "queued" | "waiting")) {
+        if let Some(chat) = run.chat_id.as_deref() {
+            activity.entry(chat).or_insert(run.status.as_str());
+        }
+    }
+    for chat in state.chats.iter().rev().filter(|chat| chat.room.as_deref() == Some(room)) {
+        let status = activity.get(chat.id.as_str()).copied().or_else(|| listening(state, &chat.id).then_some("listening"));
+        if let Some(status) = status {
+            active.insert(chat.id.as_str());
+            html.push_str(&format!("<li><a href='/chat/{}'><span class='dot' aria-hidden='true'></span><span>{}<small>{status}</small></span></a></li>", escape(&chat.id), escape(&chat.title)));
+        }
+    }
+    if active.is_empty() {
+        html.push_str("<li class='muted'>No active participants.</li>");
+    }
+    html.push_str("</ul><h2>Linked chats</h2><nav class='room-links' aria-label='Linked chats'>");
+    let mut linked = 0;
+    for chat in data["chats"].as_array().unwrap() {
+        let id = chat["id"].as_str().unwrap();
+        if !active.contains(id) {
+            linked += 1;
+            html.push_str(&format!("<a href='/chat/{}'>{} ↗</a>", escape(id), escape(chat["title"].as_str().unwrap())));
+        }
+    }
+    if linked == 0 {
+        html.push_str("<p class='muted'>No other linked chats.</p>");
+    }
+    html.push_str(&format!("</nav><form class='room-new-chat' method='post' action='/chats'><input type='hidden' name='room' value='{room}'><input type='hidden' name='lens' value='{}'><button>+ New chat in #{room}</button></form></aside></div>", if room == "general" { "none" } else { room }));
     html
 }
 
@@ -290,6 +315,38 @@ pub(crate) fn reply(workspace: &Path, response: &Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn room_sidebar_scopes_activity_and_keeps_message_chat_links() {
+        let mut state = State::default();
+        let active = crate::chat::create(&mut state);
+        state.chats[0].room = Some("research".into());
+        crate::chat::send(&mut state, &active, "Investigate", "test").unwrap();
+        state.chats[0].title = "Investigate <sources>".into();
+        state.runtime.runs[0].status = "running".into();
+        let idle = crate::chat::create(&mut state);
+        state.chats[1].room = Some("research".into());
+        state.chats[1].title = "Previous findings".into();
+        let other = crate::chat::create(&mut state);
+        state.chats[2].room = Some("engineering".into());
+        state.collective.posts.push(Post { room: "research".into(), text: "An update <script>".into(), chat: Some(active.clone()), run: Some(state.runtime.runs[0].id.clone()), key: String::new() });
+        let page = crate::render(&state, "rooms", "none", "research");
+        let (_, sidebar) = page.split_once("aria-label='Room details'").unwrap();
+        let (participants, links) = sidebar.split_once("<h2>Linked chats</h2>").unwrap();
+        assert!(page.contains("body-grid rooms-workspace"));
+        assert!(page.contains("channel=research' aria-current='page'"));
+        assert!(page.contains("An update &lt;script&gt;"));
+        assert!(page.contains(&format!("href='/chat/{active}'>Open chat ↗")));
+        assert!(participants.contains("Investigate &lt;sources&gt;"));
+        assert!(participants.contains("<small>running</small>"));
+        assert!(!participants.contains(&format!("href='/chat/{idle}'")));
+        assert!(links.contains(&format!("href='/chat/{idle}'")));
+        assert!(!links.contains(&format!("href='/chat/{active}'")));
+        assert!(!sidebar.contains(&format!("href='/chat/{other}'")));
+        let empty = render(&state, "unknown");
+        assert!(empty.contains("aria-label='#general'"));
+        assert!(empty.contains("No active participants."));
+        assert!(empty.contains("No updates yet."));
+    }
     #[test]
     fn worker_is_scoped_and_cannot_forge_authority_or_duplicate_posts() {
         let mut state = State::default();
