@@ -155,7 +155,7 @@ fn render_with_content(state: &State, view: &str, lens: &str, channel: &str, sup
         .replace("{{page_discussion}}", &chat::discussion_link(view))
         .replace("{{navigation}}", &navigation::primary(view))
         .replace("{{section_navigation}}", &navigation::secondary(view))
-        .replace("{{layout_class}}", if chat_navigation { "chat-workspace" } else if navigation::managed(view) { "with-section-nav" } else { "" })
+        .replace("{{layout_class}}", if chat_navigation { "chat-workspace" } else if view == "rooms" { "rooms-workspace" } else if navigation::managed(view) { "with-section-nav" } else { "" })
         .replace("{{page_title}}", &navigation::heading(view));
     let content = supplied.or_else(|| if view == "monitor" { Some(usage::render(&state.runtime)) } else if view == "agents" { state.runtime.render(view,lens).map(|runs| bots::overview(state) + &runs) } else { state.runtime.render(view,lens) }).or_else(|| state.collective.render(view, channel)).unwrap_or_else(|| match view {
         "providers" => providers::render(&state.runtime),
