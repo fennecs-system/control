@@ -1,8 +1,8 @@
 # Control
 
-A local workspace for coding agents, tools and knowledge, built with Rust, WASM
-and Nix. Chat on the web, in a terminal or through Discord; run Codex or Claude
-in isolated containers and keep their work between turns.
+A bot harness for agents, tools and knowledge, built with Rust, WASM
+and Nix. Chat in a UI, in a terminal or through Discord; run Codex or Claude
+in isolated containers and keep their work between turns. 
 
 ## Install
 
@@ -113,8 +113,7 @@ These chat commands work on the web, in the TUI and in authorized Discord DMs:
 
 ## Features
 
-- **Chat and artifacts.** Persistent conversations, live command activity and
-  purple/red diff previews. Browse published files in a read-only viewer.
+- **Chat and artifacts.** Persistent conversations, live command activity. 
 - **Bots and runs.** See active tasks, the queue and execution history. Cancel
   work, retry an interrupted attempt, or spawn background tasks with queued completion updates.
   Approved bots keep useful sessions active; durable handoffs continue runnable
