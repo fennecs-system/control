@@ -22,11 +22,54 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, macos-15]
+    env:
+      # Incremental state is large and rarely reusable across fresh checkouts.
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: cachix/install-nix-action@d9186cbdca7adedf113a159fa91f725a27866771 # v31
+      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
+      - name: Cache Nix store and evaluation
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          # Rust source changes do not invalidate the toolchain/store cache.
+          primary-key: nix-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'flake.nix', 'hosting/setup.sh') }}
+          restore-prefixes-first-match: nix-v1-${{ matrix.os }}-${{ runner.arch }}-
+          paths: |
+            ~/.cache/nix
+            ~/Library/Caches/nix
+      - name: Cache Cargo downloads and Trunk tools
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cache/trunk
+            ~/Library/Caches/dev.trunkrs.trunk
+          key: downloads-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'Cargo.lock', 'web/Cargo.lock') }}
+          restore-keys: downloads-v1-${{ matrix.os }}-${{ runner.arch }}-
+      - name: Cache compiled Rust and WASM targets
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            target
+            web/target
+          # Save fresh outputs per revision; fall back to compatible dependencies.
+          key: targets-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'flake.nix', '.cargo/**') }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'web/Cargo.lock', 'web/Cargo.toml', 'crates/*/Cargo.toml') }}-${{ github.sha }}
+          restore-keys: |
+            targets-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'flake.nix', '.cargo/**') }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'web/Cargo.lock', 'web/Cargo.toml', 'crates/*/Cargo.toml') }}-
+            targets-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'flake.nix', '.cargo/**') }}-
+      - name: Cache finished WASM UI
+        id: wasm
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: web/dist
+          # Exact matches only: the server embeds these assets into its binary.
+          key: wasm-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'flake.nix', '.github/workflows/rust.yml', 'web/**', '!web/target/**', '!web/dist/**', 'crates/context/**', '!crates/context/target/**', '.cargo/**') }}
       - name: Check setup app
         run: nix run .#setup -- --help
       - name: Rust tests
@@ -38,6 +81,7 @@ jobs:
       - name: UI Clippy
         run: nix develop --command cargo clippy --locked --manifest-path web/Cargo.toml --all-targets -- -D warnings
       - name: Build WASM UI
+        if: steps.wasm.outputs.cache-hit != 'true'
         run: nix develop --command sh -c 'cd web && env -u NO_COLOR trunk build --release --locked'
       - name: Build release binaries
         run: nix develop --command cargo build --release --locked --bins

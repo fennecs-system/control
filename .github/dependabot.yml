@@ -1,0 +1,30 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+      actions-security:
+        applies-to: security-updates
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps(ci)"
+  - package-ecosystem: cargo
+    directories:
+      - /
+      - /web
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      rust:
+        patterns: ["*"]
+      rust-security:
+        applies-to: security-updates
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps(rust)"
