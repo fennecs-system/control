@@ -2,6 +2,8 @@
 
 Reviewed 2026-11-05 against main `2d3492e` (#138), the continuity plans,
 local fix inventory and lead chat `c-18e4b7cadfa33158-11`.
+Controller, ownership and team-budget triage updated 2026-11-06; main `42f8c42`
+(#139 dependency update) has a passing Rust workflow.
 Keep the normal macOS/Nix release useful to friends while making coordinated
 agent teams more reliable and less noisy. Each node supplies its own configuration
 and model access. Federation remains lower priority.
@@ -31,14 +33,15 @@ All unchecked work is proposed, not implemented or deployed by this review.
 
 | Priority | Work | First useful result | Dependency / exit gate |
 | --- | --- | --- | --- |
-| P0 | R1 deadline wind-down and interrupted recovery; R2 selective watch wakes; R3 visible history failures; R4 bounded HTTP admission | Productive sessions publish; routine telemetry does not wake itself; failures remain inspectable | Separate small changes; fake-clock/fault tests and a fresh controlled playtest |
-| P1 | U1 coordination UI, existing A2A flows and W1 cron-style schedules | Keep steering chat and Rooms central; make progress, ownership, blockers and next runs clear | Preserve ad hoc coordination; schedules reuse existing supervisor admission |
-| P1 | E1 upward escalation and consistent prompting | Worker asks lead; lead resolves within scope or forwards to operator; waiting agents resume durably | Preserve checkpoint/authority rules; prove no parent-child wait deadlock |
+| P0 | R1 deadline wind-down and interrupted recovery; R2 selective events and deterministic reconciliation; R3 visible history failures; R4 bounded HTTP admission | Productive sessions publish; unchanged telemetry does not admit turns; relevant completion/failure remains visible | Separate small changes; fake-clock/fault tests and a fresh controlled playtest |
+| P1 foundation | G1 desired/observed state and conditions; O1 lifecycle ownership; Q1 team quotas and admission priority | Shared status for coordination; explicit retained/cascaded resources; children/reviews/summaries share team limits | Extend current supervisor and durable effects; stale/unknown state is visible; reservation/restart and one-slot resolution tests |
+| P1 | U1 coordination UI, existing A2A flows and W1 cron-style schedules | Keep steering chat and Rooms central; expose conditions, ownership, next runs and overlap/missed-run policy | G1/O1 projections; Q1 before added scheduled fan-out; default restriction on recursive scheduling |
+| P1 | E1 upward escalation and consistent prompting | Worker request appears as a blocked/NeedsDecision condition; lead answers or forwards; waiting work resumes durably | G1 status references durable request; preserve authority and prove no parent-child wait deadlock |
 | Supporting | A1–A4 state/effect separation and tool/runtime interfaces, alongside feature work | Typed application operations; shorter lock holds; bounded lazy history; thin adapters | Extract the seam needed by each feature; preserve atomic commits; benchmark before splitting locks or storage |
-| P2 | U2 computer-use tools and W2 reusable team workflows | Agents operate a scoped browser and run inspectable multi-step team recipes | Browser/resource contracts and durable step identities; no mandatory workflow language |
+| P2 | U2 computer-use tools and W2 reusable team workflows | Agents operate a scoped browser and run inspectable multi-step team recipes | Browser/resource contracts; validate recipe revisions before activation; standard-library interpretation over G1/O1/Q1 |
 | P2 | M1 native API/local model adapters and role-specific selection | Independent worker, reviewer and compactor models | Same cancellation, budgets, provenance and tool contracts as CLI adapters |
-| P2 | C1–C3 infinite chat and selectable compaction | Cached comonadic history views; choose a hosted or local summary model independently | A bounded history reader and M1 summary-call path; retention/recall and failure tests |
-| P2 | L1 versioned lenses, personas and optional `SOUL.md` | Reusable specialist definitions with visible effective context and separate grants | Narrow tool host; deterministic composition; captured revisions |
+| P2 | C1–C3 infinite chat and selectable compaction | Cached comonadic history views; on/off plus independent hosted/local compactor selector | Existing context extension seams, bounded reads and M1 summary calls; Q1 budgets; advanced limits in configuration |
+| P2 | L1 versioned lenses, personas and optional `SOUL.md` | Reusable specialist configuration with visible effective context and separate grants | Standard-library/configuration artifacts; narrow tool host; deterministic composition; captured revisions |
 | P2 | L2 reviewed procedural learning; L3 source/tool improvement | Swarm proposes, verifies, reviews and reuses a lesson or patch | Provenance, evaluation, admission and rollback; existing draft-PR flow |
 | Later | Remote execution/federation, general-purpose workflow languages, optional inference bundles | Extend proven local contracts | Demonstrated local need; no prerequisite for the swarm loop |
 
@@ -51,6 +54,14 @@ linked roadmap. U1/W1 and the first reusable learning demonstration can progress
 without completing A1–A4, local models or infinite-chat compaction. E1 adds a
 tracked path for blockers requiring a decision; ordinary agent conversation and
 successful steering remain lightweight.
+
+Borrow Kubernetes' spec/status and controller contracts incrementally: G1 precedes
+the new condition-driven E1/W1/U1 behavior, O1 makes cleanup ownership explicit,
+and Q1 gates increased unattended scale. Reconciliation checks typed evidence;
+it does not use a model on every wake or infer success from arbitrary prose.
+Keep recipes, persona bundles and compaction configuration outside the small
+supervisor. Each new provider attempt starts fresh from Control's journal;
+an already active attempt can keep working until it yields or reaches its limit.
 
 ### Reconciled status
 

@@ -1,6 +1,8 @@
 # Turn continuity implementation handoff
 
-Design for Sol, 2026-11-04. Status: implementation in progress, not deployed.
+Design for Sol, 2026-11-04. The implementation checkpoint below is historical;
+see the [current roadmap](SWARM-ROADMAP.md) for shipped scope and open follow-ups.
+Provider-session contract clarified 2026-11-06.
 
 The next priority is reducing stop/start context pollution: longer active slices,
 event deltas, and reliable working-state handoffs, while preserving Control's
@@ -13,9 +15,13 @@ its task from Control. Provider session reuse, API/local-model adapters and
 background summary generation are outside this implementation.
 
 The runtime model is **bot = agent + supervisor + callbacks**. While meaningful
-activity is advancing the goal, preserve the active provider session. If that
-session ends with runnable work remaining, the supervisor should resume it
-without another human "continue". A real dependency or a scheduled condition is
+activity is advancing the goal, preserve the active provider session within its
+attempt. If that attempt ends with runnable work remaining, the supervisor may
+admit a fresh attempt without another human "continue", subject to existing
+authority and budgets. Every new attempt reconstructs context from Control's
+committed journal, instructions and selected history; it never resumes the ended
+provider session. Provider caches are optional optimizations, not task-state
+authority. A real dependency or a scheduled condition is
 different from runnable work. Neither callbacks nor a short elapsed interval
 justify periodically restarting an agent.
 

@@ -3,6 +3,9 @@
 Triaged 2026-11-05 against main `2d3492e` (#138). This is a plan, not a runtime
 change. [The main roadmap](../roadmap.md) tracks shipped capabilities and release
 gates. Stable IDs below identify independently reviewable increments.
+Controller/ownership/budget review added 2026-11-06; main `42f8c42` (#139)
+changes Cargo dependencies only and its Rust workflow passed. Proposals below
+remain unimplemented.
 
 ## Direction and comparison
 
@@ -32,6 +35,8 @@ coordination, not complete replacement of all engineering responsibilities.
 | Hermes | Reusable procedural knowledge with progressive disclosure | Extend admitted claims into reviewed procedures, lens/persona revisions and tool proposals; measure reuse across agents. |
 | Pi / Pi Durable | Small interfaces between models, storage, tools and execution; explicit recovery and background compaction | Separate Control's state transitions from effects; retain evidence and classify replay safety; use the existing continuation and context seams. |
 | tinygrad | Small internal vocabulary, separate transformation and execution layers | Typed commands/events/effects with thin interpreters and measurable boundaries; tool implementations form a standard library. |
+| Kubernetes | Desired/observed state, narrow reconciliation loops, ownership, admission quotas and explicit scheduling policies | Extend the existing supervisor with G1 conditions, O1 lifecycle ownership and Q1 team admission. Borrow contracts without adopting Kubernetes or a second control plane. |
+| UniiChat | Hierarchical summaries with expansion to retained source text | C1 extends the existing comonadic history seams; summaries remain lossy derived views with source provenance. |
 | Control playtest | Steering chat and communicating workers achieved successive goals, including diamonds; maintenance and recovery were noisy | Keep the working coordination pattern and make targeted admission, publication and visibility improvements. |
 
 These projects supply useful ideas; Control's feature priorities come from the
@@ -47,6 +52,22 @@ are not dependencies of this plan. The
 for separation, not an agent scheduler or a required inference backend.
 Control remains Rust/WASM/Nix with plain files and atomic commits. Upstream
 non-Rust runtimes stay in explicitly configured tool/agent containers.
+
+[UniiChat](https://github.com/VictorTaelin/UniiChat) is Victor Taelin's project,
+already linked in the main roadmap; unrelated products named UChat/UniChat are
+not the intended comparison. Pi Durable also describes durable timers and
+dependency waits, so "no scheduling" would mischaracterize that runtime.
+Summary trees support bounded context and source expansion; they do not by
+themselves replace full-text search or guarantee recall of every fact.
+
+The [Kubernetes controller model](https://kubernetes.io/docs/concepts/architecture/controller/)
+is a useful organizing analogy. Control already has pure supervisor decisions,
+source cursors, coalescing, waits, generations and per-bot turn budgets;
+[the bot-control research contract](research/BOT-CONTROL.md) also proposes desired
+state and typed effects. The missing increment is a shared, durable account of
+intent, observed conditions and team admission, rather than inventing supervision
+from scratch. Kubernetes resource quotas are not an implementation of model-spend
+limits, and a controller cannot infer completion of an arbitrary prose goal.
 
 ## Evidence and reconciliation
 
@@ -67,7 +88,7 @@ activity API in this review.
 
 | Evidence | Triage decision |
 | --- | --- |
-| Draft: during 03:25–04:09 UTC maintenance, Alice started 55 attempts; starting prompt stayed approximately 14 KB. Her own callback-status output caused a wake. | R2: stop self-generated admissions. A smaller prompt or cheaper model would still waste those turns. |
+| Draft: during 03:25–04:09 UTC maintenance, Alice started 55 attempts; starting prompt stayed approximately 14 KB. Her own callback-status output caused a wake. | R2 reduces unnecessary admissions; C1 reduces repeated context cost on useful turns. Typed projections and lazy evidence reads also reduce input size. |
 | Draft: three redirected Alice attempts hit the 600-second deadline; a staged handoff did not become committed state. | R1: reserve finish time and expose uncommitted recovery evidence; do not replay uncertain effects. |
 | Draft: lead made 36 attempts in about 39 minutes after redirection; 13.59M recorded input tokens, 1.20M excluding cache hits. | Tighten lead prompting and coordination. These are cumulative reported inputs, not prompt size or a billing estimate; failed-attempt usage is incomplete. |
 | Lead record: repeated no-change maintenance replies and occasional requests to verify footing. | Separate changed facts and actionable failures from routine audits; preserve real alerts and human steering. |
@@ -90,7 +111,7 @@ the documented crate contracts.
 | --- | --- | --- |
 | R1a | Derived active/finishing/ended phase, with an initial measured finish reserve of 60 seconds within the existing 600-second limit. Advertise it on ordinary responses without needing a callback. Fence new host workload mutations while allowing bounded status, cancellation and handoff. | Fake-clock boundaries, no new mutating host work in finishing, successful publication for both CLI providers; ignored wind-down still times out normally. Native CLI private tools and independently running services are outside this fence. |
 | R1b | Retain failed generation, last committed checkpoint, termination cause and draft/log references as explicitly uncommitted recovery evidence. Present it at the next authorized turn. | Failed publication leaves committed notes/cursors intact; missing drafts visible; reconciliation markers commit with the next matching checkpoint. Cancel/pause does not auto-retry; ambiguous effects are inspected, never blindly replayed. |
-| R2 | Retain full watch output while selecting wakes by any-line, exit-only or bounded literal-prefix-plus-exit policy. Preserve source sequences and eligible event references. | Status-query output alone causes zero admissions; real exits, human input and source loss remain visible. Restart, policy changes, coalescing and missing spool tested. Reading is not acknowledgement. |
+| R2 | Select relevant events and reconcile known intent/observations before admitting a turn. Retain full watch output; exit-only or bounded literal-prefix-plus-exit policies provide an incremental filter for untyped streams. Preserve provenance, source sequences and eligible references. | Unchanged status-query/own-output telemetry causes zero admissions. Human steering, relevant child/tool completion, failure and source loss remain visible. Restart, stale observations, coalescing and missing spool tested. Reading is not acknowledgement. |
 | R3 | Distinguish missing/corrupt history from an empty activity record in UI and model context. | Missing/decode-failed records preserve cause and references; ordinary empty records remain empty. |
 | R4 | Bound HTTP handler admission and return a predictable overload response; retain request deadlines. | Slow-client saturation and recovery stay within the bound; worker progress and shutdown remain responsive. |
 
@@ -99,11 +120,96 @@ ship as isolated fixes. Keep typed delivery-retirement bookkeeping out of task
 context while retaining lifecycle records. Continue the existing shared agent
 contract: a bot adds approved scheduling, not a different memory/runtime system.
 
+R2 treats a wake as a hint to run a deterministic decision, not an instruction to
+call a model. A known satisfied condition with no pending work produces no turn.
+An opaque goal such as "reach diamonds" requires verified observations or an
+attributed agent checkpoint; the host must not pretend to interpret arbitrary
+logs. Unknown/stale state is not success. Preserve bounded rechecks and source-gap
+diagnostics. Suppress own room echoes and unchanged diagnostic output, while
+retaining relevant completion/failure events from the bot's own tools. Origin
+alone does not establish irrelevance. G1 adds structured conditions to this
+increment; R2's immediate filtering fix need not wait for the entire schema.
+
+R1's bounded finishing phase resembles a cleanup boundary, but is not literally
+a [Kubernetes finalizer](https://kubernetes.io/docs/concepts/overview/working-with-objects/finalizers/):
+finalizers block deletion until cleanup completes and do not supply an automatic
+grace period. Keep attempt wind-down, durable publication and resource cleanup
+separate; failed cleanup stays visible without holding a model slot indefinitely.
+
 Change workload guidance separately: act while useful work remains, check deltas
 at meaningful boundaries, publish before expiry, send changed facts/milestones/
 blockers, and wait after completion. A lead intervenes for changed goals,
 dependencies, evidence or stalled progress. Routine audits should not repeatedly
 nudge a productive builder. Advertise finish-phase instructions only after R1a.
+
+## P1 foundation: intent, ownership and team admission
+
+Deliver these as narrow extensions of current decisions and durable effects.
+They precede the corresponding E1/W1/U1 features, not the independent P0 fixes
+or the entire A1–A4 extraction.
+
+**G1: desired state and observed status.** Extend `control-bot` with a versioned
+definition/intent and separately projected status. Capture goal reference,
+definition generation, owner/team, lifecycle intent and permitted triggers.
+Status records observed generation, active attempt, source positions and typed
+conditions such as Progressing, WaitingDependency, NeedsDecision and Degraded.
+Each condition has true/false/unknown state, reason, evidence/request references
+and last transition; observations carry freshness and provenance. Model-reported
+progress remains attributed, distinct from host-verified resource state.
+
+Reconcile from admitted events, policy and time without a model call. Emit work
+only for an unsatisfied known condition or relevant pending input; record why a
+turn was admitted or suppressed. Persist intent/decision before effects, reject
+stale generations and retain existing receipts, bounded rechecks and one writer
+per chat. U1 renders this projection in the existing UI. Acceptance: duplicate
+wakes produce no duplicate effects; a satisfied idle bot stays quiet; unknown
+or stale evidence remains visible; changed steering and real failures get through.
+
+**O1: lifecycle ownership.** Record lifecycle owner, borrowing relationships and
+explicit retain/cascade cleanup policy for children and services. Chat parentage
+is coordination lineage, not proof of resource ownership. On cancellation or
+owner deletion, reconcile the policy against actual resources; retain shared or
+borrowed services and diagnostic references. Adoption/reparenting requires
+authority and a captured revision. Attempt completion alone must not stop an
+independently owned persistent service. Acceptance: cancelled lead, borrowed
+service, cleanup failure and restart yield the same visible ownership outcome.
+Use the [owner/dependent model](https://kubernetes.io/docs/concepts/architecture/garbage-collection/)
+as a reference while preserving Control's explicit resource lifetimes.
+
+**Q1: team quotas and admission priority.** Add durable team/bot reservations to
+the existing slot, queue and turn limits. Count child work, retries, review and
+summary jobs against their owning team; spawning a child must not reset limits.
+Atomically reserve before admission and reconcile usage/release by stable attempt
+identity. Unknown outcomes retain a visible reservation until reconciled.
+Expose limits, remaining capacity, queued reasons and observed/unknown usage.
+
+Start with enforceable turn/concurrency limits and conservative model-call
+reservations where the adapter exposes bounds. Delayed CLI usage telemetry
+supports accounting and future admission limits, not a strict in-flight token or
+currency ceiling. Price revisions, estimates and missing usage stay explicit;
+local inference also consumes bounded hardware capacity. Borrow aggregate
+admission from [ResourceQuota](https://kubernetes.io/docs/concepts/policy/resource-quotas/),
+without claiming Kubernetes itself solves model-spend enforcement.
+
+Use non-preempting priority classes: interactive/decision work, normal workers,
+then background summaries, with fairness/aging and bounded queues. Priority does
+not evict an active provider or create capacity; test parent/child resolution
+with one slot and yield genuinely blocked work. Any reserved decision capacity
+must be explicit. Never bypass team grants, budgets or the single-writer rule.
+Acceptance: concurrent admissions cannot oversubscribe reservations; restart,
+cancellation and partial usage do not double-charge or silently reset budgets;
+background jobs neither starve steering nor starve indefinitely under the policy.
+
+| Placement | Responsibility |
+| --- | --- |
+| Pure `control-bot` / domain core | Intent/status transitions, conditions, ownership references, budget/admission decisions and typed effects |
+| Application/persistence/effect adapters | Durable reservations and receipts, authorization, clocks, model calls, resource inspection and cleanup |
+| Standard library and versioned configuration | W1 schedule interpretation, W2 recipes, L1 persona/SOUL bundles and default compaction strategy; compile to the same commands/effects |
+| Existing context/model extension seams | C1 summary storage and pure cuts; hosted/local summary workers through M1; C2 small user controls |
+
+Product features can ship together without becoming new concepts inside the
+supervisor. Reuse existing `Compactor`, `Summaries` and Lens seams rather than
+introducing a second parallel plugin system or putting network calls in pure code.
 
 ## P1: upward escalation and prompting
 
@@ -131,6 +237,12 @@ Only the blocked dependency pauses; unrelated swarm work can continue. Deduplica
 requests by identity rather than fuzzy prose; a repeated blocker updates the
 same request instead of spawning more repair children.
 
+Project a pending request into G1's NeedsDecision/blocked status with its request
+reference. The lead reconciles a changed child condition through existing durable
+delivery; U1 shows the same condition. The condition does not replace the request's
+answer, authority and resumption protocol. Avoid a new message bus and repeated
+prose notices for an unchanged blocker.
+
 A parent waiting on its child must be able to receive and resolve that child's
 request. Test the one-model-slot case, a full queue, restart, duplicate/stale
 answers, reparented or cancelled work, authority revocation and answer-save
@@ -157,6 +269,10 @@ close to the work; show whether a message was queued, delivered or processed
 where the existing receipt contract can establish it. Avoid a new dashboard
 that forces users to abandon the useful chat flow.
 
+Use G1 conditions and O1 ownership as the data model, including observation age
+and last transition. Show unknown progress honestly; do not derive authoritative
+status by parsing the most recent assistant sentence.
+
 A2A work builds on rooms, child results and directed messages. Preserve attribution,
 lineage, evidence links and explicit destinations. E1 fills the decision/resumption
 gap. First improve the user's ability to see and direct this communication; remote
@@ -182,12 +298,24 @@ Capture the definition revision and a stable scheduled-occurrence ID so restart
 does not submit the same occurrence twice. Existing model slots, bot approval,
 budgets and per-chat ordering still govern admission.
 
-Make overlap and missed-run behavior explicit. Start with skip/coalesce when work
-is already active and skip missed occurrences after downtime; show what was skipped.
-Specify behavior for daylight-saving gaps/repeats and test next-run previews,
-restart, clock changes, edits and pause racing a due trigger. Do not infer safe
-external replay from a deduplicated schedule. W1 needs no new scheduler or workflow
-language and must not restart a progressing provider session on each timer tick.
+Borrow explicit [CronJob policies](https://kubernetes.io/docs/concepts/workloads/controllers/cron-jobs/):
+Allow, Forbid (default), or Replace, plus a missed-run start deadline. Concurrency
+policy applies per schedule; Q1 still bounds the team. Allow creates independently
+owned instances and never concurrent writers in one chat. Replace requires
+confirmed cancellation/quiescence of the prior writer and reconciliation of its
+effects; defer enabling it until that contract is tested. Show skipped occurrences
+and reasons. Initially choose at most the latest eligible missed occurrence within
+the deadline; document this Control catch-up policy rather than claiming complete
+Kubernetes equivalence. Specify daylight-saving gaps/repeats and test previews,
+restart, clock changes, edits and pause racing a due trigger. A deduplicated trigger
+does not make uncertain external effects safe to replay. Schedule ticks never
+restart a progressing provider attempt; a later admitted attempt starts fresh.
+
+By default scheduled runs and their descendants cannot create, edit or enable
+schedules. Enforce origin/capability in the host so delegation cannot bypass it;
+any operator-authorized exception is scoped and auditable. Hermes has a similar
+[default guard](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron),
+with an opt-in override; it is not an unconditional upstream prohibition.
 
 **W2 is a small declarative recipe layer** for repeated team patterns: triggers,
 roles, named steps, dependencies, bounded parallel branches, completion checks,
@@ -214,6 +342,13 @@ instances; edits affect future instances unless explicitly applied at a safe
 boundary. Retry only classified safe operations or reconcile uncertain outcomes.
 Users can inspect, steer, pause and cancel through the same chat/UI. Workflow
 definitions describe work within existing grants; they do not grant access.
+
+Validate recipes before activation: schema and referenced revisions, dependency
+cycles, fan-out/retry limits, required capabilities, budgets, ownership and result
+destinations. Require a bounded dry-run/fixture trace for the selected revision;
+show failures before enabling triggers. A changed recipe needs renewed validation.
+Implement interpretation as standard-library operations over G1/O1/Q1, not a
+workflow-specific state machine embedded in the supervisor.
 
 First acceptance: a scheduled inspect/build/review recipe survives a restart and
 a human decision wait, posts one outcome and leaves unrelated work running.
@@ -265,6 +400,14 @@ worker, then add native API and configured local inference through Rust adapters
 CLI providers continue to work. A provider choice does not change tools,
 permissions, workspace publication or the supervisor.
 
+Every new attempt is a fresh provider session reconstructed from Control's
+committed journal, standing instructions and selected context. Within an active
+attempt the provider may keep its session/KV state and perform multiple steps;
+callbacks do not force a restart. Once it ends, recovery and continuation create
+a fresh attempt, never resume its provider session. Provider caches are optional
+optimizations, never the authority for task state. This applies equally to CLI,
+native API and local adapters.
+
 Record provider/model revision, parameters, context/output limits, capabilities,
 usage semantics and opaque credential reference in execution provenance. Verify
 availability and fail visibly; listing a model does not establish access. Local
@@ -293,13 +436,14 @@ knowledge admission. Keep append-only positions and the existing Store/zipper,
   atomically at a turn boundary. Deduplicate work and retain the last usable view
   on failure. The worker needs A3's bounded reads and M1's summary-call path,
   not a complete provider/runtime rewrite.
-- **C2: user controls.** A node default and permitted per-chat override expose
-  automatic compaction on/off, history strategy, compaction provider/model,
-  context reserve, summary output bound and cost/concurrency budget. Use an
-  explicit selector: configured hosted model, configured local model, or an
-  available same-provider/model adapter. Disabling automatic summaries stops
-  new jobs; it does not erase existing summaries or raw history. Keep bounded
-  deterministic history selection and show omissions.
+- **C2: small user controls.** Expose automatic compaction on/off and an independent
+  compaction model selector: configured hosted, local, or an available same-model
+  adapter. Keep history strategy, reserves, output bounds and resource limits in
+  versioned node defaults/advanced configuration under Q1, with permitted per-chat
+  overrides. Implement pluggable strategies through existing context seams, with
+  hosted/local workers as effect adapters. Disabling automatic summaries stops
+  new jobs; it does not erase summaries or raw history. Retain bounded deterministic
+  selection and show omissions. No seven-setting panel is required to use a chat.
 - **C3: inspect and expand.** Show selected model and revision, source ranges,
   summary age/status, usage/cost where known, and omitted/unavailable evidence.
   A bounded zoom/read tool expands by stable reference down to original text.
@@ -354,6 +498,8 @@ through the tool host where intended; a descriptor or persona cannot grant acces
 
 Add versioned persona bundles referencing composable lenses, optional `SOUL.md`
 prose, procedure revisions, model-role preferences and proposed resource needs.
+These are standard-library/configuration artifacts resolved at admission; the
+supervisor does not interpret persona prose or acquire a persona-specific lifecycle.
 `SOUL.md` supplies persistent identity, tone and collaboration preferences. It is
 inert, reviewed content with explicit ownership and scope, not a mutable secret
 system prompt or a permission file. Personal definitions live under configured
@@ -426,7 +572,7 @@ Map the old inventory into current work rather than copying its whole PR sequenc
 | B5/PR 11 and self-improvement ideas | L1–L3; reuse approved bot identities, knowledge and source-improvement tools. |
 | Child-result lineage, typed activity, room discovery/focus and historical approval hypotheses | Reproduce against main before reopening; preserve existing tests and scope boundaries. |
 | K1 knowledge graph rescans, transcript invalidation and remaining polling | Follow measured hot paths after A1; independent small fixes when evidence justifies them. |
-| Disk quotas, launch-to-record crash window, aggregate resource/spend budgets | Existing reliability gates before higher fan-out/unattended scale; not waived by this roadmap. |
+| Disk quotas, launch-to-record crash window, aggregate resource/spend budgets | Q1 makes team admission explicit before higher fan-out/unattended scale; disk quotas and launch recording retain their separate reliability gates. |
 | V2 ingress credit / relay aggregate memory | Measure separately; #138 FIN-drain fix is merged and requires rebuilt images when deployed. |
 
 U1/U2 and W1/W2 make coordination, computer use and recurring team work explicit
@@ -451,7 +597,9 @@ committed-state age, context bytes, reported usage and missing usage. Report sam
 size and response to real failures/new steering, not just reduced wake count.
 
 The first implementation batch is targeted R1a/R1b and R2 changes, with R3/R4 small
-reliability fixes. U1/W1 improve the visible team experience; E1 fills a specific
+reliability fixes. G1 supplies conditions before E1/W1/U1 consume them; O1 defines
+their resource lifetimes, and Q1 gates increased unattended fan-out and scheduled
+model work. U1/W1 improve the visible team experience; E1 fills a specific
 coordination gap. Apply narrow A1–A4 extractions where those changes need them.
 U2, W2 and the first L2/L3 engineering demonstration can proceed independently of
 the full architecture/model/compaction program. C1 can begin with pure cache/cut
