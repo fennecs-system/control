@@ -4,7 +4,9 @@
 //! and exits to the owning chat's bot. Control never speaks the watched
 //! program's protocol; anything that prints lines is a source.
 mod ops;
+mod policy;
 mod tools;
+pub use policy::WakePolicy;
 pub use tools::{Tools, WatchCall};
 use crate::{State, watch_frame::{Event, Frame}};
 use serde::{Deserialize, Serialize};
@@ -31,6 +33,19 @@ pub struct Exit {
     pub gave_up: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Gap {
+    pub after: u64,
+    pub through: u64,
+}
+
+/// Creation provenance, not proof that this attempt caused every stream line.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Creator {
+    pub run: String,
+    pub attempt: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Watch {
     /// Runner ID and bot topic name.
@@ -42,14 +57,23 @@ pub struct Watch {
     pub permanent: bool,
     pub command: String,
     pub stopped: bool,
+    #[serde(default)]
+    pub wake_policy: WakePolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<Creator>,
     /// Last sequence in the local spool: where the follower resumes.
     #[serde(default)]
     pub seen: u64,
-    /// Lines and exits spooled but not yet offered to the chat's bot.
+    /// Selected lines and all exits spooled but not yet offered to the bot.
     #[serde(default)]
     pub lines: u64,
     #[serde(default)]
     pub line_seq: u64,
+    /// Last selected line; old any-line records use line_seq.
+    #[serde(default)]
+    pub wake_seq: Option<u64>,
+    #[serde(default)]
+    pub gap: Option<Gap>,
     #[serde(default)]
     pub exits: Vec<Exit>,
     #[serde(default)]
@@ -63,7 +87,7 @@ impl Watch {
         !self.stopped && !self.last_exit.as_ref().is_some_and(|exit| exit.gave_up || (!self.permanent && exit.seq >= self.line_seq))
     }
     pub(crate) fn summary(&self) -> serde_json::Value {
-        serde_json::json!({"watch_id":self.id,"name":self.name,"service_id":self.service,"restart":if self.permanent {"permanent"} else {"transient"},"active":self.active(),"stopped":self.stopped,"cursor":self.seen,"last_exit":self.last_exit})
+        serde_json::json!({"watch_id":self.id,"name":self.name,"service_id":self.service,"service_generation":self.generation,"created_by":self.created_by,"wake_policy":self.wake_policy,"restart":if self.permanent {"permanent"} else {"transient"},"active":self.active(),"stopped":self.stopped,"cursor":self.seen,"last_exit":self.last_exit,"pending_source_gap":self.gap})
     }
     #[cfg(test)]
     pub(crate) fn observe_for_test(&mut self, seq: u64, exit: Option<i32>) {
@@ -74,19 +98,26 @@ impl Watch {
         self.observe(&Frame { seq, event });
     }
     /// Records a spooled frame; returns false for a replay.
-    fn observe(&mut self, frame: &Frame) -> bool {
+    pub(crate) fn observe(&mut self, frame: &Frame) -> bool {
         if frame.seq <= self.seen {
             return false;
+        }
+        if frame.seq > self.seen.saturating_add(1) {
+            let gap = self.gap.get_or_insert(Gap { after: self.seen, through: frame.seq - 1 });
+            gap.through = frame.seq - 1;
         }
         self.seen = frame.seq;
         match &frame.event {
             Event::Line(line) => {
-                self.lines = self.lines.saturating_add(1);
                 self.line_seq = frame.seq;
-                if self.recent.len() == 5 {
-                    self.recent.remove(0);
+                if self.wake_policy.admits(line) {
+                    self.lines = self.lines.saturating_add(1);
+                    self.wake_seq = Some(frame.seq);
+                    if self.recent.len() == 5 {
+                        self.recent.remove(0);
+                    }
+                    self.recent.push(String::from_utf8_lossy(line).chars().take(200).collect());
                 }
-                self.recent.push(String::from_utf8_lossy(line).chars().take(200).collect());
             }
             Event::Exit { code, signal, restarts, gave_up } => {
                 let exit = Exit { seq: frame.seq, code: *code, signal: *signal, restarts: *restarts, gave_up: *gave_up };
@@ -121,8 +152,11 @@ fn append(id: &str, line: &[u8]) -> io::Result<()> {
 /// Spooled frames after `after`, oldest first, at most `limit`.
 pub(crate) fn frames(id: &str, after: u64, limit: usize) -> Vec<(Frame, bool)> {
     let Ok(path) = spool(id) else { return Vec::new() };
+    read_frames(&path, after, limit)
+}
+fn read_frames(path: &std::path::Path, after: u64, limit: usize) -> Vec<(Frame, bool)> {
     let mut frames = Vec::new();
-    for file in [path.with_extension("log.1"), path] {
+    for file in [path.with_extension("log.1"), path.to_owned()] {
         let Ok(mut file) = fs::File::open(file) else { continue };
         let mut bytes = Vec::new();
         if file.read_to_end(&mut bytes).is_err() {
@@ -134,6 +168,16 @@ pub(crate) fn frames(id: &str, after: u64, limit: usize) -> Vec<(Frame, bool)> {
     frames.dedup_by_key(|(frame, _)| frame.seq);
     frames.truncate(limit);
     frames
+}
+fn source_gap(frames: &[(Frame, bool)], after: u64, seen: u64, limit: usize) -> bool {
+    if frames.is_empty() { return seen > after; }
+    let mut previous = after;
+    let missing = frames.iter().any(|(frame, _)| {
+        let gap = frame.seq > previous.saturating_add(1);
+        previous = frame.seq;
+        gap
+    });
+    missing || (frames.len() < limit && previous < seen)
 }
 struct Follower {
     cancel: Arc<AtomicBool>,
@@ -267,7 +311,58 @@ mod tests {
     use super::*;
 
     fn watch() -> Watch {
-        Watch { id: "w-1".into(), name: "chat".into(), chat: "c".into(), service: "svc".into(), generation: 1, permanent: false, command: "tail -F log".into(), stopped: false, seen: 0, lines: 0, line_seq: 0, exits: Vec::new(), last_exit: None, recent: Vec::new() }
+        Watch { id: "w-1".into(), name: "chat".into(), chat: "c".into(), service: "svc".into(), generation: 1, permanent: false, command: "tail -F log".into(), stopped: false, wake_policy:Default::default(),created_by:None, seen: 0, lines: 0, line_seq: 0, wake_seq:None,gap:None, exits: Vec::new(), last_exit: None, recent: Vec::new() }
+    }
+
+    #[test]
+    fn selection_survives_restart_without_moving_evidence_or_selected_cursor() {
+        let mut watch = watch();
+        watch.wake_policy = WakePolicy::Prefixes { prefixes: vec!["event:".into()] };
+        for (seq, text) in [(1, "status: unchanged"), (2, "event: ready"), (3, "status: still unchanged")] {
+            watch.observe(&Frame { seq, event: Event::Line(text.as_bytes().to_vec()) });
+        }
+        assert_eq!((watch.seen, watch.line_seq, watch.wake_seq, watch.lines), (3, 3, Some(2), 1));
+        assert_eq!(watch.recent, ["event: ready"]);
+        let mut restored: Watch = serde_json::from_slice(&serde_json::to_vec(&watch).unwrap()).unwrap();
+        assert!(!restored.observe(&Frame { seq: 2, event: Event::Line(b"event: ready".to_vec()) }));
+        restored.observe(&Frame { seq: 4, event: Event::Line(b"status: unchanged".to_vec()) });
+        restored.observe_for_test(5, Some(0));
+        assert_eq!((restored.lines, restored.wake_seq, restored.exits.len()), (1, Some(2), 1));
+        assert!(!restored.active());
+
+        let mut legacy = serde_json::to_value(watch).unwrap();
+        for key in ["wake_policy", "wake_seq", "gap", "created_by"] { legacy.as_object_mut().unwrap().remove(key); }
+        let mut legacy: Watch = serde_json::from_value(legacy).unwrap();
+        assert_eq!(legacy.wake_policy, WakePolicy::AnyLine {});
+        legacy.observe_for_test(4, None);
+        assert_eq!(legacy.lines, 2, "old state retains any-line behavior");
+    }
+
+    #[test]
+    fn filtering_keeps_raw_spool_and_reports_missing_evidence() {
+        let dir = std::env::temp_dir().join(format!("control-watch-policy-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("w.log");
+        let mut watch = watch();
+        watch.wake_policy = WakePolicy::ExitOnly {};
+        let input = [(1,"status: unchanged"),(2,"event: inspectable")].map(|(seq,text)| Frame { seq, event: Event::Line(text.as_bytes().to_vec()) });
+        fs::write(&path, input.iter().flat_map(Frame::encode).collect::<Vec<_>>()).unwrap();
+        for frame in &input { watch.observe(frame); }
+        assert_eq!(watch.lines, 0);
+        let page = read_frames(&path, 0, 1);
+        assert_eq!(page[0].0, input[0]);
+        assert!(!source_gap(&page, 0, watch.seen, 1), "a full page is not a gap");
+        assert!(source_gap(&page, 0, watch.seen, 200), "a missing tail is a gap");
+        assert_eq!(read_frames(&path, 1, 200)[0].0, input[1]);
+        assert_eq!(watch.lines, 0, "reading neither selects nor acknowledges events");
+        fs::remove_file(&path).unwrap();
+        assert!(source_gap(&read_frames(&path, 0, 200), 0, watch.seen, 200));
+        assert!(!source_gap(&[], watch.seen, watch.seen, 200));
+        watch.observe(&Frame { seq: 5, event: Event::Line(b"status: silent gap".to_vec()) });
+        assert_eq!(watch.gap, Some(Gap { after: 2, through: 4 }));
+        watch.observe_for_test(6, Some(1));
+        assert_eq!((watch.lines,watch.exits.len()),(0,1),"gaps and exits bypass line selection");
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

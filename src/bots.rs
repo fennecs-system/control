@@ -28,9 +28,10 @@ pub enum Message {
     Lines(u64),
     /// The watched process exited: the latest exit, and how many since the last turn.
     Exit { code: Option<i32>, signal: Option<i32>, exits: u32, gave_up: bool },
+    Gap { after: u64, through: u64 },
 }
 impl control_bot::Info for Message {
-    fn urgent(&self) -> bool { matches!(self, Self::Exit{..}) }
+    fn urgent(&self) -> bool { matches!(self, Self::Exit{..} | Self::Gap{..}) }
     fn merge(&mut self, newer: &Self) -> bool {
         match (self, newer) {
             (Message::Post, Message::Post) => true,
@@ -41,6 +42,10 @@ impl control_bot::Info for Message {
             (Message::Exit { code, signal, exits, gave_up }, Message::Exit { code: c, signal: s, exits: more, gave_up: g }) => {
                 (*code, *signal, *gave_up) = (*c, *s, *g);
                 *exits = exits.saturating_add(*more);
+                true
+            }
+            (Message::Gap { through, .. }, Message::Gap { through: newer, .. }) => {
+                *through = (*through).max(*newer);
                 true
             }
             _ => false,
@@ -327,6 +332,7 @@ fn arm_at(state: &mut State, chat: &str, now: Now) -> Result<bool, &'static str>
     for w in state.watches.iter_mut().filter(|w| w.chat == chat) {
         w.lines = 0;
         w.exits.clear();
+        w.gap = None;
     }
     if state.bots.supervisor.definitions().next().is_none() {
         state.bots.room_cursor = state.collective.posts.len();
@@ -349,7 +355,7 @@ fn watch_sources(state: &State, chat: &str) -> Vec<Source> {
     watch_topics(state, chat, false)
 }
 fn watch_topics(state: &State, chat: &str, pending: bool) -> Vec<Source> {
-    state.watches.iter().filter(|w| w.chat == chat && (w.active() || (pending && (w.lines > 0 || !w.exits.is_empty())))).map(|w| Source::Topic(watch(&w.id))).collect()
+    state.watches.iter().filter(|w| w.chat == chat && (w.active() || (pending && (w.lines > 0 || !w.exits.is_empty() || w.gap.is_some())))).map(|w| Source::Topic(watch(&w.id))).collect()
 }
 /// Redefinitions that keep each bot subscribed to exactly its chat's watches.
 fn drifted(state: &State, pending: bool) -> Vec<Definition> {
@@ -364,7 +370,10 @@ fn watch_events(state: &mut State) -> Vec<(Topic, u64, Message)> {
     let mut events = Vec::new();
     for w in &mut state.watches {
         if w.lines > 0 {
-            events.push((watch(&w.id), w.line_seq, Message::Lines(std::mem::take(&mut w.lines))));
+            events.push((watch(&w.id), w.wake_seq.unwrap_or(w.line_seq), Message::Lines(std::mem::take(&mut w.lines))));
+        }
+        if let Some(gap) = w.gap.take() {
+            events.push((watch(&w.id), gap.through, Message::Gap { after: gap.after, through: gap.through }));
         }
         for exit in w.exits.drain(..) {
             events.push((watch(&w.id), exit.seq, Message::Exit { code: exit.code, signal: exit.signal, exits: 1, gave_up: exit.gave_up }));
@@ -374,7 +383,7 @@ fn watch_events(state: &mut State) -> Vec<(Topic, u64, Message)> {
     events
 }
 fn pending_watch_events(state: &State) -> bool {
-    state.watches.iter().any(|w| w.lines > 0 || !w.exits.is_empty())
+    state.watches.iter().any(|w| w.lines > 0 || !w.exits.is_empty() || w.gap.is_some())
 }
 
 fn terminal(status: &str) -> bool {
@@ -396,6 +405,7 @@ fn describe(state: &State, reasons: &[Reason]) -> String {
             signal.map_or(String::new(), |signal| format!(" on signal {signal}")),
             if *gave_up { "; it restarted too often and was retired" } else { "" },
         ),
+        Reason::Info { topic, info: Message::Gap { after, through }, .. } => format!("watch {} has missing source events after {after} through {through}; inspect the service and retained evidence before acting", name(&topic.name)),
         Reason::Timer => "your scheduled check-in".into(),
         Reason::Continue => "unfinished runnable work from your committed checkpoint".into(),
         Reason::Overflow { dropped, topics } => format!("{dropped} more events than fit; re-read {} source(s) directly", topics.len()),
@@ -593,6 +603,8 @@ fn reconcile_at(state: &mut State, now: u64, mut save: impl FnMut(&State) -> std
     let observed = watch_events(state);
     let watched = !observed.is_empty();
     for (topic, cursor, info) in observed {
+        // `from` suppresses room echoes, not owned process results. Creator
+        // provenance cannot justify dropping this bot's own exits or failures.
         effects.extend(state.bots.supervisor.step(Event::Info { topic, cursor, from: None, info }, Now(now)));
     }
     for definition in drifted(state, false) {
@@ -1491,10 +1503,59 @@ mod tests {
     }
 
     fn watching(state: &mut State, chat: &str, id: &str) {
-        state.watches.push(crate::watches::Watch { id: id.into(), name: "game".into(), chat: chat.into(), service: "svc".into(), generation: 1, permanent: true, command: "node bot.js".into(), stopped: false, seen: 0, lines: 0, line_seq: 0, exits: Vec::new(), last_exit: None, recent: Vec::new() });
+        state.watches.push(crate::watches::Watch { id: id.into(), name: "game".into(), chat: chat.into(), service: "svc".into(), generation: 1, permanent: true, command: "node bot.js".into(), stopped: false, wake_policy:Default::default(),created_by:None, seen: 0, lines: 0, line_seq: 0, wake_seq:None,gap:None, exits: Vec::new(), last_exit: None, recent: Vec::new() });
     }
     fn subscribed(state: &State, chat: &str) -> Vec<String> {
         state.bots.supervisor.definitions().filter(|d| d.chat.0 == chat).flat_map(|d| d.sources.iter().filter_map(|s| match s { Source::Topic(t) if t.kind == "watch" => Some(t.name.clone()), _ => None })).collect()
+    }
+
+    #[test]
+    fn selected_watch_wakes_keep_exact_cursors_across_save_failure_and_restart() {
+        use crate::watch_frame::{Event as WatchEvent, Frame};
+        let (mut state, chat) = fixture();
+        state.chats[0].room = None;
+        watching(&mut state, &chat, "w-select");
+        state.watches[0].wake_policy = crate::watches::WakePolicy::Prefixes { prefixes: vec!["event:".into()] };
+        command_at(&mut state, &chat, "on", Now(0)).unwrap();
+        for seq in 1..=100 {
+            state.watches[0].observe(&Frame { seq, event: WatchEvent::Line(b"status: unchanged".to_vec()) });
+            reconcile_at(&mut state, seq, |_|Ok(())).unwrap();
+        }
+        assert!(bot_runs(&state).is_empty(), "telemetry alone admits no model turns");
+        state.watches[0].observe(&Frame { seq:101, event:WatchEvent::Line(b"event: completed".to_vec()) });
+        state.watches[0].observe(&Frame { seq:102, event:WatchEvent::Line(b"status: unchanged".to_vec()) });
+        let before = serde_json::to_value(&state).unwrap();
+        assert!(reconcile_at(&mut state, 103, |_|Err(io::Error::other("disk full"))).is_err());
+        assert_eq!(serde_json::to_value(&state).unwrap(),before);
+        let mut state: State = serde_json::from_value(before).unwrap();
+        reconcile_at(&mut state, 104, |_|Ok(())).unwrap();
+        let runs = bot_runs(&state);
+        assert_eq!(runs.len(),1);
+        assert!(matches!(&runs[0].bot_turn.as_ref().unwrap().reasons[..], [Reason::Info { through:101, info:Message::Lines(1), .. }]));
+        assert!(!runs[0].objective.contains("status: unchanged"));
+        state.runtime.runs.last_mut().unwrap().status="completed".into();
+        state.watches[0].observe_for_test(103,Some(1));
+        reconcile_at(&mut state, 40_000, |_|Ok(())).unwrap();
+        assert_eq!(bot_runs(&state).len(),2,"the owner's own process exit still wakes it");
+        assert!(bot_runs(&state)[1].objective.contains("exited with code 1"));
+        reconcile_at(&mut state,40_001, |_|Ok(())).unwrap();
+        assert_eq!(bot_runs(&state).len(),2,"no duplicate successor");
+    }
+
+    #[test]
+    fn exit_only_watches_still_deliver_source_gaps_and_human_steering() {
+        use crate::watch_frame::{Event as WatchEvent, Frame};
+        let (mut state, chat) = fixture();
+        watching(&mut state, &chat, "w-gap");
+        state.watches[0].wake_policy=crate::watches::WakePolicy::ExitOnly {};
+        command_at(&mut state,&chat,"on",Now(0)).unwrap();
+        state.watches[0].observe(&Frame { seq:4,event:WatchEvent::Line(b"status: unchanged".to_vec()) });
+        reconcile_at(&mut state,1, |_|Ok(())).unwrap();
+        assert!(bot_runs(&state)[0].objective.contains("missing source events after 0 through 3"));
+        state.runtime.runs.last_mut().unwrap().status="completed".into();
+        post(&mut state,None,"Change direction");
+        reconcile_at(&mut state,40_000, |_|Ok(())).unwrap();
+        assert_eq!(bot_runs(&state).len(),2,"watch policy cannot hide human room input");
     }
 
     #[test]
