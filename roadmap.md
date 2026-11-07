@@ -39,8 +39,8 @@ the boundary with each feature; do not gate all P1 work on a new foundation laye
 
 - ✓ Continuity composition is on main through #134: shared handoffs,
   conversation/room receipts, active-session deltas and bounded successors.
-  Older “branch-only” descriptions of that subset are superseded. Deadline
-  reserve, interrupted-draft recovery and prefix/exit wake selection remain open.
+  Older “branch-only” descriptions of that subset are superseded. Checkpoint-hook
+  hardening, interrupted-draft recovery and selective watch admission remain open.
 - ✓ Ancestor request visibility (#131), longer local messages (#132), request
   styling (#135), Rooms layout (#136), CI caching/Dependabot and relay FIN
   draining (#138) are merged. These are regression coverage, not new backlog.

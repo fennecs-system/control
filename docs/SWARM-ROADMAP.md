@@ -78,7 +78,7 @@ G1/O1/Q1 are consumer-scoped changes, not a foundation release ahead of all P1.
 
 | Priority | Work | Minimum dependency / first exit |
 | --- | --- | --- |
-| P0 | R1a/R1b finishing and recovery; R2 watch admission; R3 history errors; R4 HTTP limits | Independent fixes with fault tests; preserve useful progress and real alerts. |
+| P0 | R1a/R1b lifecycle checkpoint hooks and recovery; R2 watch admission; R3 history errors; R4 HTTP limits | Independent fixes with fault tests; preserve useful progress and real alerts. |
 | P1 | E1 escalation with G1 request/dependency projections | Existing lifecycle and durable requests; one-slot resolution works. No broad spec/status subsystem. |
 | P1 | U1 coordination UI and A2A visibility | Read existing lifecycle, requests and ownership; add projections as needed. No dependency on all G1/O1/Q1 work. |
 | P1 | W1 bounded schedules | Existing timers/admission, durable occurrence IDs and shared schedule-write authorization. Q1 before expanding team-wide fan-out; Replace deferred. |
@@ -101,7 +101,7 @@ benchmarks or implementation prerequisites. Preserve the original local records.
 | Evidence | Triage decision |
 | --- | --- |
 | Private analysis reported 55 worker attempts during 44 minutes of maintenance, repeated roughly 14 KB starting prompts and status-output wakes. | R2 targets redundant admission; C1 and bounded projections target context cost per useful turn. Reproduce with a public synthetic watch fixture before attributing a specific cause. |
-| Private analysis reported three redirected attempts reaching the 600-second limit without committing a staged handoff. | R1: reserve finish time and expose uncommitted recovery evidence; never blindly replay uncertain effects. |
+| Private analysis reported three redirected attempts reaching the 600-second limit without committing a staged handoff. | R1: trace checkpoint/yield boundaries and retain recovery evidence. This does not establish that an earlier forced wind-down improves progress. |
 | Steering records reported useful progress, repeated no-change replies and workload failures. | Preserve coordination; isolate generic harness defects from workload/protocol issues. Retained services after cancellation alone do not prove an ownership bug. |
 | Current source: `history::activity` defaults failed reads to empty; HTTP accept spawns a handler thread per request. | R3/R4 remain concrete reliability work. Model slot limits do not bound HTTP threads. |
 | Current source: Lens selection uses `NoSummaries`; the server still owns broad mutable `State`. | C1 and A1–A4 remain real gaps despite journal/core-crate progress. |
@@ -114,7 +114,7 @@ exist without a full off-lock writer. New work follows current crate contracts.
 
 | ID | Small implementation slice | Acceptance |
 | --- | --- | --- |
-| R1a | Derived active/finishing/ended phase, with an initial measured finish reserve of 60 seconds within the existing 600-second limit. Advertise it on ordinary responses without needing a callback. Fence new host workload mutations while allowing bounded status, cancellation and handoff. | Fake-clock boundaries, no new mutating host work in finishing, successful publication for both CLI providers; ignored wind-down still times out normally. Native CLI private tools and independently running services are outside this fence. |
+| R1a | Trace and harden existing callback, explicit yield/pause and checkpoint-publication hooks. Deliver changed input at tool boundaries; preserve productive attempts. Request/stage handoffs at genuine dependency, decision or completion boundaries, then commit through the existing safe publication transaction. | Both CLI providers process useful events without forced restarts; duplicate callbacks create no extra turns; checkpoints commit on normal yield/pause; abrupt termination retains honest recovery evidence. No fixed 60-second finishing window or time-triggered blanket mutation fence. |
 | R1b | Retain failed generation, last committed checkpoint, termination cause and draft/log references as explicitly uncommitted recovery evidence. Present it at the next authorized turn. | Failed publication leaves committed notes/cursors intact; missing drafts visible; reconciliation markers commit with the next matching checkpoint. Cancel/pause does not auto-retry; ambiguous effects are inspected, never blindly replayed. |
 | R2 | Select relevant events and reconcile known intent/observations before admitting a turn. Retain full watch output; exit-only or bounded literal-prefix-plus-exit policies provide an incremental filter for untyped streams. Preserve provenance, source sequences and eligible references. | Unchanged status-query/own-output telemetry causes zero admissions. Human steering, relevant child/tool completion, failure and source loss remain visible. Restart, stale observations, coalescing and missing spool tested. Reading is not acknowledgement. |
 | R3 | Distinguish missing/corrupt history from an empty activity record in UI and model context. | Missing/decode-failed records preserve cause and references; ordinary empty records remain empty. |
@@ -140,17 +140,43 @@ unknown-source output, restart and missing spool. Preserve full evidence and
 processing cursors. Deterministic admission needs no goal-interpreting model;
 unknown/stale observations are not success. This fix does not depend on G1.
 
-R1's bounded finishing phase resembles a cleanup boundary, but is not literally
-a [Kubernetes finalizer](https://kubernetes.io/docs/concepts/overview/working-with-objects/finalizers/):
-finalizers block deletion until cleanup completes and do not supply an automatic
-grace period. Keep attempt wind-down, durable publication and resource cleanup
-separate; failed cleanup stays visible without holding a model slot indefinitely.
+R1 starts with existing `turn_context::callback_notice`, handoff tools and worker
+finish/design/delegation publication paths. Reproduce the lost-handoff case and
+fix its boundary; do not add a generic hook framework. Hooks here are typed Rust
+integration points over existing operations/effects. Tool results, dependency
+completion/failure and steering supply events; raw telemetry need not call a model.
+An active attempt consumes relevant deltas at tool boundaries. When it genuinely
+yields, existing admission can schedule an authorized successor from committed
+state. An event alone does not restart the current writer.
+
+A handoff draft or callback is not a committed workspace. Preserve the fence
+after an explicitly accepted yield and quiesce attempt-owned writers before
+atomic publication. Do not snapshot a changing workspace on every tool response.
+R1b covers crashes before that transaction; callbacks cannot guarantee a final
+checkpoint after abrupt process loss. Independent persistent jobs keep running:
+record their handles and completion subscriptions, then resume by reference.
+Large downloads, for example, belong to a resumable tool over persistent resource
+operations; download protocols and model-weight semantics stay outside the core.
+
+Keep bounded backstops for cancellation, hung providers and transport operations,
+with distinct scopes and visible configurable defaults; they need not require
+an operator to opt in on every call. Capture the effective limit and termination
+reason. Distinguish request deadlines, cancellation grace, inactivity detection,
+attempt budgets and persistent-job lifetime. Silence alone does not establish a
+stall; a heartbeat or log line does not establish useful progress. Tool adapters
+choose operation-appropriate bounds and report them through generic outcomes.
+The current 600-second attempt cap is a policy to evaluate
+against useful progress, not a task/service lifetime or a universal target.
+Remaining allowance may be reported; no periodic handoff timer or additional short
+deadline controls ordinary progress. Any cap change needs measured recovery and
+capacity results and cannot silently extend an authorized budget. Timeouts remain
+a failure/resource backstop rather than the workflow.
 
 Change workload guidance separately: act while useful work remains, check deltas
-at meaningful boundaries, publish before expiry, send changed facts/milestones/
+at meaningful boundaries, publish on explicit yield/pause, send changed facts/milestones/
 blockers, and wait after completion. A lead intervenes for changed goals,
 dependencies, evidence or stalled progress. Routine audits should not repeatedly
-nudge a productive builder. Advertise finish-phase instructions only after R1a.
+nudge a productive builder. Preserve the successful long active slices.
 
 ## Supporting contracts, delivered with their consumers
 
@@ -582,15 +608,18 @@ dependencies, checks and remaining limits. Run the relevant
 resource tests. Fault/cancellation tests precede claims of recovery correctness.
 Planning-only changes require document/link/diff checks, not model calls.
 
-For R1/R2, first publish credential-free synthetic deadline/watch regressions.
+For R1/R2, first publish credential-free callback/yield/crash/watch regressions.
 Then compare fresh isolated workloads with pinned revisions/models/resources
 and identical objectives. A Minecraft replication can use seed
-`-6834438708894114399`; preserve the existing playtest. Compare deadline and wake
+`-6834438708894114399`; preserve the existing playtest. Compare lifecycle-hook and wake
 changes separately before combining; label a combined-only run exploratory.
 Observe 30 minutes of maintenance after completion, then the same redirected work.
 Record milestones, useful actions, admission causes, deadline/publication failures,
 committed-state age, context bytes, reported usage and missing usage. Report sample
 size and response to real failures/new steering, not just reduced wake count.
+Compare time to milestones, useful actions, repeated work and checkpoint loss
+against the successful steering baseline; improved recovery must not come from
+prematurely ending productive work. Include a persistent job spanning attempts.
 
 Use the delivery table above for sequencing. C1 pure cache/cut fixtures and the
 first reviewed learning demonstration can proceed without the full model or

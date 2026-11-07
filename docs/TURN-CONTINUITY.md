@@ -172,6 +172,15 @@ must not be interrupted merely because a short interval elapsed. Durable handoff
 support recovery and genuinely idle agents; they are not the normal action loop.
 Do not promise token-budget enforcement from end-of-attempt CLI usage telemetry.
 
+Lifecycle refinement (2026-11-07): use typed callbacks/effects at existing tool,
+dependency, decision and yield boundaries; do not introduce a fixed early finishing
+window. Preserve the explicit-yield fence and safe publication transaction below.
+These hooks cannot turn a live draft into a committed checkpoint or guarantee a
+final save after a crash. Independent persistent jobs retain their handles and
+completion subscriptions across model attempts; an attempt deadline does not set
+their lifetime. Evaluate the current attempt cap separately from workflow progress
+and tool-specific transport limits. No new general hook/plugin runtime is required.
+
 ## State and tool contract
 
 Add a narrow `src/turn_context.rs` adapter and pure data/validation/projection
