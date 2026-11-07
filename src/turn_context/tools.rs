@@ -20,7 +20,7 @@ fn payload_schema() -> Value {
 fn disposition_schema() -> Value {
     json!({"oneOf":[
         {"type":"object","properties":{"kind":{"type":"string","enum":["continue","done"]}},"required":["kind"],"additionalProperties":false},
-        {"type":"object","properties":{"kind":{"const":"wait"},"topics":{"type":"array","maxItems":16,"items":{"type":"string","maxLength":128},"description":"Choose only from wake_topics returned by control_turn_context; empty waits for the bounded recheck or an operator timer."},"recheck_seconds":{"type":"integer","minimum":1,"maximum":300}},"required":["kind","topics","recheck_seconds"],"additionalProperties":false}
+        {"type":"object","properties":{"kind":{"const":"wait"},"topics":{"type":"array","maxItems":16,"items":{"type":"string","maxLength":128},"description":"Choose only relevant dependencies from wake_topics. An explicit wait suspends periodic check-ins. Omit recheck_seconds to sleep until a selected event, urgent failure, or direct message; empty topics waits for urgent failures or direct input."},"recheck_seconds":{"type":["integer","null"],"minimum":1,"maximum":u32::MAX,"description":"Optional fallback when a callback cannot establish readiness. Omit/null for event-only waiting; no implicit polling deadline."}},"required":["kind","topics"],"additionalProperties":false}
     ]})
 }
 impl AttemptTools for Tools {
@@ -177,7 +177,7 @@ fn handle(
             // receipt for the watch's abbreviated recent-line cache.
             "watch" => {
                 return Err(err(
-                    "Watch delivery is not available yet; use control_watch_events without acknowledging it as a turn receipt",
+                    "Use control_watch_events; its receipt can be processed in the same handoff",
                 ));
             }
             _ => return Err(err("Unknown callback source")),

@@ -6,8 +6,8 @@ service. Its output is spooled independently of whether it wakes an agent.
 
 | Policy | Eligible events |
 | --- | --- |
-| `{"kind":"any_line"}` | Every line, process exit and detected source gap. Default, including existing saved watches. |
-| `{"kind":"exit_only"}` | Process exits and detected source gaps. All lines remain readable. |
+| `{"kind":"any_line"}` | Every line, process exit and detected source gap. Explicit opt-in; legacy saved watches retain this behavior. |
+| `{"kind":"exit_only"}` | Default for new watches. Process exits and detected source gaps. All lines remain readable. |
 | `{"kind":"prefixes","prefixes":["event:","error:"]}` | Lines starting with either literal prefix, plus process exits and detected source gaps. |
 
 Prefixes are case-sensitive, anchored at the start, and interpreted as bytes,
@@ -16,6 +16,12 @@ each without control characters. Include every event class the agent needs;
 the host cannot infer a program's protocol or recognize a failure hidden in an
 unselected line. Process exits bypass line selection even when the owner started
 the process. A watch's creator does not identify the cause of each stream line.
+
+Workload tools should emit selected lines when a dependency becomes ready, a
+milestone changes, or an error needs attention. Keep unchanged health, status
+query responses and routine telemetry outside those prefixes. Matching a common
+prefix on every diagnostic line recreates any-line waking. Domain-specific
+transition detection belongs in the workload container, not Control's supervisor.
 
 Example arguments for a service whose log uses those prefixes:
 
@@ -44,14 +50,21 @@ a selected event do not move that event's wake cursor or enter its prompt previe
 
 `control_watch_events` reads unfiltered retained frames with original sequence
 numbers and truncation flags. It returns `source_gap=true` when the requested
-range has missing evidence, including a missing spool or tail. Reading does not
-acknowledge processing. Source sequence jumps generate an eligible gap event;
+range has missing or truncated evidence, including a missing spool or tail.
+Owned watches return a receipt in the existing attempt mailbox. Pass it to
+`control_turn_handoff.processed` after processing the evidence; only successful
+workspace/handoff publication advances the processed watermark. The default read
+starts after the last delivered or committed position, while explicit `after`
+can inspect history. Retries retain their delivered range. Skipped ranges and
+source gaps require explicit resynchronisation before publication. A foreign
+watch remains an observation without a receipt, even with a service grant.
+Reading alone does not acknowledge processing. Source sequence jumps generate an eligible gap event;
 missing local files are reported on read, not through a new background monitor.
 Existing retention/rotation and per-line limits still apply. Inspection of a
 service's current state may be needed after a gap.
 
 This implements R2's watch selection seam. It does not parse game-specific
-messages, change the pure supervisor, add timers, or infer that an arbitrary goal
+messages, add timers, or infer that an arbitrary goal
 is complete. Existing watches need an explicit filtered replacement to reduce
 line-driven wakes. Synthetic tests cover noisy lines, selected events, exits,
 save failure/restart and missing evidence. Diamond-run improvement still requires

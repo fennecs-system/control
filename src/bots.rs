@@ -572,7 +572,7 @@ fn reconcile_at(state: &mut State, now: u64, mut save: impl FnMut(&State) -> std
             control_context::turn_mailbox::Disposition::Continue => effects.extend(state.bots.supervisor.step(Event::Continue(bot(chat)),Now(now))),
             control_context::turn_mailbox::Disposition::Wait{topics,recheck_seconds} => {
                 let topics = topics.iter().filter_map(|source| source.split_once(':').map(|(kind,name)|Topic::new(kind,name))).collect();
-                effects.extend(state.bots.supervisor.step(Event::Wait{bot:bot(chat),topics,until:now.saturating_add(u64::from(*recheck_seconds)*1000)},Now(now)));
+                effects.extend(state.bots.supervisor.step(Event::Wait{bot:bot(chat),topics,until:recheck_seconds.map(|seconds| now.saturating_add(u64::from(seconds)*1000))},Now(now)));
             }
             control_context::turn_mailbox::Disposition::Done => {}
         } }
@@ -1058,7 +1058,7 @@ mod tests {
         command_at(&mut state,&chat,"on",Now(0)).unwrap();
         let id=state.runtime.runs[0].id.clone();
         state.chats[0].workspace=Some("published".into());
-        state.chats[0].continuity=Some(Box::new(crate::turn_context::Managed{working:Some(WorkingState{revision:1,run:id,generation:"attempt".into(),checkpoint:"published".into(),payload:Payload{subgoal:"Wait for a meaningful condition".into(),..Default::default()},processed:vec![],disposition:Disposition::Wait{topics:vec![],recheck_seconds:60}}),..Default::default()}));
+        state.chats[0].continuity=Some(Box::new(crate::turn_context::Managed{working:Some(WorkingState{revision:1,run:id,generation:"attempt".into(),checkpoint:"published".into(),payload:Payload{subgoal:"Wait for a meaningful condition".into(),..Default::default()},processed:vec![],disposition:Disposition::Wait{topics:vec![],recheck_seconds:Some(60)}}),..Default::default()}));
         reconcile_at(&mut state,1000, |_|Ok(())).unwrap();
         post(&mut state,Some("peer"),"An unchanged observation");
         reconcile_at(&mut state,2000, |_|Ok(())).unwrap();
@@ -1507,6 +1507,73 @@ mod tests {
     }
     fn subscribed(state: &State, chat: &str) -> Vec<String> {
         state.bots.supervisor.definitions().filter(|d| d.chat.0 == chat).flat_map(|d| d.sources.iter().filter_map(|s| match s { Source::Topic(t) if t.kind == "watch" => Some(t.name.clone()), _ => None })).collect()
+    }
+
+    #[test]
+    fn watch_read_receipts_retire_only_published_evidence_and_survive_restart() {
+        use crate::watches::delivery::{prepare,record};
+        use control_context::{turn_mailbox::{Mailbox,Handoff,Disposition},working_state::Payload};
+        let (mut state, chat) = fixture();
+        watching(&mut state,&chat,"w-result");
+        command_at(&mut state,&chat,"on",Now(0)).unwrap();
+        state.runtime.runs[0].status="running".into();
+        let id=state.runtime.runs[0].id.clone();
+        state.runtime.runs[0].attempts.push(crate::usage::Attempt{workspace_id:Some("attempt".into()),turn_mailbox:Some(Box::new(Mailbox::default())).into(),..Default::default()});
+        let cx=AttemptRef{run:&id,generation:"attempt",nonce:"read"};
+        // The worker reads output before the bot adapter offers its wake.
+        state.watches[0].observe_for_test(1,None);
+        let page=prepare(&state,&cx,"w-result",None).unwrap();
+        let before=serde_json::to_value(&state).unwrap();
+        assert!(record(&mut state,&cx,"w-result",&page,1,false, |_|Err(io::Error::other("disk full"))).is_err());
+        assert_eq!(serde_json::to_value(&state).unwrap(),before);
+        let receipt=record(&mut state,&cx,"w-result",&page,1,false, |_|Ok(())).unwrap().unwrap();
+        let replay=prepare(&state,&cx,"w-result",None).unwrap();
+        assert_eq!((replay.after,replay.maximum),(0,Some(1)));
+        assert_eq!(record(&mut state,&cx,"w-result",&replay,1,false, |_|panic!("replay must not save")).unwrap(),Some(receipt.clone()));
+        assert!(prepare(&state,&cx,"w-result",Some(99)).is_err());
+        {
+            let mut skipped:State=serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+            let other=AttemptRef{nonce:"skip",..cx};
+            let page=prepare(&skipped,&other,"w-result",Some(2)).unwrap();
+            assert!(page.gap);
+            let receipt=record(&mut skipped,&other,"w-result",&page,4,false, |_|Ok(())).unwrap().unwrap();
+            let replay=prepare(&skipped,&other,"w-result",Some(2)).unwrap();
+            assert!(replay.gap);
+            assert_eq!(record(&mut skipped,&other,"w-result",&replay,4,false, |_|panic!("replay must not save")).unwrap(),Some(receipt.clone()));
+            let mailbox=skipped.runtime.runs[0].attempts[0].turn_mailbox.as_mut().unwrap();
+            assert!(mailbox.stage("gap".into(),Handoff{base_revision:0,payload:Payload{subgoal:"Missing evidence".into(),..Default::default()},processed:vec![receipt],resynchronised:vec![],disposition:Disposition::Done,progress:None},0).is_err());
+            skipped.watches[0].chat="foreign".into();
+            let page=prepare(&skipped,&other,"w-result",None).unwrap();
+            assert_eq!(record(&mut skipped,&other,"w-result",&page,5,false, |_|panic!("foreign observation must not save")).unwrap(),None);
+            skipped.runtime.runs[0].status="cancelled".into();
+            assert!(record(&mut skipped,&other,"w-result",&page,5,false, |_|Ok(())).is_err());
+        }
+        for n in 0..300 {
+            let nonce=format!("empty-{n}");
+            let other=AttemptRef{nonce:&nonce,..cx};
+            let page=prepare(&state,&other,"w-result",None).unwrap();
+            assert_eq!(page.after,1);
+            record(&mut state,&other,"w-result",&page,1,false, |_|Ok(())).unwrap();
+        }
+        assert_eq!(state.runtime.runs[0].attempts[0].turn_mailbox.as_ref().unwrap().deliveries.len(),2,"empty polls reuse a receipt");
+        // A read alone has not advanced committed processing.
+        assert!(state.chats[0].continuity.as_ref().and_then(|m|m.working.as_ref()).is_none());
+        let mailbox=state.runtime.runs[0].attempts[0].turn_mailbox.as_mut().unwrap();
+        mailbox.stage("handoff".into(),Handoff{base_revision:0,payload:Payload{subgoal:"Wait for the next result".into(),..Default::default()},processed:vec![receipt],resynchronised:vec![],disposition:Disposition::Wait{topics:vec!["watch:w-result".into()],recheck_seconds:None},progress:None},0).unwrap();
+        let working=mailbox.publication(None,&id,"attempt","published").unwrap().unwrap();
+        state.runtime.runs[0].status="completed".into();
+        state.chats[0].workspace=Some("published".into());
+        state.chats[0].continuity=Some(Box::new(crate::turn_context::Managed{working:Some(working),..Default::default()}));
+        let mut state:State=serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+        reconcile_at(&mut state,1000, |_|Ok(())).unwrap();
+        assert!(bot_runs(&state).is_empty(),"already processed watch output must not launch another model turn");
+        // Newer output arriving after that read must still wake exactly once.
+        state.watches[0].observe_for_test(2,None);
+        reconcile_at(&mut state,2000, |_|Ok(())).unwrap();
+        assert_eq!(bot_runs(&state).len(),1);
+        assert!(matches!(&bot_runs(&state)[0].bot_turn.as_ref().unwrap().reasons[..], [Reason::Info{through:2,..}]));
+        reconcile_at(&mut state,2001, |_|Ok(())).unwrap();
+        assert_eq!(bot_runs(&state).len(),1);
     }
 
     #[test]

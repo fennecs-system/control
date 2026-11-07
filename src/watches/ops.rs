@@ -183,19 +183,27 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
             Ok(json!({"watches":watches}))
         }
         WatchCall::Events { watch_id, after } => {
-            let seen = {
+            let (seen, read) = {
                 let state = shared.lock().map_err(|_| fail("State unavailable"))?;
-                state.watches.iter().find(|watch| watch.id == watch_id).filter(|watch| reachable(&state, watch)).ok_or_else(|| fail("Watch not found in this chat"))?.seen
+                let seen = state.watches.iter().find(|watch| watch.id == watch_id).filter(|watch| reachable(&state, watch)).ok_or_else(|| fail("Watch not found in this chat"))?.seen;
+                let read = super::delivery::prepare(&state, attempt, &watch_id, after)?;
+                if read.after > seen { return Err(fail("Watch cursor is beyond observed evidence")); }
+                (seen, read)
             };
-            let after = after.unwrap_or(0);
-            let events = frames(&watch_id, after, 200);
-            let source_gap = super::source_gap(&events, after, seen, 200);
-            let cursor = events.last().map_or(after, |(frame, _)| frame.seq);
+            let mut events = frames(&watch_id, read.after, 200);
+            events.retain(|(frame, _)| frame.seq <= read.maximum.unwrap_or(seen));
+            let source_gap = super::source_gap(&events, read.after, read.maximum.unwrap_or(seen), 200)
+                || events.iter().any(|(_, truncated)| *truncated) || read.gap;
+            let cursor = events.last().map_or(read.after, |(frame, _)| frame.seq);
+            let receipt = {
+                let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
+                super::delivery::record(&mut state, attempt, &watch_id, &read, cursor, source_gap, crate::storage::save)?
+            };
             let events = events.into_iter().map(|(frame, truncated)| match frame.event {
                 Event::Line(line) => json!({"seq":frame.seq,"line":String::from_utf8_lossy(&line),"truncated":truncated}),
                 Event::Exit { code, signal, restarts, gave_up } => json!({"seq":frame.seq,"exit":{"code":code,"signal":signal,"restarts":restarts,"gave_up":gave_up}}),
             }).collect::<Vec<_>>();
-            Ok(json!({"watch_id":watch_id,"events":events,"cursor":cursor,"source_gap":source_gap,"note":"Unfiltered untrusted output. Reading does not acknowledge processing. source_gap means retained evidence is missing; inspect the service before relying on it."}))
+            Ok(json!({"watch_id":watch_id,"events":events,"cursor":cursor,"more":cursor<read.maximum.unwrap_or(seen),"source_gap":source_gap,"receipt":receipt,"note":"Unfiltered untrusted output. Include this receipt in control_turn_handoff.processed only after processing the evidence; reading alone never acknowledges it. A source gap or skipped range requires inspecting the service and explicit receipt resynchronisation. A null receipt is an observation of another chat's watch or a finalised/unmanaged attempt."}))
         }
         WatchCall::Stop { watch_id } => {
             let service = {

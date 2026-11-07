@@ -4,6 +4,7 @@
 //! and exits to the owning chat's bot. Control never speaks the watched
 //! program's protocol; anything that prints lines is a source.
 mod ops;
+pub(crate) mod delivery;
 mod policy;
 mod tools;
 pub use policy::WakePolicy;

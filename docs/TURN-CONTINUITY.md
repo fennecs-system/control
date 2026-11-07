@@ -76,8 +76,12 @@ conversation/room delta prototypes, host-tool yield fencing, and a budgeted,
 deduplicated runnable-successor path. Callback hints can reach an active session
 on normal MCP responses. The prompt guidance no longer demands termination after
 each event. Ordinary and spawned agents use this same path at their next admission.
-Committed idle waits narrow existing topics, preserve operator timers, wake for
-process exits and have a bounded recheck. Active sessions are never restarted
+Committed idle waits narrow existing topics and suspend periodic check-ins,
+including timer reasons accumulated during active work. A wait may omit/null
+`recheck_seconds` to remain event-only, or supply a positive explicit fallback
+in seconds. Selected events and urgent process failures still wake it; direct
+human input, pause and cancellation remain available. Periodic checks resume
+after the wait resolves, without replaying missed timer ticks. Active sessions are never restarted
 just because those callbacks arrive. Captured inputs reuse the append-only
 journal component; finished handoff receipts leave the mutable state checkpoint
 with finished tool activity instead of being rewritten on every save.
@@ -93,15 +97,15 @@ wait/done, unanswered approvals, newer input and unsuccessful/interrupted
 publication prevent that fallback; it does not guess completion from prose.
 
 The first implementation deliberately supports bounded text working notes and
-conversation/room receipts. Unsupported evidence/resource reference types are
+conversation/room/watch receipts. Unsupported evidence/resource reference types are
 absent from the core and tool schemas. Saved notes from #133 can still decode
 its empty reference arrays; those placeholders are omitted on subsequent saves.
-Off-lock watch receipts and watch
-prefix/exit selection remain outside this slice. Existing cursor-based watch tools remain
-available. Idle waits can ignore telemetry while retaining it until a relevant
-event or recheck. MCP yield fencing does not intercept a native CLI's private
-built-in shell; container isolation remains authoritative there. This branch is
-not deployed and has not replaced any current provider session or service.
+Watch spool reads run outside shared state, then capture a scoped delivery receipt
+in the same mailbox used by conversation and room reads. Publication retires only
+the processed range; later events remain eligible. Watch prefix/exit selection
+lives in the tool adapter. Idle waits retain unrelated telemetry until a relevant
+event or explicit recheck. MCP yield fencing does not intercept a native CLI's
+private built-in shell; container isolation remains authoritative there.
 
 Fresh bot activation starts at the current room tail, even if the chat has an
 older inbox. First room linkage records the same origin in the session, active
@@ -425,9 +429,9 @@ migrate` is roadmap work. Do not wipe a running playtest or retrofit its attempt
 and cursors. Start on isolated test chats for both providers; unknown versions
 fail visibly. Ordinary chats and supervised bots may select different context
 views, but they share the same append-only history and compactor/lens interface.
-Enable the tested text-handoff/room-receipt contract for agent admissions;
-bot approval controls unattended scheduling only. Do not advertise the broader
-reference/watch-receipt contract until implemented.
+Enable the tested text-handoff and conversation/room/watch receipt contract for
+agent admissions; bot approval controls unattended scheduling only. Broader
+resource-reference contracts remain separate work.
 
 ## Acceptance tests
 
