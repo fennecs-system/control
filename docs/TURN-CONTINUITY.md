@@ -334,6 +334,14 @@ restart must not turn that backlog alone into an automatic retry of the failed
 attempt; include it when an explicit retry or a new independent wake is admitted.
 Expose that recovery condition in status rather than losing the dispatch reasons.
 
+R1b follow-up: after confirming attempt writers stopped, capture retained workspace
+bytes as an immutable unpublished recovery candidate, independently of model
+cooperation. Keep the draft separately attributed; neither advances the published
+head or processed cursors. A failed stop/copy leaves visible unstable/missing
+evidence. Record timeout as a structured termination cause even if cleanup also
+fails. Candidate adoption checks authority and the current baseline; copied files
+may still be incomplete and do not roll back external services.
+
 A provider ending successfully without a handoff keeps its result/evidence and
 workspace under existing rules, marks continuity incomplete and retains the last
 committed working state. It does not acknowledge delivered events or invent a

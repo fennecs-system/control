@@ -115,7 +115,7 @@ exist without a full off-lock writer. New work follows current crate contracts.
 | ID | Small implementation slice | Acceptance |
 | --- | --- | --- |
 | R1a | Trace and harden existing callback, explicit yield/pause and checkpoint-publication hooks. Deliver changed input at tool boundaries; preserve productive attempts. Request/stage handoffs at genuine dependency, decision or completion boundaries, then commit through the existing safe publication transaction. | Both CLI providers process useful events without forced restarts; duplicate callbacks create no extra turns; checkpoints commit on normal yield/pause; abrupt termination retains honest recovery evidence. No fixed 60-second finishing window or time-triggered blanket mutation fence. |
-| R1b | Retain failed generation, last committed checkpoint, termination cause and draft/log references as explicitly uncommitted recovery evidence. Present it at the next authorized turn. | Failed publication leaves committed notes/cursors intact; missing drafts visible; reconciliation markers commit with the next matching checkpoint. Cancel/pause does not auto-retry; ambiguous effects are inspected, never blindly replayed. |
+| R1b | Host-owned recovery: after confirming attempt writers stopped, retain workspace bytes as an immutable unpublished candidate with generation/base references, termination cause and any accepted draft/logs. Surface it on the next authorized turn without relying on model warnings. | A provider making no Control calls still leaves inspectable recovery work after termination. Copy/save/stop failures stay visible; committed workspace, notes and cursors remain unchanged. Cancel/pause does not auto-retry; adoption revalidates authority and current baseline. |
 | R2 | Select relevant events and reconcile known intent/observations before admitting a turn. Retain full watch output; exit-only or bounded literal-prefix-plus-exit policies provide an incremental filter for untyped streams. Preserve provenance, source sequences and eligible references. | Unchanged status-query/own-output telemetry causes zero admissions. Human steering, relevant child/tool completion, failure and source loss remain visible. Restart, stale observations, coalescing and missing spool tested. Reading is not acknowledgement. |
 | R3 | Distinguish missing/corrupt history from an empty activity record in UI and model context. | Missing/decode-failed records preserve cause and references; ordinary empty records remain empty. |
 | R4 | Bound HTTP handler admission before spawning, with a bounded overload path and existing deadlines. | The implementation PR must specify numeric handler cap H and request/overload deadlines from measured memory and slow-client fixtures. Test H+1 admission, recovery, shutdown and long-lived routes; no unbounded rejection threads. |
@@ -157,6 +157,37 @@ checkpoint after abrupt process loss. Independent persistent jobs keep running:
 record their handles and completion subscriptions, then resume by reference.
 Large downloads, for example, belong to a resumable tool over persistent resource
 operations; download protocols and model-weight semantics stay outside the core.
+
+Current timeout paths already retain the run directory; R1b makes those bytes
+durably discoverable and inspectable as recovery work. Capture after verified
+writer shutdown, not at a timed reserve while native tools can still mutate files.
+Use existing artifact/project storage boundaries with a separate candidate
+reference; preserve exclusions and expose retention/capacity failures. Do not
+change the published head or promote a handoff's processed cursors. Record the
+latest accepted draft separately: it may describe an earlier state than the final
+files. A stable copy may still contain a partially written file or unfinished
+multi-file change; it is evidence to inspect, not proof of successful execution.
+If quiescence cannot be confirmed, retain the source as unstable and report why
+no stable candidate exists. Restart recovery can retry capture after inspection.
+Candidate adoption into fresh work rechecks the current baseline and authority;
+external service/world state must be inspected separately. A Minecraft world
+living in a service is not restored by copying an agent workspace.
+
+Record a structured timeout cause and the captured effective deadline on the
+attempt, independently of the broad failed/interrupted lifecycle label. Preserve
+that primary cause if cleanup also fails. No new supervisor state is needed just
+to let U1 or accounting distinguish timeout from provider error or cancellation.
+
+`control_workspace_start` jobs are attempt-owned, unlike persistent service jobs.
+Their timeout is an upper bound, not a predicted completion time. Use the same
+captured attempt deadline as the provider loop: cap the effective job deadline at
+the owner's remaining lifetime, disclose requested/effective limits and owner
+termination in start/status responses, and reject launch once no time remains.
+Revalidate at launch after queue/setup delay. Do not reject an otherwise useful
+short command merely because its requested maximum exceeds the remaining time.
+Long independent work uses persistent resources with separate limits. Test the
+minimum 60-second configuration, late launch, cancellation and independent jobs;
+none requires reinstating an early finishing reserve.
 
 Keep bounded backstops for cancellation, hung providers and transport operations,
 with distinct scopes and visible configurable defaults; they need not require
@@ -626,18 +657,29 @@ dependencies, checks and remaining limits. Run the relevant
 resource tests. Fault/cancellation tests precede claims of recovery correctness.
 Planning-only changes require document/link/diff checks, not model calls.
 
-For R1/R2, first publish credential-free callback/yield/crash/watch regressions.
-Then compare fresh isolated workloads with pinned revisions/models/resources
-and identical objectives. A Minecraft replication can use seed
-`-6834438708894114399`; preserve the existing playtest. Compare lifecycle-hook and wake
-changes separately before combining; label a combined-only run exploratory.
-Observe 30 minutes of maintenance after completion, then the same redirected work.
-Record milestones, useful actions, admission causes, deadline/publication failures,
-committed-state age, context bytes, reported usage and missing usage. Report sample
-size and response to real failures/new steering, not just reduced wake count.
-Compare time to milestones, useful actions, repeated work and checkpoint loss
-against the successful steering baseline; improved recovery must not come from
-prematurely ending productive work. Include a persistent job spanning attempts.
+**Diamond-run evidence gates R1/R2 improvement claims and default rollout.**
+First publish credential-free regressions for the specific defect: unchanged
+watch echoes with genuine exits, or timeout with useful files and no Control tool
+calls. Then run baseline and changed revisions in separate fresh worlds from seed
+`-6834438708894114399`, with the same steering script, agents, model configuration,
+tools, budgets and workload version. Preserve the successful original world.
+Verify milestones from world/tool evidence, not assistant claims. Each experiment
+changes one factor: watch admission, recovery candidates, or attempt-limit policy.
+Repeated paired trials are needed to assess model variability; a single successful
+run is a smoke test. Record run count and pinning/availability limitations.
+
+Predeclare the targeted gain and acceptable variation before comparing runs.
+R2 must reduce redundant maintenance turns while preserving milestone completion
+and response to real failures/steering. R1b must preserve recoverable bytes after
+the same injected interruption and reduce repeated work or time to resume useful
+progress; separately measure candidate capture/inspection overhead. Test natural
+uninterrupted runs too, so an injected fault alone cannot hide a regression.
+Track time to diamonds, milestones, useful actions, repeated actions, human
+interventions, checkpoint loss, context bytes and reported/missing usage. Observe
+30 minutes of maintenance after completion, then apply identical redirection and
+a real fault. Include a persistent job spanning model attempts. Fewer wakes or
+more saved files alone do not prove better diamond-run performance. Mixed results
+remain experimental; do not present planned mechanisms as proven improvements.
 
 Use the delivery table above for sequencing. C1 pure cache/cut fixtures and the
 first reviewed learning demonstration can proceed without the full model or
