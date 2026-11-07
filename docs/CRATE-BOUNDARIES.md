@@ -4,6 +4,15 @@ Keep the application understandable through small interfaces and independently
 tested libraries. Extract an existing responsibility when the boundary removes
 coupling or repeated work; moving files alone does not create that boundary.
 
+The Pi/tinygrad design constraint is a small vocabulary with separate decisions
+and execution. Prefer a tool, strategy or configuration over a new core concept.
+Cron interpretation, recipes, personas, goal reasoning, learning procedures and
+compaction strategies compose existing operations; they do not belong in the
+supervisor's lifecycle types. Application operations enforce authorization and
+durable acceptance; adapters perform I/O. A core API change must identify the
+generic invariant that the existing interfaces cannot express. Share helpers
+where useful without moving entire product behaviors into the core.
+
 Current libraries:
 
 - `control-context`: deterministic captured context, lens composition and shared
