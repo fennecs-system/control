@@ -1,5 +1,45 @@
 # Turn continuity implementation handoff
 
+## Persistent attempts and R1 (2026-11-07)
+
+Approved persistent bots have no implicit attempt deadline. An explicit operator
+`worker-timeout-secs` / `CONTROL_WORKER_TIMEOUT_SECS` limit is captured at admission
+and remains authoritative. Ordinary attempts retain the 600-second default.
+Approval during an active attempt removes only the implicit limit. Context budget
+responses return `null` for unlimited remaining time. Quiet output is not a health
+failure, and no periodic finish window or automatic progress extension is used.
+
+`control_turn_handoff` is an explicit yield: once its validated draft is durable,
+the host stops attempt-owned writers and commits the workspace, notes and processed
+cursors through the existing transaction, without waiting for another model reply.
+Persistent services survive; an approved bot's existing disposition controls its
+next admission. Cancellation and shutdown still override publication. A failed
+save cannot advance notes, cursors or the committed workspace independently.
+
+R1b retains a stopped attempt's workspace as a separate immutable recovery
+candidate, with generation, original base/project grant, termination cause and
+accepted draft. It uses the existing checkpoint copy rules (including exclusions
+for credentials, generated directories and symlinks), not the bounded HTML-preview
+artifact. Stop/copy/save failures are explicit. Restart reconciliation captures
+interrupted work after verifying writer termination. Nothing schedules a recovery
+turn or acknowledges a callback merely because a candidate exists.
+
+The next authorized attempt receives bounded recovery references. The
+`control_recovery` tool lists all candidates, inspects notes/files, and can copy a
+matching candidate to an isolated `.control-recovery-GENERATION` folder. Copying
+requires the current attempt, base and project grant to match; it does not replace
+the committed head. The agent must reconcile external effects and select changes
+before its normal publication. Large/binary files are retained and accessible via
+that recovery folder even when the bounded text inspector cannot display them.
+
+Attempt-owned command deadlines are capped by an explicit/default owner deadline
+when present. Responses disclose requested/effective limits; persistent service
+jobs are independent. Yielding cancels remaining attempt-owned jobs, so work that
+must outlive a model turn belongs in a persistent service.
+
+The earlier design notes below are historical where they conflict with this
+implementation contract.
+
 Design for Sol, 2026-11-04. Status: implementation in progress, not deployed.
 
 The next priority is reducing stop/start context pollution: longer active slices,

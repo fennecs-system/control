@@ -37,6 +37,8 @@ mod knowledge_tools;
 mod lens_library;
 mod lens_ui;
 mod lifecycle;
+mod attempt_control;
+mod recovery;
 mod mcp_stdio;
 mod navigation;
 #[cfg(test)]

@@ -34,7 +34,7 @@ pub const TOOLS: [Tool; 23] = [
     Tool {
         name: "agent.continuity", title: "Agent continuity", description: "Callback deltas and checkpointed working notes",
         href: None, aliases: "session context handoff callbacks delta continuity recovery",
-        mcp_names: &["control_turn_context", "control_turn_handoff"], execution: "Rust attempt mailbox / workspace checkpoint", surface: "agent MCP", available: true,
+        mcp_names: &["control_turn_context", "control_turn_handoff", "control_recovery"], execution: "Rust attempt mailbox / workspace checkpoint", surface: "agent MCP", available: true,
     },
     Tool {
         name:"service.ports",title:"TCP ports",description:"Scoped service connections · operator approval",
