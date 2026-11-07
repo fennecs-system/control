@@ -32,8 +32,12 @@ Keep the fundamental Pi/tinygrad architecture: small pure lifecycle/admission
 primitives, narrow application operations, tools/strategies for product behavior,
 and effect adapters for I/O. Each new core concept needs a generic invariant that
 existing operations cannot express. Recipes, cron interpretation, personas,
-goal reasoning and compaction strategies belong outside the supervisor. Deliver
-the boundary with each feature; do not gate all P1 work on a new foundation layer.
+goal reasoning and compaction strategies belong outside the supervisor. Sequence
+the work as small diamond-run reliability fixes, then a proven state/effect
+abstraction slice, then broader improvements. Typed operations, bounded views
+and explicit effect results must support a different async driver without moving
+runtime details into domain state. Complete the remaining extraction in usable
+increments; the whole web/TUI split is not a gate for product work.
 
 ### Reconciled status
 
@@ -319,11 +323,13 @@ evidence retrieval, cancellation and durable recovery; sleeping monitors must
 not monopolize model slots. This experiment remains separate from the request
 panel fix and does not change the current playtest midway.
 
-## Supporting work: core, web and terminal boundaries
+## After reliability: state, effect and adapter boundaries
 
 Build on the persistent-tool lifecycle/ownership rules already extracted below.
-Extract narrow application operations where they remove coupling; keep usable
-tools and demonstrations ahead of the complete web/TUI split.
+Prioritize a complete typed operation/effect boundary after the small diamond-run
+fixes and before broader features, as specified in the canonical delivery order.
+Prove the same operation under the current and an experimental async driver;
+keep usable tools and demonstrations ahead of the complete web/TUI split.
 The existing server still combines mutable application state, routing, rendering
 and execution assembly. `control-core` contains the first pure rules; the full
 application service and separate `control-tui`/`control-web` adapters remain

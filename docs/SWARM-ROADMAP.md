@@ -75,15 +75,21 @@ prose goal. Resource quotas are not model-spend enforcement.
 
 This is the canonical priority/dependency table; `roadmap.md` links here.
 G1/O1/Q1 are consumer-scoped changes, not a foundation release ahead of all P1.
+The sequence is **small diamond-run reliability fixes → state/effect abstraction
+→ broader improvements**. Finish and compare R2 first, then R1b and the other
+reproduced failures. Do not turn the first phase into an open-ended pursuit of a
+perfect run. Use the paired-trial gates below to decide what actually improved.
+Before expanding product behavior, prove the first A1/A2/A4 operation boundary
+with interchangeable drivers; complete the remaining extractions incrementally.
 
 | Priority | Work | Minimum dependency / first exit |
 | --- | --- | --- |
 | P0 | R1a/R1b lifecycle checkpoint hooks and recovery; R2 watch admission; R3 history errors; R4 HTTP limits | Independent fixes with fault tests; preserve useful progress and real alerts. |
+| Next | A1/A2/A4 first state/effect slice, then incremental A3 and remaining boundaries | One complete operation behind typed commands, bounded projections and explicit effect results; current and experimental async drivers pass the same lifecycle/durability fixtures. This precedes broader features, not the small reliability fixes. |
 | P1 | E1 escalation with G1 request/dependency projections | Existing lifecycle and durable requests; one-slot resolution works. No broad spec/status subsystem. |
 | P1 | U1 coordination UI and A2A visibility | Read existing lifecycle, requests and ownership; add projections as needed. No dependency on all G1/O1/Q1 work. |
 | P1 | W1 bounded schedules | Existing timers/admission, durable occurrence IDs and shared schedule-write authorization. Q1 before expanding team-wide fan-out; Replace deferred. |
 | Supporting | Q1 team admission; O1 ownership audit/fixes | Aggregate existing counters; extend ownership only for a demonstrated gap or a consumer changing resource lifetimes. |
-| Supporting | A1–A4 state/effect boundaries | Establish the narrow operation a feature needs as part of that slice. No full extraction gate. |
 | P2 | U2 CUA; W2 workflow tools | Scoped browser/resource operations; validated recipes using existing spawn/wait/message primitives. |
 | P2 | M1 model adapters; C1–C3 summary strategies | Bounded reads and summary-call adapter enable C1 before general local tool execution; on/off plus model selector. |
 | P2 | L1 lenses/persona/SOUL configuration; L2/L3 reviewed improvement | Captured revisions, scoped tools, evaluation and admission; no new supervisor personality or learning lifecycle. |
@@ -438,12 +444,35 @@ a human decision wait, posts one outcome and leaves unrelated work running.
 Ad hoc teams continue to work without recipes. Keep generalized workflow languages,
 distributed scheduling and arbitrary executable hooks outside this first layer.
 
-## Supporting work: decouple state and execution incrementally
+## Next after reliability: decouple state and execution
 
-Use A1–A4 to remove coupling encountered while delivering the product work above.
-Each feature must establish its narrow boundary before adding behavior. The full
-extraction is not a prerequisite, and broad `State` access is not an acceptable
-shortcut for a new tool simply because that coupling already exists elsewhere.
+A1–A4 are the next architectural work after the small diamond-run fixes, ahead
+of broader product improvements. Start with one complete callback-to-admission
+operation: typed input, domain state transition, persisted intent, interpreted
+effect and typed completion. Reuse the existing bot machine and its application
+adapter; do not invent a second supervisor. Expand only after that slice passes
+the checks below. Finishing every extraction or web/TUI crate split is not a
+prerequisite. New features use the proven boundary and extend it where needed;
+broad `State` access is not an acceptable shortcut.
+
+The useful state-monad-like property is explicit composition: a transition maps
+domain state plus typed input to updated state and effect descriptions. Lift a
+domain transition into its owning application operation through narrow borrowed
+views and typed effect mapping; do not give tools an ambient global-state handle.
+The existing `Machine::step` mutation interface can express this without cloning
+all state, a generic monad framework or adding feature-specific core concepts.
+Effects carry their resource/generation/revision context. Interpreters own I/O;
+results return as typed events and stale completions cannot mutate newer state.
+
+Keep clocks, filesystem/process handles, channels and executor types in drivers.
+The first slice must run through the existing driver and one experimental async
+driver against the same fixtures, with no runtime dependency in its domain types.
+Check ordering, duplicate delivery, cancellation, restart, save failure and
+durable-before-effect behavior, including concurrent completion. This proves a
+runtime can change without changing domain semantics; it does not establish that
+an async runtime is faster. Benchmark before choosing a production replacement.
+Record which full-state accesses the slice removes and retain the diamond-run
+fixtures as behavior regressions.
 
 Target dependency direction:
 
