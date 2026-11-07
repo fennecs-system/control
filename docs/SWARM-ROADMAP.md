@@ -215,38 +215,36 @@ introducing a second parallel plugin system or putting network calls in pure cod
 
 ## P1: upward escalation and prompting
 
-E1 complements the existing steering chat, room messages and direct follow-ups.
-Agents continue routine decisions within their role. Use a tracked request when
-a blocker needs an answer and durable resumption; ordinary collaboration does
-not require a request form or a formal workflow.
+**E1 extends `control_design_ask`; it does not replace it or add a second request
+system.** Reuse [design::Question and Continuation](../src/design.rs), request
+identity/generation checks, durable pause, worker-slot release and checkpoint
+resumption. Existing `pending`/`answer_target`/`answer` operations already support
+ancestor-visible questions and answers to descendants. The missing increment is
+an agent-callable, scoped lead-resolution tool over that same application path.
 
-E1 adds a durable worker-to-lead request and scoped resolution path alongside
-existing human design questions. Today descendant questions can appear in the
-ancestor UI; `control_agent_message` sends downward follow-ups. Neither supplies
-a structured child-to-lead decision/resumption contract.
+Add only the resolver reference/scope and answer attribution needed for that
+extension to the existing question record. Old records and ordinary calls retain
+operator resolution by default. A worker may route a delegated task decision to
+its assigned lead; host checks recorded lineage and delegated decision authority
+at resolution time. Naming a resolver does not grant authority. The answer tool
+must use the existing validated answer and durable-save/rollback boundary, retaining
+checkpoint, workspace-baseline, grant, budget and continuation rules. Do not expose
+the internal answer function without those checks or introduce supervisor variants.
 
-| Request | Resolver | Result |
-| --- | --- | --- |
-| Help, owned blocker, task tradeoff within delegated scope | Assigned lead | Evidence-linked answer or narrower task direction |
-| Goal/scope change beyond the lead's mandate, or unresolved human preference | Operator through the existing question UI/Discord path | Attributed direction for the same request |
-| Additional access, resource or capability | Existing permission broker/operator | Separate scoped grant or denial; a lead's answer is never a grant |
-| Reusable lesson or procedure revision | Knowledge/procedure review | Candidate revision with evidence, evaluated and admitted separately |
+Unresolved human preferences and decisions outside the lead's mandate go to the
+operator through the existing UI/Discord path, preserving the question identity.
+Access requests continue through the permission broker; procedure/knowledge
+proposals continue through knowledge review. Those are separate existing flows,
+not additional E1 resolver types, and a design answer never grants access.
 
-Persist request ID/type, originating actor/chat/run/generation, parent lineage,
-question, evidence references, proposed options, resolver, status, resolution
-and continuation reference. Reuse durable pause/checkpoint and resume machinery.
-Only the blocked dependency pauses; unrelated swarm work can continue. Deduplicate
-requests by identity rather than fuzzy prose; a repeated blocker updates the
-same request instead of spawning more repair children.
-
-Project a pending request into G1's NeedsDecision application view with its request
-reference. The lead reconciles a changed child condition through existing durable
-delivery; U1 shows the same condition. The condition does not replace the request's
-answer, authority and resumption protocol. Avoid a new message bus and repeated
-prose notices for an unchanged blocker.
+G1's NeedsDecision view references the same `Question`; changed questions reach
+the lead through existing delivery. Keep the existing request deduplication and
+single-pending-question semantics. Ordinary collaboration still uses steering,
+room messages and follow-ups; a decision question pauses only the affected work.
 
 A parent waiting on its child must be able to receive and resolve that child's
-request. Test the one-model-slot case, a full queue, restart, duplicate/stale
+request. Test legacy records/default operator routing, the one-model-slot case,
+a full queue, restart, duplicate/stale
 answers, reparented or cancelled work, authority revocation and answer-save
 failure. Resolution must neither create a second writer nor deadlock behind the
 child it must unblock. If the lead cannot resolve or is unavailable, forward
