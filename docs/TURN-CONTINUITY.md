@@ -180,6 +180,11 @@ final save after a crash. Independent persistent jobs retain their handles and
 completion subscriptions across model attempts; an attempt deadline does not set
 their lifetime. Evaluate the current attempt cap separately from workflow progress
 and tool-specific transport limits. No new general hook/plugin runtime is required.
+Long-job tools can supply bounded health/progress inspection and configurable
+runtime/review policy. Keep liveness, progress and unknown observations distinct;
+request a scoped lead/operator decision before extending an authorized limit.
+Pending decisions retain the existing policy, and a failed health probe alone
+does not establish that the underlying job failed.
 
 ## State and tool contract
 

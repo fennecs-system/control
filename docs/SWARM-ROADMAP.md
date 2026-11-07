@@ -172,6 +172,24 @@ deadline controls ordinary progress. Any cap change needs measured recovery and
 capacity results and cannot silently extend an authorized budget. Timeouts remain
 a failure/resource backstop rather than the workflow.
 
+Long-job tools may expose a bounded health/progress inspection hook: resource
+identity/generation, liveness, last observed progress and evidence. Keep workload
+semantics in the tool; an alive process does not prove progress, and missing metrics
+mean unknown. Healthy, progressing work continues within its authorized limits.
+Stale/unknown progress triggers a bounded recheck or decision request, not an
+automatic claim of failure. Inspection failure is distinct from job failure.
+
+Expose effective runtime/inactivity limits, review interval and expiry action at
+job creation and inspection; allow authorized changes per tool/job within node
+policy. Before a configurable limit is reached, request more time through E1's
+existing design-question flow when needed: lead within delegated scope, otherwise
+operator. Apply an extension through an authorized host operation; answer prose
+alone cannot change a budget. While awaiting a decision, the captured policy
+governs continuation and expiry; silence does not grant more time. A quiet long
+calculation may succeed, so test it alongside a hung process, unavailable health
+hook and unanswered extension request. These hooks extend the relevant tools,
+not core job-specific states or a prerequisite health framework for R1.
+
 Change workload guidance separately: act while useful work remains, check deltas
 at meaningful boundaries, publish on explicit yield/pause, send changed facts/milestones/
 blockers, and wait after completion. A lead intervenes for changed goals,
