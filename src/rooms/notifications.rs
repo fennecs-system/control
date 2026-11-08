@@ -27,6 +27,9 @@ pub struct Watch {
 struct Wake {
     origin: String,
     generation: String,
+    /// Admission scan only: skipping record-only posts does not acknowledge them.
+    #[serde(default)]
+    scanned: usize,
 }
 
 pub(super) fn definitions(mutable: bool) -> Vec<Value> {
@@ -161,6 +164,7 @@ pub(super) fn call(
             watch.wake = Some(Wake {
                 origin: run_id.into(),
                 generation,
+                scanned: watch.cursor,
             });
             watch.delivered = None;
             state.runtime.runs[index].room_wake_used = true;
@@ -191,7 +195,7 @@ pub(super) fn call(
     let posts: Vec<_> = batch
         .posts
         .into_iter()
-        .map(|post| json!({"text":post.text,"chat":post.chat,"run":post.run}))
+        .map(|post| json!({"text":post.text,"chat":post.chat,"run":post.run,"delivery":post.delivery}))
         .collect();
     Ok(
         json!({"room":watch.room,"cursor":watch.cursor,"through":through,"more":through<state.collective.posts.len(),"skipped":0,"posts":posts,"wake_armed":watch.wake.is_some(),"delivered_run":watch.delivered}),
@@ -453,18 +457,20 @@ pub fn reconcile(
                 if leaf.status != "completed" || busy.contains(watch.chat.as_str()) {
                     return Decision::Wait;
                 }
-                let through = watch
-                    .cursor
+                let scanned = watch.cursor.max(wake.scanned);
+                if scanned > state.collective.posts.len() { return Decision::Disarm; }
+                let through = scanned
                     .saturating_add(WINDOW)
                     .min(state.collective.posts.len());
-                if state.collective.posts[watch.cursor..through]
+                if state.collective.posts[scanned..through]
                     .iter()
                     .any(|post| {
                         post.room == watch.room && post.chat.as_deref() != Some(&watch.chat)
+                            && post.delivery == super::Delivery::Notify
                     })
                 {
                     Decision::Queue(origin_index)
-                } else if through > watch.cursor {
+                } else if through > scanned {
                     Decision::Advance(through)
                 } else {
                     Decision::Wait
@@ -480,7 +486,7 @@ pub fn reconcile(
         let previous = state.collective.room_watches[index].clone();
         match plan {
             Decision::Wait => {}
-            Decision::Advance(cursor) => state.collective.room_watches[index].cursor = cursor,
+            Decision::Advance(cursor) => state.collective.room_watches[index].wake.as_mut().unwrap().scanned = cursor,
             Decision::Disarm => state.collective.room_watches[index].wake = None,
             Decision::Queue(origin_index) => {
                 if crate::scheduler::admit(&state.runtime).is_err() {
@@ -643,6 +649,7 @@ mod tests {
             chat,
             run: None,
             key: String::new(),
+            delivery: Default::default(),
         });
     }
     fn rpc(name: &str, args: Value) -> Value {
@@ -815,6 +822,32 @@ mod tests {
     }
 
     #[test]
+    fn recorded_updates_preserve_one_shot_budget_and_unread_evidence() {
+        let (mut state, run) = fixture();
+        watch(&mut state, &run, true);
+        state.runtime.runs[0].status = "completed".into();
+        for _ in 0..WINDOW+1 {
+            post(&mut state, "research", "Retained observation", Some("peer".into()));
+            state.collective.posts.last_mut().unwrap().delivery = super::super::Delivery::Record;
+        }
+        assert!(reconcile(&mut state, fail).is_err());
+        assert_eq!(state.collective.room_watches[0].wake.as_ref().unwrap().scanned, 0);
+        for _ in 0..3 { reconcile(&mut state, |_| Ok(())).unwrap(); }
+        assert_eq!(state.runtime.runs.len(), 1);
+        assert_eq!(state.collective.room_watches[0].cursor, 0);
+        assert!(state.collective.room_watches[0].wake.is_some());
+        state = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        state.runtime.runs[0].status = "running".into();
+        let page = call(&mut state, &run, "control_room_notifications", &json!({})).unwrap();
+        assert_eq!(page["posts"][0]["delivery"], "record");
+        state.runtime.runs[0].status = "completed".into();
+        post(&mut state, "research", "Decision needed", None);
+        reconcile(&mut state, |_| Ok(())).unwrap();
+        assert_eq!(state.runtime.runs.len(), 2);
+        assert_eq!(state.collective.room_watches[0].cursor, 0, "admission is not processing");
+    }
+
+    #[test]
     fn one_shot_waits_for_idle_and_survives_failed_checkpoint_and_restart() {
         let (mut state, run) = fixture();
         let grant = shared_service(&mut state);
@@ -961,7 +994,8 @@ mod tests {
         state.runtime.runs[0].status = "completed".into();
         reconcile(&mut state, |_| Ok(())).unwrap();
         assert_eq!(state.runtime.runs.len(), 1);
-        assert_eq!(state.collective.room_watches[0].cursor, 1);
+        assert_eq!(state.collective.room_watches[0].cursor, 0, "wake scanning is not an inbox acknowledgement");
+        assert_eq!(state.collective.room_watches[0].wake.as_ref().unwrap().scanned, 1);
         assert!(state.collective.room_watches[0].wake.is_some());
     }
 

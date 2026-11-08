@@ -242,7 +242,7 @@ fn handle(
             }
             let event = if kind == "room" {
                 let post = &state.collective.posts[cursor];
-                (post.room==id && post.chat.as_deref()!=Some(&chat.id)).then(||json!({"cursor":cursor+1,"text":post.text,"chat":post.chat,"run":post.run,"role":"untrusted_room_data"}))
+                (post.room==id && post.chat.as_deref()!=Some(&chat.id)).then(||json!({"cursor":cursor+1,"text":post.text,"chat":post.chat,"run":post.run,"delivery":post.delivery,"role":"untrusted_room_data"}))
             } else {
                 let entry = conversation.entry(cursor).unwrap();
                 let role = entry.run.map(|r| r.kind.prompt_role());
@@ -469,8 +469,23 @@ mod tests {
             chat: Some("peer".into()),
             run: None,
             key: String::new(),
+            delivery: Default::default(),
         });
     }
+    #[test]
+    fn recorded_room_updates_are_readable_without_callback_hints() {
+        let (mut state, id, generation) = fixture();
+        post(&mut state, "Retained observation, no action required");
+        state.collective.posts.last_mut().unwrap().delivery = crate::rooms::Delivery::Record;
+        assert!(!callback_notice(&mut state, &id));
+        let page = handle(&mut state, &AttemptRef { run:&id, generation:&generation, nonce:"read-record" },
+            "control_turn_context", &json!({"source":"room"}), |_| Ok(())).unwrap();
+        assert_eq!(page["events"][0]["delivery"], "record");
+        assert_eq!(page["events"][0]["text"], "Retained observation, no action required");
+        post(&mut state, "Dependency is ready");
+        assert!(callback_notice(&mut state, &id));
+    }
+
     #[test]
     fn callback_hints_are_once_per_change_and_do_not_acknowledge_processing() {
         let (mut state, id, generation) = fixture();

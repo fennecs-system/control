@@ -588,6 +588,7 @@ fn reconcile_at(state: &mut State, now: u64, mut save: impl FnMut(&State) -> std
     let start = state.bots.room_cursor.min(state.collective.posts.len());
     let end = start.saturating_add(POSTS_PER_PASS).min(state.collective.posts.len());
     for (index, post) in state.collective.posts.iter().enumerate().take(end).skip(start) {
+        if post.delivery == crate::rooms::Delivery::Record { continue; }
         let event = Event::Info { topic: room(&post.room), cursor: index as u64 + 1, from: post.chat.clone().map(ChatId), info: Message::Post };
         effects.extend(state.bots.supervisor.step(event, Now(now)));
     }
@@ -947,7 +948,7 @@ mod tests {
         (state, chat)
     }
     fn post(state: &mut State, chat: Option<&str>, text: &str) {
-        state.collective.posts.push(crate::rooms::Post { room: "general".into(), text: text.into(), chat: chat.map(Into::into), run: None, key: format!("k{}", state.collective.posts.len()) });
+        state.collective.posts.push(crate::rooms::Post { room: "general".into(), text: text.into(), chat: chat.map(Into::into), run: None, key: format!("k{}", state.collective.posts.len()), delivery: Default::default() });
     }
     fn bot_runs(state: &State) -> Vec<&crate::runtime::Run> {
         state.runtime.runs.iter().filter(|run| run.bot_turn.is_some()).collect()
@@ -1113,6 +1114,36 @@ mod tests {
         reconcile_at(&mut state, 40_000, |_| Ok(())).unwrap();
         assert_eq!(bot_runs(&state).len(), 2, "pending messages wake the next turn after the cooldown");
         assert_eq!(status(&state, &chat).as_deref(), Some("Bot · working · room #general"));
+    }
+
+    #[test]
+    fn recorded_room_updates_do_not_wake_or_acknowledge_and_notifications_still_wake() {
+        let (mut state, chat) = fixture();
+        command(&mut state, &chat, "on").unwrap();
+        let cursor = crate::rooms::inbox_cursor(&state, &chat);
+        for _ in 0..100 {
+            post(&mut state, Some("peer"), "Retained progress observation");
+            state.collective.posts.last_mut().unwrap().delivery = crate::rooms::Delivery::Record;
+        }
+        assert!(reconcile_at(&mut state, 1_000, |_| Err(std::io::Error::other("disk"))).is_err());
+        reconcile_at(&mut state, 1_000, |_| Ok(())).unwrap();
+        assert!(bot_runs(&state).is_empty());
+        assert_eq!(crate::rooms::inbox_cursor(&state, &chat), cursor);
+        state = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        reconcile_at(&mut state, 2_000, |_| Ok(())).unwrap();
+        assert!(bot_runs(&state).is_empty());
+        post(&mut state, Some("peer"), "Dependency ready; continue the build");
+        reconcile_at(&mut state, 3_000, |_| Ok(())).unwrap();
+        assert_eq!(bot_runs(&state).len(), 1);
+        let first = state.runtime.runs.iter().position(|r| r.bot_turn.is_some()).unwrap();
+        state.runtime.runs[first].status = "completed".into();
+        post(&mut state, Some("lead"), "Recorded audit of the same milestone");
+        state.collective.posts.last_mut().unwrap().delivery = crate::rooms::Delivery::Record;
+        reconcile_at(&mut state, 40_000, |_| Ok(())).unwrap();
+        assert_eq!(bot_runs(&state).len(), 1, "a recorded lead update must not create an echo turn");
+        post(&mut state, None, "Human steering remains actionable");
+        reconcile_at(&mut state, 80_000, |_| Ok(())).unwrap();
+        assert_eq!(bot_runs(&state).len(), 2);
     }
 
     #[test]

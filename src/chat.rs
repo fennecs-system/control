@@ -1452,7 +1452,7 @@ mod tests {
         state.chats[0].room = Some("engineering".into());
         state.chats[0].title = "Architecture discussion".into();
         state.chats[0].messages.push(Message{text:"How should the context fit together?".into(),run_id:None,reply:"Engineering composes repository tools, evidence guidance, and architecture notes. Each run keeps its resolved context.".into()});
-        state.collective.posts.push(crate::rooms::Post { room: "engineering".into(), text: "The layout now keeps room navigation on the left and linked chats on the right. Shared updates use the same theme as the chat window.".into(), chat: Some(id.clone()), run: None, key: String::new() });
+        state.collective.posts.push(crate::rooms::Post { room: "engineering".into(), text: "The layout now keeps room navigation on the left and linked chats on the right. Shared updates use the same theme as the chat window.".into(), chat: Some(id.clone()), run: None, key: String::new(), delivery: Default::default() });
         let inline = |html: String| {
             let mut html = html;
             for (name, css) in [

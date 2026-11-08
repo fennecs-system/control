@@ -23,6 +23,24 @@ query responses and routine telemetry outside those prefixes. Matching a common
 prefix on every diagnostic line recreates any-line waking. Domain-specific
 transition detection belongs in the workload container, not Control's supervisor.
 
+Classification is workload policy: observe the previous condition and the new
+condition, retain diagnostics, and emit an actionable transition only when the
+condition changes. An unknown failure can require investigation on first sight;
+once understood, repetitions of that same condition stay in diagnostics. Recovery
+and a later recurrence are new transitions. A process exit or source gap remains
+eligible independently of any classification. Do not classify all lines containing
+`ERROR`, `Failed` or `Exception` as actionable: the playtest's repeated optional
+service DNS warnings passed such a filter and created monitoring-only turns.
+Likewise a crop age change can be retained while its readiness callback waits for
+the actual harvest condition. These examples specify tool behavior, not host
+knowledge of Minecraft or a universal list of ignorable failures.
+
+Validate a workload's emitter with repeated known-warning observations, first
+unknown failure, recovery and recurrence. Assert the expected transition events,
+then replay those events through the generic watch policies. Keep this distinct
+from end-to-end gameplay benchmarks; instructions alone do not prove the emitter
+implements the policy correctly.
+
 Example arguments for a service whose log uses those prefixes:
 
 ```json

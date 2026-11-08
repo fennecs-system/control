@@ -1626,7 +1626,7 @@ mod tests {
         // Simulate an already running pre-continuity provider process.
         state.runtime.runs[0].attempts[0].context_trace = None;
         state.runtime.runs[0].attempts[0].turn_mailbox = None.into();
-        state.collective.posts.push(crate::rooms::Post{room:"general".into(),text:"Old room history".into(),chat:Some("peer".into()),run:None,key:"old".into()});
+        state.collective.posts.push(crate::rooms::Post{room:"general".into(),text:"Old room history".into(),chat:Some("peer".into()),run:None,key:"old".into(),delivery:Default::default()});
         crate::bots::command(&mut state,&chat,"on").unwrap();
         assert!(state.runtime.runs[0].attempts[0].context_trace.is_none());
         assert!(state.runtime.runs[0].attempts[0].turn_mailbox.is_none());
@@ -1715,7 +1715,7 @@ mod tests {
             crate::rooms::ensure_inbox(&mut state, &chat).unwrap();
             checkpoint_next(&mut state, |_|Ok(())).unwrap();
             for i in 0..8 {
-                state.collective.posts.push(crate::rooms::Post { room: "general".into(), text: format!("event {i}"), chat: None, run: None, key: String::new() });
+                state.collective.posts.push(crate::rooms::Post { room: "general".into(), text: format!("event {i}"), chat: None, run: None, key: String::new(), delivery: Default::default() });
             }
             state.chats[0].continuity=Some(Box::new(crate::turn_context::Managed::default()));
             let run=&mut state.runtime.runs[0];

@@ -257,6 +257,16 @@ or local-model adapters. Preserve the existing scheduling and authority rules.
    Use generic watch milestone/exit policies and scoped wait conditions, preserving
    unread evidence, finite rechecks and human/failure delivery. No game-specific
    logic belongs in Control. Idle agents release their model slots.
+   Next small reliability slice: reduce coordination echoes before the state/effect
+   extraction. Tools choose explicit room delivery (`record` or `notify`); a retained
+   update must remain readable without waking peers or acknowledging their inboxes.
+   Lead policy responds to changed plans/dependencies, not every worker milestone.
+   Workload emitters classify changes rather than promoting repeated severity words
+   into events. Acceptance: a notified worker milestone followed by a recorded lead
+   update creates no extra echo turn; restart/save failure preserve unread evidence
+   and armed wakes; human input, actionable notifications and process failures still
+   arrive. Keep classification in tools/configuration and generic delivery in the
+   existing adapters; no semantic message classifier or timer in the supervisor.
 5. **Preserve recovery and measure progress.** Keep one writer, durable admission,
    generation fencing, cancellation, pause and delegation chains. Restart still
    interrupts attempts; never replay ambiguous effects. Compare useful actions,

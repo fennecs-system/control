@@ -93,7 +93,8 @@ pub(crate) fn callback_notice(state: &mut State, id: &str) -> bool {
         .iter()
         .enumerate()
         .rev()
-        .find(|(_, p)| Some(&p.room) == chat.room.as_ref() && p.chat.as_deref() != Some(&chat.id))
+        .find(|(_, p)| Some(&p.room) == chat.room.as_ref() && p.chat.as_deref() != Some(&chat.id)
+            && p.delivery == crate::rooms::Delivery::Notify)
         .map_or(0, |(i, _)| i + 1);
     let stamp = (chat.messages.len(), posts);
     if stamp.0 <= conversation && stamp.1 <= room || mailbox.announced == Some(stamp) {
