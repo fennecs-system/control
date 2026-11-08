@@ -109,7 +109,7 @@ fn handle(state: &mut State, attempt: &AttemptRef<'_>, call: MessageCall, save: 
     if target.actor != actor {
         return Err(fail("Message only chats you spawned, directly or through your children"));
     }
-    let from = state.runtime.runs.iter().rposition(|run| run.chat_id.as_deref() == Some(call.chat_id.as_str()) && run.actor == actor)
+    let from = crate::chat::latest_task(state, &call.chat_id, &actor)
         .ok_or_else(|| fail("That chat has no task to continue"))?;
     if crate::delegation::is_judge(&state.runtime.runs[from]) {
         return Err(fail("Read-only judges cannot be continued"));
@@ -278,6 +278,60 @@ mod tests {
         assert!(crate::services::accessible(&restored.services[0], &node, restored.runtime.runs.last().unwrap()));
         restored.services[0].resource.generation = serde_json::from_value(json!(2)).unwrap();
         assert!(!crate::services::accessible(&restored.services[0], &node, restored.runtime.runs.last().unwrap()), "a replacement generation is not granted");
+    }
+
+    #[test]
+    fn late_grants_survive_design_answers_inserted_before_the_grant_turn() {
+        let (mut state, lead, child, _) = family();
+        let service = late_service(&mut state, &lead);
+        let child_index = crate::chat::latest_task(&state, &child, &state.chats[0].actor).unwrap();
+        let run = &mut state.runtime.runs[child_index];
+        run.status = "running".into();
+        run.attempts.push(crate::usage::Attempt { workspace_id: Some("child-attempt".into()), ..Default::default() });
+        let old_id = run.id.clone();
+        let lead_run = state.runtime.runs[0].id.clone();
+        handle(&mut state, &AttemptRef { run: &lead_run, generation: "attempt-a", nonce: "share" },
+            MessageCall { chat_id: child.clone(), text: "Service ready".into(), services: vec![service] }, |_| Ok(())).unwrap();
+        let grant_index = state.runtime.runs.len() - 1;
+        crate::design::tests::ask_without_io(&mut state, &old_id, "question", crate::design::tests::input()).unwrap();
+        let old = &mut state.runtime.runs[child_index];
+        old.status = "waiting".into();
+        old.attempts[0].status = "waiting".into();
+        old.attempts[0].artifact = Some("paused-workspace".into());
+        crate::design::answer(&mut state, &child, None, "1", "test").unwrap();
+        let answer_index = state.runtime.runs.len() - 1;
+        assert_eq!(crate::scheduler::next(&state.runtime), Some(answer_index));
+        assert!(state.runtime.runs[answer_index].resource_grants.is_empty(), "the earlier continuation must not receive a future grant");
+        state.runtime.runs[answer_index].status = "completed".into();
+        assert_eq!(crate::scheduler::next(&state.runtime), Some(grant_index));
+        state.runtime.runs[grant_index].status = "completed".into();
+        state.runtime.runs[0].status = "completed".into();
+        for source in ["agent", "human", "bot", "listener", "fork"] {
+            let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+            match source {
+                "agent" => {
+                    restored.runtime.runs[0].status = "running".into();
+                    send(&mut restored, "next", &child).unwrap();
+                }
+                "human" => crate::chat::send(&mut restored, &child, "Continue", "test").unwrap(),
+                "fork" => { crate::chat::fork(&mut restored, &child, "Use the service", "test").unwrap(); }
+                "listener" => {
+                    restored.chats.iter_mut().find(|chat| chat.id == child).unwrap().room = Some("general".into());
+                    crate::rooms::listen(&mut restored, &child, true).unwrap();
+                    restored.collective.posts.push(crate::rooms::Post { room: "general".into(), text: "New evidence".into(), chat: None, run: None, key: "test-post".into() });
+                    crate::rooms::reconcile(&mut restored, |_| Ok(())).unwrap();
+                    assert_eq!(restored.runtime.runs.last().unwrap().kind, RunKind::RoomNotification);
+                }
+                _ => {
+                    restored.chats.iter_mut().find(|chat| chat.id == child).unwrap().room = Some("general".into());
+                    crate::bots::command(&mut restored, &child, "on").unwrap();
+                    restored.collective.posts.push(crate::rooms::Post { room: "general".into(), text: "New evidence".into(), chat: None, run: None, key: "test-post".into() });
+                    crate::bots::reconcile(&mut restored, |_| Ok(())).unwrap();
+                    assert_eq!(restored.runtime.runs.last().unwrap().kind, RunKind::BotWake);
+                }
+            }
+            assert!(crate::services::accessible(&restored.services[0], &restored.services[0].resource.owner.node, restored.runtime.runs.last().unwrap()), "{source} follow-up must inherit the logically latest grant");
+        }
     }
 
     #[test]

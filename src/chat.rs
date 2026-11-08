@@ -184,6 +184,14 @@ pub(crate) fn tree<'a>(state: &'a State, chat: &'a str) -> std::collections::Has
 fn lineage<'a>(state: &'a State, chat: &'a str) -> impl Iterator<Item = &'a str> {
     std::iter::successors(Some(chat), |id| state.chats.iter().find(|session| session.id == *id).and_then(|session| session.parent_chat.as_deref())).take(64)
 }
+/// Latest task in scheduler order. Design answers are appended later but keep
+/// the interrupted task's queue position; append order is not continuation order.
+pub(crate) fn latest_task(state: &State, chat: &str, actor: &Actor) -> Option<usize> {
+    state.runtime.runs.iter().enumerate()
+        .filter(|(_, run)| run.chat_id.as_deref() == Some(chat) && &run.actor == actor)
+        .max_by_key(|(index, run)| (run.queue_order, *index))
+        .map(|(index, _)| index)
+}
 /// Queues a Control-initiated turn in `chat`, inheriting the provider, context,
 /// lineage and grants of the run at `from`.
 pub(crate) fn enqueue_continuation(state: &mut State, chat: &str, from: usize, objective: String, kind: crate::runtime::RunKind, source: &str) -> Result<String, &'static str> {
@@ -305,6 +313,7 @@ pub fn receive(state: &mut State, incoming: &discord::Incoming) -> Result<(), &'
 /// are inherited; execution restores a separate writable copy for the child.
 pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -> Result<String, &'static str> {
     let parent = state.chats.iter().find(|s| s.id == parent_id).ok_or("Chat not found.")?.clone();
+    let from = latest_task(state, parent_id, &parent.actor);
     identity::authorize(&parent.actor, Action::Task)?;
     let objective = objective.trim();
     if objective.is_empty() || control_context::limits::message_too_long(objective) {
@@ -330,7 +339,8 @@ pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -
         state.chats.pop();
         return Err(error);
     }
-    if let Some(previous) = state.runtime.runs.iter().rev().find(|r| r.chat_id.as_deref() == Some(parent_id)) {
+    if let Some(from) = from {
+        let previous = &state.runtime.runs[from];
         let backend = previous.backend;
         let model = previous.model.clone();
         let context = previous.context.clone();
@@ -566,9 +576,8 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
         None
     };
     let run_id = if native.is_none() {
-        let resources = state.runtime.runs.iter().rev()
-            .find(|run|run.chat_id.as_deref() == Some(id) && run.actor == state.chats[index].actor)
-            .map(|run|crate::services::grants(state,run)).unwrap_or_default();
+        let resources = latest_task(state, id, &state.chats[index].actor)
+            .map(|from|crate::services::grants(state, &state.runtime.runs[from])).unwrap_or_default();
         state.runtime.enqueue_for(
             objective.into(),
             if action == Action::Improve {

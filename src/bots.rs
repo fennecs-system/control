@@ -421,9 +421,9 @@ fn objective(woke:&str)->String {
 fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
     let chat = request.chat.0.as_str();
     let session = state.chats.iter().find(|session| session.id == chat).ok_or("Bot chat is missing.")?;
-    let latest = state.runtime.runs.iter().rev()
-        .find(|run| run.chat_id.as_deref() == Some(chat) && run.actor == session.actor)
+    let from = crate::chat::latest_task(state, chat, &session.actor)
         .ok_or("Bot chat has no task.")?;
+    let latest = &state.runtime.runs[from];
     if crate::delegation::is_judge(latest) {
         return Err("Read-only judges cannot run as bots.");
     }

@@ -487,6 +487,10 @@ pub fn reconcile(
                     continue;
                 }
                 let origin = &state.runtime.runs[origin_index];
+                // An idle chat may have received a grant-bearing message after
+                // arming this wake. Preserve its logically latest authority.
+                let from = crate::chat::latest_task(state, &previous.chat, &previous.actor).unwrap_or(origin_index);
+                let grants = crate::services::grants(state, &state.runtime.runs[from]);
                 let (actor, action, backend, model, context, lenses, root) = (
                     origin.actor.clone(),
                     origin.action,
@@ -520,6 +524,7 @@ pub fn reconcile(
                 next.model = model;
                 next.context = context;
                 next.lenses = lenses;
+                next.resource_grants = grants;
                 next.room_wake_used = true;
                 // A durable persona fences continuations and children as well as this turn.
                 next.persona = Some(crate::delegation::Persona {
@@ -781,9 +786,39 @@ mod tests {
         );
     }
 
+    fn shared_service(state: &mut State) -> crate::services::Grant {
+        state.services.push(serde_json::from_value(json!({
+            "resource":{"id":"svc-shared","owner":{"node":"node-a","chat":"other-owner"},"generation":1,
+                "image":format!("sha256:{}", "a".repeat(64)),"scope":{"network":"Offline","storage":"PrivateMemory"},
+                "lease":[1,u64::MAX],"phase":"Requested"},
+            "origin":{"run":"owner-run","attempt":"owner-attempt"},
+            "actor":{"type":"local_operator"},"command":"sleep 60","uid":502,"gid":20
+        })).unwrap());
+        state.services.last().unwrap().grant()
+    }
+
+    #[test]
+    fn one_shot_retains_grants_received_after_arming() {
+        let (mut state, run) = fixture();
+        let chat = state.chats[0].id.clone();
+        watch(&mut state, &run, true);
+        let grant = shared_service(&mut state);
+        crate::chat::enqueue_continuation(&mut state, &chat, 0, "Service ready".into(), RunKind::AgentMessage, "test").unwrap();
+        state.runtime.runs[1].resource_grants.push(grant);
+        for run in &mut state.runtime.runs { run.status = "completed".into(); }
+        post(&mut state, "research", "New evidence", None);
+        reconcile(&mut state, |_| Ok(())).unwrap();
+        assert_eq!(state.runtime.runs.len(), 3);
+        assert_eq!(state.runtime.runs[2].kind, RunKind::RoomNotification);
+        assert!(crate::services::accessible(&state.services[0], &state.services[0].resource.owner.node, &state.runtime.runs[2]));
+        assert!(state.runtime.runs[0].resource_grants.is_empty(), "arming attempt remains unchanged");
+    }
+
     #[test]
     fn one_shot_waits_for_idle_and_survives_failed_checkpoint_and_restart() {
         let (mut state, run) = fixture();
+        let grant = shared_service(&mut state);
+        state.runtime.runs[0].resource_grants.push(grant);
         watch(&mut state, &run, true);
         watch(&mut state, &run, true);
         post(&mut state, "research", "A concise discovery", None);
@@ -800,6 +835,7 @@ mod tests {
         assert!(state.collective.room_watches[0].wake.is_some());
         reconcile(&mut state, |_| Ok(())).unwrap();
         assert_eq!(state.runtime.runs.len(), 2);
+        assert!(crate::services::accessible(&state.services[0], &state.services[0].resource.owner.node, &state.runtime.runs[1]), "a room wake retains the armed task's exact service grant");
         assert_eq!(
             state.runtime.runs[1].persona.as_ref().unwrap().root,
             run,
@@ -820,6 +856,8 @@ mod tests {
         reconcile(&mut restored, |_| panic!("consumed wake must be idle")).unwrap();
         assert_eq!(restored.runtime.runs.len(), 2);
         assert_eq!(restored.collective.room_watches[0].delivered, delivered);
+        restored.services[0].resource.generation = serde_json::from_value(json!(2)).unwrap();
+        assert!(!crate::services::accessible(&restored.services[0], &restored.services[0].resource.owner.node, &restored.runtime.runs[1]), "room wakes cannot gain replacement generations");
         restored.runtime.runs[1].status = "running".into();
         restored.runtime.runs[1]
             .attempts

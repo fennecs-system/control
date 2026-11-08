@@ -141,7 +141,9 @@ fn plans(state: &State, now: u64) -> Vec<(usize, Plan)> {
     let mut latest = HashMap::new();
     for (index, run) in state.runtime.runs.iter().enumerate() {
         if let Some(chat) = run.chat_id.as_deref() {
-            latest.insert(chat, index);
+            latest.entry(chat)
+                .and_modify(|head: &mut (u64, usize)| *head = (*head).max((run.queue_order, index)))
+                .or_insert((run.queue_order, index));
         }
     }
     let busy = state
@@ -167,7 +169,7 @@ fn plans(state: &State, now: u64) -> Vec<(usize, Plan)> {
                 .listener
                 .as_ref()
                 .filter(|listener| !listener.paused)?;
-            let last = latest.get(watch.chat.as_str()).copied();
+            let last = latest.get(watch.chat.as_str()).map(|&(_, index)| index);
             let valid = last.filter(|&index| {
                 let latest = &state.runtime.runs[index];
                 latest.actor == watch.actor
