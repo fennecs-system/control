@@ -373,7 +373,7 @@ fn attach_room(state: &mut State, id: &str, option: &str) -> Result<String, &'st
     let room = match option {
         "" => return Ok(session.room.as_deref().map_or("No room attached. Use /room general, /room engineering or /room research.".to_owned(), |room| format!("Room #{room}. Use /room off to detach."))),
         "off" => None,
-        name if crate::rooms::valid(name) => Some(name.to_owned()),
+        name if crate::rooms::valid(name) => Some(crate::rooms::for_task(name, lineage(state, id).last().unwrap_or(id))?),
         _ => return Err("Use /room general, /room engineering, /room research or /room off."),
     };
     if session.room == room {
@@ -971,7 +971,7 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
                 None
             };
             state.chats.last_mut().unwrap().lenses = Some(lenses);
-            state.chats.last_mut().unwrap().room = room;
+            state.chats.last_mut().unwrap().room = room.as_deref().map(|room| crate::rooms::for_task(room, &id)).transpose()?;
             state.chats.last_mut().unwrap().design_context = design_context;
             detail(state, &id)
         }
@@ -1640,7 +1640,7 @@ mod tests {
         state.runtime.runs[0].status="completed".into();
         assert!(send(&mut state,&id,"/room lobby","test").is_err());
         send(&mut state,&id,"/room general","test").unwrap();
-        assert_eq!(state.chats[0].room.as_deref(),Some("general"));
+        assert_eq!(state.chats[0].room.as_deref(),Some(format!("general/{id}").as_str()));
         assert!(state.chats[0].messages.last().unwrap().reply.contains("#general"));
         send(&mut state,&id,"/listen","test").unwrap();
         assert!(send(&mut state,&id,"/room research","test").is_err(),"a listener owns the inbox");

@@ -10,6 +10,41 @@ does not change ownership or expose other chats' services. Design continuations
 retain grants; completed delegated work returns its resource handles to the parent.
 Judges receive no service grants.
 
+Resources created after spawning can be shared explicitly through the existing
+`control_agent_message` tool:
+
+```json
+{"chat_id":"<child chat>","text":"The service is ready; continue using it.","services":["<service ID>"]}
+```
+
+The sender must already have access, and the recipient must be a same-actor
+descendant. The message and selected exact owner/generation grants commit
+together, taking effect in the queued follow-up turn without interrupting or
+changing an active attempt. Retries are idempotent; failed saves queue neither
+the message nor the grants. A replacement service generation needs a new grant.
+Omitting `services` transfers no additional authority. A service grant permits
+the existing service operations, including execution and stop; it is not a
+port-only permission. Scoped TCP approval remains a separate operator decision.
+
+## Task coordination threads
+
+New tasks coordinate in a thread under `general`, `engineering` or `research`.
+The stable scope is the top-level chat, not a provider attempt: workers spawned
+before or after room attachment resolve the same thread, and continuations keep
+it across restart. A worker using `room: "general"` reads and posts within that
+task's thread. Unrelated task history, chat links and callbacks are excluded.
+Threads reuse the existing room records, inbox cursors and event subscriptions;
+they add no supervisor state, periodic polling or deadline.
+
+The Rooms menu lists task threads by their lead's title. Operators can read and
+post into a selected thread or explicitly create another chat there. Exact room
+addresses are `<channel>/<thread chat ID>`; worker tools cannot choose another
+task's thread. Existing legacy shared-room attachments remain shared so an
+upgrade does not silently move an active swarm or invalidate its receipts. To
+move an old chat, disable its bot/listener, then use `/room general` (or another
+channel) to attach its task thread. Prior shared history remains available to
+the operator; new threads do not import it.
+
 ## First slice
 
 The worker MCP surface advertises these tools for ordinary Codex and Claude
