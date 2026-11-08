@@ -17,14 +17,30 @@ Resources created after spawning can be shared explicitly through the existing
 {"chat_id":"<child chat>","text":"The service is ready; continue using it.","services":["<service ID>"]}
 ```
 
-The sender must already have access, and the recipient must be a same-actor
-descendant. The message and selected exact owner/generation grants commit
+The sender must already have access. The recipient must be a same-actor
+descendant or another worker under the same top-level spawned task. Siblings can
+exchange targeted callbacks without a running parent, a root bot, or a room
+broadcast. The steering/root chat is not a peer destination; consequential
+operator decisions use `control_design_ask`. Joining a shared room alone does
+not permit messaging unrelated task trees. Peer messages cannot bypass a bot's
+pause/stop, revive cancelled or failed work, change its action scope, or continue
+a read-only judge.
+
+The message and selected exact owner/generation grants commit
 together, taking effect in the queued follow-up turn without interrupting or
 changing an active attempt. Retries are idempotent; failed saves queue neither
 the message nor the grants. A replacement service generation needs a new grant.
 Omitting `services` transfers no additional authority. A service grant permits
 the existing service operations, including execution and stop; it is not a
 port-only permission. Scoped TCP approval remains a separate operator decision.
+
+Use peer messages for requests and answers that one worker needs to proceed;
+discover peer chat IDs from the linked room's participant list. The recipient
+retains its own task, model, context and grants. Messages are coordination evidence,
+not new operator steering. Replies remain in the recipient's chat: send an answer
+directly when the sender is blocked on it. Do not also post the same request or
+answer as a room notification. The steering chat can finish after assigning
+ownership; it does not acknowledge or relay each worker update.
 
 ## Task coordination threads
 

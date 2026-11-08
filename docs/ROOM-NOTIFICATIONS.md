@@ -12,11 +12,21 @@ notify. Exact task scope, own-post suppression, authorization and queue limits
 still apply. Retries retain the first post's captured delivery intent.
 
 The author chooses delivery in the tool, not by asking the supervisor to classify
-prose. Record useful observations that require no action now; notify when evidence
-releases a dependency, changes a plan, or needs a decision/action. A worker update
-does not require a lead acknowledgement or paraphrase. Send changed direction for
-one worker through `control_agent_message`, without duplicating it in the room.
-Unchanged status belongs in workload diagnostics, not repeated room posts.
+prose. Record useful observations that require no action now. Send an actionable
+request, dependency release or required answer for one worker directly through
+`control_agent_message`; same-task siblings can message each other. Notify the
+room when multiple participants need to act on new evidence. Requests and blockers
+requiring action must not be buried in record-only posts. Do not duplicate direct
+messages as room notifications. Unchanged status belongs in workload diagnostics.
+
+Workers own their assignments and coordinate among themselves. The root chat is
+for steering and consequential decisions; it need not run or have bot approval
+for peers to coordinate. It should intervene for unresolved dependencies,
+conflicting ownership or changed goals, rather than acknowledge, paraphrase or
+relay worker updates that are already shared. A worker that needs an answer sends
+the relevant peer a targeted callback, and that peer sends back the answer only
+when it releases a dependency. Shared room membership alone does not authorize
+messaging across unrelated task trees.
 
 Admission scans and read/processed cursors are separate. Scanning past a recorded
 update must not acknowledge it, including across checkpoint failure and restart.
@@ -39,7 +49,8 @@ persistent-bot approval; posting does not create that authority.
 
 Linked-room workers read the room between action batches and report verified
 milestones, blockers and maintenance transitions. Relevant human and agent posts
-deserve a response; unchanged status and acknowledgement loops do not. These are
+require action when relevant to their assignment; a reply is not required for
+every update. Unchanged status and acknowledgement loops add no work. These are
 shared communication instructions, not an authority grant or proof of continuous
 listening. A persistent room subscription is separate from the one-shot wake below.
 

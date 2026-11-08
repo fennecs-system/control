@@ -261,6 +261,10 @@ or local-model adapters. Preserve the existing scheduling and authority rules.
    extraction. Tools choose explicit room delivery (`record` or `notify`); a retained
    update must remain readable without waking peers or acknowledging their inboxes.
    Lead policy responds to changed plans/dependencies, not every worker milestone.
+   Workers coordinate directly with same-task peers through the existing targeted
+   message queue, including after the steering chat finishes without a root bot.
+   A shared room alone grants no cross-task access; stopped work and action scope
+   remain protected. Requests for one worker do not also broadcast room wakes.
    Workload emitters classify changes rather than promoting repeated severity words
    into events. Acceptance: a notified worker milestone followed by a recorded lead
    update creates no extra echo turn; restart/save failure preserve unread evidence

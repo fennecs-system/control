@@ -130,6 +130,10 @@ fn record(state: &mut State, effects: Vec<Planned<BotId, Effect>>) {
 pub(crate) fn defined(state: &State, chat: &str) -> bool {
     state.bots.supervisor.status(&bot(chat)).is_some()
 }
+/// An autonomous peer must not bypass the recipient's explicit pause/stop.
+pub(crate) fn holds_peer_messages(state: &State, chat: &str) -> bool {
+    matches!(state.bots.supervisor.status(&bot(chat)), Some(Status::Paused | Status::Stopping))
+}
 pub(crate) fn continuation_enabled(state: &State, chat: &str) -> bool {
     state.bots.supervisor.definitions().any(|definition| definition.chat.0 == chat && definition.restart == Restart::Permanent)
 }

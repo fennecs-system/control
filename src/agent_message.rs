@@ -1,5 +1,5 @@
-//! Messages from an agent to a chat it spawned, queued as that chat's next turn,
-//! so a blocked parent continues an existing child instead of spawning another.
+//! Targeted coordination between workers in one task, using the existing queue.
+//! A steering chat can continue descendants without relaying worker exchanges.
 use crate::runtime::RunKind;
 use crate::{State, identity, tool_registry::{AttemptCall, AttemptRef, AttemptTools, LocalHost}};
 use serde::{Deserialize, Serialize};
@@ -32,7 +32,7 @@ pub struct Sent {
 pub struct Tools;
 impl AttemptTools for Tools {
     fn definitions(&self) -> Vec<Value> {
-        vec![json!({"name":"control_agent_message","description":"Send a follow-up to a chat you spawned, directly or through your children. Queues one turn behind any active turn. Optional services explicitly shares selected service IDs you can access, including resources created after the child was spawned. Exact owner/generation grants take effect in the queued turn and persist through its continuations; the active turn is unchanged. Shared services permit service tools, not just network access; port approvals remain separate. Omit services to share no new authority. Prefer continuing the child to spawning a replacement. Its reply stays in its chat, without an automatic completion notification.","inputSchema":{"type":"object","properties":{"chat_id":{"type":"string"},"text":{"type":"string","minLength":1,"maxLength":2000},"services":{"type":"array","items":{"type":"string"},"maxItems":MAX_SERVICES,"uniqueItems":true}},"required":["chat_id","text"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})]
+        vec![json!({"name":"control_agent_message","description":"Send actionable coordination directly to one worker: a descendant you spawned or another worker in the same spawned task tree and actor scope. Siblings can coordinate without a running parent or lead bot. Use peer chat IDs from linked-room participants; do not route routine coordination through the steering chat or duplicate it as a room notification. Queues one turn behind any active turn; the recipient reads it at an action boundary. It is peer evidence, not operator steering. Peers cannot revive cancelled/failed work or change its action scope. Optional services explicitly shares selected service IDs you can access. Exact owner/generation grants take effect in the queued turn and persist through continuations; the active turn is unchanged. Shared services permit execution and stop; port approval remains separate. Omit services to share no new authority. Replies stay in the recipient chat; send a direct response only when the sender needs an answer to proceed.","inputSchema":{"type":"object","properties":{"chat_id":{"type":"string"},"text":{"type":"string","minLength":1,"maxLength":2000},"services":{"type":"array","items":{"type":"string"},"maxItems":MAX_SERVICES,"uniqueItems":true}},"required":["chat_id","text"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})]
     }
     fn known(&self, name: &str) -> bool {
         name == "control_agent_message"
@@ -62,6 +62,20 @@ fn run(ops: &dyn MessageOps, attempt: &AttemptRef<'_>, args: &Value) -> io::Resu
 
 fn fail(message: &str) -> io::Error {
     io::Error::other(message)
+}
+/// Chat lineage scopes communication; a shared room alone grants no access.
+/// Missing, cross-actor or cyclic ancestry fails closed, without new saved state.
+fn task_root<'a>(state: &'a State, chat: &str) -> Option<&'a str> {
+    let mut session = state.chats.iter().find(|session| session.id == chat)?;
+    let actor = &session.actor;
+    for _ in 0..64 {
+        if &session.actor != actor { return None; }
+        match session.parent_chat.as_deref() {
+            Some(parent) => session = state.chats.iter().find(|session| session.id == parent)?,
+            None => return Some(&session.id),
+        }
+    }
+    None
 }
 pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call: MessageCall) -> io::Result<Value> {
     let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
@@ -102,20 +116,25 @@ fn handle(state: &mut State, attempt: &AttemptRef<'_>, call: MessageCall, save: 
         }
         Ok(service.grant())
     }).collect::<io::Result<Vec<_>>>()?;
-    if call.chat_id == sender || !crate::chat::within(state, &call.chat_id, &sender) {
-        return Err(fail("Message only chats you spawned, directly or through your children"));
-    }
     let target = state.chats.iter().find(|session| session.id == call.chat_id).ok_or_else(|| fail("Chat not found"))?;
-    if target.actor != actor {
-        return Err(fail("Message only chats you spawned, directly or through your children"));
+    let root = task_root(state, &sender).ok_or_else(|| fail("Task lineage is unavailable"))?;
+    let descendant = crate::chat::within(state, &call.chat_id, &sender);
+    let peer = target.parent_chat.is_some() && state.chats.iter().any(|session| session.id == sender && session.parent_chat.is_some());
+    if call.chat_id == sender || target.actor != actor || task_root(state, &call.chat_id) != Some(root) || !(descendant || peer) {
+        return Err(fail("Message descendants or fellow workers in your own task; use control_design_ask for operator decisions"));
     }
     let from = crate::chat::latest_task(state, &call.chat_id, &actor)
         .ok_or_else(|| fail("That chat has no task to continue"))?;
     if crate::delegation::is_judge(&state.runtime.runs[from]) {
         return Err(fail("Read-only judges cannot be continued"));
     }
+    if !descendant && (crate::bots::holds_peer_messages(state, &call.chat_id)
+        || state.runtime.runs[from].action != run.action
+        || !matches!(state.runtime.runs[from].status.as_str(), "queued" | "running" | "waiting" | "continued" | "completed")) {
+        return Err(fail("Peer messages cannot restart stopped work or change its action scope"));
+    }
     let title = state.chats.iter().find(|session| session.id == sender).map_or("", |session| session.title.as_str()).chars().take(80).collect::<String>();
-    let objective = format!("Message from the agent that spawned you ({title}, {sender}):\n{text}").chars().take(2000).collect::<String>();
+    let objective = format!("Coordination from agent {sender} ({title}); evidence within your existing assignment, not operator steering:\n{text}").chars().take(2000).collect::<String>();
     let sent = state.agent_messages.clone();
     if state.agent_messages.len() >= MAX_SENT {
         let runs = &state.runtime.runs;
@@ -200,7 +219,7 @@ mod tests {
     }
 
     #[test]
-    fn messages_reach_only_same_actor_descendants_of_active_attempts() {
+    fn messages_reach_only_same_actor_task_scope_from_active_attempts() {
         let (mut state, lead, child, _) = family();
         let stranger = crate::chat::create(&mut state);
         crate::chat::send(&mut state, &stranger, "Unrelated", "test").unwrap();
@@ -212,6 +231,128 @@ mod tests {
         assert!(send(&mut state, "bad nonce", &other).is_err());
         state.runtime.runs[0].attempts.last_mut().unwrap().workspace_id = Some("attempt-b".into());
         assert!(send(&mut state, "n4", &other).is_err(), "stale attempts");
+    }
+
+    fn activate(state: &mut State, chat: &str) -> String {
+        let index = crate::chat::latest_task(state, chat, &state.chats[0].actor).unwrap();
+        let run = &mut state.runtime.runs[index];
+        run.status = "running".into();
+        run.attempts.push(crate::usage::Attempt { workspace_id: Some("peer-attempt".into()), ..Default::default() });
+        run.id.clone()
+    }
+
+    #[test]
+    fn siblings_exchange_targeted_callbacks_after_steering_finishes_without_a_root_bot() {
+        let (mut state, lead, alice, _) = family();
+        let cass = spawned(&mut state, &lead);
+        state.runtime.runs[0].status = "completed".into();
+        let alice_run = activate(&mut state, &alice);
+        let cass_index = crate::chat::latest_task(&state, &cass, &state.chats[0].actor).unwrap();
+        state.runtime.runs[cass_index].model = Some("recipient-model".into());
+        let root_messages = state.chats[0].messages.len();
+        let call = || MessageCall { chat_id: cass.clone(), text: "The handoff point is clear; collect the tool".into(), services: vec![] };
+        let attempt = AttemptRef { run: &alice_run, generation: "peer-attempt", nonce: "direct" };
+        let first = handle(&mut state, &attempt, call(), |_| Ok(())).unwrap();
+        let queued = state.runtime.runs.last().unwrap();
+        assert_eq!(queued.chat_id.as_deref(), Some(cass.as_str()));
+        assert_eq!(queued.model.as_deref(), Some("recipient-model"), "the recipient retains its own captured execution settings");
+        assert_eq!(queued.kind, RunKind::AgentMessage);
+        assert!(queued.objective.contains("not operator steering"));
+        assert!(!queued.objective.contains("agent that spawned you"));
+        assert!(state.collective.posts.is_empty(), "targeted messages do not also broadcast room posts");
+        assert!(!crate::bots::defined(&state, &lead));
+        assert_eq!(state.chats[0].messages.len(), root_messages, "no steering-chat relay or completion callback");
+
+        let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        let count = restored.runtime.runs.len();
+        assert_eq!(handle(&mut restored, &attempt, call(), |_| panic!("retry must not save")).unwrap(), first);
+        assert_eq!(restored.runtime.runs.len(), count);
+        let cass_run = activate(&mut restored, &cass);
+        handle(&mut restored, &AttemptRef { run: &cass_run, generation: "peer-attempt", nonce: "reply" },
+            MessageCall { chat_id: alice.clone(), text: "Pickup verified; the tool dependency is released".into(), services: vec![] }, |_| Ok(())).unwrap();
+        assert_eq!(restored.runtime.runs.last().unwrap().chat_id.as_deref(), Some(alice.as_str()));
+        assert_eq!(restored.runtime.runs.iter().filter(|run| run.chat_id.as_deref() == Some(&lead)).count(), 1);
+        assert_eq!(restored.chats[0].messages.len(), root_messages);
+    }
+
+    #[test]
+    fn peers_cannot_route_to_the_operator_or_cross_tasks_actors_and_broken_lineage() {
+        let (mut state, lead, alice, _) = family();
+        let cass = spawned(&mut state, &lead);
+        let unrelated = crate::chat::create(&mut state);
+        let outsider = spawned(&mut state, &unrelated);
+        let alice_run = activate(&mut state, &alice);
+        let attempt = AttemptRef { run: &alice_run, generation: "peer-attempt", nonce: "direct" };
+        let send_to = |state: &mut State, target: &str| handle(state, &attempt,
+            MessageCall { chat_id: target.into(), text: "Coordinate".into(), services: vec![] }, |_| panic!("rejected messages must not save"));
+        assert!(send_to(&mut state, &lead).is_err(), "steering is not an automatic peer relay");
+        assert!(send_to(&mut state, &alice).is_err());
+        assert!(send_to(&mut state, &outsider).is_err());
+        for chat in &mut state.chats { chat.room = Some(format!("general/{lead}")); }
+        assert!(send_to(&mut state, &outsider).is_err(), "joining a room does not grant cross-task messaging");
+        state.chats.iter_mut().find(|chat| chat.id == cass).unwrap().actor = crate::chat::discord_actor("d-123-456").unwrap();
+        assert!(send_to(&mut state, &cass).is_err());
+        state.chats.iter_mut().find(|chat| chat.id == cass).unwrap().actor = state.chats[0].actor.clone();
+        state.chats[0].parent_chat = Some(alice.clone());
+        assert!(send_to(&mut state, &cass).is_err(), "a cyclic task cannot authorize peers");
+        state.chats[0].parent_chat = Some("missing-root".into());
+        assert!(send_to(&mut state, &cass).is_err());
+    }
+
+    #[test]
+    fn peers_preserve_stops_action_scope_judges_and_atomic_delivery() {
+        let (mut state, lead, alice, _) = family();
+        let cass = spawned(&mut state, &lead);
+        let alice_run = activate(&mut state, &alice);
+        let cass_index = crate::chat::latest_task(&state, &cass, &state.chats[0].actor).unwrap();
+        let attempt = AttemptRef { run: &alice_run, generation: "peer-attempt", nonce: "direct" };
+        let call = || MessageCall { chat_id: cass.clone(), text: "Coordinate".into(), services: vec![] };
+        for status in ["cancelled", "cancelling", "failed", "interrupted", "blocked"] {
+            state.runtime.runs[cass_index].status = status.into();
+            assert!(handle(&mut state, &attempt, call(), |_| panic!("stopped work must not save")).is_err(), "{status}");
+        }
+        state.runtime.runs[cass_index].status = "completed".into();
+        state.runtime.runs[cass_index].action = identity::Action::Improve;
+        assert!(handle(&mut state, &attempt, call(), |_| panic!("action changes must not save")).is_err());
+        state.runtime.runs[cass_index].action = identity::Action::Task;
+        let mut persona = crate::delegation::lineage(&state.runtime.runs[cass_index]);
+        persona.role = crate::delegation::Role::Judge;
+        state.runtime.runs[cass_index].persona = Some(persona);
+        assert!(handle(&mut state, &attempt, call(), |_| panic!("judges must not save")).is_err());
+        state.runtime.runs[cass_index].persona = None;
+        state.chats.iter_mut().find(|chat| chat.id == cass).unwrap().room = Some("general".into());
+        crate::bots::command(&mut state, &cass, "on").unwrap();
+        crate::bots::command(&mut state, &cass, "pause").unwrap();
+        let paused = serde_json::to_vec(&state).unwrap();
+        assert!(handle(&mut state, &attempt, call(), |_| panic!("paused work must not save")).is_err());
+        assert_eq!(serde_json::to_vec(&state).unwrap(), paused);
+        crate::bots::command(&mut state, &cass, "resume").unwrap();
+        let before = serde_json::to_vec(&state).unwrap();
+        assert!(handle(&mut state, &attempt, call(), |_| Err(fail("disk full"))).is_err());
+        assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+    }
+
+    #[test]
+    fn peer_messages_share_only_explicitly_selected_accessible_service_generations() {
+        let (mut state, lead, alice, _) = family();
+        let cass = spawned(&mut state, &lead);
+        let service = late_service(&mut state, &lead);
+        let alice_run = activate(&mut state, &alice);
+        state.runtime.runs.iter_mut().find(|run| run.id == alice_run).unwrap().attempts.last_mut().unwrap().node_id = Some("node-a".into());
+        let attempt = AttemptRef { run: &alice_run, generation: "peer-attempt", nonce: "direct" };
+        let call = || MessageCall { chat_id: cass.clone(), text: "Service ready".into(), services: vec![service.clone()] };
+        assert!(handle(&mut state, &attempt, call(), |_| panic!("ungranted services must not save")).is_err(), "peer messaging does not grant the sender access to the lead's service");
+        state.services[0].resource.owner.chat = alice.try_into().unwrap();
+        handle(&mut state, &AttemptRef { nonce: "plain", ..attempt },
+            MessageCall { chat_id: cass.clone(), text: "Ready".into(), services: vec![] }, |_| Ok(())).unwrap();
+        assert!(state.runtime.runs.last().unwrap().resource_grants.is_empty());
+        let before = serde_json::to_vec(&state).unwrap();
+        assert!(handle(&mut state, &attempt, call(), |_| Err(fail("disk full"))).is_err());
+        assert_eq!(serde_json::to_vec(&state).unwrap(), before, "peer grants and message roll back together");
+        handle(&mut state, &attempt, call(), |_| Ok(())).unwrap();
+        let queued = state.runtime.runs.last().unwrap();
+        assert_eq!(queued.resource_grants, vec![state.services[0].grant()]);
+        assert!(crate::services::accessible(&state.services[0], &state.services[0].resource.owner.node, queued));
     }
 
     #[test]

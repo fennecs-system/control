@@ -22,6 +22,10 @@ milestone changes, or an error needs attention. Keep unchanged health, status
 query responses and routine telemetry outside those prefixes. Matching a common
 prefix on every diagnostic line recreates any-line waking. Domain-specific
 transition detection belongs in the workload container, not Control's supervisor.
+Routine command completions already returned to the active worker, including
+surveys and inspections, should remain diagnostics rather than produce another
+coordination wake. Emit a callback when a waiting worker needs to resume for a
+changed dependency, and retain the underlying evidence for deliberate reads.
 
 Classification is workload policy: observe the previous condition and the new
 condition, retain diagnostics, and emit an actionable transition only when the
