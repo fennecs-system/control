@@ -118,6 +118,12 @@ for operator inspection and pauses ordinary dispatch if reconciliation cannot
 account for the container; it does not delete an unfamiliar container.
 
 Stop intent precedes removal, and only an observed absence completes cleanup.
+An explicit stop also retries cleanup of a fenced service. It keeps the recorded
+container identity and reservation until the engine confirms absence; an absent
+entry in label-filtered inventory is checked by exact container ID as well.
+An owned paused container can be removed after identity and scope verification.
+Mismatches remain fenced, and engine or persistence failures retain the reservation.
+Fenced services never restart automatically or resume their command during cleanup.
 An engine failure remains pending with a bounded diagnostic. Revocation permits
 cleanup but prevents new create/start effects. No exactly-once external effect
 guarantee is implied by this local reconciliation protocol.
@@ -136,7 +142,19 @@ maximum duration bounds the watchdog even if clocks differ.
 
 Native fault tests cover checkpoint failures, duplicate/replayed requests,
 bounded retention, ownership/scope mismatches, permission revocation, expired
-leases and restoration after the model turn ends. An explicit ignored Docker
+leases and restoration after the model turn ends. They also cover capacity
+recovery from fenced records, failed cleanup checkpoints and containers hidden
+from label-filtered inventory. An isolated Docker regression exercises pause,
+fencing, explicit stop and confirmed removal without any model calls:
+
+```sh
+CONTROL_QA_SERVICE_IMAGE=sha256:<worker-image-id> \
+nix develop --command cargo test --locked --bin control \
+  services::tests::live_fenced_paused_service_can_be_stopped_without_restart \
+  -- --ignored --exact --nocapture
+```
+
+An explicit ignored Docker
 test starts an isolated real Control server, preserves a private counter across
 restart, recovers a lost Running receipt and verifies expiry with Control stopped.
 It also tests that a child cannot open its supervisor's memory or stop its timer.
