@@ -66,7 +66,7 @@ pub(super) fn label(state: &State, room: &str) -> String {
     match address.thread {
         Some(thread) => {
             let title = state.chats.iter().find(|chat| chat.id == thread).map_or(thread, |chat| chat.title.as_str());
-            format!("#{} · {}", address.channel, title.chars().take(60).collect::<String>())
+            format!("#{} · {title}", address.channel)
         }
         None => format!("#{}", address.channel),
     }
