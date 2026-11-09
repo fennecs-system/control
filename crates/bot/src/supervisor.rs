@@ -129,7 +129,7 @@ pub enum Event<I> {
     Continue(BotId),
     /// Narrow an idle bot's wake conditions without changing its subscriptions.
     /// The host validates the deadline and topic authority before admission.
-    Wait { bot: BotId, topics: Vec<Topic>, until: u64 },
+    Wait { bot: BotId, topics: Vec<Topic>, until: Option<u64> },
     /// Processing is distinct from ingestion. Clear only reasons whose exact
     /// source watermark was committed with the agent's workspace.
     Processed { bot: BotId, topic: Topic, through: u64 },
@@ -201,7 +201,7 @@ struct Bot<I> {
 }
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-struct Wait { topics: Vec<Topic>, until: u64 }
+struct Wait { topics: Vec<Topic>, until: Option<u64> }
 impl<I: Info> Bot<I> {
     /// Admits a reason. Replays at or below the topic cursor are ignored. When
     /// the pending set is full a new distinct reason is counted as dropped and
@@ -317,6 +317,18 @@ impl<I: Info> Supervisor<I> {
     pub fn eligible(&self, bot: &BotId, turn: &TurnId) -> bool {
         self.bots.get(bot).is_some_and(|b| !b.stopping && b.turn.as_ref().is_some_and(|(id, _)| id == turn))
     }
+    /// Dispatch rechecks pause separately from an already requested/running turn.
+    /// Pausing retains the request; resuming does not allocate another turn.
+    pub fn may_start(&self, bot: &BotId, turn: &TurnId) -> bool {
+        self.eligible(bot, turn) && self.bots.get(bot).is_some_and(|b| !b.paused)
+    }
+    /// Whether retained source evidence is newer than both admission and
+    /// published processing. The application can skip reoffering old records.
+    pub fn unseen(&self, bot: &BotId, topic: &Topic, through: u64) -> bool {
+        self.bots.get(bot).is_some_and(|b| !b.stopping
+            && b.cursors.get(&topic.key()).is_none_or(|seen| through > *seen)
+            && b.processed.get(&topic.key()).is_none_or(|seen| through > *seen))
+    }
     /// Turns requested but not yet completed, for reconciliation after restart.
     pub fn outstanding(&self) -> impl Iterator<Item = (&BotId, &ChatId, &TurnId)> {
         self.bots.iter().filter_map(|(id, bot)| bot.turn.as_ref().map(|(turn, chat)| (id, chat, turn)))
@@ -324,7 +336,7 @@ impl<I: Info> Supervisor<I> {
     /// The earliest time a `Tick` could produce an effect; drivers wait until
     /// then or the next event instead of polling.
     pub fn next_deadline(&self, now: Now) -> Option<Now> {
-        self.bots.values().flat_map(|bot| [bot.timer_due.filter(|_| !bot.paused), bot.wait.as_ref().filter(|_| !bot.paused).map(|wait| wait.until), bot.ready_at(now.0)]).flatten().min().map(Now)
+        self.bots.values().flat_map(|bot| [bot.timer_due.filter(|_| !bot.paused && bot.wait.is_none()), bot.wait.as_ref().filter(|_| !bot.paused).and_then(|wait| wait.until), bot.ready_at(now.0)]).flatten().min().map(Now)
     }
     fn define(&mut self, definition: Definition, now: u64) {
         if definition.validate().is_err() {
@@ -403,12 +415,14 @@ impl<I: Info> Supervisor<I> {
             }
             Event::Wait { bot:id, topics, until } => {
                 if let Some(bot) = self.bots.get_mut(&id)
-                    && !bot.stopping && until > now
+                    && !bot.stopping && until.is_none_or(|until| until > now)
                     && topics.len() <= 16 && topics.iter().all(|topic| bot.definition.subscribes(topic)) {
-                    bot.pending.retain(|reason| !matches!(reason, Reason::Continue));
+                    // An explicit dependency wait supersedes idle check-ins,
+                    // including timers accumulated during the active turn.
+                    bot.pending.retain(|reason| !matches!(reason, Reason::Continue | Reason::Timer));
                     bot.wait = (!bot.pending.iter().any(|reason| match reason {
                         Reason::Info{topic,info,..} => info.urgent() || topics.contains(topic),
-                        Reason::Timer => true,
+                        Reason::Timer => false,
                         _ => false,
                     })).then_some(Wait{topics,until});
                 }
@@ -470,15 +484,14 @@ impl<I: Info> Supervisor<I> {
             Event::Tick => {}
         }
         for bot in self.bots.values_mut().filter(|bot| !bot.stopping && !bot.paused) {
-            if bot.wait.as_ref().is_some_and(|wait| wait.until <= now) {
+            if bot.wait.as_ref().is_some_and(|wait| wait.until.is_some_and(|until| until <= now)) {
                 bot.wait = None;
                 bot.accept(None, Reason::Timer);
             }
             if let (Some(due), Some(every)) = (bot.timer_due, bot.definition.timer())
                 && due <= now
             {
-                bot.accept(None, Reason::Timer);
-                bot.wait = None;
+                if bot.wait.is_none() { bot.accept(None, Reason::Timer); }
                 bot.timer_due = now.checked_add(every);
             }
         }
@@ -649,7 +662,7 @@ mod tests {
         let mut s = S::default();
         define(&mut s,"agent",vec![room("general"),room("work")],budget(0,60_000,10),0);
         let active=turns(&s.step(message(None,1),Now(1)))[0].1;
-        s.step(Event::Wait{bot:bot("agent"),topics:vec![topic("room","work")],until:10_000},Now(2));
+        s.step(Event::Wait{bot:bot("agent"),topics:vec![topic("room","work")],until:Some(10_000)},Now(2));
         assert!(s.step(done("agent",active),Now(3)).is_empty());
         for cursor in 2..50 {
             assert!(s.step(message(None,cursor),Now(cursor*100)).is_empty(),"irrelevant telemetry remains pending without model churn");
@@ -658,34 +671,62 @@ mod tests {
         let relevant=s.step(Event::Info{topic:topic("room","work"),cursor:1,from:None,info:Msg::Post},Now(5001));
         let next=turns(&relevant)[0].1;
         assert_eq!(turns(&relevant).len(),1);
-        s.step(Event::Wait{bot:bot("agent"),topics:vec![],until:6000},Now(5002));
+        s.step(Event::Wait{bot:bot("agent"),topics:vec![],until:Some(6000)},Now(5002));
         s.step(done("agent",next),Now(5003));
         assert!(s.step(Event::Tick,Now(5999)).is_empty());
         let recheck=s.step(Event::Tick,Now(6000));
         assert_eq!(turns(&recheck)[0].2,[Reason::Timer]);
     }
     #[test]
-    fn idle_waits_preserve_operator_timers_failures_and_explicit_pause() {
+    fn idle_waits_suspend_periodic_checks_but_preserve_deadlines_failures_and_pause() {
         for urgent in [false,true] {
             let mut s = S::default();
             define(&mut s,"agent",vec![room("general"),Source::Timer{every_ms:100}],budget(0,60_000,10),0);
             let active=turns(&s.step(message(None,1),Now(1)))[0].1;
-            s.step(Event::Wait{bot:bot("agent"),topics:vec![],until:1000},Now(2));
+            s.step(Event::Wait{bot:bot("agent"),topics:vec![],until:Some(1000)},Now(2));
             s.step(done("agent",active),Now(3));
             let wake = if urgent {
                 s.step(Event::Info{topic:topic("room","general"),cursor:2,from:None,info:Msg::Exit(Some(1))},Now(4))
             } else {
-                assert_eq!(s.next_deadline(Now(4)),Some(Now(100)),"a model cannot lengthen the operator's timer");
-                s.step(Event::Tick,Now(100))
+                assert_eq!(s.next_deadline(Now(4)),Some(Now(1000)));
+                assert!(s.step(Event::Tick,Now(100)).is_empty());
+                s.step(Event::Tick,Now(1000))
             };
             let active=turns(&wake)[0].1;
-            s.step(Event::Wait{bot:bot("agent"),topics:vec![],until:2000},Now(101));
-            s.step(Event::Pause(bot("agent")),Now(102));
-            s.step(done("agent",active),Now(103));
+            s.step(Event::Wait{bot:bot("agent"),topics:vec![],until:Some(2000)},Now(1001));
+            s.step(Event::Pause(bot("agent")),Now(1002));
+            s.step(done("agent",active),Now(1003));
             assert!(s.step(Event::Tick,Now(3000)).is_empty());
             assert_eq!(s.status(&bot("agent")),Some(Status::Paused));
             assert_eq!(turns(&s.step(Event::Resume(bot("agent")),Now(3001))).len(),1);
         }
+    }
+    #[test]
+    fn event_only_wait_sleeps_for_days_and_retains_new_events_without_preemption() {
+        let mut s = S::default();
+        define(&mut s,"agent",vec![room("general"),room("dependency"),Source::Timer{every_ms:100}],budget(0,60_000,10),0);
+        let active=turns(&s.step(message(None,1),Now(1)))[0].1;
+        // A periodic check accumulated while work was active must not defeat wait.
+        assert!(s.step(Event::Tick,Now(100)).is_empty());
+        s.step(Event::Wait{bot:bot("agent"),topics:vec![topic("room","dependency")],until:None},Now(101));
+        assert!(s.step(done("agent",active),Now(102)).is_empty());
+        #[cfg(feature = "serde")]
+        let mut s: S = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        for now in [300_000,86_400_000,604_800_000] {
+            assert!(s.step(Event::Tick,Now(now)).is_empty());
+            assert_eq!(s.next_deadline(Now(now)),None);
+        }
+        let event=|cursor| Event::Info{topic:topic("room","dependency"),cursor,from:None,info:Msg::Post};
+        let wake=s.step(event(1),Now(604_800_001));
+        assert_eq!(turns(&wake).len(),1);
+        let active=turns(&wake)[0].1;
+        assert!(s.step(event(2),Now(604_800_002)).is_empty());
+        assert!(s.eligible(&bot("agent"),&active));
+        s.step(Event::Processed{bot:bot("agent"),topic:topic("room","dependency"),through:1},Now(604_800_003));
+        s.step(Event::Wait{bot:bot("agent"),topics:vec![topic("room","dependency")],until:None},Now(604_800_004));
+        assert_eq!(turns(&s.step(done("agent",active),Now(604_800_005))).len(),1,"newer unprocessed callback survives");
+        s.step(Event::Stop(bot("agent")),Now(604_800_006));
+        assert!(s.step(Event::Tick,Now(700_000_000)).is_empty());
     }
     #[test]
     fn runnable_continuations_coalesce_obey_budget_and_do_not_resurrect_temporary_bots() {

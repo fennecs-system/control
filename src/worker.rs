@@ -421,7 +421,8 @@ fn start_with(state: Arc<Mutex<State>>, execute: fn(Arc<Mutex<State>>, Task)) ->
                         };
                         (crate::lifecycle::owners(&s.runtime.runs),s.services.iter().filter(|s|s.resource.phase.reserves_capacity()).map(crate::services::Service::binding_snapshot).collect::<Vec<_>>())
                     };
-                    let reconciled = crate::lifecycle::reconcile(&owners,&services);
+                    let reconciled = crate::lifecycle::reconcile(&owners,&services)
+                        .and_then(|()| crate::recovery::reconcile(&state).map_err(|e| e.to_string()));
                     if let Ok(mut s) = state.lock() {
                         match &reconciled {
                             Err(message) => {
@@ -458,7 +459,7 @@ fn start_with(state: Arc<Mutex<State>>, execute: fn(Arc<Mutex<State>>, Task)) ->
                         for reconcile in [crate::delegation::reconcile, crate::rooms::reconcile, crate::spawning::reconcile, crate::bots::reconcile] {
                             if let Err(message)=reconcile(&mut s, storage::save) {s.runtime.notice=message.into();}
                         }
-                        let managed_index=crate::scheduler::next(&s.runtime).filter(|&i|crate::turn_context::managed(&s,&s.runtime.runs[i]));
+                        let managed_index=crate::scheduler::next_in(&s).filter(|&i|crate::turn_context::managed(&s,&s.runtime.runs[i]));
                         match managed_index {
                             Some(index)=>match crate::turn_context::PlannedContext::prepare(&s,index) {
                                 Ok(plan)=>Some(plan),
@@ -564,6 +565,13 @@ fn run_task(state: Arc<Mutex<State>>, task: Task) {
         &mut attempt,
         Some((&state, &task.0)),
     );
+    if outcome.is_err() && attempt.termination.is_none() {
+        attempt.termination = Some(if crate::shutdown::requested() {
+            crate::attempt_control::Termination::Restarted
+        } else if crate::lifecycle::cancelled(Some((&state, &task.0))) {
+            crate::attempt_control::Termination::Cancelled
+        } else { crate::attempt_control::Termination::ProviderError });
+    }
     if let Err(error) = crate::command_jobs::quiesce(&state, &task.0, &workspace_id) {
         outcome = Err(("interrupted", error.to_string()));
     }
@@ -589,6 +597,10 @@ fn run_task(state: Arc<Mutex<State>>, task: Task) {
                 }
                 Err(_) => Err(("failed", "Could not checkpoint the paused workspace. The previous published checkpoint is unchanged.".into())),
             };
+    }
+    if outcome.is_err() && !matches!(&outcome, Err(("waiting", _))) {
+        if attempt.termination.is_none() { attempt.termination = Some(crate::attempt_control::Termination::PublicationFailed); }
+        crate::recovery::capture(Some((&state, &task.0)), &mut attempt);
     }
     attempt.elapsed_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
     // A failed checkpoint must not strand the run or stop dispatch: keep the
@@ -702,7 +714,7 @@ fn commit(
         && let Some(mailbox)=attempt.turn_mailbox.as_ref()
         && mailbox.accepted().is_some()
     {
-        let candidate=attempt.artifact.as_deref().zip(attempt.workspace_id.as_deref()).ok_or("Handoff requires a published workspace")
+        let candidate=attempt.project_checkpoint.as_deref().or(attempt.artifact.as_deref()).zip(attempt.workspace_id.as_deref()).ok_or("Handoff requires a published workspace")
             .and_then(|(checkpoint,generation)|mailbox.publication(chat_index.and_then(|i|s.chats[i].continuity.as_ref()).and_then(|c|c.working.as_ref()),id,generation,checkpoint));
         match candidate {Ok(candidate)=>working=candidate,Err(message)=>outcome=Err(("interrupted",message.into()))}
     }
@@ -729,6 +741,13 @@ fn commit(
         None
     };
     let r = &mut s.runtime.runs[run_index];
+    if let Err((status, _)) = &outcome && *status != "waiting" {
+        attempt.termination.get_or_insert(match *status {
+            "cancelled" => crate::attempt_control::Termination::Cancelled,
+            "interrupted" => crate::attempt_control::Termination::PublicationFailed,
+            _ => crate::attempt_control::Termination::ProviderError,
+        });
+    }
     let (status, result) = match outcome {
         Ok(summary) => ("completed", summary),
         Err((status, message)) => (
@@ -827,7 +846,7 @@ pub(crate) fn checkpoint_next(
     state: &mut State,
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Option<usize> {
-    let index = crate::scheduler::next(&state.runtime)?;
+    let index = crate::scheduler::next_in(state)?;
     let captured = if crate::turn_context::managed(state, &state.runtime.runs[index]) {
         Some(crate::turn_context::PlannedContext::prepare(state, index).ok()?.persist().ok()?)
     } else { None };
@@ -839,7 +858,7 @@ fn checkpoint_prepared(
     save:impl FnOnce(&State)->std::io::Result<()>,
 ) -> Option<usize> {
     if crate::shutdown::requested() { return None; }
-    let index = crate::scheduler::next(&state.runtime)?;
+    let index = crate::scheduler::next_in(state)?;
     if crate::turn_context::managed(state,&state.runtime.runs[index]) && captured.is_none(){return None;}
     let omitted_history = crate::chat::omitted_history(state, &state.runtime.runs[index].id);
     let parent = {
@@ -927,6 +946,7 @@ fn checkpoint_prepared(
     let run = &mut state.runtime.runs[index];
     run.status = "running".into();
     let mut attempt = crate::usage::Attempt::new();
+    attempt.explicit_timeout_seconds = crate::config::configured_worker_deadline().map(|d| d.as_secs());
     attempt.context_trace=captured.map(Box::new);
     attempt.turn_mailbox=turn_mailbox.into();
     attempt.github_source = github_source;
@@ -1181,11 +1201,13 @@ fn project_operation<T>(bridge: Option<(&Arc<Mutex<State>>, &str)>, generation: 
     result
 }
 fn publish_workspace(attempt: &mut crate::usage::Attempt, workspace: &Path, id: &str, bridge: Option<(&Arc<Mutex<State>>, &str)>) -> std::io::Result<()> {
-    if attempt.project.is_some() {
+    let result = if attempt.project.is_some() {
         project_operation(bridge, id, "project-checkpoint", "Saving checkpoint", ||crate::projects::publish(attempt, workspace, id))
     } else {
         crate::projects::publish(attempt, workspace, id)
-    }
+    };
+    if result.is_err() { attempt.termination.get_or_insert(crate::attempt_control::Termination::PublicationFailed); }
+    result
 }
 fn execute(
     id: &str,
@@ -1355,7 +1377,12 @@ fn execute(
         crate::lifecycle::stop_attempt(attempt).map_err(|m| ("interrupted", m.to_owned()))?;
         return Err(failed("Could not deliver the objective."));
     }
-    let (started, deadline, mut timed_out) = (Instant::now(), crate::config::worker_deadline(), false);
+    let started = Instant::now();
+    let admitted = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default().as_secs().saturating_sub(attempt.started_unix);
+    let deadline = Duration::from_secs(attempt.explicit_timeout_seconds.unwrap_or(600));
+    let mut timed_out = false;
+    let mut handoff = None;
     let result = loop {
         if crate::design::requested(bridge) {
             break Err(std::io::Error::other("Design decision requested"));
@@ -1372,16 +1399,26 @@ fn execute(
         if crate::design::requested(bridge) {
             break Err(std::io::Error::other("Design decision requested"));
         }
+        if crate::lifecycle::cancelled(bridge) { break Err(std::io::Error::other("Cancellation requested")); }
+        match crate::attempt_control::poll(bridge, attempt, started.elapsed() + Duration::from_secs(admitted)) {
+            crate::attempt_control::Decision::Finish(summary) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                crate::attempt_control::stop(bridge, attempt).map_err(|m| ("interrupted", m.to_owned()))?;
+                handoff = Some(summary);
+                break Ok(true);
+            }
+            crate::attempt_control::Decision::TimedOut => {
+                attempt.termination = Some(crate::attempt_control::Termination::TimedOut);
+                timed_out = true;
+                break Err(std::io::Error::other("Worker deadline reached"));
+            }
+            crate::attempt_control::Decision::Continue => {}
+        }
         match child.try_wait() {
             Ok(Some(status)) => break Ok(status.success()),
             Err(e) => break Err(e),
             _ => {}
-        }
-        if started.elapsed() > deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            timed_out = true;
-            break Err(std::io::Error::other("Worker deadline reached"));
         }
         std::thread::sleep(Duration::from_millis(250));
     };
@@ -1389,7 +1426,7 @@ fn execute(
     if result.is_err() {
         let _ = child.kill();
         let _ = child.wait();
-        if let Err(message) = crate::lifecycle::stop_attempt(attempt) {
+        if let Err(message) = crate::attempt_control::stop(bridge, attempt) {
             return Err(("interrupted", message.into()));
         }
         attempt.tokens = accounting.join().unwrap_or(None);
@@ -1412,8 +1449,8 @@ fn execute(
         return Err(failed(stderr));
     }
     let _ = diagnostics.join();
-    let output = read_report(&workspace.join(".control-result"))
-        .unwrap_or_else(|_| "Worker finished without a safe final report.".into());
+    let output = handoff.or_else(|| read_report(&workspace.join(".control-result")).ok())
+        .unwrap_or_else(|| "Worker finished without a safe final report.".into());
     let summary: String = output.chars().take(16000).collect();
     if let Some((state,run))=bridge {crate::command_jobs::quiesce(state,run,id).map_err(|e|failed(&e.to_string()))?;}
     if !attempt.review_only { publish_workspace(attempt,&workspace, id, bridge)
@@ -1528,6 +1565,35 @@ mod tests {
     use crate::runtime::RunKind;
     use super::*;
     #[test]
+    fn both_adapters_can_commit_host_finished_handoff_without_a_final_model_reply() {
+        use control_context::{turn_mailbox::{Mailbox,Handoff,Disposition},working_state::Payload};
+        for backend in [crate::backend::Backend::Codex, crate::backend::Backend::Claude] {
+            for cancelled in [false, true] {
+                let mut state = State::default();
+                let chat = crate::chat::create(&mut state);
+                crate::chat::send(&mut state, &chat, "Build", "test").unwrap();
+                state.runtime.runs[0].backend = backend;
+                checkpoint_next(&mut state, |_|Ok(())).unwrap();
+                let id = state.runtime.runs[0].id.clone();
+                let mut mailbox = Mailbox::default();
+                mailbox.stage("yield".into(), Handoff {base_revision:0,payload:Payload{subgoal:"Wait for dependency".into(),..Default::default()},processed:vec![],resynchronised:vec![],disposition:Disposition::Done,progress:Some("Checkpoint ready".into())},0).unwrap();
+                state.runtime.runs[0].attempts[0].turn_mailbox = Some(Box::new(mailbox)).into();
+                let mut attempt = state.runtime.runs[0].attempts[0].clone();
+                attempt.explicit_timeout_seconds = Some(600);
+                let shared = Arc::new(Mutex::new(state));
+                let decision = crate::attempt_control::poll(Some((&shared,&id)), &attempt, Duration::from_secs(600));
+                let crate::attempt_control::Decision::Finish(summary) = decision else { panic!("host must finish accepted handoff"); };
+                let mut state = shared.lock().unwrap();
+                if cancelled { state.runtime.runs[0].status = "cancelling".into(); }
+                attempt.artifact = Some("stopped-writer-checkpoint".into());
+                commit(&mut state, &id, Action::Task, attempt, Ok(summary), false, |_|Ok(())).unwrap();
+                assert_eq!(state.chats[0].workspace.is_some(), !cancelled);
+                assert_eq!(state.chats[0].continuity.as_ref().unwrap().working.is_some(), !cancelled);
+                assert_eq!(state.runtime.runs[0].status, if cancelled {"cancelled"} else {"completed"});
+            }
+        }
+    }
+    #[test]
     fn consumed_steering_does_not_drop_requested_continuation() {
         use control_context::{turn_mailbox::{Handoff,Disposition,Delivery,Range},working_state::Payload};
         let mut state=State::default();
@@ -1560,7 +1626,7 @@ mod tests {
         // Simulate an already running pre-continuity provider process.
         state.runtime.runs[0].attempts[0].context_trace = None;
         state.runtime.runs[0].attempts[0].turn_mailbox = None.into();
-        state.collective.posts.push(crate::rooms::Post{room:"general".into(),text:"Old room history".into(),chat:Some("peer".into()),run:None,key:"old".into()});
+        state.collective.posts.push(crate::rooms::Post{room:"general".into(),text:"Old room history".into(),chat:Some("peer".into()),run:None,key:"old".into(),delivery:Default::default()});
         crate::bots::command(&mut state,&chat,"on").unwrap();
         assert!(state.runtime.runs[0].attempts[0].context_trace.is_none());
         assert!(state.runtime.runs[0].attempts[0].turn_mailbox.is_none());
@@ -1649,7 +1715,7 @@ mod tests {
             crate::rooms::ensure_inbox(&mut state, &chat).unwrap();
             checkpoint_next(&mut state, |_|Ok(())).unwrap();
             for i in 0..8 {
-                state.collective.posts.push(crate::rooms::Post { room: "general".into(), text: format!("event {i}"), chat: None, run: None, key: String::new() });
+                state.collective.posts.push(crate::rooms::Post { room: "general".into(), text: format!("event {i}"), chat: None, run: None, key: String::new(), delivery: Default::default() });
             }
             state.chats[0].continuity=Some(Box::new(crate::turn_context::Managed::default()));
             let run=&mut state.runtime.runs[0];

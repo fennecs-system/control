@@ -76,7 +76,7 @@ fn hash(bytes: &[u8]) -> String {
         .map(|b| format!("{b:02x}"))
         .collect()
 }
-fn safe_read(root: &Path, relative: &str, limit: u64) -> io::Result<Vec<u8>> {
+pub(crate) fn safe_read(root: &Path, relative: &str, limit: u64) -> io::Result<Vec<u8>> {
     use std::os::unix::fs::OpenOptionsExt;
     if !valid_path(relative) || !fs::symlink_metadata(root)?.is_dir() {
         return Err(fail("Invalid artifact path"));

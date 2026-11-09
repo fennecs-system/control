@@ -16,11 +16,11 @@ control-effect = { path = "crates/effect" }
 control-journal = { path = "crates/journal" }
 control-comonad = { path = "crates/comonad" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
-ratatui = { version = "=0.29.0", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
-crossterm = "0.28"
+ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
+crossterm = "0.29"
 ring = "0.17.14"
-base64 = "0.22"
-scraper = { version = "0.27", default-features = false }
+base64 = "0.23"
+scraper = { version = "0.29", default-features = false }
 libc = "0.2"
 
 

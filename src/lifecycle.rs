@@ -249,7 +249,7 @@ pub fn stop_attempt(attempt: &Attempt) -> Result<(), &'static str> {
         .ok_or("Missing persisted workspace identity.")?;
     let prefix = format!("control-{id}");
     for (name, _, _) in names()? {
-        if name == prefix || name == format!("{prefix}-tool") || name == format!("{prefix}-probe") || attempt.command_jobs.iter().any(|job|job.name()==name) {
+        if name == prefix || name == format!("{prefix}-tool") || name == format!("{prefix}-probe") || (attempt.project.is_some() && name == format!("{prefix}-preview")) || attempt.command_jobs.iter().any(|job|job.name()==name) {
             stop_named(attempt, &name)?;
         }
     }

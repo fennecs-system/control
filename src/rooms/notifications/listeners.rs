@@ -141,7 +141,9 @@ fn plans(state: &State, now: u64) -> Vec<(usize, Plan)> {
     let mut latest = HashMap::new();
     for (index, run) in state.runtime.runs.iter().enumerate() {
         if let Some(chat) = run.chat_id.as_deref() {
-            latest.insert(chat, index);
+            latest.entry(chat)
+                .and_modify(|head: &mut (u64, usize)| *head = (*head).max((run.queue_order, index)))
+                .or_insert((run.queue_order, index));
         }
     }
     let busy = state
@@ -167,7 +169,7 @@ fn plans(state: &State, now: u64) -> Vec<(usize, Plan)> {
                 .listener
                 .as_ref()
                 .filter(|listener| !listener.paused)?;
-            let last = latest.get(watch.chat.as_str()).copied();
+            let last = latest.get(watch.chat.as_str()).map(|&(_, index)| index);
             let valid = last.filter(|&index| {
                 let latest = &state.runtime.runs[index];
                 latest.actor == watch.actor
@@ -205,7 +207,7 @@ fn plans(state: &State, now: u64) -> Vec<(usize, Plan)> {
                 return None;
             }
             let through = batch.through;
-            if batch.posts.is_empty() {
+            if !batch.posts.iter().any(|post| post.delivery == crate::rooms::Delivery::Notify) {
                 return Some((index, Plan::Advance(through)));
             }
             Some((index, Plan::Queue { through, latest }))
@@ -364,6 +366,28 @@ mod tests {
             state = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
         }
         assert_eq!(status(&state, &chat).unwrap()["state"], "listening");
+    }
+
+    #[test]
+    fn recorded_updates_do_not_spend_listener_turns_or_acknowledge_history() {
+        let (mut state, _) = listen_fixture();
+        let cursor = state.collective.room_watches[0].cursor;
+        for _ in 0..BATCH+1 {
+            post(&mut state, "research", "Retained audit", Some("peer".into()));
+            state.collective.posts.last_mut().unwrap().delivery = crate::rooms::Delivery::Record;
+        }
+        let before = state.runtime.runs.len();
+        assert!(reconcile(&mut state, 100, &mut |_| Err(std::io::Error::other("disk"))).is_err());
+        assert_eq!(state.collective.room_watches[0].listener.as_ref().unwrap().through, cursor);
+        for _ in 0..3 { tick(&mut state, 100); }
+        assert_eq!(state.runtime.runs.len(), before);
+        assert_eq!(state.collective.room_watches[0].cursor, cursor);
+        assert_eq!(batch(&state.collective.room_watches[0], &state.collective.posts).posts.len(), BATCH);
+        state = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        post(&mut state, "research", "Human asks for a decision", None);
+        tick(&mut state, 100);
+        assert_eq!(state.runtime.runs.len(), before+1);
+        assert_eq!(state.collective.room_watches[0].cursor, cursor);
     }
 
     #[test]

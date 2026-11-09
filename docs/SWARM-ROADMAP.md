@@ -13,7 +13,8 @@ Trunk download failure; the Nix-provided CLI fix is in open #143, not yet merged
 - [x] **R1a lifecycle slice:** approved persistent bots have no implicit 600-second
   wall-clock cap; explicit operator limits remain enforced. Accepted handoffs
   finish through host-owned stop/publication paths, and event-only waits release
-  model capacity. Both CLI loops use the shared attempt policy.
+  model capacity. Both CLI loops use the shared attempt policy; attempt-owned
+  commands cap their deadlines to the owner and expose requested/effective limits.
 - [x] **R1b implementation:** immutable unpublished recovery candidates retain
   workspace bytes, base/generation, termination cause and accepted drafts after
   verified writer shutdown. Scoped inspection/recovery tools do not advance the
@@ -29,8 +30,8 @@ Trunk download failure; the Nix-provided CLI fix is in open #143, not yet merged
   resource probes are recorded in [PERFORMANCE.md](PERFORMANCE.md). The tiny-device
   goal concerns efficient core/tools/TUI and replaceable backends, not a mandatory
   Raspberry Pi certification or a claim that every HTTP path became faster.
-- [ ] **R1/R2 remaining edges:** attempt-owned command deadline alignment and
-  finer causal classification of raw watch output. Creator identity alone does
+- [ ] **R1/R2 remaining evaluation and classification:** paired interruption/recovery
+  comparisons and finer causal classification of raw watch output. Creator identity alone does
   not establish which attempt caused each line. Deliver these only as narrow
   tool/adapter fixes when needed; do not add workload semantics to the supervisor.
 - [ ] **R3/R4:** visible history-read failures and bounded HTTP admission remain

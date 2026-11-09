@@ -10,6 +10,67 @@ does not change ownership or expose other chats' services. Design continuations
 retain grants; completed delegated work returns its resource handles to the parent.
 Judges receive no service grants.
 
+Resources created after spawning can be shared explicitly through the existing
+`control_agent_message` tool:
+
+```json
+{"chat_id":"<child chat>","text":"The service is ready; continue using it.","services":["<service ID>"]}
+```
+
+The sender must already have access. The recipient must be a same-actor
+descendant or another worker under the same top-level spawned task. Siblings can
+exchange targeted callbacks without a running parent, a root bot, or a room
+broadcast. The steering/root chat is not a peer destination; consequential
+operator decisions use `control_design_ask`. Joining a shared room alone does
+not permit messaging unrelated task trees. Peer messages cannot bypass a bot's
+pause/stop, revive cancelled or failed work, change its action scope, or continue
+a read-only judge.
+
+The message and selected exact owner/generation grants commit together without
+interrupting or changing an active attempt. Descendant follow-ups queue as before.
+Peer messages return `queued:false, retained:true`: active recipients read the
+typed conversation evidence; idle recipients need an approved persistent bot to
+admit a wake under its existing budget and pause/stop intent. No root bot is
+required. Unapproved or stopped recipients gain no scheduling authority.
+
+Peer admission waits until the recipient is idle and published processing receipts
+have been reconciled. Consumed messages do not create another turn. A grant offer
+still needs the next authorized attempt to activate its exact resource generation;
+reading its text does not prematurely retire that permission transition. Completed
+peer evidence uses the existing history journal rather than growing inline copies
+of context in each checkpoint. Retries are idempotent; archive/checkpoint failures
+roll back the message, receipt and grants. A replacement service generation needs a new grant.
+Omitting `services` transfers no additional authority. A service grant permits
+the existing service operations, including execution and stop; it is not a
+port-only permission. Scoped TCP approval remains a separate operator decision.
+
+Use peer messages for requests and answers that one worker needs to proceed;
+discover peer chat IDs from the linked room's participant list. The recipient
+retains its own task, model, context and grants. Messages are coordination evidence,
+not new operator steering. Replies remain in the recipient's chat: send an answer
+directly when the sender is blocked on it. Do not also post the same request or
+answer as a room notification. The steering chat can finish after assigning
+ownership; it does not acknowledge or relay each worker update.
+
+## Task coordination threads
+
+New tasks coordinate in a thread under `general`, `engineering` or `research`.
+The stable scope is the top-level chat, not a provider attempt: workers spawned
+before or after room attachment resolve the same thread, and continuations keep
+it across restart. A worker using `room: "general"` reads and posts within that
+task's thread. Unrelated task history, chat links and callbacks are excluded.
+Threads reuse the existing room records, inbox cursors and event subscriptions;
+they add no supervisor state, periodic polling or deadline.
+
+The Rooms menu lists task threads by their lead's title. Operators can read and
+post into a selected thread or explicitly create another chat there. Exact room
+addresses are `<channel>/<thread chat ID>`; worker tools cannot choose another
+task's thread. Existing legacy shared-room attachments remain shared so an
+upgrade does not silently move an active swarm or invalidate its receipts. To
+move an old chat, disable its bot/listener, then use `/room general` (or another
+channel) to attach its task thread. Prior shared history remains available to
+the operator; new threads do not import it.
+
 ## First slice
 
 The worker MCP surface advertises these tools for ordinary Codex and Claude
@@ -118,6 +179,12 @@ for operator inspection and pauses ordinary dispatch if reconciliation cannot
 account for the container; it does not delete an unfamiliar container.
 
 Stop intent precedes removal, and only an observed absence completes cleanup.
+An explicit stop also retries cleanup of a fenced service. It keeps the recorded
+container identity and reservation until the engine confirms absence; an absent
+entry in label-filtered inventory is checked by exact container ID as well.
+An owned paused container can be removed after identity and scope verification.
+Mismatches remain fenced, and engine or persistence failures retain the reservation.
+Fenced services never restart automatically or resume their command during cleanup.
 An engine failure remains pending with a bounded diagnostic. Revocation permits
 cleanup but prevents new create/start effects. No exactly-once external effect
 guarantee is implied by this local reconciliation protocol.
@@ -136,7 +203,19 @@ maximum duration bounds the watchdog even if clocks differ.
 
 Native fault tests cover checkpoint failures, duplicate/replayed requests,
 bounded retention, ownership/scope mismatches, permission revocation, expired
-leases and restoration after the model turn ends. An explicit ignored Docker
+leases and restoration after the model turn ends. They also cover capacity
+recovery from fenced records, failed cleanup checkpoints and containers hidden
+from label-filtered inventory. An isolated Docker regression exercises pause,
+fencing, explicit stop and confirmed removal without any model calls:
+
+```sh
+CONTROL_QA_SERVICE_IMAGE=sha256:<worker-image-id> \
+nix develop --command cargo test --locked --bin control \
+  services::tests::live_fenced_paused_service_can_be_stopped_without_restart \
+  -- --ignored --exact --nocapture
+```
+
+An explicit ignored Docker
 test starts an isolated real Control server, preserves a private counter across
 restart, recovers a lost Running receipt and verifies expiry with Control stopped.
 It also tests that a child cannot open its supervisor's memory or stop its timer.

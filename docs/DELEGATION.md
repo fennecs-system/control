@@ -21,6 +21,15 @@ with a singular `objective` and a `role`:
 For shared coordination, start from a [room-linked chat](ROOM-NOTIFICATIONS.md)
 before spawning. Mentioning a room in an objective does not attach it.
 
+Give each worker ownership of its goal, resources and dependencies. Workers can
+use `control_agent_message` to coordinate with same-task siblings directly;
+they do not need an active parent or a root bot to relay requests and answers.
+Use room notifications for evidence requiring several participants to act, and
+records for observations requiring no immediate action. Keep the parent available
+for user steering and consequential decisions. Assign ongoing infrastructure to
+a worker if it needs persistent ownership; do not turn the steering chat into a
+monitoring bot merely to coordinate the workers.
+
 Each accepted batch reserves the shared root budget immediately, including tasks
 still in the backlog, while the parent keeps working.
 As space becomes available in the existing 32-pending-task execution queue, Control

@@ -2052,11 +2052,6 @@ mod tests {
     fn live_room_tools_connect_worker_chat_and_ui() {
         let server = std::env::var("CONTROL_QA_URL").expect("Use an isolated server");
         let mut hive = Hive::connect(&server).unwrap();
-        hive.tool(
-            "control.room.post",
-            json!({"room":"research","message":"The shared test marker is ROOM_CEDAR."}),
-        )
-        .unwrap();
         let chat = hive
             .tool(
                 "control.chat.create",
@@ -2064,6 +2059,8 @@ mod tests {
             )
             .unwrap();
         let id = chat["id"].as_str().unwrap();
+        let thread = chat["room"].as_str().unwrap();
+        hive.tool("control.room.post", json!({"room":thread,"message":"The shared test marker is ROOM_CEDAR."})).unwrap();
         hive.tool("control.chat.send",json!({"id":id,"message":"Use the control_rooms MCP tools: read this room, then post exactly the shared test marker as a concise update. Do not use shell files to post it. Reply briefly."})).unwrap();
         let started = Instant::now();
         loop {
@@ -2078,7 +2075,7 @@ mod tests {
             }
         }
         let room = hive
-            .tool("control.room.read", json!({"room":"research"}))
+            .tool("control.room.read", json!({"room":thread}))
             .unwrap();
         assert!(room["posts"]
             .as_array()
@@ -2089,8 +2086,9 @@ mod tests {
             .tool("control.room.read", json!({"room":"engineering"}))
             .unwrap();
         assert!(!other.to_string().contains("ROOM_CEDAR"));
+        let room_page = format!("/?view=rooms&channel={thread}");
         for (path, expected) in [
-            ("/?view=rooms&channel=research", "ROOM_CEDAR"),
+            (room_page.as_str(), "ROOM_CEDAR"),
             ("/?view=lenses", "Context and tool"),
             ("/?view=editor", "Scratchpad"),
         ] {
@@ -2108,6 +2106,34 @@ mod tests {
             }
             assert!(!page.contains("<select id=\"new-chat-lens\""));
         }
+    }
+
+    #[test]
+    #[ignore = "requires an isolated Control server; no model calls or containers"]
+    fn live_task_threads_isolate_operator_posts_and_ui() {
+        let server = std::env::var("CONTROL_QA_URL").expect("Use an isolated server");
+        let mut hive = Hive::connect(&server).unwrap();
+        let first = hive.tool("control.chat.create", json!({"room":"general"})).unwrap();
+        let second = hive.tool("control.chat.create", json!({"room":"general"})).unwrap();
+        let first_room = first["room"].as_str().unwrap();
+        let second_room = second["room"].as_str().unwrap();
+        assert_ne!(first_room, second_room);
+        hive.tool("control.room.post", json!({"room":first_room,"message":"FIRST_THREAD_ONLY"})).unwrap();
+        hive.tool("control.room.post", json!({"room":second_room,"message":"SECOND_THREAD_ONLY"})).unwrap();
+        let first_posts = hive.tool("control.room.read", json!({"room":first_room})).unwrap();
+        assert!(first_posts.to_string().contains("FIRST_THREAD_ONLY"));
+        assert!(!first_posts.to_string().contains("SECOND_THREAD_ONLY"));
+        let page = hive.client.get(format!("{server}/?view=rooms&channel={first_room}")).send().unwrap().text().unwrap();
+        assert!(page.contains("FIRST_THREAD_ONLY") && !page.contains("SECOND_THREAD_ONLY"));
+        assert!(page.contains(&format!("name='channel' value='{first_room}'")));
+        assert!(page.contains(&format!("name='room' value='{first_room}'")));
+        let response = hive.client.post(format!("{server}/room")).header("Origin", &server)
+            .form(&[("channel",first_room),("message","OPERATOR_REPLY")]).send().unwrap();
+        assert_eq!(response.status().as_u16(), 303);
+        assert_eq!(response.headers().get("location").unwrap().to_str().unwrap(), format!("/?view=rooms&channel={first_room}"));
+        let posts = hive.tool("control.room.read", json!({"room":first_room})).unwrap();
+        assert!(posts.to_string().contains("OPERATOR_REPLY"));
+        assert!(!hive.tool("control.room.read", json!({"room":second_room})).unwrap().to_string().contains("OPERATOR_REPLY"));
     }
     #[test]
     #[ignore = "requires an isolated local Control server and authenticated container workers"]

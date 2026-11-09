@@ -94,7 +94,8 @@ pub enum Disposition {
     Continue,
     Wait {
         topics: Vec<String>,
-        recheck_seconds: u16,
+        #[serde(default)]
+        recheck_seconds: Option<u32>,
     },
     Done,
 }
@@ -127,10 +128,10 @@ impl Handoff {
             recheck_seconds,
         } = &self.disposition
             && (topics.len() > 16
-                || !(1..=300).contains(recheck_seconds)
+                || recheck_seconds.is_some_and(|seconds| seconds == 0)
                 || topics.iter().any(|t| t.is_empty() || t.len() > 128))
         {
-            return Err("Wait requires at most 16 existing topics and a 1–300 second recheck");
+            return Err("Wait requires at most 16 existing topics and an optional positive recheck");
         }
         Ok(())
     }

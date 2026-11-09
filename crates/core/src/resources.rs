@@ -225,6 +225,8 @@ pub enum EngineState {
     Dormant,
     Running,
     Exited,
+    /// An observed state that cannot authorize a start (for example, paused).
+    Other,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
@@ -277,8 +279,10 @@ pub fn decide(
     let result = match event {
         Event::Fence(_) if matches!(phase, Stopped(_) | Fenced { .. }) => keep(),
         Event::Fence(reason) => fence(reason),
+        // Explicit stop can recover a fenced reservation, but must inspect and
+        // verify the binding again before removing anything or freeing capacity.
         Event::Stop(reason) => match phase {
-            Stopped(_) | Fenced { .. } => keep(),
+            Stopped(_) => keep(),
             Requested => Decision {
                 phase: Stopped(reason),
                 effect: None,
@@ -361,7 +365,7 @@ pub fn decide(
                         Stopping {
                             container: None, ..
                         },
-                        EngineState::Running | EngineState::Exited,
+                        EngineState::Running | EngineState::Exited | EngineState::Other,
                     ) => fence(Fault::UnrecordedExecution),
                     (Stopping { reason, .. }, _) => Decision {
                         phase: Stopping {
@@ -552,6 +556,26 @@ mod tests {
         assert!(ImageId::try_from("latest".to_owned()).is_err());
     }
     #[test]
+    fn fenced_stop_requires_observed_cleanup_and_never_restarts() {
+        for container in [None, Some(id())] {
+            let mut r = resource();
+            r.phase = Phase::Fenced {
+                fault: Fault::UnexpectedEngineState,
+                container: container.clone(),
+            };
+            assert_eq!(apply(&mut r, Event::Tick, 11), None);
+            assert_eq!(apply(&mut r, Event::Missing, 11), None);
+            assert!(matches!(r.phase, Phase::Fenced { .. }));
+            assert_eq!(apply(&mut r, Event::Stop(StopReason::Requested), 11), None);
+            assert_eq!(r.phase, Phase::Stopping { container, reason: StopReason::Requested });
+            assert!(r.phase.reserves_capacity());
+            assert_eq!(apply(&mut r, Event::Tick, 11), Some(Effect::Inspect));
+            assert_eq!(apply(&mut r, Event::Missing, 11), None);
+            assert_eq!(r.phase, Phase::Stopped(StopReason::Requested));
+            assert!(!r.phase.reserves_capacity());
+        }
+    }
+    #[test]
     fn lifecycle_matrix_never_restarts_terminal_or_stopping_work() {
         let phases = [
             Phase::Requested,
@@ -592,11 +616,15 @@ mod tests {
                         container: id(),
                         state: EngineState::Exited,
                     },
+                    Event::Observed {
+                        container: id(),
+                        state: EngineState::Other,
+                    },
                 ] {
                     let mut r = resource();
                     r.phase = phase.clone();
                     if let Ok(d) = decide(&r, r.stamp(), event, now) {
-                        if matches!(phase, Phase::Stopped(_) | Phase::Fenced { .. }) {
+                        if matches!(phase, Phase::Stopped(_)) {
                             assert_eq!(d.phase, phase, "Terminal state cannot reserve new work");
                         }
                         if matches!(

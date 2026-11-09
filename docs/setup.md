@@ -93,7 +93,7 @@ These options preserve existing source and model choices.
 | `build-image-id` / `CONTROL_BUILD_IMAGE` | Optional immutable offline build-tool image. |
 | `model.json` | Saved models and default; managed by the web UI. |
 | `source-root` / `CONTROL_SOURCE_ROOT` | Absolute source path for explicit improvements. |
-| `worker-timeout-secs` / `CONTROL_WORKER_TIMEOUT_SECS` | Run deadline; default 600 s, clamped to 60 s–24 h. |
+| `worker-timeout-secs` / `CONTROL_WORKER_TIMEOUT_SECS` | Explicit attempt deadline, captured at admission and clamped to 60 s–24 h. When unset, ordinary attempts default to 600 s; approved persistent bots have no wall-clock deadline. Approval during an active attempt removes only its implicit default, never an explicit limit. |
 | `CONTROL_ADDR` | Loopback bind address; default `127.0.0.1:8080`. |
 
 Without explicit directory overrides, `XDG_CONFIG_HOME/control` and

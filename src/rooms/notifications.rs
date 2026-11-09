@@ -27,6 +27,9 @@ pub struct Watch {
 struct Wake {
     origin: String,
     generation: String,
+    /// Admission scan only: skipping record-only posts does not acknowledge them.
+    #[serde(default)]
+    scanned: usize,
 }
 
 pub(super) fn definitions(mutable: bool) -> Vec<Value> {
@@ -161,6 +164,7 @@ pub(super) fn call(
             watch.wake = Some(Wake {
                 origin: run_id.into(),
                 generation,
+                scanned: watch.cursor,
             });
             watch.delivered = None;
             state.runtime.runs[index].room_wake_used = true;
@@ -191,7 +195,7 @@ pub(super) fn call(
     let posts: Vec<_> = batch
         .posts
         .into_iter()
-        .map(|post| json!({"text":post.text,"chat":post.chat,"run":post.run}))
+        .map(|post| json!({"text":post.text,"chat":post.chat,"run":post.run,"delivery":post.delivery}))
         .collect();
     Ok(
         json!({"room":watch.room,"cursor":watch.cursor,"through":through,"more":through<state.collective.posts.len(),"skipped":0,"posts":posts,"wake_armed":watch.wake.is_some(),"delivered_run":watch.delivered}),
@@ -453,18 +457,20 @@ pub fn reconcile(
                 if leaf.status != "completed" || busy.contains(watch.chat.as_str()) {
                     return Decision::Wait;
                 }
-                let through = watch
-                    .cursor
+                let scanned = watch.cursor.max(wake.scanned);
+                if scanned > state.collective.posts.len() { return Decision::Disarm; }
+                let through = scanned
                     .saturating_add(WINDOW)
                     .min(state.collective.posts.len());
-                if state.collective.posts[watch.cursor..through]
+                if state.collective.posts[scanned..through]
                     .iter()
                     .any(|post| {
                         post.room == watch.room && post.chat.as_deref() != Some(&watch.chat)
+                            && post.delivery == super::Delivery::Notify
                     })
                 {
                     Decision::Queue(origin_index)
-                } else if through > watch.cursor {
+                } else if through > scanned {
                     Decision::Advance(through)
                 } else {
                     Decision::Wait
@@ -480,13 +486,17 @@ pub fn reconcile(
         let previous = state.collective.room_watches[index].clone();
         match plan {
             Decision::Wait => {}
-            Decision::Advance(cursor) => state.collective.room_watches[index].cursor = cursor,
+            Decision::Advance(cursor) => state.collective.room_watches[index].wake.as_mut().unwrap().scanned = cursor,
             Decision::Disarm => state.collective.room_watches[index].wake = None,
             Decision::Queue(origin_index) => {
                 if crate::scheduler::admit(&state.runtime).is_err() {
                     continue;
                 }
                 let origin = &state.runtime.runs[origin_index];
+                // An idle chat may have received a grant-bearing message after
+                // arming this wake. Preserve its logically latest authority.
+                let from = crate::chat::latest_task(state, &previous.chat, &previous.actor).unwrap_or(origin_index);
+                let grants = crate::services::grants(state, &state.runtime.runs[from]);
                 let (actor, action, backend, model, context, lenses, root) = (
                     origin.actor.clone(),
                     origin.action,
@@ -520,6 +530,7 @@ pub fn reconcile(
                 next.model = model;
                 next.context = context;
                 next.lenses = lenses;
+                next.resource_grants = grants;
                 next.room_wake_used = true;
                 // A durable persona fences continuations and children as well as this turn.
                 next.persona = Some(crate::delegation::Persona {
@@ -638,6 +649,7 @@ mod tests {
             chat,
             run: None,
             key: String::new(),
+            delivery: Default::default(),
         });
     }
     fn rpc(name: &str, args: Value) -> Value {
@@ -781,9 +793,65 @@ mod tests {
         );
     }
 
+    fn shared_service(state: &mut State) -> crate::services::Grant {
+        state.services.push(serde_json::from_value(json!({
+            "resource":{"id":"svc-shared","owner":{"node":"node-a","chat":"other-owner"},"generation":1,
+                "image":format!("sha256:{}", "a".repeat(64)),"scope":{"network":"Offline","storage":"PrivateMemory"},
+                "lease":[1,u64::MAX],"phase":"Requested"},
+            "origin":{"run":"owner-run","attempt":"owner-attempt"},
+            "actor":{"type":"local_operator"},"command":"sleep 60","uid":502,"gid":20
+        })).unwrap());
+        state.services.last().unwrap().grant()
+    }
+
+    #[test]
+    fn one_shot_retains_grants_received_after_arming() {
+        let (mut state, run) = fixture();
+        let chat = state.chats[0].id.clone();
+        watch(&mut state, &run, true);
+        let grant = shared_service(&mut state);
+        crate::chat::enqueue_continuation(&mut state, &chat, 0, "Service ready".into(), RunKind::AgentMessage, "test").unwrap();
+        state.runtime.runs[1].resource_grants.push(grant);
+        for run in &mut state.runtime.runs { run.status = "completed".into(); }
+        post(&mut state, "research", "New evidence", None);
+        reconcile(&mut state, |_| Ok(())).unwrap();
+        assert_eq!(state.runtime.runs.len(), 3);
+        assert_eq!(state.runtime.runs[2].kind, RunKind::RoomNotification);
+        assert!(crate::services::accessible(&state.services[0], &state.services[0].resource.owner.node, &state.runtime.runs[2]));
+        assert!(state.runtime.runs[0].resource_grants.is_empty(), "arming attempt remains unchanged");
+    }
+
+    #[test]
+    fn recorded_updates_preserve_one_shot_budget_and_unread_evidence() {
+        let (mut state, run) = fixture();
+        watch(&mut state, &run, true);
+        state.runtime.runs[0].status = "completed".into();
+        for _ in 0..WINDOW+1 {
+            post(&mut state, "research", "Retained observation", Some("peer".into()));
+            state.collective.posts.last_mut().unwrap().delivery = super::super::Delivery::Record;
+        }
+        assert!(reconcile(&mut state, fail).is_err());
+        assert_eq!(state.collective.room_watches[0].wake.as_ref().unwrap().scanned, 0);
+        for _ in 0..3 { reconcile(&mut state, |_| Ok(())).unwrap(); }
+        assert_eq!(state.runtime.runs.len(), 1);
+        assert_eq!(state.collective.room_watches[0].cursor, 0);
+        assert!(state.collective.room_watches[0].wake.is_some());
+        state = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        state.runtime.runs[0].status = "running".into();
+        let page = call(&mut state, &run, "control_room_notifications", &json!({})).unwrap();
+        assert_eq!(page["posts"][0]["delivery"], "record");
+        state.runtime.runs[0].status = "completed".into();
+        post(&mut state, "research", "Decision needed", None);
+        reconcile(&mut state, |_| Ok(())).unwrap();
+        assert_eq!(state.runtime.runs.len(), 2);
+        assert_eq!(state.collective.room_watches[0].cursor, 0, "admission is not processing");
+    }
+
     #[test]
     fn one_shot_waits_for_idle_and_survives_failed_checkpoint_and_restart() {
         let (mut state, run) = fixture();
+        let grant = shared_service(&mut state);
+        state.runtime.runs[0].resource_grants.push(grant);
         watch(&mut state, &run, true);
         watch(&mut state, &run, true);
         post(&mut state, "research", "A concise discovery", None);
@@ -800,6 +868,7 @@ mod tests {
         assert!(state.collective.room_watches[0].wake.is_some());
         reconcile(&mut state, |_| Ok(())).unwrap();
         assert_eq!(state.runtime.runs.len(), 2);
+        assert!(crate::services::accessible(&state.services[0], &state.services[0].resource.owner.node, &state.runtime.runs[1]), "a room wake retains the armed task's exact service grant");
         assert_eq!(
             state.runtime.runs[1].persona.as_ref().unwrap().root,
             run,
@@ -820,6 +889,8 @@ mod tests {
         reconcile(&mut restored, |_| panic!("consumed wake must be idle")).unwrap();
         assert_eq!(restored.runtime.runs.len(), 2);
         assert_eq!(restored.collective.room_watches[0].delivered, delivered);
+        restored.services[0].resource.generation = serde_json::from_value(json!(2)).unwrap();
+        assert!(!crate::services::accessible(&restored.services[0], &restored.services[0].resource.owner.node, &restored.runtime.runs[1]), "room wakes cannot gain replacement generations");
         restored.runtime.runs[1].status = "running".into();
         restored.runtime.runs[1]
             .attempts
@@ -923,7 +994,8 @@ mod tests {
         state.runtime.runs[0].status = "completed".into();
         reconcile(&mut state, |_| Ok(())).unwrap();
         assert_eq!(state.runtime.runs.len(), 1);
-        assert_eq!(state.collective.room_watches[0].cursor, 1);
+        assert_eq!(state.collective.room_watches[0].cursor, 0, "wake scanning is not an inbox acknowledgement");
+        assert_eq!(state.collective.room_watches[0].wake.as_ref().unwrap().scanned, 1);
         assert!(state.collective.room_watches[0].wake.is_some());
     }
 

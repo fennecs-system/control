@@ -46,6 +46,10 @@ revisions, including when a lockfile changes. Cargo still checks freshness and a
 tests and Clippy checks always run. CI disables debug symbols and incremental
 compilation to reduce build time and cache size.
 
+Linux Trunk tools use a dedicated XDG cache under the runner's temporary directory,
+which is included in the downloads cache. This avoids depending on permissions of
+a restored home-cache parent. macOS retains its native Library/Caches location.
+
 Only an exact bundle cache hit skips Trunk. Its key covers the UI sources,
 configuration, lockfile, shared context crate, Nix environment and workflow; a
 backend-only change can reuse the UI. There is no fallback for finished bundles.

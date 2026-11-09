@@ -372,7 +372,7 @@ fn admit(
                 && p.status != Status::Stopped
                 && p.service != input.service_id
                 && accessible(state, p, run, &node)
-        }).ok_or_else(||fail("peer_port_id must be an active ingress of another owned or explicitly granted service"))?;
+        }).ok_or_else(||fail("peer_port_id must be an active ingress of another owned or explicitly granted service. If a lead created the service after spawning you, ask it to send control_agent_message with services:[service_id]. The grant applies to your queued follow-up turn; port approval remains separate."))?;
         self::service(state,port,now()).map(Service::grant)
     }).transpose()?;
     let owner = service.resource.owner.chat.as_str();
