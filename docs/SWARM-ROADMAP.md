@@ -391,6 +391,38 @@ is missing; use the permission path for access. Waiting for a healthy peer is
 not itself an escalation. Check scenario fixtures across those entry points;
 prompt text never substitutes for deterministic policy tests.
 
+### Opt-in investigation when a plan is blocked
+
+Start with a versioned procedure/lens enabled per task or team, using existing
+inspect, execute, message, wait and checkpoint tools. Routine troubleshooting is
+already encouraged; this adds a concrete method, not a mandatory experiment on
+every wait. Implement after the first state/effect slice. Add a thin tool only if
+the procedure cannot retain or inspect trial records through existing operations.
+No new supervisor mode, ambient state handle or generic experimentation framework.
+
+The procedure records the blocker and source evidence, a hypothesis, the smallest
+authorized probe, expected/disconfirming observations, and the actual result.
+Use a bounded number of probes and existing task/resource/model budgets. Compare
+outcomes before retrying; an unchanged guard rejection is not a new experiment.
+Choose an alternative, request targeted peer help, or use E1's existing decision
+path when the next action exceeds the mandate. Valid dependency waits remain
+valid; elapsed silence alone neither diagnoses a stall nor authorizes intervention.
+
+Keep trial notes with the task's checkpoint/evidence and resume from them, rather
+than rediscovering failed approaches. Probe state and workload-specific health or
+risk judgments belong to the procedure/tool. Existing host operations enforce
+grants, cancellation and publication; a hypothesis, lens or peer suggestion adds
+no authority. Avoid broad broadcasts or model wakes for every sample.
+
+Acceptance: an unchanged safety/dependency guard leads to a distinct evidence-led
+probe or explicit blocked outcome instead of endless identical retries; a healthy
+long-running dependency continues undisturbed; failed/interrupted probes preserve
+notes and uncertain outcomes; exhausted budgets and out-of-scope actions use the
+existing wait/request paths. Evaluate whether the procedure reduces repeated
+actions without increasing intervention or noise. Verified general lessons may
+be proposed through L2 review; one successful probe is not automatically knowledge.
+Minecraft combat/despawn rules remain workload knowledge, outside Control's core.
+
 ## U1/U2: coordination UI, A2A and computer use
 
 **U1: retain the steering chat as the team's control surface.** Keep the current
