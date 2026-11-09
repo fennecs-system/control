@@ -74,6 +74,11 @@ jobs:
         run: nix run .#setup -- --help
       - name: Rust tests
         run: nix develop --command cargo test --locked --workspace
+      - name: Compile and test standalone service runner
+        if: runner.os == 'Linux'
+        run: |
+          nix develop --command rustc --edition=2024 --test -D warnings tools/service-runner/main.rs -o "$RUNNER_TEMP/control-service-runner-tests"
+          "$RUNNER_TEMP/control-service-runner-tests"
       - name: Rust UI tests
         run: nix develop --command cargo test --locked --manifest-path web/Cargo.toml
       - name: Clippy

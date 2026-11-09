@@ -25,7 +25,11 @@ fn position(range: &Range, watch: &str) -> Option<u64> {
 fn digest(text: &str) -> String {
     ring::digest::digest(&ring::digest::SHA256, text.as_bytes()).as_ref().iter().map(|b| format!("{b:02x}")).collect()
 }
+#[cfg(test)]
 pub(crate) fn prepare(state: &State, attempt: &AttemptRef<'_>, watch: &str, after: Option<u64>) -> io::Result<Read> {
+    prepare_view(state, attempt, watch, after, true)
+}
+pub(crate) fn prepare_view(state: &State, attempt: &AttemptRef<'_>, watch: &str, after: Option<u64>, logs: bool) -> io::Result<Read> {
     let run = &state.runtime.runs[index(state, attempt)?];
     let owned = state.watches.iter().any(|w| w.id == watch && Some(&w.chat) == run.chat_id.as_ref());
     let mailbox = run.attempts.last().and_then(|a| a.turn_mailbox.as_ref()).filter(|_| owned);
@@ -36,7 +40,7 @@ pub(crate) fn prepare(state: &State, attempt: &AttemptRef<'_>, watch: &str, afte
     let delivered = mailbox.into_iter().flat_map(|m| m.deliveries.values()).flat_map(|d| &d.ranges)
         .filter_map(|r| position(r, watch)).max().unwrap_or(processed).max(processed);
     let key = digest(&format!("{}/{}/watch/{}", attempt.run, attempt.generation, attempt.nonce));
-    let request = format!("{watch}/{after:?}");
+    let request = if logs {format!("{watch}/{after:?}")}else{format!("{watch}/{after:?}/notifications")};
     let previous = mailbox.and_then(|m| m.deliveries.get(&key));
     if previous.is_some_and(|d| d.request != request) { return Err(io::Error::other("Watch request identity reused with different arguments")); }
     let (after, maximum) = match previous.and_then(|d| d.ranges.first()) {

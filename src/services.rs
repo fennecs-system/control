@@ -273,7 +273,7 @@ fn start(shared: &Arc<Mutex<State>>, run: &str, generation: &str, nonce: &str, n
         image.as_str(),
     ])?;
     let version = marker.trim().parse::<u8>().unwrap_or(0);
-    if !(1..=3).contains(&version) || (input.lease_seconds == -1 && version < 2) {
+    if !(1..=4).contains(&version) || (input.lease_seconds == -1 && version < 2) {
         return Err(fail(
             "Rebuild worker/Claude images with Nix setup before starting persistent services",
         ));

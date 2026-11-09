@@ -29,6 +29,38 @@ Constrained-container and hardware checks provide additional evidence, without
 making a named board a prerequisite. The 512 MiB/no-swap experiment below is
 one measurement condition, not a product support promise or mandatory budget.
 
+## Watch notification transport (2026-11-09)
+
+Compared the existing stdout collector with the notification-channel revision,
+using the same isolated Linux ARM64 fixture on one virtual CPU, a 512 MiB cgroup
+limit and no swap. The compatibility path keeps notifications disabled. Each run
+starts eight finite processes producing 20,000 diagnostic lines each, collects
+their framed output and verifies the exact source count. One warmup per revision
+precedes six alternating pairs. Median wall time is 499.6 ms before and 504.3 ms
+after (+0.9%); ranges are 491.6–555.3 and 490.5–520.9 ms. This fixture shows roughly
+unchanged throughput within its observed variation, not a general regression bound.
+
+Separate real `perf` captures use `cpu-clock:u`, 499 Hz and DWARF stacks: 169
+baseline samples and 164 revised samples, converted with Inferno into flamegraphs.
+These short captures are coarse; they do not establish allocation or idle-CPU
+bounds. Enabling notifications adds a descriptor and bounded input buffer to the
+existing collector thread rather than adding a thread per channel. The std-only
+runner gains no dependency; model execution and task-resource costs are excluded.
+
+The common `watches::collector_profile` fixture uses only the old runner API and
+can be copied unchanged into the baseline. Run it only inside an isolated Linux
+container with a private home and writable `/workspace`, without credentials:
+
+```sh
+rustc --edition=2024 --test -O -C debuginfo=1 tools/service-runner/main.rs -o /tmp/runner-tests
+/tmp/runner-tests watches::collector_profile --ignored --exact --nocapture
+```
+
+For longer sampling, set `CONTROL_WATCH_PROFILE_BATCHES=128` and apply the
+`perf record`/Inferno procedure below. Functional regressions separately verify
+that diagnostic floods admit no turns, a selected notification releases an
+event-only wait once, and published notification receipts suppress an extra turn.
+
 ## Peer coordination review (2026-11-09)
 
 Compared the reviewed peer-delivery patch with `abc93d4`, using separate optimized

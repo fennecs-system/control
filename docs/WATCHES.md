@@ -1,4 +1,72 @@
-# Watch output and wake selection
+# Watch notifications and diagnostic output
+
+Use separate channels for control events and stdout/stderr. A watch started with
+`notifications=true` supplies an inherited descriptor, `CONTROL_NOTIFY_FD=3`.
+The program writes explicit newline-delimited notification payloads there; normal
+output remains diagnostic evidence. New notification watches require
+`wake_policy=exit_only` (the default); log-driven policies remain available only
+for legacy-style watches. Each payload is bounded to 4096 bytes. The
+runner frames notifications separately, and no log prefix or severity parser can
+select or suppress them. Both descriptors use the existing reader thread.
+
+```json
+{
+  "service_id": "svc-example",
+  "name": "worker",
+  "command": "exec /workspace/worker",
+  "restart": "permanent",
+  "notifications": true,
+  "wake_policy": {"kind": "exit_only"}
+}
+```
+
+For example, an adapter can write the following line to the descriptor after it
+has recorded the result for that exact task:
+
+```json
+{"task_id":"build-54","outcome":"completed","evidence":"/workspace/results/build-54.json"}
+```
+
+This is an example payload, not a protocol the supervisor interprets. Downloads,
+builds and other workloads can choose their own event schemas. Adapter results
+are untrusted program claims; process exits are independently observed by the
+host. Neither grants authority or establishes that an arbitrary user goal was met.
+Writers sharing the descriptor must serialize their complete lines. Oversize
+payloads are marked truncated and require evidence resynchronisation.
+Adapters spawning another process must explicitly preserve the descriptor if
+that child is the notification emitter.
+
+Register and test the completion channel before dispatching work. Every task
+whose result releases a dependency wait must emit an outcome for its exact ID,
+including failure. Do not restrict completion delivery to a task-name prefix.
+Before yielding, verify that the handoff waits on that watch topic. A watch of a
+long-lived process does not make its internal task completions observable: process
+exit only reports the lifetime of the process. Finite tasks can instead use a
+transient watch whose process exits when the actual operation finishes. No
+implicit task deadline or periodic model check-in is needed.
+
+Notifications enter the existing watch topic, budgets, coalescing and publication
+receipt path. They release waits on that topic without interrupting unrelated
+dependency waits. An active model turn can consume them without starting an
+additional turn. Logs and notifications retain their source sequence in the
+existing bounded journal; this is not unlimited or exactly-once external effect
+delivery. Source loss remains explicit and requires inspecting durable results.
+
+For notification-enabled watches, `control_watch_events` returns notifications
+and process exits by default. Diagnostic lines do not consume that view's
+200-event page budget. Use `include_logs=true` and an explicit historical `after`
+cursor when investigating logs. Reading either view does not acknowledge it.
+Changing views with the same request identity is rejected for an already
+delivered nonempty source range. Empty polls keep the existing position-based
+receipt behavior.
+
+The notification descriptor is opt-in for compatibility (service-runner image
+label 4). Old runner images
+reject `notifications=true` instead of silently starting without the channel;
+start a service from rebuilt images to use it. Existing service processes and
+watches are not upgraded or migrated in place.
+
+## Legacy log-driven wake selection
 
 `control_watch_start` runs a supervised command in an authorized persistent
 service. Its output is spooled independently of whether it wakes an agent.
@@ -70,7 +138,7 @@ retain their any-line behavior. The pending line count and wake cursor refer to
 selected lines; the source cursor tracks every observed frame. Quiet lines after
 a selected event do not move that event's wake cursor or enter its prompt preview.
 
-`control_watch_events` reads unfiltered retained frames with original sequence
+For legacy watches, `control_watch_events` reads unfiltered retained frames with original sequence
 numbers and truncation flags. It returns `source_gap=true` when the requested
 range has missing or truncated evidence, including a missing spool or tail.
 Owned watches return a receipt in the existing attempt mailbox. Pass it to
@@ -85,7 +153,7 @@ missing local files are reported on read, not through a new background monitor.
 Existing retention/rotation and per-line limits still apply. Inspection of a
 service's current state may be needed after a gap.
 
-This implements R2's watch selection seam. It does not parse game-specific
+This implements R2's generic watch transport seam. It does not parse game-specific
 messages, add timers, or infer that an arbitrary goal
 is complete. Existing watches need an explicit filtered replacement to reduce
 line-driven wakes. Synthetic tests cover noisy lines, selected events, exits,

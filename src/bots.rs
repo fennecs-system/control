@@ -28,6 +28,8 @@ pub enum Message {
     Peer,
     /// New output lines from a watch.
     Lines(u64),
+    /// Explicit application notifications from a watch's separate descriptor.
+    Notifications(u64),
     /// The watched process exited: the latest exit, and how many since the last turn.
     Exit { code: Option<i32>, signal: Option<i32>, exits: u32, gave_up: bool },
     Gap { after: u64, through: u64 },
@@ -38,6 +40,10 @@ impl control_bot::Info for Message {
         match (self, newer) {
             (Message::Post, Message::Post) | (Message::Peer, Message::Peer) => true,
             (Message::Lines(held), Message::Lines(more)) => {
+                *held = held.saturating_add(*more);
+                true
+            }
+            (Message::Notifications(held), Message::Notifications(more)) => {
                 *held = held.saturating_add(*more);
                 true
             }
@@ -375,6 +381,7 @@ fn arm_at(state: &mut State, chat: &str, now: Now) -> Result<bool, &'static str>
     }
     for w in state.watches.iter_mut().filter(|w| w.chat == chat) {
         w.lines = 0;
+        if let Some(notifications) = &mut w.notifications { notifications.pending = 0; }
         w.exits.clear();
         w.gap = None;
     }
@@ -399,7 +406,7 @@ fn watch_sources(state: &State, chat: &str) -> Vec<Source> {
     watch_topics(state, chat, false)
 }
 fn watch_topics(state: &State, chat: &str, pending: bool) -> Vec<Source> {
-    state.watches.iter().filter(|w| w.chat == chat && (w.active() || (pending && (w.lines > 0 || !w.exits.is_empty() || w.gap.is_some())))).map(|w| Source::Topic(watch(&w.id))).collect()
+    state.watches.iter().filter(|w| w.chat == chat && (w.active() || (pending && (w.lines > 0 || w.pending_notifications() > 0 || !w.exits.is_empty() || w.gap.is_some())))).map(|w| Source::Topic(watch(&w.id))).collect()
 }
 /// Redefinitions that keep each bot subscribed to exactly its chat's watches.
 fn drifted(state: &State, pending: bool) -> Vec<Definition> {
@@ -416,6 +423,9 @@ fn watch_events(state: &mut State) -> Vec<(Topic, u64, Message)> {
         if w.lines > 0 {
             events.push((watch(&w.id), w.wake_seq.unwrap_or(w.line_seq), Message::Lines(std::mem::take(&mut w.lines))));
         }
+        if let Some(notifications) = &mut w.notifications && notifications.pending > 0 {
+            events.push((watch(&w.id), notifications.through, Message::Notifications(std::mem::take(&mut notifications.pending))));
+        }
         if let Some(gap) = w.gap.take() {
             events.push((watch(&w.id), gap.through, Message::Gap { after: gap.after, through: gap.through }));
         }
@@ -427,7 +437,7 @@ fn watch_events(state: &mut State) -> Vec<(Topic, u64, Message)> {
     events
 }
 fn pending_watch_events(state: &State) -> bool {
-    state.watches.iter().any(|w| w.lines > 0 || !w.exits.is_empty() || w.gap.is_some())
+    state.watches.iter().any(|w| w.lines > 0 || w.pending_notifications() > 0 || !w.exits.is_empty() || w.gap.is_some())
 }
 
 fn terminal(status: &str) -> bool {
@@ -442,6 +452,10 @@ fn describe(state: &State, reasons: &[Reason]) -> String {
         Reason::Info { topic, info: Message::Lines(lines), .. } => {
             let recent = state.watches.iter().find(|w| w.id == topic.name).map(|w| w.recent.clone()).unwrap_or_default();
             format!("{lines} new lines from watch {}; latest (untrusted output): {}", name(&topic.name), recent.join(" | "))
+        }
+        Reason::Info { topic, info: Message::Notifications(count), .. } => {
+            let recent = state.watches.iter().find(|w| w.id == topic.name).and_then(|w| w.notifications.as_ref());
+            format!("{count} explicit notifications from watch {}; latest (untrusted program claims): {}", name(&topic.name), recent.map_or(String::new(), |notifications| notifications.recent.join(" | ")))
         }
         Reason::Info { topic, info: Message::Exit { code, signal, exits, gave_up }, .. } => format!(
             "watch {} exited{}{} ({exits} time(s)){}",
@@ -1714,7 +1728,7 @@ mod tests {
     }
 
     fn watching(state: &mut State, chat: &str, id: &str) {
-        state.watches.push(crate::watches::Watch { id: id.into(), name: "game".into(), chat: chat.into(), service: "svc".into(), generation: 1, permanent: true, command: "node bot.js".into(), stopped: false, wake_policy:Default::default(),created_by:None, seen: 0, lines: 0, line_seq: 0, wake_seq:None,gap:None, exits: Vec::new(), last_exit: None, recent: Vec::new() });
+        state.watches.push(crate::watches::Watch { id: id.into(), name: "game".into(), chat: chat.into(), service: "svc".into(), generation: 1, permanent: true, command: "node bot.js".into(), stopped: false, wake_policy:Default::default(),notification_channel:false,notifications:None,created_by:None, seen: 0, lines: 0, line_seq: 0, wake_seq:None,gap:None, exits: Vec::new(), last_exit: None, recent: Vec::new() });
     }
     fn subscribed(state: &State, chat: &str) -> Vec<String> {
         state.bots.supervisor.definitions().filter(|d| d.chat.0 == chat).flat_map(|d| d.sources.iter().filter_map(|s| match s { Source::Topic(t) if t.kind == "watch" => Some(t.name.clone()), _ => None })).collect()
@@ -1724,15 +1738,21 @@ mod tests {
     fn watch_read_receipts_retire_only_published_evidence_and_survive_restart() {
         use crate::watches::delivery::{prepare,record};
         use control_context::{turn_mailbox::{Mailbox,Handoff,Disposition},working_state::Payload};
+        for notifications in [false,true] {
         let (mut state, chat) = fixture();
         watching(&mut state,&chat,"w-result");
+        state.watches[0].notification_channel = notifications;
         command_at(&mut state,&chat,"on",Now(0)).unwrap();
         state.runtime.runs[0].status="running".into();
         let id=state.runtime.runs[0].id.clone();
         state.runtime.runs[0].attempts.push(crate::usage::Attempt{workspace_id:Some("attempt".into()),turn_mailbox:Some(Box::new(Mailbox::default())).into(),..Default::default()});
         let cx=AttemptRef{run:&id,generation:"attempt",nonce:"read"};
         // The worker reads output before the bot adapter offers its wake.
-        state.watches[0].observe_for_test(1,None);
+        let observe = |state:&mut State,seq| {
+            if notifications { state.watches[0].observe(&crate::watch_frame::Frame {seq,event:crate::watch_frame::Event::Notification(b"task result".to_vec())}); }
+            else { state.watches[0].observe_for_test(seq,None); }
+        };
+        observe(&mut state,1);
         let page=prepare(&state,&cx,"w-result",None).unwrap();
         let before=serde_json::to_value(&state).unwrap();
         assert!(record(&mut state,&cx,"w-result",&page,1,false, |_|Err(io::Error::other("disk full"))).is_err());
@@ -1740,6 +1760,7 @@ mod tests {
         let receipt=record(&mut state,&cx,"w-result",&page,1,false, |_|Ok(())).unwrap().unwrap();
         let replay=prepare(&state,&cx,"w-result",None).unwrap();
         assert_eq!((replay.after,replay.maximum),(0,Some(1)));
+        assert!(crate::watches::delivery::prepare_view(&state,&cx,"w-result",None,false).is_err(),"a request identity cannot change its event/log view");
         assert_eq!(record(&mut state,&cx,"w-result",&replay,1,false, |_|panic!("replay must not save")).unwrap(),Some(receipt.clone()));
         assert!(prepare(&state,&cx,"w-result",Some(99)).is_err());
         {
@@ -1779,14 +1800,43 @@ mod tests {
         reconcile_at(&mut state,1000, |_|Ok(())).unwrap();
         assert!(bot_runs(&state).is_empty(),"already processed watch output must not launch another model turn");
         // Newer output arriving after that read must still wake exactly once.
-        state.watches[0].observe_for_test(2,None);
+        observe(&mut state,2);
         reconcile_at(&mut state,2000, |_|Ok(())).unwrap();
         assert_eq!(bot_runs(&state).len(),1);
         assert!(matches!(&bot_runs(&state)[0].bot_turn.as_ref().unwrap().reasons[..], [Reason::Info{through:2,..}]));
         reconcile_at(&mut state,2001, |_|Ok(())).unwrap();
         assert_eq!(bot_runs(&state).len(),1);
+        }
     }
 
+    #[test]
+    fn explicit_notifications_release_waits_without_log_matching_or_extra_turns() {
+        use crate::watch_frame::{Event as WatchEvent, Frame};
+        let (mut state, chat) = fixture();
+        state.chats[0].room = None;
+        watching(&mut state,&chat,"w-result");
+        state.watches[0].notification_channel = true;
+        state.watches[0].wake_policy = crate::watches::WakePolicy::ExitOnly {};
+        command_at(&mut state,&chat,"on",Now(0)).unwrap();
+        state.bots.supervisor.step(Event::Wait {bot:bot(&chat),topics:vec![watch("w-result")],until:None},Now(1));
+        for seq in 1..=500 { state.watches[0].observe(&Frame {seq,event:WatchEvent::Line(b"task complete, ERROR or unchanged status is still only a log".to_vec())}); }
+        reconcile_at(&mut state,86_400_000, |_|Ok(())).unwrap();
+        assert!(bot_runs(&state).is_empty());
+        state.watches[0].observe(&Frame {seq:501,event:WatchEvent::Notification(br#"{"task":"task-54","status":"completed"}"#.to_vec())});
+        let before = serde_json::to_value(&state).unwrap();
+        assert!(reconcile_at(&mut state,86_400_001, |_|Err(io::Error::other("disk full"))).is_err());
+        assert_eq!(serde_json::to_value(&state).unwrap(),before);
+        let mut state:State = serde_json::from_value(before).unwrap();
+        reconcile_at(&mut state,86_400_002, |_|Ok(())).unwrap();
+        assert_eq!(bot_runs(&state).len(),1);
+        let run = bot_runs(&state)[0];
+        assert!(matches!(&run.bot_turn.as_ref().unwrap().reasons[..],[Reason::Info {through:501,info:Message::Notifications(1),..}]));
+        assert!(run.objective.contains("task-54") && !run.objective.contains("unchanged status"));
+        assert!(!state.watches[0].observe(&Frame {seq:501,event:WatchEvent::Notification(b"replay".to_vec())}));
+        reconcile_at(&mut state,86_400_003, |_|Ok(())).unwrap();
+        assert_eq!(bot_runs(&state).len(),1);
+        assert!(!state.watches[0].notifications.as_ref().unwrap().recent.contains(&"replay".into()));
+    }
     #[test]
     fn selected_watch_wakes_keep_exact_cursors_across_save_failure_and_restart() {
         use crate::watch_frame::{Event as WatchEvent, Frame};
