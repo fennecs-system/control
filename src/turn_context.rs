@@ -93,7 +93,8 @@ pub(crate) fn callback_notice(state: &mut State, id: &str) -> bool {
         .iter()
         .enumerate()
         .rev()
-        .find(|(_, p)| Some(&p.room) == chat.room.as_ref() && p.chat.as_deref() != Some(&chat.id))
+        .find(|(_, p)| Some(&p.room) == chat.room.as_ref() && p.chat.as_deref() != Some(&chat.id)
+            && p.delivery == crate::rooms::Delivery::Notify)
         .map_or(0, |(i, _)| i + 1);
     let stamp = (chat.messages.len(), posts);
     if stamp.0 <= conversation && stamp.1 <= room || mailbox.announced == Some(stamp) {
@@ -145,7 +146,7 @@ impl PlannedContext {
         })
     }
     pub fn current(&self, state: &State) -> bool {
-        crate::scheduler::next(&state.runtime).is_some_and(|i| {
+        crate::scheduler::next_in(state).is_some_and(|i| {
             let run = &state.runtime.runs[i];
             run.id == self.run
                 && run.chat_id == self.chat

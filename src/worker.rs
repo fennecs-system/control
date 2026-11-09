@@ -459,7 +459,7 @@ fn start_with(state: Arc<Mutex<State>>, execute: fn(Arc<Mutex<State>>, Task)) ->
                         for reconcile in [crate::delegation::reconcile, crate::rooms::reconcile, crate::spawning::reconcile, crate::bots::reconcile] {
                             if let Err(message)=reconcile(&mut s, storage::save) {s.runtime.notice=message.into();}
                         }
-                        let managed_index=crate::scheduler::next(&s.runtime).filter(|&i|crate::turn_context::managed(&s,&s.runtime.runs[i]));
+                        let managed_index=crate::scheduler::next_in(&s).filter(|&i|crate::turn_context::managed(&s,&s.runtime.runs[i]));
                         match managed_index {
                             Some(index)=>match crate::turn_context::PlannedContext::prepare(&s,index) {
                                 Ok(plan)=>Some(plan),
@@ -846,7 +846,7 @@ pub(crate) fn checkpoint_next(
     state: &mut State,
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Option<usize> {
-    let index = crate::scheduler::next(&state.runtime)?;
+    let index = crate::scheduler::next_in(state)?;
     let captured = if crate::turn_context::managed(state, &state.runtime.runs[index]) {
         Some(crate::turn_context::PlannedContext::prepare(state, index).ok()?.persist().ok()?)
     } else { None };
@@ -858,7 +858,7 @@ fn checkpoint_prepared(
     save:impl FnOnce(&State)->std::io::Result<()>,
 ) -> Option<usize> {
     if crate::shutdown::requested() { return None; }
-    let index = crate::scheduler::next(&state.runtime)?;
+    let index = crate::scheduler::next_in(state)?;
     if crate::turn_context::managed(state,&state.runtime.runs[index]) && captured.is_none(){return None;}
     let omitted_history = crate::chat::omitted_history(state, &state.runtime.runs[index].id);
     let parent = {
@@ -1626,7 +1626,7 @@ mod tests {
         // Simulate an already running pre-continuity provider process.
         state.runtime.runs[0].attempts[0].context_trace = None;
         state.runtime.runs[0].attempts[0].turn_mailbox = None.into();
-        state.collective.posts.push(crate::rooms::Post{room:"general".into(),text:"Old room history".into(),chat:Some("peer".into()),run:None,key:"old".into()});
+        state.collective.posts.push(crate::rooms::Post{room:"general".into(),text:"Old room history".into(),chat:Some("peer".into()),run:None,key:"old".into(),delivery:Default::default()});
         crate::bots::command(&mut state,&chat,"on").unwrap();
         assert!(state.runtime.runs[0].attempts[0].context_trace.is_none());
         assert!(state.runtime.runs[0].attempts[0].turn_mailbox.is_none());
@@ -1715,7 +1715,7 @@ mod tests {
             crate::rooms::ensure_inbox(&mut state, &chat).unwrap();
             checkpoint_next(&mut state, |_|Ok(())).unwrap();
             for i in 0..8 {
-                state.collective.posts.push(crate::rooms::Post { room: "general".into(), text: format!("event {i}"), chat: None, run: None, key: String::new() });
+                state.collective.posts.push(crate::rooms::Post { room: "general".into(), text: format!("event {i}"), chat: None, run: None, key: String::new(), delivery: Default::default() });
             }
             state.chats[0].continuity=Some(Box::new(crate::turn_context::Managed::default()));
             let run=&mut state.runtime.runs[0];

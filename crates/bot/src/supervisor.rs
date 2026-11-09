@@ -317,6 +317,18 @@ impl<I: Info> Supervisor<I> {
     pub fn eligible(&self, bot: &BotId, turn: &TurnId) -> bool {
         self.bots.get(bot).is_some_and(|b| !b.stopping && b.turn.as_ref().is_some_and(|(id, _)| id == turn))
     }
+    /// Dispatch rechecks pause separately from an already requested/running turn.
+    /// Pausing retains the request; resuming does not allocate another turn.
+    pub fn may_start(&self, bot: &BotId, turn: &TurnId) -> bool {
+        self.eligible(bot, turn) && self.bots.get(bot).is_some_and(|b| !b.paused)
+    }
+    /// Whether retained source evidence is newer than both admission and
+    /// published processing. The application can skip reoffering old records.
+    pub fn unseen(&self, bot: &BotId, topic: &Topic, through: u64) -> bool {
+        self.bots.get(bot).is_some_and(|b| !b.stopping
+            && b.cursors.get(&topic.key()).is_none_or(|seen| through > *seen)
+            && b.processed.get(&topic.key()).is_none_or(|seen| through > *seen))
+    }
     /// Turns requested but not yet completed, for reconciliation after restart.
     pub fn outstanding(&self) -> impl Iterator<Item = (&BotId, &ChatId, &TurnId)> {
         self.bots.iter().filter_map(|(id, bot)| bot.turn.as_ref().map(|(turn, chat)| (id, chat, turn)))

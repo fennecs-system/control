@@ -12,6 +12,14 @@ are interfaces to shared capabilities. Tool availability, resource grants and
 transport are separate. Lenses are pure, composable context/tool selections;
 personas describe behavior and policy, not additional authority.
 
+Keep the core, tools and TUI efficient enough to be plausible on a tiny machine,
+with the website separately budgeted. Pi Zero-class hardware is an illustration,
+not a required device target. Reliability fixes come first, followed by typed
+state/effect boundaries before further capability growth. Those boundaries must
+support alternative execution backends without assuming Docker in the core.
+Measure CPU, memory and latency while extracting them; see the
+[small-machine efficiency goal](docs/PERFORMANCE.md#small-machine-efficiency-goal).
+
 For one owner, sustained high fan-out may hit subscription limits; prefer API keys
 for 50-agent runs. Control roles do not change credential ownership. Operators
 remain responsible for provider terms; using Control to share account access or
@@ -257,6 +265,20 @@ or local-model adapters. Preserve the existing scheduling and authority rules.
    Use generic watch milestone/exit policies and scoped wait conditions, preserving
    unread evidence, finite rechecks and human/failure delivery. No game-specific
    logic belongs in Control. Idle agents release their model slots.
+   Next small reliability slice: reduce coordination echoes before the state/effect
+   extraction. Tools choose explicit room delivery (`record` or `notify`); a retained
+   update must remain readable without waking peers or acknowledging their inboxes.
+   Lead policy responds to changed plans/dependencies, not every worker milestone.
+   Workers coordinate directly with same-task peers through the existing targeted
+   message queue, including after the steering chat finishes without a root bot.
+   A shared room alone grants no cross-task access; stopped work and action scope
+   remain protected. Requests for one worker do not also broadcast room wakes.
+   Workload emitters classify changes rather than promoting repeated severity words
+   into events. Acceptance: a notified worker milestone followed by a recorded lead
+   update creates no extra echo turn; restart/save failure preserve unread evidence
+   and armed wakes; human input, actionable notifications and process failures still
+   arrive. Keep classification in tools/configuration and generic delivery in the
+   existing adapters; no semantic message classifier or timer in the supervisor.
 5. **Preserve recovery and measure progress.** Keep one writer, durable admission,
    generation fencing, cancellation, pause and delegation chains. Restart still
    interrupts attempts; never replay ambiguous effects. Compare useful actions,

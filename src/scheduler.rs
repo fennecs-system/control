@@ -90,18 +90,27 @@ fn background(run: &crate::runtime::Run) -> bool {
 /// Only each chat's oldest queued turn is a candidate, keeping chat FIFO. Among
 /// candidates, conversation turns start before background agents, and background
 /// agents use at most all but one slot, so a person is not queued behind them.
+#[cfg(test)]
 pub fn next(runtime: &Runtime) -> Option<usize> {
+    next_where(runtime, |_| true)
+}
+/// Application admission applies current bot intent without moving that state
+/// into the scheduling core. Held bot turns do not block other conversations.
+pub(crate) fn next_in(state: &crate::State) -> Option<usize> {
+    next_where(&state.runtime, |run| crate::bots::may_start(state, run))
+}
+fn next_where(runtime: &Runtime, permitted: impl Fn(&crate::runtime::Run) -> bool) -> Option<usize> {
     let capacity=Capacity::new(runtime.execution.max_parallel_runs.min(MAX_PARALLEL))?;
     if runtime.paused.is_some() {
         return None;
     }
     let mut heads=std::collections::HashMap::new();
-    for (index, run) in runtime.runs.iter().enumerate().filter(|(_, run)| run.status == "queued") {
+    for (index, run) in runtime.runs.iter().enumerate().filter(|(_, run)| run.status == "queued" && permitted(run)) {
         if let Some(chat)=run.chat_id.as_deref() {
             heads.entry(chat).and_modify(|head: &mut (u64, usize)| *head=(*head).min((run.queue_order, index))).or_insert((run.queue_order, index));
         }
     }
-    let candidate=|index: usize, run: &crate::runtime::Run| run.status == "queued"
+    let candidate=|index: usize, run: &crate::runtime::Run| run.status == "queued" && permitted(run)
         && run.chat_id.as_deref().is_none_or(|chat| heads.get(chat).is_some_and(|head| head.1 == index));
     let mut lanes=runtime.runs.iter().enumerate()
         .map(|(index, run)| Lane {run, queued: candidate(index, run) && !background(run)})

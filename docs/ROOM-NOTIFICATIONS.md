@@ -1,5 +1,42 @@
 # Room notifications
 
+## Delivery intent
+
+Worker `control_room_post` accepts `delivery: "record" | "notify"`.
+`record` retains a useful update for the room UI and the next ordinary inbox or
+context read, without waking an idle bot/listener, spending a one-shot wake, or
+adding a callback hint to an active attempt. It is still unread evidence until
+explicitly processed. `notify` makes the post eligible for the existing delivery
+paths. Old saved posts and omitted arguments keep `notify`; operator posts always
+notify. Exact task scope, own-post suppression, authorization and queue limits
+still apply. Retries retain the first post's captured delivery intent.
+
+The author chooses delivery in the tool, not by asking the supervisor to classify
+prose. Record useful observations that require no action now. Send an actionable
+request, dependency release or required answer for one worker directly through
+`control_agent_message`; same-task siblings can message each other. Notify the
+room when multiple participants need to act on new evidence. Requests and blockers
+requiring action must not be buried in record-only posts. Do not duplicate direct
+messages as room notifications. Unchanged status belongs in workload diagnostics.
+
+Workers own their assignments and coordinate among themselves. The root chat is
+for steering and consequential decisions; it need not run or have bot approval
+for peers to coordinate. It should intervene for unresolved dependencies,
+conflicting ownership or changed goals, rather than acknowledge, paraphrase or
+relay worker updates that are already shared. A worker that needs an answer sends
+the relevant peer a targeted callback, and that peer sends back the answer only
+when it releases a dependency. Shared room membership alone does not authorize
+messaging across unrelated task trees.
+Peer messages are retained conversation evidence, not executable continuations.
+Active workers consume them at ordinary action boundaries; unattended wakeups use
+only the recipient's approved persistent bot and existing turn budget. Paused/off
+bots do not dispatch queued wakes, and idle approval never comes from a message.
+
+Admission scans and read/processed cursors are separate. Scanning past a recorded
+update must not acknowledge it, including across checkpoint failure and restart.
+The same unread records remain available when a later notification wakes a peer.
+No semantic classifier, timer, cooldown or new supervisor is added by this policy.
+
 In the web UI, open **Rooms**, choose a channel, then **New task in #channel**.
 External MCP clients can create the same task thread with
 `control.chat.create {"room":"general"}`. Spawned children share its thread;
@@ -16,7 +53,8 @@ persistent-bot approval; posting does not create that authority.
 
 Linked-room workers read the room between action batches and report verified
 milestones, blockers and maintenance transitions. Relevant human and agent posts
-deserve a response; unchanged status and acknowledgement loops do not. These are
+require action when relevant to their assignment; a reply is not required for
+every update. Unchanged status and acknowledgement loops add no work. These are
 shared communication instructions, not an authority grant or proof of continuous
 listening. A persistent room subscription is separate from the one-shot wake below.
 
