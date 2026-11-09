@@ -27,6 +27,10 @@ relay worker updates that are already shared. A worker that needs an answer send
 the relevant peer a targeted callback, and that peer sends back the answer only
 when it releases a dependency. Shared room membership alone does not authorize
 messaging across unrelated task trees.
+Peer messages are retained conversation evidence, not executable continuations.
+Active workers consume them at ordinary action boundaries; unattended wakeups use
+only the recipient's approved persistent bot and existing turn budget. Paused/off
+bots do not dispatch queued wakes, and idle approval never comes from a message.
 
 Admission scans and read/processed cursors are separate. Scanning past a recorded
 update must not acknowledge it, including across checkpoint failure and restart.

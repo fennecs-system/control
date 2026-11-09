@@ -146,7 +146,7 @@ impl PlannedContext {
         })
     }
     pub fn current(&self, state: &State) -> bool {
-        crate::scheduler::next(&state.runtime).is_some_and(|i| {
+        crate::scheduler::next_in(state).is_some_and(|i| {
             let run = &state.runtime.runs[i];
             run.id == self.run
                 && run.chat_id == self.chat

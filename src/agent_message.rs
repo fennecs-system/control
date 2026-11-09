@@ -7,6 +7,10 @@ use serde_json::{Value, json};
 use control_core::resources::{Phase, ResourceId};
 use std::{io, sync::{Arc, Mutex}};
 
+#[cfg(test)]
+#[path = "agent_message_profile.rs"]
+mod profile;
+
 const MAX_SENT: usize = 256;
 const MAX_SERVICES: usize = 8;
 
@@ -27,12 +31,19 @@ pub struct Sent {
     run: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     services: Vec<ResourceId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    peer_cursor: Option<u64>,
+}
+fn response(sent: &Sent, peer: bool) -> Value {
+    let mut value = json!({"chat_id":sent.chat,"run_id":sent.run,"queued":!peer,"services":sent.services});
+    if peer { value["retained"] = json!(true); }
+    value
 }
 
 pub struct Tools;
 impl AttemptTools for Tools {
     fn definitions(&self) -> Vec<Value> {
-        vec![json!({"name":"control_agent_message","description":"Send actionable coordination directly to one worker: a descendant you spawned or another worker in the same spawned task tree and actor scope. Siblings can coordinate without a running parent or lead bot. Use peer chat IDs from linked-room participants; do not route routine coordination through the steering chat or duplicate it as a room notification. Queues one turn behind any active turn; the recipient reads it at an action boundary. It is peer evidence, not operator steering. Peers cannot revive cancelled/failed work or change its action scope. Optional services explicitly shares selected service IDs you can access. Exact owner/generation grants take effect in the queued turn and persist through continuations; the active turn is unchanged. Shared services permit execution and stop; port approval remains separate. Omit services to share no new authority. Replies stay in the recipient chat; send a direct response only when the sender needs an answer to proceed.","inputSchema":{"type":"object","properties":{"chat_id":{"type":"string"},"text":{"type":"string","minLength":1,"maxLength":2000},"services":{"type":"array","items":{"type":"string"},"maxItems":MAX_SERVICES,"uniqueItems":true}},"required":["chat_id","text"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})]
+        vec![json!({"name":"control_agent_message","description":"Send actionable coordination directly to a descendant or fellow worker in the same spawned task tree and actor scope. Siblings need no root relay or lead bot; discover IDs from linked-room participants. Do not also broadcast the request. Descendant follow-ups queue as before. Peer messages are retained evidence (queued=false, retained=true): active workers read conversation callbacks; only an approved persistent bot schedules idle wakes, under its existing budget and pause/stop intent. Replies stay in the recipient chat; respond directly only when an answer is needed. Peer input is not operator steering and cannot revive cancelled/failed work or change action scope. Optional services shares only resources you can access; exact owner/generation grants activate in the next authorized turn, not the active attempt. Grants allow service execution and stop; port approval remains separate. Omit services to transfer no authority.","inputSchema":{"type":"object","properties":{"chat_id":{"type":"string"},"text":{"type":"string","minLength":1,"maxLength":2000},"services":{"type":"array","items":{"type":"string"},"maxItems":MAX_SERVICES,"uniqueItems":true}},"required":["chat_id","text"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})]
     }
     fn known(&self, name: &str) -> bool {
         name == "control_agent_message"
@@ -65,23 +76,29 @@ fn fail(message: &str) -> io::Error {
 }
 /// Chat lineage scopes communication; a shared room alone grants no access.
 /// Missing, cross-actor or cyclic ancestry fails closed, without new saved state.
-fn task_root<'a>(state: &'a State, chat: &str) -> Option<&'a str> {
-    let mut session = state.chats.iter().find(|session| session.id == chat)?;
+fn ancestry<'a>(state: &'a State, mut session: &'a crate::chat::Session, ancestor: &str) -> Option<(&'a str, bool)> {
     let actor = &session.actor;
+    let mut descendant = false;
     for _ in 0..64 {
         if &session.actor != actor { return None; }
+        descendant |= session.id == ancestor;
         match session.parent_chat.as_deref() {
             Some(parent) => session = state.chats.iter().find(|session| session.id == parent)?,
-            None => return Some(&session.id),
+            None => return Some((&session.id, descendant)),
         }
     }
     None
 }
 pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call: MessageCall) -> io::Result<Value> {
     let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
-    handle(&mut state, attempt, call, crate::storage::save)
+    handle_with_archive(&mut state, attempt, call, |run| crate::history::archive_run(run).map(|_| ()), crate::storage::save)
 }
+#[cfg(test)]
 fn handle(state: &mut State, attempt: &AttemptRef<'_>, call: MessageCall, save: impl FnOnce(&State) -> io::Result<()>) -> io::Result<Value> {
+    handle_with_archive(state, attempt, call, |_| Ok(()), save)
+}
+fn handle_with_archive(state: &mut State, attempt: &AttemptRef<'_>, call: MessageCall,
+    archive: impl FnOnce(&mut crate::runtime::Run) -> io::Result<()>, save: impl FnOnce(&State) -> io::Result<()>) -> io::Result<Value> {
     let run = state.runtime.runs.iter()
         .find(|run| run.id == attempt.run && run.status == "running"
             && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation))
@@ -97,7 +114,8 @@ fn handle(state: &mut State, attempt: &AttemptRef<'_>, call: MessageCall, save: 
     }
     let key = format!("{}/{}/{}", attempt.run, attempt.generation, attempt.nonce);
     if let Some(sent) = state.agent_messages.iter().find(|sent| sent.key == key) {
-        return if sent.chat == call.chat_id && sent.services == call.services { Ok(json!({"chat_id":sent.chat,"run_id":sent.run,"queued":true,"services":sent.services})) } else { Err(fail("Request identity reused for another chat or service grant")) };
+        let peer = sent.peer_cursor.is_some();
+        return if sent.chat == call.chat_id && sent.services == call.services { Ok(response(sent, peer)) } else { Err(fail("Request identity reused for another chat or service grant")) };
     }
     let text = call.text.trim();
     if text.is_empty() || text.chars().count() > 2000 {
@@ -117,10 +135,11 @@ fn handle(state: &mut State, attempt: &AttemptRef<'_>, call: MessageCall, save: 
         Ok(service.grant())
     }).collect::<io::Result<Vec<_>>>()?;
     let target = state.chats.iter().find(|session| session.id == call.chat_id).ok_or_else(|| fail("Chat not found"))?;
-    let root = task_root(state, &sender).ok_or_else(|| fail("Task lineage is unavailable"))?;
-    let descendant = crate::chat::within(state, &call.chat_id, &sender);
-    let peer = target.parent_chat.is_some() && state.chats.iter().any(|session| session.id == sender && session.parent_chat.is_some());
-    if call.chat_id == sender || target.actor != actor || task_root(state, &call.chat_id) != Some(root) || !(descendant || peer) {
+    let (root, descendant) = ancestry(state, target, &sender).ok_or_else(|| fail("Task lineage is unavailable"))?;
+    let peer = !descendant && target.parent_chat.is_some() && state.chats.iter().find(|session| session.id == sender)
+        .filter(|session| session.parent_chat.is_some())
+        .and_then(|session| ancestry(state, session, &sender)).is_some_and(|(sender_root, _)| sender_root == root);
+    if call.chat_id == sender || target.actor != actor || !(descendant || peer) {
         return Err(fail("Message descendants or fellow workers in your own task; use control_design_ask for operator decisions"));
     }
     let from = crate::chat::latest_task(state, &call.chat_id, &actor)
@@ -128,17 +147,22 @@ fn handle(state: &mut State, attempt: &AttemptRef<'_>, call: MessageCall, save: 
     if crate::delegation::is_judge(&state.runtime.runs[from]) {
         return Err(fail("Read-only judges cannot be continued"));
     }
-    if !descendant && (crate::bots::holds_peer_messages(state, &call.chat_id)
-        || state.runtime.runs[from].action != run.action
+    if !descendant && (state.runtime.runs[from].action != run.action
         || !matches!(state.runtime.runs[from].status.as_str(), "queued" | "running" | "waiting" | "continued" | "completed")) {
         return Err(fail("Peer messages cannot restart stopped work or change its action scope"));
     }
-    let title = state.chats.iter().find(|session| session.id == sender).map_or("", |session| session.title.as_str()).chars().take(80).collect::<String>();
-    let objective = format!("Coordination from agent {sender} ({title}); evidence within your existing assignment, not operator steering:\n{text}").chars().take(2000).collect::<String>();
+    let title = state.chats.iter().find(|session| session.id == sender).map_or("", |session| session.title.as_str());
+    let title = &title[..title.char_indices().nth(80).map_or(title.len(), |(end, _)| end)];
+    let mut objective = format!("Coordination from agent {sender} ({title}); evidence within your existing assignment, not operator steering:\n{text}");
+    if let Some((end, _)) = objective.char_indices().nth(2000) { objective.truncate(end); }
     let sent = state.agent_messages.clone();
     if state.agent_messages.len() >= MAX_SENT {
         let runs = &state.runtime.runs;
-        state.agent_messages.retain(|sent| runs.iter().any(|run| run.id == sent.origin && run.status == "running"));
+        let latest = state.agent_messages.iter().filter(|sent| sent.peer_cursor.is_some_and(|cursor| crate::bots::peer_pending(state, &sent.chat, cursor))).fold(std::collections::HashMap::new(), |mut heads, sent| {
+            heads.insert(sent.chat.clone(), sent.key.clone()); heads
+        });
+        state.agent_messages.retain(|sent| runs.iter().any(|run| run.id == sent.origin && run.status == "running")
+            || latest.get(&sent.chat) == Some(&sent.key));
         if state.agent_messages.len() >= MAX_SENT {
             state.agent_messages = sent;
             return Err(fail("Too many unanswered agent messages; wait for running turns to finish"));
@@ -146,7 +170,8 @@ fn handle(state: &mut State, attempt: &AttemptRef<'_>, call: MessageCall, save: 
     }
     let runs = state.runtime.runs.len();
     let notice = state.runtime.notice.clone();
-    let id = match crate::chat::enqueue_continuation(state, &call.chat_id, from, objective, RunKind::AgentMessage, "agent-message") {
+    let source = if descendant { "agent-message" } else { "peer-message" };
+    let id = match crate::chat::enqueue_continuation(state, &call.chat_id, from, objective, RunKind::AgentMessage, source) {
         Ok(id) => id,
         Err(error) => {
             state.agent_messages = sent;
@@ -158,11 +183,18 @@ fn handle(state: &mut State, attempt: &AttemptRef<'_>, call: MessageCall, save: 
     session.messages.push(crate::chat::Message { text: format!("Message from {sender}\n{text}"), run_id: Some(id.clone()), reply: String::new() });
     session.revision = revision.saturating_add(1);
     let queued = state.runtime.runs.last_mut().unwrap();
+    // A peer contributes typed conversation evidence, not scheduling authority.
+    // Only the recipient's approved bot can admit an unattended model turn.
+    if !descendant {
+        queued.status = "completed".into();
+        queued.emitted = Some("completed".into()); // Evidence is not a worker-completion announcement.
+    }
     for grant in grants {
         if !queued.resource_grants.contains(&grant) { queued.resource_grants.push(grant); }
     }
-    state.agent_messages.push(Sent { key, origin: attempt.run.into(), chat: call.chat_id.clone(), run: id.clone(), services: call.services.clone() });
-    if let Err(error) = save(state) {
+    state.agent_messages.push(Sent { key, origin: attempt.run.into(), chat: call.chat_id.clone(), run: id.clone(), services: call.services.clone(), peer_cursor: (!descendant).then_some((messages + 1) as u64) });
+    let archived = if descendant { Ok(()) } else { archive(state.runtime.runs.last_mut().unwrap()) };
+    if let Err(error) = archived.and_then(|_| save(state)) {
         state.runtime.runs.truncate(runs);
         state.runtime.notice = notice;
         let session = state.chats.iter_mut().find(|session| session.id == call.chat_id).unwrap();
@@ -171,7 +203,12 @@ fn handle(state: &mut State, attempt: &AttemptRef<'_>, call: MessageCall, save: 
         state.agent_messages = sent;
         return Err(error);
     }
-    Ok(json!({"chat_id":call.chat_id,"run_id":id,"queued":true,"services":call.services}))
+    Ok(response(state.agent_messages.last().unwrap(), !descendant))
+}
+/// Bounded receipt metadata supplies deferred private events. Actual admission
+/// happens after published processing receipts, never inside a tool call.
+pub(crate) fn peer_cursors(state: &State) -> impl Iterator<Item = (&str, u64)> {
+    state.agent_messages.iter().filter_map(|sent| sent.peer_cursor.map(|cursor| (sent.chat.as_str(), cursor)))
 }
 
 #[cfg(test)]
@@ -257,6 +294,10 @@ mod tests {
         assert_eq!(queued.chat_id.as_deref(), Some(cass.as_str()));
         assert_eq!(queued.model.as_deref(), Some("recipient-model"), "the recipient retains its own captured execution settings");
         assert_eq!(queued.kind, RunKind::AgentMessage);
+        assert_eq!(queued.status, "completed", "an unapproved peer receives evidence, not an unattended turn");
+        assert_eq!(first["queued"], false);
+        assert_eq!(first["retained"], true);
+        assert_eq!(state.runtime.runs.iter().filter(|run| run.status == "queued").count(), 0);
         assert!(queued.objective.contains("not operator steering"));
         assert!(!queued.objective.contains("agent that spawned you"));
         assert!(state.collective.posts.is_empty(), "targeted messages do not also broadcast room posts");
@@ -323,12 +364,13 @@ mod tests {
         state.chats.iter_mut().find(|chat| chat.id == cass).unwrap().room = Some("general".into());
         crate::bots::command(&mut state, &cass, "on").unwrap();
         crate::bots::command(&mut state, &cass, "pause").unwrap();
-        let paused = serde_json::to_vec(&state).unwrap();
-        assert!(handle(&mut state, &attempt, call(), |_| panic!("paused work must not save")).is_err());
-        assert_eq!(serde_json::to_vec(&state).unwrap(), paused);
+        let received = handle(&mut state, &attempt, call(), |_| Ok(())).unwrap();
+        assert_eq!(received["queued"], false, "paused bots retain evidence without an automatic turn");
+        crate::bots::reconcile(&mut state, |_| Ok(())).unwrap();
+        assert!(crate::scheduler::next_in(&state).is_none());
         crate::bots::command(&mut state, &cass, "resume").unwrap();
         let before = serde_json::to_vec(&state).unwrap();
-        assert!(handle(&mut state, &attempt, call(), |_| Err(fail("disk full"))).is_err());
+        assert!(handle(&mut state, &AttemptRef { nonce: "failed-save", ..attempt }, call(), |_| Err(fail("disk full"))).is_err());
         assert_eq!(serde_json::to_vec(&state).unwrap(), before);
     }
 
@@ -356,6 +398,23 @@ mod tests {
     }
 
     #[test]
+    fn peer_archive_failure_rolls_back_message_receipt_and_grants_before_save() {
+        let (mut state, lead, alice, _) = family();
+        let cass = spawned(&mut state, &lead);
+        let run = activate(&mut state, &alice);
+        let before = serde_json::to_vec(&state).unwrap();
+        let result = handle_with_archive(&mut state, &AttemptRef { run: &run, generation: "peer-attempt", nonce: "archive" },
+            MessageCall { chat_id: cass, text: "New dependency evidence".into(), services: vec![] },
+            |evidence| {
+                assert_eq!(evidence.status, "completed");
+                assert_eq!(evidence.source, "peer-message");
+                Err(fail("journal full"))
+            }, |_| panic!("a failed archive must not checkpoint inline evidence"));
+        assert!(result.is_err());
+        assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+    }
+
+    #[test]
     fn failed_saves_leave_nothing_queued() {
         let (mut state, _, child, _) = family();
         let before = serde_json::to_vec(&state).unwrap();
@@ -370,7 +429,7 @@ mod tests {
         let (mut state, _, child, _) = family();
         let active = state.runtime.runs[0].id.clone();
         let first = send(&mut state, "n0", &child).unwrap();
-        state.agent_messages.extend((1..MAX_SENT).map(|index| Sent { key: format!("other/{index}"), origin: active.clone(), chat: child.clone(), run: format!("r{index}"), services: vec![] }));
+        state.agent_messages.extend((1..MAX_SENT).map(|index| Sent { key: format!("other/{index}"), origin: active.clone(), chat: child.clone(), run: format!("r{index}"), services: vec![], peer_cursor: None }));
         assert!(send(&mut state, "n1", &child).is_err(), "a full cache of live receipts refuses instead of evicting");
         assert_eq!(send(&mut state, "n0", &child).unwrap()["run_id"], first["run_id"]);
         for sent in state.agent_messages.iter_mut().skip(1) {

@@ -1,5 +1,95 @@
 # Performance checks
 
+## Small-device requirement
+
+Control's core, tools and TUI must remain practical on Pi Zero-class hardware;
+the website has a separate deployment and performance budget. Treat the
+512 MiB device class as an architectural constraint, not as a claim established
+by desktop or ARM64-container timings. Original Pi Zero ARMv6 compatibility and
+Pi Zero 2 compatibility require their own builds and hardware checks.
+
+Measure cold and warm startup, peak/idle RSS, idle CPU, tool dispatch, context
+construction and TUI input/render latency, including tail latency and growing
+history. Record architecture, storage, concurrency and swap use. Model execution
+and requested workload resources have separate budgets; report Control's own
+overhead explicitly. Avoid extra timers, duplicated state, repeated history
+hydration and dependencies in the core. Keep web assets and optional adapters
+separable through the typed state/effect boundaries; the current all-in-one
+binary is not evidence of a website-free minimal build.
+
+An ARM64 VM with two CPUs can catch relative regressions, but cannot certify
+ARMv6 support, 512 MiB operation, SD-card durability latency or interactive TUI
+responsiveness on the target board. Set numeric release thresholds from an
+actual representative-device baseline, then retain that baseline in comparisons.
+The current Nix flake lists ARM64 and x86-64 Linux/macOS systems; it does not yet
+provide an ARMv6 build target.
+
+## Peer coordination review (2026-11-09)
+
+Compared the reviewed peer-delivery patch with `abc93d4`, using separate optimized
+Linux ARM64 build directories, identical Rust fixtures and a two-CPU offline
+container. Six alternating pairs each discard one warmup batch and retain nine
+batches of 10,000 downward messages. These are medians of the six batch medians:
+
+| Retained chats/runs | Baseline routing | Reviewed routing | Change |
+| --- | ---: | ---: | ---: |
+| 16 | 1.356 µs | 0.962 µs | -29.1% |
+| 64 | 1.673 µs | 1.246 µs | -25.6% |
+| 1,024 | 5.105 µs | 4.160 µs | -18.5% |
+
+The first version regressed the 16-chat fixture by 6.2%. Borrowing the bounded
+title and truncating the formatted objective at a UTF-8 boundary removes two
+allocations without changing the 80/2,000-character limits. The fixture includes
+in-memory message/queue construction and reset, excluding filesystem durability,
+peer wake reconciliation, provider execution and fixture setup. It compares the
+existing downward path; it does not claim these numbers for new peer delivery.
+Room guidance is 1,110 → 1,108 bytes; the message tool schema is 1,048 → 1,343 bytes.
+
+The 600-turn HTTP/save/render check remains sensitive to this VM and storage.
+Unpinned bind-mount samples gave 7.429 → 7.998 ms/turn across the five measured
+stages, with contradictory paired CPU changes from -29% to +49%. Six further
+pairs pinned to one virtual CPU, on container-local disk under a 512 MiB cgroup
+limit with swap disabled, gave 11.117 → 10.057 ms/turn and 3.793 → 3.248 ms measured
+thread CPU. Both save 601 KiB. These differing results do not establish a general
+save/render speedup or a precise regression bound. Retain the noisy results and
+validate durability latency on the target hardware before setting a release gate.
+
+Real `perf` flamegraphs cover routing and HTTP before/after, using `cpu-clock:u`,
+499 Hz and DWARF stacks. Routing captures 1,712/1,260 samples and HTTP 738/757;
+profiling runs are separate from timing runs. Inspect them with the conversion
+commands below; elapsed timings are not used to manufacture flamegraphs.
+
+Real stripped production executables on container-local disk were also checked
+under the 512 MiB/no-swap limit. Startup uses three warmups then 31 process
+launches; peak RSS uses nine separate GNU Time samples. TUI `--check` connects to
+a fresh empty server; it does not measure interactive rendering.
+
+| Footprint/check | Baseline | Reviewed |
+| --- | ---: | ---: |
+| Stripped Control binary | 10,754,840 bytes | 10,754,840 bytes |
+| Stripped standalone TUI | 3,807,632 bytes | 3,807,632 bytes |
+| MCP startup to stdin EOF, median | 0.323 ms | 0.334 ms |
+| MCP peak RSS, median | 5,112 KiB | 5,112 KiB |
+| TUI connect/check, median | 162.03 ms | 161.35 ms |
+| TUI connect/check peak RSS, median | 7,260 KiB | 7,300 KiB |
+| Empty server RSS after requests | 21,428 KiB | 21,540 KiB |
+
+The short `--version` startup check varies from 0.335 → 0.457 ms; do not describe
+all startup paths as faster. No cgroup OOM events occurred. Server memory is one
+idle observation, not a bound for an active swarm; larger histories, concurrency,
+tool workloads and actual Pi/TUI rendering still need hardware measurements.
+
+Reproduce routing with the same fixture copied unchanged into the baseline:
+
+```sh
+nix develop --command cargo test --release --locked --bin control \
+  agent_message::profile::routing_profile -- --ignored --exact --nocapture
+```
+
+For HTTP comparisons, create a fresh `CONTROL_STATE_DIR` before each invocation
+of the 600-turn fixture below. Keep revisions in separate build directories and
+alternate their execution order. Never point profiling at the running node.
+
 ## Active sessions and durable bot handoffs
 
 The active-session implementation was compared with `fcc76fc` using identical

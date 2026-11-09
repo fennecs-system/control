@@ -26,10 +26,20 @@ not permit messaging unrelated task trees. Peer messages cannot bypass a bot's
 pause/stop, revive cancelled or failed work, change its action scope, or continue
 a read-only judge.
 
-The message and selected exact owner/generation grants commit
-together, taking effect in the queued follow-up turn without interrupting or
-changing an active attempt. Retries are idempotent; failed saves queue neither
-the message nor the grants. A replacement service generation needs a new grant.
+The message and selected exact owner/generation grants commit together without
+interrupting or changing an active attempt. Descendant follow-ups queue as before.
+Peer messages return `queued:false, retained:true`: active recipients read the
+typed conversation evidence; idle recipients need an approved persistent bot to
+admit a wake under its existing budget and pause/stop intent. No root bot is
+required. Unapproved or stopped recipients gain no scheduling authority.
+
+Peer admission waits until the recipient is idle and published processing receipts
+have been reconciled. Consumed messages do not create another turn. A grant offer
+still needs the next authorized attempt to activate its exact resource generation;
+reading its text does not prematurely retire that permission transition. Completed
+peer evidence uses the existing history journal rather than growing inline copies
+of context in each checkpoint. Retries are idempotent; archive/checkpoint failures
+roll back the message, receipt and grants. A replacement service generation needs a new grant.
 Omitting `services` transfers no additional authority. A service grant permits
 the existing service operations, including execution and stop; it is not a
 port-only permission. Scoped TCP approval remains a separate operator decision.

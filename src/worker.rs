@@ -459,7 +459,7 @@ fn start_with(state: Arc<Mutex<State>>, execute: fn(Arc<Mutex<State>>, Task)) ->
                         for reconcile in [crate::delegation::reconcile, crate::rooms::reconcile, crate::spawning::reconcile, crate::bots::reconcile] {
                             if let Err(message)=reconcile(&mut s, storage::save) {s.runtime.notice=message.into();}
                         }
-                        let managed_index=crate::scheduler::next(&s.runtime).filter(|&i|crate::turn_context::managed(&s,&s.runtime.runs[i]));
+                        let managed_index=crate::scheduler::next_in(&s).filter(|&i|crate::turn_context::managed(&s,&s.runtime.runs[i]));
                         match managed_index {
                             Some(index)=>match crate::turn_context::PlannedContext::prepare(&s,index) {
                                 Ok(plan)=>Some(plan),
@@ -846,7 +846,7 @@ pub(crate) fn checkpoint_next(
     state: &mut State,
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Option<usize> {
-    let index = crate::scheduler::next(&state.runtime)?;
+    let index = crate::scheduler::next_in(state)?;
     let captured = if crate::turn_context::managed(state, &state.runtime.runs[index]) {
         Some(crate::turn_context::PlannedContext::prepare(state, index).ok()?.persist().ok()?)
     } else { None };
@@ -858,7 +858,7 @@ fn checkpoint_prepared(
     save:impl FnOnce(&State)->std::io::Result<()>,
 ) -> Option<usize> {
     if crate::shutdown::requested() { return None; }
-    let index = crate::scheduler::next(&state.runtime)?;
+    let index = crate::scheduler::next_in(state)?;
     if crate::turn_context::managed(state,&state.runtime.runs[index]) && captured.is_none(){return None;}
     let omitted_history = crate::chat::omitted_history(state, &state.runtime.runs[index].id);
     let parent = {
