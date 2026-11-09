@@ -53,7 +53,7 @@ impl Collective {
                 let channel = value(f, "channel");
                 if !text.is_empty()
                     && text.chars().count() <= 2000
-                    && ["general", "engineering", "research"].contains(&channel.as_str())
+                    && crate::rooms::valid(&channel)
                 {
                     self.posts.push(crate::rooms::Post {
                         room: channel,

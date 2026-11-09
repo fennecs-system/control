@@ -37,6 +37,8 @@ mod knowledge_tools;
 mod lens_library;
 mod lens_ui;
 mod lifecycle;
+mod attempt_control;
+mod recovery;
 mod mcp_stdio;
 mod navigation;
 #[cfg(test)]
@@ -418,6 +420,10 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
                 }
                 _ => "/",
             };
+            let thread_location = (path == "/room").then(|| f.get("channel"))
+                .flatten().filter(|room| rooms::valid(room))
+                .map(|room| format!("/?view=rooms&channel={room}"));
+            let location = thread_location.as_deref().unwrap_or(location);
             if let Some((index, _)) = cancel_chat {
                 state.chats[index].revision = state.chats[index].revision.saturating_add(1);
             }

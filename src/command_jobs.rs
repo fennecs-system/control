@@ -55,7 +55,7 @@ impl Job {
         ["preparing", "running", "stopping"].contains(&self.status.as_str())
     }
     fn summary(&self) -> Value {
-        json!({"job_id":self.id,"status":self.status,"output":self.output,"exit_code":self.exit_code,"output_limit_bytes":OUTPUT_BYTES})
+        json!({"job_id":self.id,"status":self.status,"output":self.output,"exit_code":self.exit_code,"deadline_unix":self.deadline_unix,"output_limit_bytes":OUTPUT_BYTES})
     }
 }
 #[derive(Deserialize)]
@@ -182,7 +182,15 @@ fn start(
     };
     let profile = if input.environment == "build" { crate::worker_profile::Profile::Lite } else { crate::worker_profile::Profile::inspect(&image)? };
     let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
+    let owner_deadline = state.runtime.runs.iter().find(|r| r.id == run).and_then(|r| {
+        r.attempts.last().and_then(|a| crate::attempt_control::deadline(&state, r, a).map(|limit| a.started_unix.saturating_add(limit)))
+    });
+    let started = now();
+    let deadline_unix = effective_deadline(started, input.timeout_seconds, owner_deadline)?;
     let attempt = current(&mut state, run, generation)?;
+    if attempt.turn_mailbox.as_ref().is_some_and(|m| m.accepted().is_some()) {
+        return Err(fail("The attempt has handed off; no new workspace jobs may start"));
+    }
     if environment_image(attempt, &input.environment)? != image { return Err(fail("Captured command image changed")); }
     if let Some(job) = attempt.command_jobs.iter().find(|j| j.id == id) {
         return Ok(job.summary());
@@ -210,7 +218,7 @@ fn start(
         build_environment: input.environment == "build",
         review_source: attempt.review_only && attempt.backend == crate::backend::Backend::Codex,
         profile,
-        deadline_unix: now().saturating_add(input.timeout_seconds),
+        deadline_unix,
         container_id: None,
         status: "preparing".into(),
         output: String::new(),
@@ -225,7 +233,9 @@ fn start(
     let thread_state = Arc::clone(shared);
     let thread_run = run.to_owned();
     let thread_job = job.clone();
-    let summary = job.summary();
+    let mut summary = job.summary();
+    summary["requested_timeout_seconds"] = json!(input.timeout_seconds);
+    summary["effective_timeout_seconds"] = json!(deadline_unix.saturating_sub(started));
     if let Err(e) = std::thread::Builder::new()
         .name("workspace-command".into())
         .spawn(move || supervise(thread_state, thread_run, thread_job))
@@ -237,6 +247,11 @@ fn start(
         return Err(e);
     }
     Ok(summary)
+}
+fn effective_deadline(now: u64, requested: u64, owner: Option<u64>) -> io::Result<u64> {
+    let deadline = owner.map_or(now.saturating_add(requested), |end| end.min(now.saturating_add(requested)));
+    if deadline <= now { return Err(fail("The attempt deadline has elapsed; use a persistent service for work that must outlive this attempt")); }
+    Ok(deadline)
 }
 fn create(job: &Job) -> io::Result<String> {
     let workspace = job.workspace()?.canonicalize()?;
@@ -757,6 +772,12 @@ fn quiesce_until(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn command_deadline_respects_owner_without_limiting_persistent_service_lifetime() {
+        assert_eq!(super::effective_deadline(300, 600, Some(600)).unwrap(), 600);
+        assert_eq!(super::effective_deadline(300, 600, None).unwrap(), 900);
+        assert!(super::effective_deadline(600, 600, Some(600)).is_err());
+    }
     use super::*;
     use crate::tool_registry::{AttemptCall, AttemptTools, LocalHost};
     fn call(shared: &Arc<Mutex<State>>, run: &str, generation: &str, nonce: &str, name: &str, args: &Value) -> io::Result<Value> {

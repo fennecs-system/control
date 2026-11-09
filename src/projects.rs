@@ -234,7 +234,7 @@ fn skip(name: &str, metadata: bool) -> bool {
         || name.starts_with(".env.")
 }
 /// Imports and published checkpoints must be durable before being referenced.
-fn copy_tree(source: &Path, destination: &Path, metadata: bool) -> io::Result<()> {
+pub(crate) fn copy_tree(source: &Path, destination: &Path, metadata: bool) -> io::Result<()> {
     copy_tree_with(source, destination, metadata, Durability::Checkpoint)
 }
 #[derive(Clone, Copy, PartialEq, Eq)]

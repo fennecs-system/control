@@ -306,7 +306,12 @@ pub fn execute(
         .stdin
         .take()
         .is_some_and(|mut stdin| stdin.write_all(prompt.as_bytes()).is_ok());
-    let (start, deadline, mut timed_out) = (Instant::now(), crate::config::worker_deadline(), false);
+    let start = Instant::now();
+    let admitted = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default().as_secs().saturating_sub(attempt.started_unix);
+    let deadline = Duration::from_secs(attempt.explicit_timeout_seconds.unwrap_or(600));
+    let mut timed_out = false;
+    let mut handoff = None;
     let success = loop {
         if crate::design::requested(bridge) { break false; }
         if crate::lifecycle::cancelled(bridge) {
@@ -316,10 +321,6 @@ pub fn execute(
         if !sent || bad_tools.load(std::sync::atomic::Ordering::Relaxed) {
             break false;
         }
-        if start.elapsed() > deadline {
-            timed_out = true;
-            break false;
-        }
         if let Some((s, r)) = bridge {
             if s.is_poisoned() {
                 break false;
@@ -327,6 +328,18 @@ pub fn execute(
             crate::worker_tools::pump_at(s, r, &mailbox, workspace,attempt.context_trace.is_some());
         }
         if crate::design::requested(bridge) { break false; }
+        match crate::attempt_control::poll(bridge, attempt, start.elapsed() + Duration::from_secs(admitted)) {
+            crate::attempt_control::Decision::Finish(summary) => {
+                handoff = Some(summary);
+                break false;
+            }
+            crate::attempt_control::Decision::TimedOut => {
+                attempt.termination = Some(crate::attempt_control::Termination::TimedOut);
+                timed_out = true;
+                break false;
+            }
+            crate::attempt_control::Decision::Continue => {}
+        }
         match child.try_wait() {
             Ok(Some(status)) => break status.success(),
             Err(_) => break false,
@@ -337,12 +350,16 @@ pub fn execute(
     if !success {
         let _ = child.kill();
         let _ = child.wait();
-        crate::lifecycle::stop_attempt(attempt).map_err(|m| ("interrupted", m.to_owned()))?;
+        crate::attempt_control::stop(bridge, attempt).map_err(|m| ("interrupted", m.to_owned()))?;
     }
     let result = output
         .join()
         .map_err(|_| failed("Claude stream reader stopped"))?;
     let stderr = diagnostics.join().unwrap_or_default();
+    if let Some(summary) = handoff {
+        if let Ok((_, tokens)) = result { attempt.tokens = tokens; }
+        return Ok(summary);
+    }
     if !success {
         if crate::lifecycle::cancelled(bridge) {
             return Err((

@@ -102,10 +102,15 @@ fn url_for(addr: &str) -> String {
 /// Model run time limit: `CONTROL_WORKER_TIMEOUT_SECS` or `worker-timeout-secs` in the
 /// node configuration directory; default 600 s, clamped to 60 s – 24 h.
 pub fn worker_deadline() -> std::time::Duration {
+    configured_worker_deadline().unwrap_or(std::time::Duration::from_secs(600))
+}
+/// Explicit operator policy, captured at attempt admission. An absent policy
+/// does not impose a wall-clock limit on an approved persistent agent.
+pub fn configured_worker_deadline() -> Option<std::time::Duration> {
     let configured = std::env::var("CONTROL_WORKER_TIMEOUT_SECS")
         .ok()
         .or_else(|| fs::read_to_string(directory().ok()?.join("worker-timeout-secs")).ok());
-    std::time::Duration::from_secs(deadline_secs(configured.as_deref()))
+    configured.map(|value| std::time::Duration::from_secs(deadline_secs(Some(&value))))
 }
 fn deadline_secs(configured: Option<&str>) -> u64 {
     configured

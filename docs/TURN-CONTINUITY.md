@@ -1,5 +1,45 @@
 # Turn continuity implementation handoff
 
+## Persistent attempts and R1 (2026-11-07)
+
+Approved persistent bots have no implicit attempt deadline. An explicit operator
+`worker-timeout-secs` / `CONTROL_WORKER_TIMEOUT_SECS` limit is captured at admission
+and remains authoritative. Ordinary attempts retain the 600-second default.
+Approval during an active attempt removes only the implicit limit. Context budget
+responses return `null` for unlimited remaining time. Quiet output is not a health
+failure, and no periodic finish window or automatic progress extension is used.
+
+`control_turn_handoff` is an explicit yield: once its validated draft is durable,
+the host stops attempt-owned writers and commits the workspace, notes and processed
+cursors through the existing transaction, without waiting for another model reply.
+Persistent services survive; an approved bot's existing disposition controls its
+next admission. Cancellation and shutdown still override publication. A failed
+save cannot advance notes, cursors or the committed workspace independently.
+
+R1b retains a stopped attempt's workspace as a separate immutable recovery
+candidate, with generation, original base/project grant, termination cause and
+accepted draft. It uses the existing checkpoint copy rules (including exclusions
+for credentials, generated directories and symlinks), not the bounded HTML-preview
+artifact. Stop/copy/save failures are explicit. Restart reconciliation captures
+interrupted work after verifying writer termination. Nothing schedules a recovery
+turn or acknowledges a callback merely because a candidate exists.
+
+The next authorized attempt receives bounded recovery references. The
+`control_recovery` tool lists all candidates, inspects notes/files, and can copy a
+matching candidate to an isolated `.control-recovery-GENERATION` folder. Copying
+requires the current attempt, base and project grant to match; it does not replace
+the committed head. The agent must reconcile external effects and select changes
+before its normal publication. Large/binary files are retained and accessible via
+that recovery folder even when the bounded text inspector cannot display them.
+
+Attempt-owned command deadlines are capped by an explicit/default owner deadline
+when present. Responses disclose requested/effective limits; persistent service
+jobs are independent. Yielding cancels remaining attempt-owned jobs, so work that
+must outlive a model turn belongs in a persistent service.
+
+The earlier design notes below are historical where they conflict with this
+implementation contract.
+
 Design for Sol, 2026-11-04. Status: implementation in progress, not deployed.
 
 The next priority is reducing stop/start context pollution: longer active slices,
@@ -36,8 +76,12 @@ conversation/room delta prototypes, host-tool yield fencing, and a budgeted,
 deduplicated runnable-successor path. Callback hints can reach an active session
 on normal MCP responses. The prompt guidance no longer demands termination after
 each event. Ordinary and spawned agents use this same path at their next admission.
-Committed idle waits narrow existing topics, preserve operator timers, wake for
-process exits and have a bounded recheck. Active sessions are never restarted
+Committed idle waits narrow existing topics and suspend periodic check-ins,
+including timer reasons accumulated during active work. A wait may omit/null
+`recheck_seconds` to remain event-only, or supply a positive explicit fallback
+in seconds. Selected events and urgent process failures still wake it; direct
+human input, pause and cancellation remain available. Periodic checks resume
+after the wait resolves, without replaying missed timer ticks. Active sessions are never restarted
 just because those callbacks arrive. Captured inputs reuse the append-only
 journal component; finished handoff receipts leave the mutable state checkpoint
 with finished tool activity instead of being rewritten on every save.
@@ -53,15 +97,15 @@ wait/done, unanswered approvals, newer input and unsuccessful/interrupted
 publication prevent that fallback; it does not guess completion from prose.
 
 The first implementation deliberately supports bounded text working notes and
-conversation/room receipts. Unsupported evidence/resource reference types are
+conversation/room/watch receipts. Unsupported evidence/resource reference types are
 absent from the core and tool schemas. Saved notes from #133 can still decode
 its empty reference arrays; those placeholders are omitted on subsequent saves.
-Off-lock watch receipts and watch
-prefix/exit selection remain outside this slice. Existing cursor-based watch tools remain
-available. Idle waits can ignore telemetry while retaining it until a relevant
-event or recheck. MCP yield fencing does not intercept a native CLI's private
-built-in shell; container isolation remains authoritative there. This branch is
-not deployed and has not replaced any current provider session or service.
+Watch spool reads run outside shared state, then capture a scoped delivery receipt
+in the same mailbox used by conversation and room reads. Publication retires only
+the processed range; later events remain eligible. Watch prefix/exit selection
+lives in the tool adapter. Idle waits retain unrelated telemetry until a relevant
+event or explicit recheck. MCP yield fencing does not intercept a native CLI's
+private built-in shell; container isolation remains authoritative there.
 
 Fresh bot activation starts at the current room tail, even if the chat has an
 older inbox. First room linkage records the same origin in the session, active
@@ -385,9 +429,9 @@ migrate` is roadmap work. Do not wipe a running playtest or retrofit its attempt
 and cursors. Start on isolated test chats for both providers; unknown versions
 fail visibly. Ordinary chats and supervised bots may select different context
 views, but they share the same append-only history and compactor/lens interface.
-Enable the tested text-handoff/room-receipt contract for agent admissions;
-bot approval controls unattended scheduling only. Do not advertise the broader
-reference/watch-receipt contract until implemented.
+Enable the tested text-handoff and conversation/room/watch receipt contract for
+agent admissions; bot approval controls unattended scheduling only. Broader
+resource-reference contracts remain separate work.
 
 ## Acceptance tests
 

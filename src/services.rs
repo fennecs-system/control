@@ -605,6 +605,8 @@ fn verify<'a>(service: &'a Service, inspection: &Inspection) -> io::Result<Verif
 }
 trait Engine {
     fn inventory(&mut self, node: &str) -> io::Result<HashMap<String, Inspection>>;
+    /// Check the recorded ID without label filters before declaring it absent.
+    fn exists(&mut self, id: &ContainerId) -> io::Result<bool>;
     fn create(&mut self, service: &Service) -> io::Result<ContainerId>;
     fn start(&mut self, binding: &Verified<'_>) -> io::Result<()>;
     fn remove(&mut self, binding: &Verified<'_>) -> io::Result<()>;
@@ -647,6 +649,12 @@ pub(crate) fn port_binding(service: &Service, expected: &ContainerId) -> io::Res
     Ok(PortBinding { id: binding.id, user: format!("{}:{}",service.uid,service.gid), expires: service.resource.lease.expires() })
 }
 impl Engine for Docker {
+    fn exists(&mut self, id: &ContainerId) -> io::Result<bool> {
+        crate::engine::query(&[
+            "ps", "-a", "--no-trunc", "--filter", &format!("id={}", id.as_str()),
+            "--format", "{{.ID}}",
+        ]).map(|ids| !ids.trim().is_empty())
+    }
     fn logs(&mut self, binding: &Verified<'_>) -> io::Result<String> {
         commands::logs(binding.id.as_str())
     }
@@ -857,16 +865,7 @@ fn drive(
                                 "created" => EngineState::Dormant,
                                 "running" => EngineState::Running,
                                 "exited" | "dead" => EngineState::Exited,
-                                _ => {
-                                    apply(
-                                        shared,
-                                        &service,
-                                        Event::Fence(Fault::UnexpectedEngineState),
-                                        time,
-                                        &save,
-                                    )?;
-                                    return Ok(());
-                                }
+                                _ => EngineState::Other,
                             };
                             Event::Observed {
                                 container: o.id.clone().try_into().map_err(fail)?,
@@ -874,7 +873,10 @@ fn drive(
                             }
                         }
                     } else {
-                        Event::Missing
+                        match service.resource.phase.container() {
+                            Some(id) if engine.exists(id)? => Event::Fence(Fault::IdentityMismatch),
+                            _ => Event::Missing,
+                        }
                     };
                     if let Some((next, effect)) = apply(shared, &service, event, time, &save)? {
                         match effect {
@@ -1073,6 +1075,8 @@ mod tests {
     #[derive(Default)]
     struct Fake {
         records: HashMap<String, Inspection>,
+        hide_inventory: bool,
+        unavailable: bool,
         creates: usize,
         starts: usize,
         removes: usize,
@@ -1082,7 +1086,11 @@ mod tests {
         fn logs(&mut self, _: &Verified<'_>) -> io::Result<String> { Ok("retained final diagnostic".into()) }
         fn inventory(&mut self, _: &str) -> io::Result<HashMap<String, Inspection>> {
             self.inspections += 1;
-            Ok(self.records.clone())
+            if self.unavailable { return Err(fail("Engine unavailable")); }
+            Ok(if self.hide_inventory { HashMap::new() } else { self.records.clone() })
+        }
+        fn exists(&mut self, id: &ContainerId) -> io::Result<bool> {
+            Ok(self.records.contains_key(id.as_str()))
         }
         fn create(&mut self, s: &Service) -> io::Result<ContainerId> {
             self.creates += 1;
@@ -1101,6 +1109,92 @@ mod tests {
             Ok(())
         }
     }
+    #[test]
+    fn fenced_missing_services_release_capacity_only_after_persisted_stop_and_observation() {
+        let (mut state, run, _, time) = fixture();
+        for slot in 0..MAX_ACTIVE {
+            admit(&mut state, Request { run: &run, generation: "attempt-a", nonce: &format!("slot-{slot}") },
+                input("sleep 30"), "node-a".to_owned().try_into().unwrap(), time, |_| Ok(())).unwrap();
+            state.services[slot].resource.phase = Phase::Fenced {
+                fault: Fault::UnexpectedEngineState,
+                container: Some(format!("{slot:064x}").try_into().unwrap()),
+            };
+        }
+        assert!(admit_fixture(&mut state, &run, time, |_| Ok(())).unwrap_err().to_string().contains("capacity"));
+        let id = state.services[0].resource.id.as_str().to_owned();
+        assert!(page::stop(&mut state, &id, time, |_| Err(fail("disk full"))).is_err());
+        assert!(matches!(state.services[0].resource.phase, Phase::Fenced { .. }));
+        page::stop(&mut state, &id, time, |_| Ok(())).unwrap();
+        assert!(admit_fixture(&mut state, &run, time, |_| Ok(())).is_err());
+        // Restart preserves cleanup intent, without reviving the original work.
+        let state: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        let shared = Arc::new(Mutex::new(state));
+        let mut engine = Fake { unavailable: true, ..Default::default() };
+        assert!(drive(&shared, &mut engine, "node-a", time, |_| Ok(())).is_err());
+        assert!(matches!(shared.lock().unwrap().services[0].resource.phase, Phase::Stopping { .. }));
+        engine.unavailable = false;
+        drive(&shared, &mut engine, "node-a", time, |_| Err(fail("disk full"))).unwrap_err();
+        assert!(matches!(shared.lock().unwrap().services[0].resource.phase, Phase::Stopping { .. }));
+        drive(&shared, &mut engine, "node-a", time, |_| Ok(())).unwrap();
+        let mut state = shared.lock().unwrap();
+        assert_eq!(state.services[0].resource.phase, Phase::Stopped(StopReason::Requested));
+        assert!(state.services[1..].iter().all(|s| matches!(s.resource.phase, Phase::Fenced { .. })));
+        admit_fixture(&mut state, &run, time, |_| Ok(())).unwrap();
+        assert_eq!((engine.creates, engine.starts, engine.removes), (0, 0, 0));
+    }
+
+    #[test]
+    fn stopping_a_paused_service_reverifies_identity_and_retains_output() {
+        for mismatch in [false, true] {
+            let (mut state, run, _, time) = fixture();
+            admit_fixture(&mut state, &run, time, |_| Ok(())).unwrap();
+            let shared = Arc::new(Mutex::new(state));
+            let mut engine = Fake::default();
+            for _ in 0..3 { drive(&shared, &mut engine, "node-a", time, |_| Ok(())).unwrap(); }
+            engine.records.values_mut().next().unwrap().status = "paused".into();
+            drive(&shared, &mut engine, "node-a", time, |_| Ok(())).unwrap();
+            {
+                let mut state = shared.lock().unwrap();
+                assert!(matches!(state.services[0].resource.phase, Phase::Fenced { fault: Fault::UnexpectedEngineState, .. }));
+                let id = state.services[0].resource.id.as_str().to_owned();
+                page::stop(&mut state, &id, time, |_| Ok(())).unwrap();
+            }
+            if mismatch { engine.records.values_mut().next().unwrap().network = "bridge".into(); }
+            drive(&shared, &mut engine, "node-a", time, |_| Ok(())).unwrap();
+            assert!(shared.lock().unwrap().services[0].resource.phase.reserves_capacity());
+            drive(&shared, &mut engine, "node-a", time, |_| Ok(())).unwrap();
+            let state = shared.lock().unwrap();
+            if mismatch {
+                assert!(matches!(state.services[0].resource.phase, Phase::Fenced { fault: Fault::IdentityMismatch, .. }));
+                assert_eq!(engine.removes, 0);
+            } else {
+                assert_eq!(state.services[0].resource.phase, Phase::Stopped(StopReason::Requested));
+                assert_eq!(state.services[0].output, "retained final diagnostic");
+                assert_eq!(engine.removes, 1);
+            }
+            assert_eq!((engine.creates, engine.starts), (1, 1));
+        }
+    }
+
+    #[test]
+    fn missing_from_label_inventory_does_not_prove_a_recorded_container_is_gone() {
+        let (mut state, run, _, time) = fixture();
+        admit_fixture(&mut state, &run, time, |_| Ok(())).unwrap();
+        let shared = Arc::new(Mutex::new(state));
+        let mut engine = Fake::default();
+        for _ in 0..3 { drive(&shared, &mut engine, "node-a", time, |_| Ok(())).unwrap(); }
+        {
+            let mut state = shared.lock().unwrap();
+            let id = state.services[0].resource.id.as_str().to_owned();
+            page::stop(&mut state, &id, time, |_| Ok(())).unwrap();
+        }
+        engine.hide_inventory = true;
+        drive(&shared, &mut engine, "node-a", time, |_| Ok(())).unwrap();
+        assert!(matches!(shared.lock().unwrap().services[0].resource.phase, Phase::Fenced { fault: Fault::IdentityMismatch, .. }));
+        assert_eq!(engine.removes, 0);
+        assert_eq!(engine.records.len(), 1);
+    }
+
     #[test]
     fn exited_service_keeps_output_before_removal_and_failed_save_prevents_removal() {
         let (state,run,_,time)=fixture();let shared=Arc::new(Mutex::new(state));
@@ -1518,6 +1612,45 @@ mod tests {
         service.profile = crate::worker_profile::Profile::Lite;
         assert!(verify(&service, &observed).is_err());
     }
+    #[test]
+    #[ignore = "requires CONTROL_QA_SERVICE_IMAGE and local Linux Docker; isolated cleanup probe, no models or credentials"]
+    fn live_fenced_paused_service_can_be_stopped_without_restart() {
+        let image = std::env::var("CONTROL_QA_SERVICE_IMAGE").unwrap();
+        let profile = crate::worker_profile::Profile::inspect(&image).unwrap();
+        let (mut state, run, _, time) = fixture();
+        let node = format!("fenced-qa-{}-{}", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos());
+        let mut request = input("sleep infinity");
+        request.lease_seconds = -1;
+        admit_profile(&mut state, Request { run: &run, generation: "attempt-a", nonce: "fenced-probe" },
+            request, node.clone().try_into().unwrap(), time, profile, |_| Ok(())).unwrap();
+        state.services[0].resource.image = image.try_into().unwrap();
+        state.services[0].resource.phase = Phase::Creating;
+        let id = Docker.create(&state.services[0]).unwrap();
+        struct Container(ContainerId);
+        impl Drop for Container {
+            fn drop(&mut self) { let _ = crate::engine::query(&["rm", "-f", self.0.as_str()]); }
+        }
+        let _cleanup = Container(id.clone());
+        state.services[0].resource.phase = Phase::Starting(id.clone());
+        let shared = Arc::new(Mutex::new(state));
+        for _ in 0..2 { drive(&shared, &mut Docker, &node, time, |_| Ok(())).unwrap(); }
+        assert!(matches!(shared.lock().unwrap().services[0].resource.phase, Phase::Running(_)));
+        crate::engine::query(&["pause", id.as_str()]).unwrap();
+        drive(&shared, &mut Docker, &node, time, |_| Ok(())).unwrap();
+        assert!(Docker.exists(&id).unwrap());
+        {
+            let mut state = shared.lock().unwrap();
+            assert!(matches!(state.services[0].resource.phase, Phase::Fenced { fault: Fault::UnexpectedEngineState, .. }));
+            let service_id = state.services[0].resource.id.as_str().to_owned();
+            page::stop(&mut state, &service_id, time, |_| Ok(())).unwrap();
+        }
+        drive(&shared, &mut Docker, &node, time, |_| Ok(())).unwrap();
+        assert!(!Docker.exists(&id).unwrap());
+        assert!(shared.lock().unwrap().services[0].resource.phase.reserves_capacity());
+        drive(&shared, &mut Docker, &node, time, |_| Ok(())).unwrap();
+        assert_eq!(shared.lock().unwrap().services[0].resource.phase, Phase::Stopped(StopReason::Requested));
+    }
+
     #[test]
     #[ignore = "requires CONTROL_QA_SERVICE_IMAGE and local Linux Docker; isolated storage probe, no models or credentials"]
     fn live_disk_storage_exceeds_old_workspace_limit_and_survives_container_restart() {

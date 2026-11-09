@@ -11,6 +11,13 @@ pub use control_ai::{Activity, Tokens};
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Attempt {
+    /// None means the default policy: bounded ordinary attempts, unlimited
+    /// approved persistent agents. Explicit operator limits always take priority.
+    pub explicit_timeout_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub termination: Option<crate::attempt_control::Termination>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<crate::recovery::Candidate>,
     #[serde(skip_serializing_if = "crate::history::Spilled::is_unset")]
     pub turn_mailbox: crate::history::Spilled<Option<Box<control_context::turn_mailbox::Mailbox>>>,
     #[serde(skip_serializing_if = "Option::is_none")]

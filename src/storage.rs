@@ -95,6 +95,7 @@ fn interrupt_active(state: &mut State) -> bool {
                     .into();
             if let Some(attempt) = run.attempts.last_mut() {
                 attempt.status = "interrupted".into();
+                attempt.termination.get_or_insert(crate::attempt_control::Termination::Restarted);
                 for activity in &mut attempt.activity {
                     if activity.kind == "workspace" && activity.status == "in_progress" { activity.status = "interrupted".into(); }
                 }

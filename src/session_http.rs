@@ -1117,8 +1117,8 @@ mod tests {
             |_| Ok(()),
         )
         .unwrap();
-        assert_eq!(chat["room"], "research");
-        assert!(crate::rooms::read(&state, "research")["chats"]
+        assert_eq!(chat["room"], format!("research/{}", chat["id"].as_str().unwrap()));
+        assert!(crate::rooms::read(&state, chat["room"].as_str().unwrap())["chats"]
             .as_array()
             .unwrap()
             .iter()

@@ -16,7 +16,7 @@ fn rpc_at(
         && let Ok(mut state)=shared.lock()
         && crate::turn_context::callback_notice(&mut state,run_id)
     {
-        content.push(json!({"type":"text","text":"Use control_turn_context at the next action boundary for new callbacks or remaining attempt time. Keep this session active while useful work remains; hand off before the hard deadline."}));
+        content.push(json!({"type":"text","text":"Use control_turn_context at the next action boundary for new callbacks or remaining attempt time. Keep this session active while useful work remains; hand off when waiting or done, or before an explicitly reported deadline."}));
     }
     response
 }

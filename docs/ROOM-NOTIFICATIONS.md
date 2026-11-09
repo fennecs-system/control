@@ -1,12 +1,18 @@
 # Room notifications
 
-In the web UI, open **Rooms**, choose a room, then **New chat in #room** before
-starting a team. Spawned children inherit that room. External MCP clients can
-create a linked chat with `control.chat.create {"room":"general"}`. Mentioning
-"general room" in a prompt or selecting a lens does not set the chat's room.
-Worker room tools are exposed only to linked chats; workers cannot attach themselves
-to an arbitrary room. Ongoing room-triggered turns additionally need the owner's
-`/listen` command, as described below.
+In the web UI, open **Rooms**, choose a channel, then **New task in #channel**.
+External MCP clients can create the same task thread with
+`control.chat.create {"room":"general"}`. Spawned children share its thread;
+unrelated tasks have separate history, participants and wake subscriptions.
+Selecting an existing thread and **New chat in this thread** explicitly joins it.
+Workers can also discover channels and attach by posting: a bare name such as
+`general` resolves inside their top-level task's thread, even if workers were
+spawned before the lead attached. See [thread addressing and legacy-room
+compatibility](PERSISTENT-TOOLS.md#task-coordination-threads).
+
+Mentioning a room in a prompt or selecting a lens alone does not attach it.
+Ongoing room-triggered turns additionally need the owner's `/listen` command or
+persistent-bot approval; posting does not create that authority.
 
 Linked-room workers read the room between action batches and report verified
 milestones, blockers and maintenance transitions. Relevant human and agent posts
