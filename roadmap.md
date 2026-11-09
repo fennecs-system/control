@@ -12,10 +12,13 @@ are interfaces to shared capabilities. Tool availability, resource grants and
 transport are separate. Lenses are pure, composable context/tool selections;
 personas describe behavior and policy, not additional authority.
 
-Keep the core, tools and TUI viable on Pi Zero-class hardware, with the website
-separately budgeted. Reliability fixes come first, followed by typed state/effect
-boundaries before further capability growth. Measure CPU, memory and latency
-while extracting those boundaries; see the [small-device performance requirement](docs/PERFORMANCE.md#small-device-requirement).
+Keep the core, tools and TUI efficient enough to be plausible on a tiny machine,
+with the website separately budgeted. Pi Zero-class hardware is an illustration,
+not a required device target. Reliability fixes come first, followed by typed
+state/effect boundaries before further capability growth. Those boundaries must
+support alternative execution backends without assuming Docker in the core.
+Measure CPU, memory and latency while extracting them; see the
+[small-machine efficiency goal](docs/PERFORMANCE.md#small-machine-efficiency-goal).
 
 For one owner, sustained high fan-out may hit subscription limits; prefer API keys
 for 50-agent runs. Control roles do not change credential ownership. Operators

@@ -1,12 +1,12 @@
 # Performance checks
 
-## Small-device requirement
+## Small-machine efficiency goal
 
-Control's core, tools and TUI must remain practical on Pi Zero-class hardware;
-the website has a separate deployment and performance budget. Treat the
-512 MiB device class as an architectural constraint, not as a claim established
-by desktop or ARM64-container timings. Original Pi Zero ARMv6 compatibility and
-Pi Zero 2 compatibility require their own builds and hardware checks.
+Control's core, tools and TUI should have sufficiently low overhead to be
+plausible on a tiny machine. Pi Zero-class hardware illustrates that resource
+class; it is not a required board, instruction set or 512 MiB release gate.
+The website has a separate deployment and performance budget. The goal is an
+efficient architecture, rather than certification for a particular device.
 
 Measure cold and warm startup, peak/idle RSS, idle CPU, tool dispatch, context
 construction and TUI input/render latency, including tail latency and growing
@@ -17,12 +17,17 @@ hydration and dependencies in the core. Keep web assets and optional adapters
 separable through the typed state/effect boundaries; the current all-in-one
 binary is not evidence of a website-free minimal build.
 
-An ARM64 VM with two CPUs can catch relative regressions, but cannot certify
-ARMv6 support, 512 MiB operation, SD-card durability latency or interactive TUI
-responsiveness on the target board. Set numeric release thresholds from an
-actual representative-device baseline, then retain that baseline in comparisons.
-The current Nix flake lists ARM64 and x86-64 Linux/macOS systems; it does not yet
-provide an ARMv6 build target.
+Keep state and typed effects independent of execution backends. Treat Docker as
+one backend adapter; alternative runtimes should implement the same
+capability, ownership and lifecycle contracts. Measure Control's own overhead
+separately from each backend's startup, resident services and workload costs.
+Prefer event-driven idle behavior, bounded active projections and journal-backed
+history over polling, whole-state copies or repeated reconstruction.
+
+Use reproducible baselines to catch relative regressions and justify overhead.
+Constrained-container and hardware checks provide additional evidence, without
+making a named board a prerequisite. The 512 MiB/no-swap experiment below is
+one measurement condition, not a product support promise or mandatory budget.
 
 ## Peer coordination review (2026-11-09)
 
@@ -52,7 +57,8 @@ pairs pinned to one virtual CPU, on container-local disk under a 512 MiB cgroup
 limit with swap disabled, gave 11.117 → 10.057 ms/turn and 3.793 → 3.248 ms measured
 thread CPU. Both save 601 KiB. These differing results do not establish a general
 save/render speedup or a precise regression bound. Retain the noisy results and
-validate durability latency on the target hardware before setting a release gate.
+validate durability latency in representative deployment environments before
+setting numeric performance gates.
 
 Real `perf` flamegraphs cover routing and HTTP before/after, using `cpu-clock:u`,
 499 Hz and DWARF stacks. Routing captures 1,712/1,260 samples and HTTP 738/757;
@@ -77,7 +83,8 @@ a fresh empty server; it does not measure interactive rendering.
 The short `--version` startup check varies from 0.335 → 0.457 ms; do not describe
 all startup paths as faster. No cgroup OOM events occurred. Server memory is one
 idle observation, not a bound for an active swarm; larger histories, concurrency,
-tool workloads and actual Pi/TUI rendering still need hardware measurements.
+tool workloads and interactive TUI rendering need their own measurements. These
+results describe Control's measured overhead, not certification for a Pi board.
 
 Reproduce routing with the same fixture copied unchanged into the baseline:
 
