@@ -19,13 +19,8 @@
           linuxSystem = builtins.replaceStrings [ "darwin" ] [ "linux" ] pkgs.stdenv.hostPlatform.system;
           setup = pkgs.writeShellApplication {
             name = "control-setup";
-            # stdenv.cc supplies the C compiler native crates (ring) need; Xcode CLT is not required.
-            runtimeInputs = [ pkgs.rustc pkgs.cargo pkgs.lld pkgs.trunk pkgs.wasm-bindgen-cli_0_2_129 pkgs.gitMinimal pkgs.coreutils pkgs.stdenv.cc ];
-            # runtimeInputs only extends PATH; Rust's Darwin std links -liconv, which stdenv
-            # hooks would otherwise put on the linker search path.
-            text = nixpkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
-              export LIBRARY_PATH=${pkgs.lib.getLib pkgs.libiconv}/lib''${LIBRARY_PATH:+:$LIBRARY_PATH}
-            '' + ''
+            runtimeInputs = [ pkgs.nix pkgs.gitMinimal pkgs.coreutils ];
+            text = ''
               export CONTROL_SETUP_LINUX_SYSTEM=${linuxSystem}
               ${builtins.readFile ./hosting/setup.sh}
             '';

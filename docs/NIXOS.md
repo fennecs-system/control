@@ -23,53 +23,36 @@ Apply with `sudo nixos-rebuild switch`, then log out and back in for Docker grou
 membership to take effect. Docker group membership grants root-equivalent access
 to this machine. Verify `docker info` succeeds as your normal user before continuing.
 
-## Build and initialize
+## Install and start
 
 ```sh
 git clone https://github.com/fennecs-system/control.git
 cd control
-mkdir -p "$HOME/.local/share/control"
-nix build .#control --out-link "$HOME/.local/share/control/package"
-control_bin="$HOME/.local/share/control/package/bin/control"
-"$control_bin" config init --source-root "$(pwd -P)"
-```
-
-`nix build` without an attribute builds the same package. Nix vendors both Cargo
-lockfiles, builds the UI offline with the matching wasm-bindgen CLI, embeds it in
-the binary, and runs the native workspace tests. The UI is a separate derivation,
-so backend-only edits reuse its output. Keep the named output links: they protect
-the running package and images from Nix garbage collection.
-
-Build and load the default Codex worker, then save its immutable image ID:
-
-```sh
-nix build .#worker-image --out-link "$HOME/.local/share/control/worker-image"
-docker load -i "$HOME/.local/share/control/worker-image"
-config_dir=$("$control_bin" config path)
-umask 077
-docker image inspect control-worker:nix --format '{{.Id}}' > "$config_dir/worker-image-id"
-```
-
-For the full worker (Nix, Node/npm, Java and Python inside containers), use
-`worker-full-image` and tag `control-worker:nix-full` in those two commands.
-Optional `claude-image`, `claude-full-image`, `browser-image` and `build-image`
-outputs are also available; see [setup](setup.md) and [worker profiles](WORKER-PROFILES.md).
-Rebuilding the host package alone does not update loaded images or their pins.
-
-Sign in and check the node:
-
-```sh
+nix run .#setup
 nix run .#codex -- -c 'cli_auth_credentials_store="file"' login
-"$control_bin" doctor
-"$control_bin" serve
+./target/release/control doctor
+./target/release/control serve
 ```
 
-In another terminal, run
-`"$HOME/.local/share/control/package/bin/control" open` for the web UI or use
+Setup builds the native Nix package and its embedded UI, loads the worker image,
+saves its immutable ID and initializes private configuration. It also registers
+the checkout for explicit improvement requests. Existing configuration, state and
+model selection are preserved. Login and service startup are explicit.
+
+For Nix, Node/npm, Java and Python inside worker containers, use
+`nix run .#setup -- --full`. Optional `--claude`, `--browser` and
+`--build-environment` flags add those images; see [setup](setup.md).
+
+In another terminal, run `./target/release/control open` for the web UI or use
 `tui` for terminal chat. `open --link` prints a one-use sign-in link if no desktop
 browser is available. The server listens on `127.0.0.1:8080`; no firewall opening
 is needed. Configuration defaults to `~/.config/control/` and state to
 `~/.local/state/control/`, independent of the checkout or package path.
+
+Setup retains Nix output links under `${XDG_DATA_HOME:-$HOME/.local/share}/control/`.
+The stable executable is `package/bin/control` there; a copy remains at
+`target/release/control` for the checkout commands above. Keep the output links
+to protect the package's runtime libraries and images from garbage collection.
 
 ## Optional systemd user service
 
@@ -106,10 +89,11 @@ the same state.
 
 ## Updating
 
-Pull a reviewed revision and repeat the package and image build/load commands.
-Stop or finish active work before replacing image pins and restarting the service:
+Pull a reviewed revision and rerun setup with the same image flags. Stop or finish
+active work before replacing image pins and restarting the service:
 
 ```sh
+nix run .#setup
 systemctl --user restart control.service
 "$HOME/.local/share/control/package/bin/control" doctor
 "$HOME/.local/share/control/package/bin/control" tui --check
@@ -117,3 +101,13 @@ systemctl --user restart control.service
 
 Keep configuration, state and provider credentials outside the repository and
 Nix store. Do not remove Docker images still used by active runs or services.
+
+## Build only
+
+For inspection or custom deployment, `nix build .#control` (or just `nix build`)
+produces `./result/bin/control`. This does not load images, change pins or start
+services. Nix vendors both Cargo lockfiles, builds the UI offline with matching
+wasm-bindgen, and runs the native workspace tests. The UI has a separate derivation
+so backend-only edits reuse its output. Existing image outputs remain available,
+for example `nix build .#worker-image`; normal installation uses setup to load and
+pin them automatically.

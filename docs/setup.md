@@ -11,8 +11,8 @@ Docker-compatible engine and a Linux Nix builder. Match the image architecture:
 `aarch64-linux` for Apple Silicon or `x86_64-linux` for Intel. A Linux host can
 build its matching images locally; the invited setup currently targets macOS.
 
-`nix run .#setup` builds the embedded Rust/WASM UI, the release binary and the
-Codex worker image. It loads the image and saves its immutable ID. Add `--claude`
+`nix run .#setup` builds the native Nix package with its embedded Rust/WASM UI and
+the Codex worker image. It loads the image and saves its immutable ID. Add `--claude`
 or `--browser` after `--` for optional images. Add `--build-environment` for the
 [offline Rust/WASM build tool](BUILD-ENVIRONMENTS.md) used by self-improvement:
 
@@ -22,7 +22,10 @@ nix run .#setup -- --claude --browser
 
 Existing configuration, state and model choices are preserved. Image pins change
 only after every requested image builds and loads. Setup does not sign in, call
-a model or start services. Repeat it after pulling source changes.
+a model or start services. Repeat it after pulling source changes. Named output
+links under `${XDG_DATA_HOME:-$HOME/.local/share}/control/` retain the package and
+images against garbage collection; `package/bin/control` there is the stable
+executable. Setup also copies it to `target/release/control` for checkout commands.
 
 On a fresh node, `--claude` selects Claude `sonnet`; otherwise setup selects
 Codex. Setup also registers this checkout for explicit `/improve` requests.

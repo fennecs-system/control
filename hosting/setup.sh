@@ -10,9 +10,9 @@ while [ "$#" -ne 0 ]; do
     --full) profile=full ;;
     --help|-h)
       printf '%s\n' 'Usage: nix run .#setup [-- --claude] [--full] [--browser] [--build-environment]' \
-        'Build the release UI/binary and Codex worker; optionally add Claude Code, browser capture and offline Rust/WASM build environments.' \
+        'Build the Nix package and Codex worker, load images and save immutable pins; optionally add Claude Code, browser capture and offline Rust/WASM build environments.' \
         '--full adds private single-user Nix, Node/npm, JDK, Python and curl to worker images; lite remains the default.' \
-        'Requires a running Docker-compatible engine and a Linux Nix builder.' \
+        'Requires a running Docker-compatible engine; macOS also needs a Linux Nix builder.' \
         'Preserves private configuration and state. Does not sign in or start services.'
       exit 0 ;;
     *) printf '%s\n' "Unknown setup option: $1; use --help." >&2; exit 2 ;;
@@ -30,21 +30,26 @@ fi
 
 # Build every requested image first: a missing Linux builder fails before the long UI build,
 # and no configured image pin changes until all of them build and load.
+data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/control"
+mkdir -p "$data_dir"
 printf '%s\n' "Building Nix ${CONTROL_SETUP_LINUX_SYSTEM} images: ${images[*]}…"
 declare -A image_path image_id
 for image in "${images[@]}"; do
   image_output=$image
   if [ "$profile" = full ] && [[ "$image" = worker || "$image" = claude ]]; then image_output="${image}-full"; fi
-  if ! image_path[$image]=$(nix build ".#packages.${CONTROL_SETUP_LINUX_SYSTEM}.${image_output}-image" --no-link --print-out-paths); then
+  if ! image_path[$image]=$(nix build ".#packages.${CONTROL_SETUP_LINUX_SYSTEM}.${image_output}-image" --out-link "$data_dir/${image_output}-image" --print-out-paths); then
     printf '%s\n' "Could not build the ${CONTROL_SETUP_LINUX_SYSTEM} ${image} image. On macOS this needs a Linux Nix builder;" \
       'see "Linux builder on macOS" in docs/setup.md.' >&2
     exit 1
   fi
 done
 
-printf '%s\n' 'Building the embedded Rust/WASM UI and release binary…'
-(cd web && env -u NO_COLOR trunk build --release --locked)
-env -u CARGO_TARGET_DIR cargo build --release --locked --bin control
+printf '%s\n' 'Building the Nix package with its embedded Rust/WASM UI…'
+package_path=$(nix build .#control --out-link "$data_dir/package" --print-out-paths)
+# Preserve the existing checkout commands while the named output link roots the
+# package and its runtime libraries against garbage collection.
+mkdir -p target/release
+install -m 755 "$package_path/bin/control" target/release/control
 ./target/release/control config init
 config_dir=$(./target/release/control config path)
 
