@@ -121,8 +121,10 @@ These chat commands work on the web, in the TUI and in authorized Discord DMs:
   work, retry an interrupted attempt, or spawn background tasks with queued completion updates.
   Approved bots keep useful sessions active; durable handoffs continue runnable
   work or wait for relevant events while their services keep running.
-- **Lenses.** Compose knowledge, instructions and tool selections per chat.
-  Engineering and Research are built from smaller reusable lenses.
+- **Lenses.** Compose knowledge, instructions and descriptive tool context per chat.
+  Engineering and Research are built from smaller reusable lenses. Optional
+  [task autonomy and bounded investigation](docs/LENSES.md) guide recovery from
+  blocked plans without changing host permissions.
 - **Knowledge.** Write Markdown notes, connect them with `[[links]]`, explore the
   graph and [review agent-proposed claims](docs/KNOWLEDGE-TOOLS.md).
 - **Rooms.** Shared updates, durable inboxes and opt-in

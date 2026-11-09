@@ -1,20 +1,17 @@
 //! Browser defaults are preferences; each chat captures its own context.
-pub fn normalize(value: &str) -> &'static str {
-    match value {
-        "engineering" => "engineering",
-        "research" => "research",
-        _ => "none",
-    }
+pub fn normalize(value: &str) -> &str {
+    if control_context::valid_id(value) { value } else { "none" }
 }
-pub fn title(value: &str) -> &'static str {
+pub fn title(value: &str) -> &str {
     match normalize(value) {
         "engineering" => "Engineering",
         "research" => "Research",
-        _ => "No lens",
+        "none" => "No lens",
+        other => other,
     }
 }
-pub fn selected(header: &str, query: Option<&str>) -> &'static str {
-    query.map(normalize).unwrap_or_else(|| {
+pub fn selected<'a>(library: &control_context::Library, header: &'a str, query: Option<&'a str>) -> &'a str {
+    let candidate = query.map(normalize).unwrap_or_else(|| {
         header
             .lines()
             .filter_map(|line| line.split_once(':'))
@@ -24,7 +21,8 @@ pub fn selected(header: &str, query: Option<&str>) -> &'static str {
             .find(|(name, _)| *name == "control_lens")
             .map(|(_, value)| normalize(value))
             .unwrap_or("none")
-    })
+    });
+    if library.get(candidate).is_some() { candidate } else { "none" }
 }
 pub fn cookie(value: &str) -> String {
     format!(
@@ -59,7 +57,7 @@ pub fn library(state: &crate::State, lens: &str) -> String {
         .lens_library
         .current()
         .into_iter()
-        .filter(|d| !d.includes.is_empty())
+        .filter(|d| !d.includes.is_empty() || !d.instructions.trim().is_empty())
     {
         let resolved = crate::lens_library::resolve(state, std::slice::from_ref(&definition.id));
         html.push_str(&format!("<a class='lens-card {}' href='/lenses?id={}'><span class='card-symbol'>◈</span><h3>{}</h3><p>{} component lenses · v{}</p><footer>{} <span>↗</span></footer></a>",if definition.id==lens{"selected"}else{""},crate::escape(&definition.id),crate::escape(&definition.name),definition.includes.len(),definition.revision,resolved.map(|r|format!("{} tools · {} documents",r.tools.len(),r.documents.len())).unwrap_or_else(|_|"Needs attention".into())));
@@ -71,11 +69,28 @@ pub fn library(state: &crate::State, lens: &str) -> String {
 mod tests {
     use super::*;
     #[test]
+    fn custom_defaults_and_instruction_only_lenses_reach_the_chat_composer() {
+        let mut state = crate::State::default();
+        state.lens_library.definitions.push(control_context::Definition {
+            id:"field-work".into(),name:"Field <work>".into(),revision:1,instructions:"Local guidance".into(),..Default::default()
+        });
+        assert_eq!(selected(&state.lens_library,"Cookie: control_lens=field-work",None),"field-work");
+        assert_eq!(selected(&state.lens_library,"",Some("autonomy")),"autonomy");
+        assert_eq!(selected(&state.lens_library,"",Some("bad\r\nInjected")),"none");
+        assert!(cookie("bad\r\nInjected").starts_with("Set-Cookie: control_lens=none;"));
+        let cards = library(&state,"field-work");
+        assert!(cards.contains("Field &lt;work&gt;") && cards.contains("id=autonomy"));
+        let page = crate::chat::landing(&state,"field-work",None);
+        assert!(page.contains("value='field-work' form='chat-list-new' checked"));
+        assert_eq!(crate::chat::form_lenses(&std::collections::HashMap::new(),"field-work"),serde_json::json!(["field-work"]));
+    }
+    #[test]
     fn defaults_survive_navigation_and_never_become_redirect_authority() {
         let header = "Cookie: control_operator=unrelated; control_lens=research\r\n";
-        assert_eq!(selected(header, None), "research");
-        assert_eq!(selected(header, Some("engineering")), "engineering");
-        assert_eq!(selected("Cookie: control_lens=bad\r\n", None), "none");
+        let library = control_context::Library::default();
+        assert_eq!(selected(&library, header, None), "research");
+        assert_eq!(selected(&library, header, Some("engineering")), "engineering");
+        assert_eq!(selected(&library, "Cookie: control_lens=bad\r\n", None), "none");
         for target in ["//evil.test", "https://evil.test", "/\r\nSet-Cookie: bad=1"] {
             assert_eq!(return_to(target), "/");
         }

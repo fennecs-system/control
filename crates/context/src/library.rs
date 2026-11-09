@@ -56,6 +56,22 @@ pub fn valid_id(id: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 impl Library {
+    /// Offer new built-ins to existing nodes without replacing local revisions
+    /// or selecting anything for a chat. Captured run contexts are independent.
+    pub fn add_missing_defaults(&mut self) -> bool {
+        let mut changed = false;
+        for definition in Self::default().definitions {
+            if self.get(&definition.id).is_none()
+                && self.definitions.len() < 4096
+                && self.current().len() < 128
+            {
+                self.definitions.push(definition);
+                changed = true;
+            }
+        }
+        changed
+    }
+
     pub fn get(&self, id: &str) -> Option<&Definition> {
         self.definitions
             .iter()
@@ -188,6 +204,36 @@ impl Library {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn defaults_are_additive_bounded_and_preserve_local_definitions() {
+        let mut library = Library::default();
+        library.definitions.retain(|d| d.id != "autonomy" && d.id != "investigation");
+        let captured = library.resolve(&["engineering".into()], &[]).unwrap();
+        library.definitions.push(Definition { id:"autonomy".into(), name:"Local policy".into(), revision:7, instructions:"Operator's existing guidance".into(), ..Default::default() });
+        assert!(library.add_missing_defaults());
+        assert_eq!(library.get("autonomy").unwrap().revision, 7);
+        assert_eq!(library.get("autonomy").unwrap().instructions, "Operator's existing guidance");
+        assert_eq!(library.resolve(&["engineering".into()], &[]).unwrap(), captured);
+        assert!(library.get("investigation").is_some());
+        assert!(!library.add_missing_defaults());
+        library.validate(&[]).unwrap();
+        let mut full = Library { definitions:(0..128).map(|n|Definition {id:format!("local-{n}"),name:format!("Local {n}"),revision:1,..Default::default()}).collect() };
+        assert!(!full.add_missing_defaults());
+        full.validate(&[]).unwrap();
+    }
+    #[test]
+    fn investigation_is_opt_in_and_composition_adds_guidance_without_authority() {
+        let library = Library::default();
+        let ordinary = library.resolve(&["engineering".into()], &[]).unwrap();
+        let selected = library.resolve(&["engineering".into(),"autonomy".into(),"investigation".into(),"investigation".into()], &[]).unwrap();
+        assert_eq!(selected.tools, ordinary.tools);
+        assert!(selected.documents.is_empty());
+        assert!(!ordinary.instructions.iter().any(|s|s.contains("three distinct probes")));
+        assert_eq!(selected.instructions.iter().filter(|s|s.contains("three distinct probes")).count(),1);
+        assert_eq!(selected.lenses.iter().filter(|lens|lens.id=="evidence").count(),1);
+        assert!(selected.instructions.iter().any(|s|s.contains("enforced limits")));
+        assert!(selected.instructions.iter().any(|s|s.contains("not a host-enforced experiment counter")));
+    }
     #[test]
     fn presets_resolve_nested_lenses_once_and_are_pure() {
         let library = Library::default();

@@ -326,20 +326,18 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         return;
     }
     let query = fields(query);
-    let lens = lens_ui::selected(&header, query.get("lens").map(String::as_str));
-    if method == "POST" && path == "/lens" {
-        let f = fields(&String::from_utf8_lossy(
-            &data[header_end..header_end + length],
-        ));
-        let selected = lens_ui::normalize(f.get("lens").map(String::as_str).unwrap_or("none"));
-        let location = lens_ui::return_to(f.get("next").map(String::as_str).unwrap_or("/"));
-        let _ = control_http::respond(&mut stream, "303 See Other", "text/plain", b"", &format!("Location: {location}\r\n{}",lens_ui::cookie(selected)), control_http::Policy::Page);
-        return;
-    }
     if method == "GET" && serve_stylesheet(&mut stream, path) {
         return;
     }
     state_response(&mut stream, &state, |mut stream, state| {
+        let lens = lens_ui::selected(&state.lens_library, &header, query.get("lens").map(String::as_str));
+        if method == "POST" && path == "/lens" {
+            let f = fields(&String::from_utf8_lossy(&data[header_end..header_end + length]));
+            let selected = lens_ui::selected(&state.lens_library, "", f.get("lens").map(String::as_str));
+            let location = lens_ui::return_to(f.get("next").map(String::as_str).unwrap_or("/"));
+            let _ = control_http::respond(stream, "303 See Other", "text/plain", b"", &format!("Location: {location}\r\n{}",lens_ui::cookie(selected)), control_http::Policy::Page);
+            return;
+        }
         if method == "POST" && path == "/providers" {
             let f = fields(&String::from_utf8_lossy(
                 &data[header_end..header_end + length],
