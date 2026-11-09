@@ -2,6 +2,7 @@
 
 Start with the [README quick start](../README.md). This guide covers the Linux
 builder, manual builds, credential paths, configuration and optional Discord.
+For Linux/NixOS, use the [local NixOS deployment guide](NIXOS.md).
 
 ## Prerequisites
 

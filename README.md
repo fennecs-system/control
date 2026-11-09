@@ -6,6 +6,9 @@ in isolated containers and keep their work between turns.
 
 ## Install
 
+For a local NixOS machine, see the [NixOS deployment guide](docs/NIXOS.md)
+for `nix build`, worker images and a systemd user service.
+
 You need **macOS, Nix with flakes, Git, a running Linux container engine, and a
 Linux Nix builder** matching your Mac's architecture. See [setup](docs/setup.md)
 if you need a builder or want the individual build steps.

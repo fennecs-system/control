@@ -37,13 +37,16 @@
           builder = { type = "app"; program = "${pkgs.darwin.linux-builder}/bin/create-builder"; };
         });
       packages = eachSystem (pkgs:
-        if pkgs.stdenv.hostPlatform.isLinux then {
+        let control = import ./hosting/package.nix { inherit pkgs; }; in {
+          inherit control;
+          default = control;
+        } // nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           worker-image = import ./examples/worker-image.nix { inherit pkgs; };
           worker-full-image = import ./examples/worker-image.nix { inherit pkgs; profile = "full"; };
           claude-image = import ./examples/worker-image.nix { inherit pkgs; backend = "claude"; };
           claude-full-image = import ./examples/worker-image.nix { inherit pkgs; backend = "claude"; profile = "full"; };
           browser-image = import ./tools/browser/image.nix { inherit pkgs; };
           build-image = import ./tools/build/image.nix { inherit pkgs; };
-        } else { });
+        });
     };
 }
