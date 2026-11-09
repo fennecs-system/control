@@ -11,7 +11,7 @@
     in {
       devShells = eachSystem (pkgs: {
         default = pkgs.mkShell {
-          packages = [ pkgs.rustc pkgs.cargo pkgs.rustfmt pkgs.clippy pkgs.lld pkgs.trunk pkgs.ripgrep pkgs.fd ];
+          packages = [ pkgs.rustc pkgs.cargo pkgs.rustfmt pkgs.clippy pkgs.lld pkgs.trunk pkgs.wasm-bindgen-cli_0_2_129 pkgs.ripgrep pkgs.fd ];
         };
       });
       apps = eachSystem (pkgs:
@@ -19,13 +19,8 @@
           linuxSystem = builtins.replaceStrings [ "darwin" ] [ "linux" ] pkgs.stdenv.hostPlatform.system;
           setup = pkgs.writeShellApplication {
             name = "control-setup";
-            # stdenv.cc supplies the C compiler native crates (ring) need; Xcode CLT is not required.
-            runtimeInputs = [ pkgs.rustc pkgs.cargo pkgs.lld pkgs.trunk pkgs.gitMinimal pkgs.coreutils pkgs.stdenv.cc ];
-            # runtimeInputs only extends PATH; Rust's Darwin std links -liconv, which stdenv
-            # hooks would otherwise put on the linker search path.
-            text = nixpkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
-              export LIBRARY_PATH=${pkgs.lib.getLib pkgs.libiconv}/lib''${LIBRARY_PATH:+:$LIBRARY_PATH}
-            '' + ''
+            runtimeInputs = [ pkgs.nix pkgs.gitMinimal pkgs.coreutils ];
+            text = ''
               export CONTROL_SETUP_LINUX_SYSTEM=${linuxSystem}
               ${builtins.readFile ./hosting/setup.sh}
             '';
@@ -37,13 +32,16 @@
           builder = { type = "app"; program = "${pkgs.darwin.linux-builder}/bin/create-builder"; };
         });
       packages = eachSystem (pkgs:
-        if pkgs.stdenv.hostPlatform.isLinux then {
+        let control = import ./hosting/package.nix { inherit pkgs; }; in {
+          inherit control;
+          default = control;
+        } // nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           worker-image = import ./examples/worker-image.nix { inherit pkgs; };
           worker-full-image = import ./examples/worker-image.nix { inherit pkgs; profile = "full"; };
           claude-image = import ./examples/worker-image.nix { inherit pkgs; backend = "claude"; };
           claude-full-image = import ./examples/worker-image.nix { inherit pkgs; backend = "claude"; profile = "full"; };
           browser-image = import ./tools/browser/image.nix { inherit pkgs; };
           build-image = import ./tools/build/image.nix { inherit pkgs; };
-        } else { });
+        });
     };
 }

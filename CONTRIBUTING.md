@@ -19,6 +19,10 @@ git switch -c feature/short-description
 
 Use the tools pinned by `flake.lock`:
 
+The Nix environment also supplies the wasm-bindgen CLI matching `web/Cargo.lock`,
+so Trunk uses the installed tool instead of downloading a GitHub release archive.
+Keep that CLI version aligned when updating the web lockfile.
+
 ```sh
 nix develop
 cargo test --locked --workspace

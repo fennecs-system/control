@@ -6,7 +6,10 @@ in isolated containers and keep their work between turns.
 
 ## Install
 
-You need **macOS, Nix with flakes, Git, a running Linux container engine, and a
+For a local NixOS machine, see the [NixOS deployment guide](docs/NIXOS.md)
+for one-command setup and an optional systemd user service.
+
+On macOS, you need **Nix with flakes, Git, a running Linux container engine, and a
 Linux Nix builder** matching your Mac's architecture. See [setup](docs/setup.md)
 if you need a builder or want the individual build steps.
 
