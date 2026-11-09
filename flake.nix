@@ -11,7 +11,7 @@
     in {
       devShells = eachSystem (pkgs: {
         default = pkgs.mkShell {
-          packages = [ pkgs.rustc pkgs.cargo pkgs.rustfmt pkgs.clippy pkgs.lld pkgs.trunk pkgs.ripgrep pkgs.fd ];
+          packages = [ pkgs.rustc pkgs.cargo pkgs.rustfmt pkgs.clippy pkgs.lld pkgs.trunk pkgs.wasm-bindgen-cli_0_2_129 pkgs.ripgrep pkgs.fd ];
         };
       });
       apps = eachSystem (pkgs:
@@ -20,7 +20,7 @@
           setup = pkgs.writeShellApplication {
             name = "control-setup";
             # stdenv.cc supplies the C compiler native crates (ring) need; Xcode CLT is not required.
-            runtimeInputs = [ pkgs.rustc pkgs.cargo pkgs.lld pkgs.trunk pkgs.gitMinimal pkgs.coreutils pkgs.stdenv.cc ];
+            runtimeInputs = [ pkgs.rustc pkgs.cargo pkgs.lld pkgs.trunk pkgs.wasm-bindgen-cli_0_2_129 pkgs.gitMinimal pkgs.coreutils pkgs.stdenv.cc ];
             # runtimeInputs only extends PATH; Rust's Darwin std links -liconv, which stdenv
             # hooks would otherwise put on the linker search path.
             text = nixpkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
