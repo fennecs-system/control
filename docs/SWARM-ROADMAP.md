@@ -3,8 +3,57 @@
 Triaged 2026-11-05 against main `2d3492e` (#138). This is a plan, not a runtime
 change. [The main roadmap](../roadmap.md) tracks shipped capabilities and release
 gates. Stable IDs below identify independently reviewable increments.
-Architecture and dependency review updated 2026-11-07. Main `42f8c42` (#139)
-has a passing Rust workflow. Proposals below remain unimplemented.
+Status audited 2026-11-09 against deployed main `1d8c8ae` (#141/#142).
+The checklist distinguishes shipped slices from remaining acceptance work;
+unmarked product proposals remain planned. Main's macOS UI build hit an upstream
+Trunk download failure; the Nix-provided CLI fix is in open #143, not yet merged.
+
+## Shipped status and next increment
+
+- [x] **R1a lifecycle slice:** approved persistent bots have no implicit 600-second
+  wall-clock cap; explicit operator limits remain enforced. Accepted handoffs
+  finish through host-owned stop/publication paths, and event-only waits release
+  model capacity. Both CLI loops use the shared attempt policy.
+- [x] **R1b implementation:** immutable unpublished recovery candidates retain
+  workspace bytes, base/generation, termination cause and accepted drafts after
+  verified writer shutdown. Scoped inspection/recovery tools do not advance the
+  published head or processed cursors. Capture/rejection fixtures exist; this
+  successful unattended replay does not exercise an injected recovery fault.
+- [x] **R2 admission slice:** configurable watch exit/prefix selection, retained
+  spool evidence, source-gap reporting and generation/creator references; scoped
+  task rooms, record-versus-notify delivery and targeted peer communication.
+  Idle peer wakes use existing bot approval, budgets, pause and stop intent.
+- [x] **Steering-chat relay removal:** workers can coordinate directly with
+  siblings; the root conversation need not be a bot or relay their routine work.
+- [x] **Efficiency checks for #142:** routing benchmarks, flamegraphs and bounded
+  resource probes are recorded in [PERFORMANCE.md](PERFORMANCE.md). The tiny-device
+  goal concerns efficient core/tools/TUI and replaceable backends, not a mandatory
+  Raspberry Pi certification or a claim that every HTTP path became faster.
+- [ ] **R1/R2 remaining edges:** attempt-owned command deadline alignment and
+  finer causal classification of raw watch output. Creator identity alone does
+  not establish which attempt caused each line. Deliver these only as narrow
+  tool/adapter fixes when needed; do not add workload semantics to the supervisor.
+- [ ] **R3/R4:** visible history-read failures and bounded HTTP admission remain
+  open. They can ship independently alongside the architecture slice.
+- [ ] **Next: A1/A2/A4 first state/effect boundary**, then incremental A3. Start
+  with one existing callback-to-admission operation (targeted peer delivery is a
+  candidate), with narrow state views, stamped effects, durable acceptance and
+  typed results. Exercise the same contract through current and experimental
+  async drivers before expanding features. No whole-application rewrite is needed.
+
+The fresh deployed Codex trial ran over two hours after approvals without further
+operator steering: house/perimeter verification, repeated crop harvest/replant,
+bread production and recovery from game hazards. At the audited checkpoint it had
+52 completed attempts, zero failed attempts, 29 record-only room posts and no root
+turn after setup approvals. Individual useful attempts lasted about 26 and 32
+minutes. This supports continuity and quieter coordination; it is not a paired
+speed, token-cost or injected-fault benchmark. House size, starting location,
+client versions and inherited knowledge differed from the original run.
+
+**Deployment usability:** #143 is open for the native Nix package and NixOS
+instructions. The normal setup path should build/install the package, load images
+and save immutable pins in one command; manual build/pin steps are an advanced
+reference. Provider login and optional service activation remain explicit.
 
 ## Direction and comparison
 
@@ -76,15 +125,16 @@ prose goal. Resource quotas are not model-spend enforcement.
 This is the canonical priority/dependency table; `roadmap.md` links here.
 G1/O1/Q1 are consumer-scoped changes, not a foundation release ahead of all P1.
 The sequence is **small diamond-run reliability fixes → state/effect abstraction
-→ broader improvements**. Finish and compare R2 first, then R1b and the other
-reproduced failures. Do not turn the first phase into an open-ended pursuit of a
-perfect run. Use the paired-trial gates below to decide what actually improved.
+→ broader improvements**. The shipped R1/R2 slices above are the baseline; preserve
+their regressions and address remaining reproduced failures in small changes.
+Do not make further gameplay tuning or a perfect run a prerequisite for the state
+boundary. Use the paired-trial gates below for comparative performance claims.
 Before expanding product behavior, prove the first A1/A2/A4 operation boundary
 with interchangeable drivers; complete the remaining extractions incrementally.
 
 | Priority | Work | Minimum dependency / first exit |
 | --- | --- | --- |
-| P0 | R1a/R1b lifecycle checkpoint hooks and recovery; R2 watch admission; R3 history errors; R4 HTTP limits | Independent fixes with fault tests; preserve useful progress and real alerts. |
+| Shipped baseline / remaining P0 | R1a/R1b and R2 slices above; remaining R1/R2 edges, R3 history errors and R4 HTTP limits | Preserve shipped behavior; finish independent fixes with fault tests and real alerts. |
 | Next | A1/A2/A4 first state/effect slice, then incremental A3 and remaining boundaries | One complete operation behind typed commands, bounded projections and explicit effect results; current and experimental async drivers pass the same lifecycle/durability fixtures. This precedes broader features, not the small reliability fixes. |
 | P1 | E1 escalation with G1 request/dependency projections | Existing lifecycle and durable requests; one-slot resolution works. No broad spec/status subsystem. |
 | P1 | U1 coordination UI and A2A visibility | Read existing lifecycle, requests and ownership; add projections as needed. No dependency on all G1/O1/Q1 work. |
@@ -202,8 +252,9 @@ reason. Distinguish request deadlines, cancellation grace, inactivity detection,
 attempt budgets and persistent-job lifetime. Silence alone does not establish a
 stall; a heartbeat or log line does not establish useful progress. Tool adapters
 choose operation-appropriate bounds and report them through generic outcomes.
-The current 600-second attempt cap is a policy to evaluate
-against useful progress, not a task/service lifetime or a universal target.
+Ordinary attempts retain a default 600-second cap; approved persistent bots now
+have no implicit wall-clock cap, while explicit configured limits remain binding.
+This is an attempt policy, not a task/service lifetime or a universal target.
 Remaining allowance may be reported; no periodic handoff timer or additional short
 deadline controls ordinary progress. Any cap change needs measured recovery and
 capacity results and cannot silently extend an authorized budget. Timeouts remain
@@ -686,13 +737,16 @@ dependencies, checks and remaining limits. Run the relevant
 resource tests. Fault/cancellation tests precede claims of recovery correctness.
 Planning-only changes require document/link/diff checks, not model calls.
 
-**Diamond-run evidence gates R1/R2 improvement claims and default rollout.**
+**Paired evidence gates comparative R1/R2 performance claims.** The deployed
+slices and the unattended observations above do not establish those claims.
 First publish credential-free regressions for the specific defect: unchanged
 watch echoes with genuine exits, or timeout with useful files and no Control tool
 calls. Then run baseline and changed revisions in separate fresh worlds from seed
-`-6834438708894114399`, with the same steering script, agents, model configuration,
+`-5872320857145672064`, with the same steering script, agents, model configuration,
 tools, budgets and workload version. Preserve the successful original world.
-Verify milestones from world/tool evidence, not assistant claims. Each experiment
+Verify generated-world identity, spawn/start conditions and milestone size as well
+as the configured seed; this replay visibly differed from the original despite
+the requested seed. Verify milestones from world/tool evidence. Each experiment
 changes one factor: watch admission, recovery candidates, or attempt-limit policy.
 Repeated paired trials are needed to assess model variability; a single successful
 run is a smoke test. Record run count and pinning/availability limitations.

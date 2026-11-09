@@ -1,7 +1,8 @@
 # Control roadmap
 
-Triaged against main `2d3492e` (#138); architecture/dependencies reviewed
-2026-11-07. Main `42f8c42` (#139) has a passing Rust workflow.
+Status audited 2026-11-09 against deployed main `1d8c8ae` (#141/#142).
+Main's macOS UI build download failure is addressed by open #143; this planning
+update does not claim its merge or deployment.
 Keep the normal macOS/Nix release useful to friends while making coordinated
 agent teams more reliable and less noisy. Each node supplies its own configuration
 and model access. Federation remains lower priority.
@@ -24,9 +25,8 @@ from other projects while developing Control around this team-level purpose.
 
 The [swarm implementation roadmap](docs/SWARM-ROADMAP.md#delivery-order) owns
 the current priority table, dependencies and acceptance criteria. The historical
-sections below retain shipped status and background. Proposed work is not yet
-implemented or deployed; the plan includes its evidence without requiring private
-planning files or chat access.
+sections below retain shipped status and background. The swarm checklist records
+delivered R1/R2 slices separately from remaining proposals and evaluation gates.
 
 Keep the fundamental Pi/tinygrad architecture: small pure lifecycle/admission
 primitives, narrow application operations, tools/strategies for product behavior,
@@ -43,13 +43,17 @@ increments; the whole web/TUI split is not a gate for product work.
 
 - ✓ Continuity composition is on main through #134: shared handoffs,
   conversation/room receipts, active-session deltas and bounded successors.
-  Older “branch-only” descriptions of that subset are superseded. Checkpoint-hook
-  hardening, interrupted-draft recovery and selective watch admission remain open.
+  Older “branch-only” descriptions of that subset are superseded. The #141
+  lifecycle/recovery and selective-watch slices are also shipped; see the swarm
+  checklist for remaining acceptance work.
 - ✓ Ancestor request visibility (#131), longer local messages (#132), request
   styling (#135), Rooms layout (#136), CI caching/Dependabot and relay FIN
   draining (#138) are merged. These are regression coverage, not new backlog.
-- Production was verified after the requested #136 deployment. #138 is merged
-  with green main CI; its deployment is not claimed by this planning update.
+- ✓ #141/#142 are merged and locally deployed: persistent attempts avoid the
+  implicit time cliff, recovery candidates preserve unpublished work, task rooms
+  isolate coordination, and workers communicate directly without a steering-chat
+  relay. The unattended trial verified continued work and maintenance with no
+  failed attempts at the recorded checkpoint; it is not a matched speed benchmark.
 - Journals/outbox and compactor selection are implemented; lazy resident history
   and computed Lens summaries remain open. Production Lens uses `NoSummaries`.
 - Shared claims have an admission path. Reviewed procedures, persona/lens
