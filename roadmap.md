@@ -1,13 +1,66 @@
 # Control roadmap
 
-Reviewed 2026-11-04 against main through #129, the continuity review and
-the Cass playtest evidence; implementation and comparative retest remain pending.
-Keep the normal macOS/Nix release useful to friends; improve reliability before
-adding autonomous operation. Each node supplies its own configuration and model
-access. Federation remains lower priority.
+Status audited 2026-11-09 against deployed main `1d8c8ae` (#141/#142).
+Main's macOS UI build download failure is addressed by open #143; this planning
+update does not claim its merge or deployment.
+Keep the normal macOS/Nix release useful to friends while making coordinated
+agent teams more reliable and less noisy. Each node supplies its own configuration
+and model access. Federation remains lower priority.
+
+## Delivery order: a persistent swarm that learns
+
+**Control is a swarm management platform for agent teams.** Its ambition is to
+let a person direct an entire engineering team of agents: planning, building,
+reviewing, testing and operating systems together. Inter-agent communication,
+computer-use tools, an effective coordination UI and self-improvement make that
+team useful. Replacing a team's full responsibilities is a product ambition to
+validate on engineering tasks, not an already demonstrated capability.
+
+Preserve the successful steering-chat pattern: a person sets direction, a lead
+coordinates workers, agents communicate through rooms, and persistent services
+retain their work. The Minecraft team progressed through building and farming to
+diamonds and responded to new direction. That supports incremental reliability
+and noise fixes around the existing coordination model. Borrow useful contracts
+from other projects while developing Control around this team-level purpose.
+
+The [swarm implementation roadmap](docs/SWARM-ROADMAP.md#delivery-order) owns
+the current priority table, dependencies and acceptance criteria. The historical
+sections below retain shipped status and background. The swarm checklist records
+delivered R1/R2 slices separately from remaining proposals and evaluation gates.
+
+Keep the fundamental Pi/tinygrad architecture: small pure lifecycle/admission
+primitives, narrow application operations, tools/strategies for product behavior,
+and effect adapters for I/O. Each new core concept needs a generic invariant that
+existing operations cannot express. Recipes, cron interpretation, personas,
+goal reasoning and compaction strategies belong outside the supervisor. Sequence
+the work as small diamond-run reliability fixes, then a proven state/effect
+abstraction slice, then broader improvements. Typed operations, bounded views
+and explicit effect results must support a different async driver without moving
+runtime details into domain state. Complete the remaining extraction in usable
+increments; the whole web/TUI split is not a gate for product work.
+
+### Reconciled status
+
+- ✓ Continuity composition is on main through #134: shared handoffs,
+  conversation/room receipts, active-session deltas and bounded successors.
+  Older “branch-only” descriptions of that subset are superseded. The #141
+  lifecycle/recovery and selective-watch slices are also shipped; see the swarm
+  checklist for remaining acceptance work.
+- ✓ Ancestor request visibility (#131), longer local messages (#132), request
+  styling (#135), Rooms layout (#136), CI caching/Dependabot and relay FIN
+  draining (#138) are merged. These are regression coverage, not new backlog.
+- ✓ #141/#142 are merged and locally deployed: persistent attempts avoid the
+  implicit time cliff, recovery candidates preserve unpublished work, task rooms
+  isolate coordination, and workers communicate directly without a steering-chat
+  relay. The unattended trial verified continued work and maintenance with no
+  failed attempts at the recorded checkpoint; it is not a matched speed benchmark.
+- Journals/outbox and compactor selection are implemented; lazy resident history
+  and computed Lens summaries remain open. Production Lens uses `NoSummaries`.
+- Shared claims have an admission path. Reviewed procedures, persona/lens
+  revisions and a measured reusable learning loop remain planned.
 
 **Augment, don't intermediate.** Control supplies tools, isolated environments,
-knowledge and review around a person's model access. Web, TUI, Discord and MCP
+knowledge and review around a team's model access. Web, TUI, Discord and MCP
 are interfaces to shared capabilities. Tool availability, resource grants and
 transport are separate. Lenses are pure, composable context/tool selections;
 personas describe behavior and policy, not additional authority.
@@ -201,15 +254,15 @@ See [library boundaries and measurements](docs/CRATE-BOUNDARIES.md).
 
 ## Baseline: deployed revision and turn continuity checks
 
-**✓ Merged in #129 with local verification; deployment status unverified here.**
+**✓ Merged in #129; included in the verified #136 deployment.**
 Automatic turns retain omitted user instructions and recent execution evidence
 through the shared provider-neutral projection. Explicit one-shot watch requests
 re-arm the next callback, completed/pending evidence survives new watches, and
 failed saves restore observation counters. `control_bot_pause` durably pauses
 the caller's own wakes; the operator resumes it with `/bot resume`.
 
-Record whether the playtest binary/WASM and worker images include #129 and check
-node health before comparative testing. Verify that the original goal and later
+Capture the exact binary/WASM revision and worker images and check node health
+before each comparative test. Verify that the original goal and later
 steering survive callbacks, setup advances without manual "continue", and room
 updates reflect actual progress. Waiting on a peer should end a turn quietly;
 an explicit pause should stop automatic wakes. Inspect wake reasons and tool
@@ -223,9 +276,9 @@ connection/protocol work belongs in tool containers and must be distinguished
 from the stop/start overhead measured below. Keep broader extraction out of the
 continuity implementation's path.
 
-## Next priority: reduce stop/start context pollution
+## Continuity baseline and remaining follow-ups
 
-**Implementation in progress; not deployed.** The Cass playtest
+**Core composition merged through #134; comparative retest remains open.** The earlier Cass playtest
 shows 17 consecutive monitoring turns in ten minutes, repeating 68 tool calls
 without a gameplay action. Their exchanges occupy about 52% of the reconstructed
 next recent-history window. See the scoped measurements, concrete contracts,
@@ -234,7 +287,7 @@ Keep the current playtest unchanged as baseline evidence.
 
 Bot = agent + supervisor + callbacks. Keep a progressing session active; resume
 unfinished runnable work automatically when that session ends. Do not impose a
-short periodic handoff target. The feature branch has bounded captured input,
+short periodic handoff target. Main has bounded captured input,
 typed working notes and conversation/room receipts, atomic publication, idle
 waits and budgeted successors. Bot approval enables the next admission without
 restarting an active session. A missing handoff can recover from a successful
@@ -286,9 +339,9 @@ or local-model adapters. Preserve the existing scheduling and authority rules.
    on equivalent tasks explicitly permitting longer slices. Cached comonad
    summaries and API/local-model adapters remain separate later workstreams.
 
-Live feedback prioritizes repeated stop/start context pollution: let an active
+Live feedback prioritized repeated stop/start context pollution: let an active
 controller perform several related steps and consume queued event deltas before
-yielding on genuine idle/dependency waits. Compare with the current one-action
+yielding on genuine idle/dependency waits. Compare with the earlier one-action
 slices; prior native sessions also stalled, so session reuse alone is not the
 solution. Project wake bookkeeping as current metadata rather than repeatedly
 carrying it as conversational instructions. Preserve task/steering provenance,
@@ -296,11 +349,13 @@ evidence retrieval, cancellation and durable recovery; sleeping monitors must
 not monopolize model slots. This experiment remains separate from the request
 panel fix and does not change the current playtest midway.
 
-## Later: core, web and terminal boundaries
+## After reliability: state, effect and adapter boundaries
 
 Build on the persistent-tool lifecycle/ownership rules already extracted below.
-Extract narrow application operations where they remove coupling; keep usable
-tools and demonstrations ahead of the complete web/TUI split.
+Prioritize a complete typed operation/effect boundary after the small diamond-run
+fixes and before broader features, as specified in the canonical delivery order.
+Prove the same operation under the current and an experimental async driver;
+keep usable tools and demonstrations ahead of the complete web/TUI split.
 The existing server still combines mutable application state, routing, rendering
 and execution assembly. `control-core` contains the first pure rules; the full
 application service and separate `control-tui`/`control-web` adapters remain
@@ -538,12 +593,17 @@ where useful; do not claim types can prove arbitrary model behavior. Keep single
 node reliability and the tool/bot demonstrations ahead of distributed
 frameworks or broad rewrites.
 
-## Later: reusable personas and richer bot policies
+## P2: reusable personas and team workflows
+
+See [L1–L3 in the swarm roadmap](docs/SWARM-ROADMAP.md#l1-versioned-lenses-personas-and-soulmd)
+for versioned `SOUL.md`, prompt composition and the reviewed learning loop.
 
 [Bot-control research and the version-0 contract draft](docs/research/BOT-CONTROL.md)
 recommend ordinary versioned configuration, pure transitions and typed effects
-first. Callback/language experiments belong in an optional separate project over
-the tool contract; they do not block the five-bot gameplay milestone.
+first. Cron-style schedules and a small declarative team recipe layer are now
+explicit near-term work in [W1/W2](docs/SWARM-ROADMAP.md#w1w2-schedules-and-a-small-workflow-layer).
+General-purpose language experiments can remain separate; they do not block
+ordinary steering or the next team demonstration.
 
 A bot is a supervised instance using a persona, tools, state and explicit grants,
 not a second agent runtime. Preserve the original personality + policy +
@@ -576,13 +636,12 @@ declarative-directive model; keep its configuration distinct from its chat histo
 - **First workflow:** watch an explicitly selected release/source, propose a patch
   in an approved isolated project, run deterministic checks, request independent
   review and notify the owner. Merge/deploy remains an explicit grant.
-- **Later external actions:** a travel watcher could report a Qantas sale and
-  prepare a booking proposal. Buying requires explicit, scoped authorization for
-  the concrete itinerary, passenger, price/budget and action; broad chat intent,
-  website text or persona instructions are not payment authority. Retain effect
-  intent, receipts and ambiguous-outcome handling; do not blindly retry purchases.
+- **Operations workflow:** a team diagnoses a service regression, prepares a
+  tested repair and proposes a rollout. Execution follows the deployment grant
+  for that environment and revision. Retain intent, receipts, health evidence
+  and ambiguous-outcome handling; inspect uncertain effects before retrying.
 
-## Later: interactive browser as a tool
+## P2: computer use, starting with an interactive browser
 
 Extend capture into a sandboxed browser session only when the execution and
 permission boundaries are ready. Keep the session lifecycle, browser profile,
@@ -622,7 +681,13 @@ can drive different isolation levels.
   checkpoints stay in Control's domain code. Capability differences (network
   modes, storage, profiles) are declared by the backend and checked at admission.
 
-## Later: unbounded conversation memory as a comonad
+## P2: unbounded conversation memory as a comonad
+
+See [C1–C3 in the swarm roadmap](docs/SWARM-ROADMAP.md#c1c3-infinite-chat-and-compaction-model-selection)
+for the independent compaction-model selector, hosted/local choices, cache
+identity, fallback, budgets and acceptance tests. “Infinite” means continued
+conversation over retained history with bounded context and working memory;
+it does not promise infinite disk or perfect recall.
 
 The merged #129 continuity fix and the prioritized active-slice/handoff design are
 described above. Background summaries follow that implementation's evidence: retained human
@@ -670,8 +735,8 @@ tiers, bundled inference and model routing follow demonstrated local needs.
 Keep the pure Rust context core and offline federation boundary.
 
 Broader work can include a typed run state machine, deterministic supervisor
-simulation, parser fuzzing, scoped capability tokens/session expiry, a transactional
-store when JSON costs warrant it, artifact editing/highlighting and removal of
+simulation, parser fuzzing, scoped capability tokens/session expiry, an atomic
+file-manifest layout when measurements warrant it, artifact editing/highlighting and removal of
 remaining simulated UI. A Nix `packages.control` derivation is still future work;
 Nix setup and image builds already exist.
 

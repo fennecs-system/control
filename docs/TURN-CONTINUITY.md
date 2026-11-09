@@ -1,5 +1,9 @@
 # Turn continuity implementation handoff
 
+Design for Sol, 2026-11-04. The implementation checkpoint below is historical;
+see the [current roadmap](SWARM-ROADMAP.md) for shipped scope and open follow-ups.
+Provider-session contract clarified 2026-11-06.
+
 ## Persistent attempts and R1 (2026-11-07)
 
 Approved persistent bots have no implicit attempt deadline. An explicit operator
@@ -40,8 +44,6 @@ must outlive a model turn belongs in a persistent service.
 The earlier design notes below are historical where they conflict with this
 implementation contract.
 
-Design for Sol, 2026-11-04. Status: implementation in progress, not deployed.
-
 The next priority is reducing stop/start context pollution: longer active slices,
 event deltas, and reliable working-state handoffs, while preserving Control's
 recovery model. Implement this in small reviewed slices. Keep the current
@@ -53,9 +55,13 @@ its task from Control. Provider session reuse, API/local-model adapters and
 background summary generation are outside this implementation.
 
 The runtime model is **bot = agent + supervisor + callbacks**. While meaningful
-activity is advancing the goal, preserve the active provider session. If that
-session ends with runnable work remaining, the supervisor should resume it
-without another human "continue". A real dependency or a scheduled condition is
+activity is advancing the goal, preserve the active provider session within its
+attempt. If that attempt ends with runnable work remaining, the supervisor may
+admit a fresh attempt without another human "continue", subject to existing
+authority and budgets. Every new attempt reconstructs context from Control's
+committed journal, instructions and selected history; it never resumes the ended
+provider session. Provider caches are optional optimizations, not task-state
+authority. A real dependency or a scheduled condition is
 different from runnable work. Neither callbacks nor a short elapsed interval
 justify periodically restarting an agent.
 
@@ -210,6 +216,20 @@ must not be interrupted merely because a short interval elapsed. Durable handoff
 support recovery and genuinely idle agents; they are not the normal action loop.
 Do not promise token-budget enforcement from end-of-attempt CLI usage telemetry.
 
+Lifecycle refinement (2026-11-07): use typed callbacks/effects at existing tool,
+dependency, decision and yield boundaries; do not introduce a fixed early finishing
+window. Preserve the explicit-yield fence and safe publication transaction below.
+These hooks cannot turn a live draft into a committed checkpoint or guarantee a
+final save after a crash. Independent persistent jobs retain their handles and
+completion subscriptions across model attempts; an attempt deadline does not set
+their lifetime. Evaluate the current attempt cap separately from workflow progress
+and tool-specific transport limits. No new general hook/plugin runtime is required.
+Long-job tools can supply bounded health/progress inspection and configurable
+runtime/review policy. Keep liveness, progress and unknown observations distinct;
+request a scoped lead/operator decision before extending an authorized limit.
+Pending decisions retain the existing policy, and a failed health probe alone
+does not establish that the underlying job failed.
+
 ## State and tool contract
 
 Add a narrow `src/turn_context.rs` adapter and pure data/validation/projection
@@ -357,6 +377,14 @@ Retain uncommitted initial and subsequent event ranges as recovery backlog. A
 restart must not turn that backlog alone into an automatic retry of the failed
 attempt; include it when an explicit retry or a new independent wake is admitted.
 Expose that recovery condition in status rather than losing the dispatch reasons.
+
+R1b follow-up: after confirming attempt writers stopped, capture retained workspace
+bytes as an immutable unpublished recovery candidate, independently of model
+cooperation. Keep the draft separately attributed; neither advances the published
+head or processed cursors. A failed stop/copy leaves visible unstable/missing
+evidence. Record timeout as a structured termination cause even if cleanup also
+fails. Candidate adoption checks authority and the current baseline; copied files
+may still be incomplete and do not roll back external services.
 
 A provider ending successfully without a handoff keeps its result/evidence and
 workspace under existing rules, marks continuity incomplete and retains the last
