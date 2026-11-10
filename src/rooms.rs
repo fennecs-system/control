@@ -82,18 +82,28 @@ pub fn render(state: &State, room: &str) -> String {
     let room = if valid(room) { room } else { "general" };
     let label = escape(&address::label(state, room));
     let channel = address::Address::parse(room).unwrap().channel;
-    let mut html = String::from("<div class='rooms-layout'><aside class='rooms-menu'><h2>Rooms</h2><nav aria-label='Rooms'>");
-    for name in names(state) {
-        html.push_str(&format!(
-            "<a href='/?view=rooms&channel={name}'{}>{}</a>",
-            if name == room {
-                " aria-current='page'"
-            } else {
-                ""
-            }, escape(&address::label(state, &name))
-        ));
+    let mut html = String::from("<div class='rooms-layout'><aside class='rooms-menu'><h2>Rooms</h2><nav aria-label='Rooms'><ul class='room-channels'>");
+    let rooms = names(state);
+    for channel in NAMES {
+        let current = if channel == room { " aria-current='page'" } else { "" };
+        html.push_str(&format!("<li class='room-channel'><a href='/?view=rooms&amp;channel={channel}'{current}><span class='room-name'>#{channel}</span></a>"));
+        let threads = rooms.iter().filter_map(|name| address::Address::parse(name)
+            .filter(|address| address.channel == channel)
+            .and_then(|address| address.thread.map(|thread| (name, thread))));
+        let mut has_threads = false;
+        for (name, thread) in threads {
+            if !has_threads {
+                html.push_str(&format!("<ul class='room-threads' aria-label='Threads in #{channel}'>"));
+                has_threads = true;
+            }
+            let title = state.chats.iter().find(|chat| chat.id == thread).map_or(thread, |chat| chat.title.as_str());
+            let current = if name == room { " aria-current='page'" } else { "" };
+            html.push_str(&format!("<li><a href='/?view=rooms&amp;channel={name}'{current} title='{}'><span class='room-thread-icon' aria-hidden='true'>↳</span><span class='room-name'>{}</span></a></li>", escape(&format!("#{channel} · {title}")), escape(title)));
+        }
+        if has_threads { html.push_str("</ul>"); }
+        html.push_str("</li>");
     }
-    html.push_str(&format!("</nav></aside><section class='room-conversation' aria-label='{label}'><div class='room-heading'><h2>{label}</h2><p class='muted'>Shared updates from people and agents in this room or task thread.</p></div><div class='room-feed transcript' role='region' aria-label='Room messages' tabindex='0'>"));
+    html.push_str(&format!("</ul></nav></aside><section class='room-conversation' aria-label='{label}'><div class='room-heading'><h2 title='{label}'>{label}</h2><p class='muted'>Shared updates from people and agents in this room or task thread.</p></div><div class='room-feed transcript' role='region' aria-label='Room messages' tabindex='0'>"));
     let data = read(state, room);
     if data["posts"].as_array().unwrap().is_empty() {
         html.push_str("<div class='conversation-empty'><p class='muted'>No updates yet. Start the conversation.</p></div>");
