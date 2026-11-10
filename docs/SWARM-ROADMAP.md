@@ -372,13 +372,23 @@ operation: report whether the backend supports it live or requires replacement,
 and preserve service data and port/grant generation fences. No silent restart.
 
 Keep shapes in operator configuration, admission in typed application operations,
-and provisioning/metrics in replaceable effect interpreters. A later cloud tool
-can map admitted requirements to AWS or another backend and reuse the existing
-ownership, approval and receipt contracts. Provider-specific instance types,
-credentials, pricing and network configuration belong in adapters/configuration;
-unsupported requirements must be explicit. Cloud provisioning needs separate
-spend policy and crash/unknown-outcome reconciliation before activation. Do not
-build a cloud scheduler into core to deliver the local slice.
+and provisioning/metrics in replaceable effect interpreters. Borrow Kubernetes'
+separation of intent, observed status and reconciliation, without making the
+harness a cloud provisioning product. Agents choose and invoke approved tools to
+provision infrastructure; those tools report typed resource handles, observations
+and receipts through the existing ownership and lifecycle contracts. The harness
+enforces authority, admission, generation fences and recovery even when an agent
+stops; correctness must not depend on the agent remembering to clean up.
+
+AWS instance types, credentials, pricing and network configuration belong in
+external tools and operator configuration, not provider-specific supervisor
+branches or a built-in catalogue of cloud services. Tools may map a shape to
+provider requirements and must report unsupported requirements explicitly.
+Remote resources need backend-scoped capacity accounting rather than consuming
+a local node's CPU/RAM reservation. Any later cloud tool needs explicit spend
+authorization and crash/unknown-outcome reconciliation before activation. Its
+implementation is separate from this local slice; adding a provider should not
+require changing the pure core or bot supervisor.
 
 Acceptance: provision a locally approved larger service without granting broader
 tool/network authority; show its effective limits and explain denial when the
