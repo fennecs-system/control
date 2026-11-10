@@ -28,59 +28,8 @@ pub struct Runtime {
     #[serde(skip)]
     pub paused: Option<String>,
 }
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Run {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bot_turn: Option<Box<crate::bots::Turn>>,
-    #[serde(default, skip_serializing_if="Vec::is_empty")]
-    pub resource_grants: Vec<crate::services::Grant>,
-    #[serde(default)]
-    pub spawns: Vec<crate::spawning::Batch>,
-    #[serde(default)]
-    pub room_wake_used: bool,
-    /// The last status sent to frontends through the outbox.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub emitted: Option<String>,
-    #[serde(default)]
-    pub persona: Option<crate::delegation::Persona>,
-    #[serde(default)]
-    pub delegation: Option<crate::delegation::Delegation>,
-    #[serde(default)]
-    pub question: Option<crate::design::Question>,
-    #[serde(default)]
-    pub continuation: crate::history::Spilled<Option<crate::design::Continuation>>,
-    #[serde(default)]
-    pub backend: crate::backend::Backend,
-    #[serde(default)]
-    pub queue_order: u64,
-    #[serde(default)]
-    pub model: Option<String>,
-    #[serde(default)]
-    pub context: crate::history::Spilled<Option<control_context::Resolved>>,
-    #[serde(default)]
-    pub lenses: Option<Vec<String>>,
-    #[serde(default)]
-    pub chat_id: Option<String>,
-    #[serde(default)]
-    pub attempts: Vec<crate::usage::Attempt>,
-    #[serde(default)]
-    pub actor: Actor,
-    #[serde(default)]
-    pub action: Action,
-    pub id: String,
-    pub objective: crate::history::Spilled<String>,
-    pub kind: RunKind,
-    pub status: String,
-    pub source: String,
-    pub result: crate::history::Spilled<String>,
-}
-impl Run {
-    /// Milliseconds since the epoch when the run was queued, from its identifier.
-    pub(crate) fn created_ms(&self) -> Option<u64> {
-        let nanos = u128::from_str_radix(self.id.split('-').next()?, 16).ok()?;
-        u64::try_from(nanos / 1_000_000).ok()
-    }
-}
+pub use crate::application::runs::Run;
+use crate::application::runs::Submission;
 
 // Pending transitions change status/result and possibly a design answer. Keep
 // rollback bounded, without cloning attempts or completed conversation history.
@@ -255,38 +204,10 @@ impl Runtime {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        self.runs.push(Run {
-            bot_turn: None,
-            resource_grants: Vec::new(),
-            spawns: Vec::new(),
-            room_wake_used: false,
-            emitted: None,
-            persona: None,
-            delegation: None,
-            question: None,
-            continuation: None.into(),
-            backend: self.backend,
-            queue_order: self
-                .runs
-                .iter()
-                .map(|r| r.queue_order)
-                .max()
-                .unwrap_or(0)
-                .saturating_add(1),
-            model: Some(self.configured_model()),
-            context: None.into(),
-            lenses: None,
-            chat_id: None,
-            attempts: Vec::new(),
-            actor,
-            action,
-            id: format!("{stamp:x}-{}", self.runs.len()),
-            objective: objective.into(),
-            kind,
-            source: source.into(),
-            status: "queued".into(),
-            result: String::new().into(),
-        });
+        let request = Submission { objective, kind, source: source.into(), actor, action };
+        self.runs.push(request.into_run(format!("{stamp:x}-{}", self.runs.len()),
+            self.runs.iter().map(|r| r.queue_order).max().unwrap_or(0).saturating_add(1),
+            self.backend, Some(self.configured_model())));
         self.notice = "Run queued.".into();
         crate::worker::wake();
         Ok(())

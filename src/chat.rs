@@ -4,7 +4,6 @@ use crate::{
     runtime::RunKind,
     State,
 };
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::{SystemTime, UNIX_EPOCH};
 use control_context::commands::{self, Kind};
@@ -12,46 +11,7 @@ mod activity;
 pub(crate) use activity::changed as activity_changed;
 use activity::{agent_activity, command_html};
 
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Message {
-    pub text: String,
-    pub run_id: Option<String>,
-    #[serde(default)]
-    pub reply: String,
-}
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Session {
-    #[serde(default,skip_serializing_if="Option::is_none")]
-    pub continuity:Option<Box<crate::turn_context::Managed>>,
-    #[serde(default)]
-    pub activity_order: u64,
-    #[serde(default)]
-    pub project: Option<crate::projects::Project>,
-    #[serde(default)]
-    pub parent_chat: Option<String>,
-    #[serde(default)]
-    pub fork_context: Option<String>,
-    #[serde(default)]
-    pub improve_mode: bool,
-    #[serde(default)]
-    pub improve_workspace: Option<String>,
-    #[serde(default)]
-    pub workspace: Option<String>,
-    #[serde(default)]
-    pub lenses: Option<Vec<String>>,
-    #[serde(default)]
-    pub design_context: Option<String>,
-    #[serde(default)]
-    pub room: Option<String>,
-    #[serde(default)]
-    pub lens: Option<String>,
-    #[serde(default)]
-    pub revision: u64,
-    pub id: String,
-    pub actor: Actor,
-    pub title: String,
-    pub messages: Vec<Message>,
-}
+pub use crate::application::conversations::{Message,Session};
 pub fn selected_lenses(session: &Session) -> Vec<String> {
     session
         .lenses
@@ -167,9 +127,7 @@ pub fn rejected(page: &str, error: &str, draft: &str) -> String {
     let Some(end) = page[start..].find("</textarea>").map(|i| start + i) else { return page };
     format!("{}{}{}", &page[..start], escape(draft), &page[end..])
 }
-pub fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 100 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-}
+pub use crate::application::valid_id;
 /// Whether `chat` is `ancestor` or was spawned from it, directly or through children.
 pub(crate) fn within(state: &State, chat: &str, ancestor: &str) -> bool {
     lineage(state, chat).any(|id| id == ancestor)

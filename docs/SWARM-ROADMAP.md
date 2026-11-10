@@ -3,10 +3,10 @@
 Triaged 2026-11-05 against main `2d3492e` (#138). This is a plan, not a runtime
 change. [The main roadmap](../roadmap.md) tracks shipped capabilities and release
 gates. Stable IDs below identify independently reviewable increments.
-Status audited 2026-11-09 against deployed main `1d8c8ae` (#141/#142).
+Status audited 2026-11-10 against main `856be99` (through #147).
 The checklist distinguishes shipped slices from remaining acceptance work;
-unmarked product proposals remain planned. Main's macOS UI build hit an upstream
-Trunk download failure; the Nix-provided CLI fix is in open #143, not yet merged.
+unmarked product proposals remain planned. The native Nix package and pinned
+WASM tooling fix shipped in #143; both platform checks passed before merging.
 
 ## Shipped status and next increment
 
@@ -26,6 +26,12 @@ Trunk download failure; the Nix-provided CLI fix is in open #143, not yet merged
   Idle peer wakes use existing bot approval, budgets, pause and stop intent.
 - [x] **Steering-chat relay removal:** workers can coordinate directly with
   siblings; the root conversation need not be a bot or relay their routine work.
+- [x] **R2 explicit callback channel (#146):** opt-in watches deliver application
+  notifications separately from diagnostic stdout/stderr; process exits remain
+  host-observed facts. Default callback reads omit logs; explicit diagnostic
+  reads retain them. No workload-specific parser or timeout was added to core.
+- [x] **Opt-in autonomy/investigation lenses (#144):** declarative guidance is
+  captured with runs; adding a lens does not grant resource or tool authority.
 - [x] **Efficiency checks for #142:** routing benchmarks, flamegraphs and bounded
   resource probes are recorded in [PERFORMANCE.md](PERFORMANCE.md). The tiny-device
   goal concerns efficient core/tools/TUI and replaceable backends, not a mandatory
@@ -41,6 +47,10 @@ Trunk download failure; the Nix-provided CLI fix is in open #143, not yet merged
   candidate), with narrow state views, stamped effects, durable acceptance and
   typed results. Exercise the same contract through current and experimental
   async drivers before expanding features. No whole-application rewrite is needed.
+  The directed-message increment in this change establishes the first typed
+  transition/effect boundary, with a blocking production interpreter and Tokio
+  conformance fixture. Out-of-lock persistence, broader callback admission and
+  complete web/TUI separation remain open; see [STATE-BOUNDARIES.md](STATE-BOUNDARIES.md).
 
 The fresh deployed Codex trial ran over two hours after approvals without further
 operator steering: house/perimeter verification, repeated crop harvest/replant,
@@ -51,7 +61,7 @@ minutes. This supports continuity and quieter coordination; it is not a paired
 speed, token-cost or injected-fault benchmark. House size, starting location,
 client versions and inherited knowledge differed from the original run.
 
-**Deployment usability:** #143 is open for the native Nix package and NixOS
+**Deployment usability:** #143 shipped the native Nix package and NixOS
 instructions. The normal setup path should build/install the package, load images
 and save immutable pins in one command; manual build/pin steps are an advanced
 reference. Provider login and optional service activation remain explicit.

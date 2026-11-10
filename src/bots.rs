@@ -139,8 +139,13 @@ pub(crate) fn defined(state: &State, chat: &str) -> bool {
     state.bots.supervisor.status(&bot(chat)).is_some()
 }
 pub(crate) fn peer_pending(state: &State, chat: &str, through: u64) -> bool {
-    continuation_enabled(state, chat)
-        && state.bots.supervisor.unseen(&bot(chat), &Topic::new("conversation", chat), through)
+    state.bots.peer_pending(chat, through)
+}
+impl Bots {
+    pub(crate) fn peer_pending(&self, chat: &str, through: u64) -> bool {
+        self.supervisor.definitions().any(|definition| definition.chat.0 == chat && definition.restart == Restart::Permanent)
+            && self.supervisor.unseen(&bot(chat), &Topic::new("conversation", chat), through)
+    }
 }
 fn peer_events(state: &State) -> Vec<(&str, u64)> {
     let mut latest = std::collections::BTreeMap::new();
