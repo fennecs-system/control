@@ -61,6 +61,53 @@ For longer sampling, set `CONTROL_WATCH_PROFILE_BATCHES=128` and apply the
 that diagnostic floods admit no turns, a selected notification releases an
 event-only wait once, and published notification receipts suppress an extra turn.
 
+## Shared client and terminal build boundary (2026-11-10)
+
+Compared main `52bff4c` with the client/terminal module extraction. The identical
+offline Ratatui `TestBackend` fixture constructs a transcript and draws a 100×30
+frame. Six alternating pairs each discard one warmup batch and retain nine
+batches of 100 frames. Linux ARM64 timings use one virtual CPU, 512 MiB and no
+swap, with the same release toolchain. Medians of the six fixture medians:
+
+| Messages | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| 10 | 63.299 µs | 63.366 µs | +0.1% |
+| 100 | 143.474 µs | 146.010 µs | +1.8% |
+| 500 | 499.106 µs | 503.656 µs | +0.9% |
+
+Visible frame hashes match. These small increases are not a rendering speedup or
+a guarantee of zero overhead. The fixture measures transcript construction and
+in-memory terminal layout/drawing, not actual terminal I/O or interactive latency.
+
+Stripped Linux executables are 10,820,376 bytes for both default servers and
+10,427,072 bytes for the new server-only variant (-3.6%). The standalone terminal
+grows 3,807,632 → 3,873,168 bytes (+64 KiB); text/data totals grow 8,592 bytes.
+This is a recorded cost of the shared library boundary, not a size improvement.
+The server-only normal dependency graph contains neither ratatui nor crossterm.
+
+101 alternating startup pairs, after three warmups, give 473.585/469.584 µs for
+`--version` and 463.209/465.126 µs for MCP startup to stdin EOF: effectively
+unchanged at this scale. In a separate comparison, baseline/server-only version
+startup is 451.710/447.668 µs. Initial grouped startup results varied substantially;
+the alternating comparisons avoid that order effect. Standalone TUI connect/check
+uses three warmups and 31 launches per variant against a scratch loopback node:
+152.601/152.603 ms, and 152.310 ms against the server-only node. That check does
+not measure interactive rendering. Fresh-node readiness waits for HTTP health,
+not merely an open socket; no production retry or timeout policy was changed.
+
+Real terminal flamegraphs capture 3,340/3,279 `cpu-clock:u` samples at 499 Hz with
+DWARF call stacks and function-level Inferno conversion. Profiling/symbolization
+uses 2 GiB; compilation uses 4 GiB. Timing runs record no OOM events. No models,
+live node state or credentials are used. The lean Nix package also passes local
+health, shared MCP read/denial and both terminal-entry-point checks on a scratch
+node with zero model runs.
+
+Reproduce the after fixture with `cargo test --release --locked --lib
+terminal::profiling::render_profile -- --ignored --exact --nocapture` in the pinned
+environment. For before/after work, copy the same fixture into the baseline's
+terminal module. The server-only build is `cargo build --release --locked
+--no-default-features --bin control`, or `nix build .#control-server`.
+
 ## Directed-message application boundary (2026-11-10)
 
 Compared main `856be99` with the typed state/effect extraction, using the unchanged
@@ -435,7 +482,7 @@ MCP microbenchmarks also tested an alternative HTML escaper. Even with a plain-t
 fast path it regressed sparse markup: about 1.39 µs versus 0.54 µs in the same
 Linux ARM image. That candidate is retained only as a benchmark fixture under
 `tools/rust-analysis/`; application escaping is unchanged. The ignored
-`harness::tests::live_rust_benchmarks_use_mcp_and_compare_html_escaping` test runs
+`terminal::tests::live_rust_benchmarks_use_mcp_and_compare_html_escaping` library test runs
 the comparison through an isolated node and checks compile errors and deadlines.
 
 These are local synthetic measurements, not provider throughput guarantees or

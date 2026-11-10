@@ -1,5 +1,5 @@
 //! Local host tools: read-only Hive access, web search, and bounded offline execution.
-use crate::harness::Hive;
+use control::client::Hive;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 use std::{

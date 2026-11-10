@@ -62,8 +62,13 @@ an async speed comparison or a test of cancelling in-flight filesystem I/O.
 
 This is not the complete A1/A2/A4 extraction or a finished server/web/TUI split.
 The application module still shares legacy service/delegation/bot record types,
-and other handlers still take broad state. The server still compiles terminal
-client code and web rendering. Extract client/protocol code and web presentation
+and other handlers still take broad state. The shared loopback MCP client is now
+a library module independent of terminal presentation. `control tui` and
+`control-harness` call the same library entry point, so they no longer compile
+the terminal source separately. An explicit server-only build excludes terminal
+code and dependencies; the default build retains the existing CLI. Web rendering
+remains in the server. These are module/build boundaries, not the finished
+independent crate split. Extract client/protocol code and web presentation
 behind actual application commands/queries rather than duplicating the rules or
 renaming their existing modules as independent layers.
 
@@ -78,8 +83,8 @@ a future cannot undo a disk write whose outcome is unknown.
 
 Next, migrate callback admission and continuation/approval operations behind the
 same style of interface, then bounded queries that let web rendering leave the
-lock. Extract the common MCP client and TUI into their own library once those
-interfaces support them; extract web routing/rendering separately. Keep model and
+lock. Finish the client/TUI crate boundary over the shared library interface;
+extract web routing/rendering separately. Keep model and
 engine execution in adapters. Core crates retain generic state/event/effect rules
 and no HTTP, terminal, provider or runtime dependency.
 

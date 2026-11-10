@@ -13,17 +13,18 @@ use ratatui::{
     Terminal,
 };
 use reqwest::{
-    blocking::Client,
-    header::{HeaderMap, HeaderValue, ACCEPT, COOKIE},
     Url,
 };
 use serde_json::{json, Value};
 use std::{
-    fs, io,
+    io,
     time::{Duration, Instant},
 };
 
-const VERSION: &str = "2025-11-25";
+#[cfg(test)]
+use reqwest::{blocking::Client,header::HeaderValue};
+#[cfg(test)]
+use std::fs;
 use control_context::commands;
 
 fn command_line(text: &str) -> Line<'static> {
@@ -33,138 +34,10 @@ fn command_line(text: &str) -> Line<'static> {
         Line::from(text.to_owned())
     }
 }
-pub(crate) struct Hive {
-    client: Client,
-    endpoint: String,
-    next: u64,
-    #[cfg(test)]
-    operator_cookie: HeaderValue,
-}
-fn failure(message: impl std::fmt::Display) -> io::Error {
-    io::Error::other(message.to_string())
-}
-fn local_server(value: &str) -> io::Result<Url> {
-    let url = Url::parse(value).map_err(|_| failure("Invalid server URL."))?;
-    if url.scheme() != "http"
-        || !matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
-        || url.username() != ""
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-        || url.path() != "/"
-    {
-        return Err(failure(
-            "The local harness requires a loopback HTTP origin without URL credentials.",
-        ));
-    }
-    Ok(url)
-}
-impl Hive {
-    pub(crate) fn connect(server: &str) -> io::Result<Self> {
-        let url = local_server(server)?;
-        let path = std::env::var_os("CONTROL_OPERATOR_FILE")
-            .map(std::path::PathBuf::from)
-            .map(Ok)
-            .unwrap_or_else(|| crate::config::state("operator-session"))
-            .map_err(failure)?;
-        let metadata = fs::symlink_metadata(&path).map_err(|_| {
-            failure("Start the server first: ./target/release/control serve, then ./target/release/control open.")
-        })?;
-        use std::os::unix::fs::PermissionsExt;
-        if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
-            return Err(failure(
-                "Operator credential must be a private regular file.",
-            ));
-        }
-        // Only this application consumes the local operator credential. It is never printed or placed in a URL.
-        let token =
-            fs::read_to_string(path).map_err(|_| failure("Cannot load operator credential."))?;
-        if token.len() != 64 || !token.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err(failure("Invalid operator credential."));
-        }
-        let mut cookie = HeaderValue::from_str(&format!("control_operator={token}"))
-            .map_err(|_| failure("Invalid operator credential."))?;
-        cookie.set_sensitive(true);
-        let mut headers = HeaderMap::new();
-        headers.insert(COOKIE, cookie.clone());
-        headers.insert(
-            ACCEPT,
-            HeaderValue::from_static("application/json, text/event-stream"),
-        );
-        headers.insert("mcp-protocol-version", HeaderValue::from_static(VERSION));
-        let client = Client::builder()
-            .default_headers(headers)
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(3))
-            .build()
-            .map_err(|_| failure("Cannot create the local MCP client."))?;
-        let mut hive = Self {
-            client,
-            endpoint: url.join("mcp").unwrap().to_string(),
-            next: 0,
-            #[cfg(test)]
-            operator_cookie: cookie,
-        };
-        let init = hive.rpc("initialize", json!({"protocolVersion":VERSION,"capabilities":{},"clientInfo":{"name":"control-harness","version":env!("CARGO_PKG_VERSION")}}))?;
-        if init["protocolVersion"] != VERSION {
-            return Err(failure("Server negotiated an unsupported MCP version."));
-        }
-        let response = hive
-            .client
-            .post(&hive.endpoint)
-            .json(&json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
-            .send()
-            .map_err(|_| failure("Could not initialize the MCP session."))?;
-        if response.status().as_u16() != 202 {
-            return Err(failure("Server rejected MCP initialization."));
-        }
-        Ok(hive)
-    }
-    pub(crate) fn rpc(&mut self, method: &str, params: Value) -> io::Result<Value> {
-        self.next += 1;
-        let response = self
-            .client
-            .post(&self.endpoint)
-            .timeout(
-                if method == "tools/call" && control_context::tool_policy::lookup(params["name"].as_str().unwrap_or("")).is_some_and(|tool|tool.route==control_context::tool_policy::Route::Toolbox)
-                {
-                    Duration::from_secs(25)
-                } else if method == "tools/call" && control_context::tool_policy::checkpoint(params["name"].as_str().unwrap_or("")) {
-                    // A slow checkpoint must not look like a failure after the server committed it.
-                    Duration::from_secs(30)
-                } else {
-                    Duration::from_secs(3)
-                },
-            )
-            .json(&json!({"jsonrpc":"2.0","id":self.next,"method":method,"params":params}))
-            .send()
-            .map_err(|_| failure("Control is unavailable. Reconnecting on the next refresh."))?;
-        if !response.status().is_success() {
-            return Err(failure(
-                "Control rejected the request. Check local operator access.",
-            ));
-        }
-        let data: Value = response
-            .json()
-            .map_err(|_| failure("Invalid MCP response."))?;
-        if data["id"] != self.next || data.get("error").is_some() {
-            return Err(failure("MCP request failed."));
-        }
-        Ok(data["result"].clone())
-    }
-    fn tool(&mut self, name: &str, arguments: Value) -> io::Result<Value> {
-        let result = self.rpc("tools/call", json!({"name":name,"arguments":arguments}))?;
-        if result["isError"] == true {
-            return Err(failure(
-                result["content"][0]["text"]
-                    .as_str()
-                    .unwrap_or("Tool request failed."),
-            ));
-        }
-        Ok(result["structuredContent"]["data"].clone())
-    }
-}
-
+use crate::client::Hive;
+fn failure(message:impl std::fmt::Display)->io::Error {io::Error::other(message.to_string())}
+#[cfg(test)]
+use crate::client::local_server;
 #[derive(Default)]
 struct App {
     menu: Option<Menu>,
@@ -506,11 +379,11 @@ impl App {
                                     clean(event["output"].as_str().unwrap_or(""))
                                         .lines()
                                         .map(|s| {
-                                            let color=if patch {match control::diff::kind(s) {
-                                                control::diff::Kind::Add=>{let (r,g,b)=control::diff::ADD_RGB;Some(Color::Rgb(r,g,b))},
-                                                control::diff::Kind::Remove=>{let (r,g,b)=control::diff::REMOVE_RGB;Some(Color::Rgb(r,g,b))},
-                                                control::diff::Kind::Header=>Some(Color::Rgb(133,133,143)),
-                                                control::diff::Kind::Context=>None,
+                                            let color=if patch {match crate::diff::kind(s) {
+                                                crate::diff::Kind::Add=>{let (r,g,b)=crate::diff::ADD_RGB;Some(Color::Rgb(r,g,b))},
+                                                crate::diff::Kind::Remove=>{let (r,g,b)=crate::diff::REMOVE_RGB;Some(Color::Rgb(r,g,b))},
+                                                crate::diff::Kind::Header=>Some(Color::Rgb(133,133,143)),
+                                                crate::diff::Kind::Context=>None,
                                             }}else{None};
                                             let style=color.map(|color|Style::default().fg(color)).unwrap_or_default();
                                             Line::styled(format!("  {s}"),style)
@@ -1719,17 +1592,7 @@ mod tests {
         assert_ne!(unauthenticated.status().as_u16(), 200);
     }
     #[test]
-    fn remote_urls_and_terminal_control_injection_are_rejected() {
-        assert!(local_server("http://localhost:8080").is_ok());
-        for url in [
-            "https://example.com",
-            "http://localhost.evil.test",
-            "http://secret@localhost",
-            "http://localhost/path",
-            "http://localhost/?token=secret",
-        ] {
-            assert!(local_server(url).is_err());
-        }
+    fn terminal_control_injection_is_rejected_and_lenses_remain_readable() {
         assert!(!clean("hi\x1b[2J\x07").contains('\x1b'));
         assert_eq!(
             lens_label(&json!({"lenses":["engineering","evidence"],"lens":null})),
@@ -2328,4 +2191,32 @@ fn live_model_library_selection_and_reload() {
     assert!(html.contains("value='fixture-codex'><button class='model-choice' aria-pressed='true'"));
     assert!(!html.contains("<select"));
     assert!(!html.contains("provider-new"));
+}
+#[cfg(test)]
+mod profiling {
+    use super::*;
+    use std::{hint::black_box,time::Instant};
+    #[test]
+    #[ignore = "explicit offline terminal-render timing/flamegraph; no server, credentials or model calls"]
+    fn render_profile() {
+        let rounds=std::env::var("CONTROL_TUI_PROFILE_ROUNDS").ok().and_then(|s|s.parse::<usize>().ok()).unwrap_or(100).clamp(1,10000);
+        for count in [10,100,500] {
+            let messages=(0..count).map(|index|json!({"text":format!("Task {index}: inspect the next useful change."),"status":"completed","kind":"chat","reply":"Verified the change.\nNext: continue with the task.\n","activities":[]})).collect::<Vec<_>>();
+            let app=App {active:"fixture".into(),detail:json!({"messages":messages}),..Default::default()};
+            let mut terminal=Terminal::new(ratatui::backend::TestBackend::new(100,30)).unwrap();
+            let mut samples=Vec::new();
+            for batch in 0..10 {
+                let start=Instant::now();
+                for _ in 0..rounds {
+                    let transcript=black_box(app.transcript());
+                    terminal.draw(|frame|frame.render_widget(Paragraph::new(transcript).wrap(Wrap {trim:false}),frame.area())).unwrap();
+                }
+                if batch>0 {samples.push(start.elapsed().as_nanos()/rounds as u128);}
+            }
+            samples.sort_unstable();
+            let output=terminal.backend().buffer().content.iter().map(|cell|cell.symbol()).collect::<String>();
+            let hash=ring::digest::digest(&ring::digest::SHA256,output.as_bytes()).as_ref().iter().map(|b|format!("{b:02x}")).collect::<String>();
+            println!("{}",json!({"workload":"terminal_render","messages":count,"median_ns":samples[4],"samples":samples,"sha256":hash,"columns":100,"rows":30}));
+        }
+    }
 }

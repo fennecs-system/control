@@ -28,6 +28,8 @@ nix develop
 cargo test --locked --workspace
 cargo test --locked --manifest-path web/Cargo.toml
 cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --no-default-features --lib --bin control
+cargo clippy --locked --no-default-features --lib --bin control -- -D warnings
 cargo clippy --locked --manifest-path web/Cargo.toml --all-targets -- -D warnings
 cd web
 trunk build --release --locked
@@ -36,6 +38,10 @@ cargo build --release --locked --bins
 ```
 
 CI runs those checks on Linux and macOS for pull requests and pushes to `main`.
+The default `tui` feature preserves `control tui` and `control-harness`. The
+server-only build omits terminal presentation and its dependencies; CI also
+checks that its normal dependency graph contains neither ratatui nor crossterm.
+The shared MCP client remains available to the server without terminal code.
 It needs no provider credentials and makes no model calls. The ignored browser,
 container and authenticated model checks are explicit local checks; run the ones
 relevant to changes in those boundaries. Report what was tested and any remaining

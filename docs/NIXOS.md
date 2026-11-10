@@ -111,3 +111,8 @@ wasm-bindgen, and runs the native workspace tests. The UI has a separate derivat
 so backend-only edits reuse its output. Existing image outputs remain available,
 for example `nix build .#worker-image`; normal installation uses setup to load and
 pin them automatically.
+
+For a daemon without terminal dependencies, `nix build .#control-server` produces
+the same web/MCP server with the `tui` feature disabled. It retains the embedded
+web UI and reports that `control tui` is unavailable in this variant. The default
+package and setup command retain terminal support. Neither build starts services.
