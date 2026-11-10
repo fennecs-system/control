@@ -151,6 +151,7 @@ with interchangeable drivers; complete the remaining extractions incrementally.
 | P1 | U1 coordination UI and A2A visibility | Read existing lifecycle, requests and ownership; add projections as needed. No dependency on all G1/O1/Q1 work. |
 | P1 | W1 bounded schedules | Existing timers/admission, durable occurrence IDs and shared schedule-write authorization. Q1 before expanding team-wide fan-out; Replace deferred. |
 | Supporting | Q1 team admission; O1 ownership audit/fixes | Aggregate existing counters; extend ownership only for a demonstrated gap or a consumer changing resource lifetimes. |
+| P1, before more fan-out | S1 service resource requests and admission | Extend existing service operations with requested/effective capacity and operator-defined shapes; reserve aggregate node/team capacity before provisioning. Local backend first, cloud adapters later. |
 | P2 | U2 CUA; W2 workflow tools | Scoped browser/resource operations; validated recipes using existing spawn/wait/message primitives. |
 | P2 | M1 model adapters; C1–C3 summary strategies | Bounded reads and summary-call adapter enable C1 before general local tool execution; on/off plus model selector. |
 | P2 | L1 lenses/persona/SOUL configuration; L2/L3 reviewed improvement | Captured revisions, scoped tools, evaluation and admission; no new supervisor personality or learning lifecycle. |
@@ -344,6 +345,45 @@ interactive/decision work before workers and summaries, with fairness/aging.
 Priority cannot create capacity or bypass grants; test one-slot parent/child
 resolution. Increased unattended team fan-out needs Q1; a bounded W1 prototype
 can use existing budgets and slots without completing this later scheduling work.
+
+**S1: service resource requests through existing operations.** Separate image/tool
+capabilities (`Lite`/`Full`) from compute size. Today services inherit 512 MiB or
+2 GiB from the image profile and all receive a one-CPU cap; models cannot request
+a different compute allocation. Start with operator-defined named shapes that
+resolve to typed CPU, memory, process and storage bounds. Agents request a shape
+through service tools; the application admits it against operator policy and
+aggregate node/team reservations, or returns an explicit capacity/approval result.
+Reuse the existing durable decision/checkpoint path for approval. Do not add a
+resource-negotiation lifecycle to the bot supervisor or accept raw engine flags.
+
+Keep requested, admitted and backend-observed capacity distinct. Report bounded
+CPU throttling, memory pressure/OOM and utilization through explicit inspection
+tools so agents can support a resize request with evidence. A memory limit is
+not a reservation, a CPU quota is not a dedicated core, and observed health does
+not establish useful progress. Existing service defaults remain compatible.
+
+First slice: local container provisioning with persisted effective limits and
+generation-fenced inspection, restart verification and capacity accounting.
+Account for services and transient workers sharing the node. Test concurrent
+admission, duplicate requests, denied/unsupported shapes, restart reconciliation
+and releasing capacity only after confirmed teardown. Failed/unknown provisioning
+keeps a visible reservation until reconciled. Resizing is an explicit later
+operation: report whether the backend supports it live or requires replacement,
+and preserve service data and port/grant generation fences. No silent restart.
+
+Keep shapes in operator configuration, admission in typed application operations,
+and provisioning/metrics in replaceable effect interpreters. A later cloud tool
+can map admitted requirements to AWS or another backend and reuse the existing
+ownership, approval and receipt contracts. Provider-specific instance types,
+credentials, pricing and network configuration belong in adapters/configuration;
+unsupported requirements must be explicit. Cloud provisioning needs separate
+spend policy and crash/unknown-outcome reconciliation before activation. Do not
+build a cloud scheduler into core to deliver the local slice.
+
+Acceptance: provision a locally approved larger service without granting broader
+tool/network authority; show its effective limits and explain denial when the
+node cannot admit it. Measure service latency, throttling and memory pressure
+before/after under matched load; more RAM alone is not a performance claim.
 
 | Placement | Responsibility |
 | --- | --- |

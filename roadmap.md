@@ -423,6 +423,9 @@ provider/model selection. Preserve exact resource ownership, cancellation cascad
 stale-result fences and restart reconciliation as service lifetimes expand.
 Add aggregate node resource budgets before increasing fan-out further;
 deterministic Rust supervision remains responsible for scheduling.
+Service sizing and backend-independent resource requests are tracked as
+[S1 in the swarm roadmap](docs/SWARM-ROADMAP.md): operator-defined compute shapes,
+typed admission and observed limits, with local provisioning before cloud adapters.
 
 ### Shared tool prerequisites
 

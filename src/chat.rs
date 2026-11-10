@@ -834,8 +834,14 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
             }
         }
     }
-    for entry in agent_activity(state,id) {
-        html.push_str(&format!("<p class='message-status'><a target='_top' href='/chat/{}'>Agent activity ↗</a></p>{}",escape(entry.chat),command_html(&entry.activity,false)));
+    let activity = agent_activity(state,id);
+    if !activity.is_empty() {
+        let agents = activity.iter().map(|entry| entry.chat).collect::<std::collections::HashSet<_>>().len();
+        html.push_str(&format!("<details class='run-activity' data-transcript-key='agent-activity'><summary>Agent activity · {agents} active {}</summary>",if agents == 1 {"agent"} else {"agents"}));
+        for entry in activity {
+            html.push_str(&format!("<p class='message-status'><a target='_top' href='/chat/{}'>View agent ↗</a></p>{}",escape(entry.chat),command_html(&entry.activity,false)));
+        }
+        html.push_str("</details>");
     }
     if project_message.is_none() && session.project.as_ref().is_some_and(|p|!p.pending && p.grant.is_some()) {html.push_str(&crate::projects::panel(state,id));}
     html.push_str("<div id='latest'></div></body></html>");
