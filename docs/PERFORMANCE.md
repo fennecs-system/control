@@ -61,6 +61,59 @@ For longer sampling, set `CONTROL_WATCH_PROFILE_BATCHES=128` and apply the
 that diagnostic floods admit no turns, a selected notification releases an
 event-only wait once, and published notification receipts suppress an extra turn.
 
+## Directed-message application boundary (2026-11-10)
+
+Compared main `856be99` with the typed state/effect extraction, using the unchanged
+`agent_message::profile::routing_profile` and `performance::hot_paths` fixtures.
+Both builds use the same lockfile versions, Linux ARM64 toolchain and embedded
+WASM bundle. Six alternating pairs run on one virtual CPU under 512 MiB with
+swap disabled. Routing discards one warmup batch and retains nine batches of
+20,000 calls per size. These are medians of the six fixture medians:
+
+| Chats/runs | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| 16 | 0.923 µs | 0.919 µs | -0.4% |
+| 64 | 1.184 µs | 1.112 µs | -6.1% |
+| 1,024 | 4.038 µs | 3.475 µs | -13.9% |
+
+The small case is effectively unchanged. This is the existing downward-message
+path, including in-memory construction/reset, result encoding and dispatcher
+notification, with fake archive/save effects. It excludes actual fsync, peer wake
+reconciliation, provider work and async scheduling. Bounded receipt retention no
+longer clones the cache on every call; the new constructor directly inherits the
+recipient's settings. Treat these as CPU fixture results, not whole-swarm gains.
+
+The existing transcript-rendering fixture measures 10, 100 and 500 messages with
+0, 1,000 and 5,000 unrelated runs. Before/after medians are 43.131/42.102 µs,
+498.231/476.081 µs and 2.418/2.359 ms. Output byte counts and SHA-256 hashes match
+in every pair. The small decreases do not establish a general rendering speedup
+from moving record types; the important check is no observed regression here.
+
+Real `perf` sampling runs are separate from timing: `cpu-clock:u`, 499 Hz,
+DWARF stacks, then `perf script --no-inline`, Inferno collapse and flamegraph.
+Routing captures 1,202/1,125 samples and web rendering 141/136 (a coarse web view).
+The profiler/symbolizer receives 2 GiB with swap disabled; the timing limit remains
+512 MiB. The initial inline-symbolization session at 512 MiB recorded one OOM
+kill and failed helper reads after the timed fixtures had finished. Final graphs
+use function-level stacks and the larger profiling allowance. Only the isolated offline profiler receives
+PERFMON; production services receive no profiling privileges.
+
+Release compilation uses a separate 4 GiB allowance; runtime timings begin only
+after builds finish. No models, private node state or credentials are used.
+Blocking/Tokio conformance tests exercise the same message transition, but Tokio
+is not a production dependency or a measured speed improvement. TUI presentation
+is unchanged; its eventual crate extraction still needs dedicated interactive
+rendering/startup measurements. No Pi-board or whole-server latency claim follows.
+
+Reproduce with identical source fixtures and separate executables:
+
+```sh
+CONTROL_PROFILE_ROUNDS=20000 cargo test --release --locked --bin control \
+  agent_message::profile::routing_profile -- --ignored --exact --nocapture
+cargo test --release --locked --bin control \
+  performance::hot_paths -- --ignored --exact --nocapture
+```
+
 ## Peer coordination review (2026-11-09)
 
 Compared the reviewed peer-delivery patch with `abc93d4`, using separate optimized

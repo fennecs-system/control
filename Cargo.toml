@@ -23,6 +23,10 @@ base64 = "0.23"
 scraper = { version = "0.29", default-features = false }
 libc = "0.2"
 
+[dev-dependencies]
+# Alternate-driver conformance only; production runtime remains unchanged.
+tokio = { version = "1", default-features = false, features = ["rt", "sync"] }
+
 
 [workspace]
 members = ["crates/context", "crates/http", "crates/ai", "crates/core", "crates/effect", "crates/bot", "crates/comonad", "crates/journal"]

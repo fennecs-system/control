@@ -6,12 +6,7 @@ use std::{
 };
 
 pub use control_context::tool_policy::{Bridge, Route};
-/// The calling attempt and request identity. Carries no access to state.
-pub struct AttemptRef<'a> {
-    pub run: &'a str,
-    pub generation: &'a str,
-    pub nonce: &'a str,
-}
+pub use crate::application::AttemptRef;
 /// Application state as seen by tool families. Each family defines its own
 /// operations trait and implements it for `LocalHost` in its module, where it
 /// meets `State`; adding a family only lists its tools below.

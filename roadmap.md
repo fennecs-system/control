@@ -384,6 +384,13 @@ dependency-free default build. Persistence uses optional validated Serde support
 The application adapter retains config I/O and the persisted runtime. Compatibility
 checks compare it with the previous scheduler over mixed saved states. This does
 not yet extract the full command/query service, web adapter or terminal client.
+The first directed-message application transition now uses narrow borrowed
+records, typed commands/results and ordered archive/checkpoint/wake effects.
+Its production driver retains the atomic state lock; a test-only Tokio driver
+checks the same transition contract. [State boundaries](docs/STATE-BOUNDARIES.md)
+records the remaining persistence and server/web/TUI separation work. Moving
+records out of rendering modules is a dependency improvement, not by itself a
+performance claim.
 MCP should become a protocol adapter over that service, preserving today's shared
 tool catalogue rather than introducing a separate tool implementation.
 
