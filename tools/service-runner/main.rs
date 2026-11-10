@@ -23,6 +23,8 @@ unsafe extern "C" {
     fn signal(number: i32, handler: extern "C" fn(i32)) -> usize;
     fn waitpid(pid: i32, status: *mut i32, options: i32) -> i32;
     fn kill(pid: i32, signal: i32) -> i32;
+    fn dup2(old: i32, new: i32) -> i32;
+    fn fcntl(fd: i32, command: i32, ...) -> i32;
     fn inotify_init1(flags: i32) -> i32;
     fn inotify_add_watch(fd: i32, path: *const std::ffi::c_char, mask: u32) -> i32;
     fn poll(fds: *mut PollFd, count: u64, timeout: i32) -> i32;
@@ -126,9 +128,9 @@ mod watches {
         collections::{BTreeMap, VecDeque},
         fs,
         io::{Read, Seek, Write},
-        os::unix::{fs::{MetadataExt, OpenOptionsExt}, process::{CommandExt, ExitStatusExt}},
+        os::{fd::{AsRawFd, RawFd}, unix::{fs::{MetadataExt, OpenOptionsExt}, net::UnixStream, process::{CommandExt, ExitStatusExt}}},
         path::{Path, PathBuf},
-        process::{Command, ExitCode, ExitStatus, Stdio},
+        process::{ChildStdout, Command, ExitCode, ExitStatus, Stdio},
         sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex},
         thread::JoinHandle,
         time::{Duration, Instant, SystemTime},
@@ -148,7 +150,11 @@ mod watches {
     }
 
     pub fn put(args: &[String]) -> ExitCode {
-        let [id, restart] = args else { return ExitCode::from(2) };
+        let (id, restart, notifications) = match args {
+            [id, restart] => (id, restart, false),
+            [id, restart, channel] if channel == "notify-v1" => (id, restart, true),
+            _ => return ExitCode::from(2),
+        };
         let restart = match restart.as_str() {
             "transient" => Restart::Transient,
             "permanent" => Restart::Permanent,
@@ -158,7 +164,7 @@ mod watches {
         if !frame::valid_id(id) || std::io::stdin().take(frame::MAX_COMMAND as u64 + 1).read_to_string(&mut command).is_err() {
             return ExitCode::from(2);
         }
-        let Some(spec) = Spec::decode(&Spec { restart, command }.encode()) else { return ExitCode::from(2) };
+        let Some(spec) = Spec::decode(&Spec { restart, notifications, command }.encode()) else { return ExitCode::from(2) };
         let dir = directory();
         if fs::create_dir_all(&dir).is_err() {
             return ExitCode::from(1);
@@ -226,11 +232,11 @@ mod watches {
         closed: Arc<AtomicBool>,
     }
     impl Writer {
-        fn line(&self, bytes: Vec<u8>) {
+        fn emit(&self, bytes: Vec<u8>, notification: bool) {
             if let Ok(mut log) = self.log.lock()
                 && !self.closed.load(Ordering::Relaxed)
             {
-                log.append(Event::Line(bytes));
+                log.append(if notification { Event::Notification(bytes) } else { Event::Line(bytes) });
             }
         }
     }
@@ -347,13 +353,28 @@ mod watches {
     }
 
     fn start(id: &str, watch: &mut Watch, now: Instant) {
-        let spawned = Command::new("bash")
-            .args(["-c", &format!("exec 2>&1\n{}", watch.spec.command)])
-            .current_dir("/workspace")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .process_group(0)
-            .spawn();
+        let (notifications, sender) = if watch.spec.notifications {
+            let Ok((reader, sender)) = UnixStream::pair() else { return failed(id, watch, now) };
+            (Some(reader), Some(sender))
+        } else { (None, None) };
+        let mut command = Command::new("bash");
+        command.args(["-c", &format!("exec 2>&1\n{}", watch.spec.command)])
+            .current_dir("/workspace").stdin(Stdio::null()).stdout(Stdio::piped())
+            .env_remove("CONTROL_NOTIFY_FD").process_group(0);
+        if let Some(sender) = &sender {
+            let fd = sender.as_raw_fd();
+            command.env("CONTROL_NOTIFY_FD", "3");
+            // This child-only descriptor is an explicit notification capability.
+            // The pre-exec hook performs syscalls only; no allocation or locks.
+            unsafe { command.pre_exec(move || {
+                if super::dup2(fd, 3) < 0 || super::fcntl(3, 2, 0) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            }); }
+        }
+        let spawned = command.spawn();
+        drop(sender);
         let mut child = match spawned {
             Ok(child) => child,
             Err(_) => return failed(id, watch, now),
@@ -362,41 +383,29 @@ mod watches {
         let writer = Writer { log: watch.log.clone(), closed: Arc::new(AtomicBool::new(false)) };
         let output = writer.clone();
         let reader = std::thread::Builder::new().spawn(move || {
-            let Some(mut stdout) = stdout else { return };
-            let mut line = Vec::with_capacity(256);
-            let mut overflow = false;
+            let Some(stdout) = stdout else { return };
+            let count = if notifications.is_some() { 2 } else { 1 };
+            let mut streams = [Some(Input::new(Stream::Output(stdout), false)), notifications.map(|stream| Input::new(Stream::Notifications(stream), true))];
             let mut chunk = [0u8; 4096];
-            let fd = { use std::os::fd::AsRawFd; stdout.as_raw_fd() };
-            loop {
+            while streams.iter().any(Option::is_some) {
                 // An escaped descendant may hold the pipe open; stop once the run is closed.
                 if output.closed.load(Ordering::Relaxed) {
                     break;
                 }
-                let mut ready = super::PollFd { fd, events: 1, revents: 0 };
-                if unsafe { super::poll(&mut ready, 1, 500) } <= 0 {
+                let mut ready = streams.each_ref().map(|input| super::PollFd { fd:input.as_ref().map_or(-1, |input| input.stream.fd()), events:1, revents:0 });
+                if unsafe { super::poll(ready.as_mut_ptr(), count, 500) } <= 0 {
                     continue;
                 }
-                let n = match stdout.read(&mut chunk) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => n,
-                };
-                for &b in &chunk[..n] {
-                    if b == b'\n' {
-                        if !overflow {
-                            output.line(std::mem::take(&mut line));
-                        }
-                        line.clear();
-                        overflow = false;
-                    } else if line.len() <= frame::MAX_LINE {
-                        line.push(b);
-                    } else if !overflow {
-                        overflow = true;
-                        output.line(std::mem::take(&mut line));
+                for (slot, ready) in streams.iter_mut().zip(ready) {
+                    if ready.revents == 0 { continue; }
+                    let Some(input) = slot else { continue };
+                    match input.stream.read(&mut chunk) {
+                        Ok(0) => { input.finish(&output); *slot = None; }
+                        Ok(n) => input.push(&chunk[..n], &output),
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {},
+                        Err(_) => { input.finish(&output); *slot = None; },
                     }
                 }
-            }
-            if !line.is_empty() && !overflow {
-                output.line(line);
             }
         });
         match reader {
@@ -405,6 +414,105 @@ mod watches {
                 unsafe { super::kill(-(child.id() as i32), 9) };
                 failed(id, watch, now);
             }
+        }
+    }
+
+    enum Stream { Output(ChildStdout), Notifications(UnixStream) }
+    impl Stream {
+        fn fd(&self) -> RawFd { match self { Self::Output(stream) => stream.as_raw_fd(), Self::Notifications(stream) => stream.as_raw_fd() } }
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> { match self { Self::Output(stream) => stream.read(bytes), Self::Notifications(stream) => stream.read(bytes) } }
+    }
+    /// Independent framing on each descriptor; a partial log line never holds
+    /// up a notification. Both share the existing bounded spool and reader thread.
+    struct Input { stream: Stream, notification: bool, line: Vec<u8>, overflow: bool }
+    impl Input {
+        fn new(stream: Stream, notification: bool) -> Self { Self { stream, notification, line:Vec::with_capacity(256), overflow:false } }
+        fn push(&mut self, bytes: &[u8], output: &Writer) {
+            for &b in bytes {
+                if b == b'\n' {
+                    if !self.overflow && (!self.notification || !self.line.is_empty()) { output.emit(std::mem::take(&mut self.line), self.notification); }
+                    self.line.clear(); self.overflow = false;
+                } else if self.line.len() <= frame::MAX_LINE { self.line.push(b); }
+                else if !self.overflow {
+                    self.overflow = true;
+                    output.emit(std::mem::take(&mut self.line), self.notification);
+                }
+            }
+        }
+        fn finish(&mut self, output: &Writer) {
+            if !self.line.is_empty() && !self.overflow { output.emit(std::mem::take(&mut self.line), self.notification); }
+        }
+    }
+
+    #[cfg(test)]
+    #[test]
+    #[ignore = "isolated Linux collector timing/sampling fixture; no models"]
+    fn collector_profile() {
+        fs::create_dir_all(directory()).unwrap();
+        let batches = std::env::var("CONTROL_WATCH_PROFILE_BATCHES").ok().and_then(|value|value.parse::<u32>().ok()).unwrap_or(8).clamp(1,1024);
+        let started = Instant::now();
+        for batch in 0..batches {
+            let id = format!("bench-{}-{batch}",std::process::id());
+            let spec = Spec::decode("transient\nfor ((i=0; i<20000; i++)); do printf 'status unchanged %s\\n' \"$i\"; done").unwrap();
+            let log = Arc::new(Mutex::new(Log::open(&id)));
+            let mut watch = Watch {spec,log:log.clone(),running:None,restarts:VecDeque::new(),restart_at:None,removed:false};
+            start(&id,&mut watch,Instant::now());
+            let running = watch.running.take().unwrap();
+            let mut raw = 0;
+            assert_eq!(unsafe { super::waitpid(running.pid,&mut raw,0) },running.pid);
+            assert!(ExitStatus::from_raw(raw).success());
+            running.reader.join().unwrap();
+            assert_eq!(log.lock().unwrap().seq,20000);
+            fs::remove_file(log_path(&id)).unwrap();
+            let _ = fs::remove_file(previous_log(&id));
+        }
+        println!("COLLECTOR_PROFILE lines={} wall_ns={}",u64::from(batches)*20000,started.elapsed().as_nanos());
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        #[test]
+        #[ignore = "isolated Linux fixture with writable /workspace and private home; no model calls"]
+        fn notification_descriptor_does_not_wait_for_a_log_newline() {
+            let id = format!("test-{}", SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos());
+            fs::create_dir_all(directory()).unwrap();
+            let marker = std::env::temp_dir().join(&id);
+            let log = Arc::new(Mutex::new(Log::open(&id)));
+            let mut watch = Watch { spec:Spec {
+                restart:Restart::Transient, notifications:true,
+                command:format!("test \"$CONTROL_NOTIFY_FD\" = 3 || exit 42\nprintf 'partial diagnostic'\nprintf '%s\\n' '{{\"task\":\"arbitrary-54\",\"status\":\"completed\"}}' >&3\nwhile test ! -f '{}'; do sleep 0.01; done\nprintf ' finished\\n'",marker.display()),
+            }, log:log.clone(),running:None,restarts:VecDeque::new(),restart_at:None,removed:false };
+            start(&id,&mut watch,Instant::now());
+            let running = watch.running.take().expect("watch started");
+            struct Child(i32);
+            impl Drop for Child { fn drop(&mut self) { unsafe { super::super::kill(-self.0,9); } } }
+            let child = Child(running.pid);
+            let read = || fs::read(log_path(&id)).unwrap_or_default().split(|&b|b==b'\n').filter_map(Frame::decode).map(|(frame,_)|frame).collect::<Vec<_>>();
+            let started = Instant::now();
+            loop {
+                let frames = read();
+                if frames.iter().any(|frame|matches!(frame.event,Event::Notification(_))) {
+                    assert!(!frames.iter().any(|frame|matches!(frame.event,Event::Line(_))),"partial stdout must not prevent the notification");
+                    break;
+                }
+                assert!(started.elapsed()<Duration::from_secs(10),"notification never arrived");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            fs::write(&marker,b"release test child").unwrap();
+            let mut raw = 0;
+            assert_eq!(unsafe { super::super::waitpid(child.0,&mut raw,0) },child.0);
+            let status = ExitStatus::from_raw(raw);
+            assert!(status.success());
+            running.reader.join().unwrap();
+            exited(&id,Restart::Transient,&mut watch.restarts,&mut watch.restart_at,&mut watch.removed,&mut log.lock().unwrap(),status.code(),status.signal(),Instant::now());
+            let frames = read();
+            assert!(matches!(frames[0].event,Event::Notification(_)));
+            assert!(matches!(&frames[1].event,Event::Line(bytes) if bytes==b"partial diagnostic finished"));
+            assert!(matches!(frames[2].event,Event::Exit {code:Some(0),..}));
+            assert_eq!(frames.len(),3);
+            fs::remove_file(marker).unwrap();
+            fs::remove_file(log_path(&id)).unwrap();
         }
     }
     /// A run that could not start counts as an exit with code 127.

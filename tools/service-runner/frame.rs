@@ -30,26 +30,31 @@ pub enum Restart {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Spec {
     pub restart: Restart,
+    pub notifications: bool,
     pub command: String,
 }
 impl Spec {
     pub fn encode(&self) -> String {
-        format!("{}\n{}", match self.restart { Restart::Transient => "transient", Restart::Permanent => "permanent" }, self.command)
+        format!("{}{}\n{}", match self.restart { Restart::Transient => "transient", Restart::Permanent => "permanent" }, if self.notifications { " notify-v1" } else { "" }, self.command)
     }
     pub fn decode(text: &str) -> Option<Self> {
-        let (restart, command) = text.split_once('\n')?;
+        let (mode, command) = text.split_once('\n')?;
+        let (restart, notifications) = mode.strip_suffix(" notify-v1").map_or((mode, false), |restart| (restart, true));
         let restart = match restart {
             "transient" => Restart::Transient,
             "permanent" => Restart::Permanent,
             _ => return None,
         };
-        (!command.trim().is_empty() && command.len() <= MAX_COMMAND).then(|| Self { restart, command: command.into() })
+        (!command.trim().is_empty() && command.len() <= MAX_COMMAND).then(|| Self { restart, notifications, command: command.into() })
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     Line(Vec<u8>),
+    /// Explicit application notification, never inferred from stdout/stderr.
+    /// The payload is evidence supplied by the program, not a verified exit.
+    Notification(Vec<u8>),
     /// `code` is `None` when a signal ended the process. `gave_up` marks the
     /// last exit of a permanent watch that restarted too often.
     Exit { code: Option<i32>, signal: Option<i32>, restarts: u32, gave_up: bool },
@@ -64,8 +69,8 @@ impl Frame {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = format!("{}\t", self.seq).into_bytes();
         match &self.event {
-            Event::Line(bytes) => {
-                out.extend_from_slice(b"L\t");
+            Event::Line(bytes) | Event::Notification(bytes) => {
+                out.extend_from_slice(if matches!(self.event, Event::Notification(_)) { b"N\t" } else { b"L\t" });
                 for &b in bytes.iter().take(MAX_LINE) {
                     match b {
                         b'\\' => out.extend_from_slice(b"\\\\"),
@@ -95,7 +100,7 @@ impl Frame {
         let kind = parts.next()?;
         let payload = parts.next()?;
         match kind {
-            b"L" => {
+            b"L" | b"N" => {
                 let mut bytes = Vec::with_capacity(payload.len());
                 let mut truncated = false;
                 let mut escaped = payload.iter();
@@ -113,7 +118,7 @@ impl Frame {
                         _ => return None,
                     }
                 }
-                (bytes.len() <= MAX_LINE).then_some((Self { seq, event: Event::Line(bytes) }, truncated))
+                (bytes.len() <= MAX_LINE).then_some((Self { seq, event: if kind == b"N" { Event::Notification(bytes) } else { Event::Line(bytes) } }, truncated))
             }
             b"X" => {
                 let text = std::str::from_utf8(payload).ok()?;
@@ -148,6 +153,12 @@ mod tests {
         let exit = Frame { seq: 8, event: Event::Exit { code: None, signal: Some(9), restarts: 3, gave_up: true } };
         let encoded = exit.encode();
         assert_eq!(Frame::decode(&encoded[..encoded.len() - 1]), Some((exit, false)));
+        let notice = Frame { seq:9, event:Event::Notification(b"task-2\tX\t0 - 0 1\ncomplete\\n".to_vec()) };
+        let encoded = notice.encode();
+        assert_eq!(encoded.iter().filter(|&&b| b == b'\n').count(),1);
+        assert_eq!(Frame::decode(&encoded[..encoded.len()-1]),Some((notice,false)));
+        let long = Frame {seq:10,event:Event::Notification(vec![b'n';MAX_LINE+1])}.encode();
+        assert_eq!(Frame::decode(&long[..long.len()-1]),Some((Frame {seq:10,event:Event::Notification(vec![b'n';MAX_LINE])},true)));
         assert!(Frame { seq: u64::MAX, event: Event::Line(vec![b'\\'; MAX_LINE + 1]) }.encode().len() <= MAX_FRAME);
         let long = Frame { seq: 9, event: Event::Line(vec![b'a'; MAX_LINE + 10]) }.encode();
         assert_eq!(Frame::decode(&long[..long.len() - 1]), Some((Frame { seq: 9, event: Event::Line(vec![b'a'; MAX_LINE]) }, true)));
@@ -158,8 +169,12 @@ mod tests {
 
     #[test]
     fn specs_ids_and_backoff_are_bounded() {
-        let spec = Spec { restart: Restart::Permanent, command: "tail -F log\n| grep x".into() };
+        let spec = Spec { restart: Restart::Permanent, notifications:false, command: "tail -F log\n| grep x".into() };
         assert_eq!(Spec::decode(&spec.encode()), Some(spec));
+        let explicit = Spec {restart:Restart::Transient, notifications:true, command:"task".into()};
+        assert_eq!(Spec::decode(&explicit.encode()),Some(explicit));
+        assert!(!Spec::decode("transient\ntask").unwrap().notifications);
+        assert!(Spec::decode("transient notify-v2\ntask").is_none());
         assert_eq!(Spec::decode("sometimes\nls"), None);
         assert_eq!(Spec::decode("transient\n  "), None);
         assert!(valid_id("alice-chat") && !valid_id("../x") && !valid_id("") && !valid_id(&"a".repeat(33)));

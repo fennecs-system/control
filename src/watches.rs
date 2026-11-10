@@ -47,6 +47,13 @@ pub struct Creator {
     pub attempt: String,
 }
 
+#[derive(Clone, Default, Debug, Serialize, Deserialize)]
+pub struct Notifications {
+    pub pending: u64,
+    pub through: u64,
+    pub recent: Vec<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Watch {
     /// Runner ID and bot topic name.
@@ -60,6 +67,10 @@ pub struct Watch {
     pub stopped: bool,
     #[serde(default)]
     pub wake_policy: WakePolicy,
+    #[serde(default)]
+    pub notification_channel: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notifications: Option<Box<Notifications>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<Creator>,
     /// Last sequence in the local spool: where the follower resumes.
@@ -84,11 +95,12 @@ pub struct Watch {
     pub recent: Vec<String>,
 }
 impl Watch {
+    pub(crate) fn pending_notifications(&self) -> u64 { self.notifications.as_ref().map_or(0, |notifications| notifications.pending) }
     pub(crate) fn active(&self) -> bool {
         !self.stopped && !self.last_exit.as_ref().is_some_and(|exit| exit.gave_up || (!self.permanent && exit.seq >= self.line_seq))
     }
     pub(crate) fn summary(&self) -> serde_json::Value {
-        serde_json::json!({"watch_id":self.id,"name":self.name,"service_id":self.service,"service_generation":self.generation,"created_by":self.created_by,"wake_policy":self.wake_policy,"restart":if self.permanent {"permanent"} else {"transient"},"active":self.active(),"stopped":self.stopped,"cursor":self.seen,"last_exit":self.last_exit,"pending_source_gap":self.gap})
+        serde_json::json!({"watch_id":self.id,"name":self.name,"service_id":self.service,"service_generation":self.generation,"created_by":self.created_by,"wake_policy":self.wake_policy,"notification_channel":self.notification_channel.then(|| serde_json::json!({"fd":3,"environment":"CONTROL_NOTIFY_FD","format":"newline-delimited bytes","max_bytes":crate::watch_frame::MAX_LINE})),"restart":if self.permanent {"permanent"} else {"transient"},"active":self.active(),"stopped":self.stopped,"cursor":self.seen,"last_exit":self.last_exit,"pending_source_gap":self.gap})
     }
     #[cfg(test)]
     pub(crate) fn observe_for_test(&mut self, seq: u64, exit: Option<i32>) {
@@ -111,7 +123,7 @@ impl Watch {
         match &frame.event {
             Event::Line(line) => {
                 self.line_seq = frame.seq;
-                if self.wake_policy.admits(line) {
+                if !self.notification_channel && self.wake_policy.admits(line) {
                     self.lines = self.lines.saturating_add(1);
                     self.wake_seq = Some(frame.seq);
                     if self.recent.len() == 5 {
@@ -119,6 +131,13 @@ impl Watch {
                     }
                     self.recent.push(String::from_utf8_lossy(line).chars().take(200).collect());
                 }
+            }
+            Event::Notification(payload) => {
+                let notifications = self.notifications.get_or_insert_with(Default::default);
+                notifications.pending = notifications.pending.saturating_add(1);
+                notifications.through = frame.seq;
+                if notifications.recent.len() == 5 { notifications.recent.remove(0); }
+                notifications.recent.push(String::from_utf8_lossy(payload).chars().take(200).collect());
             }
             Event::Exit { code, signal, restarts, gave_up } => {
                 let exit = Exit { seq: frame.seq, code: *code, signal: *signal, restarts: *restarts, gave_up: *gave_up };
@@ -155,6 +174,33 @@ pub(crate) fn frames(id: &str, after: u64, limit: usize) -> Vec<(Frame, bool)> {
     let Ok(path) = spool(id) else { return Vec::new() };
     read_frames(&path, after, limit)
 }
+pub(super) struct Page {
+    pub events: Vec<(Frame, bool)>,
+    pub cursor: u64,
+    pub gap: bool,
+}
+/// Diagnostics do not consume a notification page's event budget. The cursor
+/// still covers the scanned source range so missing control events remain visible.
+pub(super) fn page(id: &str, after: u64, maximum: u64, logs: bool) -> Page {
+    let all = frames(id, after, usize::MAX);
+    select_page(all, after, maximum, logs, 200)
+}
+fn select_page(all: Vec<(Frame, bool)>, after: u64, maximum: u64, logs: bool, limit: usize) -> Page {
+    let mut events = Vec::new();
+    let mut cursor = after;
+    let mut gap = false;
+    for (frame, truncated) in all.into_iter().filter(|(frame,_)|frame.seq <= maximum) {
+        gap |= frame.seq > cursor.saturating_add(1);
+        cursor = frame.seq;
+        if logs || !matches!(frame.event, Event::Line(_)) {
+            gap |= truncated;
+            events.push((frame, truncated));
+            if events.len() == limit { return Page { events, cursor, gap }; }
+        }
+    }
+    gap |= cursor < maximum;
+    Page { events, cursor, gap }
+}
 fn read_frames(path: &std::path::Path, after: u64, limit: usize) -> Vec<(Frame, bool)> {
     let mut frames = Vec::new();
     for file in [path.with_extension("log.1"), path.to_owned()] {
@@ -170,6 +216,7 @@ fn read_frames(path: &std::path::Path, after: u64, limit: usize) -> Vec<(Frame, 
     frames.truncate(limit);
     frames
 }
+#[cfg(test)]
 fn source_gap(frames: &[(Frame, bool)], after: u64, seen: u64, limit: usize) -> bool {
     if frames.is_empty() { return seen > after; }
     let mut previous = after;
@@ -312,7 +359,22 @@ mod tests {
     use super::*;
 
     fn watch() -> Watch {
-        Watch { id: "w-1".into(), name: "chat".into(), chat: "c".into(), service: "svc".into(), generation: 1, permanent: false, command: "tail -F log".into(), stopped: false, wake_policy:Default::default(),created_by:None, seen: 0, lines: 0, line_seq: 0, wake_seq:None,gap:None, exits: Vec::new(), last_exit: None, recent: Vec::new() }
+        Watch { id: "w-1".into(), name: "chat".into(), chat: "c".into(), service: "svc".into(), generation: 1, permanent: false, command: "tail -F log".into(), stopped: false, wake_policy:Default::default(),notification_channel:false,notifications:None,created_by:None, seen: 0, lines: 0, line_seq: 0, wake_seq:None,gap:None, exits: Vec::new(), last_exit: None, recent: Vec::new() }
+    }
+
+    #[test]
+    fn notification_pages_do_not_spend_context_on_logs_or_hide_source_loss() {
+        let mut frames = (1..=1000).map(|seq|(Frame {seq,event:Event::Line(b"diagnostic".to_vec())},false)).collect::<Vec<_>>();
+        frames.push((Frame {seq:1001,event:Event::Notification(b"task-54 completed".to_vec())},false));
+        let page = select_page(frames.clone(),0,1001,false,200);
+        assert_eq!((page.events.len(),page.cursor,page.gap),(1,1001,false));
+        assert!(matches!(page.events[0].0.event,Event::Notification(_)));
+        let logs = select_page(frames.clone(),0,1001,true,200);
+        assert_eq!((logs.events.len(),logs.cursor,logs.gap),(200,200,false));
+        frames.remove(400);
+        assert!(select_page(frames,0,1001,false,200).gap,"a missing frame could have been a notification");
+        let page = select_page(vec![(Frame {seq:1,event:Event::Notification(vec![b'x';4096])},true)],0,1,false,200);
+        assert!(page.gap,"truncated notification evidence requires resynchronisation");
     }
 
     #[test]
