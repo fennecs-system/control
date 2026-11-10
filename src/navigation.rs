@@ -67,7 +67,7 @@ pub fn heading(view: &str) -> String {
     if let Some((_, label)) = MANAGE.iter().find(|(id, _)| *id == view) {
         return format!("Manage<span class='slash' aria-hidden='true'>/</span>{label}");
     }
-    "Control".into()
+    String::new()
 }
 pub fn conversations(state: &crate::State, active: &str) -> String {
     conversation_window(state,active,None,None,true)
