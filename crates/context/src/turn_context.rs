@@ -68,6 +68,78 @@ pub struct PreparedContext {
     pub version: u8,
     pub text: String,
     pub sections: Vec<SectionTrace>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity: Option<Capacity>,
+}
+
+/// Declared capacity, with explicit allowance for provider framing/tool schemas.
+/// UTF-8 byte accounting is conservative estimation, not an exact tokenizer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Capacity {
+    pub context_tokens: u32,
+    pub output_tokens: u32,
+    pub overhead_tokens: u32,
+}
+impl Capacity {
+    pub fn input_bytes(self) -> Option<usize> {
+        let reserved = self.output_tokens.checked_add(self.overhead_tokens)?;
+        let available = self.context_tokens.checked_sub(reserved)?;
+        (available > 0 && self.output_tokens > 0).then_some(available as usize)
+    }
+}
+
+/// Required instructions remain intact. Optional evidence is selected newest
+/// first; every omitted section stays explicit in the persisted trace.
+pub fn fit(
+    prefix: &str,
+    sections: &[Section<'_>],
+    capacity: Capacity,
+) -> Result<PreparedContext, BudgetExceeded> {
+    let limit = capacity.input_bytes().unwrap_or(0);
+    let required = sections
+        .iter()
+        .filter(|s| s.required)
+        .fold(prefix.len(), |n, s| n.saturating_add(s.text.len()));
+    if required > limit || limit == 0 {
+        return Err(BudgetExceeded {
+            required_bytes: required,
+            limit_bytes: limit,
+        });
+    }
+    let mut selected = vec![false; sections.len()];
+    let mut used = required;
+    for (at, section) in sections.iter().enumerate().rev() {
+        if section.required {
+            selected[at] = true;
+        } else if used.saturating_add(section.text.len()) <= limit {
+            selected[at] = true;
+            used += section.text.len();
+        }
+    }
+    let mut text = String::with_capacity(used);
+    text.push_str(prefix);
+    let trace = sections
+        .iter()
+        .zip(selected)
+        .map(|(section, included)| {
+            if included {
+                text.push_str(section.text);
+            }
+            SectionTrace {
+                kind: section.kind,
+                bytes: section.text.len(),
+                included,
+                reference: section.reference.clone(),
+            }
+        })
+        .collect();
+    Ok(PreparedContext {
+        version: VERSION,
+        text,
+        sections: trace,
+        capacity: Some(capacity),
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -123,8 +195,11 @@ pub fn compose(
         version: VERSION,
         text,
         sections: trace,
+        capacity: None,
     })
 }
 
+#[cfg(test)]
+mod capacity_tests;
 #[cfg(test)]
 mod tests;

@@ -235,6 +235,7 @@ pub(crate) fn capture(state: &State, index: usize) -> io::Result<TraceRef> {
     } else {
         PreparedContext {
             version: VERSION,
+            capacity:None,
             text,
             sections: vec![
                 SectionTrace {
@@ -458,8 +459,9 @@ fn project_with(state: &State, id: &str, compactor: &dyn crate::conversation::Co
             section: SectionKind::Request,
         }),
     });
-    compose(&prefix, &sections, MAX_REQUIRED_BYTES)
-    .map_err(io::Error::other)
+    if let Some(capacity)=crate::providers::capacity(&state.runtime,run.backend,run.model.as_deref().unwrap_or("")) {
+        control_context::turn_context::fit(&prefix,&sections,capacity).map_err(io::Error::other)
+    }else{compose(&prefix, &sections, MAX_REQUIRED_BYTES).map_err(io::Error::other)}
 }
 fn trace_path() -> io::Result<PathBuf> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
@@ -550,11 +552,13 @@ pub(crate) fn view(
         .and_then(|a| a.context_trace.as_ref())
         .ok_or_else(|| io::Error::other("This attempt has no captured Control input"))?;
     let context = read(reference)?;
+    let budget=serde_json::to_string_pretty(&serde_json::json!({"capacity":context.capacity,"sections":context.sections})).map_err(io::Error::other)?;
     Ok(format!(
-        "<h2>Control input</h2><p class='muted'>Projection {} · {} UTF-8 bytes · attempt {}</p><pre class='tool-output'>{}</pre>",
+        "<h2>Control input</h2><p class='muted'>Projection {} · {} UTF-8 bytes · attempt {}</p><details><summary>Capacity and evidence selection</summary><pre>{}</pre></details><pre class='tool-output'>{}</pre>",
         context.version,
         context.text.len(),
         index + 1,
+        crate::escape(&budget),
         crate::escape(&context.text)
     ))
 }

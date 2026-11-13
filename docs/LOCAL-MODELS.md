@@ -44,7 +44,15 @@ Advanced settings control recent verbatim entries, maximum leaf entries (a power
 of two) and the rendered history byte budget. The chat model's input capacity
 and the compactor's capacity are independent: choose a history budget appropriate
 for the chat model, including room for its current request, pinned instructions
-and tools. This version does not infer CLI capacity or tokenize CLI prompts.
+and tools. Each configured chat model also has optional declared context/output
+capacity and a provider/tool overhead reserve under its capacity form. When
+declared, the pure whole-input planner preserves all mandatory sections, selects
+optional evidence newest-first within the remaining byte budget, and records
+every omission plus captured capacity in the input trace. Mandatory content that
+cannot fit blocks admission with an explicit budget error; it is never truncated.
+Unknown CLI capacity preserves the existing provider policy. These are declared
+limits and conservative byte estimates, not exact tokenization or inferred CLI
+private-context capacity.
 
 Use **Compaction tree** in a chat, `/chat/ID/compaction`, or `/compact` in the TUI
 to inspect model limits, selected tree ranges, source counts, actual input and

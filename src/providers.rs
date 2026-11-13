@@ -1,11 +1,17 @@
 //! Operator-managed model selection; unsupported adapters never silently fall back.
 use std::collections::HashMap;
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Model {
     backend: crate::backend::Backend,
     model: String,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    capacity:Option<control_context::turn_context::Capacity>,
+}
+impl Model {fn same(&self,other:&Self)->bool {self.backend==other.backend && self.model==other.model}}
+pub fn capacity(runtime:&crate::runtime::Runtime,backend:crate::backend::Backend,model:&str)->Option<control_context::turn_context::Capacity> {
+    runtime.models.iter().find(|m|m.backend==backend && m.model==model).and_then(|m|m.capacity)
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -75,6 +81,7 @@ fn initialize_in(
         models: vec![Model {
             backend,
             model: backend.default_model(),
+            ..Default::default()
         }],
         backend,
         model: backend.default_model(),
@@ -149,6 +156,7 @@ pub fn load_settings(runtime: &mut crate::runtime::Runtime) -> std::io::Result<(
                     models: vec![Model {
                         backend: crate::backend::Backend::Codex,
                         model: model.clone(),
+                        ..Default::default()
                     }],
                     backend: crate::backend::Backend::Codex,
                     model: model.clone(),
@@ -176,6 +184,7 @@ fn migrate(
     let selected = Model {
         backend: settings.backend,
         model: settings.model.clone(),
+        ..Default::default()
     };
     if settings.models.is_empty() {
         settings.models.push(selected.clone());
@@ -185,6 +194,7 @@ fn migrate(
                 settings.models.push(Model {
                     backend,
                     model: backend.default_model(),
+                    ..Default::default()
                 });
             }
         }
@@ -195,11 +205,11 @@ fn migrate(
 
 fn validate_models(models: &[Model], selected: &Model) -> std::io::Result<()> {
     if models.len() > 64
-        || !models.contains(selected)
+        || !models.iter().any(|m|m.same(selected))
         || models
             .iter()
             .enumerate()
-            .any(|(i, m)| !crate::usage::valid_model(&m.model) || models[..i].contains(m))
+            .any(|(i, m)| !crate::usage::valid_model(&m.model) || models[..i].iter().any(|other|other.same(m)) || m.capacity.is_some_and(|c|c.input_bytes().is_none()))
     {
         return Err(std::io::Error::other(
             "Invalid saved models or default in model.json",
@@ -212,8 +222,9 @@ fn configured(runtime: &crate::runtime::Runtime) -> Vec<Model> {
     let current = Model {
         backend: runtime.backend,
         model: runtime.configured_model(),
+        ..Default::default()
     };
-    if !models.contains(&current) {
+    if !models.iter().any(|m|m.same(&current)) {
         models.push(current);
     }
     models
@@ -232,6 +243,8 @@ pub fn render(runtime: &crate::runtime::Runtime) -> String {
         } else {
             ""
         };
+        let capacity=entry.capacity;
+        html.push_str(&format!("<details class='model-edit'><summary>{model}: context capacity</summary><form method='post' action='/providers'><input type='hidden' name='action' value='capacity'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='model' value='{model}'><label>Declared context tokens (empty means unknown)<input name='context_tokens' type='number' min='1' value='{}'></label><label>Output token reserve<input name='output_tokens' type='number' min='1' value='{}'></label><label>Provider/tool overhead reserve<input name='overhead_tokens' type='number' min='0' value='{}'></label><p>Input bytes conservatively count as tokens. Unknown capacity preserves the provider policy. Mandatory instructions that cannot fit are reported, never truncated.</p><button>Save capacity</button></form></details>",capacity.map(|c|c.context_tokens.to_string()).unwrap_or_default(),capacity.map_or(2048,|c|c.output_tokens),capacity.map_or(4096,|c|c.overhead_tokens)));
         html.push_str(&format!("<section class='model-row'><form method='post' action='/providers'><input type='hidden' name='action' value='select'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='model' value='{model}'><button class='model-choice' aria-pressed='{selected}'><span class='model-dot' aria-hidden='true'></span><span class='model-name'>{model}<span class='model-provider'>{label}</span></span>{marker}</button></form><details class='model-edit'><summary>Edit</summary><form method='post' action='/providers'><input type='hidden' name='action' value='edit'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='old_model' value='{model}'><label>Model<input name='model' required maxlength='100' value='{model}' spellcheck='false' autocapitalize='none'></label><button>Save</button></form></details></section>"));
     }
     html.push_str("</div><details class='model-add'><summary>+ New model</summary>");
@@ -333,21 +346,36 @@ pub fn save_with(
     let entry = Model {
         backend,
         model: model.to_owned(),
+        ..Default::default()
     };
     let mut models = configured(&state.runtime);
     let mut selected = Model {
         backend: state.runtime.backend,
         model: state.runtime.configured_model(),
+        ..Default::default()
     };
     match fields.get("action").map(String::as_str).unwrap_or("use") {
+        "capacity"=>{
+            let index=models.iter().position(|m|m.same(&entry)).ok_or("Model is not configured")?;
+            let context=fields.get("context_tokens").map(|s|s.trim()).unwrap_or("");
+            models[index].capacity=if context.is_empty(){None}else{
+                let capacity=control_context::turn_context::Capacity{
+                    context_tokens:context.parse().map_err(|_|"Invalid context size")?,
+                    output_tokens:fields.get("output_tokens").and_then(|s|s.parse().ok()).ok_or("Invalid output reserve")?,
+                    overhead_tokens:fields.get("overhead_tokens").and_then(|s|s.parse().ok()).ok_or("Invalid provider/tool reserve")?,
+                };
+                if capacity.input_bytes().is_none(){return Err("Context capacity must exceed output and provider/tool reserves");}
+                Some(capacity)
+            };
+        }
         "select" => {
-            if !models.contains(&entry) {
+            if !models.iter().any(|m|m.same(&entry)) {
                 return Err("This model is no longer configured. Reload the list.");
             }
             selected = entry;
         }
         "add" => {
-            if models.contains(&entry) {
+            if models.iter().any(|m|m.same(&entry)) {
                 return Err("This model is already configured.");
             }
             models.push(entry);
@@ -356,21 +384,22 @@ pub fn save_with(
             let old = Model {
                 backend,
                 model: fields.get("old_model").cloned().unwrap_or_default(),
+                ..Default::default()
             };
-            let Some(index) = models.iter().position(|m| m == &old) else {
+            let Some(index) = models.iter().position(|m| m.same(&old)) else {
                 return Err("This model changed. Reload the list.");
             };
-            if old != entry && models.contains(&entry) {
+            if !old.same(&entry) && models.iter().any(|m|m.same(&entry)) {
                 return Err("This model is already configured.");
             }
-            if selected == old {
+            if selected.same(&old) {
                 selected = entry.clone();
             }
-            models[index] = entry;
+            models[index] = Model{capacity:if old.same(&entry){models[index].capacity}else{None},..entry};
         }
         "use" => {
             // Compatibility with existing local forms.
-            if !models.contains(&entry) {
+            if !models.iter().any(|m|m.same(&entry)) {
                 models.push(entry.clone());
             }
             selected = entry;
