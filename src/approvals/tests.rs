@@ -95,6 +95,9 @@ fn a_requester_without_authority_gets_a_note_not_a_retry() {
         user_id: "1".parse().unwrap(),
         channel_id: "2".parse().unwrap(),
     };
+    while crate::scheduler::admit(&state.runtime).is_ok() {
+        state.runtime.enqueue("Other queued work".into(), RunKind::Task, "test");
+    }
     assert_eq!(decide(&mut state, &chat, &origin), Outcome::Noted);
 }
 

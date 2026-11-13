@@ -312,6 +312,11 @@ impl<I: Info> Supervisor<I> {
             _ => Status::Ready,
         })
     }
+    /// Pause intent is independent of an outstanding turn. Status retains that
+    /// turn until its result arrives; a pause prevents starting retained work.
+    pub fn paused(&self, bot: &BotId) -> bool {
+        self.bots.get(bot).is_some_and(|bot| bot.paused)
+    }
     /// Whether a planned or recovered turn may still be queued: it must be the
     /// bot's outstanding turn and the bot must not be stopping.
     pub fn eligible(&self, bot: &BotId, turn: &TurnId) -> bool {

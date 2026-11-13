@@ -26,6 +26,10 @@ fn target<'a>(state: &'a State, port: &Port) -> Option<&'a crate::runtime::Run> 
 }
 
 pub(super) fn advance(state: &mut State, save: impl FnOnce(&State) -> io::Result<()>) -> io::Result<()> {
+    advance_with_wake(state, save, crate::worker::wake)
+}
+
+fn advance_with_wake(state: &mut State, save: impl FnOnce(&State) -> io::Result<()>, wake: impl FnOnce()) -> io::Result<()> {
     let Some(root) = state.ports.iter()
         .filter(|port|port.decision.as_ref().is_some_and(|decision|!decision.acknowledged))
         .filter_map(|port|target(state,port))
@@ -82,6 +86,7 @@ pub(super) fn advance(state: &mut State, save: impl FnOnce(&State) -> io::Result
         for index in indices {state.ports[index].decision.as_mut().unwrap().acknowledged = false;}
         return Err(error);
     }
+    if matches!(outcome, crate::approvals::Outcome::Resumed(_)) { wake(); }
     Ok(())
 }
 
