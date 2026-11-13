@@ -10,6 +10,7 @@ pub(super) struct Entry {
 }
 
 const LOCAL: &[Entry] = &[
+    Entry {text:"/github",usage:crate::client::github::USAGE,description:"Inspect the configured repository's PRs, reviews and CI without a model turn"},
     Entry {text:"/activity",usage:"/activity [compact|full]",description:"Fold or expand retained tool activity"},
     Entry { text: "/compact", usage: "/compact", description: "Inspect the compaction model, window and summary tree" },
     Entry { text: "/help", usage: "/help", description: "Show commands and keyboard shortcuts" },

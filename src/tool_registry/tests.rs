@@ -63,7 +63,8 @@ fn every_worker_schema_is_registered_for_ui_and_provider_discovery() {
 }
 #[test]
 fn attempt_tools_route_each_name_to_exactly_one_group() {
-    let workers = worker_definitions(false);
+    let workers = worker_definitions(true);
+    assert!(!worker_definitions(false).iter().any(|tool|tool["name"]=="control_github_read"));
     let mut seen = std::collections::HashSet::new();
     for &tools in &ATTEMPT_TOOLS {
         let definitions = tools.definitions();

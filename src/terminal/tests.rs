@@ -1,5 +1,42 @@
 
 #[test]
+fn github_inspection_uses_the_typed_read_without_sending_a_chat_message() {
+    use std::io::{BufRead, Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let mut reader = io::BufReader::new(stream.try_clone().unwrap());
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        assert!(line.starts_with("POST /mcp "));
+        let mut length = 0;
+        loop {
+            line.clear();reader.read_line(&mut line).unwrap();
+            if line=="\r\n" {break;}
+            if let Some((key,value))=line.split_once(':') && key.eq_ignore_ascii_case("content-length") {length=value.trim().parse().unwrap();}
+        }
+        let mut body=vec![0;length];reader.read_exact(&mut body).unwrap();
+        let request:Value=serde_json::from_slice(&body).unwrap();
+        assert_eq!(request["params"]["name"],"control_github_read");
+        assert_eq!(request["params"]["arguments"],json!({"chat_id":"c-inspection","query":{"pull_request":170,"section":"checks","page":2}}));
+        let response=json!({"jsonrpc":"2.0","id":request["id"],"result":{"isError":false,"structuredContent":{"data":{"head_sha":"verified-head","items":[]}}}}).to_string();
+        write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",response.len()).unwrap();
+    });
+    let mut hive=Hive::fixture(Client::new(),format!("http://{address}/mcp"));
+    let mut app=App {active:"c-inspection".into(),input:"/github 170 checks 2".into(),detail:json!({"messages":[{"text":"Retain this conversation"}]}),..Default::default()};
+    let before=app.detail.clone();
+    assert!(!app.submit(&mut hive).unwrap());
+    assert!(app.inspector.as_ref().unwrap().1.contains("verified-head"));
+    assert_eq!(app.detail,before);
+    assert!(app.input.is_empty());
+    server.join().unwrap();
+    app.input="/github 170 merge".into();
+    assert!(app.submit(&mut hive).is_err(),"invalid commands fail before contacting the closed server");
+}
+
+#[test]
 fn folder_prompt_stays_at_the_live_tail_and_tracks_replaced_requests() {
     let mut app = App {
         active: "c-fixture".into(),

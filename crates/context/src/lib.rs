@@ -48,9 +48,9 @@ pub const TOOLS: [Tool; 23] = [
         execution: "credential-free Nix container / Rust supervisor", surface: "chat / worker MCP", available: true,
     },
     Tool {
-        name: "github.pull_request", title: "GitHub pull request", description: "Completed improvement · scoped repository",
+        name: "github.pull_request", title: "GitHub", description: "Scoped PR inspection · improvement draft publication",
         href: None, aliases: "github git pull request draft publish review",
-        mcp_names: &["control_github_open_pr"], execution: "Rust credential broker / GitHub API", surface: "improve chat / MCP", available: true,
+        mcp_names: &["control_github_open_pr", "control_github_read"], execution: "Rust credential broker / GitHub API", surface: "improve chat / MCP", available: true,
     },
     Tool {
         name:"agent.delegate",title:"Spawn agents",description:"Background tasks · blocking worker or judge",

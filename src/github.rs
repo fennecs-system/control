@@ -17,6 +17,7 @@ use std::{
 };
 
 static PUBLICATION: Mutex<()> = Mutex::new(());
+pub(crate) mod inspection;
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Configuration {
@@ -863,6 +864,10 @@ pub fn http(
         let Ok(request) = serde_json::from_slice::<Value>(body) else {
             return false;
         };
+        if request["method"] == "tools/call" && request["params"]["name"] == "control_github_read" {
+            inspection::http(stream, shared, &request);
+            return true;
+        }
         if request["method"] != "tools/call"
             || request["params"]["name"] != "control_github_open_pr"
         {

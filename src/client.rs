@@ -7,6 +7,7 @@ use reqwest::{
 use serde_json::{Value, json};
 use std::{fs, io, time::Duration};
 const VERSION: &str = "2025-11-25";
+pub mod github;
 pub struct Hive {
     client: Client,
     endpoint: String,
@@ -55,6 +56,10 @@ pub(crate) fn local_server(value: &str) -> io::Result<Url> {
     Ok(url)
 }
 impl Hive {
+    pub fn github_read(&mut self, chat: &str, query: github::Query) -> io::Result<Value> {
+        query.validate().map_err(failure)?;
+        self.tool("control_github_read", json!({"chat_id":chat,"query":query}))
+    }
     #[cfg(all(test, feature = "tui"))]
     pub(crate) fn fixture(client: Client, endpoint: String) -> Self {
         Self { client, endpoint, next: 0, operator_cookie: HeaderValue::from_static("fixture") }
@@ -169,6 +174,9 @@ impl Hive {
                         })
                 {
                     Duration::from_secs(25)
+                } else if method == "tools/call" && params["name"] == "control_github_read" {
+                    // One PR lookup plus one bounded page, at most 20 s each.
+                    Duration::from_secs(50)
                 } else if method == "tools/call"
                     && control_context::tool_policy::checkpoint(
                         params["name"].as_str().unwrap_or(""),

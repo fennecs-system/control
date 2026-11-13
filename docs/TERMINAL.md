@@ -20,7 +20,11 @@ offline HTML screenshots, artifacts, knowledge proposals, and scoped draft-PR
 publication for completed improvements. `rg`, Git, builds and tests can run in
 the configured tool environment; their presence and dependencies are environment
 capabilities, not guaranteed host tools. See [GitHub publication](GITHUB.md) for
-the clean-baseline, configured-repository and text-output limits.
+the clean-baseline, configured-repository and text-output limits. `/github PR`
+reads that repository's PR overview; add `files`, `comments`, `reviews`,
+`review-comments`, `checks` or `statuses` and an optional page number for bounded
+evidence. This makes no model call or chat post. Checks and legacy statuses are
+separate views of the captured PR head, with no claim that empty results pass CI.
 
 The remaining work for an end-to-end terminal development loop is:
 
@@ -29,8 +33,8 @@ The remaining work for an end-to-end terminal development loop is:
   origins. Reuse typed server queries and existing approval operations. Folder,
   port, bot and design-question decisions already have terminal commands; they
   do not establish parity with every web management view.
-- **GitHub follow-up:** scoped PR/check/review read operations and updating a PR
-  after feedback. The current publisher opens a draft from a completed
+- **GitHub follow-up:** complete diff/log inspection, explicit comment writes and
+  updating a PR after feedback. The current publisher opens a draft from a completed
   checkpoint; it is not a general GitHub integration. Publication does not merge
   or deploy, and the terminal should keep those decisions explicit.
 - **Interactive execution and browser verification:** durable interactive

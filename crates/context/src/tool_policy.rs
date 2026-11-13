@@ -10,7 +10,7 @@ pub fn after_handoff(name:&str)->bool {
         "control_workspace_status"|"control_watch_status"|"control_watch_events"|
         "control_room_list"|"control_room_read"|"control_room_notifications"|
         "control_knowledge_read"|"control_knowledge_search"|
-        "control_agent_result"|"control_agent_spawn_status")
+        "control_agent_result"|"control_agent_spawn_status"|"control_github_read")
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Route {
@@ -61,6 +61,7 @@ policies! {
     "control.room.post" => (Room,true,Hidden,true),
     "control.project.request" => (Project,true,Forward,true),
     "control_github_open_pr" => (Github,true,Forward,true),
+    "control_github_read" => (Github,false,Read,true),
     "control.web.search" => (Toolbox,false,Local,true),
     "control.rust.run" => (Toolbox,false,Local,true),
     "control.rust.bench" => (Toolbox,false,Local,true),

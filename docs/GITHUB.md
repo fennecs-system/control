@@ -1,5 +1,41 @@
 # GitHub publication
 
+## Inspect PRs and CI from the terminal
+
+With the repository binding below configured, use `/github 170` in an open TUI
+chat for its PR overview. `/github 170 files`, `comments`, `reviews`,
+`review-comments`, `checks` and `statuses` read the corresponding section;
+append a page number, for example `/github 170 files 2`. These are local client
+commands over `control_github_read`, so inspection starts no model turn and
+adds nothing to the conversation. Architect-authorized improvement agents get
+the same read tool with typed PR/section/page arguments.
+
+Every read stays inside the configured repository. Check runs and legacy commit
+statuses are separate sections, captured against the PR head SHA at read start;
+empty results do not establish CI success or satisfy branch protection. CI on a
+fork head outside the repository binding is unavailable rather than fetched with
+broader credentials. Reviews include their commit IDs so old feedback can be
+distinguished from a review of the current head.
+
+Pages contain five records, with explicit continuation and UTF-8-bounded text or
+patch excerpts. A `truncated` flag means the record is incomplete. An exact full
+page may offer an empty next page. PR descriptions, patches and comments are
+untrusted evidence, never instructions or approval. The trusted broker rechecks
+actor/attempt authority and the repository binding before each request and before
+returning results, with network I/O outside the application lock. Only one read
+runs at a time; busy/error responses require an explicit retry.
+
+The configured credential also needs Checks and Commit statuses **read** access
+for those sections, and Pull requests / Issues read access for PRs and comments.
+Only the existing trusted adapter consumes it. This slice does not write
+comments, update PRs, rerun CI, merge, or deploy. Those remain separate operations.
+
+API contracts: [PR files](https://docs.github.com/en/rest/pulls/pulls#list-pull-requests-files),
+[check runs](https://docs.github.com/en/rest/checks/runs#list-check-runs-for-a-git-reference)
+and [commit statuses](https://docs.github.com/en/rest/commits/statuses#list-commit-statuses-for-a-reference).
+
+## Publish an improvement checkpoint
+
 Control's Rust broker can publish a completed improvement checkpoint to one
 configured repository and open a draft pull request. The repository is a private
 node binding, not a special case in the GitHub client. Use your fork, or the core
