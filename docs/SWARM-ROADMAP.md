@@ -40,6 +40,14 @@ WASM tooling fix shipped in #143; both platform checks passed before merging.
   resource probes are recorded in [PERFORMANCE.md](PERFORMANCE.md). The tiny-device
   goal concerns efficient core/tools/TUI and replaceable backends, not a mandatory
   Raspberry Pi certification or a claim that every HTTP path became faster.
+- [x] **M1 / C1–C3 model and compaction series (#162–#168):** deployed in main
+  `130c6fa` on 2026-11-13. Shared bounded text calls, native Codex/Claude summary
+  adapters, incremental source pages, whole-input fit, scoped tree/source recall,
+  explicit comparison tooling and chat/TUI/spawn model selection are delivered.
+  Live Codex and mounted-weight Qwen readiness calls passed. Claude needs its
+  existing login refreshed. Compaction remains opt-in; this does not replace
+  private compaction inside an active CLI attempt. See [LOCAL-MODELS.md](LOCAL-MODELS.md)
+  and [PERFORMANCE.md](PERFORMANCE.md) for measured results and limits.
 - [ ] **R1/R2 remaining evaluation and classification:** paired interruption/recovery
   comparisons and finer causal classification of raw watch output. Creator identity alone does
   not establish which attempt caused each line. Deliver these only as narrow
@@ -166,7 +174,7 @@ with interchangeable drivers; complete the remaining extractions incrementally.
 | --- | --- | --- |
 | Shipped baseline / remaining P0 | R1a/R1b and R2 slices above; remaining R1/R2 edges, R3 history errors and R4 HTTP limits | Preserve shipped behavior; finish independent fixes with fault tests and real alerts. |
 | Established baseline; extend with consumers | A1/A2/A4 first state/effect slice, then incremental A3 and remaining boundaries | Typed message/effect conformance, captured continuations, checkpoint reconciliation and the client/server build boundary are established. Broader web/client crate extraction and out-of-lock persistence remain open, without blocking the next feature. |
-| Next feature | M1 summary-call adapter, then C1/C2 compaction | One bounded text request/result/usage contract; configured hosted/local adapters, bounded history reads for summary jobs, independent compactor selection and recall/failure/performance fixtures. Full local tool-using agents follow later. |
+| Delivered; extend from evidence | M1 summary calls and C1–C3 compaction (#162–#168) | Codex/Claude CLI and private local text adapters, bounded source reads, independent compactor selection and scoped recall are shipped. Authenticated hosted APIs, cache retention/GC and full local tool-using agents remain follow-ups. |
 | P1 | E1 escalation with G1 request/dependency projections | Existing lifecycle and durable requests; one-slot resolution works. No broad spec/status subsystem. |
 | P1 | U1 coordination UI and A2A visibility | Read existing lifecycle, requests and ownership; add projections as needed. No dependency on all G1/O1/Q1 work. |
 | P1 | T1 terminal development workflow | Complete existing typed tool/query/approval surfaces for terminal review, PR/check follow-up and browser/process interaction. Keep policy in tools/adapters; see [terminal gaps and acceptance](TERMINAL.md). |
@@ -715,12 +723,15 @@ revision, private persistent summary nodes, independent compactor selection and
 read-only web/TUI inspection. It feeds both existing CLI providers through the
 common history projection. The follow-up series adds CLI-as-compactor adapters,
 configured chat/TUI and spawn model selection, whole-input context-fit planning,
-and scoped source expansion. Those slices remain pending maintainer merge and
-deployment; they do not add authenticated hosted APIs or local tool agents.
+and scoped source expansion. All six follow-up slices (#163–#168) are merged and
+deployed; they do not add authenticated hosted APIs or local tool agents.
 The incremental slice replaces the total snapshot ceiling with bounded source
 pages (64 entries / 1 MiB), preserves source checksums and reuses completed
 subtrees. Cache retention/GC remains follow-up work. Validate real
-Qwen summary quality/latency/memory before promoting it to a default.
+Qwen summary quality/latency/memory before promoting it to a default. The recorded
+local evaluation supports explicit experimentation only: it exposed a truncated
+commit ID that the original eight-anchor score missed. The v2 comparison fixture
+now scores that ID and the concurrency limit, with identifier boundaries.
 
 M1 defines separate captured selections for worker, lead, reviewer and compactor.
 S1 can independently expose an agent-started model service through tools/MCP;
