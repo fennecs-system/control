@@ -37,11 +37,13 @@ can be worse than a little repetition.
   include tests and repetitive boilerplate; they are investigation candidates, not
   evidence of redundant features. Renamed/semantic clone detection is not enabled.
 
-Generated outputs, vendored dependencies, build targets, local scratch files and
-operator configuration are excluded by scanning **git archive** snapshots, rather than
-the working checkout. The analyzer rejects symlinks and build output directories.
-Authored setup/config/docs remain in the all-language raw LOC report. There is no
-automatic classification of arbitrary code as boilerplate.
+Only tracked files from **git archive** snapshots are scanned, rather than the working
+checkout. This excludes this repository's untracked generated outputs, dependencies,
+scratch files and operator configuration. Tracked generated or vendor code would need
+an explicit scope decision; Git does not identify it automatically. The analyzer rejects
+symlinks and build output directories. Authored setup/config/docs remain in the
+all-language raw LOC report. There is no automatic classification of arbitrary code
+as boilerplate.
 
 Halstead vocabulary/volume and maintainability estimates are available in the raw
 Mozilla output, but are not combined into an opaque health score. Token entropy,
