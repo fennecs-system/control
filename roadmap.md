@@ -643,6 +643,15 @@ declarative-directive model; keep its configuration distinct from its chat histo
 - **First workflow:** watch an explicitly selected release/source, propose a patch
   in an approved isolated project, run deterministic checks, request independent
   review and notify the owner. Merge/deploy remains an explicit grant.
+- **Reviewed tool growth:** agents and users can create reusable tools, propose
+  them through `/improve`, and register accepted revisions in the MCP catalogue
+  without adding workload-specific code to the harness. Use versioned manifests,
+  typed schemas, isolated execution and explicit grants. Lenses select tools and
+  knowledge records verified applicability and evidence. Activation, revocation
+  and rollback must be explicit; discovery grants no execution authority.
+  Complete the typed application/module boundaries first, then deliver one
+  reviewed tool proposal that another agent can discover and reuse. L2/L3 holds
+  the implementation and evaluation plan.
 - **Operations workflow:** a team diagnoses a service regression, prepares a
   tested repair and proposes a rollout. Execution follows the deployment grant
   for that environment and revision. Retain intent, receipts, health evidence

@@ -24,3 +24,5 @@ pub trait MessageOps {
         call: messages::MessageCall,
     ) -> std::io::Result<messages::MessageResult>;
 }
+
+pub(crate) mod room_wakes;

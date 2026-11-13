@@ -60,6 +60,20 @@ an async speed comparison or a test of cancelling in-flight filesystem I/O.
 
 ## Remaining boundaries
 
+The next slice extracts one-shot room wake planning into
+`application/room_wakes.rs`. It consumes borrowed runs, conversations, posts and
+subscription references, with an authorization predicate supplied by the host.
+It returns typed wait/advance/disarm/queue decisions. Continuation validation is
+shared with the existing listener driver through a compatibility wrapper.
+No global `State`, JSON encoding, clock or executor is passed to the planner.
+Legacy records still include journal-backed fields; this is not yet a fully
+materialized, I/O-free domain projection. Queue capacity, grants, mutation,
+checkpoint/rollback and notification stay in the existing blocking driver.
+Its plans contain positional indices and must be consumed under exclusive
+ownership, without another writer or suspension between planning and application.
+This preserves existing wake semantics; it does not complete typed persistence
+effects or change the production scheduler.
+
 This is not the complete A1/A2/A4 extraction or a finished server/web/TUI split.
 The application module still shares legacy service/delegation/bot record types,
 and other handlers still take broad state. The server still compiles terminal

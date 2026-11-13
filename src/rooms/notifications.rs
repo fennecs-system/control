@@ -1,10 +1,10 @@
 //! Bounded room inboxes with one-shot or owner-enabled ongoing follow-ups.
 //! Room text is never executed as a prompt or treated as authority.
 use crate::runtime::RunKind;
-use crate::{State, identity, runtime};
+use crate::{State, identity};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 const MAX_WATCHES: usize = 256;
 const WINDOW: usize = 512;
@@ -43,12 +43,7 @@ pub(super) fn definitions(mutable: bool) -> Vec<Value> {
     ]
 }
 
-fn normal_task(run: &runtime::Run) -> bool {
-    run.persona.is_none()
-        && run.continuation.is_none()
-        && matches!(run.kind, crate::runtime::RunKind::Chat | crate::runtime::RunKind::SelfImprovement | crate::runtime::RunKind::Steering)
-        && run.source != "room-notification"
-}
+use crate::application::room_wakes::{self, Decision, normal_task};
 
 pub(super) fn call(
     state: &mut State,
@@ -226,64 +221,8 @@ fn batch_from<'a>(watch: &Watch, history: &'a [super::Post], cursor: usize) -> B
     batch
 }
 
-/// Follow only durable continuation receipts, never shared-root guesses or
-/// independent spawned children. Every edge retains the parent's scope.
 pub(crate) fn continuation_leaf(state: &State, origin: usize, runs: &HashMap<&str, usize>) -> Option<usize> {
-    if state.runtime.runs[origin].status != "continued" {
-        return Some(origin);
-    }
-    let mut index = origin;
-    let mut seen = Vec::with_capacity(8);
-    for _ in 0..64 {
-        let run = &state.runtime.runs[index];
-        if seen.contains(&index) {
-            return None;
-        }
-        seen.push(index);
-        if run.status != "continued" {
-            return Some(index);
-        }
-        let generation = run.attempts.last()?.workspace_id.as_deref()?;
-        let question = run
-            .question
-            .as_ref()
-            .filter(|question| question.generation == generation && question.answer.is_some())
-            .and_then(|question| question.continuation.as_deref())
-            .map(|id| (id, RunKind::DesignAnswer));
-        let delegated = run
-            .delegation
-            .as_ref()
-            .filter(|delegation| delegation.generation == generation && delegation.child.is_some())
-            .and_then(|delegation| delegation.continuation.as_deref())
-            .map(|id| (id, RunKind::DelegationResult));
-        let (id, kind) = match (question, delegated) {
-            (Some(edge), None) | (None, Some(edge)) => edge,
-            _ => return None,
-        };
-        let next_index = *runs.get(id)?;
-        let next = &state.runtime.runs[next_index];
-        let lineage = crate::delegation::lineage(run);
-        if next.kind!=kind || next.continuation.is_none() || next.chat_id!=run.chat_id
-            || next.actor!=run.actor || next.action!=run.action || next.backend!=run.backend || next.model!=run.model
-            || next.context!=run.context || next.lenses!=run.lenses
-            || next.persona.as_ref().is_some_and(|persona|persona!=&lineage)
-            || (next.persona.is_none() && (run.persona.is_some() || kind==RunKind::DelegationResult))
-            // A retried continuation has replaced its original attempt. It must
-            // not revive a wake from a failed/cancelled execution generation.
-            || next.attempts.first().and_then(|attempt|attempt.workspace_id.as_ref())!=next.attempts.last().and_then(|attempt|attempt.workspace_id.as_ref())
-        {
-            return None;
-        }
-        index = next_index;
-    }
-    None
-}
-
-enum Decision {
-    Disarm,
-    Wait,
-    Advance(usize),
-    Queue(usize),
+    room_wakes::continuation_leaf(&state.runtime.runs, origin, runs)
 }
 
 /// Gives an agent's chat a durable room inbox from the current position. Idempotent;
@@ -379,106 +318,15 @@ pub fn reconcile(
     {
         return Ok(());
     }
-    let runs: HashMap<_, _> = state
-        .runtime
-        .runs
-        .iter()
-        .enumerate()
-        .map(|(i, run)| (run.id.as_str(), i))
-        .collect();
-    let busy: HashSet<_> = state
-        .runtime
-        .runs
-        .iter()
-        .filter(|run| {
-            matches!(
-                run.status.as_str(),
-                "queued" | "running" | "cancelling" | "waiting"
-            )
-        })
-        .filter_map(|run| run.chat_id.as_deref())
-        .collect();
-    let mut latest = HashMap::<&str, u64>::new();
     let mut authorize = identity::authorizer();
-    for run in state.runtime.runs.iter().filter(|run| normal_task(run)) {
-        if let Some(chat) = run.chat_id.as_deref() {
-            latest
-                .entry(chat)
-                .and_modify(|order| *order = (*order).max(run.queue_order))
-                .or_insert(run.queue_order);
-        }
-    }
-    let plans: Vec<_> = state
-        .collective
-        .room_watches
-        .iter()
-        .enumerate()
-        .filter_map(|(i, watch)| {
+    let plans = room_wakes::plan(
+        room_wakes::View { runs: &state.runtime.runs, chats: &state.chats, posts: &state.collective.posts },
+        state.collective.room_watches.iter().enumerate().filter_map(|(index, watch)| {
             let wake = watch.wake.as_ref()?;
-            let decision = (|| {
-                let Some(&origin_index) = runs.get(wake.origin.as_str()) else {
-                    return Decision::Disarm;
-                };
-                let origin = &state.runtime.runs[origin_index];
-                if authorize(&watch.actor, origin.action).is_err()
-                    || origin.actor != watch.actor
-                    || origin.chat_id.as_deref() != Some(&watch.chat)
-                    || !state.chats.iter().any(|chat| {
-                        chat.id == watch.chat
-                            && chat.actor == watch.actor
-                            && chat.room.as_deref() == Some(&watch.room)
-                    })
-                    || origin
-                        .attempts
-                        .last()
-                        .and_then(|a| a.workspace_id.as_deref())
-                        != Some(&wake.generation)
-                    || latest
-                        .get(watch.chat.as_str())
-                        .is_some_and(|order| *order > origin.queue_order)
-                    || !matches!(
-                        origin.status.as_str(),
-                        "queued" | "running" | "waiting" | "completed" | "continued"
-                    )
-                    || watch.cursor > state.collective.posts.len()
-                {
-                    return Decision::Disarm;
-                }
-                let Some(leaf_index) = continuation_leaf(state, origin_index, &runs) else {
-                    return Decision::Disarm;
-                };
-                let leaf = &state.runtime.runs[leaf_index];
-                if !matches!(
-                    leaf.status.as_str(),
-                    "queued" | "running" | "waiting" | "completed"
-                ) {
-                    return Decision::Disarm;
-                }
-                if leaf.status != "completed" || busy.contains(watch.chat.as_str()) {
-                    return Decision::Wait;
-                }
-                let scanned = watch.cursor.max(wake.scanned);
-                if scanned > state.collective.posts.len() { return Decision::Disarm; }
-                let through = scanned
-                    .saturating_add(WINDOW)
-                    .min(state.collective.posts.len());
-                if state.collective.posts[scanned..through]
-                    .iter()
-                    .any(|post| {
-                        post.room == watch.room && post.chat.as_deref() != Some(&watch.chat)
-                            && post.delivery == super::Delivery::Notify
-                    })
-                {
-                    Decision::Queue(origin_index)
-                } else if through > scanned {
-                    Decision::Advance(through)
-                } else {
-                    Decision::Wait
-                }
-            })();
-            Some((i, decision))
-        })
-        .collect();
+            Some((index, room_wakes::WakeRef { chat: &watch.chat, actor: &watch.actor, room: &watch.room, cursor: watch.cursor, origin: &wake.origin, generation: &wake.generation, scanned: wake.scanned }))
+        }),
+        |actor, action| authorize(actor, action).is_ok(),
+    );
     for (index, plan) in plans {
         if matches!(plan, Decision::Wait) {
             continue;
@@ -1293,7 +1141,10 @@ mod tests {
             old.kind = RunKind::Task;
             state.runtime.runs.push(old);
         }
-        for (armed, iterations) in [(false, 10_000usize), (true, 10)] {
+        let armed_iterations = std::env::var("CONTROL_ROOM_PROFILE_ROUNDS")
+            .ok().and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(10).clamp(10, 100_000);
+        for (armed, iterations) in [(false, 10_000usize), (true, armed_iterations)] {
             if armed {
                 watch(&mut state, &run, true);
             }
