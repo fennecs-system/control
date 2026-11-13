@@ -1,0 +1,62 @@
+name: Codebase metrics
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: metrics-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  metrics:
+    name: Codebase metrics (advisory)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+      - name: Cache analysis tools
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: metrics-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'tools/code-metrics/**', '!tools/code-metrics/target/**') }}
+          restore-prefixes-first-match: metrics-v1-${{ runner.os }}-${{ runner.arch }}-
+      - name: Build standalone analyzer (including its tests)
+        run: nix build .#code-metrics --out-link "$RUNNER_TEMP/code-metrics"
+      - name: Compare source snapshots
+        env:
+          BASE_REV: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_REV: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -eu
+          if [ -z "$BASE_REV" ] || [ "$BASE_REV" = 0000000000000000000000000000000000000000 ]; then
+            BASE_REV=$(git rev-parse HEAD^)
+          fi
+          mkdir -p "$RUNNER_TEMP/metrics/base-source" "$RUNNER_TEMP/metrics/head-source"
+          mkdir -p "$RUNNER_TEMP/metrics/base" "$RUNNER_TEMP/metrics/head"
+          git archive "$BASE_REV" | tar -x -C "$RUNNER_TEMP/metrics/base-source"
+          git archive "$HEAD_REV" | tar -x -C "$RUNNER_TEMP/metrics/head-source"
+          "$RUNNER_TEMP/code-metrics/bin/control-code-metrics" scan "$RUNNER_TEMP/metrics/base-source" "$RUNNER_TEMP/metrics/base"
+          "$RUNNER_TEMP/code-metrics/bin/control-code-metrics" scan "$RUNNER_TEMP/metrics/head-source" "$RUNNER_TEMP/metrics/head"
+          "$RUNNER_TEMP/code-metrics/bin/control-code-metrics" compare "$RUNNER_TEMP/metrics/base/summary.json" "$RUNNER_TEMP/metrics/head/summary.json" > "$RUNNER_TEMP/metrics/summary.md"
+          printf 'Base: %s\nHead: %s\n' "$BASE_REV" "$HEAD_REV" > "$RUNNER_TEMP/metrics/revisions.txt"
+          cat "$RUNNER_TEMP/metrics/summary.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain raw reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: codebase-metrics
+          path: |
+            ${{ runner.temp }}/metrics/base
+            ${{ runner.temp }}/metrics/head
+            ${{ runner.temp }}/metrics/summary.md
+            ${{ runner.temp }}/metrics/revisions.txt
+          retention-days: 14
