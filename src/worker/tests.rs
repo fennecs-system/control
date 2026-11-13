@@ -1758,6 +1758,7 @@ fn diagnostics_return_fixed_messages_without_echoing_secret_text() {
     let failure = worker_failure(b"401 Unauthorized bearer fake-secret-for-test");
     assert!(failure.contains("authentication was rejected"));
     assert!(!failure.contains("fake-secret-for-test"));
+    assert!(worker_failure(b"Invalid API key fake-secret-for-test").contains("authentication was rejected"));
     assert_eq!(
         worker_failure(b"unexpected raw text fake-secret-for-test"),
         UNKNOWN_FAILURE

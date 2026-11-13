@@ -31,7 +31,7 @@ impl Endpoint {
         {
             return Err(io::Error::other("Invalid text model metadata"));
         }
-        if let Some(backend)=self.cli {
+        if let Some(backend) = self.cli {
             if !self.url.is_empty() {
                 return Err(io::Error::other(
                     "CLI text models do not accept an endpoint URL",
@@ -103,6 +103,8 @@ pub fn call(endpoint: &Endpoint, system: &str, input: &str) -> io::Result<Respon
 }
 
 mod cli;
+#[path = "../tools/compaction-eval/mod.rs"]
+mod evaluation;
 pub enum Target {
     Endpoint(reqwest::Url),
     Cli(crate::backend::Backend),
@@ -112,6 +114,10 @@ pub fn recover() -> io::Result<()> {
 }
 
 pub fn command(args: &[String]) -> io::Result<()> {
+    crate::shutdown::install()?;
+    if args.first().is_some_and(|s| s == "compare") {
+        return evaluation::command(&args[1..]);
+    }
     let [action, id] = args else {
         return Err(io::Error::other("Use control models test MODEL_ID"));
     };
