@@ -166,6 +166,13 @@ impl App {
         let text = self.input.trim().to_owned();
         self.menu = None;
         match text.as_str() {
+            "/compact" => {
+                if self.active.is_empty() { return Err(failure("Open a conversation first")); }
+                self.detail = hive.tool("control.chat.read", json!({"id":self.active}))?;
+                self.inspector = Some(("Compaction tree".into(), serde_json::to_string_pretty(&self.detail["compaction"]).map_err(failure)?));
+                self.scroll = 0; self.follow = false;
+                self.status = "Compaction is independent of the chat model · /chat returns".into();
+            }
             _ if text.starts_with("/port ") => {
                 let parts=text.split_whitespace().collect::<Vec<_>>();
                 if !(3..=4).contains(&parts.len()) || !matches!(parts[1],"allow"|"deny") || (parts.len()==4 && parts[3]!="--loopback") {

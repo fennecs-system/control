@@ -44,6 +44,7 @@
           claude-full-image = import ./examples/worker-image.nix { inherit pkgs; backend = "claude"; profile = "full"; };
           browser-image = import ./tools/browser/image.nix { inherit pkgs; };
           build-image = import ./tools/build/image.nix { inherit pkgs; };
+          inference-image = import ./tools/inference/image.nix { inherit pkgs; };
         });
     };
 }

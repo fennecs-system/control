@@ -2,6 +2,24 @@
 use super::*;
 use crate::runtime::RunKind;
 #[test]
+fn text_configuration_is_validated_and_failed_saves_restore_the_previous_settings() {
+    let mut state=crate::State::default();
+    state.runtime.compaction.models.push(crate::model_calls::tests::endpoint());
+    let fields=HashMap::from_iter([
+        ("action","compaction"),("enabled","on"),("model","local-qwen"),("chats","c-test"),
+        ("recent_entries","8"),("leaf_entries","4"),("history_bytes","20000")
+    ].map(|(k,v)|(k.to_owned(),v.to_owned())));
+    let before=state.runtime.compaction.settings.clone();
+    assert!(save_with(&mut state,&fields,|_|Err(std::io::Error::other("disk full"))).is_err());
+    assert_eq!(state.runtime.compaction.settings,before);
+    save_with(&mut state,&fields,|_|Ok(())).unwrap();
+    assert!(state.runtime.compaction.settings.enabled);
+    let mut invalid=fields;invalid.insert("leaf_entries".into(),"3".into());
+    assert!(save_with(&mut state,&invalid,|_|panic!("invalid settings must not reach persistence")).is_err());
+    let remove=HashMap::from_iter([("action".into(),"text-remove".into()),("id".into(),"local-qwen".into())]);
+    assert!(save_with(&mut state,&remove,|_|panic!("active compactor cannot disappear")).is_err());
+}
+#[test]
 fn fresh_claude_setup_selects_sonnet_and_reruns_preserve_the_library() {
     use crate::backend::Backend;
     use std::os::unix::fs::PermissionsExt;
@@ -114,6 +132,7 @@ fn legacy_selection_migrates_and_saved_libraries_roundtrip_without_reseeding() {
         backend: Backend::Claude,
         model: "not-in-list".into(),
         models: settings.models,
+        ..Default::default()
     };
     assert!(migrate(invalid, &[]).is_err());
 }

@@ -2,6 +2,7 @@
 //! Transports frame provider records; decoders normalize them into owned, bounded events.
 pub mod claude;
 pub mod codex;
+pub mod model;
 mod types;
 use serde_json::Value;
 use std::io::{self, Read};

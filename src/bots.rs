@@ -252,6 +252,10 @@ pub(crate) fn status(state: &State, chat: &str) -> Option<String> {
     Some(format!("{label} · {state} · {sources}"))
 }
 
+pub(crate) fn background_allowed(state: &State, chat: &str) -> bool {
+    !state.bots.supervisor.paused(&bot(chat)) && state.bots.supervisor.status(&bot(chat)) != Some(Status::Stopping)
+}
+
 /// Every defined bot with its state, including sleeping ones, for the Bots page.
 pub(crate) fn overview(state: &State) -> String {
     let mut html = "<div class='section-heading'><h2>Bots</h2></div>".to_owned();

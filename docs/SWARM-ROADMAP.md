@@ -708,6 +708,17 @@ Task-specific game adapters remain in their granted workload containers.
 
 ## M1: shared model calls, roles and local inference
 
+The first implementation slice is the bounded text-only local compactor described
+in [LOCAL-MODELS.md](LOCAL-MODELS.md): a shared pure request/result contract,
+external private endpoint adapter, declared context/output limits and model
+revision, private persistent summary nodes, independent compactor selection and
+read-only web/TUI inspection. It feeds both existing CLI providers through the
+common history projection. It does not yet supply CLI-as-compactor adapters,
+hosted authenticated calls, per-attempt `/model` overrides, or local tool agents.
+Its snapshot ceiling is 4096 entries / 1 MiB; incremental reads beyond this,
+cache retention and bounded source expansion remain C1/C3 work. Validate real
+Qwen summary quality/latency/memory before promoting it to a default.
+
 M1 defines separate captured selections for worker, lead, reviewer and compactor.
 S1 can independently expose an agent-started model service through tools/MCP;
 M1 concerns using a model to execute Control's own agent or summary attempts.

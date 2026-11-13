@@ -397,6 +397,7 @@ fn start_with(state: Arc<Mutex<State>>, execute: fn(Arc<Mutex<State>>, Task)) ->
             if crate::shutdown::requested() {
                 break;
             }
+            if triggered { crate::compaction::tick(&state); }
             match workers.reap() {
                 Ok(progressed) => triggered |= progressed,
                 Err(()) => {

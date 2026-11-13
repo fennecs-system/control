@@ -367,6 +367,11 @@ pub fn handle(
             ),
             Err(message) => respond(stream, "404 Not Found", "text/plain", message, ""),
         }
+    } else if method == "GET" && operation == "compaction" {
+        match crate::compaction::render(state,id) {
+            Ok(html)=>respond(stream,"200 OK","text/html; charset=utf-8",&crate::render(state,"artifact-page",lens,&html),""),
+            Err(error)=>respond(stream,"404 Not Found","text/plain",error,""),
+        }
     } else if method == "GET" && operation == "context" {
         match crate::turn_context::view(state,id,&crate::fields(query)) {
             Ok(html)=>respond(stream,"200 OK","text/html; charset=utf-8",&crate::render(state,"artifact-page",lens,&html),""),
