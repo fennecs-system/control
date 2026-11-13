@@ -17,6 +17,7 @@ updates:
     directories:
       - /
       - /web
+      - /tools/code-metrics
     schedule:
       interval: weekly
       day: monday

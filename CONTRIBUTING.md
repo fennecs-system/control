@@ -85,3 +85,9 @@ branch rules, along with pull requests, no force pushes and no branch deletion.
 Branch rules are repository settings; the workflow file does not enable them.
 Keep review requirements practical for the current maintainers while preserving
 the CI gate.
+
+The separate [codebase metrics](docs/CODE-METRICS.md) workflow reports source size,
+complexity hotspots and clone candidates against the base revision. It is advisory;
+do not make it a size/complexity merge gate. Changes to its standalone Rust tool
+should run its locked tests and strict Clippy with
+`--manifest-path tools/code-metrics/Cargo.toml`, plus a real snapshot comparison.

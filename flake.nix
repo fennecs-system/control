@@ -35,6 +35,7 @@
         let control = import ./hosting/package.nix { inherit pkgs; }; in {
           inherit control;
           control-server = import ./hosting/package.nix { inherit pkgs; withTerminal = false; };
+          code-metrics = import ./tools/code-metrics/package.nix { inherit pkgs; };
           default = control;
         } // nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           worker-image = import ./examples/worker-image.nix { inherit pkgs; };
