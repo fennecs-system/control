@@ -196,6 +196,9 @@ agent could read and print those values. If a tool runs arbitrary agent-authored
 code, use a credential-bearing broker outside that process. Plain redaction is
 defence in depth, not the isolation boundary; constrain destinations/redirects
 and filter secret-bearing or reflected responses before returning tool output.
+Return bounded typed response projections; raw request/header dumps must not
+become model-visible tool results. A secret-bound service must not also grant
+agents arbitrary exec/read access to its credential-bearing process or files.
 
 Keep values outside the checkout and ordinary application state/journals, using a
 platform secret store or encrypted private files with separately protected key
