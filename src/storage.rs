@@ -182,6 +182,7 @@ pub fn checkpoint(state: &State) -> Result<(), CheckpointError> {
         .map_err(|error| CheckpointError::NotReplaced(io::Error::other(error)))?;
     write_checkpoint(&directory, &data)?;
     changes().bump();
+    crate::live_updates::notify();
     Ok(())
 }
 fn write_checkpoint(directory: &std::path::Path, data: &[u8]) -> Result<(), CheckpointError> {

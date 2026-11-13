@@ -322,6 +322,7 @@ pub fn execute(
     let admitted = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default().as_secs().saturating_sub(attempt.started_unix);
     let deadline = Duration::from_secs(attempt.explicit_timeout_seconds.unwrap_or(600));
+    let mailbox_wake = crate::mailbox_wake::MailboxWake::new(&mailbox);
     let mut timed_out = false;
     let mut handoff = None;
     let success = loop {
@@ -357,7 +358,7 @@ pub fn execute(
             Err(_) => break false,
             _ => {}
         }
-        std::thread::sleep(Duration::from_millis(100));
+        mailbox_wake.wait(Duration::from_millis(100));
     };
     if !success {
         let _ = child.kill();

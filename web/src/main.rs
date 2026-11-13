@@ -468,10 +468,11 @@ fn attach_chat_frame(document: &web_sys::Document, frame:web_sys::HtmlIFrameElem
     if let Some(body)=frame.content_document().and_then(|d|d.body()) { update_request_count(document,&body); }
     let url = frame.get_attribute("src").unwrap_or_default().split('#').next().unwrap_or_default().to_owned();
     let busy = Rc::new(Cell::new(false));
+    let pending = Rc::new(Cell::new(false));
     let previous = Rc::new(RefCell::new(String::new()));
     let parent_document=document.clone();
     let poll = Closure::<dyn FnMut()>::new(move || {
-        if busy.replace(true) { return; }
+        if busy.replace(true) { pending.set(true); return; }
         let Ok(request) = web_sys::XmlHttpRequest::new() else { busy.set(false); return; };
         if request.open("GET", &url).is_err() { busy.set(false); return; }
         request.set_timeout(10_000);
@@ -480,10 +481,21 @@ fn attach_chat_frame(document: &web_sys::Document, frame:web_sys::HtmlIFrameElem
         let following = following.clone();
         let previous = previous.clone();
         let completed = busy.clone();
+        let pending = pending.clone();
         let parent_document=parent_document.clone();
         let finished = Closure::<dyn FnMut(web_sys::Event)>::once(move |_| {
             completed.set(false);
-            if response.status().ok() != Some(200) { return; }
+            if pending.replace(false) && let Ok(event) = web_sys::Event::new("control-transcript-refresh") {
+                let _ = parent_document.dispatch_event(&event);
+            }
+            if response.status().ok() != Some(200) {
+                let retry = Closure::<dyn FnMut()>::once(move || {
+                    if let Ok(event) = web_sys::Event::new("control-transcript-refresh") { let _ = parent_document.dispatch_event(&event); }
+                });
+                let _ = web_sys::window().unwrap().set_timeout_with_callback_and_timeout_and_arguments_0(retry.as_ref().unchecked_ref(), 1000);
+                retry.forget();
+                return;
+            }
             let Some(text) = response.response_text().ok().flatten() else { return; };
             if *previous.borrow() == text { return; }
             let Some(doc) = frame.content_document() else { return; };
@@ -525,7 +537,6 @@ fn attach_chat_frame(document: &web_sys::Document, frame:web_sys::HtmlIFrameElem
         if request.send().is_err() { busy.set(false); }
         finished.forget();
     });
-    web_sys::window().unwrap().set_interval_with_callback_and_timeout_and_arguments_0(poll.as_ref().unchecked_ref(), 1000)?;
     document.add_event_listener_with_callback("control-transcript-refresh",poll.as_ref().unchecked_ref())?;
     poll.forget();
     Ok(())
@@ -555,15 +566,19 @@ fn attach_navigation(document:&web_sys::Document)->Result<(),JsValue> {
     let Some(chat)=source.split('/').nth(2) else{return Ok(());};
     let url=format!("/chat/{chat}/conversations");
     let busy=Rc::new(Cell::new(false));let previous=Rc::new(RefCell::new(String::new()));
+    let pending=Rc::new(Cell::new(false));let parent=document.clone();
     let target=toggle.clone();
     let poll=Rc::new(Closure::<dyn FnMut()>::new(move || {
-        if !target.has_attribute("open")||busy.replace(true) {return;}
+        if !target.has_attribute("open") {return;}
+        if busy.replace(true) {pending.set(true);return;}
         let Ok(request)=web_sys::XmlHttpRequest::new() else{busy.set(false);return;};
         if request.open("GET",&url).is_err(){busy.set(false);return;}
         request.set_timeout(10000);
         let response=request.clone();let target=target.clone();let completed=busy.clone();let previous=previous.clone();
+        let pending=pending.clone();let parent=parent.clone();
         let done=Closure::<dyn FnMut(web_sys::Event)>::once(move |_| {
             completed.set(false);
+            if pending.replace(false) && let Ok(event)=web_sys::Event::new("control-transcript-refresh"){let _=parent.dispatch_event(&event);}
             if response.status().ok()!=Some(200){return;}
             let Some(text)=response.response_text().ok().flatten() else{return;};
             if *previous.borrow()==text{return;}
@@ -587,10 +602,35 @@ fn attach_navigation(document:&web_sys::Document)->Result<(),JsValue> {
         if request.send().is_err(){busy.set(false);}
         done.forget();
     }));
-    // Both interval and toggle dispatch the same Rust callback.
+    // State-change hints and disclosure use the same Rust callback.
     toggle.add_event_listener_with_callback("toggle",poll.as_ref().as_ref().unchecked_ref())?;
-    web_sys::window().unwrap().set_interval_with_callback_and_timeout_and_arguments_0(poll.as_ref().as_ref().unchecked_ref(),2000)?;
+    document.add_event_listener_with_callback("control-transcript-refresh",poll.as_ref().as_ref().unchecked_ref())?;
     std::mem::forget(poll);
+    Ok(())
+}
+
+// One authenticated, payload-free stream per page. Reconnects refresh the
+// authoritative HTML; a slow recovery poll is used only while disconnected.
+fn attach_updates(document: &web_sys::Document) -> Result<(), JsValue> {
+    let stream = web_sys::EventSource::new("/events")?;
+    let target = document.clone();
+    let changed = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
+        if let Ok(event) = web_sys::Event::new("control-transcript-refresh") { let _ = target.dispatch_event(&event); }
+    });
+    stream.add_event_listener_with_callback("message", changed.as_ref().unchecked_ref())?;
+    changed.forget();
+    let recovery = stream.clone();
+    let target = document.clone();
+    let fallback = Closure::<dyn FnMut()>::new(move || {
+        if recovery.ready_state() != web_sys::EventSource::OPEN && let Ok(event) = web_sys::Event::new("control-transcript-refresh") {
+            let _ = target.dispatch_event(&event);
+        }
+    });
+    let window = web_sys::window().unwrap();
+    window.set_interval_with_callback_and_timeout_and_arguments_0(fallback.as_ref().unchecked_ref(), 10_000)?;
+    fallback.forget();
+    // The page owns the connection. Let the browser close/suspend it with the
+    // document so returning through the back/forward cache can reconnect.
     Ok(())
 }
 
@@ -635,6 +675,7 @@ fn main() -> Result<(), JsValue> {
         attach_composer(&document, input.dyn_into()?)?;
         attach_transcript(&document)?;
         attach_navigation(&document)?;
+        attach_updates(&document)?;
         return Ok(());
     }
     let output = document

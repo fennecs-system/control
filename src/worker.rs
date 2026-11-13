@@ -4,7 +4,7 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -208,19 +208,23 @@ fn sandbox_probe(
     // Its memory is naturally readable by its own child; the outer harness is outside this PID namespace.
     command.args(["--", "bash", "-c", "set -eu; for path in /home/agent/.codex/auth.json /proc/self/root/home/agent/.codex/auth.json /proc/1/root/home/agent/.codex/auth.json; do if cat \"$path\" >/dev/null 2>&1; then exit 41; fi; done; IFS= read -r -d '' supervisor < /proc/1/cmdline; test \"$supervisor\" = codex-linux-sandbox || exit 42; printf verified > /workspace/probe-result"])
         .stdout(Stdio::null()).stderr(Stdio::null());
-    let mut child = command
+    let child = command
         .spawn()
         .map_err(|_| "Cannot start sandbox verification.")?;
-    let result = wait(&mut child, Duration::from_secs(30));
+    let child = crate::child::watch(child).map_err(|_| "Cannot observe sandbox verification.")?;
+    let result = match child.wait(Some(Instant::now() + Duration::from_secs(30)), &crate::shutdown::token()) {
+        control_effect::sync::Recv::Item(status) => status,
+        _ => { child.kill(); Err(std::io::Error::other("Sandbox verification interrupted")) }
+    };
     if result.is_err() {
         crate::lifecycle::stop_resource(name, node, image, &workspace)?;
     }
-    match child.try_wait().ok().flatten().and_then(|s| s.code()) {
+    match result.as_ref().ok().and_then(|s| s.code()) {
         Some(41) => return Err("Credential canary was readable through a sandbox path. No account credentials were mounted."),
         Some(42) => return Err("The sandbox did not isolate the account-bearing harness in a separate PID namespace. No account credentials were mounted."),
         _ => {}
     }
-    if !result.unwrap_or(false)
+    if !result.is_ok_and(|status| status.success())
         || fs::read(workspace.join("probe-result")).ok().as_deref() != Some(b"verified")
     {
         return Err("Credential isolation verification failed. No account credentials were mounted. Check the pinned Codex image and container sandbox support.");
@@ -292,23 +296,6 @@ fn capture_diagnostics(
     })
 }
 
-fn wait(child: &mut Child, limit: Duration) -> std::io::Result<bool> {
-    let start = Instant::now();
-    loop {
-        if let Some(status) = child.try_wait()? {
-            return Ok(status.success());
-        }
-        if crate::shutdown::requested() || start.elapsed() > limit {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "Worker deadline reached",
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(250));
-    }
-}
 static DISPATCH_WAKE: Mutex<Option<std::sync::mpsc::SyncSender<()>>> = Mutex::new(None);
 pub fn wake() {
     if let Ok(sender) = DISPATCH_WAKE.lock()
@@ -1402,6 +1389,7 @@ fn execute(
     let admitted = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default().as_secs().saturating_sub(attempt.started_unix);
     let deadline = Duration::from_secs(attempt.explicit_timeout_seconds.unwrap_or(600));
+    let mailbox_wake = crate::mailbox_wake::MailboxWake::new(&absolute);
     let mut timed_out = false;
     let mut handoff = None;
     let result = loop {
@@ -1441,7 +1429,7 @@ fn execute(
             Err(e) => break Err(e),
             _ => {}
         }
-        std::thread::sleep(Duration::from_millis(250));
+        mailbox_wake.wait(Duration::from_millis(250));
     };
     // Killing the CLI alone may leave the daemon-owned container running.
     if result.is_err() {

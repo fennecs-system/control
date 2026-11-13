@@ -8,11 +8,11 @@ use serde_json::{Value, json};
 use std::{fs, io, time::Duration};
 const VERSION: &str = "2025-11-25";
 pub mod github;
+pub mod updates;
 pub struct Hive {
     client: Client,
     endpoint: String,
     next: u64,
-    #[cfg(all(test, feature = "tui"))]
     operator_cookie: HeaderValue,
 }
 
@@ -147,7 +147,6 @@ impl Hive {
             client,
             endpoint: url.join("mcp").unwrap().to_string(),
             next: 0,
-            #[cfg(all(test, feature = "tui"))]
             operator_cookie: cookie,
         };
         let init = hive.rpc("initialize", json!({"protocolVersion":VERSION,"capabilities":{},"clientInfo":{"name":"control-harness","version":env!("CARGO_PKG_VERSION")}}))?;

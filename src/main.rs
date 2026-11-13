@@ -58,6 +58,8 @@ mod services;
 mod spawning;
 mod session_http;
 mod shutdown;
+mod live_updates;
+mod mailbox_wake;
 mod storage;
 mod tool_catalog;
 mod toolbox;
@@ -279,6 +281,10 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         return;
     }
     if access.gate(&mut stream, method, target, &header) {
+        return;
+    }
+    if method == "GET" && target == "/events" {
+        let _ = live_updates::serve(&mut stream);
         return;
     }
     let length = match body_length(&header) {
@@ -627,8 +633,15 @@ fn main() -> std::io::Result<()> {
     let mut loaded=storage::load()?;
     if let Err(error)=model_calls::recover() {loaded.runtime.notice=format!("Text-call cleanup needs inspection: {error}");}
     let state = Arc::new(Mutex::new(loaded));
-    listener.set_nonblocking(true)?;
     shutdown::install()?;
+    // Blocking accept removes the 50 ms admission poll. Cancellation wakes it
+    // through the same loopback listener, without doing socket I/O in a signal handler.
+    let wake_address = listener.local_addr()?;
+    let accept_cancel = shutdown::token();
+    let accept_wake = std::thread::spawn(move || {
+        accept_cancel.wait(None);
+        let _ = TcpStream::connect_timeout(&wake_address, std::time::Duration::from_secs(1));
+    });
     let preview_state=state.clone();
     let preview_restore=std::thread::spawn(move||previews::restore(preview_state));
     let workers = worker::start(state.clone());
@@ -640,15 +653,14 @@ fn main() -> std::io::Result<()> {
     while !shutdown::requested() {
         match listener.accept() {
             Ok((stream, _)) => {
+                if shutdown::requested() { break; }
                 // Accepted sockets can inherit nonblocking mode on BSD hosts.
                 if stream.set_nonblocking(false).is_err() { continue; }
+                let _ = stream.set_nodelay(true);
                 let state = state.clone();
                 let access = access.clone();
                 requests.retain(|request| !request.is_finished());
                 requests.push(std::thread::spawn(move || handle(stream, state, access)));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                shutdown::pause(std::time::Duration::from_millis(50));
             }
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
             Err(error) => {
@@ -658,6 +670,7 @@ fn main() -> std::io::Result<()> {
         }
     }
     drop(listener);
+    let _ = accept_wake.join();
     eprintln!("Control is stopping; waiting for owned workers and saving state.");
     let stopped = workers.join();
     let service_failed = services.join().is_err();
