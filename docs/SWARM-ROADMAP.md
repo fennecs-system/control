@@ -46,12 +46,8 @@ WASM tooling fix shipped in #143; both platform checks passed before merging.
   tool/adapter fixes when needed; do not add workload semantics to the supervisor.
 - [ ] **R3/R4:** visible history-read failures and bounded HTTP admission remain
   open. They can ship independently alongside the architecture slice.
-- [ ] **Next: A1/A2/A4 first state/effect boundary**, then incremental A3. Start
-  with one existing callback-to-admission operation (targeted peer delivery is a
-  candidate), with narrow state views, stamped effects, durable acceptance and
-  typed results. Exercise the same contract through current and experimental
-  async drivers before expanding features. No whole-application rewrite is needed.
-  The directed-message increment in #148 establishes the first typed
+- [x] **Minimum architecture checkpoint: first A1/A2/A4 boundary**, then
+  consumer-led A3. The directed-message increment in #148 establishes the first typed
   transition/effect boundary, with a blocking production interpreter and Tokio
   conformance fixture. Out-of-lock persistence, broader callback admission and
   complete web/TUI separation remain open; see [STATE-BOUNDARIES.md](STATE-BOUNDARIES.md).
@@ -64,6 +60,12 @@ WASM tooling fix shipped in #143; both platform checks passed before merging.
   an unresolved legacy save uses existing shutdown/state-unavailable fencing.
   Startup confirms disk state before journal recovery. This does not yet make
   out-of-lock or cancellable persistence safe.
+  Typed client operations now own port/project approval transport and confirmation;
+  terminal presentation cannot access production HTTP-client fields. This closes
+  the immediate separation increment, not every A1–A4 migration. Complete web
+  extraction, independent client/TUI crates and out-of-lock persistence remain
+  follow-ups. Extend boundaries with their consumers rather than adding more
+  general architecture ahead of features.
   Continuation construction also uses the shared application `Submission`
   constructor with captured settings and host-supplied grants/IDs. Approval
   eligibility is a borrowed application decision; authorization and the complete
@@ -163,7 +165,8 @@ with interchangeable drivers; complete the remaining extractions incrementally.
 | Priority | Work | Minimum dependency / first exit |
 | --- | --- | --- |
 | Shipped baseline / remaining P0 | R1a/R1b and R2 slices above; remaining R1/R2 edges, R3 history errors and R4 HTTP limits | Preserve shipped behavior; finish independent fixes with fault tests and real alerts. |
-| Next | A1/A2/A4 first state/effect slice, then incremental A3 and remaining boundaries | One complete operation behind typed commands, bounded projections and explicit effect results; current and experimental async drivers pass the same lifecycle/durability fixtures. This precedes broader features, not the small reliability fixes. |
+| Established baseline; extend with consumers | A1/A2/A4 first state/effect slice, then incremental A3 and remaining boundaries | Typed message/effect conformance, captured continuations, checkpoint reconciliation and the client/server build boundary are established. Broader web/client crate extraction and out-of-lock persistence remain open, without blocking the next feature. |
+| Next feature | M1 summary-call adapter, then C1/C2 compaction | One bounded text request/result/usage contract; configured hosted/local adapters, bounded history reads for summary jobs, independent compactor selection and recall/failure/performance fixtures. Full local tool-using agents follow later. |
 | P1 | E1 escalation with G1 request/dependency projections | Existing lifecycle and durable requests; one-slot resolution works. No broad spec/status subsystem. |
 | P1 | U1 coordination UI and A2A visibility | Read existing lifecycle, requests and ownership; add projections as needed. No dependency on all G1/O1/Q1 work. |
 | P1 | T1 terminal development workflow | Complete existing typed tool/query/approval surfaces for terminal review, PR/check follow-up and browser/process interaction. Keep policy in tools/adapters; see [terminal gaps and acceptance](TERMINAL.md). |
@@ -642,16 +645,16 @@ a human decision wait, posts one outcome and leaves unrelated work running.
 Ad hoc teams continue to work without recipes. Keep generalized workflow languages,
 distributed scheduling and arbitrary executable hooks outside this first layer.
 
-## Next after reliability: decouple state and execution
+## State/effect boundaries: established baseline and incremental follow-up
 
-A1–A4 are the next architectural work after the small diamond-run fixes, ahead
-of broader product improvements. Start with one complete callback-to-admission
-operation: typed input, domain state transition, persisted intent, interpreted
-effect and typed completion. Reuse the existing bot machine and its application
-adapter; do not invent a second supervisor. Expand only after that slice passes
-the checks below. Finishing every extraction or web/TUI crate split is not a
-prerequisite. New features use the proven boundary and extend it where needed;
-broad `State` access is not an acceptable shortcut.
+The first A1/A2/A4 operation boundary follows the small diamond-run fixes and is
+now established by the slices above. A1–A4 remain directions for consumer-led
+work: typed input, domain state transition, persisted intent, interpreted effect
+and typed completion. Reuse the existing bot machine and application adapter;
+do not invent a second supervisor. Keep the conformance gates below for each
+migrated operation. Finishing every extraction or web/TUI crate split is not a
+prerequisite for M1 and compaction. New features use the proven boundary and
+extend it where needed; broad `State` access is not an acceptable shortcut.
 
 The useful state-monad-like property is explicit composition: a transition maps
 domain state plus typed input to updated state and effect descriptions. Lift a
@@ -703,7 +706,7 @@ Registration/discovery does not authorize execution. Schema/version checks,
 namespacing, duplicate detection and scoped resource grants precede activation.
 Task-specific game adapters remain in their granted workload containers.
 
-## P2: model roles and local inference
+## M1: shared model calls, roles and local inference
 
 M1 defines separate captured selections for worker, lead, reviewer and compactor.
 S1 can independently expose an agent-started model service through tools/MCP;
@@ -712,6 +715,13 @@ Start with a bounded model request/result/usage interface usable by the summary
 worker, then add native API and configured local inference through Rust adapters.
 CLI providers continue to work. A provider choice does not change tools,
 permissions, workspace publication or the supervisor.
+
+This is the next feature increment after the client approval boundary. Keep one
+model-call contract and a shared registry, with CLI, hosted API and local endpoint
+adapters; do not add a crate per model or require a runtime rewrite. List the
+configured models in the UI, including local models and available low-cost
+Codex/Claude selections. Capture provider/model and capability metadata rather
+than treating every listed model as interchangeable or assuming account access.
 
 Every new attempt is a fresh provider session reconstructed from Control's
 committed journal, standing instructions and selected context. Within an active
@@ -771,6 +781,15 @@ hard-coded cheapest/default promise: choose using current account availability,
 measured recall and total cost. Local-model selection is equally explicit.
 [Pi's custom compaction](https://pi.dev/docs/latest/compaction) also demonstrates
 using a separate summarizer; Control implements its own typed boundary.
+
+The selector must also include configured Codex and Claude CLI models that can
+run a bounded text-only summary request without tool execution rights. Reuse
+CLI execution/normalization adapters and record availability and usage limits;
+do not create a separate summarizer implementation for each model. Low-cost
+choices should be selectable for compaction as well as ordinary model selection.
+Validate current availability, total cost and summary quality rather than
+hard-coding a permanent "cheapest" model. Never silently substitute a cloud model
+for a local-only selection.
 
 Cache identity includes access scope, immutable source IDs/hashes and ranges,
 child-summary hashes, model/provider revision, prompt/schema version and relevant

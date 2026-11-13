@@ -8,11 +8,32 @@ use serde_json::{Value, json};
 use std::{fs, io, time::Duration};
 const VERSION: &str = "2025-11-25";
 pub struct Hive {
-    pub(crate) client: Client,
-    pub(crate) endpoint: String,
-    pub(crate) next: u64,
-    #[cfg(test)]
-    pub(crate) operator_cookie: HeaderValue,
+    client: Client,
+    endpoint: String,
+    next: u64,
+    #[cfg(all(test, feature = "tui"))]
+    operator_cookie: HeaderValue,
+}
+
+#[derive(Clone, Copy)]
+pub enum PortDecision { Allow, Deny }
+
+/// The refreshed projection is retained even when approval is not confirmed.
+/// A transport failure is an outer error and must not be blindly retried.
+pub struct ProjectApproval {
+    pub detail: Value,
+    pub result: Result<(), String>,
+}
+impl ProjectApproval {
+    fn from_response(detail: Value, request: &str, redirected: bool) -> Self {
+        let project = &detail["project"];
+        let result = if project["request"] != request {
+            Err("Project request changed. Use /open to review it.".into())
+        } else if !redirected || project["pending"] == true || !project["grant"].is_string() {
+            Err(project["error"].as_str().unwrap_or("Folder was not opened. Use /open to review it or /open /absolute/path to change it.").into())
+        } else { Ok(()) };
+        Self { detail, result }
+    }
 }
 fn failure(message: impl std::fmt::Display) -> io::Error {
     io::Error::other(message.to_string())
@@ -34,6 +55,47 @@ pub(crate) fn local_server(value: &str) -> io::Result<Url> {
     Ok(url)
 }
 impl Hive {
+    #[cfg(all(test, feature = "tui"))]
+    pub(crate) fn fixture(client: Client, endpoint: String) -> Self {
+        Self { client, endpoint, next: 0, operator_cookie: HeaderValue::from_static("fixture") }
+    }
+    #[cfg(all(test, feature = "tui"))]
+    pub(crate) fn http(&self) -> &Client { &self.client }
+    #[cfg(all(test, feature = "tui"))]
+    pub(crate) fn operator_cookie(&self) -> &HeaderValue { &self.operator_cookie }
+    /// Submit an operator decision through this connection's authenticated
+    /// origin. The server rechecks ownership, request identity and permission.
+    pub fn decide_port(&self, chat: &str, request: &str, decision: PortDecision, loopback: bool) -> io::Result<()> {
+        let endpoint = Url::parse(&self.endpoint).map_err(failure)?;
+        let mut fields = vec![("id", request), ("return_chat", chat), ("response", "json"), ("seconds", "-1")];
+        if matches!(decision, PortDecision::Deny) { fields.push(("revoke", "yes")); }
+        if loopback { fields.push(("loopback", "yes")); }
+        let response = self.client.post(endpoint.join("/tools/ports").map_err(failure)?)
+            .timeout(Duration::from_secs(15))
+            .header("Origin", endpoint.origin().ascii_serialization())
+            .form(&fields).send().map_err(failure)?;
+        let status = response.status();
+        let value: Value = response.json().map_err(failure)?;
+        if !status.is_success() { return Err(failure(value["error"].as_str().unwrap_or("Port decision failed"))); }
+        Ok(())
+    }
+
+    /// Confirm the exact displayed request and read back its current result.
+    /// A redirect by itself is not proof that access was granted.
+    pub fn approve_project(&mut self, chat: &str, request: &str) -> io::Result<ProjectApproval> {
+        let endpoint = Url::parse(&self.endpoint).map_err(failure)?;
+        let mut target = endpoint.join("/").map_err(failure)?;
+        target.path_segments_mut().map_err(|_| failure("Invalid server URL"))?
+            .pop_if_empty().extend(["chat", chat, "project"]);
+        let response = self.client.post(target).timeout(Duration::from_secs(120))
+            .header("Origin", endpoint.origin().ascii_serialization())
+            .form(&[("approve", "yes"), ("request", request)]).send()
+            .map_err(|_| failure("Project approval did not finish; use /open to refresh before retrying."))?;
+        let status = response.status();
+        let detail = self.tool("control.chat.read", json!({"id":chat}))?;
+        Ok(ProjectApproval::from_response(detail, request, status.as_u16() == 303))
+    }
+
     pub fn connect(server: &str) -> io::Result<Self> {
         let url = local_server(server)?;
         let path = std::env::var_os("CONTROL_OPERATOR_FILE")
@@ -76,7 +138,7 @@ impl Hive {
             client,
             endpoint: url.join("mcp").unwrap().to_string(),
             next: 0,
-            #[cfg(test)]
+            #[cfg(all(test, feature = "tui"))]
             operator_cookie: cookie,
         };
         let init = hive.rpc("initialize", json!({"protocolVersion":VERSION,"capabilities":{},"clientInfo":{"name":"control-harness","version":env!("CARGO_PKG_VERSION")}}))?;
