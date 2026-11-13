@@ -114,13 +114,13 @@ bounds. Enabling notifications adds a descriptor and bounded input buffer to the
 existing collector thread rather than adding a thread per channel. The std-only
 runner gains no dependency; model execution and task-resource costs are excluded.
 
-The common `watches::collector_profile` fixture uses only the old runner API and
+The common `watches::tests::collector_profile` fixture uses only the old runner API and
 can be copied unchanged into the baseline. Run it only inside an isolated Linux
 container with a private home and writable `/workspace`, without credentials:
 
 ```sh
 rustc --edition=2024 --test -O -C debuginfo=1 tools/service-runner/main.rs -o /tmp/runner-tests
-/tmp/runner-tests watches::collector_profile --ignored --exact --nocapture
+/tmp/runner-tests watches::tests::collector_profile --ignored --exact --nocapture
 ```
 
 For longer sampling, set `CONTROL_WATCH_PROFILE_BATCHES=128` and apply the

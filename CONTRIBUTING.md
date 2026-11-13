@@ -44,8 +44,9 @@ point to the adjacent tests for complete examples. Use top-level `tests/` for
 integration tests that need public interfaces or a separate process. Splitting
 source files helps navigation/context; it does not itself create a compilation
 boundary or remove test code from production (the cfg already does that).
-Apply this incrementally when working on a module, rather than moving every
-suite as unrelated churn.
+Existing suites follow this layout throughout the repository, including shared
+standalone tools. Crate entry points and shared `#[path]` modules use explicit
+paths where needed; keep those paths relative to their declaring source file.
 
 CI runs those checks on Linux and macOS for pull requests and pushes to `main`.
 The default `tui` feature preserves `control tui` and `control-harness`. The
