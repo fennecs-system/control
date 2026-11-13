@@ -706,7 +706,7 @@ Registration/discovery does not authorize execution. Schema/version checks,
 namespacing, duplicate detection and scoped resource grants precede activation.
 Task-specific game adapters remain in their granted workload containers.
 
-## P2: model roles and local inference
+## M1: shared model calls, roles and local inference
 
 M1 defines separate captured selections for worker, lead, reviewer and compactor.
 S1 can independently expose an agent-started model service through tools/MCP;
