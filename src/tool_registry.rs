@@ -21,7 +21,8 @@ pub trait AttemptTools: Sync {
     fn known(&self, name: &str) -> bool;
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value>;
 }
-static ATTEMPT_TOOLS: [&dyn AttemptTools; 9] = [
+static ATTEMPT_TOOLS: [&dyn AttemptTools; 10] = [
+    &crate::github::inspection::Tools,
     &crate::compaction::Tools,
     &crate::recovery::Tools,
     &crate::turn_context::Tools,
@@ -88,6 +89,7 @@ pub fn entries() -> &'static [Entry] {
         entries.push(entry(crate::projects::definition(false)));
         entries.extend(crate::knowledge_tools::definitions().into_iter().map(entry));
         entries.push(entry(crate::github::definition()));
+        entries.push(entry(crate::github::inspection::definition(true)));
         entries.extend(crate::toolbox::definitions().into_iter().map(entry));
         entries.extend(crate::artifacts::definitions().into_iter().map(entry));
         entries.push(entry(browser_definition()));
@@ -148,7 +150,8 @@ pub fn worker_definitions(improve: bool) -> Vec<Value> {
     tools.push(crate::delegation::definition());
     tools.push(crate::spawning::definition());
     tools.extend(crate::spawning::management_definitions());
-    tools.extend(ATTEMPT_TOOLS.iter().flat_map(|tools| tools.definitions()));
+    tools.extend(ATTEMPT_TOOLS.iter().flat_map(|tools| tools.definitions())
+        .filter(|definition| improve || definition["name"] != "control_github_read"));
     tools.push(crate::delegated_results::definition());
     tools
 }

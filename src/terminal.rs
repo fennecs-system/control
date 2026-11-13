@@ -201,6 +201,14 @@ impl App {
                 };
                 self.status=if self.show_activity {"Tool details expanded · /activity folds them"}else{"Tool activity compact · failures remain visible"}.into();
             }
+            _ if text=="/github" || text.starts_with("/github ") => {
+                if self.active.is_empty() { return Err(failure("Open a conversation first")); }
+                let query = crate::client::github::Query::parse(text[7..].trim()).map_err(failure)?;
+                let value = hive.github_read(&self.active, query)?;
+                self.inspector = Some(("GitHub evidence".into(), serde_json::to_string_pretty(&value).map_err(failure)?));
+                self.scroll=0;self.follow=false;
+                self.status="Repository evidence · /github PR checks or statuses · /chat returns".into();
+            }
             "/compact" => {
                 if self.active.is_empty() { return Err(failure("Open a conversation first")); }
                 self.set_detail(hive.tool("control.chat.read", json!({"id":self.active}))?);
