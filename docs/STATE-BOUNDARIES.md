@@ -181,6 +181,12 @@ request grouping, acknowledgement and rollback still live in the existing port
 and bot drivers, and bot reconciliation retains its wider snapshot. The root
 lock remains held throughout. No async or out-of-lock persistence is enabled.
 
+Bot presentation reads pause intent independently from the supervisor's retained
+turn handle. An outstanding request is not evidence of execution: queued work
+is labelled queued, a paused queued bot is paused, and an already-executing turn
+remains visible as running while paused. This projection changes no admission,
+pause, rearm or cancellation semantics and adds no persisted status source.
+
 Next, migrate callback admission and continuation/approval operations behind the
 same style of interface, then bounded queries that let web rendering leave the
 lock. Finish the client/TUI crate boundary over the shared library interface;

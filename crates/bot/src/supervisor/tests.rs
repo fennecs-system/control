@@ -996,3 +996,20 @@ fn outstanding_turns_keep_their_destination_stops_clear_timers_and_cursor_zero_c
     assert!(s.step(done("bot", turn), Now(501)).is_empty());
     assert_eq!(s.status(&bot("bot")), None);
 }
+
+#[test]
+fn pause_intent_is_observable_without_discarding_an_outstanding_turn() {
+    let mut s = S::default();
+    define(&mut s, "bot", vec![room("general")], budget(0, 60_000, 10), 0);
+    let turn = turns(&s.step(message(None, 1), Now(1)))[0].1;
+    assert!(!s.paused(&bot("bot")));
+    s.step(Event::Pause(bot("bot")), Now(2));
+    let mut restored: S = serde_json::from_slice(&serde_json::to_vec(&s).unwrap()).unwrap();
+    assert!(restored.paused(&bot("bot")));
+    assert_eq!(restored.status(&bot("bot")), Some(Status::WaitingTurn));
+    assert!(restored.eligible(&bot("bot"), &turn));
+    assert!(!restored.may_start(&bot("bot"), &turn));
+    restored.step(Event::Resume(bot("bot")), Now(3));
+    assert!(!restored.paused(&bot("bot")));
+    assert!(restored.may_start(&bot("bot"), &turn));
+}

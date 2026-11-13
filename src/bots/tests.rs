@@ -575,7 +575,7 @@ fn room_messages_wake_a_bot_once_and_its_finished_turn_releases_the_next() {
     );
     assert_eq!(
         status(&state, &chat).as_deref(),
-        Some("Bot · working · room #general")
+        Some("Bot · queued · room #general")
     );
 }
 
@@ -2017,4 +2017,28 @@ fn a_finished_watch_still_delivers_its_last_output_and_exit() {
         bot_runs(&state)[1].objective.contains("exited with code 0"),
         "the exit was kept for the next turn"
     );
+}
+
+#[test]
+fn paused_queued_bot_is_not_reported_working_but_an_active_turn_remains_visible() {
+    let (mut state, chat) = fixture();
+    command_at(&mut state, &chat, "on", Now(0)).unwrap();
+    peer_message_at(&mut state, &chat, 1, Now(1));
+    reconcile_at(&mut state, 2, |_| Ok(())).unwrap();
+    let index = state.runtime.runs.iter().position(|run| run.bot_turn.is_some()).unwrap();
+    assert!(status(&state, &chat).unwrap().contains(" · queued · "));
+    command_at(&mut state, &chat, "pause", Now(3)).unwrap();
+    let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+    assert!(status(&restored, &chat).unwrap().contains(" · paused · "));
+    assert!(!status(&restored, &chat).unwrap().contains("working"));
+    let turn = restored.runtime.runs[index].bot_turn.as_ref().unwrap().turn;
+    assert!(!restored.bots.supervisor.may_start(&bot(&chat), &TurnId(turn)));
+    restored.runtime.runs[index].status = "running".into();
+    assert!(status(&restored, &chat).unwrap().contains("paused · current turn running"));
+    restored.runtime.runs[index].status = "cancelling".into();
+    assert!(status(&restored, &chat).unwrap().contains("paused · current turn stopping"));
+    restored.runtime.runs[index].status = "queued".into();
+    command_at(&mut restored, &chat, "resume", Now(4)).unwrap();
+    assert!(status(&restored, &chat).unwrap().contains(" · queued · "));
+    assert!(restored.bots.supervisor.may_start(&bot(&chat), &TurnId(turn)));
 }

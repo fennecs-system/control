@@ -224,9 +224,27 @@ pub(crate) fn status(state: &State, chat: &str) -> Option<String> {
     if sources.is_empty() {
         sources = "no sources".into();
     }
+    // An outstanding supervisor request may still be queued, or may continue
+    // running after pause. Project intent and actual execution independently.
+    let activity = if matches!(status, Status::WaitingTurn | Status::Paused) {
+        state.runtime.runs.iter().rev().find(|run| run.chat_id.as_deref() == Some(chat)
+            && matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling"))
+            .map(|run| run.status.as_str())
+    } else { None };
     let state = match status {
+        _ if status != Status::Stopping && state.bots.supervisor.paused(&id) => match activity {
+            Some("running") => "paused · current turn running",
+            Some("cancelling") => "paused · current turn stopping",
+            _ => "paused",
+        },
         Status::Ready => "sleeping",
-        Status::WaitingTurn => "working",
+        Status::WaitingTurn => match activity {
+            Some("running") => "working",
+            Some("cancelling") => "stopping current turn",
+            Some("queued") => "queued",
+            Some("waiting") => "waiting for decision",
+            _ => "waiting for turn result",
+        },
         Status::Paused => "paused",
         Status::Stopping => "stopping",
     };

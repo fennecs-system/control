@@ -150,15 +150,23 @@ pub(crate) fn latest_task(state: &State, chat: &str, actor: &Actor) -> Option<us
         .max_by_key(|(index, run)| (run.queue_order, *index))
         .map(|(index, _)| index)
 }
+/// A full queue defers admission; rejected input or authority does not retry.
+#[derive(Debug)]
+pub(crate) enum ContinuationError {
+    Busy,
+    Rejected,
+}
+
 /// Prepares an admitted continuation from captured settings. Publication,
 /// checkpointing and dispatcher notification belong to the caller.
-pub(crate) fn continuation(state: &State, chat: &str, from: usize, objective: String, kind: crate::runtime::RunKind, source: &str) -> Result<crate::runtime::Run, &'static str> {
+#[inline]
+pub(crate) fn continuation(state: &State, chat: &str, from: usize, objective: String, kind: crate::runtime::RunKind, source: &str) -> Result<crate::runtime::Run, ContinuationError> {
     use crate::application::runs::Submission;
     let latest = &state.runtime.runs[from];
-    identity::authorize(&latest.actor, latest.action)?;
-    crate::scheduler::admit(&state.runtime)?;
+    identity::authorize(&latest.actor, latest.action).map_err(|_| ContinuationError::Rejected)?;
+    crate::scheduler::admit(&state.runtime).map_err(|_| ContinuationError::Busy)?;
     if objective.is_empty() || control_context::limits::message_too_long(&objective) {
-        return Err(control_context::limits::CHAT_MESSAGE_ERROR);
+        return Err(ContinuationError::Rejected);
     }
     let grants = crate::services::grants(state, latest);
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();

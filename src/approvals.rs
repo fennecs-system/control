@@ -30,24 +30,22 @@ pub(crate) fn resume(state: &mut State, decisions: Decisions<'_>) -> Outcome {
     let latest = match approval_resume::decide(&state.runtime.runs, chat, decisions.origins) {
         Eligibility::Wait => return Outcome::Wait,
         Eligibility::Note => None,
-        Eligibility::Candidate(at) => {
-            let run = &state.runtime.runs[at];
-            crate::identity::authorize(&run.actor, run.action).is_ok().then_some(at)
-        }
+        Eligibility::Candidate(at) => Some(at),
     };
     let mut continuation = None;
     if let Some(latest) = latest {
-        if crate::scheduler::admit(&state.runtime).is_err() {
-            return Outcome::Wait;
-        }
         let objective = format!("Operator {}:\n{}\n{} Original task:\n{}", decisions.heading.to_lowercase(), decisions.lines, decisions.instruction, decisions.task).chars().take(2000).collect();
-        if let Ok(mut run) = crate::chat::continuation(state, chat, latest, objective, decisions.kind, decisions.source) {
-            for grant in decisions.grants {
-                if !run.resource_grants.contains(&grant) {
-                    run.resource_grants.push(grant);
+        match crate::chat::continuation(state, chat, latest, objective, decisions.kind, decisions.source) {
+            Ok(mut run) => {
+                for grant in decisions.grants {
+                    if !run.resource_grants.contains(&grant) {
+                        run.resource_grants.push(grant);
+                    }
                 }
+                continuation = Some(run);
             }
-            continuation = Some(run);
+            Err(crate::chat::ContinuationError::Busy) => return Outcome::Wait,
+            Err(crate::chat::ContinuationError::Rejected) => {}
         }
     }
     approval_resume::record(Edit {

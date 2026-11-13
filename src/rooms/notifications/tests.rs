@@ -26,8 +26,8 @@ fn a_bot_turn_stays_open_until_its_continuation_finishes() {
     assert!(
         crate::bots::status(&state, &chat)
             .unwrap()
-            .contains("working"),
-        "the continuation keeps the turn open"
+            .contains("queued"),
+        "the queued continuation keeps the turn open without claiming execution"
     );
     assert_eq!(
         state

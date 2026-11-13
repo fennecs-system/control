@@ -1,7 +1,7 @@
 use super::*;
 
 // The host preparation API is read-only. Fixtures explicitly publish its result.
-fn enqueue_continuation(state: &mut State, chat: &str, from: usize, objective: String, kind: RunKind, source: &str) -> Result<String, &'static str> {
+fn enqueue_continuation(state: &mut State, chat: &str, from: usize, objective: String, kind: RunKind, source: &str) -> Result<String, ContinuationError> {
     let run = continuation(state, chat, from, objective, kind, source)?;
     let id = run.id.clone();
     state.runtime.runs.push(run);

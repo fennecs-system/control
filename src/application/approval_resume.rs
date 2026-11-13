@@ -24,6 +24,7 @@ pub(crate) struct Edit<'a> {
 /// No I/O, IDs, clock, policy lookup or dispatcher notification. The driver must
 /// checkpoint these edits with its request receipts before waking a dispatcher.
 /// Keep exclusive ownership through acknowledgement; this is not an async plan.
+#[inline]
 pub(crate) fn record(edit: Edit<'_>, chat: &str, run: Option<Run>, text: String) -> Outcome {
     let run_id = run.as_ref().map(|run| run.id.clone());
     if let Some(run) = run {
