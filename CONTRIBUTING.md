@@ -37,6 +37,16 @@ cd ..
 cargo build --release --locked --bins
 ```
 
+Keep substantial unit-test suites beside their implementation: `file.rs` uses
+`#[cfg(test)] mod tests;` to load `file/tests.rs`. They retain private access and
+the same module paths. Keep short usage/contract documentation near the API and
+point to the adjacent tests for complete examples. Use top-level `tests/` for
+integration tests that need public interfaces or a separate process. Splitting
+source files helps navigation/context; it does not itself create a compilation
+boundary or remove test code from production (the cfg already does that).
+Apply this incrementally when working on a module, rather than moving every
+suite as unrelated churn.
+
 CI runs those checks on Linux and macOS for pull requests and pushes to `main`.
 The default `tui` feature preserves `control tui` and `control-harness`. The
 server-only build omits terminal presentation and its dependencies; CI also
