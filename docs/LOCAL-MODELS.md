@@ -84,11 +84,14 @@ remain usable as new messages arrive. Missing/invalid summaries fall back to
 recent raw entries within the configured byte budget, with failures visible in
 the inspector; chats without opt-in keep their existing history policy.
 
-This first worker limits a snapshot to 4096 entries / 1 MiB and retains at most
-16 ready views in memory. Exceeding the snapshot limit reports an error rather
-than processing a partial history. It is a bounded first implementation, not a
-claim of unlimited history processing. Disk cache retention/GC and incremental
-journal reads beyond this ceiling remain follow-up work.
+The worker reads at most 64 entries / 1 MiB of encoded text per source page and
+retains at most 16 ready summary views. There is no 4096-entry or 1 MiB total
+history ceiling. A single oversized source entry fails visibly. Content-addressed
+source pages and completed subtrees are reused; inference still reads bounded
+leaves or child pairs. Source descriptors and the existing retained-history
+indexes grow with history; this does not claim constant memory for all of Control.
+Source validation still scans the covered prefix. Disk cache retention/GC remains
+separate work; do not interpret "infinite" as free or unlimited storage.
 
 ## External llama.cpp service
 
