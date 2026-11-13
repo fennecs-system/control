@@ -1,5 +1,87 @@
-
 use super::*;
+
+#[test]
+fn invalid_continuation_input_leaves_the_queue_and_notice_unchanged() {
+    let mut state = State::default();
+    state
+        .runtime
+        .enqueue("original".into(), RunKind::Task, "test");
+    state.runtime.runs[0].status = "completed".into();
+    state.runtime.notice = "unchanged".into();
+    for objective in [
+        String::new(),
+        "x".repeat(control_context::limits::CHAT_MESSAGE_CHARS + 1),
+    ] {
+        assert!(
+            enqueue_continuation(
+                &mut state,
+                "chat",
+                0,
+                objective,
+                RunKind::PortDecision,
+                "test"
+            )
+            .is_err()
+        );
+        assert_eq!(state.runtime.runs.len(), 1);
+        assert_eq!(state.runtime.notice, "unchanged");
+    }
+}
+
+#[test]
+#[ignore = "release continuation benchmark and perf fixture; synthetic state, no model calls"]
+fn profile_continuation_admission() {
+    use std::{hint::black_box, time::Instant};
+    let rounds = std::env::var("CONTROL_CONTINUATION_ROUNDS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(100)
+        .clamp(1, 100_000);
+    for retained in [16, 1024, 20_001] {
+        let mut state = State::default();
+        state
+            .runtime
+            .enqueue("original".into(), RunKind::Task, "fixture");
+        let mut origin = state.runtime.runs.pop().unwrap();
+        origin.status = "completed".into();
+        origin.model = Some("captured-model".into());
+        origin.chat_id = Some("chat".into());
+        state.runtime.runs = (0..retained)
+            .map(|index| {
+                let mut run = origin.clone();
+                run.id = format!("run-{index}");
+                run.queue_order = index as u64;
+                run
+            })
+            .collect();
+        let mut samples = Vec::new();
+        for batch in 0..11 {
+            let start = Instant::now();
+            for _ in 0..rounds {
+                let id = enqueue_continuation(
+                    black_box(&mut state),
+                    "chat",
+                    0,
+                    "continue".into(),
+                    RunKind::PortDecision,
+                    "fixture",
+                )
+                .unwrap();
+                black_box(id);
+                black_box(state.runtime.runs.pop().unwrap());
+            }
+            if batch != 0 {
+                samples.push(start.elapsed().as_nanos() / rounds as u128);
+            }
+        }
+        samples.sort_unstable();
+        println!(
+            "{}",
+            json!({"case":"continuation_admission", "retained":retained,
+            "median_ns":(samples[4]+samples[5])/2, "min_ns":samples[0], "max_ns":samples[9], "rounds":rounds})
+        );
+    }
+}
 #[test]
 fn long_unicode_messages_reach_runs_and_reject_overflow_without_changes() {
     let mut state = State::default();

@@ -62,6 +62,9 @@ WASM tooling fix shipped in #143; both platform checks passed before merging.
   legacy callers: pre-replacement failure versus unconfirmed rename/directory
   sync. Migrating transactions to reconcile unconfirmed writes remains open;
   this does not yet make out-of-lock or cancellable persistence safe.
+  Continuation construction also uses the shared application `Submission`
+  constructor with captured settings and host-supplied grants/IDs. Approval
+  eligibility, persistence and the complete continuation operation remain open.
 
 The fresh deployed Codex trial ran over two hours after approvals without further
 operator steering: house/perimeter verification, repeated crop harvest/replant,

@@ -58,6 +58,26 @@ pub(crate) struct Submission {
     pub action: Action,
 }
 impl Submission {
+    /// Construct a fresh continuation from captured settings. The host supplies
+    /// current grants, authorization/admission, identity and queue position.
+    /// Never clone the origin's attempts, pending requests or execution state.
+    pub(crate) fn into_continuation(
+        self,
+        origin: &Run,
+        chat: &str,
+        id: String,
+        queue_order: u64,
+        grants: Vec<crate::services::Grant>,
+    ) -> Run {
+        let mut run = self.into_run(id, queue_order, origin.backend, origin.model.clone());
+        run.chat_id = Some(chat.into());
+        run.context = origin.context.clone();
+        run.lenses = origin.lenses.clone();
+        run.persona = Some(crate::delegation::lineage(origin));
+        run.resource_grants = grants;
+        run
+    }
+
     pub(crate) fn into_run(
         self,
         id: String,
@@ -93,6 +113,9 @@ impl Submission {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
 impl Run {
     /// Milliseconds since the epoch when the run was queued, from its identifier.
     pub(crate) fn created_ms(&self) -> Option<u64> {
