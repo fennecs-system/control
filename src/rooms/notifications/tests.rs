@@ -278,8 +278,8 @@ fn one_shot_retains_grants_received_after_arming() {
     let chat = state.chats[0].id.clone();
     watch(&mut state, &run, true);
     let grant = shared_service(&mut state);
-    crate::chat::enqueue_continuation(
-        &mut state,
+    let continuation = crate::chat::continuation(
+        &state,
         &chat,
         0,
         "Service ready".into(),
@@ -287,6 +287,7 @@ fn one_shot_retains_grants_received_after_arming() {
         "test",
     )
     .unwrap();
+    state.runtime.runs.push(continuation);
     state.runtime.runs[1].resource_grants.push(grant);
     for run in &mut state.runtime.runs {
         run.status = "completed".into();

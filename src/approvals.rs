@@ -1,8 +1,10 @@
 //! Operator decisions that resume the agent which asked, shared by port and bot
 //! requests. Callers keep their own request records and acknowledge them once
-//! `resume` returns anything but `Wait`.
+//! `resume` returns anything but `Wait`. Checkpoint that receipt with the edits
+//! before waking the dispatcher; this preparation step performs no I/O.
 use crate::{State, runtime::RunKind};
-use crate::application::approval_resume::{self, Eligibility};
+use crate::application::approval_resume::{self, Eligibility, Edit};
+pub(crate) use approval_resume::Outcome;
 
 pub(crate) struct Decisions<'a> {
     /// Requester chat and the runs that made the requests.
@@ -20,17 +22,6 @@ pub(crate) struct Decisions<'a> {
     pub grants: Vec<crate::services::Grant>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Outcome {
-    /// The chat is busy or there is no capacity; try again later.
-    Wait,
-    Resumed(String),
-    /// A newer human turn steers the task, the request's turn did not finish
-    /// or its actor may no longer act; the decisions are recorded in the chat
-    /// without a new turn.
-    Noted,
-}
-
 /// Resumes the requester when its latest turn completed and no human turn
 /// followed the latest request. An answered design question continues the
 /// same turn rather than steering it.
@@ -44,27 +35,24 @@ pub(crate) fn resume(state: &mut State, decisions: Decisions<'_>) -> Outcome {
             crate::identity::authorize(&run.actor, run.action).is_ok().then_some(at)
         }
     };
-    let mut run_id = None;
+    let mut continuation = None;
     if let Some(latest) = latest {
         if crate::scheduler::admit(&state.runtime).is_err() {
             return Outcome::Wait;
         }
         let objective = format!("Operator {}:\n{}\n{} Original task:\n{}", decisions.heading.to_lowercase(), decisions.lines, decisions.instruction, decisions.task).chars().take(2000).collect();
-        if let Ok(id) = crate::chat::enqueue_continuation(state, chat, latest, objective, decisions.kind, decisions.source) {
-            let run = state.runtime.runs.last_mut().unwrap();
+        if let Ok(mut run) = crate::chat::continuation(state, chat, latest, objective, decisions.kind, decisions.source) {
             for grant in decisions.grants {
                 if !run.resource_grants.contains(&grant) {
                     run.resource_grants.push(grant);
                 }
             }
-            run_id = Some(id);
+            continuation = Some(run);
         }
     }
-    if let Some(session) = state.chats.iter_mut().find(|session| session.id == chat) {
-        session.messages.push(crate::chat::Message { text: format!("{}\n{}", decisions.heading, decisions.lines), run_id: run_id.clone(), reply: String::new() });
-        session.revision = session.revision.saturating_add(1);
-    }
-    run_id.map_or(Outcome::Noted, Outcome::Resumed)
+    approval_resume::record(Edit {
+        runs: &mut state.runtime.runs, notice: &mut state.runtime.notice, chats: &mut state.chats,
+    }, chat, continuation, format!("{}\n{}", decisions.heading, decisions.lines))
 }
 
 #[cfg(test)]

@@ -557,7 +557,11 @@ fn needs_recovery(state:&State, index:usize) -> bool {
             || newer.kind.prompt_role()==control_context::agent_policy::PromptRole::Instruction))
 }
 
-fn reconcile_at(state: &mut State, now: u64, mut save: impl FnMut(&State) -> std::io::Result<()>) -> Result<(), &'static str> {
+fn reconcile_at(state: &mut State, now: u64, save: impl FnMut(&State) -> std::io::Result<()>) -> Result<(), &'static str> {
+    reconcile_with_wake_at(state, now, save, crate::worker::wake)
+}
+
+fn reconcile_with_wake_at(state: &mut State, now: u64, mut save: impl FnMut(&State) -> std::io::Result<()>, wake: impl FnOnce()) -> Result<(), &'static str> {
     let peers = peer_events(state).into_iter().map(|(chat, cursor)| (chat.to_owned(), cursor)).collect::<Vec<_>>();
     let recoveries=state.chats.iter().enumerate().filter_map(|(chat_index,chat)| {
         if !defined(state,&chat.id) { return None; }
@@ -599,7 +603,7 @@ fn reconcile_at(state: &mut State, now: u64, mut save: impl FnMut(&State) -> std
     let watches = state.watches.clone();
     let (runs, notice) = (state.runtime.runs.len(), state.runtime.notice.clone());
     let chats = state.chats.iter().map(|session| (session.messages.len(), session.revision,session.continuity.as_ref().and_then(|mode|mode.recovered.clone()))).collect::<Vec<_>>();
-    let decided = advance(state);
+    let (decided, resumed) = advance(state);
     // Turns requested earlier and now finished; decided before new events so a
     // turn requested in this pass is never mistaken for a finished one.
     let finished = if outstanding {
@@ -725,6 +729,7 @@ fn reconcile_at(state: &mut State, now: u64, mut save: impl FnMut(&State) -> std
         }
         return Err("Could not save bot progress; events remain pending.");
     }
+    if resumed { wake(); }
     Ok(())
 }
 
@@ -889,8 +894,9 @@ fn decide(state: &mut State, id: &str, allow: bool, chat: Option<&str>, now: Now
 /// Resumes each requesting agent once all its requests are decided, if the
 /// requesting turn (or its continuation) is still the latest in that chat;
 /// otherwise records the decisions in the chat without a new turn.
-fn advance(state: &mut State) -> bool {
+fn advance(state: &mut State) -> (bool, bool) {
     let mut changed = false;
+    let mut resumed = false;
     let requesters = state.bots.approvals.iter()
         .filter(|a| a.decision != Decision::Pending && !a.acknowledged)
         .map(|a| a.requester.clone()).collect::<std::collections::BTreeSet<_>>();
@@ -914,12 +920,13 @@ fn advance(state: &mut State) -> bool {
         if outcome == crate::approvals::Outcome::Wait {
             continue;
         }
+        resumed |= matches!(outcome, crate::approvals::Outcome::Resumed(_));
         for approval in state.bots.approvals.iter_mut().filter(|a| a.requester == requester && a.decision != Decision::Pending) {
             approval.acknowledged = true;
         }
         changed = true;
     }
-    changed
+    (changed, resumed)
 }
 
 fn visible(state: &State, approval: &Approval, chat: &str) -> bool {

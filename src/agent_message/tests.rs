@@ -610,8 +610,8 @@ fn explicit_late_service_grants_reach_only_the_queued_turn_and_survive_continuat
     );
     let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
     let from = restored.runtime.runs.len() - 1;
-    crate::chat::enqueue_continuation(
-        &mut restored,
+    let continuation = crate::chat::continuation(
+        &restored,
         &child,
         from,
         "Continue".into(),
@@ -619,6 +619,7 @@ fn explicit_late_service_grants_reach_only_the_queued_turn_and_survive_continuat
         "test",
     )
     .unwrap();
+    restored.runtime.runs.push(continuation);
     assert!(crate::services::accessible(
         &restored.services[0],
         &node,

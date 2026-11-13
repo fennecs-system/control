@@ -164,8 +164,22 @@ The host keeps authorization, capacity, request acknowledgement and durable
 publication, using the same continuation constructor. Existing busy-chat,
 human-steering, design-answer and failure rules are unchanged. Candidate indices
 are ephemeral under exclusive state ownership, not plans to carry across an
-await or another writer. The complete request-acknowledgement transaction is
-still a subsequent extraction.
+await or another writer.
+
+Approval publication now takes an `approval_resume::Edit` containing only runs,
+the queue notice and borrowed chat records. `chat::continuation` prepares an
+admitted run without changing state or notifying a dispatcher. The host adds
+current grants, then the application operation records that run and its note.
+Port and bot drivers acknowledge their existing request records in the same
+checkpoint and notify the dispatcher only after successful persistence. Ordinary
+save rejection restores the prior edits and sends no wake; reload does not replay
+acknowledged requests. The existing checkpoint adapter reconciles or fences an
+uncertain publication instead of returning an ordinary rollback error.
+
+This completes the ordering of this blocking path, not its full extraction:
+request grouping, acknowledgement and rollback still live in the existing port
+and bot drivers, and bot reconciliation retains its wider snapshot. The root
+lock remains held throughout. No async or out-of-lock persistence is enabled.
 
 Next, migrate callback admission and continuation/approval operations behind the
 same style of interface, then bounded queries that let web rendering leave the

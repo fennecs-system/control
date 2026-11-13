@@ -33,6 +33,9 @@ fn profile_approval_resume() {
             for _ in 0..rounds {
                 let result = decide(black_box(&mut state), &chat, "run-0");
                 assert!(matches!(result, Outcome::Resumed(_)));
+                // Synthetic successful acknowledgement: the driver now owns the
+                // wake. Retain one notification per measured admission.
+                crate::worker::wake();
                 black_box(result);
                 black_box(state.runtime.runs.pop().unwrap());
                 black_box(state.chats[0].messages.pop().unwrap());

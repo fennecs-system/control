@@ -23,6 +23,30 @@ fn approved() -> (State, String) {
     approve(&mut state, &id, 60, false, None, now(), |_| Ok(())).unwrap();
     (state, chat)
 }
+
+#[test]
+fn dispatcher_wakes_only_after_acknowledged_checkpoint_and_never_on_replay() {
+    let (mut state, _) = approved();
+    state.runtime.runs[0].status = "completed".into();
+    let checkpointed = std::cell::Cell::new(false);
+    let wakes = std::cell::Cell::new(0);
+    let before = serde_json::to_vec(&state).unwrap();
+    assert!(advance_with_wake(&mut state, |_| Err(fail("disk full")), || wakes.set(wakes.get() + 1)).is_err());
+    assert_eq!(wakes.get(), 0);
+    assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+    advance_with_wake(&mut state, |state| {
+        assert!(state.ports[0].decision.as_ref().unwrap().acknowledged);
+        assert_eq!(state.runtime.runs.last().unwrap().kind, RunKind::PortDecision);
+        checkpointed.set(true);
+        Ok(())
+    }, || {
+        assert!(checkpointed.get());
+        wakes.set(wakes.get() + 1);
+    }).unwrap();
+    assert_eq!(wakes.get(), 1);
+    let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+    advance_with_wake(&mut restored, |_| panic!("no replay checkpoint"), || panic!("no replay wake")).unwrap();
+}
 #[test]
 fn approval_waits_for_turn_and_wakes_once_with_captured_provider_after_reload() {
     let (mut state, chat) = approved();

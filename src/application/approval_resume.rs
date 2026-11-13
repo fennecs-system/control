@@ -1,7 +1,41 @@
-//! Approval eligibility over borrowed run records; no policy lookup or effects.
-//! The host authorizes a candidate and checks admission before constructing it.
+//! Approval eligibility and publication over borrowed records; no I/O or policy.
+//! The host admits candidates and checkpoints publication with request receipts.
 use super::runs::Run;
 use control_context::agent_policy::{MessageSpeaker, RunKind};
+use super::conversations::{Message, Session};
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Outcome {
+    /// The chat is busy or there is no capacity; try again later.
+    Wait,
+    Resumed(String),
+    /// Only record the decisions; a newer human turn or failed authorization
+    /// or completion check prevents starting another turn.
+    Noted,
+}
+
+pub(crate) struct Edit<'a> {
+    pub runs: &'a mut Vec<Run>,
+    pub notice: &'a mut String,
+    pub chats: &'a mut [Session],
+}
+
+/// Publish an already-admitted continuation and its note over borrowed records.
+/// No I/O, IDs, clock, policy lookup or dispatcher notification. The driver must
+/// checkpoint these edits with its request receipts before waking a dispatcher.
+/// Keep exclusive ownership through acknowledgement; this is not an async plan.
+pub(crate) fn record(edit: Edit<'_>, chat: &str, run: Option<Run>, text: String) -> Outcome {
+    let run_id = run.as_ref().map(|run| run.id.clone());
+    if let Some(run) = run {
+        edit.runs.push(run);
+        *edit.notice = "Run queued.".into();
+    }
+    if let Some(session) = edit.chats.iter_mut().find(|session| session.id == chat) {
+        session.messages.push(Message { text, run_id: run_id.clone(), reply: String::new() });
+        session.revision = session.revision.saturating_add(1);
+    }
+    run_id.map_or(Outcome::Noted, Outcome::Resumed)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Eligibility {

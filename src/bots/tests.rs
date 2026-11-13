@@ -1189,6 +1189,32 @@ fn decisions_for_a_superseded_requester_are_recorded_without_a_new_turn() {
 }
 
 #[test]
+fn approval_dispatch_follows_checkpoint_and_failed_saves_leave_no_wake() {
+    let (mut state, parent, child) = requester();
+    let id = ask(&mut state, "n1", &child, None).unwrap()["request_id"].as_str().unwrap().to_owned();
+    finish_requesting_turn(&mut state);
+    command_at(&mut state, &parent, &format!("deny {id}"), Now(1)).unwrap();
+    let before = serde_json::to_vec(&state).unwrap();
+    let checkpointed = std::cell::Cell::new(false);
+    let wakes = std::cell::Cell::new(0);
+    assert!(reconcile_with_wake_at(&mut state, 2, |_| Err(io::Error::other("disk full")), || wakes.set(wakes.get() + 1)).is_err());
+    assert_eq!(wakes.get(), 0);
+    assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+    reconcile_with_wake_at(&mut state, 2, |state| {
+        assert!(state.bots.approvals.iter().all(|a| a.acknowledged));
+        assert_eq!(state.runtime.runs.last().unwrap().kind, RunKind::BotDecision);
+        checkpointed.set(true);
+        Ok(())
+    }, || {
+        assert!(checkpointed.get());
+        wakes.set(wakes.get() + 1);
+    }).unwrap();
+    assert_eq!(wakes.get(), 1);
+    let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+    reconcile_with_wake_at(&mut restored, 2, |_| Ok(()), || panic!("no replay wake")).unwrap();
+}
+
+#[test]
 fn the_chat_panel_route_decides_and_rolls_back_failed_saves() {
     let (mut state, parent, child) = requester();
     let id = ask(&mut state, "n1", &child, None).unwrap()["request_id"]
@@ -1356,8 +1382,8 @@ fn control_initiated_turns_after_a_request_do_not_drop_its_resume() {
         .unwrap()
         .to_owned();
     finish_requesting_turn(&mut state);
-    crate::chat::enqueue_continuation(
-        &mut state,
+    let continuation = crate::chat::continuation(
+        &state,
         &parent,
         0,
         "Message from the lead".into(),
@@ -1365,6 +1391,7 @@ fn control_initiated_turns_after_a_request_do_not_drop_its_resume() {
         "agent-message",
     )
     .unwrap();
+    state.runtime.runs.push(continuation);
     state.runtime.runs.last_mut().unwrap().status = "completed".into();
     command_at(&mut state, &parent, &format!("deny {id}"), Now(1)).unwrap();
     reconcile_at(&mut state, 2, |_| Ok(())).unwrap();
