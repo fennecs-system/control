@@ -85,6 +85,9 @@ fn functions(space: &Value, file: &str, tests: &[(usize, usize)], output: &mut V
     let name = space["name"].as_str().unwrap_or("");
     let line = space["start_line"].as_u64().unwrap_or(0) as usize;
     let test = file.split('/').any(|part| part == "tests")
+        || Path::new(file)
+            .file_name()
+            .is_some_and(|name| name == "tests.rs")
         || tests
             .iter()
             .any(|&(start, end)| (start..=end).contains(&line));
@@ -340,5 +343,21 @@ mod tests {
         assert_eq!(output.len(), 2);
         assert_eq!(output[0]["test_scope"], true);
         assert_eq!(output[1]["test_scope"], false);
+    }
+
+    #[test]
+    fn external_test_modules_include_unannotated_helpers() {
+        let helper = json!({"name": "fixture", "kind": "function", "start_line": 1});
+        for (file, expected) in [
+            ("src/application/notifications/tests.rs", true),
+            ("src/room_wakes/tests/helpers.rs", true),
+            ("crates/bot/tests.rs", true),
+            ("src/application/notifications.rs", false),
+            ("src/latest_tests.rs", false),
+        ] {
+            let mut output = vec![];
+            functions(&helper, file, &[], &mut output);
+            assert_eq!(output[0]["test_scope"], expected, "{file}");
+        }
     }
 }

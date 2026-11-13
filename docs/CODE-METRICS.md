@@ -26,7 +26,9 @@ can be worse than a little repetition.
   anonymous closures remain in the raw analyzer output. Function sums include nested
   closures, so summing all function scores would double-count work.
 - A small Rust reporter uses Syn source spans to recognize direct `#[cfg(test)]`
-  modules/functions/impls, `#[test]` functions, and dedicated `tests/` directories.
+  modules/functions/impls, `#[test]` functions, dedicated `tests/` directories and
+  conventional `tests.rs` files (including unannotated fixture helpers). File naming
+  is a convention-based label; it does not resolve external module declarations.
   It does not evaluate arbitrary `cfg` expressions or expand macros. Complex conditional
   test scopes and macro-generated code require manual inspection. These are source
   metrics, not executable path coverage or Rust compiler complexity.
