@@ -1962,7 +1962,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
         }
         // Use the application's normal client; this test never reads or prints a credential.
-        let mut hive = crate::harness::Hive::connect(&url).unwrap();
+        let mut hive = control::client::Hive::connect(&url).unwrap();
         let mut tool = |name: &str, arguments: serde_json::Value| {
             let value = hive.rpc("tools/call", json!({"name":name,"arguments":arguments})).unwrap();
             assert_ne!(value["isError"], true, "QA request refused");

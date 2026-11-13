@@ -34,6 +34,7 @@
       packages = eachSystem (pkgs:
         let control = import ./hosting/package.nix { inherit pkgs; }; in {
           inherit control;
+          control-server = import ./hosting/package.nix { inherit pkgs; withTerminal = false; };
           default = control;
         } // nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           worker-image = import ./examples/worker-image.nix { inherit pkgs; };

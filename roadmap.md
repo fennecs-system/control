@@ -393,6 +393,11 @@ records out of rendering modules is a dependency improvement, not by itself a
 performance claim.
 MCP should become a protocol adapter over that service, preserving today's shared
 tool catalogue rather than introducing a separate tool implementation.
+The shared loopback MCP client is now independent of terminal presentation.
+Both terminal entry points use one library implementation, and the optional
+`control-server` Nix package excludes terminal code/dependencies. This is a real
+build boundary; independent server/web/TUI crates and the web application-query
+boundary are still incomplete.
 
 Do not expose the full state mutex as the interface, clone complete histories,
 introduce a distributed framework or make every tool its own crate. This improves

@@ -1,4 +1,4 @@
-{ pkgs }:
+{ pkgs, withTerminal ? true }:
 let
   inherit (pkgs) lib;
   # Keep the UI output reusable when only the host code changes.
@@ -40,8 +40,8 @@ pkgs.rustPlatform.buildRustPackage {
       && !(builtins.elem (builtins.baseNameOf path) [ "target" "dist" ]);
   };
   cargoLock.lockFile = ../Cargo.lock;
-  cargoBuildFlags = [ "--bin" "control" ];
-  cargoTestFlags = [ "--workspace" ];
+  cargoBuildFlags = [ "--bin" "control" ] ++ lib.optional (!withTerminal) "--no-default-features";
+  cargoTestFlags = [ "--workspace" ] ++ lib.optional (!withTerminal) "--no-default-features";
   nativeCheckInputs = [ pkgs.gitMinimal ] ++ lib.optional pkgs.stdenv.hostPlatform.isLinux pkgs.util-linux;
   preBuild = ''
     mkdir -p web/dist

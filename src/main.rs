@@ -32,7 +32,6 @@ mod doctor;
 mod engine;
 mod federation;
 mod github;
-mod harness;
 mod knowledge;
 mod knowledge_tools;
 mod lens_library;
@@ -546,7 +545,10 @@ fn main() -> std::io::Result<()> {
         ));
     }
     if args.get(1).is_some_and(|s| s == "tui") {
-        return harness::run();
+        #[cfg(feature = "tui")]
+        return control::terminal::run();
+        #[cfg(not(feature = "tui"))]
+        return Err(std::io::Error::other("This server build excludes the terminal UI; use a Control build with the tui feature."));
     }
     if args.get(1).is_some_and(|s| s == "config") {
         let directory = config::directory().map_err(std::io::Error::other)?;

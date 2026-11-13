@@ -3,3 +3,6 @@ pub mod diff;
 pub mod discord;
 pub mod identity;
 pub mod outbox;
+pub mod client;
+#[cfg(feature = "tui")]
+pub mod terminal;

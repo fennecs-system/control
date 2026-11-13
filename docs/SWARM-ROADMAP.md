@@ -3,7 +3,7 @@
 Triaged 2026-11-05 against main `2d3492e` (#138). This is a plan, not a runtime
 change. [The main roadmap](../roadmap.md) tracks shipped capabilities and release
 gates. Stable IDs below identify independently reviewable increments.
-Status audited 2026-11-10 against main `856be99` (through #147).
+Status audited 2026-11-10 against locally deployed main `52bff4c` (through #148).
 The checklist distinguishes shipped slices from remaining acceptance work;
 unmarked product proposals remain planned. The native Nix package and pinned
 WASM tooling fix shipped in #143; both platform checks passed before merging.
@@ -32,6 +32,10 @@ WASM tooling fix shipped in #143; both platform checks passed before merging.
   reads retain them. No workload-specific parser or timeout was added to core.
 - [x] **Opt-in autonomy/investigation lenses (#144):** declarative guidance is
   captured with runs; adding a lens does not grant resource or tool authority.
+- [x] **First typed message operation (#148):** borrowed application views and
+  ordered archive/checkpoint/wake effects, with blocking/Tokio conformance tests.
+  Shared conversation/run records no longer belong to rendering modules. The
+  production driver retains its cross-domain lock through persistence.
 - [x] **Efficiency checks for #142:** routing benchmarks, flamegraphs and bounded
   resource probes are recorded in [PERFORMANCE.md](PERFORMANCE.md). The tiny-device
   goal concerns efficient core/tools/TUI and replaceable backends, not a mandatory
@@ -47,10 +51,13 @@ WASM tooling fix shipped in #143; both platform checks passed before merging.
   candidate), with narrow state views, stamped effects, durable acceptance and
   typed results. Exercise the same contract through current and experimental
   async drivers before expanding features. No whole-application rewrite is needed.
-  The directed-message increment in this change establishes the first typed
+  The directed-message increment in #148 establishes the first typed
   transition/effect boundary, with a blocking production interpreter and Tokio
   conformance fixture. Out-of-lock persistence, broader callback admission and
   complete web/TUI separation remain open; see [STATE-BOUNDARIES.md](STATE-BOUNDARIES.md).
+  This follow-up separates the shared MCP client from terminal presentation,
+  compiles terminal code once and provides an optional server-only build. The
+  independent crate split and web rendering boundary remain subsequent work.
 
 The fresh deployed Codex trial ran over two hours after approvals without further
 operator steering: house/perimeter verification, repeated crop harvest/replant,
