@@ -29,6 +29,36 @@ Constrained-container and hardware checks provide additional evidence, without
 making a named board a prerequisite. The 512 MiB/no-swap experiment below is
 one measurement condition, not a product support promise or mandatory budget.
 
+## One-shot room admission boundary (2026-11-13)
+
+Compared main `52bff4c` with the borrowed application planner using the same
+`profile_idle_and_waiting_room_reconciliation` fixture in both source snapshots.
+The fixture now accepts `CONTROL_ROOM_PROFILE_ROUNDS` for the armed case; its
+default remains 10. Timings used 100 iterations per batch, nine batches per
+fixture, one warmup fixture per revision and six alternating pairs. Linux ARM64,
+rustc 1.99.0, release with debug symbols, one pinned virtual CPU, 512 MiB and no
+swap were held constant. Compiler builds and stack symbolization used higher
+memory limits, outside the timing runs.
+
+With 20,001 retained runs and one armed, waiting subscription, the median of the
+six fixture medians was 766,740.5 ns before and 762,609.5 ns after (-0.54%). The
+ranges were 720,569–814,141 ns and 691,706–805,498 ns. Treat this as roughly
+unchanged performance, not a speedup. The unarmed fast path remained at the
+fixture's few-nanosecond measurement floor. No model, container lifecycle or
+checkpoint I/O occurs inside this waiting-path fixture; its save callback fails
+the test if called. It does not measure queue publication/fsync, interactive TUI,
+web latency or overall swarm throughput.
+
+Real `perf` captures use `cpu-clock:u`, 499 Hz and DWARF stacks: 3,229 baseline
+samples and 3,464 revised samples, rendered with Inferno. The revised stacks
+contain `application::room_wakes::plan`; retained-run index construction remains
+in this path. This extraction does not remove its linear scan. Timing-run
+`memory.events.max` increased by six while OOM/kill counters stayed zero;
+the logs retain this limit pressure and do not establish a resident-memory
+improvement. Raw paired logs, environment, memory counters, scripts, perf data
+and flamegraphs are retained under the ignored local directory
+`.control/performance/room-wakes-20261113/`.
+
 ## Watch notification transport (2026-11-09)
 
 Compared the existing stdout collector with the notification-channel revision,

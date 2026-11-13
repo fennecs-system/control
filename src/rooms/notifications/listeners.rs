@@ -2,6 +2,7 @@
 //! no polling model, extra thread, lifetime reply quota or per-post model call.
 use crate::runtime::RunKind;
 use super::*;
+use std::collections::HashSet;
 
 const COOLDOWN_SECONDS: u64 = 30;
 
