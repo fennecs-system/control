@@ -12,9 +12,8 @@ use ratatui::{
     widgets::{Block, Paragraph, Wrap},
     Terminal,
 };
-use reqwest::{
-    Url,
-};
+#[cfg(test)]
+use reqwest::Url;
 use serde_json::{json, Value};
 use std::{
     io,
@@ -22,7 +21,7 @@ use std::{
 };
 
 #[cfg(test)]
-use reqwest::{blocking::Client,header::HeaderValue};
+use reqwest::blocking::Client;
 #[cfg(test)]
 use std::fs;
 use control_context::commands;
@@ -176,15 +175,8 @@ impl App {
                     .ok_or_else(||failure("Port request changed. Refresh the conversation before approving it."))?;
                 let loopback=parts.get(3)==Some(&"--loopback");
                 if parts[1]=="allow" && request["loopback_required"]==true && !loopback {return Err(failure("This exact loopback target requires /port allow ID --loopback."));}
-                let endpoint=Url::parse(&hive.endpoint).map_err(failure)?;
-                let mut fields=vec![("id",parts[2]),("return_chat",self.active.as_str()),("response","json"),("seconds","-1")];
-                if parts[1]=="deny" {fields.push(("revoke","yes"));}
-                if loopback {fields.push(("loopback","yes"));}
-                let response=hive.client.post(endpoint.join("/tools/ports").map_err(failure)?)
-                    .timeout(Duration::from_secs(15))
-                    .header("Origin",endpoint.origin().ascii_serialization()).form(&fields).send().map_err(failure)?;
-                let status=response.status();let value:Value=response.json().map_err(failure)?;
-                if !status.is_success() {return Err(failure(value["error"].as_str().unwrap_or("Port decision failed")));}
+                let decision = if parts[1] == "allow" { crate::client::PortDecision::Allow } else { crate::client::PortDecision::Deny };
+                hive.decide_port(&self.active, parts[2], decision, loopback)?;
                 self.detail=hive.tool("control.chat.read",json!({"id":self.active}))?;
                 self.status="Port decision saved".into();
             }
@@ -200,13 +192,9 @@ impl App {
                 let displayed=project["request"].as_str().filter(|request|!request.is_empty()).ok_or_else(||failure("Project request changed. Use /open to review it."))?;
                 let request=text.strip_prefix("/trust ").map(str::trim).unwrap_or(displayed).to_owned();
                 if request!=displayed {return Err(failure("Project request changed. Use /open to review it."));}
-                let url=hive.endpoint.trim_end_matches("/mcp");
-                let response=hive.client.post(format!("{url}/chat/{}/project",self.active)).timeout(Duration::from_secs(120))
-                    .header("Origin",url).form(&[("approve","yes"),("request",request.as_str())]).send().map_err(|_|failure("Project approval did not finish; use /open to refresh before retrying."))?;
-                let status=response.status();
-                self.detail=hive.tool("control.chat.read",json!({"id":self.active}))?;
-                if self.detail["project"]["request"]!=request {return Err(failure("Project request changed. Use /open to review it."));}
-                if status.as_u16()!=303 || pending_project(&self.detail).is_some() || !self.detail["project"]["grant"].is_string() {return Err(failure(self.detail["project"]["error"].as_str().unwrap_or("Folder was not opened. Use /open to review it or /open /absolute/path to change it.")));}
+                let approval = hive.approve_project(&self.active, &request)?;
+                self.detail = approval.detail;
+                approval.result.map_err(failure)?;
                 self.inspector=None;self.status="Folder ready · isolated worktree".into();
             }
             "/quit" => return Ok(true),

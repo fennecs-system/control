@@ -48,16 +48,29 @@ Current libraries:
   instead of retaining the entire application's JSON tree. Authorization and DM
   binding are rechecked at delivery; the projection never grants authority.
 
-The next useful splits are `control-tui` for the existing MCP client and terminal
+Potential later splits are `control-tui` for the existing MCP client and terminal
 interface, and `control-web` for HTTP/UI adapters. Their dependency should be a
 small application interface, not direct access to every mutable runtime field.
 The TUI is already close to this boundary; web routing and rendering still need
 their state projection and authorization calls made explicit.
 
-These are proposed boundaries, not completed extractions: the terminal currently
-includes `src/harness.rs` in two binaries, and most server state, routing and
-rendering are still declared by `src/main.rs`. The Rust/WASM package under `web/`
-is the browser client, not yet a `control-web` server adapter.
+These are proposed crate boundaries, not completed extractions: the terminal and
+loopback client are library modules compiled once, with terminal dependencies
+excluded by the server-only build. The TUI now calls typed client operations for
+port decisions and project approval; only the client owns their HTTP routes,
+forms, origin headers and confirmation rules. Production client transport fields
+are private. Server state, routing and rendering remain coupled in places.
+The Rust/WASM package under `web/` is the browser client, not yet a `control-web`
+server adapter.
+
+This is a useful stopping point for general separation work: the existing pure
+domain/effect crates, borrowed application operations, blocking/async conformance
+fixture and client/server build boundary support the next model/summary feature.
+Migrate a remaining legacy access when its consumer needs it or measurement shows
+a problem. Full web extraction, independent client/TUI crates and out-of-lock
+persistence remain explicit follow-ups, not prerequisites for a text-only model
+adapter. Do not mark those broader boundaries complete or add runtime/plugin
+frameworks merely to close the architecture phase.
 
 MCP is another adapter, not core business logic. A future `control-mcp` should
 own JSON-RPC/protocol negotiation, tool discovery schemas and protocol error

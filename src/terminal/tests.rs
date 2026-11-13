@@ -112,16 +112,11 @@ fn terminal_folder_approval_uses_displayed_identity_and_retains_errors_without_a
             }
         }
     });
-    let mut hive = Hive {
-        client: Client::builder()
+    let mut hive = Hive::fixture(Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(3))
             .build()
-            .unwrap(),
-        endpoint: format!("http://{addr}/mcp"),
-        next: 0,
-        operator_cookie: HeaderValue::from_static("fixture"),
-    };
+            .unwrap(), format!("http://{addr}/mcp"));
     let mut app = App {
         active: "c-fixture".into(),
         detail: json!({"project":{"request":"p-fixture","path":"/node/project","name":"project","pending":true}}),
@@ -217,15 +212,10 @@ fn listen_commands_reach_the_server_and_render_returned_state() {
             .unwrap();
         }
     });
-    let mut hive = Hive {
-        client: Client::builder()
+    let mut hive = Hive::fixture(Client::builder()
             .timeout(Duration::from_secs(3))
             .build()
-            .unwrap(),
-        endpoint: format!("http://{addr}/mcp"),
-        next: 0,
-        operator_cookie: HeaderValue::from_static("fixture"),
-    };
+            .unwrap(), format!("http://{addr}/mcp"));
     let mut app = App {
         active: "c-fixture".into(),
         input: "/listen".into(),
@@ -330,15 +320,10 @@ fn terminal_port_decisions_require_explicit_loopback_and_use_operator_http() {
             .unwrap();
         }
     });
-    let mut hive = Hive {
-        client: Client::builder()
+    let mut hive = Hive::fixture(Client::builder()
             .timeout(Duration::from_secs(3))
             .build()
-            .unwrap(),
-        endpoint: format!("http://{addr}/mcp"),
-        next: 0,
-        operator_cookie: HeaderValue::from_static("fixture"),
-    };
+            .unwrap(), format!("http://{addr}/mcp"));
     let mut app = App {
         active: "c-fixture".into(),
         detail: json!({"messages":[{"text":"Earlier prompt","reply":"Earlier response"}],"pending_ports":[{"port_id":"port-fixture","name":"relay","target":{"host":"127.0.0.1","port":25565},"loopback_required":true}]}),
@@ -427,15 +412,10 @@ fn refresh_keeps_a_new_chat_blank_and_preserves_explicit_resume() {
         }
         calls
     });
-    let mut hive = Hive {
-        client: Client::builder()
+    let mut hive = Hive::fixture(Client::builder()
             .timeout(Duration::from_secs(3))
             .build()
-            .unwrap(),
-        endpoint: format!("http://{addr}/mcp"),
-        next: 0,
-        operator_cookie: HeaderValue::from_static("fixture"),
-    };
+            .unwrap(), format!("http://{addr}/mcp"));
     let mut app = App::default();
     app.refresh(&mut hive).unwrap();
     app.refresh(&mut hive).unwrap();
@@ -706,7 +686,7 @@ fn live_workspace_diff_tracks_real_edits_and_persists() {
     let output = patch["output"].as_str().unwrap();
     assert!(output.contains("edit-demo.txt") && output.contains(" alpha\n-beta\n+gamma\n"));
     let page = hive
-        .client
+        .http()
         .get(format!("{server}/chat/{id}/transcript"))
         .send()
         .unwrap()
@@ -763,7 +743,7 @@ fn live_design_question_pauses_and_resumes_checkpoint() {
         .unwrap();
     assert_eq!(before["text"], "design-before");
     let page = hive
-        .client
+        .http()
         .get(format!("{server}/chat/{id}/transcript"))
         .send()
         .unwrap()
@@ -776,7 +756,7 @@ fn live_design_question_pauses_and_resumes_checkpoint() {
     }
     let question_id = paused["messages"][0]["question"]["id"].as_str().unwrap();
     let response = hive
-        .client
+        .http()
         .post(format!("{server}/chat/{id}/messages"))
         .header("Origin", &server)
         .form(&[("message", format!("/answer {question_id} 2"))])
@@ -861,7 +841,7 @@ fn live_harness_commands_create_children_and_cancel_without_losing_history() {
     let revision = detail["revision"].as_u64().unwrap();
     let steering = detail["messages"][1]["run_id"].as_str().unwrap();
     let response = hive
-        .client
+        .http()
         .post(format!("{server}/cancel-run"))
         .header("Origin", &server)
         .form(&[("id", steering)])
@@ -941,7 +921,7 @@ fn live_chat_enter_sends_and_shift_enter_adds_newline() {
     // The existing native client consumes the operator credential internally.
     // Pass it directly to the browser cookie store; never print it or put it in a URL.
     let cookie = hive
-        .operator_cookie
+        .operator_cookie()
         .to_str()
         .unwrap()
         .strip_prefix("control_operator=")
@@ -977,7 +957,7 @@ fn live_chat_enter_sends_and_shift_enter_adds_newline() {
         .unwrap();
     assert_eq!(chat["messages"][0]["text"], "first\r\nsecond");
     let transcript = hive
-        .client
+        .http()
         .get(format!("{server}/chat/{chat_id}/transcript"))
         .send()
         .unwrap();
@@ -1184,7 +1164,7 @@ fn live_tools_catalog_and_rust_roundtrip() {
     let server = std::env::var("CONTROL_QA_URL").expect("Use an isolated server");
     let mut hive = Hive::connect(&server).unwrap();
     let page = hive
-        .client
+        .http()
         .get(format!("{server}/?view=tools"))
         .send()
         .unwrap()
@@ -1194,7 +1174,7 @@ fn live_tools_catalog_and_rust_roundtrip() {
     assert!(!page.contains("Lens tools"));
     assert!(!page.contains("<iframe"));
     let filtered = hive
-        .client
+        .http()
         .get(format!("{server}/?view=tools&q=lens%3Aresearch"))
         .send()
         .unwrap()
@@ -1224,7 +1204,7 @@ fn live_tools_catalog_and_rust_roundtrip() {
             .contains("tool-roundtrip-ok")
     );
     let result = hive
-        .client
+        .http()
         .post(format!("{server}/tools/rust"))
         .timeout(Duration::from_secs(25))
         .header("Origin", &server)
@@ -1238,7 +1218,7 @@ fn live_tools_catalog_and_rust_roundtrip() {
         .unwrap();
     assert!(result.contains("&lt;script&gt;escaped&lt;/script&gt;"));
     assert!(!result.contains("<script>escaped</script>"));
-    let rejected = hive.client.post(format!("{server}/mcp")).json(&json!({"jsonrpc":"2.0","method":"tools/call","params":{"name":"control.rust.run","arguments":{"code":"fn main() {}"}}})).send().unwrap();
+    let rejected = hive.http().post(format!("{server}/mcp")).json(&json!({"jsonrpc":"2.0","method":"tools/call","params":{"name":"control.rust.run","arguments":{"code":"fn main() {}"}}})).send().unwrap();
     assert_eq!(rejected.status().as_u16(), 400);
 }
 #[test]
@@ -1381,7 +1361,7 @@ fn live_browser_ui_capture_and_protected_artifact() {
     let server = std::env::var("CONTROL_QA_URL").expect("Use an isolated server");
     let hive = Hive::connect(&server).unwrap();
     let page = hive
-        .client
+        .http()
         .get(format!("{server}/tools/browser"))
         .send()
         .unwrap();
@@ -1389,7 +1369,7 @@ fn live_browser_ui_capture_and_protected_artifact() {
     assert_eq!(page.headers()["referrer-policy"], "same-origin");
     assert!(page.text().unwrap().contains("/tools/browser/capture"));
     let outside = hive
-        .client
+        .http()
         .post(format!("{server}/tools/browser/capture"))
         .form(&[
             ("input", "../outside.html"),
@@ -1400,7 +1380,7 @@ fn live_browser_ui_capture_and_protected_artifact() {
         .unwrap();
     assert_eq!(outside.status().as_u16(), 400);
     let capture = hive
-        .client
+        .http()
         .post(format!("{server}/tools/browser/capture"))
         .header("Origin", &server)
         .form(&[
@@ -1413,7 +1393,7 @@ fn live_browser_ui_capture_and_protected_artifact() {
     assert_eq!(capture.status().as_u16(), 303);
     let location = capture.headers()["location"].to_str().unwrap();
     let page = hive
-        .client
+        .http()
         .get(format!("{server}{location}"))
         .send()
         .unwrap()
@@ -1422,7 +1402,7 @@ fn live_browser_ui_capture_and_protected_artifact() {
     let name = location.split_once("capture=").unwrap().1;
     let url = format!("{server}/tools/browser/artifacts/{name}");
     assert!(page.contains(&format!("src='/tools/browser/artifacts/{name}'")));
-    let image = hive.client.get(&url).send().unwrap();
+    let image = hive.http().get(&url).send().unwrap();
     assert_eq!(image.headers()["content-type"], "image/png");
     assert!(image.bytes().unwrap().starts_with(b"\x89PNG\r\n\x1a\n"));
     let unauthenticated = reqwest::blocking::Client::builder()
@@ -1505,7 +1485,7 @@ fn live_declarative_lens_library() {
         .as_nanos();
     let lens_id = format!("fixture-{stamp:x}");
     let note = hive
-        .client
+        .http()
         .post(format!("{server}/knowledge/save"))
         .form(&[
             ("id", ""),
@@ -1537,7 +1517,7 @@ fn live_declarative_lens_library() {
         ("instructions".into(), "Fixture instructions.".into()),
     ];
     let saved = hive
-        .client
+        .http()
         .post(format!("{server}/lenses/save"))
         .form(&fields)
         .send()
@@ -1563,7 +1543,7 @@ fn live_declarative_lens_library() {
         .unwrap();
     assert_eq!(chat["lenses"], json!([lens_id]));
     let page = hive
-        .client
+        .http()
         .get(format!("{server}/chat/{}", chat["id"].as_str().unwrap()))
         .send()
         .unwrap()
@@ -1574,21 +1554,21 @@ fn live_declarative_lens_library() {
     assert!(!page.contains("chat-lenses"));
     fields.iter_mut().find(|(k, _)| k == "revision").unwrap().1 = "1".into();
     let saved = hive
-        .client
+        .http()
         .post(format!("{server}/lenses/save"))
         .form(&fields)
         .send()
         .unwrap();
     assert_eq!(saved.status().as_u16(), 303);
     let stale = hive
-        .client
+        .http()
         .post(format!("{server}/lenses/save"))
         .form(&fields)
         .send()
         .unwrap();
     assert_eq!(stale.status().as_u16(), 409);
     let exported: Value = hive
-        .client
+        .http()
         .get(format!("{server}/lenses/export"))
         .send()
         .unwrap()
@@ -1611,7 +1591,7 @@ fn live_chat_composition_and_design_entry() {
     let mut hive = Hive::connect(&server).unwrap();
     let before = hive.tool("control.chats.list", json!({})).unwrap();
     let response = hive
-        .client
+        .http()
         .get(format!("{server}/chats?discuss=knowledge"))
         .send()
         .unwrap();
@@ -1622,7 +1602,7 @@ fn live_chat_composition_and_design_entry() {
     assert_eq!(hive.tool("control.chats.list", json!({})).unwrap(), before);
     for origin in ["null", "https://foreign.example"] {
         let rejected = hive
-            .client
+            .http()
             .post(format!("{server}/chats"))
             .header("origin", origin)
             .form(&[("composition", "1")])
@@ -1632,7 +1612,7 @@ fn live_chat_composition_and_design_entry() {
     }
     assert_eq!(hive.tool("control.chats.list", json!({})).unwrap(), before);
     let result = hive
-        .client
+        .http()
         .post(format!("{server}/chats"))
         .header("origin", &server)
         .form(&[
@@ -1646,10 +1626,10 @@ fn live_chat_composition_and_design_entry() {
     assert_eq!(result.status().as_u16(), 303);
     let path = result.headers()["location"].to_str().unwrap();
     let id = path.strip_prefix("/chat/").unwrap();
-    let page = hive.client.get(format!("{server}{path}")).send().unwrap();
+    let page = hive.http().get(format!("{server}{path}")).send().unwrap();
     assert_eq!(page.headers()["referrer-policy"], "same-origin");
     let invalid = hive
-        .client
+        .http()
         .post(format!("{server}/chat/{id}/messages"))
         .header("origin", &server)
         .form(&[("message", "")])
@@ -1661,7 +1641,7 @@ fn live_chat_composition_and_design_entry() {
     assert_eq!(detail["design_context"], "knowledge");
     assert!(detail["messages"].as_array().unwrap().is_empty());
     let result = hive
-        .client
+        .http()
         .post(format!("{server}/chat/{id}/lenses"))
         .header("origin", &server)
         .form(&[("composition", "1")])
@@ -1673,7 +1653,7 @@ fn live_chat_composition_and_design_entry() {
         json!([])
     );
     let page = hive
-        .client
+        .http()
         .get(format!("{server}/knowledge"))
         .send()
         .unwrap()
@@ -1689,7 +1669,7 @@ fn live_knowledge_save_and_graph() {
     let hive = Hive::connect(&server).unwrap();
     if std::env::var_os("CONTROL_QA_VERIFY_RELOAD").is_some() {
         let page = hive
-            .client
+            .http()
             .get(format!("{server}/knowledge?mode=graph"))
             .send()
             .unwrap()
@@ -1702,7 +1682,7 @@ fn live_knowledge_save_and_graph() {
     }
     let create = |title: &str, body: &str| {
         let result = hive
-            .client
+            .http()
             .post(format!("{server}/knowledge/save"))
             .form(&[
                 ("id", ""),
@@ -1723,12 +1703,12 @@ fn live_knowledge_save_and_graph() {
         .unwrap()
         .1
         .into_owned();
-    let page = hive.client.get(url).send().unwrap().text().unwrap();
+    let page = hive.http().get(url).send().unwrap().text().unwrap();
     assert!(page.contains("✓ Saved Durability A.md · revision 1"));
     assert!(page.contains("A saved note."));
     create("Durability B", "Backlink: [[Durability A]]");
     let stale = hive
-        .client
+        .http()
         .post(format!("{server}/knowledge/save"))
         .form(&[
             ("id", id.as_str()),
@@ -1741,7 +1721,7 @@ fn live_knowledge_save_and_graph() {
     assert_eq!(stale.status().as_u16(), 409);
     assert!(stale.text().unwrap().contains("Retain this stale edit"));
     let graph = hive
-        .client
+        .http()
         .get(format!("{server}/knowledge?mode=graph"))
         .send()
         .unwrap()
@@ -1749,7 +1729,7 @@ fn live_knowledge_save_and_graph() {
         .unwrap();
     assert!(graph.contains("<line"));
     let note = hive
-        .client
+        .http()
         .get(format!("{server}/knowledge?doc={id}"))
         .send()
         .unwrap()
@@ -1810,7 +1790,7 @@ fn live_room_tools_connect_worker_chat_and_ui() {
         ("/?view=editor", "Scratchpad"),
     ] {
         let page = hive
-            .client
+            .http()
             .get(format!("{server}{path}"))
             .send()
             .unwrap()
@@ -1855,7 +1835,7 @@ fn live_task_threads_isolate_operator_posts_and_ui() {
     assert!(first_posts.to_string().contains("FIRST_THREAD_ONLY"));
     assert!(!first_posts.to_string().contains("SECOND_THREAD_ONLY"));
     let page = hive
-        .client
+        .http()
         .get(format!("{server}/?view=rooms&channel={first_room}"))
         .send()
         .unwrap()
@@ -1865,7 +1845,7 @@ fn live_task_threads_isolate_operator_posts_and_ui() {
     assert!(page.contains(&format!("name='channel' value='{first_room}'")));
     assert!(page.contains(&format!("name='room' value='{first_room}'")));
     let response = hive
-        .client
+        .http()
         .post(format!("{server}/room"))
         .header("Origin", &server)
         .form(&[("channel", first_room), ("message", "OPERATOR_REPLY")])
@@ -1925,11 +1905,11 @@ fn live_shared_chat_keeps_context_and_web_transcript() {
         }
     }
     let url = format!("{}/chat/{id}", server.trim_end_matches('/'));
-    let page = hive.client.get(&url).send().unwrap();
+    let page = hive.http().get(&url).send().unwrap();
     assert!(page.status().is_success());
     assert!(page.text().unwrap().contains("chat-transcript"));
     let page = hive
-        .client
+        .http()
         .get(format!("{url}/transcript"))
         .send()
         .unwrap()
@@ -2029,7 +2009,7 @@ fn live_artifacts_preserve_project_files_and_viewer_after_restart() {
         );
         assert!(other.is_err());
         let response = hive
-            .client
+            .http()
             .get(format!(
                 "{server}/chat/{chat}/artifacts?artifact={artifact}&file=preview.txt"
             ))
@@ -2057,7 +2037,7 @@ fn live_model_library_selection_and_reload() {
     let server = std::env::var("CONTROL_QA_URL").expect("Use an isolated server");
     let hive = Hive::connect(&server).unwrap();
     let page = || {
-        hive.client
+        hive.http()
             .get(format!("{server}/?view=providers"))
             .send()
             .unwrap()
@@ -2067,7 +2047,7 @@ fn live_model_library_selection_and_reload() {
     if std::env::var_os("CONTROL_QA_VERIFY_RELOAD").is_none() {
         for (provider, model) in [("codex", "fixture-codex"), ("claude", "fixture-claude")] {
             let response = hive
-                .client
+                .http()
                 .post(format!("{server}/providers"))
                 .header("Origin", &server)
                 .form(&[("action", "add"), ("provider", provider), ("model", model)])
@@ -2077,7 +2057,7 @@ fn live_model_library_selection_and_reload() {
         }
         for (provider, model) in [("claude", "fixture-claude"), ("codex", "fixture-codex")] {
             let response = hive
-                .client
+                .http()
                 .post(format!("{server}/providers"))
                 .header("Origin", &server)
                 .form(&[
