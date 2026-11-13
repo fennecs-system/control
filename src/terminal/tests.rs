@@ -459,6 +459,29 @@ fn refresh_keeps_a_new_chat_blank_and_preserves_explicit_resume() {
     );
 }
 use super::*;
+
+#[test]
+fn completing_commands_only_edits_the_draft_and_never_changes_the_conversation() {
+    let mut app = App { input: "/con".into(), active: "chat-a".into(), detail: json!({"revision":3,"messages":[]}), ..Default::default() };
+    let before = app.detail.clone();
+    app.complete_command();
+    assert_eq!(app.input, "/context ");
+    assert_eq!(app.active, "chat-a");
+    assert_eq!(app.detail, before);
+    app.input = "/".into();
+    app.input_changed();
+    let candidates = app.command_matches();
+    app.command_selection = candidates.iter().position(|entry| entry.text == "/cancel all").unwrap();
+    app.complete_command();
+    assert_eq!(app.input, "/cancel all ");
+    assert_eq!(app.detail, before, "completion must never execute cancellation");
+    app.input = "/con".into();
+    app.commands_hidden = true;
+    assert!(app.command_matches().is_empty());
+    app.input_changed();
+    assert_eq!(app.command_matches().len(), 1);
+    assert_eq!(command_line("/con").spans[0].style.fg, Some(Color::Rgb(181, 160, 255)));
+}
 #[test]
 #[ignore = "requires isolated control-bench-qa server with benchmark worker image; no model calls"]
 fn live_rust_benchmarks_use_mcp_and_compare_html_escaping() {

@@ -721,3 +721,31 @@ do not substitute model judgment for deterministic scheduling.
 
 The subsequent [bounded execution implementation](EXECUTION.md) changes admission
 and supervision separately from these rendering measurements.
+
+## Terminal command discovery (2026-11-13)
+
+Compared merged main `93d189d` with the terminal-only command catalogue/help
+changes using the existing release render fixture. Linux aarch64 / Rust 1.99.0,
+pinned offline dependencies, identical release flags and six alternating pairs
+after warmup; one CPU, 512 MiB and no swap during measurement.
+
+| Transcript messages | Baseline → revised render median | Change |
+| --- | ---: | ---: |
+| 10 | 62.750 → 63.841 µs | +1.7% |
+| 100 | 141.492 → 143.214 µs | +1.2% |
+| 500 | 495.203 → 492.831 µs | −0.5% |
+
+Process-median ranges overlap in every case and rendered-buffer hashes match.
+This is evidence against a material transcript-render regression in this fixture,
+not proof of unchanged latency on every device. It does not exercise popup layout
+or network polling. A separate revised-only fixture measures discovery plus
+highlight construction at **201–267 ns** for `/`, `/con`, `/context` and `/improve`
+and **38 ns** for ordinary text. That is not full-frame or keyboard latency.
+
+Actual render flamegraphs contain 1,032 / 1,042 CPU-clock samples. Memory-event
+counters did not increase during measurement and no OOM occurred. Timing logs,
+raw stacks, SVGs, scripts and binary hashes remain locally under
+`.control/performance/tui-commands-20261113/`. An interactive local-client smoke
+check completed `/con` with Tab and opened `/help` without submitting a model
+prompt; all existing paused bot/run state was preserved.
+

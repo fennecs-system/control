@@ -54,3 +54,22 @@ fn render_profile() {
         );
     }
 }
+
+#[test]
+#[ignore = "offline command discovery timing; no server, credentials or model calls"]
+fn command_profile() {
+    for input in ["/", "/con", "/context", "/improve", "ordinary text"] {
+        let app = App { input: input.into(), ..Default::default() };
+        let mut samples = Vec::new();
+        for batch in 0..10 {
+            let start = Instant::now();
+            for _ in 0..100_000 {
+                black_box(app.command_matches());
+                black_box(command_line(black_box(input)));
+            }
+            if batch > 0 { samples.push(start.elapsed().as_nanos() / 100_000); }
+        }
+        samples.sort_unstable();
+        println!("{}", json!({"workload":"terminal_commands","input":input,"median_ns":samples[4]}));
+    }
+}

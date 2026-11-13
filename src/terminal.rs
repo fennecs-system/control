@@ -26,10 +26,11 @@ use reqwest::{blocking::Client,header::HeaderValue};
 #[cfg(test)]
 use std::fs;
 use control_context::commands;
+mod command_menu;
 
 fn command_line(text: &str) -> Line<'static> {
-    if let Some(command) = commands::parse(text).filter(|c| c.highlight.start == 0) {
-        Line::from(vec![Span::styled(text[command.highlight.clone()].to_owned(), Style::default().fg(Color::Rgb(181, 160, 255))), Span::raw(text[command.highlight.end..].to_owned())])
+    if let Some(highlight) = command_menu::highlight(text) {
+        Line::from(vec![Span::styled(text[highlight.clone()].to_owned(), Style::default().fg(Color::Rgb(181, 160, 255))), Span::raw(text[highlight.end..].to_owned())])
     } else {
         Line::from(text.to_owned())
     }
@@ -40,6 +41,8 @@ fn failure(message:impl std::fmt::Display)->io::Error {io::Error::other(message.
 use crate::client::local_server;
 #[derive(Default)]
 struct App {
+    command_selection: usize,
+    commands_hidden: bool,
     menu: Option<Menu>,
     inspector: Option<(String, String)>,
     follow: bool,
@@ -112,6 +115,22 @@ fn pending_project(detail: &Value) -> Option<&Value> {
     (project["grant"].is_null() || project["pending"] == true).then_some(project)
 }
 impl App {
+    fn command_matches(&self) -> Vec<command_menu::Entry> {
+        if self.commands_hidden || self.menu.is_some() { return Vec::new(); }
+        command_menu::matching(&self.input).collect()
+    }
+    /// Completion edits the draft only. Sending remains an explicit Enter.
+    fn complete_command(&mut self) {
+        if let Some(entry) = self.command_matches().get(self.command_selection).copied() {
+            self.input = format!("{} ", entry.text);
+            self.command_selection = 0;
+            self.status.clear();
+        }
+    }
+    fn input_changed(&mut self) {
+        self.command_selection = 0;
+        self.commands_hidden = false;
+    }
     fn refresh(&mut self, hive: &mut Hive) -> io::Result<()> {
         self.chats = hive
             .tool("control.chats.list", json!({}))?
@@ -198,7 +217,12 @@ impl App {
                 let lines=self.chats.iter().map(|c|format!("{}\n  /resume {}",c["title"].as_str().unwrap_or("Chat"),c["id"].as_str().unwrap_or(""))).collect::<Vec<_>>().join("\n\n");
                 self.inspector=Some(("Conversations".into(),lines));self.scroll=0;self.follow=false;self.status="↑ ↓ choose · Enter open · Esc back".into();
             }
-            "/help" => self.status = "/chats · /lenses · /use ID ID · /use none · /context · /chat · /new · /resume ID · /open /path · /trust · /port allow|deny ID · /improve request · /improve off · /answer QUESTION_ID choice · /steer direction · /btw question · /spawn task · /listen · /listen off · /cancel · Ctrl+Q quit".into(),
+            "/help" => {
+                self.inspector = Some(("Help".into(), command_menu::help()));
+                self.scroll = 0;
+                self.follow = false;
+                self.status = "PageUp / PageDown scroll · Esc or /chat returns".into();
+            }
             "/lenses"=>{
                 let definitions=hive.tool("control.lenses.list",json!({}))?;
                 let entries=definitions.as_array().ok_or_else(||failure("Invalid lens library response."))?.iter().map(|d| (d["name"].as_str().unwrap_or("Lens").into(), d["includes"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" + ")).unwrap_or_default(), d["id"].as_str().unwrap_or("").into())).collect();
@@ -240,6 +264,7 @@ impl App {
             _ => {}
         }
         self.input.clear();
+        self.input_changed();
         Ok(false)
     }
     fn transcript(&self) -> Text<'static> {
@@ -491,12 +516,16 @@ pub fn run() -> io::Result<()> {
     let mut dirty = true;
     loop {
         if dirty {
+            let matches = app.command_matches();
+            let selection = app.command_selection.min(matches.len().saturating_sub(1));
+            let suggestions_height = if matches.is_empty() { 0 } else { matches.len().min(5) as u16 + 1 };
             terminal.draw(|frame| {
                 let layout = Layout::default()
                     .direction(Direction::Vertical)
                     .constraints([
                         Constraint::Length(2),
                         Constraint::Min(5),
+                        Constraint::Length(suggestions_height),
                         Constraint::Length(5),
                         Constraint::Length(2),
                     ])
@@ -536,8 +565,16 @@ pub fn run() -> io::Result<()> {
                 let composer_style = Style::default()
                     .bg(Color::Rgb(36, 32, 47))
                     .fg(Color::Rgb(233, 232, 237));
-                frame.render_widget(Block::default().style(composer_style), layout[2]);
-                let input_area = layout[2].inner(ratatui::layout::Margin {
+                if !matches.is_empty() {
+                    let start = selection.saturating_sub(4);
+                    let mut lines = matches.iter().enumerate().skip(start).take(5).map(|(index, entry)| {
+                        Line::from(vec![Span::styled(format!("{} {}", if index == selection { "›" } else { " " }, entry.text), Style::default().fg(Color::Rgb(181, 160, 255))), Span::raw(format!("  {}", entry.description))])
+                    }).collect::<Vec<_>>();
+                    lines.push(Line::styled("↑ ↓ choose · Tab completes · Esc dismisses", Style::default().fg(Color::Rgb(133, 133, 143))));
+                    frame.render_widget(Paragraph::new(lines), layout[2]);
+                }
+                frame.render_widget(Block::default().style(composer_style), layout[3]);
+                let input_area = layout[3].inner(ratatui::layout::Margin {
                     horizontal: 1,
                     vertical: 1,
                 });
@@ -591,7 +628,7 @@ pub fn run() -> io::Result<()> {
                     ))
                     .style(Style::default().fg(Color::Rgb(133, 133, 143)))
                     .wrap(Wrap { trim: false }),
-                    layout[3],
+                    layout[4],
                 );
             })?;
             dirty = false;
@@ -602,6 +639,15 @@ pub fn run() -> io::Result<()> {
             if let Event::Key(key) = event {
                 if key.kind != KeyEventKind::Press {
                     continue;
+                }
+                let matches = app.command_matches();
+                if !matches.is_empty() && key.modifiers.is_empty() {
+                    match key.code {
+                        KeyCode::Up => { app.command_selection = app.command_selection.saturating_sub(1); continue; }
+                        KeyCode::Down => { app.command_selection = (app.command_selection + 1).min(matches.len() - 1); continue; }
+                        KeyCode::Esc => { app.commands_hidden = true; continue; }
+                        _ => {}
+                    }
                 }
                 if app.menu.is_some() && app.input.is_empty() {
                     match key.code {
@@ -649,7 +695,8 @@ pub fn run() -> io::Result<()> {
                         }
                     }
                     KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
-                        app.input.push('\n')
+                        app.input.push('\n');
+                        app.input_changed();
                     }
                     KeyCode::Enter => match app.submit(&mut hive) {
                         Ok(true) => break,
@@ -658,19 +705,19 @@ pub fn run() -> io::Result<()> {
                     },
                     KeyCode::Backspace => {
                         app.input.pop();
+                        app.input_changed();
                     }
-                    KeyCode::Tab => {
-                        let matches: Vec<_> = commands::completions(&app.input).into_iter().map(|i|commands::DEFINITIONS[i].text).collect();
-                        if let [command] = matches.as_slice() {
-                            app.input = format!("{command} ");
-                            app.status.clear();
-                        } else if !matches.is_empty() && app.input.starts_with('/') {
-                            app.status = matches.join(" · ");
-                        }
+                    KeyCode::Tab => app.complete_command(),
+                    KeyCode::Esc => {
+                        app.menu = None;
+                        app.inspector = None;
+                        app.follow = true;
+                        app.status.clear();
                     }
                     KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        if app.input.chars().count() < 2100 {
+                        if app.input.chars().count() < control_context::limits::CHAT_MESSAGE_CHARS {
                             app.input.push(c);
+                            app.input_changed();
                         }
                     }
                     KeyCode::PageUp => {

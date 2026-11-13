@@ -89,7 +89,7 @@ Run `./target/release/control <command>`:
 | --- | --- |
 | `serve` | Start the local web and MCP server. |
 | `open` / `open --link` | Open an authenticated web session, or print a one-use link for another browser. |
-| `tui` | Start a fresh terminal chat; `--resume ID` opens an existing one. Enter sends; Ctrl+Q quits. |
+| `tui` | Start a fresh terminal chat; `--resume ID` opens an existing one. Tab completes `/` commands; `/help` lists commands and shortcuts. Enter sends; Ctrl+Q quits. See [terminal development](docs/TERMINAL.md). |
 | `doctor` | Check local prerequisites and sandbox isolation without calling a model. |
 | `config init` / `config path` | Initialize or locate private configuration. |
 | `mcp` | Serve local tools to an external MCP client. |
