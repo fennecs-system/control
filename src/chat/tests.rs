@@ -1,5 +1,28 @@
 use super::*;
 
+// The host preparation API is read-only. Fixtures explicitly publish its result.
+fn enqueue_continuation(state: &mut State, chat: &str, from: usize, objective: String, kind: RunKind, source: &str) -> Result<String, ContinuationError> {
+    let run = continuation(state, chat, from, objective, kind, source)?;
+    let id = run.id.clone();
+    state.runtime.runs.push(run);
+    state.runtime.notice = "Run queued.".into();
+    crate::worker::wake();
+    Ok(id)
+}
+
+#[test]
+fn preparing_a_continuation_does_not_publish_or_change_state() {
+    let mut state = State::default();
+    let chat = create(&mut state);
+    send(&mut state, &chat, "Original task", "test").unwrap();
+    state.runtime.runs[0].status = "completed".into();
+    let before = serde_json::to_vec(&state).unwrap();
+    let run = continuation(&state, &chat, 0, "Continue".into(), RunKind::PortDecision, "test").unwrap();
+    assert_eq!(run.chat_id.as_deref(), Some(chat.as_str()));
+    assert_eq!(run.status, "queued");
+    assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+}
+
 #[test]
 fn invalid_continuation_input_leaves_the_queue_and_notice_unchanged() {
     let mut state = State::default();

@@ -150,26 +150,30 @@ pub(crate) fn latest_task(state: &State, chat: &str, actor: &Actor) -> Option<us
         .max_by_key(|(index, run)| (run.queue_order, *index))
         .map(|(index, _)| index)
 }
-/// Queues a Control-initiated turn in `chat`, inheriting the provider, context,
-/// lineage and grants of the run at `from`.
-pub(crate) fn enqueue_continuation(state: &mut State, chat: &str, from: usize, objective: String, kind: crate::runtime::RunKind, source: &str) -> Result<String, &'static str> {
+/// A full queue defers admission; rejected input or authority does not retry.
+#[derive(Debug)]
+pub(crate) enum ContinuationError {
+    Busy,
+    Rejected,
+}
+
+/// Prepares an admitted continuation from captured settings. Publication,
+/// checkpointing and dispatcher notification belong to the caller.
+#[inline]
+pub(crate) fn continuation(state: &State, chat: &str, from: usize, objective: String, kind: crate::runtime::RunKind, source: &str) -> Result<crate::runtime::Run, ContinuationError> {
     use crate::application::runs::Submission;
     let latest = &state.runtime.runs[from];
-    identity::authorize(&latest.actor, latest.action)?;
-    crate::scheduler::admit(&state.runtime)?;
+    identity::authorize(&latest.actor, latest.action).map_err(|_| ContinuationError::Rejected)?;
+    crate::scheduler::admit(&state.runtime).map_err(|_| ContinuationError::Busy)?;
     if objective.is_empty() || control_context::limits::message_too_long(&objective) {
-        return Err(control_context::limits::CHAT_MESSAGE_ERROR);
+        return Err(ContinuationError::Rejected);
     }
     let grants = crate::services::grants(state, latest);
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
     let id = format!("{stamp:x}-{}", state.runtime.runs.len());
     let order = state.runtime.runs.iter().map(|run| run.queue_order).max().unwrap_or(0).saturating_add(1);
     let request = Submission { objective, kind, source: source.into(), actor: latest.actor.clone(), action: latest.action };
-    let run = request.into_continuation(latest, chat, id.clone(), order, grants);
-    state.runtime.runs.push(run);
-    state.runtime.notice = "Run queued.".into();
-    crate::worker::wake();
-    Ok(id)
+    Ok(request.into_continuation(latest, chat, id, order, grants))
 }
 fn command_menu(actor: &Actor) -> String {
     command_menu_for(identity::authorize(actor, Action::Task).is_ok(), identity::authorize(actor, Action::Improve).is_ok())

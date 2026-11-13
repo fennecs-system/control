@@ -1,4 +1,34 @@
 # Performance checks
+
+## Approval publication ordering (2026-11-13)
+
+Compared merged main `93d189d` with the approval-publication slice, using the
+existing synthetic release fixture on Linux aarch64 / Rust 1.99.0 with pinned
+offline dependencies. Six alternating pairs after warmup ran on one CPU with
+512 MiB and no swap. Both revisions perform one dispatcher notification per
+admission; the revised fixture supplies that notification after its synthetic
+successful acknowledgement because publication no longer wakes by itself.
+
+| Retained completed runs | Baseline → revised median | Change |
+| --- | ---: | ---: |
+| 16 | 786.5 → 941 ns | +154.5 ns (+19.6%) |
+| 1,024 | 10.719 → 9.963 µs | −7.1% |
+| 20,001 | 408.374 → 375.511 µs | −8.0% |
+
+Typed `Busy` versus `Rejected` admission results remove duplicate authorization
+and capacity checks while preserving denial-before-capacity semantics. Larger
+ledgers improve, but the small fixture retains a fixed sub-microsecond overhead
+from the preparation/publication split; this is not a claim of zero regression.
+The fixture excludes checkpoint I/O, request grouping and bot reconciliation;
+it does not measure end-to-end approval latency or the new status projection.
+
+Actual CPU-clock flamegraphs contain 2,514 / 2,175 samples. Memory-event counters
+did not increase during the measured run; no OOM occurred. Scripts, timing logs,
+raw stacks, SVGs and binary hashes are retained locally under
+`.control/performance/approval-publication-20261113/`. Tests separately verify
+checkpoint-before-wake, save rejection without wake, reload deduplication and
+paused/queued/running labels. No live model calls were made.
+
 ## Approval eligibility and checkpoint reconciliation (2026-11-13)
 
 Compared main `dda2b89` with runtime changes through `5f0babc`, with identical
