@@ -21,7 +21,8 @@ pub trait AttemptTools: Sync {
     fn known(&self, name: &str) -> bool;
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value>;
 }
-static ATTEMPT_TOOLS: [&dyn AttemptTools; 8] = [
+static ATTEMPT_TOOLS: [&dyn AttemptTools; 9] = [
+    &crate::compaction::Tools,
     &crate::recovery::Tools,
     &crate::turn_context::Tools,
     &crate::command_jobs::Tools,
