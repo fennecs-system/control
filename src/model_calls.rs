@@ -16,9 +16,11 @@ pub struct Endpoint {
     pub revision: String,
     pub limits: Limits,
     pub timeout_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cli: Option<crate::backend::Backend>,
 }
 impl Endpoint {
-    pub fn validate(&self) -> io::Result<reqwest::Url> {
+    pub fn validate(&self) -> io::Result<Target> {
         self.limits.validate()?;
         if !crate::application::valid_id(&self.id)
             || !crate::usage::valid_model(&self.model)
@@ -28,6 +30,14 @@ impl Endpoint {
             || !(1..=86400).contains(&self.timeout_seconds)
         {
             return Err(io::Error::other("Invalid text model metadata"));
+        }
+        if let Some(backend)=self.cli {
+            if !self.url.is_empty() {
+                return Err(io::Error::other(
+                    "CLI text models do not accept an endpoint URL",
+                ));
+            }
+            return Ok(Target::Cli(backend));
         }
         let url = reqwest::Url::parse(&self.url)
             .map_err(|_| io::Error::other("Invalid model endpoint"))?;
@@ -50,13 +60,16 @@ impl Endpoint {
                 "Use a private/loopback model endpoint ending in /v1 without credentials or query parameters",
             ));
         }
-        Ok(url)
+        Ok(Target::Endpoint(url))
     }
 }
 
 /// One bounded request, no retries, tools, credential forwarding or cloud fallback.
 pub fn call(endpoint: &Endpoint, system: &str, input: &str) -> io::Result<Response> {
-    let mut url = endpoint.validate()?;
+    let mut url = match endpoint.validate()? {
+        Target::Cli(backend) => return cli::call(endpoint, backend, system, input),
+        Target::Endpoint(url) => url,
+    };
     url.set_path("/v1/chat/completions");
     let body = Request {
         model: &endpoint.model,
@@ -87,6 +100,15 @@ pub fn call(endpoint: &Endpoint, system: &str, input: &str) -> io::Result<Respon
     let value =
         serde_json::from_slice(&bytes).map_err(|_| io::Error::other("Malformed model response"))?;
     control_ai::model::decode(value, &endpoint.limits)
+}
+
+mod cli;
+pub enum Target {
+    Endpoint(reqwest::Url),
+    Cli(crate::backend::Backend),
+}
+pub fn recover() -> io::Result<()> {
+    cli::recover()
 }
 
 pub fn command(args: &[String]) -> io::Result<()> {
