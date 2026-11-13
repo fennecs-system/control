@@ -5,7 +5,19 @@ tool container. It does not embed llama.cpp, download weights or grant a
 summarizer tools. The same derived history view feeds Codex and Claude chats.
 This does not replace either CLI's private context handling. The same summary
 worker also accepts explicitly selected Claude/Codex CLI text adapters. General
-local tool-using agents and `/model` selection are separate follow-up work.
+local tool-using agents remain separate follow-up work.
+
+Chat and TUI accept `/model` to list configured agent models, `/model PROVIDER:ID`
+to select future turns and `/model default` to select the current node default.
+This is chat metadata, excluded from model history; it starts no model traffic
+and does not interrupt an active attempt. Completion and `/help` share the same
+command definition. Add models in Manage before selecting them; account access
+is verified by the adapter when a run starts, not inferred from a model name.
+Both spawn tools accept an optional `model` selector. Omission inherits the
+parent's captured provider/model; an explicit configured selection is captured
+with the child/batch and preserves its existing tool permissions and role.
+Invalid selections are rejected before effects, and changing a retried request's
+selection is a conflict. There is no silent cross-provider fallback.
 
 For a future local agent adapter, Control owns input assembly, tree compaction
 and context-fit admission; the inference server supplies generation. Server KV
@@ -164,3 +176,15 @@ Q4_K_M weights alone are about 19.4 GB, before KV cache and runtime memory.
 Availability does not prove this pinned runtime or your hardware can load it;
 verify model-format support and test the endpoint before enabling chat summaries.
 No weights are bundled or downloaded by this change.
+
+The 2026-11-13 local test loaded the verified Qwen3.8-27B Q4_K_M artifact
+(`d15d4b6de55f662ac40e867702d31afe738d032fa06b829b2b1a21a49d4a48ee`)
+with llama.cpp `620d222`, using a read-only operator-directory mount, 32 GiB
+container limit, eight CPU cores and 32768 context. Docker reported about
+20–23.3 GiB during the run (including cache); generation was about 2.1–2.2 tokens/s.
+The original eight-anchor fixture took 97.4 s flat and 357.6 s for seven tree
+calls. Both retained all eight anchors, the pending approval and unresolved test.
+However, flat output changed commit `a1b2c3` to `a1b2c`, which the original anchor
+score missed. Tree output retained the correct commit. This supports an opt-in
+experiment, not a default promotion or a guarantee of summary fidelity. The
+inspection/recall path and authoritative originals remain essential.

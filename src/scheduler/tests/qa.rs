@@ -106,6 +106,7 @@ fn adapter_matches_original_scheduler_over_mixed_saved_states() {
             if draw() % 5 == 0 {
                 run.delegation = Some(crate::delegation::Delegation {
                     input: crate::delegation::Input {
+                        model:None,
                         objective: "Review".into(),
                         role: crate::delegation::Role::Worker,
                     },

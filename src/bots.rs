@@ -513,8 +513,9 @@ fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
     if crate::delegation::is_judge(latest) {
         return Err("Read-only judges cannot run as bots.");
     }
-    let (actor, action, backend, model, context, lenses) =
+    let (actor, action, mut backend, mut model, context, lenses) =
         (latest.actor.clone(), latest.action, latest.backend, latest.model.clone(), latest.context.clone(), latest.lenses.clone());
+    if let Some(selected)=&session.model {backend=selected.backend;model=Some(selected.model.clone());}
     let persona = crate::delegation::lineage(latest);
     let recovery = (latest.kind.prompt_role()==control_context::agent_policy::PromptRole::Wake && latest.status == "completed"
         && latest.attempts.last().is_some_and(|a|a.context_trace.is_some()

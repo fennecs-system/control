@@ -50,6 +50,20 @@ fn post(state: &mut State, chat: Option<&str>, text: &str) {
         delivery: Default::default(),
     });
 }
+#[test]
+fn model_selection_does_not_wake_a_bot_but_is_captured_on_its_next_callback() {
+    let (mut state,chat)=fixture();
+    state.runtime.models.push(crate::providers::Model::captured(crate::backend::Backend::Claude,"reviewer".into()));
+    crate::chat::send(&mut state,&chat,"/model claude:reviewer","test").unwrap();
+    assert_eq!(state.runtime.runs.len(),1);
+    command_at(&mut state,&chat,"on",Now(0)).unwrap();
+    peer_message_at(&mut state,&chat,1,Now(1));
+    reconcile_at(&mut state,2,|_|Ok(())).unwrap();
+    let runs=bot_runs(&state);assert_eq!(runs.len(),1);
+    assert_eq!(runs[0].backend,crate::backend::Backend::Claude);
+    assert_eq!(runs[0].model.as_deref(),Some("reviewer"));
+    assert_eq!(state.runtime.runs[0].backend,crate::backend::Backend::Codex);
+}
 fn bot_runs(state: &State) -> Vec<&crate::runtime::Run> {
     state
         .runtime

@@ -214,6 +214,7 @@ pub fn create(state: &mut State) -> String {
     let id = format!("c-{stamp:x}-{}", state.chats.len());
     let activity_order=next_activity(state);
     state.chats.push(Session {
+        model:None,
         continuity:None,
         activity_order,
         project: None,
@@ -243,6 +244,7 @@ pub fn receive(state: &mut State, incoming: &discord::Incoming) -> Result<(), &'
     }
     if !state.chats.iter().any(|s| s.id == id) {
         state.chats.push(Session {
+            model:None,
             continuity:None,
             activity_order:0,
             project: None,
@@ -294,6 +296,7 @@ pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -
     session.workspace = parent.workspace;
     session.project = parent.project.and_then(|p|p.approved());
     session.parent_chat = Some(parent_id.into());
+    session.model=parent.model.clone();
     session.fork_context = Some(context);
     session.lenses = parent.lenses;
     session.lens = parent.lens;
@@ -307,8 +310,8 @@ pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -
     }
     if let Some(from) = from {
         let previous = &state.runtime.runs[from];
-        let backend = previous.backend;
-        let model = previous.model.clone();
+        let backend = parent.model.as_ref().map_or(previous.backend,|m|m.backend);
+        let model = parent.model.as_ref().map(|m|m.model.clone()).or_else(||previous.model.clone());
         let context = previous.context.clone();
         let lenses = previous.lenses.clone();
         let resources = crate::services::grants(state,previous);
@@ -370,6 +373,13 @@ fn attach_room(state: &mut State, id: &str, option: &str) -> Result<String, &'st
 fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result<(), &'static str> {
     if crate::shutdown::requested() {
         return Err("Control is stopping; try again after restart.");
+    }
+    if let Some(option)=commands::tail(text.trim(),Kind::Model) {
+        let reply=crate::providers::selection::command(state,id,option)?;
+        let session=state.chats.iter_mut().find(|c|c.id==id).ok_or("Chat not found.")?;
+        session.messages.push(Message{text:text.trim().into(),run_id:None,reply});
+        session.revision=session.revision.saturating_add(1);
+        return Ok(());
     }
     if let Some(option)=commands::tail(text.trim(),Kind::Bot) {
         let reply=crate::bots::command(state,id,option)?;
@@ -556,6 +566,7 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
             action,
         )?;
         let run = state.runtime.runs.last_mut().unwrap();
+        if let Some(model)=&state.chats[index].model {run.backend=model.backend;run.model=Some(model.model.clone());}
         if steering.is_some() {
             run.kind = RunKind::Steering;
         }

@@ -39,6 +39,7 @@ fn slots_overlap_chats_but_never_reorder_or_overlap_a_conversation() {
     runtime.runs[0].question = None;
     runtime.runs[0].delegation = Some(crate::delegation::Delegation {
         input: crate::delegation::Input {
+            model:None,
             objective: "Inspect".into(),
             role: crate::delegation::Role::Worker,
         },

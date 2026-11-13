@@ -4,12 +4,16 @@ use std::collections::HashMap;
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Model {
-    backend: crate::backend::Backend,
-    model: String,
+    pub(crate) backend: crate::backend::Backend,
+    pub(crate) model: String,
     #[serde(default,skip_serializing_if="Option::is_none")]
     capacity:Option<control_context::turn_context::Capacity>,
 }
-impl Model {fn same(&self,other:&Self)->bool {self.backend==other.backend && self.model==other.model}}
+impl Model {
+    pub(crate) fn captured(backend:crate::backend::Backend,model:String)->Self {Self {backend,model,capacity:None}}
+    fn same(&self,other:&Self)->bool {self.backend==other.backend && self.model==other.model}
+}
+pub(crate) mod selection;
 pub fn capacity(runtime:&crate::runtime::Runtime,backend:crate::backend::Backend,model:&str)->Option<control_context::turn_context::Capacity> {
     runtime.models.iter().find(|m|m.backend==backend && m.model==model).and_then(|m|m.capacity)
 }

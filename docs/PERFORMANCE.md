@@ -802,3 +802,38 @@ raw stacks, SVGs, scripts and binary hashes remain locally under
 check completed `/con` with Tab and opened `/help` without submitting a model
 prompt; all existing paused bot/run state was preserved.
 
+## Model/compaction series (2026-11-13)
+
+Compared deployed `b744ee2` with the series through chat model selection using
+the existing release fixtures, Linux aarch64 and the pinned offline toolchain.
+Six alternating history pairs and three TUI pairs followed warmup. Measurements
+used one pinned CPU, 512 MiB and no swap; the external Qwen experiment used
+different CPU cores on the same host. Treat host pressure and compiler layout as
+possible noise, particularly for code paths unchanged with compaction disabled.
+
+| Fixture | Baseline → revised median |
+| --- | ---: |
+| Managed context, 15 turns, compaction off | 37.033 → 35.971 µs |
+| Managed context, 150 turns, compaction off | 62.736 → 57.493 µs |
+| TUI render, 10 messages | 83.960 → 79.354 µs |
+| TUI render, 100 messages | 179.193 → 180.981 µs |
+| TUI render, 500 messages | 618.735 → 632.162 µs |
+
+Prompt sizes match at 17146/24888 bytes; every rendered-buffer hash matches.
+The largest TUI median increase is 2.2%, with overlapping sample distributions.
+No material regression is established by these fixtures; they do not measure
+network polling, end-to-end inference or every workload. The revised enabled
+selection fixture took 7.702/43.955/157.545 µs for 32/256/1024 entries, selecting
+4/7/9 tree nodes. Its model calls are deterministic mocks, not Qwen timings.
+Covered-prefix validation still scans retained source; this is not constant-time
+history access. Cold summary generation and disk cache size are separate costs.
+
+CPU-clock flamegraphs were captured for baseline/revised history and revised
+enabled selection. Memory-event counters remained zero, including OOM. Local
+logs, raw profiling data and SVGs are retained under
+`/private/tmp/control-boundary-profile/compaction-series/`; copied logs/SVGs are
+under `.control/performance/compaction-series-20261113/`. The profiling helper is
+stopped. These fixtures profile the host/core path; the inference container is an
+optional external service and its RAM is reported separately in
+[LOCAL-MODELS.md](LOCAL-MODELS.md).
+

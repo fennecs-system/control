@@ -10,6 +10,8 @@ pub struct Message {
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Session {
+    #[serde(default, skip_serializing_if="Option::is_none")]
+    pub model: Option<crate::providers::Model>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuity: Option<Box<crate::turn_context::Managed>>,
     #[serde(default)]

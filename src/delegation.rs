@@ -29,6 +29,8 @@ pub struct Persona {
 pub struct Input {
     pub objective: String,
     pub role: Role,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub model:Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -55,6 +57,11 @@ pub fn pausing(run: &runtime::Run) -> bool {
     })
 }
 pub fn definition() -> Value {
+    let mut definition=inherited_definition();
+    definition["inputSchema"]["properties"]["model"]=crate::providers::selection::schema();
+    definition
+}
+fn inherited_definition()->Value {
     json!({"name":"control_agent_spawn_blocking","description":"Spawn a bounded worker or isolated read-only judge and block this conversation until its result returns. Use control_agent_spawn for independent background work. This checkpoints your files, pauses you, releases the worker, then automatically resumes you using your captured provider and model. Stop immediately after acknowledgement; never poll or wait inside a command. Children share your actor and authority ceiling, not writable files. Review feedback never applies or merges changes. Limits: depth 2, configured per-root team budget shared with spawn batches, and one judge per root task; execution uses bounded node slots.","inputSchema":{"type":"object","properties":{"objective":{"type":"string","minLength":1,"maxLength":2000},"role":{"type":"string","enum":["worker","judge"]}},"required":["objective","role"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
 }
 
@@ -190,8 +197,9 @@ fn request_with_save(
         return Err("Answer the pending design question before delegation.");
     }
     budget(state, run, input.role)?;
-    let backend = run.backend;
-    let model = run.model.clone().unwrap_or_else(|| run.backend.default_model());
+    let selected=crate::providers::selection::resolve(&state.runtime,run.backend,&run.model.clone().unwrap_or_else(||run.backend.default_model()),input.model.as_deref())?;
+    let backend = selected.backend;
+    let model = selected.model;
     let previous = state.runtime.runs[index].delegation.clone();
     state.runtime.runs[index].delegation = Some(Delegation {
         input,
@@ -359,6 +367,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
         let child_chat = state.chats.last_mut().unwrap();
         child_chat.actor = parent.actor.clone();
         child_chat.parent_chat = parent.chat_id.clone();
+        child_chat.model=Some(crate::providers::Model::captured(d.backend,d.model.clone()));
         child_chat.lenses = parent.lenses.clone();
         child_chat.room = chat.room.clone();
         child_chat.title = d.input.objective.chars().take(60).collect();
