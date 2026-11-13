@@ -132,6 +132,15 @@ positions are safe only under exclusive ownership. An async interpreter must
 settle an in-flight commit's outcome before surrendering that ownership; dropping
 a future cannot undo a disk write whose outcome is unknown.
 
+Continuation construction now uses `Submission::into_continuation` in the
+application layer. It borrows the origin's captured settings and constructs a
+fresh run through the shared `into_run` constructor. The host still owns actor
+authorization, capacity, current service grants, clock/ID, queue ordering and
+dispatcher notification. Captured models (including `None`), lenses and lineage
+remain unchanged; attempts and stale grants are not copied. No record/schema or
+provider-session change is involved. Approval eligibility and its durable
+transaction remain in the host; this constructor alone is not that extraction.
+
 Next, migrate callback admission and continuation/approval operations behind the
 same style of interface, then bounded queries that let web rendering leave the
 lock. Finish the client/TUI crate boundary over the shared library interface;

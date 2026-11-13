@@ -153,20 +153,23 @@ pub(crate) fn latest_task(state: &State, chat: &str, actor: &Actor) -> Option<us
 /// Queues a Control-initiated turn in `chat`, inheriting the provider, context,
 /// lineage and grants of the run at `from`.
 pub(crate) fn enqueue_continuation(state: &mut State, chat: &str, from: usize, objective: String, kind: crate::runtime::RunKind, source: &str) -> Result<String, &'static str> {
+    use crate::application::runs::Submission;
     let latest = &state.runtime.runs[from];
-    let (actor, action, backend, model, context, lenses) = (latest.actor.clone(), latest.action, latest.backend, latest.model.clone(), latest.context.clone(), latest.lenses.clone());
-    let persona = crate::delegation::lineage(latest);
+    identity::authorize(&latest.actor, latest.action)?;
+    crate::scheduler::admit(&state.runtime)?;
+    if objective.is_empty() || control_context::limits::message_too_long(&objective) {
+        return Err(control_context::limits::CHAT_MESSAGE_ERROR);
+    }
     let grants = crate::services::grants(state, latest);
-    state.runtime.enqueue_for(objective, kind, source, actor, action)?;
-    let run = state.runtime.runs.last_mut().unwrap();
-    run.chat_id = Some(chat.into());
-    run.backend = backend;
-    run.model = model;
-    run.context = context;
-    run.lenses = lenses;
-    run.persona = Some(persona);
-    run.resource_grants = grants;
-    Ok(run.id.clone())
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+    let id = format!("{stamp:x}-{}", state.runtime.runs.len());
+    let order = state.runtime.runs.iter().map(|run| run.queue_order).max().unwrap_or(0).saturating_add(1);
+    let request = Submission { objective, kind, source: source.into(), actor: latest.actor.clone(), action: latest.action };
+    let run = request.into_continuation(latest, chat, id.clone(), order, grants);
+    state.runtime.runs.push(run);
+    state.runtime.notice = "Run queued.".into();
+    crate::worker::wake();
+    Ok(id)
 }
 fn command_menu(actor: &Actor) -> String {
     command_menu_for(identity::authorize(actor, Action::Task).is_ok(), identity::authorize(actor, Action::Improve).is_ok())
