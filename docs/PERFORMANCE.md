@@ -1,5 +1,58 @@
 # Performance checks
 
+## Local compaction selection (2026-11-13)
+
+Compared merged main `b744ee2` with the local-compaction feature using the same
+release `conversation::tests::continuity_profile` fixture, Linux aarch64 / Rust
+1.99.0, pinned offline dependencies, one CPU, 512 MiB and no swap. Six alternating
+pairs followed warmup. Compaction remained disabled for this comparison; rendered
+prompt sizes were identical on both revisions.
+
+| Retained turns | Baseline → feature median | Prompt bytes |
+| --- | ---: | ---: |
+| 15 | 33.609 → 32.917 µs | 17,146 |
+| 150 | 56.501 → 51.167 µs | 24,888 |
+
+These runs show no disabled-path regression in this fixture. There is no intended
+speed improvement on that path; compiler layout and measurement effects can
+account for the observed difference. This is not an end-to-end inference result.
+
+The explicit `compaction::tests::selection_profile` fixture measures enabled,
+cached selection separately. It revalidates source hashes before reusing a view:
+
+| Source entries | Cached selection median | Selected summary nodes | Mock cold calls |
+| --- | ---: | ---: | ---: |
+| 32 | 10.911 µs | 4 | 12 |
+| 256 | 81.421 µs | 7 | 121 |
+| 1,024 | 318.403 µs | 9 | 503 |
+
+The source-validation pass is linear in the bounded snapshot, while the selected
+summary cut is logarithmic. Flamegraphs show source rendering and hashing as the
+main enabled-path work. Snapshot limits are 4096 entries / 1 MiB; this fixture
+uses short synthetic records, not maximum-sized entries. All model replies are
+mocked. Four-entry leaves produce many cold calls; operators can increase the
+maximum leaf size within their model's input budget, trading fewer requests for
+larger summaries. Warm persistent-cache reuse is covered separately by a test
+that forbids any repeated model call. No Qwen fidelity, inference latency or
+hardware-fit claim follows from these measurements.
+
+Separate 499 Hz user-space CPU profiles cover baseline, disabled feature and
+enabled selection. Artifacts and logs are retained under
+`.control/performance/local-compaction-20261113/` and the isolated profiling
+scratch directory. CPU flamegraphs exclude network/disk wait time. Cgroup memory
+events stayed zero, including OOM kills. The optional inference image was built
+and its `--help`/`--version` entry points smoke-tested without weights; the runtime
+reports llama.cpp 0.7.0, build 11669, commit `620d222`.
+
+The library target's existing `terminal::profiling::render_profile` ran three
+alternating pairs at the same runtime resource limits. For 10 / 100 / 500 messages,
+baseline → feature medians were 60.799 → 61.293 µs, 138.123 → 139.327 µs and
+474.670 → 486.577 µs (+0.8%, +0.9%, +2.5%). All rendered-buffer hashes matched.
+These small increases are reported rather than presented as a speed gain; the
+transcript renderer is unchanged and the new inspector command is not exercised
+by this fixture. A discarded binary-target probe selected zero tests; only the
+verified library-target runs contribute to these figures.
+
 ## Approval publication ordering (2026-11-13)
 
 Compared merged main `93d189d` with the approval-publication slice, using the

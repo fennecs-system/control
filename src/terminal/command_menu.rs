@@ -10,6 +10,7 @@ pub(super) struct Entry {
 }
 
 const LOCAL: &[Entry] = &[
+    Entry { text: "/compact", usage: "/compact", description: "Inspect the compaction model, window and summary tree" },
     Entry { text: "/help", usage: "/help", description: "Show commands and keyboard shortcuts" },
     Entry { text: "/context", usage: "/context", description: "Inspect the next message's lens context" },
     Entry { text: "/chat", usage: "/chat", description: "Return to the conversation" },

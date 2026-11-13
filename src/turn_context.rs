@@ -282,7 +282,7 @@ fn write_prepared(generation: &str, prepared: &PreparedContext) -> io::Result<Tr
 
 /// Agent admission uses the configured history view; raw positions are stable.
 fn project(state: &State, id: &str) -> io::Result<PreparedContext> {
-    project_with(state, id, crate::conversation::compactor())
+    project_with(state, id, &crate::compaction::selector(state))
 }
 fn project_with(state: &State, id: &str, compactor: &dyn crate::conversation::Compactor) -> io::Result<PreparedContext> {
     use control_context::{

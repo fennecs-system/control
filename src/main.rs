@@ -45,6 +45,8 @@ mod navigation;
 #[path = "main/tests/performance.rs"]
 mod performance;
 mod providers;
+mod model_calls;
+mod compaction;
 mod projects;
 mod ports;
 mod previews;
@@ -500,6 +502,7 @@ fn serve_stylesheet(stream: &mut impl Write, path: &str) -> bool {
 
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).is_some_and(|s| s == "models") { return model_calls::command(&args[2..]); }
     if args.get(1).is_some_and(|s| s == "claude") {
         return claude::command(&args[2..]);
     }

@@ -57,6 +57,7 @@ pub(crate) fn handoff(instructions: &[&str], run: Option<&str>, activity: &[crat
     text
 }
 impl<'a> Entry<'a> {
+    pub fn summary_text(&self) -> String { Self { task_view: true, ..*self }.render() }
     /// The run's status and reply, or the message's own reply without a run.
     pub fn response(&self) -> (&'a str, &'a str) {
         crate::chat::response_from_run(self.message, self.run)
@@ -87,6 +88,7 @@ impl<'a> Entry<'a> {
 }
 
 impl<'a> Conversation<'a> {
+    pub fn id(&self) -> &str { &self.session.id }
     pub fn carry(&self, current: usize, window: &Window) -> Carry<'a> {
         let automatic = self.entry(current).and_then(|entry| entry.run).is_some_and(|run| run.kind.speaker() == control_context::agent_policy::MessageSpeaker::Control || run.continuation.is_some());
         let instructions = if automatic {

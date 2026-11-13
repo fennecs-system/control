@@ -7,6 +7,7 @@ use crate::{
 use serde_json::{json, Value};
 use std::time::{SystemTime, UNIX_EPOCH};
 use control_context::commands::{self, Kind};
+use crate::conversation::Compactor as _;
 mod activity;
 pub(crate) use activity::changed as activity_changed;
 use activity::{agent_activity, command_html};
@@ -286,7 +287,7 @@ pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -
     }
     crate::scheduler::admit(&state.runtime)?;
     let conversation = crate::conversation::Conversation::of(state, &parent);
-    let context = crate::conversation::compactor().window(&conversation, parent.messages.len()).render(&conversation).concat();
+    let context = crate::compaction::selector(state).window(&conversation, parent.messages.len()).render(&conversation).concat();
     let child = create(state);
     let session = state.chats.last_mut().unwrap();
     session.actor = parent.actor;
@@ -588,7 +589,7 @@ pub fn prompt(state: &State, run_id: &str) -> Option<String> {
         .find(|s| Some(&s.id) == run.chat_id.as_ref())?;
     let conversation = crate::conversation::Conversation::of(state, session);
     let current = conversation.position(run_id)?;
-    let window = crate::conversation::compactor().window(&conversation, current);
+    let window = crate::compaction::selector(state).window(&conversation, current);
     let carry = conversation.carry(current, &window);
     let activity = carry.previous.and_then(|run| run.attempts.last()).map(|attempt| crate::history::activity(run.chat_id.as_deref(), attempt));
     let handoff = crate::conversation::handoff(&carry.instructions, carry.previous.map(|run| run.id.as_str()), activity.as_deref().unwrap_or(&[]));
@@ -650,7 +651,7 @@ pub fn omitted_history(state: &State, run: &str) -> usize {
                 .messages
                 .iter()
                 .position(|m| m.run_id.as_deref() == Some(run))
-                .map(|current| crate::conversation::compactor().window(&crate::conversation::Conversation::of(state, session), current).omitted)
+                .map(|current| crate::compaction::selector(state).window(&crate::conversation::Conversation::of(state, session), current).omitted)
         })
         .unwrap_or(0)
 }
@@ -691,6 +692,7 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
         value["agent_activity"]=json!(agent_activity(state,id));
         value["room_listener"]=crate::rooms::listener_status(state,id).unwrap_or(Value::Null);
         value["bot"]=crate::bots::status(state,id).map_or(Value::Null,Value::from);
+        value["compaction"]=crate::compaction::status(state,id);
         if let Some(messages)=value["messages"].as_array_mut() {
             for message in messages {
                 if let Some(run)=message["run_id"].as_str() {
@@ -719,6 +721,7 @@ pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
         .unwrap_or_default();
     let lenses = selected_lenses(session);
     let room = format!("{room}{}", session.parent_chat.as_deref().filter(|parent| valid_id(parent)).map(|parent| format!("<a href='/chat/{parent}'>Parent chat ↗</a>")).unwrap_or_default());
+    let room = format!("{room}<a href='/chat/{id}/compaction'>Compaction tree ↗</a>");
     let mode = if session.improve_mode {
         "<span class='chat-command active-command' title='Use /improve off to return to regular chat'>/improve</span>"
     } else {

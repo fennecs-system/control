@@ -61,6 +61,10 @@ preserves your saved models and selection.
 Choose a saved model under **Manage → Models & providers**. **+ New model** adds
 another model; clicking its row selects it for new runs.
 
+[Local text models and compaction](docs/LOCAL-MODELS.md) describes independent
+local summarizers for Codex/Claude chats, configurable history windows and the
+web/TUI summary-tree inspector. Inference stays in an external service/container.
+
 You can also use Control's tools from your existing Claude Code or Codex CLI.
 With Control running, register its MCP server from the checkout:
 

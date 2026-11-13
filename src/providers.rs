@@ -8,7 +8,7 @@ pub struct Model {
     model: String,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Settings {
     #[serde(default)]
@@ -17,6 +17,10 @@ struct Settings {
     backend: crate::backend::Backend,
     #[serde(default)]
     model: String,
+    #[serde(default)]
+    text_models: Vec<crate::model_calls::Endpoint>,
+    #[serde(default)]
+    compaction: crate::compaction::Settings,
 }
 
 pub fn initialization_options(
@@ -74,6 +78,7 @@ fn initialize_in(
         }],
         backend,
         model: backend.default_model(),
+        ..Default::default()
     };
     if path.try_exists()? || std::fs::symlink_metadata(&path).is_ok() {
         return Ok(());
@@ -103,6 +108,8 @@ pub fn save_settings(state: &crate::State) -> std::io::Result<()> {
         models: configured(&state.runtime),
         backend: state.runtime.backend,
         model: state.runtime.configured_model(),
+        text_models: state.runtime.compaction.models.clone(),
+        compaction: state.runtime.compaction.settings.clone(),
     };
     let bytes = serde_json::to_vec_pretty(&settings).map_err(std::io::Error::other)?;
     crate::config::write_private("model.json", &bytes)
@@ -124,6 +131,9 @@ pub fn load_settings(runtime: &mut crate::runtime::Runtime) -> std::io::Result<(
             .filter(|b| b.image().is_some())
             .collect();
             let settings = migrate(settings, &installed)?;
+            validate_text(&settings.text_models, &settings.compaction)?;
+            runtime.compaction.models = settings.text_models;
+            runtime.compaction.settings = settings.compaction;
             runtime.models = settings.models;
             runtime.model = Some(settings.model);
             runtime.backend = settings.backend;
@@ -142,6 +152,7 @@ pub fn load_settings(runtime: &mut crate::runtime::Runtime) -> std::io::Result<(
                     }],
                     backend: crate::backend::Backend::Codex,
                     model: model.clone(),
+                    ..Default::default()
                 })
                 .map_err(std::io::Error::other)?;
                 crate::config::write_private("model.json", &bytes)?;
@@ -234,13 +245,75 @@ pub fn render(runtime: &crate::runtime::Runtime) -> String {
         html.push_str(&format!("<form method='post' action='/providers'><input type='hidden' name='action' value='add'><input type='hidden' name='provider' value='{id}'><label>{label}<input name='model' required maxlength='100' value='{default}' spellcheck='false' autocapitalize='none'></label><button>Add model</button></form>"));
     }
     html.push_str("</details>");
+    html.push_str(&render_text(runtime));
     html
+}
+
+fn validate_text(models: &[crate::model_calls::Endpoint], settings: &crate::compaction::Settings) -> std::io::Result<()> {
+    settings.validate()?;
+    if models.len() > 64 || models.iter().enumerate().any(|(at,m)| models[..at].iter().any(|other|other.id==m.id)) {
+        return Err(std::io::Error::other("Duplicate or too many text models"));
+    }
+    for model in models { model.validate()?; }
+    if settings.enabled && !models.iter().any(|m|Some(&m.id)==settings.model.as_ref()) {
+        return Err(std::io::Error::other("Select a configured compactor model before enabling summaries"));
+    }
+    Ok(())
+}
+fn render_text(runtime: &crate::runtime::Runtime) -> String {
+    let memory = &runtime.compaction;
+    let mut html = "<h3>Text models &amp; compaction</h3><p>External inference services; no model runtime is embedded in Control. These endpoints summarize history for both Codex and Claude; they are not yet tool-using agent adapters.</p>".to_owned();
+    for model in &memory.models {
+        html.push_str(&format!("<article class='record'><h4>{}</h4><p>{} · context {} tokens · output {} tokens · revision {}</p><form method='post' action='/providers'><input type='hidden' name='action' value='text-remove'><input type='hidden' name='id' value='{}'><button>Remove model</button></form></article>", crate::escape(&model.id), crate::escape(&model.model), model.limits.context_tokens, model.limits.output_tokens, crate::escape(&model.revision), crate::escape(&model.id)));
+    }
+    html.push_str("<details><summary>Add local text model</summary><form method='post' action='/providers'><input type='hidden' name='action' value='text-add'><label>Name<input name='id' required maxlength='100' placeholder='local-qwen'></label><label>Server model alias<input name='model' required maxlength='100' placeholder='qwen-compactor'></label><label>Private endpoint<input name='url' required placeholder='http://127.0.0.1:8081/v1'></label><label>Weights/runtime revision<input name='revision' required maxlength='256' placeholder='GGUF SHA256 and server revision'></label><label>Declared context tokens<input name='context_tokens' type='number' min='1024' value='32768'></label><label>Output token limit<input name='output_tokens' type='number' min='1' value='1024'></label><label>Input byte ceiling<input name='input_bytes' type='number' min='1' max='1048576' value='28000'></label><label>Output byte ceiling<input name='output_bytes' type='number' min='1' max='65536' value='8192'></label><label>Request timeout seconds<input name='timeout_seconds' type='number' min='1' max='86400' value='1800'></label><button>Add text model</button></form></details>");
+    html.push_str("<form method='post' action='/providers'><input type='hidden' name='action' value='compaction'><label>Compaction model<select name='model'><option value=''>Select a text model</option>");
+    for model in &memory.models { html.push_str(&format!("<option value='{}'{}>{}</option>",crate::escape(&model.id),if Some(&model.id)==memory.settings.model.as_ref(){" selected"}else{""},crate::escape(&model.id))); }
+    html.push_str(&format!("</select></label><label>Chats to summarize (space-separated IDs; empty means none)<input name='chats' maxlength='8192' value='{}'></label>",crate::escape(&memory.settings.chats.join(" "))));
+    html.push_str(&format!("<label><input name='enabled' type='checkbox'{}> Automatic summaries</label><details><summary>Advanced window settings</summary><label>Recent entries kept verbatim<input name='recent_entries' type='number' min='1' max='128' value='{}'></label><label>Leaf chunk entries (power of two)<input name='leaf_entries' type='number' min='1' max='64' value='{}'></label><label>History byte budget<input name='history_bytes' type='number' min='1024' max='262144' value='{}'></label></details><p>Input is conservatively byte-bounded using declared context/output limits; this is not exact tokenization. Summary requests exceeding capacity fail visibly. Inspect a chat at /chat/ID/compaction, or use /compact in the TUI.</p><button>Save compaction settings</button></form>", if memory.settings.enabled {" checked"}else{""},memory.settings.recent_entries,memory.settings.leaf_entries,memory.settings.history_bytes));
+    html
+}
+fn save_text(state: &mut crate::State, fields: &HashMap<String,String>, save: impl FnOnce(&crate::State)->std::io::Result<()>) -> Result<(), &'static str> {
+    let mut models = state.runtime.compaction.models.clone();
+    let mut settings = state.runtime.compaction.settings.clone();
+    let get = |name| fields.get(name).map(String::as_str).unwrap_or("");
+    match get("action") {
+        "text-add" => {
+            let context_tokens = get("context_tokens").parse().map_err(|_|"Invalid context size")?;
+            let output_tokens = get("output_tokens").parse().map_err(|_|"Invalid output size")?;
+            models.push(crate::model_calls::Endpoint { id:get("id").into(),model:get("model").into(),url:get("url").into(),revision:get("revision").into(),
+                limits:control_ai::model::Limits{context_tokens,output_tokens,input_bytes:get("input_bytes").parse().map_err(|_|"Invalid input byte ceiling")?,output_bytes:get("output_bytes").parse().map_err(|_|"Invalid output byte ceiling")?},
+                timeout_seconds:get("timeout_seconds").parse().map_err(|_|"Invalid request timeout")? });
+        }
+        "text-remove" => { models.retain(|m|m.id!=get("id")); }
+        "compaction" => {
+            settings = crate::compaction::Settings { enabled:fields.contains_key("enabled"), model:(!get("model").is_empty()).then(||get("model").to_owned()),
+                chats:get("chats").split_whitespace().map(str::to_owned).collect(),
+                recent_entries:get("recent_entries").parse().map_err(|_|"Invalid recent window")?,leaf_entries:get("leaf_entries").parse().map_err(|_|"Invalid leaf size")?,
+                history_bytes:get("history_bytes").parse().map_err(|_|"Invalid history budget")? };
+        }
+        _ => return Err("Unknown model action"),
+    }
+    validate_text(&models,&settings).map_err(|_|"Invalid model/window settings: check endpoint, limits, unique names and selected model")?;
+    let previous_models=std::mem::replace(&mut state.runtime.compaction.models,models);
+    let previous_settings=std::mem::replace(&mut state.runtime.compaction.settings,settings);
+    if save(state).is_err() {
+        state.runtime.compaction.models=previous_models;
+        state.runtime.compaction.settings=previous_settings;
+        return Err("Could not confirm model settings were saved; reload before retrying");
+    }
+    state.runtime.compaction.changed();
+    crate::worker::wake();
+    Ok(())
 }
 pub fn save_with(
     state: &mut crate::State,
     fields: &HashMap<String, String>,
     save: impl FnOnce(&crate::State) -> std::io::Result<()>,
 ) -> Result<(), &'static str> {
+    if fields.get("action").is_some_and(|a|a.starts_with("text-") || a == "compaction") {
+        return save_text(state, fields, save);
+    }
     let backend = match fields.get("provider").map(String::as_str) {
         Some("codex") => crate::backend::Backend::Codex,
         Some("claude") => crate::backend::Backend::Claude,
