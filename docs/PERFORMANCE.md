@@ -1,5 +1,40 @@
 # Performance checks
 
+## Classified checkpoint boundary (2026-11-13)
+
+Compared test-layout baseline `bbdd73c` with checkpoint adapter `9b2765a`, using
+the existing `storage::tests::profile_durable_save_stages` release fixture.
+Both binaries used identical flags (debug symbols retained), Linux aarch64,
+Rust 1.99.0, one CPU and 512 MiB without swap in an isolated helper. Live bots,
+models and application state were not involved. Each fixture rotates serialization,
+overwrite/fsync, atomic replacement and complete save, retaining 31 samples per
+stage and case. Complete-save medians below are medians across three alternating
+disk pairs after warmup, and six alternating tmpfs pairs respectively.
+
+| Retained runs / finished handoffs | Disk save, baseline → revised (ms) | Tmpfs save, baseline → revised (µs) |
+| --- | ---: | ---: |
+| 1 / no | 2.144 → 2.068 | 43.29 → 44.00 |
+| 1 / yes | 2.709 → 2.871 | 44.52 → 41.83 |
+| 100 / no | 1.517 → 1.524 | 114.98 → 115.90 |
+| 100 / yes | 2.199 → 2.468 | 163.11 → 162.42 |
+| 1,000 / no | 3.167 → 3.485 | 754.73 → 745.92 |
+| 1,000 / yes | 3.619 → 3.748 | 1,158.84 → 1,144.61 |
+
+Disk results are noisy: individual process medians span 1.16–4.02 ms before and
+1.12–4.15 ms after. Some case medians rise up to 12%; this small sample cannot
+prove unchanged durable-save latency. The tmpfs control removes durable storage
+latency while retaining serialization and filesystem calls: changes range from
+−6.0% to +1.6%, with no consistent CPU overhead detected. Tmpfs does **not** test
+durability. No speed improvement is claimed for adding error classification.
+
+Actual `perf record` CPU-clock stacks and flamegraphs were collected for both disk
+fixtures (72 / 115 samples). These sparse user-space samples are a sanity check,
+not evidence about blocked fsync time or a statistically precise CPU comparison.
+No new memory-limit or OOM events occurred. Logs, scripts, resource settings,
+binary hashes, raw samples and SVGs remain locally under
+`.control/performance/checkpoint-outcomes-20261113/`. This does not measure provider
+throughput, web/TUI rendering or persistence moved outside the lock.
+
 ## Small-machine efficiency goal
 
 Control's core, tools and TUI should have sufficiently low overhead to be
