@@ -715,8 +715,9 @@ revision, private persistent summary nodes, independent compactor selection and
 read-only web/TUI inspection. It feeds both existing CLI providers through the
 common history projection. It does not yet supply CLI-as-compactor adapters,
 hosted authenticated calls, per-attempt `/model` overrides, or local tool agents.
-Its snapshot ceiling is 4096 entries / 1 MiB; incremental reads beyond this,
-cache retention and bounded source expansion remain C1/C3 work. Validate real
+The incremental slice replaces the total snapshot ceiling with bounded source
+pages (64 entries / 1 MiB), preserves source checksums and reuses completed
+subtrees. Cache retention and bounded source expansion remain C1/C3 work. Validate real
 Qwen summary quality/latency/memory before promoting it to a default.
 
 M1 defines separate captured selections for worker, lead, reviewer and compactor.

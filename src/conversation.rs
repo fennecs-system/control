@@ -57,6 +57,7 @@ pub(crate) fn handoff(instructions: &[&str], run: Option<&str>, activity: &[crat
     text
 }
 impl<'a> Entry<'a> {
+    pub(crate) fn source(message:&'a Message,run:Option<&'a Run>)->Self {Self{message,run,task_view:true}}
     pub fn summary_text(&self) -> String { Self { task_view: true, ..*self }.render() }
     /// The run's status and reply, or the message's own reply without a run.
     pub fn response(&self) -> (&'a str, &'a str) {

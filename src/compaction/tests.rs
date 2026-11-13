@@ -22,9 +22,25 @@ fn fixture() -> (State, Job) {
         recent_entries: 2,
         ..Default::default()
     };
-    let job = prepare(&state).unwrap();
+    let job = hydrate(&state, prepare(&state).unwrap());
     assert_eq!(job.chat, chat);
     (state, job)
+}
+fn hydrate(state: &State, mut job: Job) -> Job {
+    let mut entries = Vec::new();
+    while entries.len() < job.entries.len() {
+        entries.extend(
+            source_page(
+                state,
+                &job,
+                entries.len(),
+                (job.entries.len() - entries.len()).min(64),
+            )
+            .unwrap(),
+        );
+    }
+    job.entries = source::Records::Memory(entries);
+    job
 }
 fn scratch() -> std::path::PathBuf {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -88,7 +104,7 @@ fn bounded_tree_survives_restart_and_is_scoped_to_model_revision_and_sources() {
             .all(|item| matches!(item, Item::Entry(_)))
     );
     let block = Block { start: 0, level: 2 };
-    let original = node_key(&job, block);
+    let original = node_key(&job, block).unwrap();
     let corrupt = &cached.nodes[0];
     std::fs::write(dir.join(format!("{}.json", corrupt.key)), b"{}").unwrap();
     assert!(
@@ -99,7 +115,10 @@ fn bounded_tree_survives_restart_and_is_scoped_to_model_revision_and_sources() {
     );
     let mut changed = job;
     changed.identity = "different-model-revision".into();
-    assert_ne!(node_key(&changed, Block { start: 0, level: 2 }), original);
+    assert_ne!(
+        node_key(&changed, Block { start: 0, level: 2 }).unwrap(),
+        original
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 #[test]
@@ -108,7 +127,7 @@ fn small_context_failure_and_cancel_do_not_publish_a_view_or_lose_raw_history() 
     let dir = scratch();
     job.model.limits.context_tokens = 1024;
     job.model.limits.output_tokens = 256;
-    job.entries.iter_mut().for_each(|s| *s = "x".repeat(1000));
+    job.entries = source::Records::Memory(vec!["x".repeat(1000); 32]);
     assert!(
         execute(&job, &dir, |model, system, input| {
             control_ai::model::Request {
@@ -140,9 +159,7 @@ fn smaller_contexts_split_leaves_and_explicit_scope_controls_background_work() {
     let dir = scratch();
     job.model.limits.context_tokens = 2048;
     job.model.limits.output_tokens = 256;
-    job.entries
-        .iter_mut()
-        .for_each(|s| *s = "evidence ".repeat(70));
+    job.entries = source::Records::Memory(vec!["evidence ".repeat(70); 32]);
     let mut calls = 0;
     execute(&job, &dir, |model, system, input| {
         control_ai::model::Request {
@@ -175,13 +192,6 @@ fn smaller_contexts_split_leaves_and_explicit_scope_controls_background_work() {
         .push(job.chat.clone());
     state.runtime.compaction.settings.enabled = false;
     assert!(!allowed(&state, &job));
-    job.limited = true;
-    assert!(
-        execute(&job, &dir, |_, _, _| panic!(
-            "snapshot limits must not silently summarize a prefix"
-        ))
-        .is_err()
-    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -255,6 +265,77 @@ fn fallback_obeys_the_configured_byte_budget_for_unicode_without_a_summary() {
 }
 
 #[test]
+fn paged_history_exceeds_old_entry_and_text_limits_with_bounded_model_inputs() {
+    let (mut state, _) = fixture();
+    let dir = scratch();
+    private_directory(&dir).unwrap();
+    state.chats[0].messages.resize(
+        5000,
+        crate::chat::Message {
+            text: "Retained constraint ".repeat(30),
+            reply: "Verified finding".into(),
+            run_id: None,
+        },
+    );
+    state.runtime.compaction.settings.leaf_entries = 64;
+    state.runtime.compaction.models[0].limits.context_tokens = 262144;
+    state.runtime.compaction.models[0].limits.input_bytes = 200000;
+    let mut job = prepare(&state).unwrap();
+    let mut largest = 0;
+    job.entries = source::Records::capture(job.entries.len(), &dir, |start, count| {
+        let entries = source_page(&state, &job, start, count)?;
+        largest = largest.max(serde_json::to_vec(&entries).unwrap().len());
+        Ok(entries)
+    })
+    .unwrap();
+    assert!(largest <= source::PAGE_BYTES);
+    assert_eq!(job.entries.len(), 5000);
+    let view = execute(&job, &dir, |model, system, input| {
+        control_ai::model::Request {
+            model: &model.model,
+            system,
+            input,
+            limits: &model.limits,
+        }
+        .chat_completions()?;
+        Ok(control_ai::model::Response {
+            text: "Retained constraint and finding".into(),
+            tokens: None,
+        })
+    })
+    .unwrap();
+    assert_eq!(view.count, 5000);
+    assert!(view.nodes.len() < 20);
+    execute(&job, &dir, |_, _, _| {
+        panic!("completed subtrees must be reused")
+    })
+    .unwrap();
+    state
+        .runtime
+        .compaction
+        .views
+        .insert(job.chat.clone(), view);
+    let conversation = Conversation::of(&state, &state.chats[0]);
+    assert!(
+        selector(&state)
+            .window(&conversation, 5000)
+            .items
+            .iter()
+            .any(|item| matches!(item, Item::Summary(..)))
+    );
+    state.chats[0].messages[0].text = "An old source changed".into();
+    let conversation = Conversation::of(&state, &state.chats[0]);
+    assert!(
+        selector(&state)
+            .window(&conversation, 5000)
+            .items
+            .iter()
+            .all(|item| matches!(item, Item::Entry(..)))
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 #[ignore = "explicit release benchmark; synthetic evidence and no model traffic"]
 fn selection_profile() {
     use std::{hint::black_box, time::Instant};
@@ -263,7 +344,7 @@ fn selection_profile() {
     for count in [32, 256, 1024] {
         let message = state.chats[0].messages[0].clone();
         state.chats[0].messages.resize(count, message);
-        let job = prepare(&state).unwrap();
+        let job = hydrate(&state, prepare(&state).unwrap());
         let dir = scratch();
         let mut calls = 0;
         let view = execute(&job, &dir, |_, _, _| {
