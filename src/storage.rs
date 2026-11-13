@@ -122,12 +122,72 @@ fn interrupt_active(state: &mut State) -> bool {
     changed
 }
 pub fn save(state: &State) -> io::Result<()> {
-    let data = crate::history::persisting(|| serde_json::to_vec(state)).map_err(io::Error::other)?;
-    write_checkpoint(&crate::config::state_directory().map_err(io::Error::other)?, &data)?;
+    checkpoint(state).map_err(CheckpointError::into_io_error)
+}
+
+/// Whether publication was attempted matters to an effect interpreter deciding
+/// whether rollback is safe. `Unconfirmed` requires reconciliation before retry;
+/// it does not mean the new state is absent. Legacy `save` callers erase this
+/// distinction and retain their existing behaviour.
+#[derive(Debug)]
+pub enum CheckpointError {
+    /// Serialization, configuration or temporary-file preparation failed before
+    /// issuing rename. The published checkpoint was not touched by this call.
+    NotReplaced(io::Error),
+    /// Rename was attempted but publication was not durably acknowledged.
+    /// Even a rename error is conservative here (for example filesystem I/O
+    /// errors); a directory-sync error can leave the replacement visible.
+    Unconfirmed(io::Error),
+}
+
+impl CheckpointError {
+    fn into_io_error(self) -> io::Error {
+        match self {
+            Self::NotReplaced(error) | Self::Unconfirmed(error) => error,
+        }
+    }
+}
+
+impl std::fmt::Display for CheckpointError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotReplaced(error) => write!(formatter, "checkpoint not replaced: {error}"),
+            Self::Unconfirmed(error) => write!(formatter, "checkpoint unconfirmed: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for CheckpointError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::NotReplaced(error) | Self::Unconfirmed(error) => Some(error),
+        }
+    }
+}
+
+/// Synchronous, phase-aware checkpoint boundary. Success includes file and
+/// directory sync; only success wakes state-change subscribers. This API does
+/// not permit releasing the application's write lock during persistence.
+pub fn checkpoint(state: &State) -> Result<(), CheckpointError> {
+    let data = crate::history::persisting(|| serde_json::to_vec(state))
+        .map_err(|error| CheckpointError::NotReplaced(io::Error::other(error)))?;
+    let directory = crate::config::state_directory()
+        .map_err(|error| CheckpointError::NotReplaced(io::Error::other(error)))?;
+    write_checkpoint(&directory, &data)?;
     changes().bump();
     Ok(())
 }
-fn write_checkpoint(directory: &std::path::Path, data: &[u8]) -> io::Result<()> {
+fn write_checkpoint(directory: &std::path::Path, data: &[u8]) -> Result<(), CheckpointError> {
+    write_checkpoint_with_sync(directory, data, |directory| {
+        fs::File::open(directory)?.sync_all()
+    })
+}
+
+fn write_checkpoint_with_sync(
+    directory: &std::path::Path,
+    data: &[u8],
+    sync_directory: impl FnOnce(&std::path::Path) -> io::Result<()>,
+) -> Result<(), CheckpointError> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -136,11 +196,13 @@ fn write_checkpoint(directory: &std::path::Path, data: &[u8]) -> io::Result<()> 
         options.mode(0o600);
     }
     let temporary = directory.join("state.json.tmp");
-    let mut file = options.open(&temporary)?;
-    file.write_all(data)?;
-    file.sync_all()?;
-    fs::rename(temporary, directory.join("state.json"))?;
-    fs::File::open(directory)?.sync_all()
+    let mut file = options
+        .open(&temporary)
+        .map_err(CheckpointError::NotReplaced)?;
+    file.write_all(data).map_err(CheckpointError::NotReplaced)?;
+    file.sync_all().map_err(CheckpointError::NotReplaced)?;
+    fs::rename(temporary, directory.join("state.json")).map_err(CheckpointError::Unconfirmed)?;
+    sync_directory(directory).map_err(CheckpointError::Unconfirmed)
 }
 
 #[cfg(test)]

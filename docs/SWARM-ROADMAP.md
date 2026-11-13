@@ -58,6 +58,10 @@ WASM tooling fix shipped in #143; both platform checks passed before merging.
   This follow-up separates the shared MCP client from terminal presentation,
   compiles terminal code once and provides an optional server-only build. The
   independent crate split and web rendering boundary remain subsequent work.
+  The storage adapter now exposes phase-aware checkpoint errors without changing
+  legacy callers: pre-replacement failure versus unconfirmed rename/directory
+  sync. Migrating transactions to reconcile unconfirmed writes remains open;
+  this does not yet make out-of-lock or cancellable persistence safe.
 
 The fresh deployed Codex trial ran over two hours after approvals without further
 operator steering: house/perimeter verification, repeated crop harvest/replant,

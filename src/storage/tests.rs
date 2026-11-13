@@ -1,6 +1,62 @@
-
 use super::*;
 use crate::runtime::RunKind;
+
+#[test]
+fn checkpoint_failures_preserve_the_publication_phase() {
+    struct Scratch(std::path::PathBuf);
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    let root = Scratch(
+        std::env::temp_dir().join(format!("control-checkpoint-phase-{}", std::process::id())),
+    );
+    fs::create_dir(&root.0).unwrap();
+    let published = root.0.join("state.json");
+    let temporary = root.0.join("state.json.tmp");
+    fs::write(&published, b"old").unwrap();
+
+    // Failure before rename leaves the published bytes intact, and never calls
+    // the directory-sync boundary.
+    fs::create_dir(&temporary).unwrap();
+    let error =
+        write_checkpoint_with_sync(&root.0, b"new", |_| panic!("not published")).unwrap_err();
+    assert!(matches!(error, CheckpointError::NotReplaced(_)));
+    assert_eq!(fs::read(&published).unwrap(), b"old");
+    fs::remove_dir(&temporary).unwrap();
+
+    // Rename failures are conservatively unconfirmed, even when this particular
+    // error (a directory at the target) is known to leave that target intact.
+    fs::remove_file(&published).unwrap();
+    fs::create_dir(&published).unwrap();
+    let error =
+        write_checkpoint_with_sync(&root.0, b"new", |_| panic!("rename failed")).unwrap_err();
+    assert!(matches!(error, CheckpointError::Unconfirmed(_)));
+    assert!(published.is_dir());
+    fs::remove_dir(&published).unwrap();
+
+    // The exact production path has already renamed the real file when the
+    // injected directory-sync failure is returned. Rolling back memory or
+    // blindly retrying this error would assume facts the result cannot prove.
+    fs::write(&published, b"old").unwrap();
+    let error = write_checkpoint_with_sync(&root.0, b"new", |_| {
+        assert_eq!(fs::read(&published).unwrap(), b"new");
+        Err(io::Error::other("injected directory-sync failure"))
+    })
+    .unwrap_err();
+    assert!(matches!(error, CheckpointError::Unconfirmed(_)));
+    assert_eq!(
+        error.into_io_error().to_string(),
+        "injected directory-sync failure"
+    );
+    assert_eq!(fs::read(&published).unwrap(), b"new");
+
+    write_checkpoint(&root.0, b"confirmed").unwrap();
+    assert_eq!(fs::read(&published).unwrap(), b"confirmed");
+    assert!(!temporary.exists());
+}
+
 #[test]
 fn finished_diagnostics_survive_compact_and_pretty_serialization() {
     let mut state = State::initial();
