@@ -552,6 +552,16 @@ fn publish_with(
     Ok(())
 }
 
+// Retain a candidate on unwind: a checkpoint may already reference its files.
+// Ordinary rejected/failed approvals still remove their unpublished directory.
+struct PendingGrant(Option<PathBuf>);
+impl Drop for PendingGrant {
+    fn drop(&mut self) {
+        if !std::thread::panicking() && let Some(path) = &self.0 {
+            let _ = fs::remove_dir_all(path);
+        }
+    }
+}
 /// Called only after HTTP operator authentication, never from model tools.
 /// Slow copies/Git run without holding the shared state lock; the approval is
 /// rechecked before its durable attachment to the chat.
@@ -586,8 +596,6 @@ pub fn approve(shared: &Arc<Mutex<State>>, id: &str, request: &str) -> io::Resul
     let directory = root()?.join("grants").join(&grant);
     fs::create_dir_all(directory.parent().unwrap())?;
     fs::create_dir(&directory)?;
-    struct PendingGrant(Option<PathBuf>);
-    impl Drop for PendingGrant {fn drop(&mut self){if let Some(path)=&self.0 {let _=fs::remove_dir_all(path);}}}
     let mut pending=PendingGrant(Some(directory.clone()));
     compose(&root()?, &project, &directory)?;
     let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;

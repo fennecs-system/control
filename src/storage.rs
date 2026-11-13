@@ -2,7 +2,7 @@ use crate::State;
 use control_effect::sync::Changes;
 use std::{
     fs,
-    io::{self, Write},
+    io::{self, Read, Write},
     sync::{Arc, OnceLock},
 };
 
@@ -64,11 +64,12 @@ pub fn lock() -> io::Result<fs::File> {
     Ok(file)
 }
 pub fn load() -> io::Result<State> {
-    let path = crate::config::state("state.json").map_err(io::Error::other)?;
-    let mut state: State = if path.exists() {
-        serde_json::from_slice(&fs::read(&path)?).map_err(io::Error::other)?
-    } else {
-        State::initial()
+    let directory = crate::config::state_directory().map_err(io::Error::other)?;
+    // A previous process may have stopped with an unconfirmed rename. Confirm
+    // the file and directory before recovering journals or dispatching anything.
+    let mut state: State = match read_checkpoint(&directory)? {
+        Some(data) => serde_json::from_slice(&data).map_err(io::Error::other)?,
+        None => State::initial(),
     };
     crate::providers::load_settings(&mut state.runtime)?;
     state.runtime.execution = crate::scheduler::load_limits()?;
@@ -122,13 +123,27 @@ fn interrupt_active(state: &mut State) -> bool {
     changed
 }
 pub fn save(state: &State) -> io::Result<()> {
-    checkpoint(state).map_err(CheckpointError::into_io_error)
+    legacy_result(checkpoint(state))
+}
+
+fn legacy_result(result: Result<(), CheckpointError>) -> io::Result<()> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(CheckpointError::NotReplaced(error)) => Err(error),
+        Err(CheckpointError::Unconfirmed(error)) => {
+            // Legacy callers roll back on ordinary errors. Unwinding while they
+            // own the state mutex makes it unavailable; shutdown stops workers.
+            // No caller may overwrite the uncertain disk state with a rollback.
+            crate::shutdown::request();
+            panic!("Checkpoint outcome is unconfirmed; stopping Control: {error}");
+        }
+    }
 }
 
 /// Whether publication was attempted matters to an effect interpreter deciding
 /// whether rollback is safe. `Unconfirmed` requires reconciliation before retry;
-/// it does not mean the new state is absent. Legacy `save` callers erase this
-/// distinction and retain their existing behaviour.
+/// it does not mean the new state is absent. Legacy `save` callers must stop
+/// rather than erase an unconfirmed outcome into a rollback-safe error.
 #[derive(Debug)]
 pub enum CheckpointError {
     /// Serialization, configuration or temporary-file preparation failed before
@@ -138,14 +153,6 @@ pub enum CheckpointError {
     /// Even a rename error is conservative here (for example filesystem I/O
     /// errors); a directory-sync error can leave the replacement visible.
     Unconfirmed(io::Error),
-}
-
-impl CheckpointError {
-    fn into_io_error(self) -> io::Error {
-        match self {
-            Self::NotReplaced(error) | Self::Unconfirmed(error) => error,
-        }
-    }
 }
 
 impl std::fmt::Display for CheckpointError {
@@ -178,9 +185,76 @@ pub fn checkpoint(state: &State) -> Result<(), CheckpointError> {
     Ok(())
 }
 fn write_checkpoint(directory: &std::path::Path, data: &[u8]) -> Result<(), CheckpointError> {
-    write_checkpoint_with_sync(directory, data, |directory| {
-        fs::File::open(directory)?.sync_all()
-    })
+    commit_checkpoint(directory, data, sync_directory)
+}
+
+fn sync_directory(directory: &std::path::Path) -> io::Result<()> {
+    fs::File::open(directory)?.sync_all()
+}
+
+fn open_checkpoint(directory: &std::path::Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(directory.join("state.json"))?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::other("Checkpoint is not a regular file"));
+    }
+    Ok(file)
+}
+
+fn read_checkpoint(directory: &std::path::Path) -> io::Result<Option<Vec<u8>>> {
+    let mut file = match open_checkpoint(directory) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        result => result?,
+    };
+    let size = usize::try_from(file.metadata()?.len()).map_err(io::Error::other)?;
+    let mut data = Vec::with_capacity(size);
+    file.read_to_end(&mut data)?;
+    file.sync_all()?;
+    sync_directory(directory)?;
+    Ok(Some(data))
+}
+
+/// Reconcile only the exact intended bytes, under the existing exclusive writer
+/// lock. A bounded buffer avoids cloning a full-state checkpoint on the rare
+/// error path. A mismatch is not evidence that rollback is safe.
+fn confirm_checkpoint(
+    directory: &std::path::Path,
+    data: &[u8],
+    sync: impl FnOnce(&std::path::Path) -> io::Result<()>,
+) -> io::Result<()> {
+    let mut file = open_checkpoint(directory)?;
+    let mut buffer = [0; 8192];
+    for expected in data.chunks(buffer.len()) {
+        file.read_exact(&mut buffer[..expected.len()])?;
+        if &buffer[..expected.len()] != expected {
+            return Err(io::Error::other(
+                "Published checkpoint differs from the candidate",
+            ));
+        }
+    }
+    if file.read(&mut buffer[..1])? != 0 {
+        return Err(io::Error::other(
+            "Published checkpoint differs from the candidate",
+        ));
+    }
+    file.sync_all()?;
+    sync(directory)
+}
+
+fn commit_checkpoint(
+    directory: &std::path::Path,
+    data: &[u8],
+    mut sync: impl FnMut(&std::path::Path) -> io::Result<()>,
+) -> Result<(), CheckpointError> {
+    match write_checkpoint_with_sync(directory, data, &mut sync) {
+        Err(CheckpointError::Unconfirmed(_)) => {
+            confirm_checkpoint(directory, data, sync).map_err(CheckpointError::Unconfirmed)
+        }
+        result => result,
+    }
 }
 
 fn write_checkpoint_with_sync(
