@@ -60,19 +60,50 @@ an async speed comparison or a test of cancelling in-flight filesystem I/O.
 
 ## Remaining boundaries
 
-The next slice extracts one-shot room wake planning into
-`application/room_wakes.rs`. It consumes borrowed runs, conversations, posts and
+One-shot room wake planning (#151) lives in `application/room_wakes.rs`.
+It consumes borrowed runs, conversations, posts and
 subscription references, with an authorization predicate supplied by the host.
 It returns typed wait/advance/disarm/queue decisions. Continuation validation is
 shared with the existing listener driver through a compatibility wrapper.
 No global `State`, JSON encoding, clock or executor is passed to the planner.
 Legacy records still include journal-backed fields; this is not yet a fully
-materialized, I/O-free domain projection. Queue capacity, grants, mutation,
-checkpoint/rollback and notification stay in the existing blocking driver.
+materialized, I/O-free domain projection. Queue capacity, grants and effect
+interpretation remain host responsibilities.
 Its plans contain positional indices and must be consumed under exclusive
 ownership, without another writer or suspension between planning and application.
-This preserves existing wake semantics; it does not complete typed persistence
-effects or change the production scheduler.
+The publication follow-up adds `application/room_notifications.rs`: typed
+advance/disarm/queue changes apply through narrow mutable run, chat and wake
+fields. The persisted wake receipt moves with its existing fields and defaults;
+saved JSON, notification text, captured settings and grant inheritance stay the
+same. Run identity is supplied by the driver. A queued run is constructed from
+captured settings directly rather than resolving provider defaults and then
+overwriting them.
+
+Applying a change returns a pending transition with ordered checkpoint and, for
+queued notifications, dispatcher-wake effects. The blocking interpreter in
+`rooms/notifications/driver.rs` owns the state borrow through persistence. Its
+guard restores only touched fields on failure or unwind before a confirmed
+checkpoint. A failure after confirmation retains the durable queued run. This
+aligns notification delivery with directed messages: dispatcher notification is
+exposed only after the save succeeds, rather than as a side effect of enqueue.
+Cursor-only changes checkpoint without waking a worker.
+
+Conformance fixtures exercise the same transition and guard with blocking and
+test-only Tokio interpreters, failed checkpoints, unwind, dropping a suspended
+transaction before/after confirmed commit, and restart without duplicate
+publication. These use fake persistence and do not establish safety of cancelling
+an in-flight filesystem commit. Production persistence remains synchronous and
+under the existing lock; neither the scheduler nor core gains a runtime or a
+notification-specific lifecycle.
+
+The legacy save callback still returns an unclassified `io::Result`. In
+particular, `storage::save` can fail syncing the directory after renaming the
+state file. This slice preserves the existing rollback-on-error contract; it
+does not establish that every returned error means nothing reached disk.
+Before claiming recovery correctness for those cases or moving persistence
+outside the lock, distinguish not-committed, confirmed and unknown outcomes
+and add a reconciliation/fencing path. The fake-checkpoint tests exercise
+definite failures and explicit acknowledgements, not post-rename ambiguity.
 
 This is not the complete A1/A2/A4 extraction or a finished server/web/TUI split.
 The application module still shares legacy service/delegation/bot record types,
