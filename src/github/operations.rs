@@ -22,9 +22,44 @@ pub(crate) fn definition(operator: bool) -> Value {
 }
 
 struct WriteApi<'a>(ReadApi<'a>);
+fn authorize_write(state: &State, caller: Caller<'_>) -> io::Result<()> {
+    authorize(state, caller)?;
+    if let Caller::Attempt { run, generation } = caller {
+        let run = state
+            .runtime
+            .runs
+            .iter()
+            .find(|r| r.id == run)
+            .ok_or_else(|| fail("Attempt is not active"))?;
+        if run
+            .attempts
+            .last()
+            .and_then(|a| a.turn_mailbox.as_ref())
+            .and_then(|m| m.accepted())
+            .is_some()
+            || run
+                .question
+                .as_ref()
+                .is_some_and(|q| q.generation == generation && q.answer.is_none())
+        {
+            return Err(fail(
+                "Attempt is handing off or waiting for a decision; no GitHub writes may run",
+            ));
+        }
+    }
+    Ok(())
+}
 impl Api for WriteApi<'_> {
     fn request(&self, method: &str, path: &str, body: Option<Value>) -> io::Result<Value> {
         self.0.check()?;
+        authorize_write(
+            &*self
+                .0
+                .shared
+                .lock()
+                .map_err(|_| fail("State unavailable"))?,
+            self.0.caller,
+        )?;
         self.0.rest.request(method, path, body)
     }
 }
@@ -38,7 +73,7 @@ pub(super) fn execute(
     let _guard = MUTATION.try_lock().map_err(|_| {
         fail("A GitHub mutation is already running; inspect remote state before retrying")
     })?;
-    authorize(
+    authorize_write(
         &*shared.lock().map_err(|_| fail("State unavailable"))?,
         caller,
     )?;

@@ -55,7 +55,9 @@ adding `--allow-merge`; omitting that flag disables it again. This grants the
 tool's capability, not approval inferred from PR text or reviewer comments.
 Repository instructions and operator authorization still govern when an agent
 may merge. Only the configured base branch is allowed, and the exact head SHA is
-sent to GitHub so a concurrently changed head is rejected. Only open, non-draft
+sent to GitHub so a concurrently changed head is rejected. The base check is a
+preflight: GitHub's merge endpoint has no atomic expected-base parameter, so a
+concurrent retarget remains possible. Only open, non-draft
 PRs are submitted for merge. An explicit retry of the same already-merged head
 returns its observed state without a second merge. Inspect CI and reviews first:
 the adapter does not infer CI success, review approval or bypass GitHub rules.

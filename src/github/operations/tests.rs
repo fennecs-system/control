@@ -170,3 +170,73 @@ fn unauthorized_mutations_fail_before_config_or_credential_access() {
         .is_err()
     );
 }
+
+#[test]
+fn write_authority_is_lost_when_a_handoff_or_decision_is_staged() {
+    use control_context::{
+        turn_mailbox::{Disposition, Handoff, Mailbox},
+        working_state::Payload,
+    };
+    let mut state = State::default();
+    let chat = crate::chat::create(&mut state);
+    crate::chat::send(&mut state, &chat, "/improve Inspect a change", "test").unwrap();
+    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].attempts.push(Attempt {
+        workspace_id: Some("generation".into()),
+        ..Default::default()
+    });
+    let id = state.runtime.runs[0].id.clone();
+    let caller = Caller::Attempt {
+        run: &id,
+        generation: "generation",
+    };
+    assert!(authorize_write(&state, caller).is_ok());
+    let mut mailbox = Mailbox::default();
+    mailbox
+        .stage(
+            "draft".into(),
+            Handoff {
+                base_revision: 0,
+                payload: Payload {
+                    subgoal: "Retain progress".into(),
+                    ..Default::default()
+                },
+                processed: vec![],
+                resynchronised: vec![],
+                disposition: Disposition::Continue,
+                progress: None,
+            },
+            0,
+        )
+        .unwrap();
+    state.runtime.runs[0].attempts[0].turn_mailbox = Some(Box::new(mailbox)).into();
+    assert!(
+        authorize(&state, caller).is_ok(),
+        "observations remain permitted"
+    );
+    assert!(
+        authorize_write(&state, caller).is_err(),
+        "later writes must recheck the handoff fence"
+    );
+    state.runtime.runs[0].attempts[0].turn_mailbox = None.into();
+    state.runtime.runs[0].question = Some(crate::design::Question {
+        id: "question".into(),
+        generation: "generation".into(),
+        nonce: "fixture".into(),
+        input: crate::design::Input {
+            question: "Choose a direction".into(),
+            options: vec!["First".into(), "Second".into()],
+            recommended: None,
+        },
+        answer: None,
+        continuation: None,
+    });
+    assert!(authorize_write(&state, caller).is_err());
+    state.runtime.runs[0].question.as_mut().unwrap().answer = Some("First".into());
+    assert!(authorize_write(&state, caller).is_ok());
+    let binding:Configuration=serde_json::from_value(json!({"repository":"example/project","source_root":"/source","token_file":"/private/token","base":"main"})).unwrap();
+    assert!(
+        !binding.allow_merge,
+        "old bindings must not acquire merge permission"
+    );
+}
