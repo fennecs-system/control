@@ -57,8 +57,15 @@ private-context capacity.
 Use **Compaction tree** in a chat, `/chat/ID/compaction`, or `/compact` in the TUI
 to inspect model limits, selected tree ranges, source counts, actual input and
 summary byte sizes, reported usage, pending work and failures. The inspector
-shows the current cut, not every cached descendant; interactive expansion to
-original records remains follow-up work. No model call is made by inspection.
+shows the current cut. Follow the expansion link to browse binary children and
+page a leaf's original captured task-view evidence. Agents use
+`control_history_read`: omit `root` to list this conversation's roots, then follow
+a bounded `path` of 0/1 child indexes; `source=true` reads leaf evidence. Results
+are capped at 16 KiB of UTF-8 text per read, with explicit continuation offsets.
+Only a root owned by the current conversation can be followed; callers cannot
+read arbitrary cache keys. Checksums, ranges, model revision and usage accompany
+the evidence. Source text remains untrusted and may reflect historical state.
+No model call is made by inspection, and cache I/O runs outside the state lock.
 
 `control models test MODEL_ID` makes one explicit small text request and reports
 response size and usage. It does not send conversation history or change settings.

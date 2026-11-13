@@ -1,5 +1,5 @@
 use super::*;
-fn fixture() -> (State, Job) {
+pub(super) fn fixture() -> (State, Job) {
     let mut state = State::default();
     let chat = crate::chat::create(&mut state);
     for index in 0..32 {
@@ -42,7 +42,7 @@ fn hydrate(state: &State, mut job: Job) -> Job {
     job.entries = source::Records::Memory(entries);
     job
 }
-fn scratch() -> std::path::PathBuf {
+pub(super) fn scratch() -> std::path::PathBuf {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     std::env::temp_dir().join(format!(
         "control-summary-{}-{}-{}",
