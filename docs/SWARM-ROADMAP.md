@@ -58,13 +58,16 @@ WASM tooling fix shipped in #143; both platform checks passed before merging.
   This follow-up separates the shared MCP client from terminal presentation,
   compiles terminal code once and provides an optional server-only build. The
   independent crate split and web rendering boundary remain subsequent work.
-  The storage adapter now exposes phase-aware checkpoint errors without changing
-  legacy callers: pre-replacement failure versus unconfirmed rename/directory
-  sync. Migrating transactions to reconcile unconfirmed writes remains open;
-  this does not yet make out-of-lock or cancellable persistence safe.
+  The storage adapter now exposes phase-aware checkpoint errors to distinguish
+  pre-replacement failure from unconfirmed rename/directory sync.
+  The adapter reconciles exact published bytes and durability on uncertainty;
+  an unresolved legacy save uses existing shutdown/state-unavailable fencing.
+  Startup confirms disk state before journal recovery. This does not yet make
+  out-of-lock or cancellable persistence safe.
   Continuation construction also uses the shared application `Submission`
   constructor with captured settings and host-supplied grants/IDs. Approval
-  eligibility, persistence and the complete continuation operation remain open.
+  eligibility is a borrowed application decision; authorization and the complete
+  request acknowledgement/publication transaction remain in the host.
 
 The fresh deployed Codex trial ran over two hours after approvals without further
 operator steering: house/perimeter verification, repeated crop harvest/replant,
@@ -166,10 +169,60 @@ with interchangeable drivers; complete the remaining extractions incrementally.
 | P1 | W1 bounded schedules | Existing timers/admission, durable occurrence IDs and shared schedule-write authorization. Q1 before expanding team-wide fan-out; Replace deferred. |
 | Supporting | Q1 team admission; O1 ownership audit/fixes | Aggregate existing counters; extend ownership only for a demonstrated gap or a consumer changing resource lifetimes. |
 | P1, before more fan-out | S1 service resource requests and admission | Extend existing service operations with requested/effective capacity and operator-defined shapes; reserve aggregate node/team capacity before provisioning. Local backend first, cloud adapters later. |
+| P1 | V1 Manage Vault and scoped secret injection | Typed tool/resource operations and host authorization; agents use opaque references, with values resolved only inside trusted effect adapters. No supervisor credential subsystem. |
 | P2 | U2 CUA; W2 workflow tools | Scoped browser/resource operations; validated recipes using existing spawn/wait/message primitives. |
 | P2 | M1 model adapters; C1–C3 summary strategies | Bounded reads and summary-call adapter enable C1 before general local tool execution; on/off plus model selector. |
 | P2 | L1 lenses/persona/SOUL configuration; L2/L3 reviewed improvement | Captured revisions, scoped tools, evaluation and admission; no new supervisor personality or learning lifecycle. |
 | Later | Federation, inference bundles, general workflow languages, weight training | Demonstrated local need. |
+
+## V1: Manage Vault and scoped secret injection
+
+Provide a Vault in **Manage** for operator-owned API keys, tokens and other
+credentials, with the requested GrokBot-inspired workflow. Operators add, rotate,
+revoke and grant use without pasting secrets into chat. Agents can discover only
+permitted metadata and request an opaque secret reference; values never enter
+model context, steering/room chat, tool-call arguments visible to the model,
+transcripts, summaries, knowledge, recovery candidates or ordinary logs. The
+private operator input flow must also stay outside agent-visible browser/CUA
+surfaces and captures. Do not echo a newly stored value back into chat.
+
+Resolve references at the trusted tool/API/service effect boundary, after checking
+the current caller, owning team/chat, attempt generation, permitted destination,
+operation and expiry. Support broker-attached API authentication (for example an
+authorization header) and explicitly approved service bindings. Tool schemas
+carry references, not literal keys. Do not expose a secret-reading tool, put keys
+in URLs, or inject raw values into an agent's shell/environment/workspace: the
+agent could read and print those values. If a tool runs arbitrary agent-authored
+code, use a credential-bearing broker outside that process. Plain redaction is
+defence in depth, not the isolation boundary; constrain destinations/redirects
+and filter secret-bearing or reflected responses before returning tool output.
+Return bounded typed response projections; raw request/header dumps must not
+become model-visible tool results. A secret-bound service must not also grant
+agents arbitrary exec/read access to its credential-bearing process or files.
+
+Keep values outside the checkout and ordinary application state/journals, using a
+platform secret store or encrypted private files with separately protected key
+material. Specify backup/recovery, rotation, revocation and per-node ownership.
+Audit who used which reference, for what operation/destination and with what
+result, without logging the value or authentication payload. Grants are checked
+at execution, not only registration; queued calls and persistent services must
+respect revocation. An API credential or payment credential grants no implicit
+permission to spend or perform another consequential action: use existing durable
+operator approvals and action-specific limits where required.
+
+Implement the Manage UI, secret storage and injection as application operations
+and trusted adapters over existing capability/resource semantics. Reuse generic
+typed authorization/effect interfaces; keep provider formats, payment workflows
+and credential resolution out of the supervisor. Declarative tools/configuration
+select bindings, including dynamically admitted tools, without receiving values.
+
+**First exit:** create a synthetic secret through Manage, let an authorized agent
+call a local test API by reference, and prove the API received authentication
+while model input/output, chats, tool traces, logs and persisted candidates did
+not contain it. Exercise cross-agent misuse, wrong destination/redirects,
+reflected response bodies, expired/revoked grants, queued-call revocation,
+rotation and denied CUA access. Measure dispatch/memory overhead with synthetic
+values; never use real credentials in fixtures or CI. This is planned work.
 
 ## Evidence and reconciliation
 

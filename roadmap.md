@@ -27,6 +27,9 @@ The [swarm implementation roadmap](docs/SWARM-ROADMAP.md#delivery-order) owns
 the current priority table, dependencies and acceptance criteria. The historical
 sections below retain shipped status and background. The swarm checklist records
 delivered R1/R2 slices separately from remaining proposals and evaluation gates.
+Planned [V1 Manage Vault](docs/SWARM-ROADMAP.md#v1-manage-vault-and-scoped-secret-injection)
+adds operator-managed credentials and scoped tool/API injection by opaque
+reference, keeping secret values outside agent context and chat.
 
 Keep the fundamental Pi/tinygrad architecture: small pure lifecycle/admission
 primitives, narrow application operations, tools/strategies for product behavior,

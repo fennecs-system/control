@@ -2,6 +2,22 @@
 use super::*;
 use std::os::unix::fs::PermissionsExt;
 struct Fixture(PathBuf);
+
+#[test]
+fn pending_project_files_survive_uncertain_unwind_but_not_ordinary_rejection() {
+    let fixture = Fixture::new();
+    let path = fixture.0.join("pending-grant");
+    fs::create_dir(&path).unwrap();
+    fs::write(path.join("checkpoint.txt"), "candidate bytes").unwrap();
+    let result = std::panic::catch_unwind(|| {
+        let _pending = PendingGrant(Some(path.clone()));
+        panic!("unconfirmed checkpoint");
+    });
+    assert!(result.is_err());
+    assert_eq!(fs::read_to_string(path.join("checkpoint.txt")).unwrap(), "candidate bytes");
+    drop(PendingGrant(Some(path.clone())));
+    assert!(!path.exists(), "ordinary rollback removes unpublished files");
+}
 impl Fixture {
     fn new() -> Self {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

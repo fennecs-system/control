@@ -1,5 +1,6 @@
 
 use super::*;
+mod profiling;
 
 fn requested() -> (State, String, String) {
     let mut state = State::default();

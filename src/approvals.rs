@@ -2,7 +2,7 @@
 //! requests. Callers keep their own request records and acknowledge them once
 //! `resume` returns anything but `Wait`.
 use crate::{State, runtime::RunKind};
-use control_context::agent_policy::MessageSpeaker;
+use crate::application::approval_resume::{self, Eligibility};
 
 pub(crate) struct Decisions<'a> {
     /// Requester chat and the runs that made the requests.
@@ -36,20 +36,16 @@ pub(crate) enum Outcome {
 /// same turn rather than steering it.
 pub(crate) fn resume(state: &mut State, decisions: Decisions<'_>) -> Outcome {
     let chat = decisions.chat;
-    let in_chat = |run: &&crate::runtime::Run| run.chat_id.as_deref() == Some(chat);
-    if state.runtime.runs.iter().filter(in_chat).any(|run| matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling")) {
-        return Outcome::Wait;
-    }
-    let requested = state.runtime.runs.iter().rposition(|run| decisions.origins.contains(&run.id.as_str()));
-    let latest = state.runtime.runs.iter().rposition(|run| in_chat(&run));
-    let steered = requested.is_some_and(|at| state.runtime.runs[at + 1..].iter().filter(in_chat)
-        .any(|run| run.kind.speaker() == MessageSpeaker::User && run.kind != RunKind::DesignAnswer));
-    let resumable = requested.is_some() && !steered && latest.is_some_and(|at| {
-        let run = &state.runtime.runs[at];
-        run.status == "completed" && crate::identity::authorize(&run.actor, run.action).is_ok()
-    });
+    let latest = match approval_resume::decide(&state.runtime.runs, chat, decisions.origins) {
+        Eligibility::Wait => return Outcome::Wait,
+        Eligibility::Note => None,
+        Eligibility::Candidate(at) => {
+            let run = &state.runtime.runs[at];
+            crate::identity::authorize(&run.actor, run.action).is_ok().then_some(at)
+        }
+    };
     let mut run_id = None;
-    if let (true, Some(latest)) = (resumable, latest) {
+    if let Some(latest) = latest {
         if crate::scheduler::admit(&state.runtime).is_err() {
             return Outcome::Wait;
         }

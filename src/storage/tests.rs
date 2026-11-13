@@ -1,5 +1,183 @@
 use super::*;
 use crate::runtime::RunKind;
+mod profiling;
+
+#[test]
+fn reconciled_approval_checkpoint_survives_restart_without_a_duplicate_resume() {
+    let directory = std::env::temp_dir().join(format!(
+        "control-approved-checkpoint-{}",
+        std::process::id()
+    ));
+    fs::create_dir(&directory).unwrap();
+    let mut state = State::default();
+    let chat = crate::chat::create(&mut state);
+    crate::chat::send(&mut state, &chat, "original task", "test").unwrap();
+    state.runtime.runs[0].status = "completed".into();
+    let origin = state.runtime.runs[0].id.clone();
+    let decide = |state: &mut State| {
+        crate::approvals::resume(
+            state,
+            crate::approvals::Decisions {
+                chat: &chat,
+                origins: &[&origin],
+                heading: "Port decisions",
+                lines: "approved",
+                instruction: "Continue.",
+                task: "original task",
+                kind: RunKind::PortDecision,
+                source: "test",
+                grants: Vec::new(),
+            },
+        )
+    };
+    let crate::approvals::Outcome::Resumed(id) = decide(&mut state) else {
+        panic!("must resume")
+    };
+    let candidate = crate::history::persisting(|| serde_json::to_vec(&state)).unwrap();
+    let mut first = true;
+    legacy_result(commit_checkpoint(&directory, &candidate, |directory| {
+        if std::mem::take(&mut first) {
+            Err(io::Error::other("lost directory-sync acknowledgement"))
+        } else {
+            sync_directory(directory)
+        }
+    }))
+    .unwrap();
+    let mut restored: State =
+        serde_json::from_slice(&read_checkpoint(&directory).unwrap().unwrap()).unwrap();
+    assert_eq!(restored.runtime.runs.last().unwrap().id, id);
+    assert_eq!(
+        restored.chats[0].messages.last().unwrap().run_id.as_deref(),
+        Some(id.as_str())
+    );
+    let counts = (
+        restored.runtime.runs.len(),
+        restored.chats[0].messages.len(),
+    );
+    assert_eq!(decide(&mut restored), crate::approvals::Outcome::Wait);
+    assert_eq!(
+        (
+            restored.runtime.runs.len(),
+            restored.chats[0].messages.len()
+        ),
+        counts
+    );
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn reconciliation_confirms_exact_bytes_and_never_acknowledges_different_data() {
+    struct Scratch(std::path::PathBuf);
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    let root = Scratch(std::env::temp_dir().join(format!(
+        "control-checkpoint-reconcile-{}",
+        std::process::id()
+    )));
+    fs::create_dir(&root.0).unwrap();
+    let published = root.0.join("state.json");
+    let calls = std::cell::Cell::new(0);
+    commit_checkpoint(&root.0, b"candidate", |directory| {
+        calls.set(calls.get() + 1);
+        if calls.get() == 1 {
+            Err(io::Error::other("injected first sync failure"))
+        } else {
+            sync_directory(directory)
+        }
+    })
+    .unwrap();
+    assert_eq!(calls.get(), 2);
+    assert_eq!(read_checkpoint(&root.0).unwrap().unwrap(), b"candidate");
+
+    for different in [b"different".as_slice(), b"candidate-extra", b"short"] {
+        fs::write(&published, different).unwrap();
+        assert!(
+            confirm_checkpoint(&root.0, b"candidate", |_| panic!(
+                "mismatch must not confirm"
+            ))
+            .is_err()
+        );
+        assert_eq!(fs::read(&published).unwrap(), different);
+    }
+    fs::remove_file(&published).unwrap();
+    assert!(read_checkpoint(&root.0).unwrap().is_none());
+    std::os::unix::fs::symlink("missing-target", &published).unwrap();
+    assert!(
+        read_checkpoint(&root.0).is_err(),
+        "a dangling symlink is not an initial state"
+    );
+    assert!(
+        confirm_checkpoint(&root.0, b"candidate", |_| panic!("no regular checkpoint")).is_err()
+    );
+    fs::remove_file(&published).unwrap();
+    fs::create_dir(&published).unwrap();
+    assert!(read_checkpoint(&root.0).is_err());
+}
+
+#[test]
+fn unreconciled_legacy_save_stops_and_fences_state_in_a_separate_process() {
+    const CHILD: &str = "CONTROL_CHECKPOINT_FENCE_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "storage::tests::unreconciled_legacy_save_stops_and_fences_state_in_a_separate_process", "--nocapture"])
+            .env(CHILD, "1").output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let directory =
+        std::env::temp_dir().join(format!("control-checkpoint-fence-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    let state = std::sync::Mutex::new(State::default());
+    let intended = std::cell::RefCell::new(Vec::new());
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut state = state.lock().unwrap();
+        state.runtime.enqueue(
+            "accepted continuation".into(),
+            RunKind::PortDecision,
+            "test",
+        );
+        *intended.borrow_mut() = serde_json::to_vec(&*state).unwrap();
+        let failure = commit_checkpoint(&directory, &intended.borrow(), |_| {
+            Err(io::Error::other("persistent sync failure"))
+        });
+        assert!(matches!(&failure, Err(CheckpointError::Unconfirmed(_))));
+        legacy_result(failure).unwrap();
+    }));
+    assert!(result.is_err());
+    assert!(crate::shutdown::requested());
+    assert!(
+        state.is_poisoned(),
+        "dispatch and request handlers must not reacquire state"
+    );
+    let mut response = Vec::new();
+    crate::state_response(&mut response, &state, |_, _| {
+        panic!("fenced request executed")
+    });
+    assert!(
+        String::from_utf8(response)
+            .unwrap()
+            .contains("503 Service Unavailable")
+    );
+    assert_eq!(
+        fs::read(directory.join("state.json")).unwrap(),
+        *intended.borrow()
+    );
+    // Restart can only load bytes after syncing that file and its directory;
+    // it never persists an in-memory rollback over the retained candidate.
+    let restored: State =
+        serde_json::from_slice(&read_checkpoint(&directory).unwrap().unwrap()).unwrap();
+    assert_eq!(restored.runtime.runs.len(), 1);
+    assert_eq!(restored.runtime.runs[0].status, "queued");
+    fs::remove_dir_all(directory).unwrap();
+}
 
 #[test]
 fn checkpoint_failures_preserve_the_publication_phase() {
@@ -46,9 +224,10 @@ fn checkpoint_failures_preserve_the_publication_phase() {
     })
     .unwrap_err();
     assert!(matches!(error, CheckpointError::Unconfirmed(_)));
-    assert_eq!(
-        error.into_io_error().to_string(),
-        "injected directory-sync failure"
+    assert!(
+        error
+            .to_string()
+            .contains("injected directory-sync failure")
     );
     assert_eq!(fs::read(&published).unwrap(), b"new");
 

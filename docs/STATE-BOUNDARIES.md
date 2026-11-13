@@ -103,13 +103,31 @@ Real-file tests inject a directory-sync failure after replacement and verify tha
 the new bytes are visible despite the error. This is an adapter boundary, with
 no new supervisor state, runtime or persistence dependency.
 
-The legacy `storage::save` callback still erases this classification into an
-`io::Result`, preserving existing caller behaviour, including rollback on error.
-Those callers do not yet reconcile unconfirmed writes. Before claiming recovery
-correctness or moving persistence outside the lock, migrate each transaction to
-the classified result with an explicit reconciliation/fencing path. The earlier
-fake-checkpoint driver tests exercise definite failures and acknowledgements;
-they do not prove recovery from an unconfirmed real write.
+The storage adapter now reconciles an unconfirmed write once, while retaining
+exclusive writer ownership. It compares the published regular file with the
+exact intended bytes using a bounded buffer, then syncs that file and directory.
+Only confirmed equality/durability returns success and notifies subscribers.
+Different, missing or unreadable bytes remain unconfirmed; a visible file alone
+is not a durable acknowledgement. Successful writes gain no extra reads/syncs.
+
+The legacy `storage::save` adapter returns ordinary errors only before replacement.
+If reconciliation cannot establish the outcome, it requests existing node
+shutdown and unwinds, poisoning the shared state mutex. Requests/dispatch cannot
+reacquire it, and shutdown cannot save an in-memory rollback over uncertain disk
+state. Project-approval staging files survive unwind, since that checkpoint may
+reference them. This deliberately changes the unreconciled-error path from an
+unsafe retry into a stopped node; no timeout, new supervisor mode or durable
+status object is introduced. All current production checkpoint callers use this
+adapter. Future consumers of the typed API must handle `Unconfirmed` explicitly.
+
+Startup confirms the checkpoint file and directory before journal recovery and
+dispatch. Fault tests cover transient directory-sync failure, exact-byte mismatch,
+an approval resume surviving reload without duplicate admission, and persistent
+uncertainty in a child process that verifies shutdown/503/poison fencing and
+retained candidate bytes. These are filesystem fault injections, not a hardware
+power-loss simulation. Persistence remains synchronous under the write lock;
+durable intent, generation/revision validation and cancellation settlement remain
+necessary before moving it outside that lock or introducing an async interpreter.
 
 This is not the complete A1/A2/A4 extraction or a finished server/web/TUI split.
 The application module still shares legacy service/delegation/bot record types,
@@ -138,8 +156,16 @@ fresh run through the shared `into_run` constructor. The host still owns actor
 authorization, capacity, current service grants, clock/ID, queue ordering and
 dispatcher notification. Captured models (including `None`), lenses and lineage
 remain unchanged; attempts and stale grants are not copied. No record/schema or
-provider-session change is involved. Approval eligibility and its durable
-transaction remain in the host; this constructor alone is not that extraction.
+provider-session change is involved.
+
+Approval eligibility now lives in `application::approval_resume`: a read-only
+operation over borrowed runs derives `Wait`, `Note` or `Candidate(index)`.
+The host keeps authorization, capacity, request acknowledgement and durable
+publication, using the same continuation constructor. Existing busy-chat,
+human-steering, design-answer and failure rules are unchanged. Candidate indices
+are ephemeral under exclusive state ownership, not plans to carry across an
+await or another writer. The complete request-acknowledgement transaction is
+still a subsequent extraction.
 
 Next, migrate callback admission and continuation/approval operations behind the
 same style of interface, then bounded queries that let web rendering leave the

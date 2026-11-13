@@ -1,5 +1,59 @@
 # Performance checks
 
+## Approval eligibility and checkpoint reconciliation (2026-11-13)
+
+Compared main `dda2b89` with runtime changes through `5f0babc`, with identical
+profiling fixtures injected into the baseline. Linux aarch64 / Rust 1.99.0,
+identical release flags and offline pinned dependencies; one CPU, 512 MiB and
+no swap during measurement. No live app, model or real credential was involved.
+After warmup, six alternating baseline/revised pairs measured these paths:
+
+| Retained completed runs | Approval resume, baseline → revised | Change |
+| --- | ---: | ---: |
+| 16 | 772 → 724 ns | −6.2% |
+| 1,024 | 10.222 → 10.346 µs | +1.2% |
+| 20,001 | 361.957 → 362.823 µs | +0.2% |
+
+The approval fixture includes eligibility, host authorization/capacity, queue
+construction, note append and dispatcher notification, then resets the appended
+records. Each process retains ten 100-operation batches after discarding the
+first. Larger-history process medians overlap; no broad speedup is claimed for
+moving the existing selection rules behind a borrowed interface.
+
+Normal saves use the existing 31-sample durable-save fixture, rotating its four
+stages. Median process medians for full serialization/publication are below.
+Tmpfs removes durable-storage latency but does **not** test durability.
+
+| Runs / finished handoffs | Disk save, baseline → revised (ms) | Tmpfs save, baseline → revised (µs) |
+| --- | ---: | ---: |
+| 1 / no | 2.306 → 2.173 | 40.980 → 40.188 |
+| 1 / yes | 1.724 → 2.131 | 40.084 → 39.917 |
+| 100 / no | 1.504 → 1.803 | 110.730 → 107.813 |
+| 100 / yes | 1.584 → 1.758 | 151.251 → 153.229 |
+| 1,000 / no | 2.963 → 2.932 | 727.563 → 733.459 |
+| 1,000 / yes | 3.379 → 3.388 | 1,104.772 → 1,122.418 |
+
+Normal successful saves gain no extra filesystem calls. Tmpfs changes range from
+−2.6% to +1.6%; disk results are noisier, including case medians up to +23.6%.
+These measurements do not prove unchanged durable-save latency. Reconciliation
+performs its bounded-buffer comparison and additional syncs only on uncertainty.
+
+Checkpoint loading now confirms file/directory durability before recovery. For a
+74,208-byte checkpoint, six process medians (50 retained loads after warmup)
+give **28.865 → 29.698 µs**, about +0.833 µs (+2.9%). This measures repeated
+warm, clean-file loads, not cold startup or degraded storage; sync latency on
+other filesystems can be higher. The confirmation is a correctness cost at
+startup, not an added sync on ordinary chat/tool reads.
+
+Actual CPU-clock samples/flamegraphs cover approval admission (2,212 / 2,211
+samples, 1,000-operation batches) and save stages (65 / 76 sparse samples).
+User-space CPU samples do not measure blocked fsync time. No memory-pressure,
+limit or OOM events occurred. Scripts, timing logs, raw stacks, SVGs, binary
+hashes and resource settings remain locally in
+`.control/performance/approval-checkpoint-20261113/`. Fault tests establish the
+new recovery/fencing behaviour separately; this is not a game or model-throughput
+comparison and does not establish out-of-lock or async persistence safety.
+
 ## Shared continuation constructor (2026-11-13)
 
 Compared deployed main `6579846` with constructor slice `16bc49a`, injecting the
