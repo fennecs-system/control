@@ -144,6 +144,12 @@ conversation until you send a message. It works from any directory. Use Enter to
 a newline, Ctrl+N or `/new` for a new chat, Ctrl+Up/Down to switch chats, and
 Ctrl+Q to quit. PageUp/PageDown scroll; End follows new replies.
 
+Your messages use muted grey cards with purple accents; replies remain on the
+black background. Routine tool output is folded by default. `/activity full`
+expands it, `/activity compact` folds it, and `/activity` toggles. Failures remain
+visible and the underlying logs are retained. `/model` lists or selects configured
+models without making a model call; `/compact` inspects the compaction tree.
+
 `/chats` opens the conversation picker. `/lenses` opens a picker with Space to
 toggle selections and Enter to apply. `/use engineering evidence` composes lenses;
 `/use none` clears them. `/context` previews the next-message context, `/chat`

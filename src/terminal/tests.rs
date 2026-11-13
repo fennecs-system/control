@@ -1269,7 +1269,7 @@ fn live_worker_uses_credential_free_playground_tool() {
     }
 }
 #[test]
-fn automatic_updates_are_attributed_to_control_in_terminal() {
+fn automatic_updates_stay_distinct_from_human_message_cards() {
     let app = App {
         detail: json!({"messages":[
             {"kind":"delegation-result","text":"Delegated task · completed"},
@@ -1284,12 +1284,15 @@ fn automatic_updates_are_attributed_to_control_in_terminal() {
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>();
-    assert_eq!(labels.iter().filter(|line| *line == "You").count(), 1);
-    assert_eq!(labels.iter().filter(|line| *line == "Control").count(), 2);
+    assert_eq!(labels.iter().filter(|line| *line == "◇ Event").count(), 2);
+    assert!(!labels.iter().any(|line|matches!(line.as_str(),"You"|"Control")));
+    assert_eq!(text.lines.iter().find(|line|line.to_string()=="Use the smaller option").unwrap().style.bg,Some(history::CARD));
+    assert!(text.lines.iter().filter(|line|matches!(line.to_string().as_str(),"New room posts"|"Delegated task · completed")).all(|line|line.style.bg!=Some(history::CARD)));
 }
 #[test]
 fn file_diffs_use_purple_additions_and_pastel_red_removals_in_terminal() {
     let app = App {
+        show_activity:true,
         detail: json!({"messages":[{"text":"Edit","status":"completed","reply":"Done","attempts":[{"activity":[{"kind":"file_change","status":"completed","text":"1 file · +1 −1","output":"@@ -1 +1 @@\n-old\n+new\n"},{"kind":"command_execution","text":"echo","output":"+ordinary output"}]}]}]}),
         ..App::default()
     };
@@ -1314,8 +1317,24 @@ fn file_diffs_use_purple_additions_and_pastel_red_removals_in_terminal() {
     assert_eq!(ordinary.style.fg, None);
 }
 #[test]
+fn folded_activity_retains_failures_and_expansion_is_a_local_action() {
+    let mut app=App {detail:json!({"messages":[{"text":"Build","reply":"Working","attempts":[{"activity":[
+        {"kind":"command_execution","text":"cargo check","status":"completed","output":"private verbose success detail"},
+        {"kind":"command_execution","text":"cargo test","status":"failed","output":"E42: test failed\nlong stack trace"}
+    ]}]}]}),input:"/activity full".into(),..Default::default()};
+    let compact=app.transcript().to_string();assert!(compact.contains("2 actions · 1 failed"));assert!(compact.contains("E42: test failed"));assert!(!compact.contains("private verbose success detail"));
+    let mut hive=Hive::fixture(Client::new(),"http://127.0.0.1:1/".into());
+    app.submit(&mut hive).unwrap();
+    assert!(app.show_activity);assert!(app.transcript().to_string().contains("private verbose success detail"));
+    app.layout_history(80);assert!(!app.history.dirty());
+    app.set_detail(json!({"messages":[{"text":"New result","reply":"Verified"}]}));
+    assert!(app.history.dirty());app.layout_history(80);
+    assert!(app.history.window(0,30).to_string().contains("Verified"));
+}
+#[test]
 fn activity_and_context_boundary_render_in_terminal() {
     let app = App {
+        show_activity:true,
         detail: json!({"messages":[{"text":"Build", "status":"running", "reply":"", "attempts":[{"omitted_history":3,"activity":[{"status":"completed","text":"cargo check", "output":"finished\u{001b}[31m"}]}]}]}),
         ..App::default()
     };
@@ -1328,6 +1347,7 @@ fn activity_and_context_boundary_render_in_terminal() {
 #[test]
 fn service_commands_and_child_stdout_render_in_terminal() {
     let app = App {
+        show_activity:true,
         detail: json!({"messages":[{"text":"Run","commands":[{"text":"echo own","status":"completed","output":"own output\nExit 0"}]}],"agent_activity":[{"chat":"child-chat","activity":{"text":"npm install","status":"running","output":"downloaded\u{001b}[31m\n"}}]}),
         ..App::default()
     };

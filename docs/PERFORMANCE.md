@@ -837,3 +837,37 @@ stopped. These fixtures profile the host/core path; the inference container is a
 optional external service and its RAM is reported separately in
 [LOCAL-MODELS.md](LOCAL-MODELS.md).
 
+## TUI history layout and scrolling (2026-11-13)
+
+The revised terminal caches the formatted transcript and UTF-8 row ranges until
+its data/view changes. Resize rebuilds the row index; ordinary scrolling borrows
+only visible rows. It retains one active transcript, not a full history-sized cell
+grid. This adds retained text/index memory and moves linear work to initial load,
+changed data and resize. Network refresh remains synchronous and is not measured
+by these offline renderer fixtures. Scroll positions now use `usize`, removing
+the previous 65535-row ceiling. Tool details are folded in presentation by
+default; `/activity full` expands the retained output and failures remain visible.
+
+Linux aarch64, pinned release toolchain, one CPU / 512 MiB / no swap, six
+alternating pairs against the pre-styling model-series binary:
+
+| Messages | Previous → cached warm-frame median |
+| --- | ---: |
+| 10 | 58.989 → 58.443 µs |
+| 100 | 132.922 → 58.370 µs |
+| 500 | 454.856 → 58.737 µs |
+
+A separate fixture scrolls to varied offsets in 1000/10000-message histories:
+**62.047/71.417 µs** warm-frame medians, including viewport drawing/diffing. Cold
+format/index construction took **2/24 ms** respectively (6000/60000 indexed rows).
+This is evidence for bounded visible-row work, not constant-time initial loading,
+model inference or network latency. The buffer hashes deliberately change with
+the new cards/spacing; Unicode/style, attribution, expansion and large-offset
+checks validate correctness instead of expecting the old appearance.
+
+Actual CPU-clock flamegraphs were retained (921 revised samples), with no memory
+event/OOM increases. Local scripts, binaries, raw stacks and logs remain under
+`/private/tmp/control-boundary-profile/tui-history/final/`; copied SVGs/logs and
+the synthetic offline visual preview are in
+`.control/performance/tui-history-20261113/`. The helper is stopped.
+

@@ -26,6 +26,7 @@ use reqwest::blocking::Client;
 use std::fs;
 use control_context::commands;
 mod command_menu;
+mod history;
 
 fn command_line(text: &str) -> Line<'static> {
     if let Some(highlight) = command_menu::highlight(text) {
@@ -40,6 +41,8 @@ fn failure(message:impl std::fmt::Display)->io::Error {io::Error::other(message.
 use crate::client::local_server;
 #[derive(Default)]
 struct App {
+    history:history::layout::Cache,
+    show_activity:bool,
     command_selection: usize,
     commands_hidden: bool,
     menu: Option<Menu>,
@@ -50,7 +53,7 @@ struct App {
     detail: Value,
     input: String,
     status: String,
-    scroll: u16,
+    scroll: usize,
 }
 struct Menu {
     entries: Vec<(String, String, String)>,
@@ -98,6 +101,24 @@ fn clean(text: &str) -> String {
         .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
         .collect()
 }
+fn folded_activity(lines:&mut Vec<Line<'static>>,events:&[Value]) {
+    let mut count=0;let mut failed=0;let mut latest=None;let mut failure=None;
+    for event in events.iter().filter(|event|event["kind"]!="message") {
+        count+=1;latest=Some(event);
+        if matches!(event["status"].as_str(),Some("failed"|"error"|"interrupted"|"cancelled")) {failed+=1;failure=Some(event);}
+    }
+    if let Some(latest)=latest {
+        let detail=clean(latest["text"].as_str().or(latest["command"].as_str()).unwrap_or(""));
+        let detail=detail.lines().next().unwrap_or("").chars().take(48).collect::<String>();
+        let failures=if failed>0 {format!(" · {failed} failed")}else{String::new()};
+        lines.push(Line::styled(format!("  ↳ {count} actions{failures} · {detail}"),Style::default().fg(Color::Rgb(133,133,143))));
+    }
+    if let Some(event)=failure {
+        let output=clean(event["output"].as_str().unwrap_or(""));
+        let output=output.lines().find(|line|!line.trim().is_empty()).unwrap_or("See activity details").chars().take(240).collect::<String>();
+        lines.push(Line::styled(format!("  ! {output}"),Style::default().fg(Color::Rgb(237,139,155))));
+    }
+}
 fn lens_label(detail: &Value) -> String {
     let lenses = detail["lenses"]
         .as_array()
@@ -114,6 +135,12 @@ fn pending_project(detail: &Value) -> Option<&Value> {
     (project["grant"].is_null() || project["pending"] == true).then_some(project)
 }
 impl App {
+    fn set_detail(&mut self,detail:Value) {self.detail=detail;self.history.invalidate();}
+    fn layout_history(&mut self,width:u16) {
+        let width=history::content_width(width);
+        if self.history.dirty() {let text=self.transcript();self.history.update(text,width);}
+        else if self.history.width()!=width {self.history.resize(width);}
+    }
     fn command_matches(&self) -> Vec<command_menu::Entry> {
         if self.commands_hidden || self.menu.is_some() { return Vec::new(); }
         command_menu::matching(&self.input).collect()
@@ -148,27 +175,35 @@ impl App {
                 || self.chats.iter().find(|s|s["id"]==self.active).map(|s|&s["port_revision"]) != Some(&self.detail["port_revision"])
                 || self.chats.iter().find(|s|s["id"]==self.active).map(|s|&s["bot_revision"]) != Some(&self.detail["bot_revision"]))
         {
-            self.detail = hive.tool("control.chat.read", json!({"id":self.active}))?;
+            self.set_detail(hive.tool("control.chat.read", json!({"id":self.active}))?);
         }
         Ok(())
     }
     fn new_chat(&mut self, hive: &mut Hive) -> io::Result<()> {
+        self.history.invalidate();
         self.menu = None;
         self.inspector = None;
         let value = hive.tool("control.chat.create", json!({}))?;
         self.active = value["id"].as_str().unwrap_or("").into();
-        self.detail = value;
+        self.set_detail(value);
         self.scroll = 0;
         self.follow = true;
         self.refresh(hive)
     }
     fn submit(&mut self, hive: &mut Hive) -> io::Result<bool> {
+        self.history.invalidate();
         let text = self.input.trim().to_owned();
         self.menu = None;
         match text.as_str() {
+            _ if text=="/activity" || text.starts_with("/activity ") => {
+                self.show_activity=match text.strip_prefix("/activity").unwrap().trim() {
+                    ""=>!self.show_activity,"full"=>true,"compact"=>false,_=>return Err(failure("Use /activity, /activity full or /activity compact."))
+                };
+                self.status=if self.show_activity {"Tool details expanded · /activity folds them"}else{"Tool activity compact · failures remain visible"}.into();
+            }
             "/compact" => {
                 if self.active.is_empty() { return Err(failure("Open a conversation first")); }
-                self.detail = hive.tool("control.chat.read", json!({"id":self.active}))?;
+                self.set_detail(hive.tool("control.chat.read", json!({"id":self.active}))?);
                 self.inspector = Some(("Compaction tree".into(), serde_json::to_string_pretty(&self.detail["compaction"]).map_err(failure)?));
                 self.scroll = 0; self.follow = false;
                 self.status = "Compaction is independent of the chat model · /chat returns".into();
@@ -184,14 +219,14 @@ impl App {
                 if parts[1]=="allow" && request["loopback_required"]==true && !loopback {return Err(failure("This exact loopback target requires /port allow ID --loopback."));}
                 let decision = if parts[1] == "allow" { crate::client::PortDecision::Allow } else { crate::client::PortDecision::Deny };
                 hive.decide_port(&self.active, parts[2], decision, loopback)?;
-                self.detail=hive.tool("control.chat.read",json!({"id":self.active}))?;
+                self.set_detail(hive.tool("control.chat.read",json!({"id":self.active}))?);
                 self.status="Port decision saved".into();
             }
             "/open" => {
                 if !self.active.is_empty() {
-                    self.detail=hive.tool("control.chat.read",json!({"id":self.active}))?;
+                    self.set_detail(hive.tool("control.chat.read",json!({"id":self.active}))?);
                 }
-                self.inspector=None;self.follow=true;self.scroll=u16::MAX;
+                self.inspector=None;self.follow=true;self.scroll=usize::MAX;
                 self.status=if pending_project(&self.detail).is_some() {"Review the folder request below; /trust confirms it"}else{"Use /open /absolute/path or /open --as NAME /absolute/path"}.into();
             }
             _ if text=="/trust" || text.starts_with("/trust ")=>{
@@ -200,7 +235,7 @@ impl App {
                 let request=text.strip_prefix("/trust ").map(str::trim).unwrap_or(displayed).to_owned();
                 if request!=displayed {return Err(failure("Project request changed. Use /open to review it."));}
                 let approval = hive.approve_project(&self.active, &request)?;
-                self.detail = approval.detail;
+                self.set_detail(approval.detail);
                 approval.result.map_err(failure)?;
                 self.inspector=None;self.status="Folder ready · isolated worktree".into();
             }
@@ -235,14 +270,14 @@ impl App {
                 let resolved=hive.tool("control.lenses.resolve",json!({"lenses":lenses}))?;
                 self.inspector=Some(("Next-message context preview".into(),serde_json::to_string_pretty(&resolved).map_err(|_|failure("Could not display context."))?));self.scroll=0;self.follow=false;self.status="Live library preview; existing runs retain their captured snapshots. /chat to return.".into();
             }
-            "/chat"=>{self.inspector=None;self.follow=true;self.scroll=u16::MAX;}
+            "/chat"=>{self.inspector=None;self.follow=true;self.scroll=usize::MAX;}
             _ if text.starts_with("/use ")=>{
                 let names=text[5..].split(|c:char|c.is_whitespace()||c==',').filter(|s|!s.is_empty()).collect::<Vec<_>>();
                 let lenses=if names==["none"]{Vec::new()}else{names};
                 // Resolve before creating a conversation: invalid input has no side effects.
                 hive.tool("control.lenses.resolve",json!({"lenses":lenses}))?;
                 if self.active.is_empty(){self.new_chat(hive)?;}
-                self.detail=hive.tool("control.chat.lenses",json!({"id":self.active,"lenses":lenses}))?;
+                self.set_detail(hive.tool("control.chat.lenses",json!({"id":self.active,"lenses":lenses}))?);
                 self.inspector=None;self.status=format!("Future messages: {}",lens_label(&self.detail));self.follow=true;
             }
             _ if text.starts_with("/resume ") => { self.active = text[8..].trim().into(); self.inspector=None;self.refresh(hive)?; }
@@ -250,9 +285,9 @@ impl App {
             _ if !text.is_empty() => {
                 if control_context::limits::message_too_long(&text) { return Err(failure(control_context::limits::CHAT_MESSAGE_ERROR)); }
                 if self.active.is_empty() { self.new_chat(hive)?; }
-                self.detail = hive.tool("control.chat.send",json!({"id":self.active,"message":text}))?;
+                self.set_detail(hive.tool("control.chat.send",json!({"id":self.active,"message":text}))?);
                 self.inspector=None;
-                self.scroll = u16::MAX;
+                self.scroll = usize::MAX;
                 self.follow = true;
                 self.status = if text.starts_with("/steer ") { "Queued for next turn" } else if self.detail["mode"] == "improve" { "Improve · sent" } else { "Sent" }.into();
             }
@@ -337,22 +372,22 @@ impl App {
         }
         if let Some(messages) = self.detail["messages"].as_array() {
             for (position, message) in messages.iter().enumerate() {
-                lines.push(Line::styled(
-                    control_context::agent_policy::MessageSpeaker::for_run_kind(message["kind"].as_str()).label(),
-                    Style::default().fg(Color::Rgb(181, 160, 255)),
-                ));
-                lines.extend(
-                    clean(message["text"].as_str().unwrap_or(""))
-                        .lines()
-                        .map(command_line),
-                );
-                lines.push(Line::styled(
-                    format!(
-                        "Control · {}",
-                        if message["status"] == "queued" && message["kind"] == "steering" { "queued · next turn".into() } else { clean(message["status"].as_str().unwrap_or("")) }
-                    ),
-                    Style::default().fg(Color::Rgb(140, 218, 203)),
-                ));
+                let user=control_context::agent_policy::MessageSpeaker::for_run_kind(message["kind"].as_str())==control_context::agent_policy::MessageSpeaker::User;
+                if user {
+                    lines.push(history::user_line(Line::from(" ")));
+                    lines.extend(clean(message["text"].as_str().unwrap_or("")).lines().map(command_line).map(history::user_line));
+                    lines.push(history::user_line(Line::from(" ")));
+                } else {
+                    lines.push(Line::styled("◇ Event",Style::default().fg(Color::Rgb(133,133,143))));
+                    lines.extend(clean(message["text"].as_str().unwrap_or("")).lines().map(command_line));
+                }
+                lines.push(Line::from(""));
+                let status=message["status"].as_str().unwrap_or("");
+                if !matches!(status,""|"completed") {
+                    let status=if status=="queued" && message["kind"]=="steering" {"queued · next turn"} else {status};
+                    let color=if matches!(status,"failed"|"interrupted"|"cancelled") {Color::Rgb(237,139,155)}else{history::PURPLE};
+                    lines.push(Line::styled(format!("● {}",clean(status)),Style::default().fg(color)));
+                }
                 let folder_reply = (message["run_id"].is_null()
                     && commands::tail(message["text"].as_str().unwrap_or("").trim(), commands::Kind::Open).is_some()
                     && message["reply"].as_str().and_then(|reply|reply.strip_prefix("Review and approve folder access: /chat/")).and_then(|path|path.strip_suffix("/project"))==Some(self.active.as_str())).then(|| {
@@ -376,6 +411,7 @@ impl App {
                             lines.push(Line::styled(format!("Context window · {count} earlier exchanges excluded from attempt {}. History retained.", index + 1), Style::default().fg(Color::Rgb(133, 133, 143))));
                         }
                         if let Some(events) = attempt["activity"].as_array() {
+                            if !self.show_activity {folded_activity(&mut lines,events);}
                             for event in events {
                                 if event["kind"]=="message" {
                                     let text=event["text"].as_str().unwrap_or("");
@@ -384,6 +420,7 @@ impl App {
                                     }
                                     continue;
                                 }
+                                if !self.show_activity {continue;}
                                 let patch=event["kind"] == "file_change";
                                 if patch && event["output"].as_str().unwrap_or("").is_empty() {continue;}
                                 lines.push(Line::styled(
@@ -414,7 +451,8 @@ impl App {
                     }
                 }
                 if let Some(commands)=message["commands"].as_array() {
-                    for command in commands { service_command_lines(&mut lines,command); }
+                    if self.show_activity {for command in commands {service_command_lines(&mut lines,command);}}
+                    else {folded_activity(&mut lines,commands);for command in commands.iter().filter(|command|command["kind"]=="message") {service_command_lines(&mut lines,command);}}
                 }
                 lines.push(Line::from(""));
             }
@@ -422,7 +460,8 @@ impl App {
         if let Some(commands)=self.detail["agent_activity"].as_array() {
             for command in commands {
                 lines.push(Line::styled(format!("Agent · {}",clean(command["chat"].as_str().unwrap_or(""))),Style::default().fg(Color::Rgb(181,160,255))));
-                service_command_lines(&mut lines,&command["activity"]);
+                if self.show_activity || command["activity"]["kind"]=="message" {service_command_lines(&mut lines,&command["activity"]);}
+                else {folded_activity(&mut lines,std::slice::from_ref(&command["activity"]));}
             }
         }
         if let Some(questions) = self.detail["pending_questions"].as_array() {
@@ -493,7 +532,7 @@ pub fn run() -> io::Result<()> {
         let path=std::path::PathBuf::from(directory);
         let path=if path.is_absolute(){path}else{std::env::current_dir()?.join(path)};
         if app.active.is_empty(){app.new_chat(&mut hive)?;}
-        app.detail=hive.tool("control.project.request",json!({"id":app.active,"path":path.to_string_lossy()}))?;
+        app.set_detail(hive.tool("control.project.request",json!({"id":app.active,"path":path.to_string_lossy()}))?);
         app.refresh(&mut hive)?;
     }
     if args.iter().any(|s| s == "--check") {
@@ -548,15 +587,14 @@ pub fn run() -> io::Result<()> {
                     .style(Style::default().fg(Color::Rgb(133, 133, 143))),
                     layout[0],
                 );
-                let paragraph = Paragraph::new(app.transcript()).wrap(Wrap { trim: false });
-                let max_scroll = paragraph
-                    .line_count(layout[1].width)
-                    .saturating_sub(layout[1].height as usize)
-                    .min(u16::MAX as usize) as u16;
-                if app.follow || app.scroll == u16::MAX {
+                app.layout_history(layout[1].width);
+                let max_scroll=app.history.len().saturating_sub(usize::from(layout[1].height));
+                if app.follow || app.scroll == usize::MAX {
                     app.scroll = max_scroll;
                 }
-                frame.render_widget(paragraph.scroll((app.scroll.min(max_scroll), 0)), layout[1]);
+                else {app.scroll=app.scroll.min(max_scroll);}
+                let text=app.history.window(app.scroll.min(max_scroll),usize::from(layout[1].height));
+                frame.render_widget(history::History{paragraph:Paragraph::new(text),scroll:0}, layout[1]);
                 let composer_style = Style::default()
                     .bg(Color::Rgb(36, 32, 47))
                     .fg(Color::Rgb(233, 232, 237));
@@ -653,12 +691,13 @@ pub fn run() -> io::Result<()> {
                             } else {
                                 (menu.selected + 1).min(menu.entries.len().saturating_sub(1))
                             };
-                            app.scroll =
-                                menu.selected.saturating_sub(6).min(u16::MAX as usize) as u16;
+                            app.scroll = menu.selected.saturating_sub(6);
+                            app.history.invalidate();
                             continue;
                         }
                         KeyCode::Char(' ') if app.menu.as_ref().is_some_and(|m| m.multiple) => {
                             app.menu.as_mut().unwrap().toggle();
+                            app.history.invalidate();
                             continue;
                         }
                         KeyCode::Enter => {
@@ -671,6 +710,7 @@ pub fn run() -> io::Result<()> {
                             continue;
                         }
                         KeyCode::Esc => {
+                            app.history.invalidate();
                             app.menu = None;
                             app.inspector = None;
                             app.follow = true;
@@ -704,6 +744,7 @@ pub fn run() -> io::Result<()> {
                     }
                     KeyCode::Tab => app.complete_command(),
                     KeyCode::Esc => {
+                        app.history.invalidate();
                         app.menu = None;
                         app.inspector = None;
                         app.follow = true;
@@ -738,7 +779,7 @@ pub fn run() -> io::Result<()> {
                         app.active = app.chats[next]["id"].as_str().unwrap_or("").into();
                         app.menu = None;
                         app.inspector = None;
-                        app.scroll = u16::MAX;
+                        app.scroll = usize::MAX;
                         app.follow = true;
                         if let Err(e) = app.refresh(&mut hive) {
                             app.status = e.to_string();
