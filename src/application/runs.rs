@@ -1,4 +1,5 @@
 //! Run records and construction without execution, rendering or I/O.
+//! Constructor contracts and usage fixtures live in runs/tests.rs.
 use crate::identity::{Action, Actor};
 use control_context::agent_policy::RunKind;
 use serde::{Deserialize, Serialize};

@@ -1,5 +1,36 @@
 # Performance checks
 
+## Shared continuation constructor (2026-11-13)
+
+Compared deployed main `6579846` with constructor slice `16bc49a`, injecting the
+same ignored `chat::tests::profile_continuation_admission` fixture into both
+snapshots. Both used identical release flags with debug symbols, pinned offline
+dependencies and Linux aarch64 / Rust 1.99.0. Timing used one CPU, 512 MiB and no
+swap in an isolated helper, with no live application/model calls. The fixture
+queues a continuation from captured settings, then removes that run to preserve
+the retained ledger. It includes authorization/capacity checks, queue-order
+scan, construction and dispatcher notification; it excludes persistence, real
+workers, web/TUI rendering and context-history hydration.
+
+After warmup, six alternating baseline/revised pairs each retained ten batches
+of 100 operations, discarding the first batch. The table reports the median of
+the six process medians; retained records are completed runs.
+
+| Retained runs | Baseline | Revised | Change |
+| --- | ---: | ---: | ---: |
+| 16 | 277.5 ns | 236.5 ns | −14.8% |
+| 1,024 | 1.586 µs | 1.502 µs | −5.3% |
+| 20,001 | 100.874 µs | 99.548 µs | −1.3% |
+
+All six short-ledger pairs improved. The large-ledger process medians overlap
+(baseline 98.752–102.170 µs; revised 99.066–103.078 µs), so the largest case is
+effectively unchanged at this precision; ledger scans still dominate. This is a
+small admission-path saving, not a model-throughput or whole-application speedup.
+No new memory-limit or OOM events occurred. Real `perf record` CPU-clock samples
+(577 / 565, using 1,000-operation batches) and before/after flamegraphs accompany
+the timings under `.control/performance/continuation-construction-20261113/`, with
+scripts, resource limits, binary hashes and raw stacks.
+
 ## Classified checkpoint boundary (2026-11-13)
 
 Compared test-layout baseline `bbdd73c` with checkpoint adapter `9b2765a`, using
