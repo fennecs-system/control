@@ -2,6 +2,7 @@
 //! Migrate one operation at a time; drivers retain global-state/persistence
 //! ownership until their atomic commit boundaries have been extracted.
 pub(crate) mod conversations;
+pub(crate) mod approval_resume;
 pub(crate) mod messages;
 pub(crate) mod runs;
 
