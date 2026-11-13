@@ -2,6 +2,17 @@
 use super::*;
 use crate::runtime::RunKind;
 #[test]
+fn capacity_metadata_survives_selection_and_rolls_back_when_save_fails() {
+    let mut state=crate::State::default();let model=state.runtime.configured_model();
+    let mut fields=HashMap::from_iter([("action","capacity"),("provider","codex"),("model",model.as_str()),("context_tokens","32768"),("output_tokens","1024"),("overhead_tokens","4096")].map(|(k,v)|(k.to_owned(),v.to_owned())));
+    assert!(save_with(&mut state,&fields,|_|Err(std::io::Error::other("disk full"))).is_err());
+    assert!(capacity(&state.runtime,crate::backend::Backend::Codex,&model).is_none());
+    save_with(&mut state,&fields,|_|Ok(())).unwrap();
+    fields.insert("action".into(),"select".into());save_with(&mut state,&fields,|_|Ok(())).unwrap();
+    assert_eq!(capacity(&state.runtime,crate::backend::Backend::Codex,&model).unwrap().context_tokens,32768);
+    assert_eq!(configured(&state.runtime).len(),1);
+}
+#[test]
 fn text_configuration_is_validated_and_failed_saves_restore_the_previous_settings() {
     let mut state=crate::State::default();
     state.runtime.compaction.models.push(crate::model_calls::tests::endpoint());
@@ -40,6 +51,7 @@ fn fresh_claude_setup_selects_sonnet_and_reruns_preserve_the_library() {
         vec![Model {
             backend: Backend::Claude,
             model: "sonnet".into()
+            ,..Default::default()
         }]
     );
     assert_eq!(
