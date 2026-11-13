@@ -33,7 +33,23 @@ pub(super) fn active() -> (State, String) {
 pub(super) fn input(n: usize) -> Input {
     Input {
         objectives: (0..n).map(|n| format!("Inspect page {n}")).collect(),
+        model:None,
     }
+}
+#[test]
+fn configured_override_is_captured_for_the_batch_and_bad_override_creates_nothing() {
+    let (mut state,id)=active();
+    state.runtime.models.push(crate::providers::Model::captured(Backend::Claude,"reviewer".into()));
+    let mut task=input(2);task.model=Some("claude:reviewer".into());
+    request(&mut state,&id,"parent-attempt","choice",task.clone(),|_|Ok(())).unwrap();
+    assert!(state.runtime.runs[1..].iter().all(|run|run.backend==Backend::Claude && run.model.as_deref()==Some("reviewer")));
+    assert!(state.chats[1..].iter().all(|chat|chat.model.as_ref().unwrap().backend==Backend::Claude));
+    task.model=None;
+    assert!(request(&mut state,&id,"parent-attempt","choice",task,|_|panic!("changed retry")).is_err());
+    let (mut state,id)=active();let mut task=input(1);task.model=Some("missing".into());
+    let before=serde_json::to_vec(&state).unwrap();
+    assert!(request(&mut state,&id,"parent-attempt","bad",task,|_|panic!("invalid selection")).is_err());
+    assert_eq!(serde_json::to_vec(&state).unwrap(),before);
 }
 #[test]
 fn batch_is_nonblocking_isolated_deduplicated_and_available_after_restore() {
@@ -432,6 +448,7 @@ fn batch_cancel_follows_retained_continuations_and_fences_their_backlog() {
     s.runtime.runs[1].status = "continued".into();
     s.runtime.runs[1].delegation = Some(delegation::Delegation {
         input: delegation::Input {
+            model:None,
             objective: "Review".into(),
             role: Role::Judge,
         },

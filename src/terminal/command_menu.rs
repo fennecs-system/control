@@ -39,6 +39,7 @@ fn entries() -> impl Iterator<Item = Entry> {
             "answer" => "/answer QUESTION_ID CHOICE",
             "open" => "/open [--as NAME] /absolute/path",
             "bot" => "/bot on [every N]",
+            "model" => "/model [PROVIDER:MODEL | default]",
             _ => entry.text,
         }, description: entry.description,
     }))

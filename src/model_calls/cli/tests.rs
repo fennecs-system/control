@@ -1,5 +1,16 @@
 use super::*;
 #[test]
+fn claude_text_calls_reject_tool_events_even_after_an_empty_advertised_list() {
+    let transcript=[
+        serde_json::json!({"type":"system","subtype":"init","tools":[]}),
+        serde_json::json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"unexpected","name":"Bash","input":{"command":"true"}}]}}),
+        serde_json::json!({"type":"result","subtype":"success","is_error":false,"result":"not accepted"})
+    ].iter().map(ToString::to_string).collect::<Vec<_>>().join("\n")+"\n";
+    let flag=Arc::new(AtomicBool::new(false));
+    assert!(decode(transcript.as_bytes(),crate::backend::Backend::Claude,Arc::clone(&flag),1024).is_err());
+    assert!(flag.load(Ordering::Acquire));
+}
+#[test]
 fn codex_text_decoding_rejects_tools_unknown_items_failures_and_oversize() {
     let good = concat!(
         "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"retained constraint\"}}\n",

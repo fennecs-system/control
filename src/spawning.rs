@@ -14,6 +14,8 @@ mod completions;
 #[serde(deny_unknown_fields)]
 pub struct Input {
     objectives: Vec<String>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    model:Option<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -81,6 +83,11 @@ impl Batch {
     }
 }
 pub fn definition() -> Value {
+    let mut definition=inherited_definition();
+    definition["inputSchema"]["properties"]["model"]=crate::providers::selection::schema();
+    definition
+}
+fn inherited_definition()->Value {
     json!({"name":"control_agent_spawn","description":"Start independent or background worker objectives without pausing this conversation. Give each worker ownership of its goal and dependencies, including ongoing infrastructure when needed. Workers coordinate directly with same-task peers; keep the root chat for steering and consequential decisions rather than relaying routine updates. Continue useful work in this session; spawning does not require ending it. Control queues completion updates automatically. Yield when genuinely waiting with no independent work remaining. Use control_agent_spawn_status only when a current status check is needed, never in a polling loop. Configured team budget (default 64), pending-intent budget and 24000-byte payload apply independently of model slots. Children inherit captured model, lenses, actor, linked room and immutable baseline, never live edits. Mentioning a room in an objective does not link it. First Improve turns without a published baseline must checkpoint via control_agent_spawn_blocking or finish first. Depth limit 2; children and blocking spawns share one root budget. Cancellation fences backlog and descendants; later originating-chat turns can inspect or cancel retained batches.","inputSchema":{"type":"object","properties":{"objectives":{"type":"array","description":"One concise task per child, 1–2000 characters each and 24000 UTF-8 bytes total. Example: [\"Inspect the API\",\"Review the tests\"]. Request identity comes from the transport; do not supply nonce or identity fields.","minItems":1,"items":{"type":"string","minLength":1,"maxLength":2000}}},"required":["objectives"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
 }
 pub fn management_definitions() -> Vec<Value> {
@@ -186,8 +193,9 @@ pub fn request(
     // Clone only captured inputs needed by children, never attempts/history.
     let actor = run.actor.clone();
     let action = run.action;
-    let backend = run.backend;
-    let model = run.model.clone();
+    let selected=crate::providers::selection::resolve(&state.runtime,run.backend,&run.model.clone().unwrap_or_else(||run.backend.default_model()),input.model.as_deref())?;
+    let backend = selected.backend;
+    let model = Some(selected.model);
     let context = (*run.context).clone();
     let lenses = run.lenses.clone();
     let lineage = delegation::lineage(run);
@@ -283,6 +291,7 @@ fn materialize(state: &mut State, index: usize, batch_index: usize) -> Result<()
         let child = state.chats.last_mut().unwrap();
         child.actor = seed.actor.clone();
         child.parent_chat = Some(seed.parent_chat.clone());
+        child.model=seed.model.as_ref().map(|model|crate::providers::Model::captured(seed.backend,model.clone()));
         child.lenses = seed.lenses.clone();
         child.lens = seed
             .lenses

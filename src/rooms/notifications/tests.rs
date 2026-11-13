@@ -620,6 +620,7 @@ fn watch_survives_real_delegation_and_design_continuations_without_rearming() {
     parent.attempts[0].artifact = Some("parent-checkpoint".into());
     parent.delegation = Some(crate::delegation::Delegation {
         input: crate::delegation::Input {
+            model:None,
             objective: "Inspect source".into(),
             role: crate::delegation::Role::Worker,
         },

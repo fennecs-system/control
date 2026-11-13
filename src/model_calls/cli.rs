@@ -273,7 +273,8 @@ fn decode(
         }
     }
     let mut emit = |event| {
-        if matches!(event, control_ai::Event::RejectedTools) {
+        if matches!(event, control_ai::Event::RejectedTools)
+            || matches!(event, control_ai::Event::Activity(ref activity) if activity.kind=="mcp_tool_call") {
             rejected.store(true, Ordering::Release);
         }
     };
@@ -292,6 +293,7 @@ fn decode(
             control_ai::json_lines(reader, control_ai::claude::Claude::new(&[]), &mut emit)?
         }
     };
+    if rejected.load(Ordering::Acquire) {return Err(io::Error::other("CLI summary attempted tools"));}
     let text = output
         .text
         .filter(|text| text.len() <= max && text.chars().count() < 16000)

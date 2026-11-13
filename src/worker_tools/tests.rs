@@ -360,6 +360,7 @@ fn delegated_pause_fences_command_writers_and_github_before_dispatch() {
     });
     run.delegation = Some(crate::delegation::Delegation {
         input: crate::delegation::Input {
+            model:None,
             objective: "Inspect".into(),
             role: crate::delegation::Role::Worker,
         },

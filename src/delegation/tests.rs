@@ -7,6 +7,7 @@ use crate::{
 };
 fn input(role: Role) -> Input {
     Input {
+        model:None,
         objective: "Inspect this change and report evidence".into(),
         role,
     }
@@ -51,6 +52,20 @@ fn pause(s: &mut State, role: Role) {
     let a = &mut s.runtime.runs[0].attempts[0];
     a.status = "waiting".into();
     a.artifact = Some("immutable-paused-source".into());
+}
+#[test]
+fn explicit_reviewer_model_is_captured_without_changing_parent_or_granting_authority() {
+    let mut state=active(Action::Task);
+    state.runtime.models.push(crate::providers::Model::captured(Backend::Claude,"reviewer".into()));
+    let id=state.runtime.runs[0].id.clone();
+    let mut task=input(Role::Judge);task.model=Some("claude:reviewer".into());
+    request_with_save(&mut state,&id,"selected",task,|_|Ok(())).unwrap();
+    let parent=&state.runtime.runs[0];
+    assert_eq!(parent.backend,Backend::Codex);
+    assert_eq!(parent.model.as_deref(),Some("dev-model"));
+    let delegation=parent.delegation.as_ref().unwrap();
+    assert_eq!(delegation.backend,Backend::Claude);assert_eq!(delegation.model,"reviewer");
+    assert_eq!(delegation.input.role,Role::Judge);
 }
 #[test]
 fn acknowledgement_is_idempotent_and_fences_other_requests() {

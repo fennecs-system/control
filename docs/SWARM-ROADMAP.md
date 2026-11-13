@@ -713,11 +713,13 @@ in [LOCAL-MODELS.md](LOCAL-MODELS.md): a shared pure request/result contract,
 external private endpoint adapter, declared context/output limits and model
 revision, private persistent summary nodes, independent compactor selection and
 read-only web/TUI inspection. It feeds both existing CLI providers through the
-common history projection. It does not yet supply CLI-as-compactor adapters,
-hosted authenticated calls, per-attempt `/model` overrides, or local tool agents.
+common history projection. The follow-up series adds CLI-as-compactor adapters,
+configured chat/TUI and spawn model selection, whole-input context-fit planning,
+and scoped source expansion. Those slices remain pending maintainer merge and
+deployment; they do not add authenticated hosted APIs or local tool agents.
 The incremental slice replaces the total snapshot ceiling with bounded source
 pages (64 entries / 1 MiB), preserves source checksums and reuses completed
-subtrees. Cache retention and bounded source expansion remain C1/C3 work. Validate real
+subtrees. Cache retention/GC remains follow-up work. Validate real
 Qwen summary quality/latency/memory before promoting it to a default.
 
 M1 defines separate captured selections for worker, lead, reviewer and compactor.
@@ -901,6 +903,20 @@ Tool/persona changes follow their respective admission paths. Merge/deploy remai
 under existing maintainer/operator authority; neither a judge nor a learned skill
 can expand it. Add selectable reviewers with M1 availability checks before claiming
 independent multi-model review. Runtime registration never auto-installs agent code.
+
+**Next tooling slice: TUI self-development parity.** The TUI already drives the
+shared workspace, service, review and draft-publication tools. Session work still
+uses external GitHub review/CI tooling, host-configured inference mounts and
+resource limits, a perf harness, and host deployment/restart commands. Follow the
+compaction/model settings series with scoped GitHub read/check/comment operations,
+operator-configured immutable inference/service profiles (mount references and
+CPU/RAM limits), and durable deployment/restart jobs. Deployment captures an
+authorized merged revision, backs up the current installation, runs the existing
+build, replaces it atomically, checks health and reports or rolls back failure.
+Expose approval/results through the same TUI/web application operations. Keep
+these effects in the tool/host interpreters; they do not require new supervisor
+concepts, model-specific core paths or access to credential contents. Preserve
+the repository rule that maintainers merge PRs.
 
 ## Regression lanes, deferrals and delivery evidence
 

@@ -71,6 +71,7 @@ impl<'a> Entry<'a> {
     }
     /// The entry as prompt history shows it.
     pub fn render(&self) -> String {
+        if self.run.is_none() && control_context::commands::tail(self.message.text.trim(),control_context::commands::Kind::Model).is_some() {return String::new();}
         if self.task_view {
             use control_context::agent_policy::PromptRole;
             if let Some(run) = self.run.filter(|run| run.kind.prompt_role() == PromptRole::Wake) {

@@ -73,6 +73,7 @@ pub(crate) fn fixture() -> State {
     });
     parent.delegation = Some(Delegation {
         input: Task {
+            model:None,
             objective: "Implement child task".into(),
             role: Role::Worker,
         },
