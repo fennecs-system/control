@@ -29,6 +29,43 @@ Constrained-container and hardware checks provide additional evidence, without
 making a named board a prerequisite. The 512 MiB/no-swap experiment below is
 one measurement condition, not a product support promise or mandatory budget.
 
+## Typed room notification publication (2026-11-13)
+
+Compared main `457a117` with the typed publication operation using an identical
+`profile_room_publication` fixture in both source snapshots. The fixture admits
+and publishes one notification through reconciliation, verifies its receipt and
+run count, then resets the touched records for the next iteration. Checkpoint
+I/O is a counted no-op and no worker/model is started. Timings include planning,
+run construction, mutation and fixture reset, but exclude fsync, active dispatcher
+delivery and real application workload latency.
+
+Linux ARM64/rustc 1.99.0, release with debug symbols, one pinned virtual CPU,
+512 MiB and no swap. Each fixture uses ten batches of 100 iterations, discards
+the first batch and reports the remaining median. One warmup fixture per revision
+precedes six alternating pairs; the table shows medians of their six medians.
+
+| Retained runs | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| 16 | 938 ns | 951 ns | +1.4% |
+| 1,024 | 31.219 µs | 30.751 µs | -1.5% |
+| 20,001 | 1.050 ms | 0.985 ms | -6.2% |
+
+The smaller cases are roughly unchanged. The largest fixture is lower in all
+six pairs; this is a result for this in-memory publication path, not a general
+server or TUI speedup. The driver now checks capacity once under exclusive
+ownership rather than again inside `Runtime::enqueue_for`, and constructs the
+run directly from captured settings. Retained-run index/queue-order scans remain
+linear. No allocation or resident-memory improvement is established.
+
+Real `perf` captures use `cpu-clock:u`, 499 Hz and DWARF stacks: 6,628 baseline
+samples and 6,570 revised samples, rendered with Inferno. Profiling/symbolization
+use 2 GiB, outside the timing runs. During the measured pairs, memory-limit and
+OOM counters do not increase (the max counter was already nine after setup and
+warmups). Raw logs, environment/counters, scripts, perf data and flamegraphs are
+retained under `.control/performance/room-effects-20261113/` (ignored locally).
+These measurements and fake-checkpoint tests do not cover ambiguous real save
+outcomes; see [state boundaries](STATE-BOUNDARIES.md).
+
 ## One-shot room admission boundary (2026-11-13)
 
 Compared main `52bff4c` with the borrowed application planner using the same

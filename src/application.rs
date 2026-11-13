@@ -26,3 +26,4 @@ pub trait MessageOps {
 }
 
 pub(crate) mod room_wakes;
+pub(crate) mod room_notifications;
