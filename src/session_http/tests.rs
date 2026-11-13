@@ -329,7 +329,24 @@ fn browser_fixture(long_messages_only: bool) {
     let mut service = serde_json::to_value(&initial.services[0]).unwrap();
     service["executions"] = json!([{"id":"browser-command","digest":"fixture","run":initial.runtime.runs[0].id,"attempt":"fixture","command":"printf service-output","display_command":"printf service-output","timeout_seconds":120,"status":"running","output":"Service streaming alpha","truncated":false,"exit_code":null,"diagnostic":""}]);
     initial.services[0] = serde_json::from_value(service).unwrap();
-    let state = Arc::new(Mutex::new(initial));
+    // In-memory mutations have no storage checkpoint. Publish the same hint
+    // when the fixture's write guard drops; HTTP reads use the inner mutex.
+    struct FixtureState(Arc<Mutex<crate::State>>);
+    struct FixtureWrite<'a>(std::sync::MutexGuard<'a, crate::State>, bool);
+    impl std::ops::Deref for FixtureWrite<'_> {
+        type Target = crate::State;
+        fn deref(&self) -> &Self::Target { &self.0 }
+    }
+    impl std::ops::DerefMut for FixtureWrite<'_> {
+        fn deref_mut(&mut self) -> &mut Self::Target { self.1 = true; &mut self.0 }
+    }
+    impl Drop for FixtureWrite<'_> {
+        fn drop(&mut self) { if self.1 { crate::live_updates::notify(); } }
+    }
+    impl FixtureState {
+        fn lock(&self) -> Result<FixtureWrite<'_>, ()> { self.0.lock().map(|guard| FixtureWrite(guard, false)).map_err(|_| ()) }
+    }
+    let state = FixtureState(Arc::new(Mutex::new(initial)));
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let server = format!("http://{}", listener.local_addr().unwrap());
     listener.set_nonblocking(true).unwrap();
@@ -341,7 +358,9 @@ fn browser_fixture(long_messages_only: bool) {
     let posted_ports = port_posts.clone();
     let reject_port = Arc::new(AtomicBool::new(false));
     let rejected_port = reject_port.clone();
-    let served = state.clone();
+    let served = state.0.clone();
+    let event_cancel = control_effect::sync::CancelToken::new();
+    let events = event_cancel.clone();
     let stopped = stop.clone();
     let fail = failed.clone();
     let thread = std::thread::spawn(move || {
@@ -380,6 +399,9 @@ fn browser_fixture(long_messages_only: bool) {
             reader.read_exact(&mut body).unwrap();
             if path.starts_with("/tool-window/") {
                 crate::web_assets::serve(&mut stream, &path);
+            } else if path == "/events" {
+                let token = events.clone();
+                std::thread::spawn(move || { let _ = crate::live_updates::fixture_stream(&mut stream, &token); });
             } else if crate::serve_stylesheet(&mut stream, &path) {
             } else if path == "/tools/ports" {
                 posted_ports.fetch_add(1, Ordering::Relaxed);
@@ -452,16 +474,19 @@ fn browser_fixture(long_messages_only: bool) {
     });
     struct Fixture {
         stop: Arc<AtomicBool>,
+        events: control_effect::sync::CancelToken,
         thread: Option<std::thread::JoinHandle<()>>,
     }
     impl Drop for Fixture {
         fn drop(&mut self) {
             self.stop.store(true, Ordering::Relaxed);
+            self.events.cancel();
             let _ = self.thread.take().unwrap().join();
         }
     }
     let _fixture = Fixture {
         stop,
+        events: event_cancel,
         thread: Some(thread),
     };
     let driver = std::env::var("CONTROL_WEBDRIVER_URL").expect("local WebDriver URL");

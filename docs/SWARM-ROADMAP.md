@@ -939,6 +939,18 @@ comments, title/description updates and exact-head merges through
 permission and operator authorization; GitHub branch rules remain authoritative.
 Resource/mount profiles and deployment/restart jobs remain separate slices.
 
+**Chat latency boundary.** Deliver update hints through transport adapters, not
+agent wakes: event-driven HTTP admission, mailbox notifications and authenticated
+web/TUI subscriptions reuse existing effect primitives. Keep fresh provider
+attempts, credential isolation and per-attempt sandbox verification. The next
+execution slice can acquire task sandboxes lazily through workspace tools, with
+bounded idle leases. Claude already separates execution from its provider
+container; Codex native workspace tools still share that container and need an
+explicit adapter contract before that separation. Do not expose a shared mount
+of other chats to warm containers or expire resources while useful work runs.
+Lightweight provider containers remain required. Measure startup and delivery
+separately from model inference; see [PERFORMANCE.md](PERFORMANCE.md).
+
 ## Regression lanes, deferrals and delivery evidence
 
 Preserve child-result lineage, typed activity, room discovery, approval and

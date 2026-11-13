@@ -5,6 +5,7 @@ use std::collections::HashSet;
 /// Refresh ancestors without changing conversation ordering or persisting each
 /// output sample. A malformed saved parent cycle must not trap the supervisor.
 pub(crate) fn changed(state: &mut State, id: &str) {
+    crate::live_updates::notify();
     let mut cursor = Some(id.to_owned());
     let mut visited = HashSet::new();
     while let Some(id) = cursor.take() {

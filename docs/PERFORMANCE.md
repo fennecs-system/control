@@ -1,5 +1,67 @@
 # Performance checks
 
+## Event-driven chat delivery (2026-11-14)
+
+Compared deployed main `1be79c7` with the event-driven transport patch using five
+identical short prompts and `gpt-6.1-sol`. Direct Codex used one prestarted pinned
+container with `exec` then four `exec resume` calls; Control used a fresh ordinary
+chat and fresh provider attempt per message. Both provider containers had 2 CPUs
+and 2 GiB. Alternating the paths per turn, all ten replies matched. The patched
+server used an isolated fresh state; no civilisation agents were resumed for
+measurement. The offline profiler was paused during inference measurements.
+
+| Mean, five turns | Before | After |
+| --- | ---: | ---: |
+| Control first message text | 6.378 s | 4.592 s |
+| Direct Codex first message text | 3.860 s | 4.160 s |
+| Observed difference | +2.518 s | +0.432 s |
+| Control completed response | 7.808 s | 5.608 s |
+| Direct Codex completed response | 4.801 s | 5.133 s |
+
+Docker events placed provider start 1.191–1.305 s after submission before and
+0.552–0.619 s after. This includes admission and the unchanged per-attempt
+credential-isolation canary probe. Container create-to-start alone was already
+around 80–100 ms. Completion after container exit decreased from 0.259–0.645 s
+to 0.116–0.211 s. Ten authenticated pings after the patch took 0.917–1.271 ms;
+the previous pass took roughly 90–201 ms. MCP observation reads averaged 4.54 ms
+after, versus 84–98 ms before.
+
+First text means structured message-event availability, not raw token deltas or
+browser paint. Both passes sampled Control every 100 ms plus RPC duration. The
+CLI system/tool context and resumed-session strategy differ from Control's
+journal-based attempts. Five samples cannot establish a population latency or
+attribute every difference to the harness; inference and cache conditions vary.
+The web's 1 s transcript poll and TUI's 2 s refresh are replaced with coalesced,
+authenticated, payload-free hints; their former display delay is additional to
+the table. TUI input remains checked at 100 ms. Reconnects force a fresh read;
+failed transcript reads retry, and disconnected clients retain a recovery poll.
+Idle streams wait on the existing effect generation primitive, with 15 s
+transport heartbeats, and never wake agents. No task timeout policy changed.
+
+Firefox passed 15 successive sends (median 131 ms, maximum 137 ms in its
+synthetic fixture), long-message validation, streaming/service updates, retained
+focus/scroll/expanded details and transient request failures. Socket tests cover
+bounded stream admission, cancellation, malformed input and coalescing. The full
+Nix package builds with the embedded WASM UI. Local artifacts and the exact Rust
+benchmark driver are retained under `.control/performance/chat-latency-20261114/`
+and `/private/tmp/control-latency-after-20261114/`. These measurements do not
+claim lazy task sandboxes or provider-container pooling has been implemented.
+
+Twenty synthetic chat creations were observed through the shared client stream
+in 11.87–15.25 ms (median 13.00 ms), including the operation and checkpoint;
+dropping the idle subscription took 0.17 ms. A credential-free Docker mount test
+verified that a container's atomic mailbox rename reaches the host watcher.
+
+Six alternating Linux release pairs used one pinned CPU, 512 MiB and no swap.
+Core coordination medians were 1.219 → 1.215 µs. TUI render medians for
+10 / 100 / 500 messages were 59.871 / 59.415 / 59.254 →
+58.365 / 58.115 / 58.363 µs; all rendered-buffer hashes matched. These fixtures
+establish no material regression, not an inference or renderer speedup claim.
+CPU-clock flamegraphs cover both revisions' core and TUI; cgroup memory/OOM
+counters remained zero. Artifacts are retained in the `cpu-final` subdirectory
+of the local performance evidence directory. The core has no persisted UI
+state, new dependency or provider-specific notification logic.
+
 ## Local compaction selection (2026-11-13)
 
 Compared merged main `b744ee2` with the local-compaction feature using the same

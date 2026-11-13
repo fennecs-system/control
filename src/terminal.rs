@@ -558,6 +558,7 @@ pub fn run() -> io::Result<()> {
     execute!(io::stdout(), EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     let mut refreshed = Instant::now();
+    let mut updates = hive.updates()?;
     let mut dirty = true;
     loop {
         if dirty {
@@ -808,7 +809,7 @@ pub fn run() -> io::Result<()> {
                 }
             }
         }
-        if refreshed.elapsed() > Duration::from_secs(2) {
+        if updates.changed() || (!updates.connected() && refreshed.elapsed() > Duration::from_secs(10)) {
             let old_chats = app.chats.clone();
             let old_revision = app.detail["revision"].clone();
             let old_status = app.status.clone();
