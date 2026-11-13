@@ -23,7 +23,10 @@ capabilities, not guaranteed host tools. See [GitHub publication](GITHUB.md) for
 the clean-baseline, configured-repository and text-output limits. `/github PR`
 reads that repository's PR overview; add `files`, `comments`, `reviews`,
 `review-comments`, `checks` or `statuses` and an optional page number for bounded
-evidence. This makes no model call or chat post. Checks and legacy statuses are
+evidence. `/github PR comment|title|body TEXT` sends an explicit comment/edit;
+`/github PR merge HEAD_SHA [squash|merge|rebase]` requests an exact-head merge
+only when enabled by the operator's GitHub binding. These commands make no model
+call or chat post. Checks and legacy statuses are
 separate views of the captured PR head, with no claim that empty results pass CI.
 
 The remaining work for an end-to-end terminal development loop is:
@@ -33,10 +36,9 @@ The remaining work for an end-to-end terminal development loop is:
   origins. Reuse typed server queries and existing approval operations. Folder,
   port, bot and design-question decisions already have terminal commands; they
   do not establish parity with every web management view.
-- **GitHub follow-up:** complete diff/log inspection, explicit comment writes and
-  updating a PR after feedback. The current publisher opens a draft from a completed
-  checkpoint; it is not a general GitHub integration. Publication does not merge
-  or deploy, and the terminal should keep those decisions explicit.
+- **GitHub follow-up:** complete diff/workflow-log inspection and publishing new
+  source revisions to an existing PR after feedback. Comments, title/body edits
+  and explicitly authorized merges have typed tools; deployment remains separate.
 - **Interactive execution and browser verification:** durable interactive
   process handles and bounded browser navigation/input against approved
   previews. Background commands and offline screenshots exist; a screenshot

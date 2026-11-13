@@ -56,6 +56,10 @@ pub(crate) fn local_server(value: &str) -> io::Result<Url> {
     Ok(url)
 }
 impl Hive {
+    pub fn github_write(&mut self, chat: &str, operation: github::Operation) -> io::Result<Value> {
+        operation.validate().map_err(failure)?;
+        self.tool("control_github_write", json!({"chat_id":chat,"operation":operation}))
+    }
     pub fn github_read(&mut self, chat: &str, query: github::Query) -> io::Result<Value> {
         query.validate().map_err(failure)?;
         self.tool("control_github_read", json!({"chat_id":chat,"query":query}))
@@ -174,8 +178,8 @@ impl Hive {
                         })
                 {
                     Duration::from_secs(25)
-                } else if method == "tools/call" && params["name"] == "control_github_read" {
-                    // One PR lookup plus one bounded page, at most 20 s each.
+                } else if method == "tools/call" && matches!(params["name"].as_str(), Some("control_github_read" | "control_github_write")) {
+                    // One PR lookup plus one page/mutation, at most 20 s each.
                     Duration::from_secs(50)
                 } else if method == "tools/call"
                     && control_context::tool_policy::checkpoint(

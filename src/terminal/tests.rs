@@ -2,6 +2,11 @@
 #[test]
 fn github_inspection_uses_the_typed_read_without_sending_a_chat_message() {
     use std::io::{BufRead, Read, Write};
+    for (input,tool,arguments) in [
+        ("/github 170 checks 2", "control_github_read",json!({"chat_id":"c-inspection","query":{"pull_request":170,"section":"checks","page":2}})),
+        ("/github 170 merge 1234567890123456789012345678901234567890", "control_github_write",json!({"chat_id":"c-inspection","operation":{"action":"merge","pull_request":170,"expected_head_sha":"1234567890123456789012345678901234567890","method":"squash"}})),
+        ("/github 170 comment Review findings\n\nPlease check this.", "control_github_write",json!({"chat_id":"c-inspection","operation":{"action":"comment","pull_request":170,"body":"Review findings\n\nPlease check this."}})),
+    ] {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || {
@@ -19,13 +24,13 @@ fn github_inspection_uses_the_typed_read_without_sending_a_chat_message() {
         }
         let mut body=vec![0;length];reader.read_exact(&mut body).unwrap();
         let request:Value=serde_json::from_slice(&body).unwrap();
-        assert_eq!(request["params"]["name"],"control_github_read");
-        assert_eq!(request["params"]["arguments"],json!({"chat_id":"c-inspection","query":{"pull_request":170,"section":"checks","page":2}}));
+        assert_eq!(request["params"]["name"],tool);
+        assert_eq!(request["params"]["arguments"],arguments);
         let response=json!({"jsonrpc":"2.0","id":request["id"],"result":{"isError":false,"structuredContent":{"data":{"head_sha":"verified-head","items":[]}}}}).to_string();
         write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",response.len()).unwrap();
     });
     let mut hive=Hive::fixture(Client::new(),format!("http://{address}/mcp"));
-    let mut app=App {active:"c-inspection".into(),input:"/github 170 checks 2".into(),detail:json!({"messages":[{"text":"Retain this conversation"}]}),..Default::default()};
+    let mut app=App {active:"c-inspection".into(),input:input.into(),detail:json!({"messages":[{"text":"Retain this conversation"}]}),..Default::default()};
     let before=app.detail.clone();
     assert!(!app.submit(&mut hive).unwrap());
     assert!(app.inspector.as_ref().unwrap().1.contains("verified-head"));
@@ -34,6 +39,7 @@ fn github_inspection_uses_the_typed_read_without_sending_a_chat_message() {
     server.join().unwrap();
     app.input="/github 170 merge".into();
     assert!(app.submit(&mut hive).is_err(),"invalid commands fail before contacting the closed server");
+    }
 }
 
 #[test]

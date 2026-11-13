@@ -18,6 +18,7 @@ use std::{
 
 static PUBLICATION: Mutex<()> = Mutex::new(());
 pub(crate) mod inspection;
+pub(crate) mod operations;
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Configuration {
@@ -25,6 +26,8 @@ pub struct Configuration {
     pub source_root: PathBuf,
     pub token_file: PathBuf,
     pub base: String,
+    #[serde(default)]
+    pub allow_merge: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Source {
@@ -131,7 +134,7 @@ fn validate_configuration(value: &Configuration) -> io::Result<()> {
 }
 pub fn cli(args: &[String]) -> io::Result<()> {
     if args.first().map(String::as_str) != Some("configure") {
-        println!("control github configure --repository OWNER/REPO --token-file /private/path [--base main]\nBinds GitHub publication to the configured improvement source. Credential contents are never displayed.");
+        println!("control github configure --repository OWNER/REPO --token-file /private/path [--base main] [--allow-merge]\nBinds GitHub tools to the configured improvement source. Merge is disabled unless explicitly enabled. Credential contents are never displayed.");
         return Ok(());
     }
     let option = |name: &str| args.windows(2).find(|p| p[0] == name).map(|p| p[1].clone());
@@ -144,6 +147,7 @@ pub fn cli(args: &[String]) -> io::Result<()> {
             })?,
         ),
         base: option("--base").unwrap_or_else(|| "main".into()),
+        allow_merge: args.iter().any(|arg| arg == "--allow-merge"),
     };
     validate_configuration(&value)?;
     // Metadata only during setup. Only the API adapter consumes the credential.
@@ -157,8 +161,8 @@ pub fn cli(args: &[String]) -> io::Result<()> {
     }
     crate::config::write_private("github.json", &serde_json::to_vec_pretty(&value)?)?;
     println!(
-        "GitHub publication configured for {}. No merge or deployment permission was granted.",
-        value.repository
+        "GitHub tools configured for {}. Merge permission: {}. No deployment permission was granted.",
+        value.repository, value.allow_merge
     );
     Ok(())
 }
@@ -462,7 +466,7 @@ impl Rest {
 impl Api for Rest {
     fn request(&self, method: &str, path: &str, body: Option<Value>) -> io::Result<Value> {
         if !path.starts_with(&format!("/repos/{}/", self.repository))
-            || !["GET", "POST"].contains(&method)
+            || !["GET", "POST", "PATCH", "PUT"].contains(&method)
         {
             return Err(fail(
                 "GitHub request is outside the configured repository capability",
@@ -481,14 +485,14 @@ impl Api for Rest {
             request = request.json(&body);
         }
         let response = request.send().map_err(|_| {
-            fail("GitHub request failed; inspect retained publication before retrying")
+            fail("GitHub request outcome is unknown; inspect remote state before any explicit retry")
         })?;
         let status = response.status();
         if status.as_u16() == 404 {
             return Ok(Value::Null);
         }
         if !status.is_success() {
-            return Err(fail("GitHub rejected the request; check repository permissions and retained publication status"));
+            return Err(fail(&format!("GitHub rejected the request (HTTP {}); check permissions, branch rules and current remote state", status.as_u16())));
         }
         let mut bytes = Vec::new();
         response
@@ -864,6 +868,10 @@ pub fn http(
         let Ok(request) = serde_json::from_slice::<Value>(body) else {
             return false;
         };
+        if request["method"] == "tools/call" && request["params"]["name"] == "control_github_write" {
+            operations::http(stream, shared, &request);
+            return true;
+        }
         if request["method"] == "tools/call" && request["params"]["name"] == "control_github_read" {
             inspection::http(stream, shared, &request);
             return true;

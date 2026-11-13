@@ -62,6 +62,7 @@ policies! {
     "control.project.request" => (Project,true,Forward,true),
     "control_github_open_pr" => (Github,true,Forward,true),
     "control_github_read" => (Github,false,Read,true),
+    "control_github_write" => (Github,true,Forward,true),
     "control.web.search" => (Toolbox,false,Local,true),
     "control.rust.run" => (Toolbox,false,Local,true),
     "control.rust.bench" => (Toolbox,false,Local,true),

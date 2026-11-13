@@ -916,13 +916,17 @@ build, replaces it atomically, checks health and reports or rolls back failure.
 Expose approval/results through the same TUI/web application operations. Keep
 these effects in the tool/host interpreters; they do not require new supervisor
 concepts, model-specific core paths or access to credential contents. Preserve
-the repository rule that maintainers merge PRs.
+the repository rule that maintainers merge PRs unless the operator explicitly
+authorizes an agent to do so.
 
 The first utility increment provides typed, repository-bound PR/file/comment/
 review/check/status reads through `control_github_read` and TUI `/github`, with
 bounded excerpts and no model turn. It reuses the credential broker and host
-attempt interface; it adds no supervisor state. Comment writes, PR updates,
-resource/mount profiles and deployment/restart jobs remain separate slices.
+attempt interface; it adds no supervisor state. A second increment adds typed
+comments, title/description updates and exact-head merges through
+`control_github_write` and `/github`. Merge requires an explicit node binding
+permission and operator authorization; GitHub branch rules remain authoritative.
+Resource/mount profiles and deployment/restart jobs remain separate slices.
 
 ## Regression lanes, deferrals and delivery evidence
 

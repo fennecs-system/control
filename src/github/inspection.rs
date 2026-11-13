@@ -10,12 +10,16 @@ static INSPECTION: Mutex<()> = Mutex::new(());
 pub struct Tools;
 impl AttemptTools for Tools {
     fn definitions(&self) -> Vec<Value> {
-        vec![definition(false)]
+        vec![definition(false), super::operations::definition(false)]
     }
     fn known(&self, name: &str) -> bool {
-        name == "control_github_read"
+        matches!(name, "control_github_read" | "control_github_write")
     }
-    fn call(&self, cx: &AttemptCall<'_>, _: &str, args: &Value) -> io::Result<Value> {
+    fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
+        if name == "control_github_write" {
+            let operation = serde_json::from_value(args.clone()).map_err(|_| fail("Expected a typed GitHub operation"))?;
+            return super::operations::execute(cx.host.0, Caller::Attempt { run: cx.attempt.run, generation: cx.attempt.generation }, operation);
+        }
         let query: Query = serde_json::from_value(args.clone())
             .map_err(|_| fail("Expected a PR number, section and optional page"))?;
         execute(
@@ -41,11 +45,11 @@ pub(crate) fn definition(operator: bool) -> Value {
 }
 
 #[derive(Clone, Copy)]
-enum Caller<'a> {
+pub(super) enum Caller<'a> {
     Chat(&'a str),
     Attempt { run: &'a str, generation: &'a str },
 }
-fn authorize(state: &State, caller: Caller<'_>) -> io::Result<()> {
+pub(super) fn authorize(state: &State, caller: Caller<'_>) -> io::Result<()> {
     let (chat, actor) = match caller {
         Caller::Chat(chat) => (chat, None),
         Caller::Attempt { run, generation } => {
@@ -84,14 +88,14 @@ fn authorize(state: &State, caller: Caller<'_>) -> io::Result<()> {
     Ok(())
 }
 
-struct ReadApi<'a> {
-    shared: &'a Arc<Mutex<State>>,
-    caller: Caller<'a>,
-    config: &'a Configuration,
-    rest: Rest,
+pub(super) struct ReadApi<'a> {
+    pub(super) shared: &'a Arc<Mutex<State>>,
+    pub(super) caller: Caller<'a>,
+    pub(super) config: &'a Configuration,
+    pub(super) rest: Rest,
 }
 impl ReadApi<'_> {
-    fn check(&self) -> io::Result<()> {
+    pub(super) fn check(&self) -> io::Result<()> {
         if crate::shutdown::requested() {
             return Err(fail("Control is stopping"));
         }
@@ -138,7 +142,7 @@ fn execute(shared: &Arc<Mutex<State>>, caller: Caller<'_>, query: Query) -> io::
 }
 
 /// Project only scalar fields. Bound text at UTF-8 boundaries and disclose loss.
-fn project(value: &Value, fields: &[&str], body_bytes: usize) -> Value {
+pub(super) fn project(value: &Value, fields: &[&str], body_bytes: usize) -> Value {
     let mut result = serde_json::Map::new();
     let mut truncated = false;
     for (name, value) in fields
