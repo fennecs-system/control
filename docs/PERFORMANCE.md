@@ -871,3 +871,35 @@ event/OOM increases. Local scripts, binaries, raw stacks and logs remain under
 the synthetic offline visual preview are in
 `.control/performance/tui-history-20261113/`. The helper is stopped.
 
+## Scoped GitHub inspection (2026-11-14)
+
+Compared deployed main `4ebabf7` with utility revision `098fc80` using the existing
+release fixtures, Linux aarch64 and the same pinned offline toolchain. Six
+alternating pairs followed warmup, with one pinned CPU, 512 MiB and no swap.
+Values below are medians of the six process medians.
+
+| Fixture | Baseline → revised median |
+| --- | ---: |
+| Cached TUI render, 10 messages | 60.737 → 59.592 µs |
+| Cached TUI render, 100 messages | 60.509 → 59.709 µs |
+| Cached TUI render, 500 messages | 60.498 → 59.062 µs |
+| Coordination routing, 64 chats | 1.258 → 1.250 µs |
+
+All rendered-buffer hashes match and process-median ranges overlap. These
+fixtures show no material regression; the small decreases are not a demonstrated
+optimization. Command discovery plus highlighting for `/`, `/con`, `/context`
+and `/improve` measured 285/201.5/214.5/211 ns before and 293/205/218/209.5 ns
+after adding `/github`; ordinary text measured 38/37.5 ns. The largest increase
+is 8 ns. This does not measure keyboard-to-frame latency or GitHub API latency.
+GitHub authorization, bounded replies and TUI transport use deterministic mocks
+and loopback fixtures; no live credential was used for these checks.
+
+Actual CPU-clock flamegraphs contain 901/884 baseline/revised TUI samples and
+1258/1228 routing samples. Rendering remains dominated by Ratatui buffer work;
+routing by string traversal, comparisons and copies. Memory-event counters
+remained zero, including OOM. Raw data, scripts and binaries remain under
+`/private/tmp/control-boundary-profile/github-inspection/`; copied logs, folded
+stacks and four SVGs are under
+`.control/performance/github-inspection-20261114/`. The profiling helper is
+stopped; the separate inference service is retained.
+
