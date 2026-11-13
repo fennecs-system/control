@@ -29,7 +29,7 @@ struct Subscriber;
 impl Subscriber {
     fn acquire() -> Option<Self> {
         SUBSCRIBERS
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                 (n < MAX_SUBSCRIBERS).then_some(n + 1)
             })
             .ok()
