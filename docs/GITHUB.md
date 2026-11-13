@@ -1,4 +1,4 @@
-# GitHub publication
+# GitHub tools
 
 ## Inspect PRs and CI from the terminal
 
@@ -27,10 +27,55 @@ runs at a time; busy/error responses require an explicit retry.
 
 The configured credential also needs Checks and Commit statuses **read** access
 for those sections, and Pull requests / Issues read access for PRs and comments.
-Only the existing trusted adapter consumes it. This slice does not write
-comments, update PRs, rerun CI, merge, or deploy. Those remain separate operations.
+Only the existing trusted adapter consumes it. Reads do not mutate remote state.
 
-API contracts: [PR files](https://docs.github.com/en/rest/pulls/pulls#list-pull-requests-files),
+## Comment, edit and merge
+
+`control_github_write` uses the same bound repository and architect/improvement
+authorization. Its typed operations are `comment` (PR number/body), `update`
+(PR number plus title and/or body), and `merge` (PR number, exact
+`expected_head_sha`, optional `method`: `squash`, `merge` or `rebase`). No arbitrary
+URL, repository, branch change, rule bypass or shell command is accepted. The
+ordinary worker and judge tool sets do not gain write authority. Writes are fenced
+after handoff, and active-attempt generation/ownership is rechecked before each
+network request. Network work stays outside the application state lock.
+
+These are also local TUI commands, with no model turn or chat-history submission:
+
+```text
+/github 170 comment Reviewed the current head; the failing check needs attention.
+/github 170 title Clarify the PR title
+/github 170 body Replace the description with this text
+/github 170 merge FULL_40_CHARACTER_HEAD_SHA squash
+```
+
+Merge is **disabled by default**, including for existing bindings. The operator
+can enable it by repeating `control github configure` with the same binding and
+adding `--allow-merge`; omitting that flag disables it again. This grants the
+tool's capability, not approval inferred from PR text or reviewer comments.
+Repository instructions and operator authorization still govern when an agent
+may merge. Only the configured base branch is allowed, and the exact head SHA is
+sent to GitHub so a concurrently changed head is rejected. The base check is a
+preflight: GitHub's merge endpoint has no atomic expected-base parameter, so a
+concurrent retarget remains possible. Only open, non-draft
+PRs are submitted for merge. An explicit retry of the same already-merged head
+returns its observed state without a second merge. Inspect CI and reviews first:
+the adapter does not infer CI success, review approval or bypass GitHub rules.
+Configure required checks/reviews in GitHub branch rules; a credential with bypass
+privileges could otherwise bypass them under GitHub's own policy.
+
+No write is automatically retried. A lost response can mean the effect succeeded;
+inspect remote PR/comments before explicitly retrying, especially comments, which
+are not idempotent. The adapter returns bounded result fields rather than echoing
+descriptions or tokens. GitHub may accept an already dispatched request while a
+pause/revocation is occurring; host checks do not revoke an in-flight HTTP request.
+Nothing here deploys Control, reruns workflows, force-pushes or deletes branches.
+Comment/edit operations need Pull requests write (or Issues write for comments);
+merge additionally needs Contents write. Keep the token scoped to the bound repo.
+
+API contracts: [PR editing/merge](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request),
+[comments](https://docs.github.com/en/rest/issues/comments#create-an-issue-comment),
+[PR files](https://docs.github.com/en/rest/pulls/pulls#list-pull-requests-files),
 [check runs](https://docs.github.com/en/rest/checks/runs#list-check-runs-for-a-git-reference)
 and [commit statuses](https://docs.github.com/en/rest/commits/statuses#list-commit-statuses-for-a-reference).
 

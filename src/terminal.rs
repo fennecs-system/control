@@ -203,9 +203,12 @@ impl App {
             }
             _ if text=="/github" || text.starts_with("/github ") => {
                 if self.active.is_empty() { return Err(failure("Open a conversation first")); }
-                let query = crate::client::github::Query::parse(text[7..].trim()).map_err(failure)?;
-                let value = hive.github_read(&self.active, query)?;
-                self.inspector = Some(("GitHub evidence".into(), serde_json::to_string_pretty(&value).map_err(failure)?));
+                let command = crate::client::github::Command::parse(text[7..].trim()).map_err(failure)?;
+                let value = match command {
+                    crate::client::github::Command::Read(query) => hive.github_read(&self.active, query)?,
+                    crate::client::github::Command::Write(operation) => hive.github_write(&self.active, operation)?,
+                };
+                self.inspector = Some(("GitHub operation".into(), serde_json::to_string_pretty(&value).map_err(failure)?));
                 self.scroll=0;self.follow=false;
                 self.status="Repository evidence · /github PR checks or statuses · /chat returns".into();
             }

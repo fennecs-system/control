@@ -90,6 +90,7 @@ pub fn entries() -> &'static [Entry] {
         entries.extend(crate::knowledge_tools::definitions().into_iter().map(entry));
         entries.push(entry(crate::github::definition()));
         entries.push(entry(crate::github::inspection::definition(true)));
+        entries.push(entry(crate::github::operations::definition(true)));
         entries.extend(crate::toolbox::definitions().into_iter().map(entry));
         entries.extend(crate::artifacts::definitions().into_iter().map(entry));
         entries.push(entry(browser_definition()));
@@ -151,7 +152,7 @@ pub fn worker_definitions(improve: bool) -> Vec<Value> {
     tools.push(crate::spawning::definition());
     tools.extend(crate::spawning::management_definitions());
     tools.extend(ATTEMPT_TOOLS.iter().flat_map(|tools| tools.definitions())
-        .filter(|definition| improve || definition["name"] != "control_github_read"));
+        .filter(|definition| improve || !matches!(definition["name"].as_str(), Some("control_github_read" | "control_github_write"))));
     tools.push(crate::delegated_results::definition());
     tools
 }
