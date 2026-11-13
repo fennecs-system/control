@@ -1,6 +1,20 @@
 
 use super::*;
 use std::cell::Cell;
+// Only the uniquely owned QA workspace, removed after its test containers.
+struct WorkspaceCleanup(Option<String>);
+impl WorkspaceCleanup {
+    fn of(service: &Service) -> Self {
+        Self(workspace::Workspace::of(service).map(|workspace| workspace.name().to_owned()))
+    }
+}
+impl Drop for WorkspaceCleanup {
+    fn drop(&mut self) {
+        if let Some(name) = &self.0 {
+            let _ = crate::engine::query(&["volume", "rm", name]);
+        }
+    }
+}
 pub(super) fn fixture() -> (State, String, String, u64) {
     let mut s = State::default();
     let chat = crate::chat::create(&mut s);
@@ -42,7 +56,7 @@ pub(super) fn admit_fixture(
         save,
     )
 }
-fn inspection(s: &Service, id: &str) -> Inspection {
+pub(super) fn inspection(s: &Service, id: &str) -> Inspection {
     Inspection {
         id: id.into(),
         name: format!("/{}", s.name()),
@@ -64,7 +78,7 @@ fn inspection(s: &Service, id: &str) -> Inspection {
         memory: 512 * 1024 * 1024,
         cpu: 1_000_000_000,
         pids: 64,
-        mounts: Vec::new(),
+        mounts: workspace::Workspace::of(s).map(|workspace| vec![json!({"Type":"volume","Name":workspace.name(),"Driver":"local","Destination":"/workspace","RW":true})]).unwrap_or_default(),
         tmpfs: tmpfs(s),
         storage_opts: Some(s.storage.options()),
         entrypoint: vec!["control-service-runner".into()],
@@ -718,13 +732,13 @@ fn disk_storage_defaults_and_captured_quota_are_verified() {
     admit_fixture(&mut state, &run, time, |_| Ok(())).unwrap();
     let mut service = state.services[0].clone();
     service.resource.phase = Phase::Creating;
-    assert_eq!(service.storage, Storage::Disk { limit_mb: None });
+    assert_eq!(service.storage, Storage::Workspace { limit_mb: None });
     assert_eq!(tmpfs(&service).len(), 1);
     assert!(tmpfs(&service).contains_key("/tmp"));
     assert!(!service.readonly_root());
     let observed = inspection(&service, &"b".repeat(64));
     assert!(verify(&service, &observed).is_ok());
-    service.storage = Storage::Disk {
+    service.storage = Storage::Workspace {
         limit_mb: NonZeroU32::new(4096),
     };
     assert!(
@@ -836,6 +850,7 @@ fn live_fenced_paused_service_can_be_stopped_without_restart() {
     .unwrap();
     state.services[0].resource.image = image.try_into().unwrap();
     state.services[0].resource.phase = Phase::Creating;
+    let _workspace = WorkspaceCleanup::of(&state.services[0]);
     let id = Docker.create(&state.services[0]).unwrap();
     struct Container(ContainerId);
     impl Drop for Container {
@@ -885,7 +900,7 @@ fn live_fenced_paused_service_can_be_stopped_without_restart() {
 
 #[test]
 #[ignore = "requires CONTROL_QA_SERVICE_IMAGE and local Linux Docker; isolated storage probe, no models or credentials"]
-fn live_disk_storage_exceeds_old_workspace_limit_and_survives_container_restart() {
+fn live_workspace_survives_restart_exit_cleanup_and_container_replacement() {
     let image = std::env::var("CONTROL_QA_SERVICE_IMAGE").unwrap();
     let profile = crate::worker_profile::Profile::inspect(&image).unwrap();
     let (mut state, run, _, time) = fixture();
@@ -914,6 +929,7 @@ fn live_disk_storage_exceeds_old_workspace_limit_and_survives_container_restart(
     let mut service = state.services.remove(0);
     service.resource.image = image.try_into().unwrap();
     service.resource.phase = Phase::Creating;
+    let _workspace = WorkspaceCleanup::of(&service);
     let id = Docker.create(&service).unwrap();
     struct Container(ContainerId);
     impl Drop for Container {
@@ -940,12 +956,35 @@ fn live_disk_storage_exceeds_old_workspace_limit_and_survives_container_restart(
         observations[id.as_str()]
             .mounts
             .iter()
-            .all(|m| m["Type"] == "tmpfs" && m["Destination"] == "/tmp")
+            .all(|m| (m["Type"] == "tmpfs" && m["Destination"] == "/tmp") || (m["Type"] == "volume" && m["Destination"] == "/workspace"))
     );
+    // Reproduce daemon shutdown's observable consequence without restarting
+    // the operator's Docker daemon or touching other services.
+    crate::engine::query(&["stop", "--time=1", id.as_str()]).unwrap();
+    let shared = Arc::new(Mutex::new(State::default()));
+    shared.lock().unwrap().services.push(service.clone());
+    drive(&shared, &mut Docker, &node, time, |_| Ok(())).unwrap();
+    assert!(!Docker.exists(&id).unwrap(), "Exited containers are still removed");
+    drive(&shared, &mut Docker, &node, time, |_| Ok(())).unwrap();
+    assert_eq!(shared.lock().unwrap().services[0].resource.phase, Phase::Stopped(StopReason::Exited));
     drop(cleanup);
     assert!(Docker.inventory(&node).unwrap().is_empty());
+    // A different service handle under the same owner reopens the volume.
+    // Serialize first, like a Control restart, rather than relying on memory.
+    let restored: State = serde_json::from_slice(&serde_json::to_vec(&*shared.lock().unwrap()).unwrap()).unwrap();
+    service = restored.services[0].binding_snapshot();
+    service.resource.id = "replacement-probe".to_owned().try_into().unwrap();
     service.resource.phase = Phase::Creating;
-    service.storage = Storage::Disk {
+    let replacement = Docker.create(&service).unwrap();
+    let replacement_cleanup = Container(replacement.clone());
+    let observations = Docker.inventory(&node).unwrap();
+    service.resource.phase = Phase::Starting(replacement.clone());
+    Docker.start(&verify(&service, &observations[replacement.as_str()]).unwrap()).unwrap();
+    let output = crate::engine::query(&["exec", replacement.as_str(), "bash", "-c", "set -eu; test \"$(stat -c %s /workspace/large.bin)\" = 566231040; test ! -e /home/agent/marker; test ! -e /tmp/marker; test ! -w /bin; printf replacement-ok"]).unwrap();
+    assert_eq!(output.trim(), "replacement-ok");
+    drop(replacement_cleanup);
+    service.resource.phase = Phase::Creating;
+    service.storage = Storage::Workspace {
         limit_mb: NonZeroU32::new(1024),
     };
     match Docker.create(&service) {
@@ -970,6 +1009,12 @@ fn live_disk_storage_exceeds_old_workspace_limit_and_survives_container_restart(
             println!("Engine rejected explicit cap; no uncapped fallback: {error}");
         }
     }
+    // A pre-existing name alone must not authorize mounting foreign data.
+    let workspace = workspace::Workspace::of(&service).unwrap();
+    crate::engine::query(&["volume", "rm", workspace.name()]).unwrap();
+    crate::engine::query(&["volume", "create", "--label", "dev.control.chat=foreign", workspace.name()]).unwrap();
+    assert!(Docker.create(&service).unwrap_err().to_string().contains("workspace does not match"));
+    assert!(Docker.inventory(&node).unwrap().is_empty());
 }
 #[test]
 #[ignore = "requires CONTROL_QA_SERVICE_IMAGE (new pinned worker image), CONTROL_QA_CONTROL_BIN and a local Linux engine; no credentials/models"]
@@ -1007,6 +1052,7 @@ fn live_service_survives_server_restart_and_expires_without_control() {
     let value=admit_profile(&mut s,Request{run:&run,generation:"attempt-a",nonce:"live"},Input{command:"printf durable > /workspace/counter; if (exec 3<> /proc/1/mem) 2>/dev/null; then exit 41; fi; kill -STOP 1 2>/dev/null || true; echo ready; sleep 60".to_owned().try_into().unwrap(),lease_seconds:20,storage_limit_mb:None},node.clone().try_into().unwrap(),time,profile,|_|Ok(())).unwrap();
     assert!(value["service_id"].is_string());
     s.services[0].resource.image = image.try_into().unwrap();
+    let _workspace = WorkspaceCleanup::of(&s.services[0]);
     s.runtime.runs[0].status = "completed".into();
     fs::write(
         state_dir.join("state.json"),

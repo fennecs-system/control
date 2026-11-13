@@ -185,11 +185,12 @@ fn card(service: &Service) -> String {
     } else {
         format!("lease ends in {} min", resource.lease.expires().saturating_sub(now()) / 60)
     };
-    let storage = match service.storage {
+    let mut storage = match service.storage {
         Storage::Memory => "memory storage".to_owned(),
-        Storage::Disk { limit_mb: Some(limit) } => format!("disk storage, {limit} MB"),
-        Storage::Disk { limit_mb: None } => "disk storage".to_owned(),
+        Storage::Disk { limit_mb: Some(limit) } | Storage::Workspace { limit_mb: Some(limit) } => format!("disk layer, {limit} MB"),
+        Storage::Disk { limit_mb: None } | Storage::Workspace { limit_mb: None } => "disk storage".to_owned(),
     };
+    if matches!(service.storage, Storage::Workspace { .. }) { storage.push_str(" · /workspace retained for this chat"); }
     let chat = resource.owner.chat.as_str();
     let conversation = if crate::chat::valid_id(chat) { format!("<a href='/chat/{chat}'>Conversation</a> · ") } else { String::new() };
     let container = resource.phase.container().map(|id| format!("container {} · ", crate::escape(&id.as_str().chars().take(12).collect::<String>()))).unwrap_or_default();

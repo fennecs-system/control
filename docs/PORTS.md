@@ -124,10 +124,11 @@ A chat cannot request or manage another chat's ports; judges cannot manage ports
   approval; a service's normal offline execution boundary is unchanged.
 
 New services also capture an executable private workspace policy, allowing
-agent-authored tools to compile and run in `/workspace`. It is bounded tmpfs with
-`rw,exec,nosuid,nodev`; the image root remains read-only and other tmpfs scopes are
-unchanged. Older records missing `workspace_exec` retain their previous policy
-and serialization. They are not silently upgraded or fenced by the new default.
+agent-authored tools to compile and run in `/workspace`. New services use the
+retained, chat-owned disk volume described in [Persistent tools](PERSISTENT-TOOLS.md),
+without granting arbitrary host mounts. Older records keep their captured
+container-layer or tmpfs layout and executable policy. They are not silently
+upgraded or fenced by the new default.
 
 ## Verification
 

@@ -33,6 +33,7 @@ fn cards_escape_commands_and_show_live_data_only_when_observed() {
         plain.contains("Requested") && plain.contains("until stopped") && plain.contains("/chat/")
     );
     assert!(plain.contains("action='/tools/services'") && plain.contains("Stop service"));
+    assert!(plain.contains("/workspace retained for this chat"));
     assert!(
         !plain.contains("data-live="),
         "only running services wait for live usage"
