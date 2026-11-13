@@ -96,14 +96,20 @@ an in-flight filesystem commit. Production persistence remains synchronous and
 under the existing lock; neither the scheduler nor core gains a runtime or a
 notification-specific lifecycle.
 
-The legacy save callback still returns an unclassified `io::Result`. In
-particular, `storage::save` can fail syncing the directory after renaming the
-state file. This slice preserves the existing rollback-on-error contract; it
-does not establish that every returned error means nothing reached disk.
-Before claiming recovery correctness for those cases or moving persistence
-outside the lock, distinguish not-committed, confirmed and unknown outcomes
-and add a reconciliation/fencing path. The fake-checkpoint tests exercise
-definite failures and explicit acknowledgements, not post-rename ambiguity.
+`storage::checkpoint` now distinguishes failures before attempting replacement
+(`NotReplaced`) from failures at rename or directory sync (`Unconfirmed`). Success
+requires both file and directory sync before notifying state-change subscribers.
+Real-file tests inject a directory-sync failure after replacement and verify that
+the new bytes are visible despite the error. This is an adapter boundary, with
+no new supervisor state, runtime or persistence dependency.
+
+The legacy `storage::save` callback still erases this classification into an
+`io::Result`, preserving existing caller behaviour, including rollback on error.
+Those callers do not yet reconcile unconfirmed writes. Before claiming recovery
+correctness or moving persistence outside the lock, migrate each transaction to
+the classified result with an explicit reconciliation/fencing path. The earlier
+fake-checkpoint driver tests exercise definite failures and acknowledgements;
+they do not prove recovery from an unconfirmed real write.
 
 This is not the complete A1/A2/A4 extraction or a finished server/web/TUI split.
 The application module still shares legacy service/delegation/bot record types,
