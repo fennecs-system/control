@@ -110,7 +110,7 @@ pub(super) fn command_html(event: &Activity, open: bool) -> String {
 mod tests {
     use super::*;
     #[test]
-    fn child_chat_messages_are_inline_scoped_and_refresh_ancestors() {
+    fn child_chat_messages_are_collapsed_scoped_and_refresh_ancestors() {
         let mut state = State::default();
         let parent = crate::chat::create(&mut state);
         let child = crate::chat::create(&mut state);
@@ -139,6 +139,7 @@ mod tests {
         ));
         assert!(state.chats[0].revision > revision);
         let html = crate::chat::transcript(&state, &parent).unwrap();
+        assert!(html.contains("data-transcript-key='agent-activity'><summary>Agent activity · 1 active agent</summary>"));
         assert!(html.contains("<p class='preserve'>Checking &lt;inventory&gt;.</p>"));
         assert!(!html.contains("<pre>Checking"));
         let detail = crate::chat::detail(&state, &parent).unwrap();

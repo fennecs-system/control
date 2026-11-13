@@ -470,6 +470,29 @@ Relays retain listeners across reconnects and queue excess connections. The old
 one-hour/one-connection limitation is superseded. Resource and transport limits
 remain separate from model-turn slots; see [ports](docs/PORTS.md).
 
+## Planned: agent-requested resources and model services
+
+Agents should be able to acquire the resources a workload needs through service
+tools: for example, request a 24 GiB Minecraft container, more CPU, or GPU access
+for a local model. Separate compute allocation from the lite/full image choice.
+Allow typed resource requests and optional operator-defined shape presets, within
+configured capacity and grants; use the existing approval path when needed.
+Report effective limits and unavailable capacity explicitly.
+
+An agent can start an inference server as an ordinary persistent service and
+call it through scoped tools/MCP. Model setup belongs in tooling; this does not
+depend on supporting that model as Control's own worker or compaction backend.
+Start with local services, then allow approved external tools to acquire remote
+resources. Cloud-specific APIs and configuration remain outside the core.
+
+Keep the harness Kubernetes-inspired: generic admission, ownership, observed
+status and recovery through typed operations/effects. Resource accounting and
+cleanup must survive an agent stopping. Preserve data and authority when a
+resource change requires service replacement; do not silently restart workloads.
+Deliver after the first state/effect boundary and before expanding swarm fan-out;
+[S1](docs/SWARM-ROADMAP.md) holds the implementation dependencies and checks.
+This capability is planned, not implemented.
+
 ## ✓ Scoped web and collective tools
 
 Merged in #34 after local checks. Rebuild the pinned worker/browser images before

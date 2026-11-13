@@ -158,6 +158,7 @@ with interchangeable drivers; complete the remaining extractions incrementally.
 | P1 | U1 coordination UI and A2A visibility | Read existing lifecycle, requests and ownership; add projections as needed. No dependency on all G1/O1/Q1 work. |
 | P1 | W1 bounded schedules | Existing timers/admission, durable occurrence IDs and shared schedule-write authorization. Q1 before expanding team-wide fan-out; Replace deferred. |
 | Supporting | Q1 team admission; O1 ownership audit/fixes | Aggregate existing counters; extend ownership only for a demonstrated gap or a consumer changing resource lifetimes. |
+| P1, before more fan-out | S1 service resource requests and admission | Extend existing service operations with requested/effective capacity and operator-defined shapes; reserve aggregate node/team capacity before provisioning. Local backend first, cloud adapters later. |
 | P2 | U2 CUA; W2 workflow tools | Scoped browser/resource operations; validated recipes using existing spawn/wait/message primitives. |
 | P2 | M1 model adapters; C1–C3 summary strategies | Bounded reads and summary-call adapter enable C1 before general local tool execution; on/off plus model selector. |
 | P2 | L1 lenses/persona/SOUL configuration; L2/L3 reviewed improvement | Captured revisions, scoped tools, evaluation and admission; no new supervisor personality or learning lifecycle. |
@@ -351,6 +352,41 @@ interactive/decision work before workers and summaries, with fairness/aging.
 Priority cannot create capacity or bypass grants; test one-slot parent/child
 resolution. Increased unattended team fan-out needs Q1; a bounded W1 prototype
 can use existing budgets and slots without completing this later scheduling work.
+
+**S1: agents request service resources through tools.** Let an agent request,
+for example, a 24 GiB Minecraft container or an inference service with GPU access.
+Extend existing service operations with typed CPU, memory and accelerator requests;
+operator-defined shapes are optional presets. Separate compute size from image
+capabilities (`Lite`/`Full`), which currently fix memory at 512 MiB/2 GiB and cap
+every service at one CPU. Keep existing defaults compatible.
+
+Admit requests within configured capacity and grants; otherwise return a clear
+capacity result or use the existing durable approval path. Approval cannot create
+missing RAM or a GPU. Report requested/effective limits, accelerator availability
+and bounded utilization/pressure through inspection tools. Account for concurrent
+workers and services on the same backend. GPU access is an explicit device grant,
+not privileged mode or arbitrary device passthrough.
+
+Agents can also start a model server as an ordinary persistent service and call
+it through a scoped tool/MCP endpoint. Model selection, downloads, inference
+configuration and MCP wrapping belong to tools, with network/device grants as
+needed. This can ship before M1: calling a model as a tool does not require using
+it as Control's agent backend. No model-serving lifecycle belongs in the supervisor.
+
+Keep admission and ownership generic, with provisioning interpreted by replaceable
+backends. Agents choose approved tools; provider-specific cloud APIs, instance
+types and credentials stay in those tools/configuration. Borrow Kubernetes'
+intent/status/reconciliation boundary, without building a cloud scheduler. Adding
+a provider must not change pure core or the bot supervisor. Remote capacity and
+spend authorization are scoped to that backend.
+
+First deliver local resource requests, persisted effective limits and lifecycle
+accounting. Test concurrent/duplicate admission, unsupported CPU/GPU requests,
+restart reconciliation and cleanup after an agent stops. Release reservations on
+confirmed teardown; reconcile unknown provisioning outcomes visibly. Resizing an
+existing service must explicitly report live-update versus replacement support
+and preserve data and port/grant generation fences. Measure matched-load latency,
+CPU throttling and memory pressure before claiming an improvement from more RAM.
 
 | Placement | Responsibility |
 | --- | --- |
@@ -609,6 +645,8 @@ Task-specific game adapters remain in their granted workload containers.
 ## P2: model roles and local inference
 
 M1 defines separate captured selections for worker, lead, reviewer and compactor.
+S1 can independently expose an agent-started model service through tools/MCP;
+M1 concerns using a model to execute Control's own agent or summary attempts.
 Start with a bounded model request/result/usage interface usable by the summary
 worker, then add native API and configured local inference through Rust adapters.
 CLI providers continue to work. A provider choice does not change tools,
