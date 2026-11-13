@@ -26,6 +26,15 @@ and scratch directories. No job publishes
 an image or writes to a shared package or compiler cache. Base images remain
 immutable.
 
+Run `control doctor` before an improvement. When a build image is configured,
+it checks the image's declared lockfile hashes against the source checkout,
+without running a model or build container. Workspace build jobs repeat that
+check against their actual isolated files before launching the command. A stale
+image fails with a rebuild instruction instead of an opaque missing-crate error.
+Refresh the build environment after lockfile changes; updating Control's binary
+alone does not update an independently pinned build image. Legacy build images
+without this metadata must be rebuilt once.
+
 For a Control improvement, ask the agent to start a build-environment job with
 `timeout_seconds: 1800` and this command:
 
@@ -55,6 +64,9 @@ configuration with its own `cargoLocks` list and optional `extraPackages` or
 unsupported source types fail evaluation. Build/load the resulting image and set
 that node's `build-image-id`. This is a declared tool environment, not a special
 case that grants the agent authority over a particular repository.
+Each lock entry can specify `workspacePath`, such as `web/Cargo.lock`, to associate
+its hash with the path inside the task workspace. Otherwise its basename is used;
+paths must be unique. Workspaces absent from a particular task are skipped.
 
 Nix is used to construct the image. The image does not contain a Nix daemon or
 offer arbitrary package fetching during execution. Future environment requests

@@ -915,6 +915,20 @@ under existing maintainer/operator authority; neither a judge nor a learned skil
 can expand it. Add selectable reviewers with M1 availability checks before claiming
 independent multi-model review. Runtime registration never auto-installs agent code.
 
+Agreed delivery order: prove `/improve` source editing, declared-environment tests,
+read-only review and real draft-PR publication; then deliver deployment/restart
+tools (including a clean source checkout matching the installed revision),
+compaction hardening and generic MCP integration. Follow with versioned tool
+packages, proposal/activation/revocation, scoped discovery/execution and a measured
+two-agent reuse demonstration. Keep service CPU/RAM requests in S1's tool/adapter
+slice; a larger Docker VM alone does not change captured service limits.
+
+The 2026-11-14 isolated `/improve` trial reproduced a stale build-image dependency
+failure, then passed a real offline Cargo test and independent read-only judge
+after refreshing the image. This proves edit/build/review/artifact recovery, not
+remote publication: this node still needs its own GitHub credential binding for
+the real draft-PR step. The opt-in live test now supports that step explicitly.
+
 **Next tooling slice: TUI self-development parity.** The TUI already drives the
 shared workspace, service, review and draft-publication tools. Session work still
 uses external GitHub review/CI tooling, host-configured inference mounts and

@@ -1,12 +1,13 @@
 # An operator builds this declaration, then pins its immutable image ID. Agents
 # select that environment; they never evaluate repository Nix on the host.
 { pkgs
-, cargoLocks ? [ { lockFile = ../../Cargo.lock; } { lockFile = ../../web/Cargo.lock; } ]
+, cargoLocks ? [ { lockFile = ../../Cargo.lock; workspacePath = "Cargo.lock"; } { lockFile = ../../web/Cargo.lock; workspacePath = "web/Cargo.lock"; } ]
 , extraPackages ? [ ]
 , wasmBindgen ? pkgs.wasm-bindgen-cli_0_2_129
 }:
 let
-  vendors = map (lock: pkgs.rustPlatform.importCargoLock lock) cargoLocks;
+  lockPaths = map (lock: lock.workspacePath or (builtins.baseNameOf lock.lockFile)) cargoLocks;
+  vendors = map (lock: pkgs.rustPlatform.importCargoLock (builtins.removeAttrs lock [ "workspacePath" ])) cargoLocks;
   # Sharing immutable crate sources is safe; execution never publishes caches.
   # A duplicate name must point at the very same checksum-pinned source.
   vendor = pkgs.runCommand "control-build-vendor" { } ''
@@ -54,6 +55,7 @@ let
     immutableBase = true;
   });
 in
+assert builtins.length (pkgs.lib.unique lockPaths) == builtins.length lockPaths;
 assert pkgs.lib.all (lock:
   pkgs.lib.all (package: !(package ? source)
     || package.source == "registry+https://github.com/rust-lang/crates.io-index")
@@ -78,7 +80,13 @@ pkgs.dockerTools.buildLayeredImage {
       "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
       "PATH=/bin"
     ];
-    Labels."dev.control.environment" = "rust-wasm-build-v1";
+    Labels = {
+      "dev.control.environment" = "rust-wasm-build-v1";
+      "dev.control.build-locks" = builtins.toJSON (builtins.listToAttrs (map (lock: {
+        name = lock.workspacePath or (builtins.baseNameOf lock.lockFile);
+        value = builtins.hashFile "sha256" lock.lockFile;
+      }) cargoLocks));
+    };
     Cmd = [ "cargo" "--version" ];
   };
 }

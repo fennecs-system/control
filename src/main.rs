@@ -16,6 +16,7 @@ mod chat;
 mod child;
 mod claude;
 mod command_jobs;
+mod build_environment;
 mod collective;
 mod conversation;
 mod turn_context;
