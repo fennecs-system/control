@@ -248,6 +248,8 @@ pub(crate) fn worker_failure(bytes: &[u8]) -> &'static str {
     } else if message.contains("401")
         || message.contains("unauthorized")
         || message.contains("not logged in")
+        || message.contains("invalid api key")
+        || message.contains("authentication_failed")
     {
         "Codex account authentication was rejected. Refresh the host login and submit a new run."
     } else if message.contains("certificate") || message.contains("ssl") {

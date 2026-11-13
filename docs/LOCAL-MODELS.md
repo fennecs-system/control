@@ -108,6 +108,25 @@ indexes grow with history; this does not claim constant memory for all of Contro
 Source validation still scans the covered prefix. Disk cache retention/GC remains
 separate work; do not interpret "infinite" as free or unlimited storage.
 
+## Compare compactors explicitly
+
+`control models compare MODEL_ID [MODEL_ID ...]` makes paid/model calls only when
+invoked. It runs the same synthetic fixture through one flat summary and a binary
+tree (seven calls), reporting exact identifier recall, missing facts, elapsed time,
+reported usage and raw synthetic summaries. Unknown usage stays unknown. Inspect
+the summaries for contradictions and lost approvals: canary presence can mean a
+model quoted and rejected an injection, so it is not itself an injection failure.
+The fixture contains no live chat or credentials and never resumes bots.
+
+On 2026-11-13, the pinned Codex adapter (`gpt-6.1-sol`) retained all eight anchors
+in both modes (9.9 s flat, 49.0 s tree). Both preserved the pending approval and
+unverified completion claim. Tree output quoted the canary while rejecting its
+authority. This small cold test does not establish superiority over flat summaries
+or measure warm subtree reuse. Claude's readiness check returned HTTP 401 with the
+existing login; no Claude quality or latency result is claimed. Refresh its login
+before comparing. These are account/runtime-specific observations, not pricing
+recommendations.
+
 ## External llama.cpp service
 
 An optional Linux CPU image is declared in `tools/inference/image.nix` and pinned
