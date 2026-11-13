@@ -121,7 +121,7 @@ fn container_command_scoped(
             "--label",
             &format!("dev.control.attempt={name}"),
             "--label",
-            if name.starts_with("control-auth-check-") { crate::lifecycle::CHECK_LABEL } else { "dev.control.purpose=run" },
+            if name.starts_with("control-auth-check-") || name.starts_with("control-summary-") { crate::lifecycle::CHECK_LABEL } else { "dev.control.purpose=run" },
             "--user",
             &user,
             "--read-only",
@@ -163,6 +163,24 @@ fn permissions(command: &mut Command) {
     for setting in PERMISSIONS {
         command.args(["-c", setting]);
     }
+}
+
+/// A bounded text request reuses the worker's credential isolation, without
+/// workspace tools, MCP, project files or resumable provider state.
+pub(crate) fn text_command(image:&str,name:&str,workspace:&Path,node:&str,model:&str)->Result<Command,&'static str> {
+    let auth=Credentials::locate()?;
+    let root=workspace.parent().ok_or("Invalid summary workspace")?;
+    let policy=root.join("worker-seccomp.json");
+    fs::write(&policy,include_bytes!("../hosting/worker-seccomp.json")).map_err(|_|"Cannot prepare text sandbox")?;
+    sandbox_probe(image,root,&auth,&format!("control-auth-check-{name}"),&policy,node)?;
+    let mut command=container_command(image,name,workspace,&auth,&policy,node)?;
+    command.args(["codex","exec","--ignore-user-config","--ignore-rules","--ephemeral","--skip-git-repo-check","--json","--model",model]);
+    permissions(&mut command);
+    for feature in ["shell_tool","apps","multi_agent","browser_use","computer_use","code_mode","js_repl","view_image","sleep_tool","skill_search","skill_mcp_dependency_install","workspace_dependencies"] {
+        command.args(["--disable",feature]);
+    }
+    command.args(["-c","web_search=\"disabled\"","-c","agents.enabled=false","-c","project_doc_max_bytes=0","-"]);
+    Ok(command)
 }
 
 fn sandbox_probe(

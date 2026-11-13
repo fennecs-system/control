@@ -12,6 +12,7 @@ pub(crate) fn endpoint() -> Endpoint {
             output_bytes: 8192,
         },
         timeout_seconds: 30,
+        cli: None,
     }
 }
 #[test]

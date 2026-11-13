@@ -51,6 +51,18 @@ fn credential() -> io::Result<PathBuf> {
 pub fn credentials_ready() -> io::Result<()> {
     credential().map(|_| ())
 }
+
+pub(crate) fn text_command(image:&str,name:&str,workspace:&Path,node:&str,model:&str)->io::Result<Command> {
+    let auth=credential()?;
+    let meta=fs::symlink_metadata(&auth)?;
+    let mut command=base(name,node,meta.uid(),meta.gid());
+    // Check resources are supervised by the caller rather than run reconciliation.
+    command.args(["--interactive","--tmpfs",&format!("/home/agent/.claude:rw,nosuid,uid={},gid={},size=32m",meta.uid(),meta.gid()),
+        "--mount",&mount(&auth,"/home/agent/.claude/.credentials.json",true)?,"--mount",&mount(workspace,"/workspace",true)?,image,
+        "claude","--print","--output-format","stream-json","--verbose","--no-session-persistence","--restricted","--tools","",
+        "--disable-slash-commands","--setting-sources","","--strict-mcp-config","--mcp-config","{\"mcpServers\":{}}","--permission-mode","dontAsk","--model",model]);
+    Ok(command)
+}
 fn mount(path: &Path, target: &str, readonly: bool) -> io::Result<String> {
     let path = path
         .to_str()
@@ -75,7 +87,7 @@ fn base(name: &str, node: &str, uid: u32, gid: u32) -> Command {
         &format!("dev.control.attempt={name}"),
         "--label",
         // Login and offline checks are supervised by their command, not run reconciliation.
-        if name.starts_with("control-claude-login-") || name.starts_with("control-claude-probe-") { crate::lifecycle::CHECK_LABEL } else { "dev.control.purpose=run" },
+        if name.starts_with("control-claude-login-") || name.starts_with("control-claude-probe-") || name.starts_with("control-summary-") { crate::lifecycle::CHECK_LABEL } else { "dev.control.purpose=run" },
         "--user",
         &format!("{uid}:{gid}"),
         "--read-only",

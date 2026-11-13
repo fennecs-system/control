@@ -623,7 +623,9 @@ fn main() -> std::io::Result<()> {
     storage::initialize()?;
     let _state_lock = storage::lock()?;
     let access = Arc::new(access::Access::load()?);
-    let state = Arc::new(Mutex::new(storage::load()?));
+    let mut loaded=storage::load()?;
+    if let Err(error)=model_calls::recover() {loaded.runtime.notice=format!("Text-call cleanup needs inspection: {error}");}
+    let state = Arc::new(Mutex::new(loaded));
     listener.set_nonblocking(true)?;
     shutdown::install()?;
     let preview_state=state.clone();

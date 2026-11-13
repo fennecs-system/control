@@ -3,9 +3,9 @@
 Control calls a configured text endpoint; inference runs in a separate service or
 tool container. It does not embed llama.cpp, download weights or grant a
 summarizer tools. The same derived history view feeds Codex and Claude chats.
-This does not replace either CLI's private context handling. CLI models as
-summarizers, general local tool-using agents and `/model` selection are separate
-follow-up work.
+This does not replace either CLI's private context handling. The same summary
+worker also accepts explicitly selected Claude/Codex CLI text adapters. General
+local tool-using agents and `/model` selection are separate follow-up work.
 
 For a future local agent adapter, Control owns input assembly, tree compaction
 and context-fit admission; the inference server supplies generation. Server KV
@@ -22,6 +22,16 @@ In **Manage → Models & providers**, add a local text model with:
 - a weights/runtime revision, ideally the GGUF SHA256 plus runtime revision;
 - declared context/output token limits, input/output byte ceilings and an
   explicit per-request timeout. There is no retry or cloud fallback.
+
+For CLI summarizers, choose the Codex/Claude adapter and leave the URL empty.
+They reuse the pinned worker image and existing login isolation, with no project
+mount or Control MCP tools. Claude's advertised tools are checked against an
+empty list; Codex execution/integration features are disabled and any observed
+tool or unknown item rejects the result. CLI output is byte-bounded; its output
+token setting is an input reserve, not a claim that Control can impose an
+in-flight provider token ceiling. Failed calls retain private ownership records
+for recovery. Recovery only stops a verified matching container whose host owner
+PID is gone; a reused PID conservatively defers cleanup.
 
 Choose that model for compaction, enter the exact chat IDs to process, and enable
 automatic summaries. An empty chat list processes nothing. These operator
