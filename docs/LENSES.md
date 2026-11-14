@@ -6,7 +6,7 @@ Use **Lenses** to create/edit definitions and inspect their effective instructio
 Select them in a chat's lens picker, or use terminal commands:
 
 ```text
-/use engineering autonomy investigation
+/use engineering coordination autonomy investigation
 /context
 ```
 
@@ -14,6 +14,13 @@ The same selection is available through `control.chat.lenses`. Changes affect
 future operator messages; queued runs, spawned workers and automatic continuations
 retain their captured revisions. Editing the library never changes an active
 attempt's instructions. `/use none` clears the selection for future messages.
+
+Built-in lenses are versioned. On load, a node adds missing built-ins and appends
+a newer built-in revision when its current copy is still the built-in revision it
+last installed. A local edit is a newer local revision, so it is never replaced;
+earlier revisions stay available to captured runs. When changing a built-in, add its
+previous shipped definition to `crates/context/src/builtin-lens-history.json`, so
+unedited copies from older nodes are recognised and upgraded.
 The browser preference only chooses the starting selection for a new chat.
 
 ## Task autonomy
@@ -25,6 +32,42 @@ its rationale rather than treating every guard rejection as a reason to wait
 forever. Host-enforced permissions, mandatory safety constraints, cancellation
 and explicit user limits remain binding. The lens does not authorize broader
 access or consequential actions beyond the task's mandate.
+
+## Coordination and planning
+
+The optional `coordination` lens helps a team turn a shared outcome into small,
+verifiable deliverables with accountable owners. Roles can change as work changes.
+It asks agents to minimize dependencies, distinguish prerequisites from optional
+precautions, and retain a blocker's producer and release signal in existing notes
+and handoffs. A worker should check for circular waits and pursue independent
+authorized work while another dependency is pending.
+
+Agents coordinate directly with affected peers, share useful evidence and
+dependency releases in the team room, and keep routine relaying and repeated
+no-change messages out of the steering chat. Changed evidence or repeated lack
+of useful results calls for revisiting the plan. Healthy long-running work can
+still wait on callbacks without a new deadline or forced intervention.
+
+Roles and claims own shared deliverables, not each agent's basic needs: every
+agent keeps itself fed, safe and supplied, and its own caution is not a
+dependency. Agents wait only on a producer that can act, and when that producer is
+blocked, offline or slow, or several peers wait on one, they produce the input
+themselves or take a reversible step. When nobody can unblock the goal they ask
+the operator with options, and apply standing risk guidance to similar reversible
+steps.
+
+Select **Coordination & planning** in the lens picker, or use `/use coordination`.
+For a team, select **Swarm** (`/use swarm`), which includes `coordination`,
+`autonomy` and `investigation`: the first run with coordination alone showed
+agents sleeping behind self-imposed safety guards. This is versioned guidance over existing tools, not a central
+planner, permission grant or guarantee against deadlock. Its ownership and
+blocker advice uses advisory room claims (see
+[Room notifications](ROOM-NOTIFICATIONS.md#claims)); claims only help when
+agents check them. Existing
+chats and running workers are not opted in when the preset is added. Select it
+before launching the team; spawned work and continuations keep captured revisions.
+Evaluate useful actions, dependency releases, repeated messages and interventions
+in a separate opt-in run before claiming an improvement.
 
 ## Bounded investigation
 

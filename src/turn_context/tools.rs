@@ -20,7 +20,7 @@ fn payload_schema() -> Value {
 fn disposition_schema() -> Value {
     json!({"oneOf":[
         {"type":"object","properties":{"kind":{"type":"string","enum":["continue","done"]}},"required":["kind"],"additionalProperties":false},
-        {"type":"object","properties":{"kind":{"const":"wait"},"topics":{"type":"array","maxItems":16,"items":{"type":"string","maxLength":128},"description":"Choose only relevant dependencies from wake_topics. An explicit wait suspends periodic check-ins. Omit recheck_seconds to sleep until a selected event, urgent failure, or direct message; empty topics waits for urgent failures or direct input."},"recheck_seconds":{"type":["integer","null"],"minimum":1,"maximum":u32::MAX,"description":"Optional fallback when a callback cannot establish readiness. Omit/null for event-only waiting; no implicit polling deadline."}},"required":["kind","topics"],"additionalProperties":false}
+        {"type":"object","properties":{"kind":{"const":"wait"},"topics":{"type":"array","maxItems":16,"items":{"type":"string","maxLength":128},"description":"Choose only relevant dependencies from wake_topics, or claim:<room>/<key> to wake once when that live claim resolves as done, released or abandoned; progress updates do not wake. A key nobody has claimed cannot be awaited. An explicit wait suspends periodic check-ins. Empty topics wake on urgent failures or direct messages; selected topics wake only on those topics and urgent failures, retaining other messages for the next turn, so include this chat's conversation topic to be woken by direct messages. Omit recheck_seconds to sleep until then."},"recheck_seconds":{"type":["integer","null"],"minimum":1,"maximum":u32::MAX,"description":"Optional fallback when a callback cannot establish readiness. Omit/null for event-only waiting; no implicit polling deadline."}},"required":["kind","topics"],"additionalProperties":false}
     ]})
 }
 impl AttemptTools for Tools {
@@ -135,16 +135,21 @@ fn handle(
         .as_bytes(),
     );
     let result = if name == "control_turn_handoff" {
-        let handoff:Handoff=serde_json::from_value(args.clone()).map_err(|_|err("Expected a strict handoff payload, base revision, processed receipts and disposition"))?;
+        let mut handoff:Handoff=serde_json::from_value(args.clone()).map_err(|_|err("Expected a strict handoff payload, base revision, processed receipts and disposition"))?;
         if let control_context::turn_mailbox::Disposition::Wait { topics, .. } =
-            &handoff.disposition
+            &mut handoff.disposition
         {
             let allowed = crate::bots::wait_topics(state, &chat.id);
-            if topics.iter().any(|topic| !allowed.contains(topic))
-            {
-                return Err(err(
-                    "Wait can only narrow existing wake_topics; it cannot create subscriptions",
-                ));
+            for topic in topics.iter_mut() {
+                // A claim wait records the revision it observed, so a change
+                // published before the wait is admitted still releases it.
+                if let Some(name) = topic.strip_prefix("claim:") {
+                    *topic = crate::rooms::claims::wait_topic(state, &chat.id, name).map_err(err)?;
+                } else if !allowed.contains(topic) {
+                    return Err(err(
+                        "Wait can only narrow existing wake_topics or name claim:<room>/<key>; it cannot create other subscriptions",
+                    ));
+                }
             }
         }
         mailbox.stage(key.clone(), handoff, revision).map_err(err)?;

@@ -205,6 +205,7 @@ pub const TOOLS: [Tool; 23] = [
             "control_room_watch",
             "control_room_notifications",
             "control_room_ack",
+            "control_room_claim",
         ],
         execution: "local Rust / scoped room broker",
         surface: "rooms / MCP / room-linked agents",

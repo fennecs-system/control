@@ -25,3 +25,16 @@ fn timeouts_answer_the_exact_request_id() {
     assert!(request_id(r#"{"method":"notify","params":{"id":3}}"#).is_none());
     assert!(response_id("null").is_none());
 }
+#[test]
+fn undeliverable_requests_get_escaped_errors_and_keep_framing() {
+    let reply = error_reply("7", "lost \"x\"\n\\");
+    assert_eq!(
+        reply,
+        r#"{"jsonrpc":"2.0","id":7,"error":{"code":-32000,"message":"lost \"x\"\u000a\\"}}"#
+    );
+    let mut input = io::Cursor::new(b"tail of a large line\n{\"id\":2}\n".to_vec());
+    skip_line(&mut input).unwrap();
+    let mut next = String::new();
+    input.read_line(&mut next).unwrap();
+    assert_eq!(request_id(next.trim()).as_deref(), Some("2"));
+}

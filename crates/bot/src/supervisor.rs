@@ -55,6 +55,9 @@ pub trait Info: Clone + Debug + PartialEq {
     fn merge(&mut self, newer: &Self) -> bool;
     /// Failures may interrupt an idle wait; ordinary telemetry does not.
     fn urgent(&self) -> bool { false }
+    /// Input addressed to this bot releases a wait that selected no topics. A
+    /// wait that selected topics keeps it pending for the next turn instead.
+    fn direct(&self) -> bool { false }
 }
 
 /// Bounds automatic turns: a minimum gap between turns and a cap per window.
@@ -202,6 +205,11 @@ struct Bot<I> {
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 struct Wait { topics: Vec<Topic>, until: Option<u64> }
+impl Wait {
+    fn releases<I: Info>(&self, topic: &Topic, info: &I) -> bool {
+        info.urgent() || self.topics.contains(topic) || (info.direct() && self.topics.is_empty())
+    }
+}
 impl<I: Info> Bot<I> {
     /// Admits a reason. Replays at or below the topic cursor are ignored. When
     /// the pending set is full a new distinct reason is counted as dropped and
@@ -425,11 +433,13 @@ impl<I: Info> Supervisor<I> {
                     // An explicit dependency wait supersedes idle check-ins,
                     // including timers accumulated during the active turn.
                     bot.pending.retain(|reason| !matches!(reason, Reason::Continue | Reason::Timer));
+                    // Evidence admitted before the wait releases it at once,
+                    // so registering a wait late never loses its wake.
+                    let wait = Wait{topics,until};
                     bot.wait = (!bot.pending.iter().any(|reason| match reason {
-                        Reason::Info{topic,info,..} => info.urgent() || topics.contains(topic),
-                        Reason::Timer => false,
+                        Reason::Info{topic,info,..} => wait.releases(topic, info),
                         _ => false,
-                    })).then_some(Wait{topics,until});
+                    })).then_some(wait);
                 }
             }
             Event::Processed { bot:id,topic,through } => {
@@ -463,7 +473,7 @@ impl<I: Info> Supervisor<I> {
                     if bot.definition.subscribes(&topic) && !bot.own(from.as_ref()) {
                         if bot.cursors.get(&key).is_none_or(|seen| cursor > *seen)
                             && bot.processed.get(&key).is_none_or(|seen| cursor > *seen)
-                            && bot.wait.as_ref().is_some_and(|wait| info.urgent() || wait.topics.contains(&topic)) {
+                            && bot.wait.as_ref().is_some_and(|wait| wait.releases(&topic, &info)) {
                             bot.wait = None;
                         }
                         bot.accept(Some((key.clone(), cursor)), Reason::Info { topic: topic.clone(), through: cursor, info: info.clone() });

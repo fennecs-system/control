@@ -26,6 +26,12 @@ WASM tooling fix shipped in #143; both platform checks passed before merging.
   Idle peer wakes use existing bot approval, budgets, pause and stop intent.
 - [x] **Steering-chat relay removal:** workers can coordinate directly with
   siblings; the root conversation need not be a bot or relay their routine work.
+- [x] **Room claims and selective waits:** advisory, revisioned ownership per task
+  room with operator-only reclaim of abandoned claims. Bots can wait on a claim
+  without lost wakes, and selective waits retain unrelated direct messages.
+  See [ROOM-NOTIFICATIONS.md](ROOM-NOTIFICATIONS.md#claims).
+- [x] **MCP bridge transport:** mailbox I/O errors on shared mounts answer the
+  affected call instead of closing the provider session.
 - [x] **R2 explicit callback channel (#146):** opt-in watches deliver application
   notifications separately from diagnostic stdout/stderr; process exits remain
   host-observed facts. Default callback reads omit logs; explicit diagnostic

@@ -417,6 +417,10 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
                 "/room" | "/propose" | "/review" | "/request" | "/decide" => {
                     state.collective.action(path, &f)
                 }
+                "/room-claim-release" => {
+                    rooms::claims::operator_action(state, &f);
+                    "/?view=rooms"
+                }
                 "/spawn" => {
                     if let Some(task) = f.get("objective").filter(|s| !s.trim().is_empty()) {
                         state.agents.push(format!(
@@ -429,7 +433,7 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
                 }
                 _ => "/",
             };
-            let thread_location = (path == "/room").then(|| f.get("channel"))
+            let thread_location = matches!(path, "/room" | "/room-claim-release").then(|| f.get("channel"))
                 .flatten().filter(|room| rooms::valid(room))
                 .map(|room| format!("/?view=rooms&channel={room}"));
             let location = thread_location.as_deref().unwrap_or(location);
