@@ -307,7 +307,7 @@ fn restart_fences_running_and_cancelling_without_replaying_or_publishing() {
         crate::history::activity(
             state.runtime.runs[1].chat_id.as_deref(),
             &state.runtime.runs[1].attempts[0]
-        )[0]
+        ).unwrap()[0]
         .status,
         "interrupted",
         "recorded in the journal"

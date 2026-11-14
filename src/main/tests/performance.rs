@@ -117,6 +117,46 @@ fn hot_paths() {
     }
 }
 #[test]
+#[ignore = "explicit inline/archived history-read timing; no credentials or model calls"]
+fn history_reads() {
+    let rounds = std::env::var("CONTROL_HISTORY_PROFILE_ROUNDS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(10)
+        .clamp(1, 1000);
+    for messages in [10, 100, 500] {
+        for archived in [false, true] {
+            let mut state = fixture(messages, messages * 2);
+            if archived {
+                for run in state
+                    .runtime
+                    .runs
+                    .iter_mut()
+                    .filter(|run| run.chat_id.as_deref() == Some("benchmark-chat"))
+                {
+                    crate::history::archive_run(run).unwrap();
+                }
+            }
+            let detail = chat::detail(&state, "benchmark-chat").unwrap().to_string();
+            let mut samples = Vec::new();
+            for batch in 0..10 {
+                let start = Instant::now();
+                for _ in 0..rounds {
+                    black_box(chat::detail(black_box(&state), "benchmark-chat").unwrap());
+                }
+                if batch > 0 {
+                    samples.push(start.elapsed().as_nanos() / rounds as u128);
+                }
+            }
+            samples.sort_unstable();
+            println!(
+                "{}",
+                serde_json::json!({"workload":"history_detail","messages":messages,"archived":archived,"median_ns":samples[4],"samples":samples,"sha256":fingerprint(&detail)})
+            );
+        }
+    }
+}
+#[test]
 #[ignore = "explicit release-mode identity snapshot timing; no credentials or container calls"]
 fn ownership_snapshots() {
     let mut state = fixture(500, 0);

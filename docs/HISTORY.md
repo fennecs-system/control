@@ -63,6 +63,18 @@ Each phase is profiled with the 15-turn workload (`fifteen_turn_conversations_wo
 
 ## Turn continuity
 
+Activity reads distinguish a successful empty record from missing, invalid or
+unavailable evidence. The API's hydrated attempt view adds `history_error` on a
+failed read and retains its `journal` reference; successful responses keep their
+existing shape. Web and TUI show the warning even when tool details are folded.
+Legacy handoff context, delegated feedback and outbound notifications also expose
+read failures when consuming activity. They do not invent a tool event or infer
+that no changes occurred. A later successful read clears the warning in the view;
+reads do not modify the attempt, published checkpoint or processing cursors.
+Error messages name the logical journal and entry, with a bounded cause rather
+than quoting corrupt contents. Existing startup hydration still rejects missing
+run text or handoff state; this does not weaken that recovery boundary.
+
 Codex and Claude CLI attempts start fresh processes. Their shared conversation
 projection supplies context; neither provider's native session is the source of
 truth. At admission, ordinary agents and bots use the same task view: typed
