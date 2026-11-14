@@ -61,8 +61,9 @@ fn render(shared: &Arc<Mutex<State>>) -> io::Result<String> {
     let state = shared.lock().map_err(|_| fail("State unavailable"))?;
     let services = listed(&state);
     let cards = services.iter().map(card).collect::<String>();
+    let compute = compute_panel(&state.services);
     let empty = if services.is_empty() { "<p class='muted'>No persistent services yet. Agents start them from chat.</p>" } else { "" };
-    let page = crate::render(&state, "tool-page", "none", &format!("<h2>Persistent services</h2><div data-live-src='/tools/services/live'>{empty}{cards}</div>"));
+    let page = crate::render(&state, "tool-page", "none", &format!("<h2>Persistent services</h2>{compute}<div data-live-src='/tools/services/live'>{empty}{cards}</div>"));
     Ok(page.replacen("</head>", "<script type='module' src='/tool-window/chat-bootstrap.js'></script></head>", 1))
 }
 fn listed(state: &State) -> Vec<Service> {
@@ -177,6 +178,21 @@ fn usage(live: &Live) -> String {
     format!("{stats}<table><thead><tr><th>PID</th><th>User</th><th>Command</th></tr></thead><tbody>{rows}</tbody></table>")
 }
 
+fn compute_label(shape: Option<compute::Shape>, limits: compute::Limits) -> String {
+    let memory = if limits.memory_bytes.is_multiple_of(compute::GIB) { format!("{} GiB", limits.memory_bytes / compute::GIB) } else { format!("{} MiB", limits.memory_bytes / (1024 * 1024)) };
+    format!("{} · {memory} RAM · {} CPU{}", shape.map_or("default", compute::Shape::name), limits.cpus, if limits.cpus == 1 { "" } else { "s" })
+}
+
+fn compute_panel(services: &[Service]) -> String {
+    let used = compute::reserved(services);
+    let capacity = compute::CAPACITY;
+    let rows = compute::SHAPES.map(|shape| {
+        let limits = shape.limits();
+        format!("<tr><td><code>{}</code></td><td>{} GiB</td><td>{}</td></tr>", shape.name(), limits.memory_bytes / compute::GIB, limits.cpus)
+    }).join("");
+    format!("<section class='record service-record'><h3>Service resources</h3><p>{} MiB of {} GiB RAM · {} of {} CPUs reserved</p><table><thead><tr><th>Shape</th><th>Memory limit</th><th>CPU limit</th></tr></thead><tbody>{rows}</tbody></table><p class='muted'>Ask an agent to use a shape when starting a service. Defaults: Lite 512 MiB, Full 2 GiB; 1 CPU. To change size, stop and replace in the same chat; /workspace is retained.</p><p class='muted'>This budget covers Control services only. Allow headroom for models, workers and the host. Reserved limits are separate from live usage below.</p></section>", used.memory_bytes / (1024 * 1024), capacity.memory_bytes / compute::GIB, used.cpus, capacity.cpus)
+}
+
 fn card(service: &Service) -> String {
     let resource = &service.resource;
     let command = service.command.0.lines().next().unwrap_or_default().chars().take(160).collect::<String>();
@@ -202,8 +218,9 @@ fn card(service: &Service) -> String {
     } else {
         String::new()
     };
+    let compute = compute_label(service.shape, service.limits());
     format!(
-        "<article class='record service-record'><h3><code>{}</code></h3><p>{} · {:?} profile · {storage} · {lease}</p><p>{conversation}{container}image {}</p>{live}{diagnostic}{action}</article>",
+        "<article class='record service-record'><h3><code>{}</code></h3><p>{} · {compute}</p><p>{:?} image · {storage} · {lease}</p><p>{conversation}{container}image {}</p>{live}{diagnostic}{action}</article>",
         crate::escape(&command),
         phase(&resource.phase),
         service.profile,

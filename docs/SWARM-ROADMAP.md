@@ -432,6 +432,15 @@ operator-defined shapes are optional presets. Separate compute size from image
 capabilities (`Lite`/`Full`), which currently fix memory at 512 MiB/2 GiB and cap
 every service at one CPU. Keep existing defaults compatible.
 
+The first local slice delivers optional `small` (2 GiB/1 CPU), `medium`
+(4 GiB/2 CPUs) and `large` (8 GiB/2 CPUs) shapes through the existing service
+start/status tools, persisted immutable presets, atomic 20 GiB/8 CPU service
+admission and matching UI limits. Omitting a shape preserves image defaults.
+Replacement reuses the chat's retained workspace. This does not complete S1:
+operator-configurable pools/presets, raw CPU/RAM requests, worker accounting,
+device grants and backend provisioning remain later slices. No core lifecycle,
+provider adapter or scheduler changes are needed for these local presets.
+
 Admit requests within configured capacity and grants; otherwise return a clear
 capacity result or use the existing durable approval path. Approval cannot create
 missing RAM or a GPU. Report requested/effective limits, accelerator availability

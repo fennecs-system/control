@@ -1,6 +1,7 @@
 //! Chat-owned, bounded offline services. Attempts only attach; a pure core
 //! reducer decides effects, and one supervisor interprets durable intents.
 mod commands;
+mod compute;
 mod page;
 pub use page::http;
 #[cfg(test)]
@@ -92,6 +93,8 @@ pub struct Service {
     workspace_exec: bool,
     #[serde(default, skip_serializing_if = "crate::worker_profile::Profile::is_lite")]
     profile: crate::worker_profile::Profile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    shape: Option<compute::Shape>,
     #[serde(default, skip_serializing_if = "Storage::is_memory")]
     storage: Storage,
     #[serde(default)]
@@ -143,7 +146,7 @@ impl Service {
         Grant { id:self.resource.id.clone(),owner:self.resource.owner.clone(),generation:self.resource.generation }
     }
     pub(crate) fn binding_snapshot(&self)->Self {
-        Self {resource:self.resource.clone(),origin:self.origin.clone(),actor:self.actor.clone(),command:self.command.clone(),uid:self.uid,gid:self.gid,workspace_exec:self.workspace_exec,profile:self.profile,storage:self.storage,diagnostic:String::new(),output:String::new(),exit_code:None,executions:Vec::new(),command_receipts:Vec::new()}
+        Self {resource:self.resource.clone(),origin:self.origin.clone(),actor:self.actor.clone(),command:self.command.clone(),uid:self.uid,gid:self.gid,workspace_exec:self.workspace_exec,profile:self.profile,shape:self.shape,storage:self.storage,diagnostic:String::new(),output:String::new(),exit_code:None,executions:Vec::new(),command_receipts:Vec::new()}
     }
     pub(crate) fn owned_by(&self, node: &NodeId, chat: &str, actor: &Actor) -> bool {
         self.resource.owner.node == *node
@@ -160,14 +163,17 @@ impl Service {
     fn readonly_root(&self) -> bool {
         self.storage == Storage::Memory && self.profile.readonly_root()
     }
+    fn limits(&self) -> compute::Limits { compute::limits(self.shape, self.profile) }
     fn summary(&self) -> Value {
-        json!({"service_id":self.resource.id,"platform":format!("linux/{}", std::env::consts::ARCH),"phase":self.resource.phase,"scope":self.resource.scope,"storage":self.storage,"workspace":workspace::Workspace::of(self).map(|workspace|json!({"path":"/workspace","volume":workspace.name(),"retained_on_removal":true,"shared_with":"same_chat_services"})),"workspace_executable":self.workspace_exec,"expires_unix":(!self.resource.lease.is_until_stopped()).then(||self.resource.lease.expires()),"until_stopped":self.resource.lease.is_until_stopped(),"diagnostic":self.diagnostic,"output":self.output,"exit_code":self.exit_code,"output_limit_bytes":OUTPUT,"executions":self.executions.iter().map(|e|e.brief()).collect::<Vec<_>>()})
+        json!({"service_id":self.resource.id,"platform":format!("linux/{}", std::env::consts::ARCH),"shape":self.shape,"limits":self.limits(),"phase":self.resource.phase,"scope":self.resource.scope,"storage":self.storage,"workspace":workspace::Workspace::of(self).map(|workspace|json!({"path":"/workspace","volume":workspace.name(),"retained_on_removal":true,"shared_with":"same_chat_services"})),"workspace_executable":self.workspace_exec,"expires_unix":(!self.resource.lease.is_until_stopped()).then(||self.resource.lease.expires()),"until_stopped":self.resource.lease.is_until_stopped(),"diagnostic":self.diagnostic,"output":self.output,"exit_code":self.exit_code,"output_limit_bytes":OUTPUT,"executions":self.executions.iter().map(|e|e.brief()).collect::<Vec<_>>()})
     }
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Input {
     command: CommandText,
+    #[serde(default)]
+    shape: Option<compute::Shape>,
     #[serde(default = "default_lease")]
     lease_seconds: i64,
     #[serde(default)]
@@ -222,7 +228,7 @@ pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
     let Some(id) = id else {
         return if list {
             Ok(
-                json!({"services":s.services.iter().filter(owned).filter(|service|service.resource.phase.reserves_capacity()).chain(s.services.iter().rev().filter(owned).filter(|service|!service.resource.phase.reserves_capacity()).take(10)).map(Service::summary).collect::<Vec<_>>()}),
+                json!({"compute":compute::status(&s.services),"services":s.services.iter().filter(owned).filter(|service|service.resource.phase.reserves_capacity()).chain(s.services.iter().rev().filter(owned).filter(|service|!service.resource.phase.reserves_capacity()).take(10)).map(Service::summary).collect::<Vec<_>>()}),
             )
         } else {
             Err(fail("service_id is required"))
@@ -360,10 +366,11 @@ fn admit_profile(
     .map_err(fail)?;
     if let Some(existing) = s.services.iter().find(|service| service.resource.id == id) {
         if existing.command.0 != input.command.0
+            || existing.shape != input.shape
             || existing.resource.lease.seconds() != lease.seconds()
             || match existing.storage { Storage::Disk { limit_mb } | Storage::Workspace { limit_mb } => limit_mb != input.storage_limit_mb, Storage::Memory => input.storage_limit_mb.is_some() }
         {
-            return Err(fail("Request identity already has a different command or storage policy"));
+            return Err(fail("Request identity already has a different command, shape or storage policy"));
         }
         return Ok(existing.summary());
     }
@@ -377,6 +384,7 @@ fn admit_profile(
             "Service capacity reached; stop an owned service before starting more",
         ));
     }
+    compute::admit(&s.services, compute::limits(input.shape, profile))?;
     let actor = run.actor.clone();
     let origin = Origin {
         run: run.id.clone().try_into().map_err(fail)?,
@@ -412,6 +420,7 @@ fn admit_profile(
         gid: unsafe { libc::getgid() },
         workspace_exec: true,
         profile,
+        shape: input.shape,
         storage: Storage::Workspace { limit_mb: input.storage_limit_mb },
         diagnostic: String::new(),
         output: String::new(),
@@ -568,8 +577,8 @@ fn verify<'a>(service: &'a Service, inspection: &Inspection) -> io::Result<Verif
         || inspection.user != format!("{}:{}", service.uid, service.gid)
         || inspection.caps != ["ALL"]
         || !inspection.security.iter().any(|s| s == "no-new-privileges")
-        || inspection.memory != service.profile.service_memory()
-        || inspection.cpu != 1_000_000_000
+        || inspection.memory != service.limits().memory_bytes
+        || inspection.cpu != service.limits().cpus * 1_000_000_000
         || inspection.pids != service.profile.service_pids()
         || inspection.tmpfs != expected_tmpfs
         || match &inspection.storage_opts {
@@ -703,8 +712,8 @@ impl Engine for Docker {
             "--cap-drop=ALL".into(),
             "--security-opt=no-new-privileges".into(),
             format!("--pids-limit={}", service.profile.service_pids()),
-            format!("--memory={}", service.profile.service_memory()),
-            "--cpus=1".into(),
+            format!("--memory={}", service.limits().memory_bytes),
+            format!("--cpus={}", service.limits().cpus),
             "--log-driver=local".into(),
             "--log-opt=max-size=1m".into(),
             "--log-opt=max-file=2".into(),
