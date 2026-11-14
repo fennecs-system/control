@@ -60,6 +60,7 @@ mod spawning;
 mod session_http;
 mod shutdown;
 mod live_updates;
+mod http_admission;
 mod mailbox_wake;
 mod storage;
 mod tool_catalog;
@@ -231,6 +232,7 @@ fn body_length(header: &str) -> Body {
 fn read_until(stream: &mut TcpStream, data: &mut Vec<u8>, deadline: std::time::Instant, limit: usize, done: impl Fn(&[u8]) -> bool) -> bool {
     let mut buf = [0; 4096];
     while !done(data) {
+        if shutdown::requested() { return false; }
         let Some(left) = deadline.checked_duration_since(std::time::Instant::now()).filter(|d| !d.is_zero()) else { return false };
         let _ = stream.set_read_timeout(Some(left.min(std::time::Duration::from_secs(3))));
         match stream.read(&mut buf) {
@@ -650,18 +652,17 @@ fn main() -> std::io::Result<()> {
     let ports = ports::supervise(state.clone());
     println!("control · {} · run ./target/release/control open in another terminal to sign in", config::server_url());
     let mut listener_error = None;
-    let mut requests: Vec<std::thread::JoinHandle<()>> = Vec::new();
+    let mut requests = http_admission::Requests::new();
     while !shutdown::requested() {
         match listener.accept() {
             Ok((stream, _)) => {
                 if shutdown::requested() { break; }
-                // Accepted sockets can inherit nonblocking mode on BSD hosts.
-                if stream.set_nonblocking(false).is_err() { continue; }
-                let _ = stream.set_nodelay(true);
                 let state = state.clone();
                 let access = access.clone();
-                requests.retain(|request| !request.is_finished());
-                requests.push(std::thread::spawn(move || handle(stream, state, access)));
+                if let Err(error) = requests.dispatch(stream, move |stream| handle(stream, state, access)) {
+                    listener_error = Some(error);
+                    shutdown::request();
+                }
             }
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
             Err(error) => {
@@ -679,14 +680,13 @@ fn main() -> std::io::Result<()> {
     let _=preview_restore.join();
     // Already-admitted HTTP tool calls have their own bounded waits. Let those
     // handlers finish too before the final state save and process exit.
-    let mut request_failed = false;
-    for request in requests { request_failed |= request.join().is_err(); }
+    let requests_result = requests.join();
     let state = state.lock().map_err(|_| std::io::Error::other("State unavailable during shutdown; retained attempts require inspection on restart."))?;
     storage::save(&state)?;
     stopped?;
     if service_failed { return Err(std::io::Error::other("Service supervisor stopped unexpectedly; inspect retained service identities.")); }
     if port_failed { return Err(std::io::Error::other("Port supervisor stopped unexpectedly; inspect retained port approvals.")); }
-    if request_failed { return Err(std::io::Error::other("A request stopped unexpectedly during shutdown; inspect node state before restarting.")); }
+    requests_result?;
     match listener_error { Some(error) => Err(error), None => Ok(()) }
 }
 
