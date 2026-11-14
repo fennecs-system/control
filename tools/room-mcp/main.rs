@@ -22,8 +22,8 @@ const LOG_LIMIT: u64 = 65536;
 /// The latest exchange step, overwritten each time, so a stalled session shows
 /// whether the provider or the host stopped answering.
 const TRACE: &str = "/workspace/.control-room-mcp.last";
-/// Room for the envelope `{"nonce":"<ns>-<n>","request":…}` around a request.
-const ENVELOPE_OVERHEAD: usize = 68;
+/// Versioned envelope with a maximal u128 timestamp and u64 sequence number.
+const ENVELOPE_OVERHEAD: usize = 95;
 const MAX_REQUEST: usize = mailbox_limits::REQUEST_ENVELOPE_BYTES - ENVELOPE_OVERHEAD;
 const MAX_RESPONSE: usize = 512 * 1024;
 /// How long a request may wait for the host before it is answered with an error.
@@ -68,7 +68,28 @@ fn member(text: &str, key: &str) -> Option<String> {
             b':' if depth == 1 => {
                 if key_start == Some(key) {
                     let rest = text[i + 1..].trim_start();
-                    let end = if rest.starts_with('"') {
+                    let end = if rest.starts_with(['{', '[']) {
+                        let (mut level, mut quoted, mut escaped) = (0usize, false, false);
+                        let mut end = rest.len();
+                        for (j, b) in rest.bytes().enumerate() {
+                            if quoted {
+                                if escaped { escaped = false; }
+                                else if b == b'\\' { escaped = true; }
+                                else if b == b'"' { quoted = false; }
+                            } else {
+                                match b {
+                                    b'"' => quoted = true,
+                                    b'{' | b'[' => level += 1,
+                                    b'}' | b']' => {
+                                        level = level.saturating_sub(1);
+                                        if level == 0 { end = j + 1; break; }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        end
+                    } else if rest.starts_with('"') {
                         let mut j = 1;
                         while j < rest.len() && rest.as_bytes()[j] != b'"' {
                             j += if rest.as_bytes()[j] == b'\\' { 2 } else { 1 };
@@ -78,7 +99,7 @@ fn member(text: &str, key: &str) -> Option<String> {
                         rest.find([',', '}']).unwrap_or(rest.len())
                     };
                     let id = rest[..end].trim();
-                    return (!id.is_empty() && id != "null").then(|| id.to_owned());
+                    return (!id.is_empty()).then(|| id.to_owned());
                 }
             }
             b',' if depth == 1 => key_start = None,
@@ -93,8 +114,12 @@ fn member(text: &str, key: &str) -> Option<String> {
     }
     None
 }
-fn response_id(text: &str) -> Option<String> {
-    if text == "null" { None } else { request_id(text) }
+/// Host replies carry the bridge nonce independently of JSON-RPC IDs, which
+/// also covers notifications and batches. Late replies never trigger a replay.
+fn correlated_response(text: &str, nonce: &str) -> Option<String> {
+    (member(text, "\"nonce\"").as_deref() == Some(nonce))
+        .then(|| member(text, "\"response\""))
+        .flatten()
 }
 fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -114,8 +139,43 @@ fn error_reply(id: &str, message: &str) -> String {
         escape(message)
     )
 }
+/// A failed batch must resolve every request ID, rather than silently leaving
+/// all of its calls pending. Notifications still receive no wire response.
+fn delivery_error(request: &str, message: &str) -> Option<String> {
+    if !request.starts_with('[') {
+        return request_id(request).map(|id| error_reply(&id, message));
+    }
+    let (mut depth, mut quoted, mut escaped, mut start) = (0usize, false, false, 0usize);
+    let mut replies = Vec::new();
+    for (i, byte) in request.bytes().enumerate() {
+        if quoted {
+            if escaped { escaped = false; }
+            else if byte == b'\\' { escaped = true; }
+            else if byte == b'"' { quoted = false; }
+            continue;
+        }
+        match byte {
+            b'"' => quoted = true,
+            b'{' | b'[' => {
+                if depth == 1 { start = i; }
+                depth += 1;
+            }
+            b'}' | b']' => {
+                depth = depth.saturating_sub(1);
+                if depth == 1 && let Some(id) = request_id(&request[start..=i]) {
+                    replies.push(error_reply(&id, message));
+                }
+            }
+            _ => {}
+        }
+    }
+    (!replies.is_empty()).then(|| format!("[{}]", replies.join(",")))
+}
 fn note(message: &str) {
     eprintln!("control-room-mcp: {message}");
+    journal(message);
+}
+fn journal(message: &str) {
     if fs::symlink_metadata(LOG).is_ok_and(|m| !m.is_file() || m.len() >= LOG_LIMIT) {
         return;
     }
@@ -133,6 +193,7 @@ fn note(message: &str) {
     }
 }
 fn trace(step: &str) {
+    journal(step);
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis());
     if let Ok(mut file) = fs::OpenOptions::new().write(true).create(true).truncate(true).custom_flags(platform_flags::SAFE_READ).open(TRACE) {
         let _ = writeln!(file, "{stamp} {step}");
@@ -203,38 +264,31 @@ fn main() -> io::Result<()> {
             if raw.len() > MAX_REQUEST && raw.last() != Some(&b'\n') {
                 skip_line(&mut input)?;
                 note(&format!("request {count} exceeded {MAX_REQUEST} bytes"));
-                if let Some(id) = request_id(line.trim()) {
-                    reply(&mut stdout, &error_reply(&id, "MCP request too large for the Control tool bridge; send smaller arguments or write large content to a file first"))?;
+                if let Some(error) = delivery_error(line.trim(), "MCP request too large for the Control tool bridge; send smaller arguments or write large content to a file first") {
+                    reply(&mut stdout, &error)?;
                 }
                 continue;
             }
             let _ = fs::remove_file(RESPONSE);
             let id = request_id(line.trim());
-            let method = member(line.trim(), "\"method\"").unwrap_or_default();
-            trace(&format!("received {count} {method} id={}", id.as_deref().unwrap_or("-")));
-            let envelope = format!("{{\"nonce\":\"{stamp}-{count}\",\"request\":{}}}", line.trim());
+            let method = member(line.trim(), "\"method\"").unwrap_or_else(|| if line.trim_start().starts_with('[') { "batch".to_owned() } else { String::new() });
+            let tool = member(line.trim(), "\"params\"").and_then(|params| member(&params, "\"name\"")).unwrap_or_default();
+            trace(&format!("received {count} {method} {tool} id={}", id.as_deref().unwrap_or("-")));
+            let nonce = format!("\"{stamp}-{count}\"");
+            let envelope = format!("{{\"version\":1,\"nonce\":{nonce},\"request\":{}}}", line.trim());
             if let Err(error) = send(&envelope, stamp, count, &mut tries) {
-                if let Some(id) = &id {
-                    reply(&mut stdout, &error_reply(id, &format!("Control tool bridge could not deliver this request ({error}); it was not sent, so retrying is safe")))?;
+                if let Some(error) = delivery_error(line.trim(), &format!("Control tool bridge could not deliver this request ({error}); it was not sent, so retrying is safe")) {
+                    reply(&mut stdout, &error)?;
                 }
                 continue;
             }
             let start = Instant::now();
             loop {
                 if let Ok(response) = response(Path::new(RESPONSE)) {
-                    // A late reply to an earlier timed-out request is not this request's answer.
-                    if response_id(response.trim()) != id {
+                    let Some(response) = correlated_response(response.trim(), &nonce) else {
                         let _ = fs::remove_file(RESPONSE);
-                        if !Path::new(REQUEST).exists() {
-                            if let Err(error) = send(&envelope, stamp, count, &mut tries) {
-                                if let Some(id) = &id {
-                                    reply(&mut stdout, &error_reply(id, &format!("Control tool bridge lost this request ({error}); check its effect before retrying")))?;
-                                }
-                                break;
-                            }
-                        }
                         continue;
-                    }
+                    };
                     if response.trim() != "null" {
                         reply(&mut stdout, response.trim())?;
                         trace(&format!("replied {count} {method} id={}", id.as_deref().unwrap_or("-")));
@@ -246,8 +300,8 @@ fn main() -> io::Result<()> {
                 if start.elapsed() > HOST_TIMEOUT {
                     // Keep serving: answer this request with an error rather than exiting the transport.
                     note(&format!("request {count} had no host reply within {} s", HOST_TIMEOUT.as_secs()));
-                    if let Some(id) = &id {
-                        reply(&mut stdout, &error_reply(id, &format!("Control tool host did not respond within {} s", HOST_TIMEOUT.as_secs())))?;
+                    if let Some(error) = delivery_error(line.trim(), &format!("Control tool host did not respond within {} s; its effect may have happened, so inspect status before retrying", HOST_TIMEOUT.as_secs())) {
+                        reply(&mut stdout, &error)?;
                     }
                     break;
                 }

@@ -477,3 +477,18 @@ fn mailbox_rejects_symlinks_and_oversized_requests() {
     assert!(read_request(&dir.join("large")).is_err());
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn a_late_reply_cannot_remove_the_next_mailbox_request() {
+    let dir = std::env::temp_dir().join(format!("control-room-late-reply-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let first = json!({"nonce":"1","request":{"id":7}});
+    let next = json!({"nonce":"2","request":{"id":7}});
+    fs::write(dir.join(".control-room-request"), first.to_string()).unwrap();
+    assert_eq!(take_request(&dir).unwrap(), first);
+    fs::write(dir.join(".control-room-request"), next.to_string()).unwrap();
+    reply(&dir, &json!({"nonce":"1","response":{"id":7,"result":{}}}));
+    assert_eq!(take_request(&dir).unwrap(), next, "a late reply must not discard a newer delivery, even if JSON-RPC IDs are reused");
+    assert!(take_request(&dir).is_err());
+    fs::remove_dir_all(dir).unwrap();
+}

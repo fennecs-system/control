@@ -340,6 +340,16 @@ pub(crate) fn read_request(path: &Path) -> std::io::Result<Value> {
     }
     serde_json::from_slice(&bytes).map_err(std::io::Error::other)
 }
+/// Claim a delivery before running its effect. A slow tool must not delete the
+/// next request when replying after the bridge has moved on.
+pub(crate) fn take_request(workspace: &Path) -> std::io::Result<Value> {
+    let claimed = workspace.join(format!(".control-room-processing-{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    fs::rename(workspace.join(".control-room-request"), &claimed)?;
+    let result = read_request(&claimed);
+    let _ = fs::remove_file(claimed);
+    result
+}
 pub(crate) fn reply(workspace: &Path, response: &Value) {
     // A fresh file plus rename prevents symlink/hardlink replacement from redirecting host writes.
     let temp = workspace.join(format!(
@@ -357,7 +367,6 @@ pub(crate) fn reply(workspace: &Path, response: &Value) {
         return;
     };
     if file.write_all(response.to_string().as_bytes()).is_ok() {
-        let _ = fs::remove_file(workspace.join(".control-room-request"));
         let _ = fs::rename(&temp, workspace.join(".control-room-response"));
     }
     let _ = fs::remove_file(temp);
