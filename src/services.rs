@@ -164,6 +164,12 @@ impl Service {
         self.storage == Storage::Memory && self.profile.readonly_root()
     }
     fn limits(&self) -> compute::Limits { compute::limits(self.shape, self.profile) }
+    /// Commands still running inside this service, for the process tree.
+    pub(crate) fn running_commands(&self) -> Vec<String> { self.executions.iter().filter_map(commands::Execution::running_label).collect() }
+    pub(crate) fn label(&self) -> String { self.command.0.lines().next().unwrap_or_default().chars().take(80).collect() }
+    pub(crate) fn live(&self) -> bool { self.resource.phase.reserves_capacity() }
+    pub(crate) fn shape_name(&self) -> &'static str { self.shape.map_or("default", compute::Shape::name) }
+    pub(crate) fn phase_name(&self) -> &'static str { page::phase(&self.resource.phase) }
     fn summary(&self) -> Value {
         json!({"service_id":self.resource.id,"platform":format!("linux/{}", std::env::consts::ARCH),"shape":self.shape,"limits":self.limits(),"phase":self.resource.phase,"scope":self.resource.scope,"storage":self.storage,"workspace":workspace::Workspace::of(self).map(|workspace|json!({"path":"/workspace","volume":workspace.name(),"retained_on_removal":true,"shared_with":"same_chat_services"})),"workspace_executable":self.workspace_exec,"expires_unix":(!self.resource.lease.is_until_stopped()).then(||self.resource.lease.expires()),"until_stopped":self.resource.lease.is_until_stopped(),"diagnostic":self.diagnostic,"output":self.output,"exit_code":self.exit_code,"output_limit_bytes":OUTPUT,"executions":self.executions.iter().map(|e|e.brief()).collect::<Vec<_>>()})
     }

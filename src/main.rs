@@ -51,6 +51,7 @@ mod compaction;
 mod projects;
 mod ports;
 mod previews;
+mod process_tree;
 mod rooms;
 mod runtime;
 mod rust_bench;

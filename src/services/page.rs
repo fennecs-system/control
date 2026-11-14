@@ -187,7 +187,7 @@ fn gather<T: Send + 'static>(jobs: Vec<(String, Job<T>)>, deadline: Instant) -> 
     collected
 }
 
-fn phase(phase: &Phase) -> &'static str {
+pub(super) fn phase(phase: &Phase) -> &'static str {
     match phase {
         Phase::Requested => "Requested",
         Phase::Creating => "Creating",

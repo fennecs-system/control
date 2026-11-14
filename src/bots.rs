@@ -325,19 +325,12 @@ pub(crate) fn background_allowed(state: &State, chat: &str) -> bool {
     !state.bots.supervisor.paused(&bot(chat)) && state.bots.supervisor.status(&bot(chat)) != Some(Status::Stopping)
 }
 
-/// Every defined bot with its state, including sleeping ones, for the Bots page.
+/// Task trees with their bots, agents, services and processes, for the Bots page.
 pub(crate) fn overview(state: &State) -> String {
     let mut html = "<div class='section-heading'><h2>Bots</h2></div>".to_owned();
-    let mut any = false;
-    for definition in state.bots.supervisor.definitions() {
-        let chat = definition.chat.0.as_str();
-        let Some(status) = status(state, chat) else { continue };
-        any = true;
-        let title = state.chats.iter().find(|session| session.id == chat).map_or(chat, |session| session.title.as_str());
-        html.push_str(&format!("<article class='record'><h3>{}</h3><p>{}</p><a href='/chat/{}'>Open chat ↗</a></article>", crate::escape(title), crate::escape(&status), crate::escape(chat)));
-    }
-    if !any {
-        html.push_str("<div class='empty'>No bots. Use /bot on in a chat or approve a bot request.</div>");
+    match crate::process_tree::render(state) {
+        Some(tree) => html.push_str(&tree),
+        None => html.push_str("<div class='empty'>No bots, services or active agents. Use /bot on in a chat or approve a bot request.</div>"),
     }
     html
 }
