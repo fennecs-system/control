@@ -6,7 +6,7 @@ Use **Lenses** to create/edit definitions and inspect their effective instructio
 Select them in a chat's lens picker, or use terminal commands:
 
 ```text
-/use engineering autonomy investigation
+/use engineering coordination autonomy investigation
 /context
 ```
 
@@ -25,6 +25,30 @@ its rationale rather than treating every guard rejection as a reason to wait
 forever. Host-enforced permissions, mandatory safety constraints, cancellation
 and explicit user limits remain binding. The lens does not authorize broader
 access or consequential actions beyond the task's mandate.
+
+## Coordination and planning
+
+The optional `coordination` lens helps a team turn a shared outcome into small,
+verifiable deliverables with accountable owners. Roles can change as work changes.
+It asks agents to minimize dependencies, distinguish prerequisites from optional
+precautions, and retain a blocker's producer and release signal in existing notes
+and handoffs. A worker should check for circular waits and pursue independent
+authorized work while another dependency is pending.
+
+Agents coordinate directly with affected peers, share useful evidence and
+dependency releases in the team room, and keep routine relaying and repeated
+no-change messages out of the steering chat. Changed evidence or repeated lack
+of useful results calls for revisiting the plan. Healthy long-running work can
+still wait on callbacks without a new deadline or forced intervention.
+
+Select **Coordination & planning** in the lens picker, or use `/use coordination`.
+It composes with `autonomy` and `investigation` without including either
+automatically. This is versioned guidance over existing tools, not a central
+planner, task database, permission grant or guarantee against deadlock. Existing
+chats and running workers are not opted in when the preset is added. Select it
+before launching the team; spawned work and continuations keep captured revisions.
+Evaluate useful actions, dependency releases, repeated messages and interventions
+in a separate opt-in run before claiming an improvement.
 
 ## Bounded investigation
 

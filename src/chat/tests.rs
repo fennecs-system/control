@@ -715,12 +715,12 @@ fn composing_and_changing_lenses_preserves_each_runs_selection() {
     );
 }
 #[test]
-fn investigation_guidance_survives_child_wake_and_library_edits_without_retroactive_changes() {
+fn optional_guidance_survives_child_wake_and_library_edits_without_retroactive_changes() {
     let mut state = State::default();
     let created = tool(
         &mut state,
         "control.chat.create",
-        &json!({"lenses":["autonomy","investigation"]}),
+        &json!({"lenses":["autonomy","investigation","coordination"]}),
     )
     .unwrap();
     let id = created["id"].as_str().unwrap().to_owned();
@@ -731,6 +731,10 @@ fn investigation_guidance_survives_child_wake_and_library_edits_without_retroact
     let mut revised = state.lens_library.get("investigation").unwrap().clone();
     revised.revision += 1;
     revised.instructions = "Future investigation guidance only".into();
+    state.lens_library.definitions.push(revised);
+    let mut revised = state.lens_library.get("coordination").unwrap().clone();
+    revised.revision += 1;
+    revised.instructions = "Future coordination guidance only".into();
     state.lens_library.definitions.push(revised);
     let wake = enqueue_continuation(
         &mut state,
@@ -756,14 +760,17 @@ fn investigation_guidance_survives_child_wake_and_library_edits_without_retroact
     for run in [&parent, &child, &wake] {
         let text = prompt(&restored, run).unwrap();
         assert!(text.contains("investigation@1") && text.contains("three distinct probes"));
+        assert!(text.contains("coordination@1"));
         assert_eq!(text.matches("three distinct probes").count(), 1);
         assert!(!text.contains("Future investigation guidance only"));
+        assert!(!text.contains("Future coordination guidance only"));
     }
     send(&mut state, &id, "Start a new authorized step", "test").unwrap();
     let next = prompt(&state, &state.runtime.runs.last().unwrap().id).unwrap();
     assert!(
         next.contains("investigation@2") && next.contains("Future investigation guidance only")
     );
+    assert!(next.contains("coordination@2") && next.contains("Future coordination guidance only"));
     tool(
         &mut state,
         "control.chat.lenses",
@@ -779,6 +786,7 @@ fn investigation_guidance_survives_child_wake_and_library_edits_without_retroact
     .unwrap();
     let plain = prompt(&state, &state.runtime.runs.last().unwrap().id).unwrap();
     assert!(!plain.contains("Captured lens guidance") && !plain.contains("three distinct probes"));
+    assert!(!plain.contains("Future coordination guidance only"));
 }
 #[test]
 fn chat_context_is_captured_and_does_not_follow_browser_defaults() {

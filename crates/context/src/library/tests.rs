@@ -5,7 +5,7 @@ fn defaults_are_additive_bounded_and_preserve_local_definitions() {
     let mut library = Library::default();
     library
         .definitions
-        .retain(|d| d.id != "autonomy" && d.id != "investigation");
+        .retain(|d| d.id != "autonomy" && d.id != "investigation" && d.id != "coordination");
     let captured = library.resolve(&["engineering".into()], &[]).unwrap();
     library.definitions.push(Definition {
         id: "autonomy".into(),
@@ -25,6 +25,7 @@ fn defaults_are_additive_bounded_and_preserve_local_definitions() {
         captured
     );
     assert!(library.get("investigation").is_some());
+    assert!(library.get("coordination").is_some());
     assert!(!library.add_missing_defaults());
     library.validate(&[]).unwrap();
     let mut full = Library {
@@ -41,7 +42,7 @@ fn defaults_are_additive_bounded_and_preserve_local_definitions() {
     full.validate(&[]).unwrap();
 }
 #[test]
-fn investigation_is_opt_in_and_composition_adds_guidance_without_authority() {
+fn optional_procedures_compose_without_adding_tools_or_authority() {
     let library = Library::default();
     let ordinary = library.resolve(&["engineering".into()], &[]).unwrap();
     let selected = library
@@ -51,12 +52,19 @@ fn investigation_is_opt_in_and_composition_adds_guidance_without_authority() {
                 "autonomy".into(),
                 "investigation".into(),
                 "investigation".into(),
+                "coordination".into(),
+                "coordination".into(),
             ],
             &[],
         )
         .unwrap();
     assert_eq!(selected.tools, ordinary.tools);
     assert!(selected.documents.is_empty());
+    assert!(!ordinary.lenses.iter().any(|lens| lens.id == "coordination"));
+    assert_eq!(
+        selected.lenses.iter().filter(|lens| lens.id == "coordination").count(),
+        1
+    );
     assert!(
         !ordinary
             .instructions
