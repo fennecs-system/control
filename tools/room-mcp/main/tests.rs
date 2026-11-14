@@ -38,3 +38,9 @@ fn undeliverable_requests_get_escaped_errors_and_keep_framing() {
     input.read_line(&mut next).unwrap();
     assert_eq!(request_id(next.trim()).as_deref(), Some("2"));
 }
+#[test]
+fn traces_name_the_top_level_method_not_nested_ones() {
+    let line = r#"{"jsonrpc":"2.0","params":{"method":"inner"},"method":"tools/call","id":3}"#;
+    assert_eq!(member(line, "\"method\"").as_deref(), Some("\"tools/call\""));
+    assert!(member(r#"{"id":4}"#, "\"method\"").is_none());
+}

@@ -17,6 +17,9 @@ const RESPONSE: &str = "/workspace/.control-room-response";
 /// Bridge diagnostics for the host; `.control-` files are never published.
 const LOG: &str = "/workspace/.control-room-mcp.log";
 const LOG_LIMIT: u64 = 65536;
+/// The latest exchange step, overwritten each time, so a stalled session shows
+/// whether the provider or the host stopped answering.
+const TRACE: &str = "/workspace/.control-room-mcp.last";
 const MAX_REQUEST: usize = 32700;
 /// Shared bind mounts can briefly report a fresh rename or create as missing.
 const SEND_ATTEMPTS: u32 = 8;
@@ -37,6 +40,10 @@ fn response(path: &Path) -> io::Result<String> {
 }
 /// Raw token of the top-level "id" member, without a JSON dependency. None for notifications.
 fn request_id(text: &str) -> Option<String> {
+    member(text, "\"id\"")
+}
+/// Raw token of a top-level member, without a JSON dependency.
+fn member(text: &str, key: &str) -> Option<String> {
     let bytes = text.as_bytes();
     let (mut depth, mut i, mut key_start) = (0usize, 0usize, None);
     while i < bytes.len() {
@@ -52,7 +59,7 @@ fn request_id(text: &str) -> Option<String> {
                 }
             }
             b':' if depth == 1 => {
-                if key_start == Some("\"id\"") {
+                if key_start == Some(key) {
                     let rest = text[i + 1..].trim_start();
                     let end = if rest.starts_with('"') {
                         let mut j = 1;
@@ -116,6 +123,12 @@ fn note(message: &str) {
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_millis());
         let _ = writeln!(log, "{stamp} {message}");
+    }
+}
+fn trace(step: &str) {
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis());
+    if let Ok(mut file) = fs::OpenOptions::new().write(true).create(true).truncate(true).custom_flags(platform_flags::SAFE_READ).open(TRACE) {
+        let _ = writeln!(file, "{stamp} {step}");
     }
 }
 /// Publish one request atomically. Every try uses a fresh temporary name, so a
@@ -190,6 +203,8 @@ fn main() -> io::Result<()> {
             }
             let _ = fs::remove_file(RESPONSE);
             let id = request_id(line.trim());
+            let method = member(line.trim(), "\"method\"").unwrap_or_default();
+            trace(&format!("received {count} {method} id={}", id.as_deref().unwrap_or("-")));
             let envelope = format!("{{\"nonce\":\"{stamp}-{count}\",\"request\":{}}}", line.trim());
             if let Err(error) = send(&envelope, stamp, count, &mut tries) {
                 if let Some(id) = &id {
@@ -215,6 +230,9 @@ fn main() -> io::Result<()> {
                     }
                     if response.trim() != "null" {
                         reply(&mut stdout, response.trim())?;
+                        trace(&format!("replied {count} {method} id={}", id.as_deref().unwrap_or("-")));
+                    } else {
+                        trace(&format!("acknowledged {count} {method}"));
                     }
                     break;
                 }
