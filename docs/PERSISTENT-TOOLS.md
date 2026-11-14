@@ -122,8 +122,34 @@ The initial scope is deliberately small:
   The engine's available disk and any daemon-wide limits still apply.
   New service storage records require this version of Control; older
   binaries cannot read those records when rolling back node state.
-- Eight reserved service slots per node, each limited to one CPU, 512 MiB RAM
-  and 64 processes (Full: 2 GiB and 128 processes). Fenced resources retain their reservation.
+- Eight reserved service slots per node. Omit `shape` to keep the image default:
+  one CPU, 512 MiB RAM and 64 processes (Full: 2 GiB and 128 processes).
+  Optional compute presets are independent of Lite/Full image capabilities:
+
+  | `shape` | RAM limit | CPU limit |
+  | --- | --- | --- |
+  | `small` | 2 GiB | 1 |
+  | `medium` | 4 GiB | 2 |
+  | `large` | 8 GiB | 2 |
+
+  Preset identifiers have immutable limits and are saved with the service.
+  Existing records without a shape keep their original limits and PID policy.
+  The node's service pool admits at most 16 GiB and 8 CPUs in total, atomically
+  with the durable reservation. Pending, stopping and fenced resources count;
+  only confirmed teardown releases capacity. An over-capacity request fails
+  without creating a service; retries do not reserve twice. This is a service
+  admission budget, not a host allocator: external model servers, worker
+  containers and Control itself require additional headroom. Docker's physical
+  capacity may be smaller; these limits do not guarantee resident memory or
+  dedicated CPU cores. Unsupported engine limits fail visibly, never uncapped.
+  `control_service_status` without an ID returns presets and remaining budget.
+  Each service reports its shape and effective `limits` (bytes and CPU count).
+  The Services page shows these limits separately from observed live usage.
+  Start with `{"command":"exec your-server", "shape":"medium"}` for 4 GiB,
+  or `"large"` for 8 GiB. Allow room inside the limit for application overhead;
+  a managed runtime's heap must be smaller than its container memory limit.
+  Resizing requires stopping and replacing the service in the same chat, which
+  reopens `/workspace`; ports and grants must bind the new service handle.
 - `lease_seconds: -1` (default) retains a service until stopped; use 1–3600
   seconds for a bounded lifetime. Use a foreground command; shell exit ends
   the service and its descendants. Port approvals default to the service's

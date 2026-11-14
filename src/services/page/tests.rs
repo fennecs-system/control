@@ -11,6 +11,7 @@ fn cards_escape_commands_and_show_live_data_only_when_observed() {
             .unwrap(),
         lease_seconds: -1,
         storage_limit_mb: None,
+        shape: Some(compute::Shape::Large),
     };
     admit(
         &mut state,
@@ -38,7 +39,16 @@ fn cards_escape_commands_and_show_live_data_only_when_observed() {
         !plain.contains("data-live="),
         "only running services wait for live usage"
     );
-    assert!(!plain.contains("CPU") && !plain.contains("<table>"));
+    assert!(plain.contains("large · 8 GiB RAM · 2 CPUs") && !plain.contains("<table>"));
+    // Optional local preview uses only this synthetic state and repository CSS.
+    if let Some(path) = std::env::var_os("CONTROL_QA_SERVICES_PREVIEW") {
+        let mut page = render(&Arc::new(Mutex::new(state))).unwrap();
+        for (name, css) in [("style", include_str!("../../../assets/style.css")), ("navigation", include_str!("../../../assets/navigation.css")), ("workspace", include_str!("../../../assets/workspace.css")), ("runtime", include_str!("../../../assets/runtime.css")), ("collective", include_str!("../../../assets/collective.css"))] {
+            page = page.replace(&format!("<link rel=\"stylesheet\" href=\"/{name}.css\">"), &format!("<style>{css}</style>"));
+            page = page.replace(&format!("<link rel='stylesheet' href='/{name}.css'>"), &format!("<style>{css}</style>"));
+        }
+        std::fs::write(path, page).unwrap();
+    }
     let live = Live {
         stats: Some(crate::engine::Stats {
             cpu: "3.5%".into(),
@@ -65,6 +75,7 @@ fn page_snapshots_keep_escaped_diagnostics() {
         command: "sleep infinity".to_owned().try_into().unwrap(),
         lease_seconds: -1,
         storage_limit_mb: None,
+        shape: None,
     };
     admit(
         &mut state,

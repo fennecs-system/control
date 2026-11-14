@@ -35,6 +35,7 @@ fn input(command: &str) -> Input {
         command: command.to_owned().try_into().unwrap(),
         lease_seconds: 60,
         storage_limit_mb: None,
+        shape: None,
     }
 }
 pub(super) fn admit_fixture(
@@ -1049,7 +1050,7 @@ fn live_service_survives_server_restart_and_expires_without_control() {
     fs::set_permissions(state_dir.join("node-id"), fs::Permissions::from_mode(0o600)).unwrap();
     let (mut s, run, _, time) = fixture();
     let profile = crate::worker_profile::Profile::inspect(&image).unwrap();
-    let value=admit_profile(&mut s,Request{run:&run,generation:"attempt-a",nonce:"live"},Input{command:"printf durable > /workspace/counter; if (exec 3<> /proc/1/mem) 2>/dev/null; then exit 41; fi; kill -STOP 1 2>/dev/null || true; echo ready; sleep 60".to_owned().try_into().unwrap(),lease_seconds:20,storage_limit_mb:None},node.clone().try_into().unwrap(),time,profile,|_|Ok(())).unwrap();
+    let value=admit_profile(&mut s,Request{run:&run,generation:"attempt-a",nonce:"live"},Input{command:"printf durable > /workspace/counter; if (exec 3<> /proc/1/mem) 2>/dev/null; then exit 41; fi; kill -STOP 1 2>/dev/null || true; echo ready; sleep 60".to_owned().try_into().unwrap(),lease_seconds:20,storage_limit_mb:None,shape:None},node.clone().try_into().unwrap(),time,profile,|_|Ok(())).unwrap();
     assert!(value["service_id"].is_string());
     s.services[0].resource.image = image.try_into().unwrap();
     let _workspace = WorkspaceCleanup::of(&s.services[0]);
