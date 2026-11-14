@@ -256,6 +256,21 @@ maximum duration bounds the watchdog even if clocks differ.
 
 ## Verification and cost
 
+The worker MCP mailbox handles both individual JSON-RPC requests and batches.
+Batch elements execute in order through the same attempt authorization checks,
+with separate delivery identities; notifications produce no JSON-RPC reply.
+Versioned bridge deliveries correlate host replies by nonce, including batches
+and notifications. Older pinned bridges keep their original reply format.
+The host claims a mailbox request before executing it, so a late reply cannot
+delete the next request. A missing reply never automatically replays an effect.
+Transport errors distinguish a request that was not sent from an uncertain
+outcome that must be inspected before retrying.
+
+The bounded `.control-room-mcp.log` records exchange steps and tool names, without
+arguments or results, alongside the latest-step `.last` file. These internal
+files are excluded from published workspaces. They distinguish a provider that
+has not sent a call from a host that has not answered it.
+
 Native fault tests cover checkpoint failures, duplicate/replayed requests,
 bounded retention, ownership/scope mismatches, permission revocation, expired
 leases and restoration after the model turn ends. They also cover capacity

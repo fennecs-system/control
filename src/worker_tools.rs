@@ -356,12 +356,35 @@ pub fn pump(state: &Arc<Mutex<State>>, run: &str, workspace: &Path, managed:bool
     pump_at(state, run, workspace, workspace,managed);
 }
 pub fn pump_at(state: &Arc<Mutex<State>>, run: &str, mailbox: &Path, workspace: &Path, managed:bool) {
-    let path = mailbox.join(".control-room-request");
-    let Ok(envelope) = rooms::read_request(&path) else {
+    let Ok(envelope) = rooms::take_request(mailbox) else {
         return;
     };
-    let response = if managed {rpc_at(state, run, &envelope, Some(workspace))}else{dispatch_at(state,run,&envelope,Some(workspace))};
+    let response = answer(&envelope, |envelope| if managed {rpc_at(state, run, envelope, Some(workspace))}else{dispatch_at(state,run,envelope,Some(workspace))});
+    // Versioned only at this transport boundary: old pinned bridges still receive
+    // raw JSON-RPC, while new bridges correlate every reply by delivery nonce.
+    let response = if envelope["version"] == 1 {
+        json!({"nonce":envelope["nonce"],"response":response})
+    } else { response };
     rooms::reply(mailbox, &response);
+}
+/// A JSON-RPC batch is answered element by element, as one array of the
+/// non-notification replies. Each element gets its own nonce, so idempotent
+/// tools such as room posts do not collapse two calls into one.
+fn answer(envelope: &Value, single: impl Fn(&Value) -> Value) -> Value {
+    let Some(batch) = envelope["request"].as_array() else { return single(envelope) };
+    if batch.is_empty() {
+        return json!({"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Empty JSON-RPC batch"}});
+    }
+    let nonce = envelope["nonce"].as_str().unwrap_or_default();
+    let replies: Vec<Value> = batch.iter().enumerate()
+        .map(|(index, request)| {
+            if !request.is_object() || request["jsonrpc"] != "2.0" || !request["method"].is_string() {
+                json!({"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Invalid JSON-RPC batch element"}})
+            } else { single(&json!({"nonce":format!("{nonce}-{index}"),"request":request})) }
+        })
+        .filter(|reply| !reply.is_null())
+        .collect();
+    if replies.is_empty() { Value::Null } else { Value::Array(replies) }
 }
 
 #[cfg(test)]
