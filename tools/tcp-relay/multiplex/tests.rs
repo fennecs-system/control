@@ -128,10 +128,12 @@ fn a_blocked_stream_does_not_block_other_streams_or_heartbeats() {
     let mut reply = Vec::new();
     client.read_to_end(&mut reply).unwrap();
     assert_eq!(reply, b"responsive");
+    // A heartbeat newer than the ping stays newer, so a descheduled poller
+    // cannot miss it the way a fixed freshness window can under load.
+    let sent = Instant::now();
     pair.host.send(0, Kind::Ping, &[]).unwrap();
-    let start = Instant::now();
-    while pair.listener.heartbeat_age() > Duration::from_millis(100) {
-        assert!(start.elapsed() < Duration::from_secs(1));
+    while *pair.listener.heartbeat.lock().unwrap() < sent {
+        assert!(sent.elapsed() < Duration::from_secs(2));
         thread::sleep(Duration::from_millis(5));
     }
     drop(pair);
