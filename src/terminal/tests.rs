@@ -564,7 +564,7 @@ fn live_rust_benchmarks_use_mcp_and_compare_html_escaping() {
     }
 }
 #[test]
-#[ignore = "requires isolated control-selfdev-qa server, declared build image, own authenticated development model; three or more model calls"]
+#[ignore = "requires isolated control-selfdev-qa server, declared build image, own authenticated model; optional CONTROL_QA_SELFDEV_PUBLISH creates a draft PR through the configured broker"]
 fn live_improve_build_and_independent_judge_roundtrip() {
     let state_dir = crate::config::state_directory().unwrap();
     assert!(state_dir.parent().is_some_and(|p| {
@@ -573,6 +573,11 @@ fn live_improve_build_and_independent_judge_roundtrip() {
                 .is_some_and(|s| s.to_string_lossy().starts_with("control-selfdev-qa."))
     }));
     let server = std::env::var("CONTROL_QA_URL").expect("Use an isolated self-development server");
+    let publish = std::env::var_os("CONTROL_QA_SELFDEV_PUBLISH").is_some();
+    if publish {
+        assert!(crate::config::directory().unwrap().join("github.json").is_file(),
+            "Configure the isolated node's GitHub binding before starting: publication provenance cannot be added retroactively");
+    }
     let mut hive = Hive::connect(&server).unwrap();
     let chat = hive
         .tool("control.chat.create", json!({"mode":"improve"}))
@@ -633,7 +638,9 @@ fn live_improve_build_and_independent_judge_roundtrip() {
             .flat_map(|a| a["command_jobs"].as_array().into_iter().flatten())
             .any(|job| job["build_environment"] == true
                 && job["exit_code"] == 0
-                && job["status"] == "completed"),
+                && job["status"] == "completed"
+                && job["command"].as_str().is_some_and(|command| command.contains("cargo test --locked --bin control github::tests"))
+                && job["output"].as_str().is_some_and(|output| output.contains("test result: ok."))),
         "A real declared build job must pass"
     );
     let final_run = runs
@@ -661,6 +668,16 @@ fn live_improve_build_and_independent_judge_roundtrip() {
             .exists(),
         "The original checkout must remain unchanged"
     );
+    if publish {
+        let arguments = json!({"run_id":final_run["id"],"title":"Self-development verification: isolated source edit, build and judge",
+            "body":"Draft verification from Control's own /improve workflow. Adds only docs/self-development-proof.md after a real declared-environment test and independent read-only judge. Do not merge this synthetic proof file."});
+        let publication = hive.tool("control_github_open_pr", arguments.clone()).unwrap();
+        let url = publication["url"].as_str().expect("Publisher must return the real draft PR URL");
+        assert!(url.starts_with("https://github.com/") && url.contains("/pull/"));
+        let retry = hive.tool("control_github_open_pr", arguments).unwrap();
+        assert_eq!(retry["url"], publication["url"], "Retry must recover the same PR");
+        println!("Control self-development draft PR: {url}");
+    }
 }
 #[test]
 #[ignore = "requires isolated server and authenticated worker; two small model calls, optional reload mode makes no calls"]

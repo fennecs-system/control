@@ -50,6 +50,17 @@ pub fn run() -> io::Result<()> {
         engine,
         "start a Linux Docker-compatible engine",
     );
+    match crate::build_environment::image() {
+        Ok(Some(image)) if engine => {
+            let readiness = crate::config::source_root().and_then(|source| crate::build_environment::check(&image, &source));
+            match readiness {
+                Ok(()) => check("declared build environment", true, ""),
+                Err(error) => check("declared build environment", false, &error.to_string()),
+            }
+        }
+        Ok(_) => {}
+        Err(error) => check("declared build environment", false, &error.to_string()),
+    }
     let mut runtime = crate::runtime::Runtime::default();
     crate::providers::load_settings(&mut runtime)?;
     // Every backend with a pinned image is checked; the selected one must be complete.

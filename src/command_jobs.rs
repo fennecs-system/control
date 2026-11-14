@@ -86,9 +86,7 @@ fn fail(message: &str) -> io::Error {
 fn environment_image(attempt: &Attempt, environment: &str) -> io::Result<String> {
     let image = match environment {
         "worker" => attempt.image.clone().ok_or_else(|| fail("Missing captured worker image"))?,
-        "build" => std::env::var("CONTROL_BUILD_IMAGE").ok().or_else(|| {
-            fs::read_to_string(crate::config::directory().ok()?.join("build-image-id")).ok()
-        }).ok_or_else(|| fail("No declared build environment; build/load the Nix build-image and configure build-image-id"))?.trim().to_owned(),
+        "build" => crate::build_environment::image()?.ok_or_else(|| fail("No declared build environment; build/load the Nix build-image and configure build-image-id"))?,
         _ => return Err(fail("Unknown declared environment")),
     };
     if !crate::runtime::pinned_image(&image) {
@@ -255,6 +253,7 @@ fn effective_deadline(now: u64, requested: u64, owner: Option<u64>) -> io::Resul
 }
 fn create(job: &Job) -> io::Result<String> {
     let workspace = job.workspace()?.canonicalize()?;
+    if job.build_environment { crate::build_environment::check(&job.image, &workspace)?; }
     let meta = fs::symlink_metadata(&workspace)?;
     if !meta.is_dir() || meta.uid() == 0 {
         return Err(fail("Expected private non-root workspace"));

@@ -129,3 +129,28 @@ content. New files use regular non-executable mode. Changed binary contents need
 a later extension. Artifact publication limits also apply. Provider output and
 reviewer findings remain evidence, not a guarantee that tests passed; inspect the
 retained run, checks and diff before merging.
+
+## Verify the self-development workflow
+
+Run `control doctor` before starting. A configured build image must match the
+source lockfiles; refreshing the application binary does not refresh that image.
+Then use `/improve` to request a bounded source edit and actual tests in the
+declared `build` environment. A successful shell inspection is not evidence that
+the Rust tests passed. Independent judges inspect captured read-only source.
+After the improvement completes, publish its completed run using the existing
+tool or web action above. The original checkout must remain unchanged.
+
+The explicit live test `terminal::tests::live_improve_build_and_independent_judge_roundtrip`
+exercises a source edit, actual Cargo tests, judge handoff and final artifact read
+through the shared TUI client. It requires a private isolated node under
+`/private/tmp/control-selfdev-qa.*/state`, its own loopback server URL in
+`CONTROL_QA_URL`, and the configured build image and development-model login.
+It makes model calls. By default it makes no GitHub writes.
+
+To exercise the real publisher too, configure that isolated node's GitHub binding
+against a clean checkout of the remote base **before** starting a fresh test,
+then explicitly set `CONTROL_QA_SELFDEV_PUBLISH=1`. The test opens a draft PR with
+one synthetic proof document and retries the same publication to verify the URL
+is reused. Review and close that draft rather than merging the synthetic file.
+No test credential is copied into prompts or containers. Missing credentials or
+a changed remote base must remain visible failures, not a simulated success.
