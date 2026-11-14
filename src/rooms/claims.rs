@@ -135,7 +135,7 @@ pub(crate) fn listed(state: &State, room: &str) -> Vec<Value> {
     state.collective.claims.iter().filter(|c| c.room == room && c.status != Status::Released)
         .map(|c| json!({"key":c.key,"owner":c.owner,"status":c.status,"blocked_on":c.blocked_on,
             "note":c.note,"revision":c.revision,"incarnation":c.incarnation,
-            "abandoned":c.abandoned || !active.contains(c.owner.as_str())}))
+            "abandoned":c.abandoned,"owner_idle":!active.contains(c.owner.as_str())}))
         .collect()
 }
 
@@ -193,7 +193,7 @@ enum Action {
 }
 
 pub(crate) fn definition() -> Value {
-    json!({"name":"control_room_claim","description":"Advisory ownership of one deliverable or investigation in this task's thread, so peers do not duplicate it. acquire is atomic: it succeeds if the key is free or released, otherwise returns the current owner without changing it. Either way it lists related live claims that look like the same effort: join or wait on one of those, or release your duplicate. update and release need the current revision and only work for the owner. status working, blocked (set blocked_on to the claim key you need) or done; done is your claim backed by evidence, not host verification. Claims appear in control_room_read with abandoned=true when their owner can no longer act; only the operator reclaims those. A bot waits for a dependency with wait topic claim:<room>/<key>: it wakes once, when that claim incarnation resolves as done, released or abandoned, not on progress updates. Claims grant no authority.","annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false},
+    json!({"name":"control_room_claim","description":"Advisory ownership of one deliverable or investigation in this task's thread, so peers do not duplicate it. acquire is atomic: it succeeds if the key is free or released, otherwise returns the current owner without changing it. Either way it lists related live claims that look like the same effort: join or wait on one of those, or release your duplicate. update and release need the current revision and only work for the owner. status working, blocked (set blocked_on to the claim key you need) or done; done is your claim backed by evidence, not host verification. control_room_read marks abandoned=true when the owner is lost (its turn failed, was cancelled or interrupted, or its bot was stopped) and owner_idle=true when it has no active turn; only the operator releases another owner's claim. A bot waits for a dependency with wait topic claim:<room>/<key>: it wakes once, when that claim incarnation resolves as done, released or abandoned, not on progress updates. Claims grant no authority.","annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false},
         "inputSchema":{"type":"object","properties":{
             "room":{"type":"string"},
             "key":{"type":"string","minLength":1,"maxLength":MAX_KEY,"pattern":"^[A-Za-z0-9._-]+$"},
@@ -301,26 +301,57 @@ fn evict(state: &mut State, room: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// Owners that host facts say will not act again without new input: the chat
+/// is gone, or its latest turn failed, was cancelled, interrupted or blocked.
+/// An owner idle after a completed turn is not lost, and a persistent bot's
+/// failed turn is retried, so neither wakes dependents.
+fn lost_owners(state: &State) -> HashSet<&str> {
+    let mut latest: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    for run in &state.runtime.runs {
+        if let Some(chat) = run.chat_id.as_deref() {
+            latest.insert(chat, run.status.as_str());
+        }
+    }
+    let chats: HashSet<&str> = state.chats.iter().map(|chat| chat.id.as_str()).collect();
+    state.collective.claims.iter().map(|c| c.owner.as_str())
+        .filter(|owner| !chats.contains(owner)
+            || (!crate::bots::continuation_enabled(state, owner)
+                && latest.get(owner).is_some_and(|status| matches!(*status, "failed" | "cancelled" | "interrupted" | "blocked"))))
+        .collect()
+}
 fn lost(state: &State) -> Vec<usize> {
-    let active = active_owners(state);
+    let lost = lost_owners(state);
     state.collective.claims.iter().enumerate()
-        .filter(|(_, c)| matches!(c.status, Status::Working | Status::Blocked) && !c.abandoned && !active.contains(c.owner.as_str()))
+        .filter(|(_, c)| matches!(c.status, Status::Working | Status::Blocked) && !c.abandoned && lost.contains(c.owner.as_str()))
         .map(|(index, _)| index)
         .collect()
 }
 pub(crate) fn abandonment_due(state: &State) -> bool {
     !lost(state).is_empty()
 }
-/// Host observation: live claims whose owner can no longer act become
-/// abandoned once, so dependents wake instead of sleeping forever.
-pub(crate) fn observe_abandoned(state: &mut State) -> Vec<Resolved> {
-    lost(state).into_iter().map(|index| {
+fn abandon(state: &mut State, indices: Vec<usize>) -> Vec<Resolved> {
+    indices.into_iter().map(|index| {
         state.collective.claim_seq += 1;
         let revision = state.collective.claim_seq;
         let claim = &mut state.collective.claims[index];
         (claim.abandoned, claim.revision) = (true, revision);
         Resolved { room: claim.room.clone(), key: claim.key.clone(), incarnation: claim.incarnation, revision, outcome: Outcome::Abandoned, by: None }
     }).collect()
+}
+/// Host observation: live claims whose owner is lost become abandoned once,
+/// so dependents wake instead of sleeping on a producer that will not report.
+pub(crate) fn observe_abandoned(state: &mut State) -> Vec<Resolved> {
+    let indices = lost(state);
+    abandon(state, indices)
+}
+/// An explicit stop (task cancellation or `/bot off`) abandons the chat's live
+/// claims immediately; its final running turn may still report afterwards.
+pub(crate) fn abandon_owned(state: &mut State, owner: &str) -> Vec<Resolved> {
+    let indices = state.collective.claims.iter().enumerate()
+        .filter(|(_, c)| c.owner == owner && matches!(c.status, Status::Working | Status::Blocked) && !c.abandoned)
+        .map(|(index, _)| index)
+        .collect();
+    abandon(state, indices)
 }
 
 /// Operator reclaim of a claim whose owner can no longer act. The revision
@@ -379,8 +410,8 @@ pub(crate) fn render(state: &State, room: &str) -> String {
         if !claim["note"].as_str().unwrap_or_default().is_empty() {
             html.push_str(&format!("<p class='preserve muted'>{}</p>", text("note")));
         }
-        if claim["abandoned"] == true {
-            html.push_str(&format!("<form method='post' action='/room-claim-release'><input type='hidden' name='channel' value='{}'><input type='hidden' name='key' value='{}'><input type='hidden' name='revision' value='{}'><button>Release abandoned claim</button></form>",
+        if claim["abandoned"] == true || claim["owner_idle"] == true {
+            html.push_str(&format!("<form method='post' action='/room-claim-release'><input type='hidden' name='channel' value='{}'><input type='hidden' name='key' value='{}'><input type='hidden' name='revision' value='{}'><button>Release claim</button></form>",
                 crate::escape(room), text("key"), claim["revision"]));
         }
         html.push_str("</li>");

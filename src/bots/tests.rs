@@ -2149,3 +2149,23 @@ fn an_abandoned_producer_wakes_its_dependents_instead_of_leaving_them_asleep() {
     let turn = bot_runs(&state)[0].bot_turn.as_ref().unwrap();
     assert!(turn.reasons.iter().any(|reason| matches!(reason, Reason::Info { info: Message::Resolved(crate::rooms::claims::Outcome::Abandoned), .. })));
 }
+#[test]
+fn stopping_a_producer_bot_wakes_its_dependents_but_an_idle_one_does_not() {
+    let (mut state, chat) = fixture();
+    let peer = crate::chat::create(&mut state);
+    state.chats.iter_mut().find(|c| c.id == peer).unwrap().room = Some("general".into());
+    crate::chat::send(&mut state, &peer, "Gather wood", "test").unwrap();
+    state.runtime.runs.iter_mut().for_each(|run| run.status = "completed".into());
+    command_at(&mut state, &chat, "on", Now(0)).unwrap();
+    command_at(&mut state, &peer, "on", Now(0)).unwrap();
+    claim_wood(&mut state, &peer, json!({"key":"wood","action":"acquire"}));
+    let topic = crate::rooms::claims::wait_topic(&state, &chat, "general/wood").unwrap();
+    waiting_on(&mut state, vec![topic]);
+    reconcile_at(&mut state, 1_000, |_| Ok(())).unwrap();
+    assert!(bot_runs(&state).iter().all(|run| run.chat_id.as_deref() != Some(chat.as_str())), "a healthy producer bot keeps its dependents asleep");
+    stop_all(&mut state, std::slice::from_ref(&peer));
+    reconcile_at(&mut state, 40_000, |_| Ok(())).unwrap();
+    let woken = bot_runs(&state).into_iter().filter(|run| run.chat_id.as_deref() == Some(chat.as_str())).collect::<Vec<_>>();
+    assert_eq!(woken.len(), 1, "stopping the producer resolves its claim as abandoned");
+    assert!(woken[0].bot_turn.as_ref().unwrap().reasons.iter().any(|reason| matches!(reason, Reason::Info { info: Message::Resolved(crate::rooms::claims::Outcome::Abandoned), .. })));
+}

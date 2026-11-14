@@ -175,10 +175,11 @@ it. Claims live beside the room's posts in the same checkpoint:
   acquisition revision. Released claims are kept as tombstones until the room's
   bound evicts them.
 
-`control_room_read` lists live claims. A claim whose owner has no active or
-queued turn and is not a persistent bot is shown as `abandoned`. The room page
-offers the operator an explicit release for those at the revision shown; there
-is no automatic timeout.
+`control_room_read` lists live claims with two separate flags. `owner_idle` means
+the owner has no active or queued turn and is not a persistent bot; it is only an
+observation, and the room page offers the operator an explicit release at the
+revision shown. `abandoned` means the owner is lost (see below). There is no
+automatic timeout.
 
 ### Waiting on a claim
 
@@ -190,10 +191,14 @@ outcome:
 - `done`: the owner reported it done.
 - `released`: the owner or the operator released it unfinished, or the key was
   later acquired again.
-- `abandoned`: host observation that the owner has no active or queued turn and
-  is not a persistent bot, for example after its run was cancelled or failed.
-  Bots reconciliation records this once, so dependents wake instead of sleeping
-  on a producer that will never report. The owner's next update clears it.
+- `abandoned`: host facts that the owner will not act again without new input.
+  Its chat is gone, or its latest turn failed, was cancelled, interrupted or
+  blocked; or its bot was stopped by task cancellation or `/bot off`, which
+  resolves its claims immediately. An owner idle after a completed turn, such as
+  a steering chat between turns, is not lost, and a persistent bot's failed turn
+  is retried. Bots reconciliation records this once, so dependents wake instead
+  of sleeping on a producer that will never report. The owner's next update
+  clears it.
 
 Progress updates such as a note, `working` or `blocked` wake nobody. A wait on a
 key with no live claim is refused, as is a wait on an incarnation that already
