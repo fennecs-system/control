@@ -150,6 +150,11 @@ The initial scope is deliberately small:
   `control_service_status` without an ID returns presets and remaining budget.
   Each service reports its shape and effective `limits` (bytes and CPU count).
   The Services page shows these limits separately from observed live usage.
+  Stopped services can be deleted there one at a time, or all at once with
+  **Clean up stopped services**. Deletion removes the stopped records and, once no
+  service record of that chat remains, the chat's retained `/workspace` volume;
+  only volumes carrying this node's Control labels are removed, and the engine
+  refuses one still mounted. Running services must be stopped first.
   Start with `{"command":"exec your-server", "shape":"medium"}` for 4 GiB,
   or `"large"` for 8 GiB. Allow room inside the limit for application overhead;
   a managed runtime's heap must be smaller than its container memory limit.

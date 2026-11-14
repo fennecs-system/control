@@ -115,3 +115,26 @@ pub(super) fn valid_mounts(
 
 #[cfg(test)]
 mod tests;
+
+/// Removes this node's service workspace volumes for chats not in `keep`, or
+/// only `chat`'s when given. Ownership comes from the volume's Control labels;
+/// the engine refuses a volume still mounted by any container.
+pub(super) fn remove_unused(node: &str, keep: &std::collections::HashSet<String>, chat: Option<&str>) -> (usize, Vec<String>) {
+    let node_label = format!("label=dev.control.node={node}");
+    let listed = match crate::engine::query(&["volume", "ls", "--filter", "label=dev.control.purpose=service-workspace", "--filter", &node_label, "--format", "{{.Name}}\t{{.Label \"dev.control.chat\"}}"]) {
+        Ok(text) => text,
+        Err(error) => return (0, vec![format!("Could not list service workspaces: {error}")]),
+    };
+    let (mut removed, mut failures) = (0, Vec::new());
+    for line in listed.lines() {
+        let Some((name, owner)) = line.split_once('\t') else { continue };
+        if !name.starts_with("control-service-workspace-") || keep.contains(owner) || chat.is_some_and(|chat| chat != owner) {
+            continue;
+        }
+        match crate::engine::query(&["volume", "rm", name]) {
+            Ok(_) => removed += 1,
+            Err(error) => failures.push(format!("{name}: {error}")),
+        }
+    }
+    (removed, failures)
+}
