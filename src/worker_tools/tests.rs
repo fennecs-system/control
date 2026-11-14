@@ -1,6 +1,136 @@
 
 use super::*;
 use crate::runtime::RunKind;
+
+#[test]
+#[ignore = "requires CONTROL_QA_SERVICE_IMAGE and isolated CONTROL_STATE_DIR; real pinned MCP bridge, no models or credentials"]
+fn live_mailbox_notifications_and_tool_calls_roundtrip() {
+    use std::{
+        io::{BufRead, BufReader, Write},
+        process::Stdio,
+        time::{Duration, Instant},
+    };
+    let root = crate::config::state_directory().unwrap();
+    assert!(root
+        .to_string_lossy()
+        .starts_with("/private/tmp/control-mailbox-qa."));
+    let image = std::env::var("CONTROL_QA_SERVICE_IMAGE").unwrap();
+    let mut state = State::default();
+    let chat = crate::chat::create(&mut state);
+    crate::chat::send(
+        &mut state,
+        &chat,
+        "Isolated mailbox transport probe",
+        "test",
+    )
+    .unwrap();
+    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].attempts.push(crate::usage::Attempt {
+        workspace_id: Some("attempt-a".into()),
+        image: Some(image.clone()),
+        ..Default::default()
+    });
+    let run = state.runtime.runs[0].id.clone();
+    let workspace = crate::runtime::workspace("attempt-a").unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let workspace = workspace.canonicalize().unwrap();
+    let shared = Arc::new(Mutex::new(state));
+    let name = format!("control-mailbox-qa-{}", std::process::id());
+    struct Cleanup(String);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = crate::engine::query(&["rm", "-f", &self.0]);
+        }
+    }
+    let _cleanup = Cleanup(name.clone());
+    let mut command = crate::engine::scrubbed();
+    command.args([
+        "run",
+        "--rm",
+        "--interactive",
+        "--pull=never",
+        "--name",
+        &name,
+        "--network=none",
+        "--read-only",
+        "--cap-drop=ALL",
+        "--security-opt=no-new-privileges",
+        "--memory=128m",
+        "--cpus=1",
+        "--pids-limit=32",
+        "--user",
+        &format!("{}:{}", unsafe { libc::getuid() }, unsafe {
+            libc::getgid()
+        }),
+        "--mount",
+        &format!("type=bind,src={},dst=/workspace", workspace.display()),
+        "--entrypoint=/bin/control-room-mcp",
+        &image,
+    ]);
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    let mut requests = vec![
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"qa","version":"1"}}}),
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+    ];
+    for i in 3..23 {
+        requests.push(json!({"jsonrpc":"2.0","id":i,"method":"tools/call","params":{"name":"control_room_post","arguments":{"room":"general","message":format!("isolated-probe-{i}"),"delivery":"record"}}}));
+        requests.push(
+            json!({"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":i}}),
+        );
+    }
+    let expected = requests
+        .iter()
+        .filter_map(|r| r.get("id").cloned())
+        .collect::<Vec<_>>();
+    for request in requests {
+        writeln!(input, "{request}").unwrap();
+    }
+    drop(input);
+    let (sender, replies) = std::sync::mpsc::channel();
+    let output = child.stdout.take().unwrap();
+    let reader = std::thread::spawn(move || {
+        for line in BufReader::new(output).lines() {
+            let _ = sender.send(line);
+        }
+    });
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut observed = Vec::new();
+    while Instant::now() < deadline {
+        pump(&shared, &run, &workspace, false);
+        while let Ok(line) = replies.try_recv() {
+            let value: Value = serde_json::from_str(&line.unwrap()).unwrap();
+            assert!(value.get("error").is_none(), "{value}");
+            observed.push(value["id"].clone());
+        }
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    if child.try_wait().unwrap().is_none() {
+        let _ = child.kill();
+    }
+    let status = child.wait().unwrap();
+    reader.join().unwrap();
+    while let Ok(line) = replies.try_recv() {
+        let value: Value = serde_json::from_str(&line.unwrap()).unwrap();
+        assert!(value.get("error").is_none(), "{value}");
+        observed.push(value["id"].clone());
+    }
+    assert!(
+        status.success(),
+        "MCP bridge did not complete; replies: {observed:?}"
+    );
+    assert_eq!(observed, expected);
+    assert_eq!(shared.lock().unwrap().collective.posts.len(), 20);
+}
 #[test]
 fn ordinary_agents_receive_the_shared_continuity_mcp_without_bot_authority() {
     for backend in [
