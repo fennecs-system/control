@@ -122,3 +122,30 @@ fn gather_keeps_results_that_arrive_before_the_deadline() {
     );
     assert!(gather::<u32>(Vec::new(), Instant::now() + Duration::from_secs(5)).is_empty());
 }
+
+#[test]
+fn operators_forget_stopped_services_and_keep_workspaces_of_live_chats() {
+    let (mut state, run, chat, time) = super::super::tests::fixture();
+    for nonce in ["live", "old-a", "old-b"] {
+        admit(&mut state, Request { run: &run, generation: "attempt-a", nonce },
+            Input { command: "sleep 30".to_owned().try_into().unwrap(), lease_seconds: -1, storage_limit_mb: None, shape: None },
+            "node-a".to_owned().try_into().unwrap(), time, |_| Ok(())).unwrap();
+    }
+    for index in [1, 2] {
+        state.services[index].resource.phase = Phase::Stopped(StopReason::Requested);
+    }
+    let (live, old) = (state.services[0].resource.id.as_str().to_owned(), state.services[1].resource.id.as_str().to_owned());
+    assert!(forget(&mut state, Some(&live), |_| Ok(())).is_err(), "live services are stopped first, never deleted");
+    assert!(forget(&mut state, Some(&old), |_| Err(io::Error::other("disk full"))).is_err());
+    assert_eq!(state.services.len(), 3, "a failed save restores the records");
+
+    let (keep, target) = forget(&mut state, Some(&old), |_| Ok(())).unwrap();
+    assert_eq!(state.services.len(), 2);
+    assert_eq!(target.as_deref(), Some(chat.as_str()));
+    assert!(keep.contains(&chat), "the chat still has services, so its workspace stays");
+    assert!(card(&state.services[1].binding_snapshot()).contains("value='delete'"));
+
+    let (keep, target) = forget(&mut state, None, |_| Ok(())).unwrap();
+    assert_eq!(state.services.len(), 1, "cleanup removes every stopped record and only those");
+    assert!(target.is_none() && keep.contains(&chat));
+}
