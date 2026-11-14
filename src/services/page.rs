@@ -185,12 +185,12 @@ fn compute_label(shape: Option<compute::Shape>, limits: compute::Limits) -> Stri
 
 fn compute_panel(services: &[Service]) -> String {
     let used = compute::reserved(services);
-    let capacity = compute::CAPACITY;
+    let capacity = compute::capacity();
     let rows = compute::SHAPES.map(|shape| {
         let limits = shape.limits();
         format!("<tr><td><code>{}</code></td><td>{} GiB</td><td>{}</td></tr>", shape.name(), limits.memory_bytes / compute::GIB, limits.cpus)
     }).join("");
-    format!("<section class='record service-record'><h3>Service resources</h3><p>{} MiB of {} GiB RAM · {} of {} CPUs reserved</p><table><thead><tr><th>Shape</th><th>Memory limit</th><th>CPU limit</th></tr></thead><tbody>{rows}</tbody></table><p class='muted'>Ask an agent to use a shape when starting a service. Defaults: Lite 512 MiB, Full 2 GiB; 1 CPU. To change size, stop and replace in the same chat; /workspace is retained.</p><p class='muted'>This budget covers Control services only. Allow headroom for models, workers and the host. Reserved limits are separate from live usage below.</p></section>", used.memory_bytes / (1024 * 1024), capacity.memory_bytes / compute::GIB, used.cpus, capacity.cpus)
+    format!("<section class='record service-record'><h3>Service resources</h3><p>{} MiB of {} GiB RAM · {} of {} CPU limits reserved ({} CPUs, {}x oversubscription)</p><table><thead><tr><th>Shape</th><th>Memory limit</th><th>CPU limit</th></tr></thead><tbody>{rows}</tbody></table><p class='muted'>Ask an agent to use a shape when starting a service. Defaults: Lite 512 MiB, Full 2 GiB; 1 CPU. To change size, stop and replace in the same chat; /workspace is retained.</p><p class='muted'>This budget covers Control services only. Allow headroom for models, workers and the host. Reserved limits are separate from live usage below.</p></section>", used.memory_bytes / (1024 * 1024), capacity.memory_bytes / compute::GIB, used.cpus, capacity.admitted_cpus(), capacity.cpus, capacity.cpu_oversubscription)
 }
 
 fn card(service: &Service) -> String {
