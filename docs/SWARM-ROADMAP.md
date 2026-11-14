@@ -267,6 +267,15 @@ exist without a full off-lock writer. New work follows current crate contracts.
 | R3 | Distinguish missing/corrupt history from an empty activity record in UI and model context. | Missing/decode-failed records preserve cause and references; ordinary empty records remain empty. |
 | R4 | Bound HTTP handler admission before spawning, with a bounded overload path and existing deadlines. | The implementation PR must specify numeric handler cap H and request/overload deadlines from measured memory and slow-client fixtures. Test H+1 admission, recovery, shutdown and long-lived routes; no unbounded rejection threads. |
 
+R4 implementation pending review: the HTTP adapter admits at most 32 handlers,
+including the existing maximum 16 live-update streams. Overload uses one
+nonblocking best-effort response write and closes; it creates no rejection thread
+or application queue. Existing 10-second request-read and 3-second I/O bounds
+remain, with shutdown checked between reads. Socket and isolated process tests
+cover saturation, recovery, retained panics and live streams alongside trickled
+requests. See [HTTP-ADMISSION.md](HTTP-ADMISSION.md) and the release measurements
+in [PERFORMANCE.md](PERFORMANCE.md). This does not change agent timeouts or goals.
+
 R1a/R1b form the recovery increment; R2 is independently testable. R3 and R4 can
 ship as isolated fixes. Keep typed delivery-retirement bookkeeping out of task
 context while retaining lifecycle records. Continue the existing shared agent

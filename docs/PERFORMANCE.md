@@ -1,5 +1,58 @@
 # Performance checks
 
+## Bounded HTTP admission (2026-11-14)
+
+Compared main `6bf92ef` with the HTTP admission patch, using the same Linux
+aarch64 offline image and Rust 1.99.0 release build with debug symbols. Six
+alternating pairs followed warmup, on one pinned CPU, 512 MiB and no swap. Each
+probe started a fresh private node, with no provider calls, service containers or
+personal configuration. Values are medians of the six process measurements.
+
+| Fixture | Baseline → revised |
+| --- | ---: |
+| Ordinary loopback health request, 1,000 per process | 27.917 → 28.479 µs |
+| Process p95 health latency | 43.522 → 41.626 µs |
+| Total server threads: 16 live streams + 128 offered partial bodies | 151 → 39 |
+| Server RSS at that load | 81.93 → 37.92 MiB |
+| SIGTERM shutdown while bodies keep trickling | 9.913 → 0.063 s |
+| Coordination routing, 64 chats | 1.377 → 1.361 µs |
+| Cached TUI render, 10 / 100 / 500 messages | 63.204 / 63.366 / 62.896 → 62.643 / 64.493 / 63.790 µs |
+
+The 39 threads comprise 32 admitted HTTP handlers plus seven other server
+threads in this fixture. Idle measurements had seven/eight total threads and
+roughly 23–27 MiB RSS. The 32-handler cap retains capacity for 16 ordinary requests
+alongside the existing maximum 16 live streams. Partial authenticated requests
+declared a 512 KiB body and sent 511 KiB, retaining their final bytes. Excess
+patched connections closed without completing the request; an independent
+socket/process regression verifies the complete best-effort `503` when the peer
+has sent no request bytes. This is a bound on admission, not a whole-process RAM
+budget or guaranteed availability when all slots are occupied.
+
+Health medians overlap (26.834–30.625 µs baseline; 27.334–35.625 µs revised).
+All terminal-buffer hashes match and render ranges overlap. One baseline routing
+process was a large outlier at 35.818 µs; it is retained in the raw measurements
+and included in the median calculation. These results show no material ordinary
+request/core/TUI regression; small median changes do not establish a speedup.
+Health timings include local TCP setup and response reads, not inference or
+browser paint. RSS excludes the probe, container runtime and other workloads.
+The shutdown result is specific to continuously arriving request bytes; existing
+operation-specific waits still apply to already admitted tool calls.
+
+Socket and real-server tests passed on macOS and Linux, including H+1 overload,
+slot recovery, nonreading peers, retained panics and authenticated streams during
+shutdown. Real user-space CPU-clock flamegraphs contain 1,318 / 1,339 routing
+samples and 931 / 935 TUI samples. HTTP traces include the Rust probe and its
+server children. These short-lived request threads produced too few user-space
+samples to interpret; including kernel CPU yielded 258 baseline but only five
+revised samples, with unresolved kernel symbols. These HTTP traces do not support
+a per-function comparison. A denser diagnostic trace was stopped because its
+instrumentation distorted the workload; it is not used for timing claims. All
+paired measurements above were taken without perf attached. Full data, executables and commands
+remain in `/private/tmp/control-http-admission-profile/`; copied logs, folded
+stacks, probe source and SVGs are under
+`.control/performance/http-admission-20261114/`. See
+[HTTP-ADMISSION.md](HTTP-ADMISSION.md) for limits and overload semantics.
+
 ## Event-driven chat delivery (2026-11-14)
 
 Compared deployed main `1be79c7` with the event-driven transport patch using five

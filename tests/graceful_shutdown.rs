@@ -1,4 +1,6 @@
 //! Real server-process checks, with isolated placeholder-only configuration.
+#[path = "graceful_shutdown/http_admission.rs"]
+mod http_admission;
 use std::{
     fs,
     io::{Read, Write},
