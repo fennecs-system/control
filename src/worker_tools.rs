@@ -74,7 +74,7 @@ fn dispatch_at(
         && run.attempts.last().is_some_and(|attempt|attempt.turn_mailbox.is_some());
     let result = match request["method"].as_str().unwrap_or("") {
         "initialize" => {
-            json!({"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"control-worker","version":"0.1"}})
+            json!({"protocolVersion":control_context::tool_policy::MCP_LATEST,"capabilities":{"tools":{}},"serverInfo":{"name":"control-worker","version":"0.1"}})
         }
         "ping" => json!({}),
         "tools/list" => {

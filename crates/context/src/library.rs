@@ -3,6 +3,15 @@ use crate::TOOLS;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+/// Stored definitions, all revisions included.
+const MAX_DEFINITIONS: usize = 4096;
+/// Distinct current lenses.
+const MAX_LENSES: usize = 128;
+/// Lenses selected for one resolution.
+const MAX_SELECTED: usize = 128;
+/// Includes or documents named by one definition.
+const MAX_REFERENCES: usize = 128;
+
 #[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Definition {
@@ -70,6 +79,7 @@ impl Library {
         let shipped: Vec<Definition> = serde_json::from_str(include_str!("builtin-lens-history.json"))
             .expect("Built-in lens history must be valid");
         let mut changed = false;
+        let mut lenses = self.current().len();
         for definition in Self::default().definitions {
             let current = self.get(&definition.id).cloned();
             let mut installed = self.builtin.get(&definition.id).copied();
@@ -79,10 +89,10 @@ impl Library {
                 changed = true;
             }
             match current {
-                None if self.definitions.len() < 4096 && self.current().len() < 128 => {}
+                None if self.definitions.len() < MAX_DEFINITIONS && lenses < MAX_LENSES => lenses += 1,
                 Some(current) if installed == Some(current.revision)
                     && definition.revision > current.revision
-                    && self.definitions.len() < 4096 => {}
+                    && self.definitions.len() < MAX_DEFINITIONS => {}
                 _ => continue,
             }
             self.builtin.insert(definition.id.clone(), definition.revision);
@@ -113,8 +123,8 @@ impl Library {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
-        if roots.len() > 128 {
-            return Err("Select at most 128 lenses.".into());
+        if roots.len() > MAX_SELECTED {
+            return Err(format!("Select at most {MAX_SELECTED} lenses."));
         }
         let mut resolved = Resolved {
             roots: roots.clone(),
@@ -198,7 +208,7 @@ impl Library {
         Ok(())
     }
     pub fn validate(&self, documents: &[DocumentInput]) -> Result<(), String> {
-        if self.current().len() > 128 || self.definitions.len() > 4096 {
+        if self.current().len() > MAX_LENSES || self.definitions.len() > MAX_DEFINITIONS {
             return Err("The local lens library is full.".into());
         }
         let mut versions = BTreeSet::new();
@@ -208,8 +218,8 @@ impl Library {
                 || d.name.chars().count() > 80
                 || d.revision == 0
                 || d.instructions.chars().count() > 4000
-                || d.includes.len() > 128
-                || d.documents.len() > 128
+                || d.includes.len() > MAX_REFERENCES
+                || d.documents.len() > MAX_REFERENCES
                 || !versions.insert((&d.id, d.revision))
             {
                 return Err("Invalid lens definition or duplicate revision.".into());

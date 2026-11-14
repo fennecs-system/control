@@ -24,6 +24,7 @@ let
     mkdir -p $out/bin src/room-mcp
     cp ${../tools/room-mcp/main.rs} src/room-mcp/main.rs
     cp ${../tools/platform-flags.rs} src/platform-flags.rs
+    cp ${../tools/mailbox-limits.rs} src/mailbox-limits.rs
     rustc --edition=2024 -O src/room-mcp/main.rs -o $out/bin/control-room-mcp
   '';
 in

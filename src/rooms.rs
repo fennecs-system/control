@@ -11,6 +11,8 @@ use std::{
 pub const NAMES: [&str; 3] = ["general", "engineering", "research"];
 mod address;
 pub(crate) mod claims;
+#[path = "../tools/mailbox-limits.rs"]
+mod mailbox_limits;
 pub(crate) use address::{for_task, names};
 mod notifications;
 pub use notifications::{Watch, reconcile};
@@ -42,17 +44,9 @@ pub struct Post {
     pub delivery: Delivery,
 }
 pub fn read(state: &State, room: &str) -> Value {
-    let legacy = state
-        .collective
-        .room
-        .iter()
-        .filter(|(r, _)| r == room)
-        .rev()
-        .take(50)
-        .map(|(_, text)| json!({"text":text,"author":"operator"}));
     let posts = state.collective.posts.iter().filter(|p| p.room == room).rev().take(50)
         .map(|p| json!({"text":p.text,"chat":p.chat,"run":p.run,"delivery":p.delivery,"author":if p.run.is_some(){"agent"}else{"operator"}}));
-    json!({"room":room,"posts":posts.chain(legacy).take(50).collect::<Vec<_>>(),"claims":claims::listed(state, room),
+    json!({"room":room,"posts":posts.collect::<Vec<_>>(),"claims":claims::listed(state, room),
         "chats":state.chats.iter().rev().filter(|c| c.room.as_deref()==Some(room)).take(50).map(|c|json!({"id":c.id,"title":c.title})).collect::<Vec<_>>()})
 }
 pub fn tool(state: &mut State, name: &str, args: &Value) -> Result<Value, &'static str> {
@@ -197,7 +191,7 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
         };
         match req["method"].as_str().unwrap_or("") {
             "initialize" => Ok(
-                json!({"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"control-room","version":"0.1"}}),
+                json!({"protocolVersion":control_context::tool_policy::MCP_LATEST,"capabilities":{"tools":{}},"serverInfo":{"name":"control-room","version":"0.1"}}),
             ),
             "ping" => Ok(json!({})),
             "tools/list" => { let mut tools = vec![
@@ -340,8 +334,8 @@ pub(crate) fn read_request(path: &Path) -> std::io::Result<Value> {
         return Err(std::io::Error::other("Not a regular request"));
     }
     let mut bytes = Vec::new();
-    file.take(32769).read_to_end(&mut bytes)?;
-    if bytes.len() > 32768 {
+    file.take(mailbox_limits::REQUEST_ENVELOPE_BYTES as u64 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > mailbox_limits::REQUEST_ENVELOPE_BYTES {
         return Err(std::io::Error::other("Request too large"));
     }
     serde_json::from_slice(&bytes).map_err(std::io::Error::other)

@@ -4,7 +4,6 @@ use std::collections::HashMap;
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Collective {
-    pub room: Vec<(String, String)>,
     pub posts: Vec<crate::rooms::Post>,
     pub room_watches: Vec<crate::rooms::Watch>,
     pub(crate) proposals: Vec<Knowledge>,

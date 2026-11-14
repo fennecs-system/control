@@ -5,6 +5,8 @@
 //! fail every later tool call in the turn. Only a closed stdin or stdout ends it.
 #[path = "../platform-flags.rs"]
 mod platform_flags;
+#[path = "../mailbox-limits.rs"]
+mod mailbox_limits;
 use std::{
     fs,
     io::{self, BufRead, Read, Write},
@@ -20,7 +22,12 @@ const LOG_LIMIT: u64 = 65536;
 /// The latest exchange step, overwritten each time, so a stalled session shows
 /// whether the provider or the host stopped answering.
 const TRACE: &str = "/workspace/.control-room-mcp.last";
-const MAX_REQUEST: usize = 32700;
+/// Room for the envelope `{"nonce":"<ns>-<n>","request":…}` around a request.
+const ENVELOPE_OVERHEAD: usize = 68;
+const MAX_REQUEST: usize = mailbox_limits::REQUEST_ENVELOPE_BYTES - ENVELOPE_OVERHEAD;
+const MAX_RESPONSE: usize = 512 * 1024;
+/// How long a request may wait for the host before it is answered with an error.
+const HOST_TIMEOUT: Duration = Duration::from_secs(35);
 /// Shared bind mounts can briefly report a fresh rename or create as missing.
 const SEND_ATTEMPTS: u32 = 8;
 fn response(path: &Path) -> io::Result<String> {
@@ -32,8 +39,8 @@ fn response(path: &Path) -> io::Result<String> {
         return Err(io::Error::other("Not a regular response"));
     }
     let mut text = String::new();
-    file.take(524289).read_to_string(&mut text)?;
-    if text.len() > 524288 {
+    file.take(MAX_RESPONSE as u64 + 1).read_to_string(&mut text)?;
+    if text.len() > MAX_RESPONSE {
         return Err(io::Error::other("Response too large"));
     }
     Ok(text)
@@ -236,11 +243,11 @@ fn main() -> io::Result<()> {
                     }
                     break;
                 }
-                if start.elapsed() > Duration::from_secs(35) {
+                if start.elapsed() > HOST_TIMEOUT {
                     // Keep serving: answer this request with an error rather than exiting the transport.
-                    note(&format!("request {count} had no host reply within 35 s"));
+                    note(&format!("request {count} had no host reply within {} s", HOST_TIMEOUT.as_secs()));
                     if let Some(id) = &id {
-                        reply(&mut stdout, &error_reply(id, "Control tool host did not respond within 35 s"))?;
+                        reply(&mut stdout, &error_reply(id, &format!("Control tool host did not respond within {} s", HOST_TIMEOUT.as_secs())))?;
                     }
                     break;
                 }

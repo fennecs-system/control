@@ -136,3 +136,9 @@ fn an_owner_idle_after_a_completed_turn_is_not_lost_but_a_stopped_one_is() {
     assert_eq!(stopped[0].outcome, Outcome::Abandoned);
     assert!(abandon_owned(&mut state, &a).is_empty());
 }
+
+#[test]
+fn rule_messages_state_the_enforced_limits() {
+    assert!(KEY_RULE.contains(&format!("1–{MAX_KEY} ")));
+    assert!(NOTE_RULE.contains(&format!(" {MAX_NOTE} ")));
+}
