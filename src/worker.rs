@@ -1208,6 +1208,64 @@ fn project_operation<T>(bridge: Option<(&Arc<Mutex<State>>, &str)>, generation: 
     record(if result.is_ok() {"completed"} else {"failed"}, output);
     result
 }
+
+/// A successful CLI exit is not a completed tool exchange. Check after the
+/// stdout reader joins, so a buffered completion cannot be mistaken for loss.
+/// No timeout or automatic retry: a host effect may already have happened.
+fn capture_codex(
+    reader: impl std::io::Read,
+    mut update: impl FnMut(crate::usage::Activity),
+) -> (Option<crate::usage::Tokens>, bool) {
+    // Completion is adapter state, independent of the bounded UI activity tail.
+    let mut pending = std::collections::HashSet::new();
+    let tokens = crate::usage::capture_with(reader, |event| {
+        if event.kind == "mcp_tool_call" {
+            if matches!(event.status.as_str(), "in_progress" | "running") {
+                pending.insert(event.id.clone());
+            } else {
+                pending.remove(&event.id);
+            }
+        }
+        update(event);
+    });
+    (tokens, !pending.is_empty())
+}
+fn finish_codex_tools(
+    attempt: &mut crate::usage::Attempt,
+    bridge: Option<(&Arc<Mutex<State>>, &str)>,
+    generation: &str,
+    host_finished: bool,
+    unfinished: bool,
+) -> Result<(), (&'static str, String)> {
+    if host_finished || !unfinished {
+        return Ok(());
+    }
+    interrupt_unfinished_tools(bridge, generation);
+    attempt.termination = Some(crate::attempt_control::Termination::ProviderError);
+    Err(("interrupted", "The provider ended with an unfinished MCP tool call. Inspect pending requests and service status before retrying: the tool's outcome is unconfirmed. The published checkpoint is unchanged; check recovery evidence for unpublished work.".into()))
+}
+fn interrupt_unfinished_tools(bridge: Option<(&Arc<Mutex<State>>, &str)>, generation: &str) {
+    let Some((shared, id)) = bridge else { return };
+    let Ok(mut state) = shared.lock() else { return };
+    let Some(attempt) = state
+        .runtime
+        .runs
+        .iter_mut()
+        .find(|r| r.id == id)
+        .and_then(|r| r.attempts.last_mut())
+        .filter(|a| a.workspace_id.as_deref() == Some(generation))
+    else {
+        return;
+    };
+    for activity in &mut attempt.activity {
+        if activity.kind == "mcp_tool_call"
+            && matches!(activity.status.as_str(), "in_progress" | "running")
+        {
+            activity.status = "interrupted".into();
+            activity.output = "The provider session ended before reporting this tool's result. Inspect host request/resource status before retrying; the effect may already have happened.".into();
+        }
+    }
+}
 fn publish_workspace(attempt: &mut crate::usage::Attempt, workspace: &Path, id: &str, bridge: Option<(&Arc<Mutex<State>>, &str)>) -> std::io::Result<()> {
     let result = if attempt.project.is_some() {
         project_operation(bridge, id, "project-checkpoint", "Saving checkpoint", ||crate::projects::publish(attempt, workspace, id))
@@ -1352,7 +1410,7 @@ fn execute(
     let diff_workspace = absolute.clone();
     let review_only=attempt.review_only;
     let accounting = std::thread::spawn(move || {
-        crate::usage::capture_with(stdout, |event| {
+        capture_codex(stdout, |event| {
             let Some((state, id)) = &live else {
                 return;
             };
@@ -1438,7 +1496,7 @@ fn execute(
         if let Err(message) = crate::attempt_control::stop(bridge, attempt) {
             return Err(("interrupted", message.into()));
         }
-        attempt.tokens = accounting.join().unwrap_or(None);
+        attempt.tokens = accounting.join().unwrap_or_default().0;
         return Err(if crate::lifecycle::cancelled(bridge) {
             (
                 "cancelled",
@@ -1452,12 +1510,14 @@ fn execute(
             failed("Worker stopped after its deadline or a process error.")
         });
     }
-    attempt.tokens = accounting.join().unwrap_or(None);
+    let (tokens, unfinished) = accounting.join().map_err(|_| failed("Could not read the provider's final tool results."))?;
+    attempt.tokens = tokens;
     if !result.unwrap_or(false) {
         let stderr = diagnostics.join().unwrap_or(UNKNOWN_FAILURE);
         return Err(failed(stderr));
     }
     let _ = diagnostics.join();
+    finish_codex_tools(attempt, bridge, id, handoff.is_some(), unfinished)?;
     let output = handoff.or_else(|| read_report(&workspace.join(".control-result")).ok())
         .unwrap_or_else(|| "Worker finished without a safe final report.".into());
     let summary: String = output.chars().take(16000).collect();

@@ -976,6 +976,22 @@ separately from model inference; see [PERFORMANCE.md](PERFORMANCE.md).
 
 ## Regression lanes, deferrals and delivery evidence
 
+**2026-11-14 approval-stall investigation (not yet deployed).** A Codex setup
+attempt ended with a successful CLI exit while its first MCP room post remained
+`in_progress`; no approval request or service had been created. This was not an
+approval expiring. A replay of the identical objective on the deployed stack
+reached an 8-GiB service, five children and pending persistent-bot approvals;
+the replay was cancelled without granting access. The original transport/provider
+stall remains unreproduced. The narrow adapter fix rejects successful completion
+with an unfinished MCP call after draining stdout, marks retained activity
+interrupted and uses the existing recovery path without publishing or retrying
+uncertain effects. Accepted host handoffs remain valid. It adds no supervisor
+concept, wake or deadline. A real pinned-image mailbox fixture exercises
+initialize, notifications, discovery and 20 consecutive room posts without a
+model; synthetic exit fixtures cover interruption, completed/failed calls,
+accepted handoffs and stale generations. These checks establish honest failure
+reporting, not a fix for the original stall or faster gameplay.
+
 Preserve child-result lineage, typed activity, room discovery, approval and
 continuity regressions. Reproduce historical failures against main before
 reopening them. Follow measured knowledge/transcript/polling hot paths; keep disk

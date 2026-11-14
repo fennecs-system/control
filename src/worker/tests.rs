@@ -1,6 +1,173 @@
 
 use super::*;
 use crate::runtime::RunKind;
+
+#[test]
+fn codex_tool_outcome_survives_activity_truncation_and_drains_final_results() {
+    for completion in [None, Some("completed"), Some("failed")] {
+        let mut lines = String::new();
+        let mut append = |id: &str, kind: &str, status: &str| {
+            lines.push_str(
+                &serde_json::json!({"type":"item.updated", "item":{
+                    "id":id, "type":kind, "tool":"control_room_post", "command":"test",
+                    "status":status
+                }})
+                .to_string(),
+            );
+            lines.push('\n');
+        };
+        append("mcp1", "mcp_tool_call", "in_progress");
+        for i in 0..100 {
+            append(&format!("cmd{i}"), "command_execution", "completed");
+        }
+        if let Some(status) = completion {
+            append("mcp1", "mcp_tool_call", status);
+        }
+        let mut tail = std::collections::VecDeque::new();
+        let (_, unfinished) = capture_codex(lines.as_bytes(), |event| {
+            tail.push_back(event);
+            if tail.len() > 64 {
+                tail.pop_front();
+            }
+        });
+        assert_eq!(tail.len(), 64);
+        assert_eq!(unfinished, completion.is_none());
+        if completion.is_none() {
+            assert!(tail.iter().all(|event| event.kind != "mcp_tool_call"));
+        }
+    }
+}
+
+#[test]
+fn unfinished_codex_tool_prevents_success_without_publishing_or_retrying() {
+    let mut state = State::default();
+    let chat = crate::chat::create(&mut state);
+    state.chats[0].workspace = Some("previous-output".into());
+    crate::chat::send(&mut state, &chat, "Build", "test").unwrap();
+    checkpoint_next(&mut state, |_| Ok(())).unwrap();
+    let id = state.runtime.runs[0].id.clone();
+    let attempt = state.runtime.runs[0].attempts[0].clone();
+    let generation = attempt.workspace_id.clone().unwrap();
+    record_activity_for(
+        &mut state,
+        &id,
+        &generation,
+        crate::usage::Activity {
+            id: "item_1".into(),
+            kind: "mcp_tool_call".into(),
+            text: "control_room_post".into(),
+            status: "in_progress".into(),
+            output: String::new(),
+        },
+    );
+    let shared = Arc::new(Mutex::new(state));
+    let mut attempt = attempt;
+    let result = finish_codex_tools(&mut attempt, Some((&shared, &id)), &generation, false, true);
+    assert!(matches!(&result, Err(("interrupted", _))));
+    assert_eq!(
+        attempt.termination,
+        Some(crate::attempt_control::Termination::ProviderError)
+    );
+    let mut state = shared.lock().unwrap();
+    commit(
+        &mut state,
+        &id,
+        Action::Task,
+        attempt,
+        result.map(|()| "done".into()),
+        false,
+        |_| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(state.runtime.runs.len(), 1);
+    assert_eq!(state.runtime.runs[0].status, "interrupted");
+    assert_eq!(state.chats[0].workspace.as_deref(), Some("previous-output"));
+    let events = crate::history::activity(Some(&chat), &state.runtime.runs[0].attempts[0]);
+    assert_eq!(events[0].status, "interrupted");
+    assert!(events[0]
+        .output
+        .contains("effect may already have happened"));
+}
+
+#[test]
+fn codex_completion_distinguishes_finished_tools_and_host_handoffs() {
+    for (kind, status, host_finished) in [
+        ("mcp_tool_call", "completed", false),
+        ("mcp_tool_call", "failed", false),
+        ("command_execution", "in_progress", false),
+        ("mcp_tool_call", "in_progress", true),
+    ] {
+        let mut state = State::default();
+        let chat = crate::chat::create(&mut state);
+        crate::chat::send(&mut state, &chat, "Build", "test").unwrap();
+        checkpoint_next(&mut state, |_| Ok(())).unwrap();
+        let id = state.runtime.runs[0].id.clone();
+        let mut attempt = state.runtime.runs[0].attempts[0].clone();
+        let generation = attempt.workspace_id.clone().unwrap();
+        let event = crate::usage::Activity {
+            id: "item_1".into(),
+            kind: kind.into(),
+            text: "tool".into(),
+            status: "in_progress".into(),
+            output: String::new(),
+        };
+        record_activity_for(&mut state, &id, &generation, event.clone());
+        // The reader has drained its final completion before the exit guard runs.
+        record_activity_for(
+            &mut state,
+            &id,
+            &generation,
+            crate::usage::Activity {
+                status: status.into(),
+                ..event
+            },
+        );
+        let shared = Arc::new(Mutex::new(state));
+        assert!(finish_codex_tools(
+            &mut attempt,
+            Some((&shared, &id)),
+            &generation,
+            host_finished,
+            kind == "mcp_tool_call" && status == "in_progress"
+        )
+        .is_ok());
+        assert!(attempt.termination.is_none());
+        assert_eq!(
+            shared.lock().unwrap().runtime.runs[0].attempts[0].activity[0].status,
+            status
+        );
+    }
+}
+
+#[test]
+fn stale_codex_exit_cannot_interrupt_another_attempt() {
+    let mut state = State::default();
+    let chat = crate::chat::create(&mut state);
+    crate::chat::send(&mut state, &chat, "Build", "test").unwrap();
+    checkpoint_next(&mut state, |_| Ok(())).unwrap();
+    let id = state.runtime.runs[0].id.clone();
+    let attempt = state.runtime.runs[0].attempts[0].clone();
+    let generation = attempt.workspace_id.clone().unwrap();
+    record_activity_for(
+        &mut state,
+        &id,
+        &generation,
+        crate::usage::Activity {
+            id: "item_1".into(),
+            kind: "mcp_tool_call".into(),
+            text: "tool".into(),
+            status: "in_progress".into(),
+            output: String::new(),
+        },
+    );
+    let shared = Arc::new(Mutex::new(state));
+    interrupt_unfinished_tools(Some((&shared, &id)), "stale-generation");
+    assert_eq!(
+        shared.lock().unwrap().runtime.runs[0].attempts[0].activity[0].status,
+        "in_progress"
+    );
+}
+
 #[test]
 fn both_adapters_can_commit_host_finished_handoff_without_a_final_model_reply() {
     use control_context::{
