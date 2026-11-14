@@ -224,10 +224,9 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
                     "control_room_read" => read(state, &room()?),
                     "control_room_claim" => {
                         let (room, chat) = (room()?, chat.id.clone());
-                        let (value, revision) = claims::call(state, &chat, &room, args)?;
-                        if let Some(revision) = revision {
-                            let key = value["claim"]["key"].as_str().unwrap_or_default().to_owned();
-                            crate::bots::claim_changed(state, &room, &key, revision, Some(&chat));
+                        let (value, resolved) = claims::call(state, &chat, &room, args)?;
+                        if let Some(resolved) = resolved {
+                            crate::bots::claim_resolved(state, &resolved);
                         }
                         value
                     }

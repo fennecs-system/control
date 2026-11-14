@@ -2083,17 +2083,21 @@ fn waiting_on(state: &mut State, topics: Vec<String>) {
     }));
 }
 fn claim_wood(state: &mut State, owner: &str, args: serde_json::Value) -> u64 {
-    let (value, revision) = crate::rooms::claims::call(state, owner, "general", &args).unwrap();
-    claim_changed_at(state, "general", "wood", revision.unwrap(), Some(owner), Now(5_000));
+    let (value, resolved) = crate::rooms::claims::call(state, owner, "general", &args).unwrap();
+    if let Some(resolved) = resolved {
+        claim_resolved_at(state, &resolved, Now(5_000));
+    }
     value["claim"]["revision"].as_u64().unwrap()
 }
 #[test]
-fn claim_waits_ignore_chatter_and_wake_on_the_claim_change() {
+fn claim_waits_ignore_progress_and_chatter_and_wake_on_resolution() {
     let (mut state, chat) = fixture();
     let peer = crate::chat::create(&mut state);
+    crate::chat::send(&mut state, &peer, "Gather wood", "test").unwrap();
     command_at(&mut state, &chat, "on", Now(0)).unwrap();
+    let revision = claim_wood(&mut state, &peer, json!({"key":"wood","action":"acquire"}));
     let topic = crate::rooms::claims::wait_topic(&state, &chat, "general/wood").unwrap();
-    assert_eq!(topic, "claim:general/wood@0");
+    assert_eq!(topic, format!("claim:general/wood#{revision}"));
     waiting_on(&mut state, vec![topic]);
     reconcile_at(&mut state, 1_000, |_| Ok(())).unwrap();
     assert!(wait_topics(&state, &chat).contains(&format!("conversation:{chat}")),
@@ -2101,18 +2105,19 @@ fn claim_waits_ignore_chatter_and_wake_on_the_claim_change() {
 
     post(&mut state, Some(&peer), "Still chopping");
     peer_message_at(&mut state, &chat, 1, Now(2_000));
+    let revision = claim_wood(&mut state, &peer, json!({"key":"wood","action":"update","note":"12 logs","revision":revision}));
     reconcile_at(&mut state, 3_000, |_| Ok(())).unwrap();
-    assert!(bot_runs(&state).is_empty(), "room posts and unselected direct messages stay pending");
+    assert!(bot_runs(&state).is_empty(), "posts, unselected messages and progress updates stay pending");
 
-    let revision = claim_wood(&mut state, &peer, json!({"key":"wood","action":"acquire"}));
+    claim_wood(&mut state, &peer, json!({"key":"wood","action":"update","status":"done","revision":revision}));
     reconcile_at(&mut state, 6_000, |_| Ok(())).unwrap();
-    assert_eq!(bot_runs(&state).len(), 1, "the selected claim releases the wait");
-    let reasons = &bot_runs(&state)[0].bot_turn.as_ref().unwrap().reasons;
-    assert!(reasons.len() >= 2, "retained chatter arrives with the release: {reasons:?}");
-    assert!(revision > 0);
+    assert_eq!(bot_runs(&state).len(), 1, "the resolution releases the wait");
+    let turn = bot_runs(&state)[0].bot_turn.as_ref().unwrap();
+    assert!(turn.reasons.iter().any(|reason| matches!(reason, Reason::Info { info: Message::Resolved(crate::rooms::claims::Outcome::Done), .. })));
+    assert!(turn.reasons.len() >= 2, "retained chatter arrives with the release");
 }
 #[test]
-fn a_claim_change_before_the_wait_is_admitted_still_wakes() {
+fn a_resolution_before_the_wait_is_admitted_still_wakes() {
     let (mut state, chat) = fixture();
     let peer = crate::chat::create(&mut state);
     command_at(&mut state, &chat, "on", Now(0)).unwrap();
@@ -2123,5 +2128,24 @@ fn a_claim_change_before_the_wait_is_admitted_still_wakes() {
     waiting_on(&mut state, vec![topic]);
     reconcile_at(&mut state, 6_000, |_| Ok(())).unwrap();
     reconcile_at(&mut state, 7_000, |_| Ok(())).unwrap();
-    assert_eq!(bot_runs(&state).len(), 1, "admission compares the observed revision, so no wake is lost");
+    assert_eq!(bot_runs(&state).len(), 1, "admission checks the incarnation's outcome, so no wake is lost");
+}
+#[test]
+fn an_abandoned_producer_wakes_its_dependents_instead_of_leaving_them_asleep() {
+    let (mut state, chat) = fixture();
+    let peer = crate::chat::create(&mut state);
+    command_at(&mut state, &chat, "on", Now(0)).unwrap();
+    crate::chat::send(&mut state, &peer, "Gather wood", "test").unwrap();
+    claim_wood(&mut state, &peer, json!({"key":"wood","action":"acquire"}));
+    let topic = crate::rooms::claims::wait_topic(&state, &chat, "general/wood").unwrap();
+    waiting_on(&mut state, vec![topic]);
+    reconcile_at(&mut state, 1_000, |_| Ok(())).unwrap();
+    assert!(bot_runs(&state).is_empty());
+    let peer_run = state.runtime.runs.iter().position(|run| run.chat_id.as_deref() == Some(peer.as_str())).unwrap();
+    state.runtime.runs[peer_run].status = "cancelled".into();
+    reconcile_at(&mut state, 2_000, |_| Ok(())).unwrap();
+    reconcile_at(&mut state, 3_000, |_| Ok(())).unwrap();
+    assert_eq!(bot_runs(&state).len(), 1, "a cancelled owner resolves the claim as abandoned");
+    let turn = bot_runs(&state)[0].bot_turn.as_ref().unwrap();
+    assert!(turn.reasons.iter().any(|reason| matches!(reason, Reason::Info { info: Message::Resolved(crate::rooms::claims::Outcome::Abandoned), .. })));
 }

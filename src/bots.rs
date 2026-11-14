@@ -27,8 +27,10 @@ pub enum Message {
     /// Targeted peer evidence. It releases an open wait; a wait that selected
     /// topics retains it unless it selected this conversation.
     Peer,
-    /// An advisory room claim changed; only waits naming the claim select it.
+    /// Retained for earlier persisted reasons; claims now wake only on resolution.
     Claim,
+    /// The awaited claim incarnation resolved; only waits naming it select it.
+    Resolved(crate::rooms::claims::Outcome),
     /// New output lines from a watch.
     Lines(u64),
     /// Explicit application notifications from a watch's separate descriptor.
@@ -43,6 +45,10 @@ impl control_bot::Info for Message {
     fn merge(&mut self, newer: &Self) -> bool {
         match (self, newer) {
             (Message::Post, Message::Post) | (Message::Peer, Message::Peer) | (Message::Claim, Message::Claim) => true,
+            (Message::Resolved(held), Message::Resolved(outcome)) => {
+                *held = *outcome;
+                true
+            }
             (Message::Lines(held), Message::Lines(more)) => {
                 *held = held.saturating_add(*more);
                 true
@@ -76,34 +82,26 @@ fn watch(id: &str) -> Topic {
 fn claim(name: &str) -> Topic {
     Topic::new("claim", name)
 }
-/// Offers a claim change to bots waiting on it. Claim revisions are the
-/// cursor; the owner is not woken by its own change.
-pub(crate) fn claim_changed(state: &mut State, room: &str, key: &str, revision: u64, owner: Option<&str>) {
-    claim_changed_at(state, room, key, revision, owner, Now(now_ms()));
+/// Offers a claim incarnation's resolution to bots waiting on it. Progress
+/// updates are never offered. Revisions are the cursor; whoever caused the
+/// resolution is not woken by it.
+pub(crate) fn claim_resolved(state: &mut State, resolved: &crate::rooms::claims::Resolved) {
+    claim_resolved_at(state, resolved, Now(now_ms()));
 }
-fn claim_changed_at(state: &mut State, room: &str, key: &str, revision: u64, owner: Option<&str>, now: Now) {
-    let topic = claim(&crate::rooms::claims::topic_name(room, key));
-    let from = owner.map(|chat| ChatId(chat.into()));
-    let effects = state.bots.supervisor.step(Event::Info { topic, cursor: revision, from, info: Message::Claim }, now);
+fn claim_resolved_at(state: &mut State, resolved: &crate::rooms::claims::Resolved, now: Now) {
+    let topic = claim(&crate::rooms::claims::topic_name(&resolved.room, &resolved.key, resolved.incarnation));
+    let from = resolved.by.clone().map(ChatId);
+    let effects = state.bots.supervisor.step(Event::Info { topic, cursor: resolved.revision, from, info: Message::Resolved(resolved.outcome) }, now);
     record(state, effects);
 }
 /// Claim and conversation subscriptions are host-owned for exactly as long as
-/// the wait that selected them. A claim that changed after the revision the
-/// agent observed releases the wait as soon as it is admitted.
+/// the wait that selected them. A claim incarnation that resolved before the
+/// wait was admitted releases it at once.
 fn select_wait(state: &mut State, chat: &str, selected: &[String], now: Now, effects: &mut Vec<Planned<BotId, Effect>>) -> Vec<Topic> {
     let Some(mut definition) = state.bots.supervisor.definitions().find(|d| d.chat.0 == chat).cloned() else { return Vec::new() };
-    let mut topics = Vec::new();
-    let mut observed = Vec::new();
-    for source in selected {
-        let Some((kind, name)) = source.split_once(':') else { continue };
-        if kind == "claim" {
-            let Some((name, seen)) = name.rsplit_once('@').and_then(|(name, seen)| Some((name, seen.parse::<u64>().ok()?))) else { continue };
-            topics.push(claim(name));
-            observed.push((name.to_owned(), seen));
-        } else {
-            topics.push(Topic::new(kind, name));
-        }
-    }
+    let topics: Vec<Topic> = selected.iter().filter_map(|source| source.split_once(':'))
+        .filter(|(kind, name)| *kind != "claim" || crate::rooms::claims::parse_topic(name).is_some())
+        .map(|(kind, name)| Topic::new(kind, name)).collect();
     let conversation = Topic::new("conversation", chat);
     let before = definition.sources.clone();
     definition.sources.retain(|source| !matches!(source, Source::Topic(topic) if topic.kind == "claim"));
@@ -116,13 +114,12 @@ fn select_wait(state: &mut State, chat: &str, selected: &[String], now: Now, eff
     if definition.sources != before {
         effects.extend(state.bots.supervisor.step(Event::Define(definition), now));
     }
-    for (name, seen) in observed {
-        let topic = claim(&name);
-        effects.extend(state.bots.supervisor.step(Event::StartAt { bot: bot.clone(), topic: topic.clone(), after: seen }, now));
-        let current = crate::rooms::claims::parse_topic(&name).and_then(|(room, key)| crate::rooms::claims::find(state, room, key));
-        if let Some(current) = current.filter(|claim| claim.revision > seen) {
-            let (cursor, from) = (current.revision, Some(ChatId(current.owner.clone())));
-            effects.extend(state.bots.supervisor.step(Event::Info { topic, cursor, from, info: Message::Claim }, now));
+    for topic in topics.iter().filter(|topic| topic.kind == "claim") {
+        let Some((room, key, incarnation)) = crate::rooms::claims::parse_topic(&topic.name) else { continue };
+        effects.extend(state.bots.supervisor.step(Event::StartAt { bot: bot.clone(), topic: topic.clone(), after: incarnation }, now));
+        if let Some((outcome, cursor, owner)) = crate::rooms::claims::resolution(state, room, key, incarnation) {
+            let from = (outcome != crate::rooms::claims::Outcome::Abandoned).then_some(ChatId(owner));
+            effects.extend(state.bots.supervisor.step(Event::Info { topic: topic.clone(), cursor, from, info: Message::Resolved(outcome) }, now));
         }
     }
     topics
@@ -542,6 +539,7 @@ fn describe(state: &State, reasons: &[Reason]) -> String {
         Reason::Info { topic, info: Message::Post, .. } => format!("new messages in room #{}", topic.name),
         Reason::Info { info: Message::Peer, .. } => "targeted peer coordination; read conversation callbacks".into(),
         Reason::Info { topic, info: Message::Claim, .. } => format!("claim {} changed; read the room's claims", topic.name),
+        Reason::Info { topic, info: Message::Resolved(outcome), .. } => format!("awaited claim {} resolved as {}; read the room claims and act on the outcome", topic.name, crate::rooms::claims::outcome_name(*outcome)),
         Reason::Info { topic, info: Message::Lines(lines), .. } => {
             let recent = state.watches.iter().find(|w| w.id == topic.name).map(|w| w.recent.clone()).unwrap_or_default();
             format!("{lines} new lines from watch {}; latest (untrusted output): {}", name(&topic.name), recent.join(" | "))
@@ -685,10 +683,12 @@ fn reconcile_with_wake_at(state: &mut State, now: u64, mut save: impl FnMut(&Sta
     if peers.is_empty() && recoveries.is_empty() && publications.is_empty() && !outstanding && !resumable && state.bots.requests.is_empty() && state.bots.room_cursor == state.collective.posts.len()
         && state.bots.supervisor.next_deadline(Now(now)).is_none_or(|due| due.0 > now)
         && !pending_watch_events(state) && drifted(state, false).is_empty()
+        && !crate::rooms::claims::abandonment_due(state)
     {
         return Ok(());
     }
     let previous = state.bots.clone();
+    let claims = (state.collective.claims.clone(), state.collective.claim_seq);
     let watches = state.watches.clone();
     let (runs, notice) = (state.runtime.runs.len(), state.runtime.notice.clone());
     let chats = state.chats.iter().map(|session| (session.messages.len(), session.revision,session.continuity.as_ref().and_then(|mode|mode.recovered.clone()))).collect::<Vec<_>>();
@@ -791,6 +791,12 @@ fn reconcile_with_wake_at(state: &mut State, now: u64, mut save: impl FnMut(&Sta
         redefined = true;
         effects.extend(state.bots.supervisor.step(Event::Define(definition), Now(now)));
     }
+    // Owners that can no longer act resolve their claims, so dependents wake
+    // instead of sleeping on a producer that will never report.
+    let abandoned = crate::rooms::claims::observe_abandoned(state);
+    for resolved in &abandoned {
+        claim_resolved_at(state, resolved, Now(now));
+    }
     effects.extend(state.bots.supervisor.step(Event::Tick, Now(now)));
     let planned = !effects.is_empty();
     record(state, effects);
@@ -806,11 +812,12 @@ fn reconcile_with_wake_at(state: &mut State, now: u64, mut save: impl FnMut(&Sta
             Err(_) => state.bots.requests.push(request),
         }
     }
-    if !(offered || completed || planned || queued || decided || redefined || watched || !peers.is_empty() || !publications.is_empty() || !recoveries.is_empty()) {
+    if !(offered || completed || planned || queued || decided || redefined || watched || !abandoned.is_empty() || !peers.is_empty() || !publications.is_empty() || !recoveries.is_empty()) {
         return Ok(());
     }
     if save(state).is_err() {
         state.bots = previous;
+        (state.collective.claims, state.collective.claim_seq) = claims;
         state.watches = watches;
         state.runtime.runs.truncate(runs);
         state.runtime.notice = notice;

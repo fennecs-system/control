@@ -14,7 +14,7 @@ fn defaults_are_additive_bounded_and_preserve_local_definitions() {
         instructions: "Operator's existing guidance".into(),
         ..Default::default()
     });
-    assert!(library.add_missing_defaults());
+    assert!(library.merge_defaults());
     assert_eq!(library.get("autonomy").unwrap().revision, 7);
     assert_eq!(
         library.get("autonomy").unwrap().instructions,
@@ -26,7 +26,7 @@ fn defaults_are_additive_bounded_and_preserve_local_definitions() {
     );
     assert!(library.get("investigation").is_some());
     assert!(library.get("coordination").is_some());
-    assert!(!library.add_missing_defaults());
+    assert!(!library.merge_defaults());
     library.validate(&[]).unwrap();
     let mut full = Library {
         definitions: (0..128)
@@ -37,8 +37,9 @@ fn defaults_are_additive_bounded_and_preserve_local_definitions() {
                 ..Default::default()
             })
             .collect(),
+        builtin: Default::default(),
     };
-    assert!(!full.add_missing_defaults());
+    assert!(!full.merge_defaults());
     full.validate(&[]).unwrap();
 }
 #[test]
@@ -164,4 +165,39 @@ fn document_inputs_are_explicit_and_snapshots_survive_definition_changes() {
             .is_empty()
     );
     assert_eq!(snapshot.documents[0].body, "A fixed fact");
+}
+#[test]
+fn newer_built_in_revisions_reach_nodes_unless_the_lens_was_edited_locally() {
+    let shipped = Library::default().get("coordination").unwrap().clone();
+    let older = Definition { revision: shipped.revision - 1, instructions: "Earlier wording".into(), ..shipped.clone() };
+    let node = |definitions: Vec<Definition>, installed: Option<u64>| {
+        let mut library = Library::default();
+        library.definitions.retain(|d| d.id != "coordination");
+        library.definitions.extend(definitions);
+        match installed {
+            Some(revision) => { library.builtin.insert("coordination".into(), revision); }
+            None => { library.builtin.remove("coordination"); }
+        }
+        library
+    };
+
+    let mut upgraded = node(vec![older.clone()], Some(older.revision));
+    assert!(upgraded.merge_defaults());
+    assert_eq!(upgraded.get("coordination").unwrap(), &shipped);
+    assert!(upgraded.definitions.contains(&older), "earlier revisions stay for captured runs");
+    assert!(!upgraded.merge_defaults());
+
+    let edited = Definition { revision: shipped.revision + 4, instructions: "Operator wording".into(), ..shipped.clone() };
+    let mut local = node(vec![older.clone(), edited.clone()], Some(older.revision));
+    assert!(!local.merge_defaults());
+    assert_eq!(local.get("coordination").unwrap(), &edited);
+
+    // Nodes stored before this record adopt an exact built-in copy.
+    let mut legacy = node(vec![shipped.clone()], None);
+    assert!(legacy.merge_defaults());
+    assert_eq!(legacy.builtin.get("coordination"), Some(&shipped.revision));
+    assert_eq!(legacy.definitions.iter().filter(|d| d.id == "coordination").count(), 1);
+    let mut unknown = node(vec![older.clone()], None);
+    assert!(!unknown.merge_defaults(), "an unrecognised copy may be a local edit");
+    assert_eq!(unknown.get("coordination").unwrap(), &older);
 }

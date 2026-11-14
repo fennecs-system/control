@@ -14,6 +14,11 @@ The same selection is available through `control.chat.lenses`. Changes affect
 future operator messages; queued runs, spawned workers and automatic continuations
 retain their captured revisions. Editing the library never changes an active
 attempt's instructions. `/use none` clears the selection for future messages.
+
+Built-in lenses are versioned. On load, a node adds missing built-ins and appends
+a newer built-in revision when its current copy is still the built-in revision it
+last installed. A local edit is a newer local revision, so it is never replaced;
+earlier revisions stay available to captured runs.
 The browser preference only chooses the starting selection for a new chat.
 
 ## Task autonomy
@@ -41,9 +46,18 @@ no-change messages out of the steering chat. Changed evidence or repeated lack
 of useful results calls for revisiting the plan. Healthy long-running work can
 still wait on callbacks without a new deadline or forced intervention.
 
+Roles and claims own shared deliverables, not each agent's basic needs: every
+agent keeps itself fed, safe and supplied, and its own caution is not a
+dependency. Agents wait only on a producer that can act, and when that producer is
+blocked, offline or slow, or several peers wait on one, they produce the input
+themselves or take a reversible step. When nobody can unblock the goal they ask
+the operator with options, and apply standing risk guidance to similar reversible
+steps.
+
 Select **Coordination & planning** in the lens picker, or use `/use coordination`.
-It composes with `autonomy` and `investigation` without including either
-automatically. This is versioned guidance over existing tools, not a central
+For a team, select **Swarm** (`/use swarm`), which includes `coordination`,
+`autonomy` and `investigation`: the first run with coordination alone showed
+agents sleeping behind self-imposed safety guards. This is versioned guidance over existing tools, not a central
 planner, permission grant or guarantee against deadlock. Its ownership and
 blocker advice uses advisory room claims (see
 [Room notifications](ROOM-NOTIFICATIONS.md#claims)); claims only help when

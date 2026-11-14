@@ -17,13 +17,18 @@ pub struct Definition {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Library {
     pub definitions: Vec<Definition>,
+    /// The built-in revision this node last installed per lens. A later
+    /// built-in revision is installed only while that one is still current,
+    /// so a local edit (a newer local revision) is never replaced.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub builtin: std::collections::BTreeMap<String, u64>,
 }
 impl Default for Library {
     fn default() -> Self {
-        Self {
-            definitions: serde_json::from_str(include_str!("builtin-lenses.json"))
-                .expect("Built-in lens definitions must be valid"),
-        }
+        let definitions: Vec<Definition> = serde_json::from_str(include_str!("builtin-lenses.json"))
+            .expect("Built-in lens definitions must be valid");
+        let builtin = definitions.iter().map(|d| (d.id.clone(), d.revision)).collect();
+        Self { definitions, builtin }
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,18 +61,30 @@ pub fn valid_id(id: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 impl Library {
-    /// Offer new built-ins to existing nodes without replacing local revisions
-    /// or selecting anything for a chat. Captured run contexts are independent.
-    pub fn add_missing_defaults(&mut self) -> bool {
+    /// Offer new built-ins and newer built-in revisions to existing nodes
+    /// without replacing local edits or selecting anything for a chat. New
+    /// revisions are appended, so captured run contexts keep their revision.
+    pub fn merge_defaults(&mut self) -> bool {
         let mut changed = false;
         for definition in Self::default().definitions {
-            if self.get(&definition.id).is_none()
-                && self.definitions.len() < 4096
-                && self.current().len() < 128
-            {
-                self.definitions.push(definition);
-                changed = true;
+            let current = self.get(&definition.id).cloned();
+            let installed = self.builtin.get(&definition.id).copied();
+            match current {
+                None if self.definitions.len() < 4096 && self.current().len() < 128 => {}
+                // Nodes from before this record: an exact built-in copy is one.
+                Some(current) if installed.is_none() && current == definition => {
+                    self.builtin.insert(definition.id.clone(), definition.revision);
+                    changed = true;
+                    continue;
+                }
+                Some(current) if installed == Some(current.revision)
+                    && definition.revision > current.revision
+                    && self.definitions.len() < 4096 => {}
+                _ => continue,
             }
+            self.builtin.insert(definition.id.clone(), definition.revision);
+            self.definitions.push(definition);
+            changed = true;
         }
         changed
     }
