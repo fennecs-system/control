@@ -98,6 +98,9 @@ These options preserve existing source and model choices.
 | `model.json` | Saved models and default; managed by the web UI. |
 | `source-root` / `CONTROL_SOURCE_ROOT` | Absolute source path for explicit improvements. |
 | `worker-timeout-secs` / `CONTROL_WORKER_TIMEOUT_SECS` | Explicit attempt deadline, captured at admission and clamped to 60 s–24 h. When unset, ordinary attempts default to 600 s; approved persistent bots have no wall-clock deadline. Approval during an active attempt removes only its implicit default, never an explicit limit. |
+| `service-memory-gib` | Service pool memory budget, a strict sum of service limits; default 20, 1–4096. |
+| `service-cpus` | Service pool CPUs; default 8, 1–1024. |
+| `service-cpu-oversubscription` | Factor applied to `service-cpus` when admitting CPU limits; default 2, 1–8. Containers keep their hard CPU caps. |
 | `CONTROL_ADDR` | Loopback bind address; default `127.0.0.1:8080`. |
 
 Without explicit directory overrides, `XDG_CONFIG_HOME/control` and
