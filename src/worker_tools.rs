@@ -342,7 +342,7 @@ fn dispatch_at(
             } else if name == "control_browser_capture" {
                 drop(state);
                 crate::web_access::capture_tool(&request["params"]["arguments"]).unwrap_or_else(|error|crate::toolbox::result(Err(error)))
-            } else if ["control_room_list", "control_room_read", "control_room_post", "control_room_watch", "control_room_notifications", "control_room_ack"].contains(&name) {
+            } else if ["control_room_list", "control_room_read", "control_room_post", "control_room_watch", "control_room_notifications", "control_room_ack", "control_room_claim"].contains(&name) {
                 return rooms::checkpoint(&mut state, run_id, envelope, crate::storage::save);
             } else {
                 return error("Tool is not allowed for this worker");

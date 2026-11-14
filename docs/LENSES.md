@@ -44,7 +44,10 @@ still wait on callbacks without a new deadline or forced intervention.
 Select **Coordination & planning** in the lens picker, or use `/use coordination`.
 It composes with `autonomy` and `investigation` without including either
 automatically. This is versioned guidance over existing tools, not a central
-planner, task database, permission grant or guarantee against deadlock. Existing
+planner, permission grant or guarantee against deadlock. Its ownership and
+blocker advice uses advisory room claims (see
+[Room notifications](ROOM-NOTIFICATIONS.md#claims)); claims only help when
+agents check them. Existing
 chats and running workers are not opted in when the preset is added. Select it
 before launching the team; spawned work and continuations keep captured revisions.
 Evaluate useful actions, dependency releases, repeated messages and interventions

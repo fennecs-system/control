@@ -10,6 +10,13 @@ pub struct Collective {
     pub(crate) proposals: Vec<Knowledge>,
     requests: Vec<Request>,
     pub notice: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) claims: Vec<crate::rooms::claims::Claim>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) claim_seq: u64,
+}
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct Knowledge {

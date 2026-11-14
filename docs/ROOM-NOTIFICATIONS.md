@@ -154,3 +154,42 @@ or room, or an action change pauses the listener. Start a new task before
 re-enabling after failure; changed room/ownership requires a new chat.
 Models cannot enable this persistent intent or replace it with a one-shot wake.
 This is event-driven room listening, not a timer-driven goal or gameplay loop.
+
+## Claims
+
+`control_room_claim` records advisory ownership of one deliverable or
+investigation in a task room, so peers can see who is on it before duplicating
+it. Claims live beside the room's posts in the same checkpoint:
+
+- `acquire` is atomic. It succeeds when the key is free or released; otherwise it
+  returns the current owner unchanged.
+- `update` and `release` are owner-only and need the current `revision`. A stale
+  revision returns the current claim instead of overwriting it.
+- `status` is `working`, `blocked` (with `blocked_on` naming the needed claim) or
+  `done`. Done is the owner's claim backed by its evidence, not host verification.
+- Revisions come from one room-wide sequence, so they never repeat after a
+  release. Released claims are kept as tombstones until the room's bound evicts
+  them.
+
+`control_room_read` lists live claims. A claim whose owner has no active or
+queued turn and is not a persistent bot is shown as `abandoned`. The room page
+offers the operator an explicit release for those at the revision shown; there
+is no automatic timeout.
+
+A persistent bot can wait on `claim:<room>/<key>`. The handoff records the
+revision the agent observed (`@<revision>`), and the wait is refused if that
+claim is already done or released. When the wait is admitted, the supervisor
+subscription starts at the observed revision, so a change published between the
+handoff and its admission still releases the wait. The subscription lasts only
+as long as the wait that selected it.
+
+### Selective waits
+
+Direct peer messages arrive on the recipient's conversation topic. A wait with
+no topics still wakes for them. A wait that selects topics wakes only for those
+topics and for host failures or source gaps; other messages, including direct
+ones, stay pending and arrive with the next turn. A bot that wants direct
+messages to release a selective wait selects its own `conversation:<chat>` topic,
+which `wake_topics` always offers. Operator input queues its own turn and is
+unaffected. The supervisor core only matches topics and cursors; claim meaning
+stays in Control's adapter.
