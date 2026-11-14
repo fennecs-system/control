@@ -251,6 +251,12 @@ pub(crate) fn wait_topics(state: &State, chat: &str) -> Vec<String> {
     }
     topics
 }
+/// A stopped owner will not finish its claims; their dependents wake now.
+fn abandon_claims(state: &mut State, chat: &str, now: Now) {
+    for resolved in crate::rooms::claims::abandon_owned(state, chat) {
+        claim_resolved_at(state, &resolved, now);
+    }
+}
 /// Stops every bot running in `chats`; a running turn finishes first.
 pub(crate) fn stop_all(state: &mut State, chats: &[String]) -> usize {
     let now = Now(now_ms());
@@ -262,6 +268,7 @@ pub(crate) fn stop_all(state: &mut State, chats: &[String]) -> usize {
         let effects = state.bots.supervisor.step(Event::Stop(bot(chat)), now);
         record(state, effects);
         cancel_queued_turns(state, chat);
+        abandon_claims(state, chat, now);
         stopped += 1;
     }
     stopped
@@ -350,6 +357,7 @@ fn command_at(state: &mut State, chat: &str, option: &str, now: Now) -> Result<&
             let effects = state.bots.supervisor.step(Event::Stop(id), now);
             record(state, effects);
             cancel_queued_turns(state, chat);
+            abandon_claims(state, chat, now);
             Ok("Bot stopped. A running turn finishes first.")
         }
         ["pause"] if defined(state, chat) => {

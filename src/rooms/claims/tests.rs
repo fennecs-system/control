@@ -53,9 +53,10 @@ fn blocked_claims_name_a_different_dependency() {
 fn operators_release_only_abandoned_claims_at_the_shown_revision() {
     let (mut state, a, _) = setup();
     let revision = claim(&mut state, &a, json!({"key":"server","action":"acquire"}))["claim"]["revision"].as_u64().unwrap();
-    assert_eq!(listed(&state, "general")[0]["abandoned"], true, "an owner with no active turn or bot cannot act");
+    assert_eq!(listed(&state, "general")[0]["owner_idle"], true, "an owner with no active turn or bot cannot act now");
+    assert_eq!(listed(&state, "general")[0]["abandoned"], false, "idle is not lost");
     crate::chat::send(&mut state, &a, "Keep the server running", "test").unwrap();
-    assert_eq!(listed(&state, "general")[0]["abandoned"], false);
+    assert_eq!(listed(&state, "general")[0]["owner_idle"], false);
     assert!(operator_release(&mut state, "general", "server", revision).is_err());
 
     state.runtime.runs.iter_mut().for_each(|run| run.status = "completed".into());
@@ -120,4 +121,18 @@ fn owners_that_cannot_act_resolve_their_claims_once_as_abandoned() {
     assert!(observe_abandoned(&mut state).is_empty(), "abandonment is reported once");
     let claim = find(&state, "general", "farm").unwrap();
     assert_eq!(resolution(&state, "general", "farm", claim.incarnation).unwrap().0, Outcome::Abandoned);
+}
+
+#[test]
+fn an_owner_idle_after_a_completed_turn_is_not_lost_but_a_stopped_one_is() {
+    let (mut state, a, _) = setup();
+    crate::chat::send(&mut state, &a, "Steer the team", "test").unwrap();
+    claim(&mut state, &a, json!({"key":"server","action":"acquire"}));
+    state.runtime.runs.iter_mut().for_each(|run| run.status = "completed".into());
+    assert!(observe_abandoned(&mut state).is_empty(), "a steering chat between turns keeps its claims");
+    assert_eq!(listed(&state, "general")[0]["owner_idle"], true);
+    let stopped = abandon_owned(&mut state, &a);
+    assert_eq!(stopped.len(), 1, "an explicit stop resolves the owner's claims at once");
+    assert_eq!(stopped[0].outcome, Outcome::Abandoned);
+    assert!(abandon_owned(&mut state, &a).is_empty());
 }
