@@ -98,12 +98,18 @@ The initial scope is deliberately small:
   relays; they do not enable the container's network namespace.
 - New Lite and Full services have a private writable container layer. Both use a non-root user, dropped capabilities, no new privileges and
   a private PID namespace. No automatic container restart.
-- `/workspace` and `/home/agent` use disk-backed container storage with no
-  Control disk cap by default. Only written data consumes space; there is no
-  up-front capacity reservation. Files survive model turns and Control restart,
-  and remain until the container is removed. Attempt checkpoints do not include them.
-  Shared base images remain immutable. Older services retain their captured tmpfs
-  layout and limits; start a new service to use disk storage.
+- New services mount `/workspace` from a retained local Docker volume owned by
+  the node and chat. Replacement services in the same chat automatically reopen
+  that workspace, including after process exit, container cleanup or Docker
+  restart. Same-chat services share files and must avoid conflicting writes;
+  other chats and nodes use different volumes. Names are derived by Control,
+  never accepted as tool input. Only written data consumes space; there is no
+  up-front reservation or Control disk cap. Attempt checkpoints do not include
+  these files, and retained storage is not a backup against disk loss.
+  `/home/agent` remains container-local configuration/cache storage and is lost
+  on removal. Shared base images remain immutable. Existing services retain their
+  captured container-layer or tmpfs layout; they are not silently migrated.
+  `status.workspace` identifies retained storage; null means the legacy layout.
 - `/tmp` remains a 128 MiB RAM-backed tmpfs for disposable scratch. Its contents
   disappear on container restart and count against the existing memory limit.
   Larger temporary builds and downloads can use a scratch folder in `/workspace`.
@@ -114,7 +120,7 @@ The initial scope is deliberately small:
   project quotas). Unsupported caps fail service creation with a diagnostic;
   Control never silently drops them. The default works without quota support.
   The engine's available disk and any daemon-wide limits still apply.
-  New disk-backed service records require this version of Control; older
+  New service storage records require this version of Control; older
   binaries cannot read those records when rolling back node state.
 - Eight reserved service slots per node, each limited to one CPU, 512 MiB RAM
   and 64 processes (Full: 2 GiB and 128 processes). Fenced resources retain their reservation.
@@ -149,13 +155,26 @@ replays an in-flight command. Other services remain running. These tools provide
 no host command execution, arbitrary container selection or new network authority.
 Task-specific adapters and server configuration remain outside Control's source.
 
-Use `/workspace` for task files and worktrees, `/tmp` for disposable scratch builds
-and downloads, and `/home/agent` for tool configuration and caches. No `/scratch`
-alias or host-private directory is needed. `/workspace` and home last until
-container removal; `/tmp` is RAM-backed and disposable across container restarts.
-Export anything worth keeping as an artifact or project checkpoint. A service
-exit can trigger supervisor removal, so the writable layer alone is not crash
-recovery or a backup.
+Keep task programs, worktrees, downloads and durable application data under
+`/workspace`. Commands start there by default; configure applications that would
+otherwise write to `/home/agent` or elsewhere to use a workspace data directory.
+This is a storage contract and tool instruction, not a filesystem write jail:
+applications can still write elsewhere, but those files are not retained.
+Use `/tmp` for disposable scratch and `/home/agent` for disposable configuration
+and caches. No `/scratch` alias or host-private directory is needed.
+Export selected results as artifacts or project checkpoints; those have separate
+publication limits and do not replace service storage.
+
+Container removal deliberately does not remove workspace volumes. To inspect
+retained volumes, an operator can run
+`docker volume ls --filter label=dev.control.purpose=service-workspace` and inspect
+their `dev.control.node` and `dev.control.chat` labels. Service status also gives
+the exact volume name. Only delete a volume explicitly after confirming its data
+is no longer needed; Docker volume pruning can destroy retained workspaces.
+Control does not automatically restart application processes or replay commands
+after Docker restarts. Start a replacement service and inspect its existing
+workspace before launching the application again. This does not recover files
+already lost from legacy container layers.
 
 ## Lifecycle and recovery
 
@@ -212,6 +231,20 @@ fencing, explicit stop and confirmed removal without any model calls:
 CONTROL_QA_SERVICE_IMAGE=sha256:<worker-image-id> \
 nix develop --command cargo test --locked --bin control \
   services::tests::live_fenced_paused_service_can_be_stopped_without_restart \
+  -- --ignored --exact --nocapture
+```
+
+The storage regression writes a 540 MiB file as the service's non-root user,
+checks restart, then stops the container and lets Control's supervisor remove
+it. A new service handle under the restored chat owner must read the retained
+file, while container-local home and scratch files are gone. It also rejects a
+foreign-labelled volume before container creation and verifies quota support
+fails explicitly rather than silently dropping the requested limit.
+
+```sh
+CONTROL_QA_SERVICE_IMAGE=sha256:<worker-image-id> \
+nix develop --command cargo test --locked --bin control \
+  services::tests::live_workspace_survives_restart_exit_cleanup_and_container_replacement \
   -- --ignored --exact --nocapture
 ```
 

@@ -6,6 +6,7 @@ pub use page::http;
 #[cfg(test)]
 pub(crate) use page::stop;
 mod tools;
+mod workspace;
 pub use tools::{ServiceCall, ServiceOps, Tools};
 pub(crate) use commands::activity as command_activity;
 #[cfg(test)]
@@ -64,13 +65,16 @@ impl<'de> Deserialize<'de> for CommandText {
 enum Storage {
     #[default]
     Memory,
+    /// Legacy disk layout: all writable files belong to the container layer.
     Disk { limit_mb: Option<NonZeroU32> },
+    /// Disposable layer plus a retained, chat-owned /workspace mount.
+    Workspace { limit_mb: Option<NonZeroU32> },
 }
 impl Storage {
     fn is_memory(&self) -> bool { *self == Self::Memory }
     fn options(self) -> HashMap<String, String> {
         match self {
-            Self::Disk { limit_mb: Some(limit) } => HashMap::from([("size".into(), format!("{limit}M"))]),
+            Self::Disk { limit_mb: Some(limit) } | Self::Workspace { limit_mb: Some(limit) } => HashMap::from([("size".into(), format!("{limit}M"))]),
             _ => HashMap::new(),
         }
     }
@@ -157,7 +161,7 @@ impl Service {
         self.storage == Storage::Memory && self.profile.readonly_root()
     }
     fn summary(&self) -> Value {
-        json!({"service_id":self.resource.id,"platform":format!("linux/{}", std::env::consts::ARCH),"phase":self.resource.phase,"scope":self.resource.scope,"storage":self.storage,"workspace_executable":self.workspace_exec,"expires_unix":(!self.resource.lease.is_until_stopped()).then(||self.resource.lease.expires()),"until_stopped":self.resource.lease.is_until_stopped(),"diagnostic":self.diagnostic,"output":self.output,"exit_code":self.exit_code,"output_limit_bytes":OUTPUT,"executions":self.executions.iter().map(|e|e.brief()).collect::<Vec<_>>()})
+        json!({"service_id":self.resource.id,"platform":format!("linux/{}", std::env::consts::ARCH),"phase":self.resource.phase,"scope":self.resource.scope,"storage":self.storage,"workspace":workspace::Workspace::of(self).map(|workspace|json!({"path":"/workspace","volume":workspace.name(),"retained_on_removal":true,"shared_with":"same_chat_services"})),"workspace_executable":self.workspace_exec,"expires_unix":(!self.resource.lease.is_until_stopped()).then(||self.resource.lease.expires()),"until_stopped":self.resource.lease.is_until_stopped(),"diagnostic":self.diagnostic,"output":self.output,"exit_code":self.exit_code,"output_limit_bytes":OUTPUT,"executions":self.executions.iter().map(|e|e.brief()).collect::<Vec<_>>()})
     }
 }
 #[derive(Deserialize)]
@@ -357,7 +361,7 @@ fn admit_profile(
     if let Some(existing) = s.services.iter().find(|service| service.resource.id == id) {
         if existing.command.0 != input.command.0
             || existing.resource.lease.seconds() != lease.seconds()
-            || match existing.storage { Storage::Disk { limit_mb } => limit_mb != input.storage_limit_mb, Storage::Memory => input.storage_limit_mb.is_some() }
+            || match existing.storage { Storage::Disk { limit_mb } | Storage::Workspace { limit_mb } => limit_mb != input.storage_limit_mb, Storage::Memory => input.storage_limit_mb.is_some() }
         {
             return Err(fail("Request identity already has a different command or storage policy"));
         }
@@ -408,7 +412,7 @@ fn admit_profile(
         gid: unsafe { libc::getgid() },
         workspace_exec: true,
         profile,
-        storage: Storage::Disk { limit_mb: input.storage_limit_mb },
+        storage: Storage::Workspace { limit_mb: input.storage_limit_mb },
         diagnostic: String::new(),
         output: String::new(),
         exit_code: None,
@@ -572,10 +576,7 @@ fn verify<'a>(service: &'a Service, inspection: &Inspection) -> io::Result<Verif
             Some(options) => *options != expected_storage,
             None => !expected_storage.is_empty(),
         }
-        || inspection.mounts.iter().any(|m| {
-            m["Type"] != "tmpfs"
-                || !expected_tmpfs.contains_key(m["Destination"].as_str().unwrap_or(""))
-        })
+        || !workspace::valid_mounts(service, &inspection.mounts, &expected_tmpfs)
         || inspection.entrypoint != ["control-service-runner"]
         || inspection.command.len() != 3
         || inspection.command.first().map(String::as_str) != Some(deadline.as_str())
@@ -692,6 +693,8 @@ impl Engine for Docker {
     }
     fn create(&mut self, service: &Service) -> io::Result<ContainerId> {
         let r = &service.resource;
+        let workspace = workspace::Workspace::of(service);
+        if let Some(workspace) = &workspace { workspace.ensure()?; }
         let mut args = vec![
             "create".to_owned(),
             "--pull=never".into(),
@@ -714,6 +717,9 @@ impl Engine for Docker {
             "--workdir=/workspace".into(),
             "--entrypoint=control-service-runner".into(),
         ];
+        if let Some(workspace) = workspace {
+            args.extend(["--mount".into(), format!("type=volume,source={},target=/workspace", workspace.name())]);
+        }
         if service.readonly_root() { args.push("--read-only".into()); }
         for (key, value) in service.storage.options() {
             args.extend(["--storage-opt".into(), format!("{key}={value}")]);
