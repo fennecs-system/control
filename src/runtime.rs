@@ -273,18 +273,9 @@ impl Runtime {
                 Some(h)
             }
             "agents" => {
-                let mut h = "<div class='section-heading'><h3>Active runs</h3><a href='/?view=runs'>Run history ↗</a></div>".to_owned();
-                let mut running = self
-                    .runs
-                    .iter()
-                    .filter(|r| ["running", "cancelling", "waiting"].contains(&r.status.as_str()))
-                    .peekable();
-                if running.peek().is_none() {
-                    h.push_str("<div class='empty'>No active agents.</div>");
-                }
-                for run in running {
-                    h.push_str(&run_record(run));
-                }
+                // The Bots page process tree shows active turns; only queued work
+                // that has not started is listed here.
+                let mut h = String::new();
                 let mut queued = self
                     .runs
                     .iter()
