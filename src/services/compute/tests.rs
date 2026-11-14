@@ -32,6 +32,7 @@ fn admission_counts_pending_and_fenced_resources_retries_do_not_charge_again() {
     let (mut state, run, _, time) = fixture();
     let first = request(&mut state, &run, time, "one", Some(Shape::Large)).unwrap();
     request(&mut state, &run, time, "two", Some(Shape::Large)).unwrap();
+    request(&mut state, &run, time, "filler", Some(Shape::Medium)).unwrap();
     assert_eq!(
         request(&mut state, &run, time, "one", Some(Shape::Large)).unwrap(),
         first
@@ -54,7 +55,7 @@ fn admission_counts_pending_and_fenced_resources_retries_do_not_charge_again() {
     request(&mut state, &run, time, "three", Some(Shape::Medium)).unwrap();
     assert_eq!(
         status(&state.services)["capacity"]["reserved"]["memory_bytes"],
-        12 * GIB
+        16 * GIB
     );
     // Durable restart retains compute reservations and the captured shape.
     let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
@@ -103,16 +104,17 @@ fn defaults_keep_legacy_limits_and_named_shapes_are_independent_of_image_capabil
 
 #[test]
 fn five_default_workers_and_an_eight_gib_server_fit_the_pool() {
-    let (mut state, run, _, time) = fixture();
-    for slot in 0..5 {
-        request(&mut state, &run, time, &format!("worker-{slot}"), None).unwrap();
+    for profile in [crate::worker_profile::Profile::Lite, crate::worker_profile::Profile::Full] {
+        let (mut state, run, _, time) = fixture();
+        for slot in 0..6 {
+            admit_profile(&mut state,
+                Request { run: &run, generation: "attempt-a", nonce: &format!("service-{slot}") },
+                Input { command: "sleep 30".to_owned().try_into().unwrap(), shape: (slot == 5).then_some(Shape::Large), lease_seconds: 60, storage_limit_mb: None },
+                "node-a".to_owned().try_into().unwrap(), time, profile, |_| Ok(())).unwrap();
+        }
+        assert_eq!(status(&state.services)["capacity"]["reserved"]["cpus"], 7);
+        assert_eq!(status(&state.services)["capacity"]["reserved"]["memory_bytes"], 5 * profile.service_memory() + 8 * GIB);
     }
-    request(&mut state, &run, time, "server", Some(Shape::Large)).unwrap();
-    assert_eq!(status(&state.services)["capacity"]["reserved"]["cpus"], 7);
-    assert_eq!(
-        status(&state.services)["capacity"]["reserved"]["memory_bytes"],
-        10 * GIB + GIB / 2
-    );
 }
 
 #[test]
@@ -143,7 +145,7 @@ fn concurrent_requests_cannot_oversubscribe_the_memory_pool() {
     );
     assert_eq!(
         status(&shared.lock().unwrap().services)["capacity"]["available"]["memory_bytes"],
-        0
+        4 * GIB
     );
 }
 

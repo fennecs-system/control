@@ -3,7 +3,7 @@
 use super::*;
 
 pub(super) const GIB: u64 = 1024 * 1024 * 1024;
-pub(super) const CAPACITY: Limits = Limits { memory_bytes: 16 * GIB, cpus: 8 };
+pub(super) const CAPACITY: Limits = Limits { memory_bytes: 20 * GIB, cpus: 8 };
 pub(super) const SHAPES: [Shape; 3] = [Shape::Small, Shape::Medium, Shape::Large];
 
 /// These identifiers have immutable limits; a future preset needs a new name.
@@ -80,7 +80,7 @@ pub(super) fn admit(services: &[Service], requested: Limits) -> io::Result<()> {
         || used.cpus.saturating_add(requested.cpus) > CAPACITY.cpus
     {
         return Err(fail(
-            "Service compute capacity reached (16 GiB / 8 CPUs per node); stop a service and wait for Stopped, or request a smaller shape",
+            "Service compute capacity reached (20 GiB / 8 CPUs per node); stop a service and wait for Stopped, or request a smaller shape",
         ));
     }
     Ok(())
