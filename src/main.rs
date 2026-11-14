@@ -515,6 +515,10 @@ fn main() -> std::io::Result<()> {
         return claude::command(&args[2..]);
     }
     if args.get(1).is_some_and(|s| s == "--version") {
+        if args.get(2).is_some_and(|s| s == "--json") {
+            println!("{}", serde_json::to_string(&control::build_info::current()).map_err(std::io::Error::other)?);
+            return Ok(());
+        }
         println!(
             "control {} · {}-{}",
             env!("CARGO_PKG_VERSION"),
@@ -543,7 +547,7 @@ fn main() -> std::io::Result<()> {
         return github::cli(&args[2..]);
     }
     if args.get(1).is_some_and(|s| s == "--help" || s == "help") {
-        println!("control [serve | tui | mcp | discord | doctor | config | open | browser | federation]\nserve: local web/MCP server on CONTROL_ADDR (default 127.0.0.1:8080)\ntui: Rust terminal client\nmcp [--root DIRECTORY]: local tools for an external harness\ndiscord --enable: listen to this node's configured DMs\ndoctor: offline prerequisites; no model calls\nconfig init | path: initialize or locate personal configuration\nopen: sign in to the local website\nbrowser capture FILE [WIDTH HEIGHT]: offline Nix Firefox capture\nfederation help: signed offline lens exchange\n--check-worker: one authenticated sandbox test (uses model usage)\n--version: version and platform");
+        println!("control [serve | tui | mcp | discord | doctor | config | open | browser | federation]\nserve: local web/MCP server on CONTROL_ADDR (default 127.0.0.1:8080)\ntui: Rust terminal client\nmcp [--root DIRECTORY]: local tools for an external harness\ndiscord --enable: listen to this node's configured DMs\ndoctor: offline prerequisites; no model calls\nconfig init | path: initialize or locate personal configuration\nopen: sign in to the local website\nbrowser capture FILE [WIDTH HEIGHT]: offline Nix Firefox capture\nfederation help: signed offline lens exchange\n--check-worker: one authenticated sandbox test (uses model usage)\n--version [--json]: version, platform and optional build identification");
         println!("claude login | check: container login or offline tool isolation check\nconfig init [--provider codex|claude] [--source-root PATH]: initialize private configuration without replacing saved choices\nconfig path: show the node configuration directory\n--bind-discord LABEL ID: bind a configured principal locally");
         println!("open --link: print a one-use local browser sign-in link");
         println!("github configure: bind improvement PR publication to a repository and private credential reference");

@@ -1,4 +1,4 @@
-{ pkgs, withTerminal ? true }:
+{ pkgs, withTerminal ? true, revision ? null }:
 let
   inherit (pkgs) lib;
   # Keep the UI output reusable when only the host code changes.
@@ -39,6 +39,7 @@ pkgs.rustPlatform.buildRustPackage {
       lib.cleanSourceFilter path type
       && !(builtins.elem (builtins.baseNameOf path) [ "target" "dist" ]);
   };
+  CONTROL_BUILD_REVISION = if revision == null then "" else revision;
   cargoLock.lockFile = ../Cargo.lock;
   cargoBuildFlags = [ "--bin" "control" ] ++ lib.optional (!withTerminal) "--no-default-features";
   cargoTestFlags = [ "--workspace" ] ++ lib.optional (!withTerminal) "--no-default-features";

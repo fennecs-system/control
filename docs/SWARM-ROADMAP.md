@@ -962,6 +962,16 @@ comments, title/description updates and exact-head merges through
 permission and operator authorization; GitHub branch rules remain authoritative.
 Resource/mount profiles and deployment/restart jobs remain separate slices.
 
+Deployment's first verification slice stamps Nix packages with their Git revision
+and dirty flag, exposed as typed JSON by `control --version --json` and the
+state-free `/health/build` probe. Unstamped builds report a null revision, and a
+dirty build must not satisfy an exact merged-revision check. This is build
+identification, not signed provenance or deployment permission. The remaining
+job runner must be managed separately from the service it restarts (for example,
+a separate launchd job or systemd unit); detaching a child process alone does not
+escape a service manager's process-group/cgroup cleanup. Keep its durable journal,
+rollback installation and health result outside application State.
+
 **Chat latency boundary.** Deliver update hints through transport adapters, not
 agent wakes: event-driven HTTP admission, mailbox notifications and authenticated
 web/TUI subscriptions reuse existing effect primitives. Keep fresh provider
