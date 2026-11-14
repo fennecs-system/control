@@ -1,4 +1,5 @@
 pub mod config;
+pub mod build_info;
 pub mod diff;
 pub mod discord;
 pub mod identity;

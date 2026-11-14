@@ -32,9 +32,12 @@
           builder = { type = "app"; program = "${pkgs.darwin.linux-builder}/bin/create-builder"; };
         });
       packages = eachSystem (pkgs:
-        let control = import ./hosting/package.nix { inherit pkgs; }; in {
+        let
+          revision = self.rev or (self.dirtyRev or null);
+          control = import ./hosting/package.nix { inherit pkgs revision; };
+        in {
           inherit control;
-          control-server = import ./hosting/package.nix { inherit pkgs; withTerminal = false; };
+          control-server = import ./hosting/package.nix { inherit pkgs revision; withTerminal = false; };
           code-metrics = import ./tools/code-metrics/package.nix { inherit pkgs; };
           default = control;
         } // nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {

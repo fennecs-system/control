@@ -137,6 +137,16 @@ Use `~/.local/bin/control`, or add that directory to your shell's PATH. Reinstal
 the binary after rebuilding. For development checks, see
 [CONTRIBUTING.md](../CONTRIBUTING.md).
 
+`control --version --json` identifies the installed binary; `GET /health/build`
+identifies the serving binary with the same typed fields (`version`, `revision`,
+`dirty`, `arch`, `os`). The existing `/health` liveness response is unchanged.
+Nix flake packages capture the source revision and whether it was modified.
+Plain Cargo/source-export builds report `revision: null` unless the builder
+explicitly supplies `CONTROL_BUILD_REVISION=<full-sha>` (or `<full-sha>-dirty`).
+Unknown or dirty builds must not count as verification of an exact merged
+revision. These fields are build identification, not signed provenance, and
+grant no deployment or restart authority.
+
 ## Terminal chat
 
 Run `control tui`; it starts a fresh chat without resuming or creating a saved
