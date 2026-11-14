@@ -146,10 +146,7 @@ pub fn rpc(state: &mut State, request: &Value) -> Value {
     }
     let result = match request["method"].as_str().unwrap_or("") {
         "initialize" => {
-            let version = match request["params"]["protocolVersion"].as_str() {
-                Some("2025-03-26") => "2025-03-26",
-                _ => "2025-11-25",
-            };
+            let version = control_context::tool_policy::negotiate(request["params"]["protocolVersion"].as_str());
             json!({"protocolVersion":version,"capabilities":{"tools":{}},"serverInfo":{"name":"control","version":env!("CARGO_PKG_VERSION")}})
         }
         "ping" => json!({}),
@@ -223,7 +220,7 @@ pub fn handle(
             .filter_map(|s| s.split_once(':'))
             .find(|(k, _)| k.eq_ignore_ascii_case("mcp-protocol-version"))
             .map(|(_, v)| v.trim());
-        if version.is_some_and(|v| !["2025-03-26", "2025-11-25"].contains(&v)) {
+        if version.is_some_and(|v| !control_context::tool_policy::supported(v)) {
             respond(
                 stream,
                 "400 Bad Request",

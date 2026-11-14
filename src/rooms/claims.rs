@@ -11,6 +11,9 @@ use std::collections::HashSet;
 
 const MAX_KEY: usize = 48;
 const MAX_NOTE: usize = 500;
+// Rule messages state the limits above; a test keeps them in step.
+const KEY_RULE: &str = "Claim keys are 1–48 letters, digits, '.', '_' or '-'.";
+const NOTE_RULE: &str = "Claim notes are at most 500 characters.";
 /// Live and released claims retained per room; released ones are evicted first.
 const MAX_PER_ROOM: usize = 128;
 const MAX_RELATED: usize = 5;
@@ -32,7 +35,8 @@ pub enum Outcome {
     Done,
     /// The owner or the operator released it unfinished.
     Released,
-    /// Host observation: the owner has no active turn and is not a persistent bot.
+    /// Host facts: the owner's chat is gone, its latest turn failed, was
+    /// cancelled, interrupted or blocked, or its bot was stopped.
     Abandoned,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -222,11 +226,11 @@ pub(crate) struct Resolved {
 pub(crate) fn call(state: &mut State, chat: &str, room: &str, args: &Value) -> Result<(Value, Option<Resolved>), &'static str> {
     let call: Call = serde_json::from_value(args.clone()).map_err(|_| "Expected key, action and optional status, blocked_on, note and revision.")?;
     if !valid_key(&call.key) {
-        return Err("Claim keys are 1–48 letters, digits, '.', '_' or '-'.");
+        return Err(KEY_RULE);
     }
     let note = call.note.as_deref().map(str::trim).unwrap_or_default();
     if note.chars().count() > MAX_NOTE {
-        return Err("Claim notes are at most 500 characters.");
+        return Err(NOTE_RULE);
     }
     let status = match call.status {
         Some(Status::Released) => return Err("Use action=release to release a claim."),

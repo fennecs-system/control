@@ -28,7 +28,7 @@ pub fn handle(
             .map(|(_, v)| v.trim());
         if request["jsonrpc"] != "2.0"
             || request.get("id").is_none()
-            || version.is_some_and(|v| !["2025-03-26", "2025-11-25"].contains(&v))
+            || version.is_some_and(|v| !control_context::tool_policy::supported(v))
         {
             respond(
                 stream,
