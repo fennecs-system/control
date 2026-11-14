@@ -197,6 +197,11 @@ fn newer_built_in_revisions_reach_nodes_unless_the_lens_was_edited_locally() {
     assert!(legacy.merge_defaults());
     assert_eq!(legacy.builtin.get("coordination"), Some(&shipped.revision));
     assert_eq!(legacy.definitions.iter().filter(|d| d.id == "coordination").count(), 1);
+    // ... and a copy of an earlier shipped revision upgrades.
+    let previous: Vec<Definition> = serde_json::from_str(include_str!("../builtin-lens-history.json")).unwrap();
+    let mut shipped_earlier = node(vec![previous[0].clone()], None);
+    assert!(shipped_earlier.merge_defaults());
+    assert_eq!(shipped_earlier.get("coordination").unwrap(), &shipped);
     let mut unknown = node(vec![older.clone()], None);
     assert!(!unknown.merge_defaults(), "an unrecognised copy may be a local edit");
     assert_eq!(unknown.get("coordination").unwrap(), &older);

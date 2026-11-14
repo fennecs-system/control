@@ -65,18 +65,21 @@ impl Library {
     /// without replacing local edits or selecting anything for a chat. New
     /// revisions are appended, so captured run contexts keep their revision.
     pub fn merge_defaults(&mut self) -> bool {
+        // Earlier shipped revisions identify unedited copies on nodes that
+        // predate the installed-revision record.
+        let shipped: Vec<Definition> = serde_json::from_str(include_str!("builtin-lens-history.json"))
+            .expect("Built-in lens history must be valid");
         let mut changed = false;
         for definition in Self::default().definitions {
             let current = self.get(&definition.id).cloned();
-            let installed = self.builtin.get(&definition.id).copied();
+            let mut installed = self.builtin.get(&definition.id).copied();
+            if let Some(current) = current.as_ref().filter(|c| installed.is_none() && (**c == definition || shipped.contains(c))) {
+                self.builtin.insert(definition.id.clone(), current.revision);
+                installed = Some(current.revision);
+                changed = true;
+            }
             match current {
                 None if self.definitions.len() < 4096 && self.current().len() < 128 => {}
-                // Nodes from before this record: an exact built-in copy is one.
-                Some(current) if installed.is_none() && current == definition => {
-                    self.builtin.insert(definition.id.clone(), definition.revision);
-                    changed = true;
-                    continue;
-                }
                 Some(current) if installed == Some(current.revision)
                     && definition.revision > current.revision
                     && self.definitions.len() < 4096 => {}

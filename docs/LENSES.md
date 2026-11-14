@@ -18,7 +18,9 @@ attempt's instructions. `/use none` clears the selection for future messages.
 Built-in lenses are versioned. On load, a node adds missing built-ins and appends
 a newer built-in revision when its current copy is still the built-in revision it
 last installed. A local edit is a newer local revision, so it is never replaced;
-earlier revisions stay available to captured runs.
+earlier revisions stay available to captured runs. When changing a built-in, add its
+previous shipped definition to `crates/context/src/builtin-lens-history.json`, so
+unedited copies from older nodes are recognised and upgraded.
 The browser preference only chooses the starting selection for a new chat.
 
 ## Task autonomy
