@@ -52,8 +52,13 @@ WASM tooling fix shipped in #143; both platform checks passed before merging.
   comparisons and finer causal classification of raw watch output. Creator identity alone does
   not establish which attempt caused each line. Deliver these only as narrow
   tool/adapter fixes when needed; do not add workload semantics to the supervisor.
-- [ ] **R3/R4:** visible history-read failures and bounded HTTP admission remain
-  open. They can ship independently alongside the architecture slice.
+- [ ] **R3 implementation in review:** missing/invalid/unavailable activity reads
+  return a typed failure; chat API retains the journal reference and reports it
+  in web/TUI, legacy context, delegated feedback and notifications. Empty records
+  remain empty, repaired reads recover and no synthetic tool event is introduced.
+  Fault and read-only regressions pass; this is not yet deployed.
+- [ ] **R4:** bounded HTTP handler admission remains open. It can ship
+  independently alongside the architecture slice.
 - [x] **Minimum architecture checkpoint: first A1/A2/A4 boundary**, then
   consumer-led A3. The directed-message increment in #148 establishes the first typed
   transition/effect boundary, with a blocking production interpreter and Tokio

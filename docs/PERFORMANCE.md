@@ -1,5 +1,36 @@
 # Performance checks
 
+## Explicit history-read failures (2026-11-14)
+
+Compared main `6bf92ef` with the R3 history-read patch, Linux aarch64 / pinned
+Rust 1.99, one pinned CPU, 512 MiB and no swap. Six alternating release pairs
+followed warmup; the same new read fixture was added to the baseline harness.
+It measures both inline and archived chat-detail reads at 10/100/500 messages.
+The existing web, core coordination and TUI fixtures also ran.
+
+| Workload | Baseline → patch median |
+| --- | ---: |
+| API detail, 500 inline turns | 10.510 → 10.514 ms |
+| API detail, 500 archived turns | 12.253 → 12.103 ms |
+| Web transcript, 500 turns | 3.001 → 2.943 ms |
+| TUI rendering, 500 turns | 62.901 → 62.305 µs |
+| Core coordination, 64 chats | 1.332 → 1.312 µs |
+
+All normal API JSON, HTML and terminal-buffer hashes matched. Across all measured
+sizes, differences ranged from −2.9% to +3.3%; these observations show no material
+regression in these fixtures, not a speedup or end-to-end inference result.
+The success path adds no filesystem operation, persistent state or model call.
+Cgroup memory-event and OOM counters stayed zero.
+
+Actual CPU-clock flamegraphs at 499 Hz with DWARF stacks contain 3,515/3,531
+samples for history reads and 925/925 for TUI rendering. Raw logs, source patch,
+measurement script and flamegraphs remain under
+`.control/performance/history-errors-20261114/` and
+`/private/tmp/control-history-errors-profile/`. Release Linux fault checks also
+passed: ten history tests, delegated feedback and the folded TUI warning.
+These checks do not claim a faster compactor, detection of every externally
+modified journal, or a Raspberry Pi device certification.
+
 ## Event-driven chat delivery (2026-11-14)
 
 Compared deployed main `1be79c7` with the event-driven transport patch using five
