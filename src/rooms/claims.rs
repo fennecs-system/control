@@ -62,6 +62,11 @@ pub struct Claim {
     /// edge-triggered on it.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub blocked_at: u64,
+    /// Revision at which this claim last advanced: it became done, or resumed
+    /// working after being blocked. Kept while it stays done or working; 0 if
+    /// it never advanced. Advisor stall facts compare it with team turns.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub advanced_at: u64,
 }
 fn is_zero(value: &u64) -> bool {
     *value == 0
@@ -290,17 +295,27 @@ pub(crate) fn call(state: &mut State, chat: &str, room: &str, args: &Value) -> R
         Some(previous) if previous.incarnation == incarnation && previous.status == Status::Blocked && previous.blocked_on == blocked_on => previous.blocked_at,
         _ => revision,
     };
+    // Progress is a transition into done, or out of blocked back to working;
+    // re-reporting either state keeps it.
+    let status = if release { Status::Released } else { status };
+    let previous = current.as_ref().filter(|previous| previous.incarnation == incarnation);
+    let advanced_at = match (previous.map(|previous| previous.status), status) {
+        (Some(Status::Done), Status::Done) => previous.map_or(0, |previous| previous.advanced_at),
+        (_, Status::Done) | (Some(Status::Blocked), Status::Working) => revision,
+        _ => previous.map_or(0, |previous| previous.advanced_at),
+    };
     let claim = Claim {
         room: room.to_owned(),
         key: call.key,
         owner: chat.to_owned(),
-        status: if release { Status::Released } else { status },
+        status,
         blocked_on,
         note: if release { String::new() } else { note.to_owned() },
         revision,
         incarnation,
         abandoned: false,
         blocked_at,
+        advanced_at,
     };
     // Resolution is a transition: re-reporting done is progress, not a new outcome.
     let resolved = claim.outcome().filter(|_| current.as_ref().is_none_or(|c| c.incarnation != claim.incarnation || c.outcome().is_none_or(|o| o == Outcome::Abandoned)))

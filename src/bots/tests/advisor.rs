@@ -173,7 +173,7 @@ fn facts_coalesce_into_one_reason_and_respect_the_advisor_budget() {
     let tester = spawned(&mut state, &root, "Tester");
     state.collective.claim_seq += 1;
     state.collective.claims.push(crate::rooms::claims::Claim { room: "general".into(), key: "build".into(), owner: worker.clone(),
-        status: crate::rooms::claims::Status::Working, blocked_on: None, note: String::new(), revision: 1, incarnation: 1, abandoned: false, blocked_at: 0 });
+        status: crate::rooms::claims::Status::Working, blocked_on: None, note: String::new(), revision: 1, incarnation: 1, abandoned: false, blocked_at: 0, advanced_at: 0 });
     let advisor = advisor(&mut state, &root);
     let mut definition = state.bots.supervisor.definitions().find(|d| d.chat.0 == advisor).unwrap().clone();
     definition.budget.turns_per_window = 1;
@@ -410,4 +410,135 @@ fn blocked_members_are_not_observed_with_the_lens_off() {
     reconcile_at(&mut state, 2, ok).unwrap();
     assert!(advisor_runs(&state, &advisor).is_empty());
     assert_eq!(state.bots.teams[&root], before);
+}
+
+#[test]
+fn turns_without_claim_progress_are_one_stall_fact_until_a_claim_advances() {
+    let (mut state, root) = fixture();
+    let miner = spawned(&mut state, &root, "Miner");
+    let smith = spawned(&mut state, &root, "Smith");
+    state.runtime.execution.advisor_stall_turns = 4;
+    let advisor = advisor(&mut state, &root);
+    // A running member keeps the team from going quiet.
+    turn(&mut state, &smith, "running");
+    reconcile_at(&mut state, 1, ok).unwrap();
+    for _ in 0..6 {
+        turn(&mut state, &miner, "completed");
+    }
+    reconcile_at(&mut state, 2, ok).unwrap();
+    assert!(advisor_runs(&state, &advisor).is_empty(), "without open claims there is nothing to stall");
+    claim(&mut state, &miner, "mine", "working", None);
+    claim(&mut state, &smith, "smelt", "working", None);
+    reconcile_at(&mut state, 3, ok).unwrap();
+    for _ in 0..3 {
+        turn(&mut state, &miner, "completed");
+    }
+    claim(&mut state, &miner, "mine", "working", None);
+    reconcile_at(&mut state, 4, ok).unwrap();
+    assert!(advisor_runs(&state, &advisor).is_empty(), "below the window; a working update is not progress");
+    turn(&mut state, &smith, "completed");
+    reconcile_at(&mut state, 5, ok).unwrap();
+    let runs = advisor_runs(&state, &advisor);
+    assert_eq!(runs.len(), 1);
+    assert_eq!(facts(runs[0]), [Facts { stalled: Some(lifecycle::Stall { turns: 4, open: 2 }), ..Facts::default() }]);
+    assert!(runs[0].objective.contains("busy but stalled: 4 team turns settled while 2 claim(s) stayed open"));
+    finish(&mut state, &advisor);
+    for _ in 0..8 {
+        turn(&mut state, &miner, "completed");
+    }
+    reconcile_at(&mut state, 40_000, ok).unwrap();
+    assert_eq!(advisor_runs(&state, &advisor).len(), 1, "a stall is reported once");
+    // A claim resuming from blocked re-arms it: progress itself is no fact.
+    claim(&mut state, &smith, "smelt", "blocked", Some("mine"));
+    claim(&mut state, &smith, "smelt", "working", None);
+    reconcile_at(&mut state, 80_000, ok).unwrap();
+    assert_eq!(advisor_runs(&state, &advisor).len(), 1);
+    for _ in 0..4 {
+        turn(&mut state, &miner, "completed");
+    }
+    reconcile_at(&mut state, 120_000, ok).unwrap();
+    let runs = advisor_runs(&state, &advisor);
+    assert_eq!(runs.len(), 2);
+    assert_eq!(facts(runs[1])[0].stalled, Some(lifecycle::Stall { turns: 4, open: 2 }));
+    finish(&mut state, &advisor);
+    // So does a claim becoming done; the remaining open claim can stall again.
+    for _ in 0..3 {
+        turn(&mut state, &miner, "completed");
+    }
+    claim(&mut state, &miner, "mine", "done", None);
+    reconcile_at(&mut state, 160_000, ok).unwrap();
+    for _ in 0..4 {
+        turn(&mut state, &miner, "completed");
+    }
+    reconcile_at(&mut state, 200_000, ok).unwrap();
+    let runs = advisor_runs(&state, &advisor);
+    assert_eq!(runs.len(), 3);
+    assert_eq!(facts(runs[2])[0].stalled, Some(lifecycle::Stall { turns: 4, open: 1 }), "the done claim restarted the window");
+}
+
+/// Marks `chat`'s live claim `key` blocked on `on` with a free-text `note`.
+fn blocked_with(state: &mut State, chat: &str, key: &str, on: &str, note: &str) {
+    let revision = crate::rooms::claims::find(state, "general", key).unwrap().revision;
+    let args = json!({"key":key,"action":"update","status":"blocked","blocked_on":on,"note":note,"revision":revision});
+    let (value, _) = crate::rooms::claims::call(state, chat, "general", &args).unwrap();
+    assert_eq!(value["applied"], true, "{value}");
+}
+
+#[test]
+fn members_reporting_a_similar_blocker_are_one_shared_fact() {
+    let (mut state, root) = fixture();
+    let members = ["Miner", "Builder", "Smith", "Scout"].map(|name| spawned(&mut state, &root, name));
+    for (member, key) in members.iter().zip(["mine", "build", "smelt", "scout"]) {
+        claim(&mut state, member, key, "working", None);
+    }
+    let advisor = advisor(&mut state, &root);
+    turn(&mut state, &members[3], "running");
+    reconcile_at(&mut state, 1, ok).unwrap();
+    let host = "Host error 502: the shared service at 10.0.0.5 refused the connection";
+    blocked_with(&mut state, &members[0], "mine", "ore", host);
+    blocked_with(&mut state, &members[1], "build", "planks", "host error 503 - shared service at 10.0.0.7 refused the connection");
+    blocked_with(&mut state, &members[2], "smelt", "fuel", "Need coal from the scout before smelting can start");
+    reconcile_at(&mut state, 2, ok).unwrap();
+    let runs = advisor_runs(&state, &advisor);
+    assert_eq!(runs.len(), 1);
+    let observed = facts(runs[0]);
+    assert_eq!(observed[0].shared, [lifecycle::Shared { reason: host.into(), members: vec![members[0].clone(), members[1].clone()] }]);
+    assert_eq!(observed[0].blocked.len(), 3, "claims blocked on different keys stay separate entries");
+    assert!(runs[0].objective.contains("2 members report a similar blocker"));
+    finish(&mut state, &advisor);
+    // An unchanged group is not repeated, even with a new note revision.
+    blocked_with(&mut state, &members[0], "mine", "ore", "Host error 502: the shared service at 10.0.0.6 refused the connection");
+    reconcile_at(&mut state, 40_000, ok).unwrap();
+    assert_eq!(advisor_runs(&state, &advisor).len(), 1);
+    // A member joining is reported with the whole group.
+    blocked_with(&mut state, &members[3], "scout", "map", "HOST ERROR 504: shared service refused the connection (10.0.0.9)");
+    reconcile_at(&mut state, 80_000, ok).unwrap();
+    let runs = advisor_runs(&state, &advisor);
+    assert_eq!(runs.len(), 2);
+    let observed = facts(runs[1]);
+    assert_eq!(observed[0].shared.len(), 1);
+    assert_eq!(observed[0].shared[0].members, [members[0].clone(), members[1].clone(), members[3].clone()]);
+}
+
+#[test]
+fn members_failing_with_the_same_error_share_a_blocker() {
+    let (mut state, root) = fixture();
+    let miner = spawned(&mut state, &root, "Miner");
+    let smith = spawned(&mut state, &root, "Smith");
+    let scout = spawned(&mut state, &root, "Scout");
+    let advisor = advisor(&mut state, &root);
+    turn(&mut state, &scout, "running");
+    reconcile_at(&mut state, 1, ok).unwrap();
+    for member in [&miner, &smith] {
+        for attempt in 0..3 {
+            let run = turn(&mut state, member, "failed");
+            state.runtime.runs[run].result = format!("Could not reach the build host (attempt {attempt}): connection reset").into();
+        }
+    }
+    reconcile_at(&mut state, 2, ok).unwrap();
+    let runs = advisor_runs(&state, &advisor);
+    assert_eq!(runs.len(), 1);
+    let observed = facts(runs[0]);
+    assert_eq!(observed[0].repeated, 2);
+    assert_eq!(observed[0].shared, [lifecycle::Shared { reason: "Could not reach the build host (attempt 2): connection reset".into(), members: vec![miner.clone(), smith.clone()] }]);
 }

@@ -152,3 +152,34 @@ fn an_operator_release_ends_the_blocked_state() {
     let released = find(&state, "general", "house").unwrap();
     assert_eq!((released.status, released.blocked_on.as_deref(), released.blocked_at), (Status::Released, None, 0));
 }
+
+#[test]
+fn a_claim_advances_when_it_becomes_done_or_resumes_from_blocked() {
+    let (mut state, a, _) = setup();
+    let at = |state: &State| find(state, "general", "house").unwrap().advanced_at;
+    let mut revision = claim(&mut state, &a, json!({"key":"house","action":"acquire"}))["claim"]["revision"].as_u64().unwrap();
+    assert_eq!(at(&state), 0, "acquiring is not progress");
+    let mut update = |state: &mut State, mut args: Value| {
+        (args["key"], args["action"], args["revision"]) = (json!("house"), json!("update"), json!(revision));
+        revision = claim(state, &a, args)["claim"]["revision"].as_u64().unwrap();
+        revision
+    };
+    update(&mut state, json!({"status":"working","note":"still going"}));
+    assert_eq!(at(&state), 0, "a working note is not progress");
+    update(&mut state, json!({"status":"blocked","blocked_on":"wood"}));
+    assert_eq!(at(&state), 0);
+    let resumed = update(&mut state, json!({"status":"working"}));
+    assert_eq!(at(&state), resumed, "blocked → working advances");
+    update(&mut state, json!({"status":"working","note":"walls up"}));
+    assert_eq!(at(&state), resumed);
+    let done = update(&mut state, json!({"status":"done"}));
+    assert_eq!(at(&state), done);
+    update(&mut state, json!({"status":"done","note":"verified"}));
+    assert_eq!(at(&state), done, "re-reporting done is the same advance");
+    update(&mut state, json!({"status":"working"}));
+    assert_eq!(at(&state), done);
+    claim(&mut state, &a, json!({"key":"house","action":"release","revision":revision}));
+    assert_eq!(at(&state), done, "a release keeps the last advance");
+    claim(&mut state, &a, json!({"key":"house","action":"acquire"}));
+    assert_eq!(at(&state), 0, "a new incarnation starts unadvanced");
+}
