@@ -1,6 +1,7 @@
 use crate::identity::{Action, Actor, DiscordId, DmBinding, DmBindings, Policy};
 use crate::{config, discord, identity};
-use super::{permissions as discord_permissions, delivery::Snapshot};
+use super::{permissions as discord_permissions, delivery::Snapshot, operator::{self as routing, Ledger, Notice}};
+use crate::client::{Hive, operator, updates::Updates};
 use reqwest::{
     blocking::Client,
     header::{HeaderMap, HeaderValue, AUTHORIZATION},
@@ -37,6 +38,16 @@ struct Bridge {
     bot_id: DiscordId,
     bot_name: String,
     state: std::cell::RefCell<StateCache>,
+    operator: std::cell::RefCell<Operator>,
+}
+/// The operator interface connection (the one the TUI uses) and the reply routing table.
+#[derive(Default)]
+struct Operator {
+    hive: Option<(Hive, Updates)>,
+    refreshed: Option<std::time::Instant>,
+    /// Decision, port and bot revisions from `control.chats.list` at the last read.
+    revisions: Value,
+    ledger: Ledger,
 }
 /// Cache only delivery fields; reload on size, modification time or inode changes.
 #[derive(Default)]
@@ -60,7 +71,7 @@ impl StateCache {
     }
 }
 /// Ok, retry after a delay, or a permanent refusal (None) that must not be retried.
-type Sent = Result<(), Option<Duration>>;
+type Sent = Result<Option<DiscordId>, Option<Duration>>;
 fn retry_after(response: reqwest::blocking::Response) -> Duration {
     Duration::from_secs_f64(response.json::<Value>().ok().and_then(|v| v["retry_after"].as_f64()).unwrap_or(5.0).clamp(1.0, 300.0))
 }
@@ -92,6 +103,18 @@ fn credential() -> Result<String, &'static str> {
         }
     }
     Err("Missing DISCORD_TOKEN.")
+}
+/// DM recipients who may use the operator interface, and what is forwarded to them.
+fn operators(routes: &[Route]) -> (crate::client::operator::Forwarding, Vec<(DiscordId, DiscordId)>) {
+    let (Ok(policy), Ok(dms)) = (Policy::load(), DmBindings::load()) else { return (Default::default(), Vec::new()) };
+    let recipients = routes.iter().filter_map(|route| {
+        let user = route.recipient?;
+        identity::operates(&policy, &route.actor(user)?, &dms).then_some((user, route.channel))
+    }).collect();
+    (policy.operator, recipients)
+}
+fn save_cursors(cursors: &HashMap<String, String>) -> Result<(), &'static str> {
+    checkpoint(config::state("discord-cursors.json")?, &serde_json::to_vec(cursors).map_err(|_| "Could not encode conversation cursors.")?)
 }
 fn checkpoint(path: impl AsRef<Path>, bytes: &[u8]) -> Result<(), &'static str> {
     let path = path.as_ref();
@@ -373,6 +396,7 @@ impl Bridge {
             bot_id,
             bot_name: user["username"].as_str().unwrap_or("Control").into(),
             state: Default::default(),
+            operator: std::cell::RefCell::new(Operator { ledger: config::state("discord-operator.json").map(load_json).unwrap_or_default(), ..Default::default() }),
         })
     }
     fn status(&self, routes: &[Route], ready: bool, message: &str) {
@@ -473,7 +497,7 @@ impl Bridge {
             })
             .send()
         {
-            Ok(r) if r.status().is_success() => Ok(()),
+            Ok(r) if r.status().is_success() => Ok(r.json::<Value>().ok().and_then(|v| v["id"].as_str()?.parse().ok())),
             Ok(r) if r.status().as_u16() == 429 => Err(Some(retry_after(r))),
             // Other 4xx (403, 50007 cannot DM user, ...) will not succeed on retry.
             Ok(r) if r.status().is_client_error() => Err(None),
@@ -542,6 +566,20 @@ impl Bridge {
             let Some(id) = row["id"].as_str().and_then(|s| s.parse::<DiscordId>().ok()) else {
                 continue;
             };
+            // A reply to an operator notification (or a typed decision naming
+            // one) is that request's decision, not a message to the DM chat.
+            // It is consumed before it runs, so a crash cannot apply it twice.
+            let notice = sender(&row, route, self.bot_id).and_then(|user| {
+                let replied = row["message_reference"]["message_id"].as_str().and_then(|s| s.parse().ok());
+                self.operator.borrow().ledger.target(user, route.channel, replied, row["content"].as_str().unwrap_or("")).cloned()
+            });
+            if let Some(notice) = notice {
+                cursors.insert(channel.clone(), id.to_string());
+                save_cursors(cursors)?;
+                let outcome = self.decide(route, &notice, row["content"].as_str().unwrap_or(""));
+                let _ = self.reply(route.channel, &outcome);
+                continue;
+            }
             if let Some(message) = incoming(&row, route, self.bot_id) {
                 let actor = message.actor();
                 if identity::authorize(&actor, message.action).is_ok() {
@@ -588,13 +626,116 @@ impl Bridge {
         }
         Ok(true)
     }
+    /// The operator interface, connected on first use and after a failure.
+    fn hive(operator: &mut Operator) -> Result<&mut (Hive, Updates), &'static str> {
+        if operator.hive.is_none() {
+            let hive = Hive::connect(&config::server_url()).map_err(|_| "Operator interface unavailable; is control serve running?")?;
+            let updates = hive.updates().map_err(|_| "Operator update stream unavailable.")?;
+            operator.hive = Some((hive, updates));
+            operator.refreshed = None;
+        }
+        Ok(operator.hive.as_mut().unwrap())
+    }
+    /// Notifies operator principals of pending requests across all chats. Reads
+    /// `control.requests.list` only when the server's change hints (the TUI's)
+    /// fire, or every 10 s while they are disconnected.
+    fn notify_requests(&self, routes: &[Route]) -> Result<(), &'static str> {
+        let (forwarding, recipients) = operators(routes);
+        let mut operator = self.operator.borrow_mut();
+        if recipients.is_empty() {
+            operator.hive = None;
+            return Ok(());
+        }
+        Self::hive(&mut operator)?;
+        let stale = operator.refreshed.is_none_or(|at| at.elapsed() >= Duration::from_secs(10));
+        let first = operator.refreshed.is_none();
+        let operator = &mut *operator;
+        let Some((hive, updates)) = operator.hive.as_mut() else { return Ok(()) };
+        if !(updates.changed() || first || (stale && !updates.connected())) {
+            return Ok(());
+        }
+        // The cheap chat list carries the decision revisions (as the TUI uses
+        // them); the node-wide view is read only when one of them moved.
+        let revisions = match hive.tool("control.chats.list", json!({})) {
+            Ok(list) => json!([list[0]["decision_revision"], list[0]["port_revision"], list[0]["bot_revision"]]),
+            Err(_) => {
+                operator.hive = None;
+                return Err("Could not read the chat list; retrying.");
+            }
+        };
+        if !first && revisions == operator.revisions {
+            operator.refreshed = Some(std::time::Instant::now());
+            return Ok(());
+        }
+        let groups = match hive.tool("control.requests.list", json!({})) {
+            Ok(groups) => groups,
+            Err(_) => {
+                operator.hive = None;
+                return Err("Could not read pending operator requests; retrying.");
+            }
+        };
+        operator.refreshed = Some(std::time::Instant::now());
+        operator.revisions = revisions;
+        let mut retry = false;
+        for group in groups.as_array().into_iter().flatten() {
+            let (Some(chat), title) = (group["chat_id"].as_str(), group["title"].as_str().unwrap_or("Chat")) else { continue };
+            let link = format!("{}/chat/{chat}", config::server_url());
+            for pending in operator::pending(group) {
+                if pending.id.is_empty() || !forwarding.forwards(chat, pending.kind) {
+                    continue;
+                }
+                for &(user, channel) in &recipients {
+                    if operator.ledger.sent(user, chat, pending.kind, &pending.id) {
+                        continue;
+                    }
+                    let receipt = Ledger::receipt(user, chat, pending.kind, &pending.id);
+                    match self.send(channel, &routing::text(title, &link, &pending), Some(&nonce(&receipt))) {
+                        Ok(Some(message)) => {
+                            operator.ledger.record(Notice { user, channel, message, chat: chat.into(), kind: pending.kind, id: pending.id.clone(), loopback: pending.loopback });
+                            let saved = serde_json::to_vec(&operator.ledger).map_err(|_| "Could not encode operator routing.")
+                                .and_then(|bytes| checkpoint(config::state("discord-operator.json")?, &bytes));
+                            if let Err(message) = saved { eprintln!("{message}"); }
+                        }
+                        Ok(None) | Err(Some(_)) => retry = true,
+                        Err(None) => eprintln!("Discord refused an operator notification."),
+                    }
+                }
+            }
+        }
+        if retry {
+            operator.refreshed = None;
+        }
+        Ok(())
+    }
+    /// Applies a reply to `notice` through the shared operator interface, as
+    /// the TUI would in that chat; the server rechecks that it is still pending.
+    fn decide(&self, route: &Route, notice: &Notice, text: &str) -> String {
+        let (_, recipients) = operators(std::slice::from_ref(route));
+        if !recipients.contains(&(notice.user, notice.channel)) {
+            return "Operator requests are not enabled for this account.".into();
+        }
+        let command = match operator::reply(&notice.pending(), text) {
+            Ok(command) => command,
+            Err(error) => return format!("Control: {error}"),
+        };
+        let mut state = self.operator.borrow_mut();
+        let result = Self::hive(&mut state).map_err(str::to_owned)
+            .and_then(|(hive, _)| operator::execute(hive, &notice.chat, &command).map_err(|e| e.to_string()));
+        match result {
+            Ok(()) => format!("Decision sent.\n{}/chat/{}", config::server_url(), notice.chat),
+            Err(error) => {
+                if error.starts_with("Control is unavailable") { state.hive = None; }
+                format!("Control could not apply that decision: {error}")
+            }
+        }
+    }
     /// One delivery attempt honouring per-receipt backoff. Permanent refusals are recorded and not retried.
     fn attempt(&self, receipt: &str, channel: DiscordId, content: &str, outbound: &mut Outbound) -> bool {
         if outbound.backoff.get(receipt).is_some_and(|(until, _)| now() < *until) {
             return false;
         }
         match self.send(channel, content, Some(&nonce(receipt))) {
-            Ok(()) => {
+            Ok(_) => {
                 outbound.backoff.remove(receipt);
                 true
             }
@@ -623,12 +764,15 @@ impl Bridge {
             let _ = outbound.save_receipts();
         }
         let events = crate::outbox::read(&crate::outbox::path()?, outbound.cursor).map_err(|_| "Could not read the delivery outbox.")?;
+        // Recipients who receive design questions as operator requests.
+        let (forwarding, operating) = operators(routes);
+        let questions = if forwarding.enabled && forwarding.chats.is_empty() && forwarding.kinds.contains(&operator::Kind::Question) { operating.into_iter().map(|(_, channel)| channel).collect() } else { Vec::new() };
         let mut authorize = identity::authorizer();
         // Events parked until their authorization or route is available again;
         // anything not yet retried stays parked if a receipt cannot be saved.
         let mut parked = std::mem::take(&mut outbound.parked).into_iter();
         while let Some(run) = parked.next() {
-            match self.deliver_one(&run, routes, outbound, &mut authorize) {
+            match self.deliver_one(&run, routes, &questions, outbound, &mut authorize) {
                 Ok(Outcome::Done) => {}
                 Ok(_) => outbound.parked.push(run),
                 Err(error) => {
@@ -639,7 +783,7 @@ impl Bridge {
             }
         }
         for (run, next) in &events {
-            match self.deliver_one(run, routes, outbound, &mut authorize)? {
+            match self.deliver_one(run, routes, &questions, outbound, &mut authorize)? {
                 Outcome::Done => {}
                 // Parking never drops an event: with the set full, the cursor holds.
                 Outcome::Park if outbound.parked.len() < PARKED => outbound.parked.push(run.clone()),
@@ -650,7 +794,7 @@ impl Bridge {
         }
         Ok(())
     }
-    fn deliver_one(&self, run: &crate::outbox::Delivery, routes: &[Route], outbound: &mut Outbound, authorize: &mut impl FnMut(&Actor, Action) -> Result<identity::Workspace, &'static str>) -> Result<Outcome, &'static str> {
+    fn deliver_one(&self, run: &crate::outbox::Delivery, routes: &[Route], questions: &[DiscordId], outbound: &mut Outbound, authorize: &mut impl FnMut(&Actor, Action) -> Result<identity::Workspace, &'static str>) -> Result<Outcome, &'static str> {
         {
             {
                 let (actor, action, status) = (&run.actor, run.action, run.status.as_str());
@@ -659,6 +803,9 @@ impl Bridge {
                     Actor::DiscordDm { channel_id, .. } => (*channel_id, true),
                     _ => return Ok(Outcome::Done),
                 };
+                if status == "waiting" && !run.question.is_null() && questions.contains(&channel) {
+                    return Ok(Outcome::Done);
+                }
                 if (!run.source.starts_with("discord:") && run.chat.is_none())
                     || !crate::outbox::DELIVERABLE.contains(&status)
                     || outbound.delivered.contains(&receipt)
@@ -801,10 +948,13 @@ fn run(check_only: bool) -> Result<(), &'static str> {
             };
         }
         // Transient storage or Discord failures are logged; the bridge keeps polling.
-        if let Err(m) = config::state("discord-cursors.json").and_then(|path| checkpoint(path, &serde_json::to_vec(&cursors).map_err(|_| "Could not encode conversation cursors.")?)) {
+        if let Err(m) = save_cursors(&cursors) {
             eprintln!("{m}");
         }
         if let Err(m) = bridge.deliver(&routes, &mut outbound).and_then(|()| bridge.outbox(&routes, &mut outbound)) {
+            eprintln!("{m}");
+        }
+        if let Err(m) = bridge.notify_requests(&routes) {
             eprintln!("{m}");
         }
         bridge.status(

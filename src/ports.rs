@@ -717,6 +717,10 @@ pub(crate) fn pending_for_chat<'a>(state: &'a State, id: &str) -> Vec<&'a Port> 
         && (crate::chat::within(state,&port.chat,id) || runs.contains(port.origin_run.as_str()) || requester(port).is_some_and(|c| crate::chat::within(state,c,id)))).collect()
 }
 
+/// Owning chats of every pending port request, for the node-wide view.
+pub(crate) fn pending_chats(state: &State) -> impl Iterator<Item = &str> {
+    state.ports.iter().filter(|port| port.status == Status::Pending).map(|port| port.chat.as_str())
+}
 pub(crate) fn pending_json(state: &State,id: &str)->Vec<Value> {
     pending_for_chat(state,id).into_iter().map(|port| {
         let mut value=port.summary();

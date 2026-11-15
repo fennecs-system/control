@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use std::{fs, io, time::Duration};
 const VERSION: &str = control_context::tool_policy::MCP_LATEST;
 pub mod github;
+pub mod operator;
 pub mod updates;
 pub struct Hive {
     client: Client,
@@ -16,7 +17,7 @@ pub struct Hive {
     operator_cookie: HeaderValue,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PortDecision { Allow, Deny }
 
 /// The refreshed projection is retained even when approval is not confirmed.

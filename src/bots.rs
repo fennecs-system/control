@@ -1038,6 +1038,10 @@ fn pending<'a>(state: &'a State, chat: &'a str) -> impl Iterator<Item = &'a Appr
     state.bots.approvals.iter().filter(move |a| a.decision == Decision::Pending && visible(state, a, chat))
 }
 pub(crate) fn pending_count(state: &State, chat: &str) -> usize { pending(state,chat).count() }
+/// Requesting chats of every pending request, for the node-wide view.
+pub(crate) fn pending_chats(state: &State) -> impl Iterator<Item = &str> {
+    state.bots.approvals.iter().filter(|a| a.decision == Decision::Pending).map(|a| a.requester.as_str())
+}
 pub(crate) fn decision_revision(state: &State) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();

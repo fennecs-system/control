@@ -192,3 +192,44 @@ fn ownership_snapshots() {
         serde_json::json!({"workload":"ownership_snapshot","attempts":500,"median_ns":samples[4],"min_ns":samples[0]})
     );
 }
+/// Operator-facing views: the web chat page, its requests panel, the Bots page,
+/// `control.chat.read`/`control.chats.list` (TUI) and the node-wide request
+/// view an away-from-keyboard adapter reads on change hints.
+#[test]
+#[ignore = "explicit release-mode synthetic timing; no credentials, models or source execution"]
+fn operator_views() {
+    for (messages, unrelated, questions) in [(10, 0, 0), (100, 1000, 10), (500, 5000, 50)] {
+        let mut state = fixture(messages, unrelated);
+        for (index, run) in state.runtime.runs.iter_mut().filter(|run| run.chat_id.as_deref() == Some("benchmark-chat")).take(questions).enumerate() {
+            run.status = "waiting".into();
+            run.question = Some(crate::design::Question {
+                id: format!("q-{index}"),
+                generation: format!("g-{index}"),
+                nonce: format!("n-{index}"),
+                input: crate::design::parse_input(serde_json::json!({"question":"Choose a route <&> λ","options":["Relay","Stop"]})).unwrap(),
+                answer: None,
+                continuation: None,
+            });
+        }
+        let workloads: [(&str, &dyn Fn(&State) -> usize); 6] = [
+            ("web_chat_page", &|s| chat::render(s, "benchmark-chat").unwrap().len()),
+            ("web_requests_panel", &|s| chat::requests(s, "benchmark-chat").unwrap().len()),
+            ("web_bots_page", &|s| crate::bots::overview(s).len()),
+            ("chat_read", &|s| chat::detail(s, "benchmark-chat").unwrap().to_string().len()),
+            ("chats_list", &|s| chat::list(s).to_string().len()),
+            ("requests_list", &|s| chat::pending_requests(s).to_string().len()),
+        ];
+        for (name, workload) in workloads {
+            let mut samples = Vec::new();
+            for _ in 0..9 {
+                let start = Instant::now();
+                for _ in 0..10 {
+                    black_box(workload(black_box(&state)));
+                }
+                samples.push(start.elapsed().as_nanos() / 10);
+            }
+            samples.sort_unstable();
+            println!("{}", serde_json::json!({"workload":name,"messages":messages,"unrelated_runs":unrelated,"questions":questions,"median_ns":samples[4],"min_ns":samples[0],"bytes":workload(&state)}));
+        }
+    }
+}

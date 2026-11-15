@@ -725,6 +725,27 @@ pub fn list(state: &State) -> Value {
         json!({"id":s.id,"title":s.title,"lens":s.lens,"lenses":selected_lenses(s),"revision":s.revision,"messages":s.messages.len(),"parent_chat":entry.parent,"depth":entry.depth,"activity_order":s.activity_order,"decision_revision":decision_revision,"port_revision":port_revision,"bot_revision":bot_revision})
     }).collect::<Vec<_>>())
 }
+/// Pending operator decisions across the node, grouped by top-level chat in
+/// the `pending_*` shape of `detail`. Each group is decided in its chat, the
+/// same way as from that chat's own view.
+pub fn pending_requests(state: &State) -> Value {
+    let waiting = state.runtime.runs.iter()
+        .filter(|run| run.status == "waiting" && run.question.as_ref().is_some_and(|q| q.answer.is_none()))
+        .filter_map(|run| run.chat_id.as_deref());
+    let chats = waiting.chain(crate::bots::pending_chats(state)).chain(crate::ports::pending_chats(state));
+    let mut roots = Vec::new();
+    for chat in chats {
+        let root = lineage(state, chat).last().unwrap_or(chat);
+        if !roots.contains(&root) { roots.push(root); }
+    }
+    let mut authorize = identity::authorizer();
+    json!(roots.into_iter().filter_map(|id| {
+        let session = state.chats.iter().find(|s| s.id == id && valid_id(&s.id))?;
+        authorize(&session.actor, Action::Task).ok()?;
+        let entry = json!({"chat_id":id,"title":session.title,"pending_questions":crate::design::pending_json(state,id),"pending_bots":crate::bots::pending_json(state,id),"pending_ports":crate::ports::pending_json(state,id)});
+        ["pending_questions","pending_bots","pending_ports"].iter().any(|k| entry[k].as_array().is_some_and(|a| !a.is_empty())).then_some(entry)
+    }).collect::<Vec<_>>())
+}
 pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
     let session = state.chats.iter().find(|s| s.id == id).ok_or("Chat not found.")?;
     identity::authorize(&session.actor, Action::Task)?;
@@ -901,6 +922,7 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
     };
     match name {
         "control.chats.list" => Ok(list(state)),
+        "control.requests.list" => Ok(pending_requests(state)),
         "control.chat.read" => detail(state, id()?),
         "control.chat.lenses" => {
             let id = id()?;
