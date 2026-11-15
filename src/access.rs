@@ -63,6 +63,11 @@ impl Access {
             .any(|(name, value)| name == "control_operator" && equal(value, &self.session))
     }
     pub fn gate(&self, stream: &mut TcpStream, method: &str, target: &str, header: &str) -> bool {
+        if method == "GET" && target == "/health/build" {
+            let body = serde_json::to_string(&control::build_info::current()).expect("Build metadata is serializable");
+            respond(stream, "200 OK", "application/json", &body, "");
+            return true;
+        }
         if method == "GET" && target == "/health" {
             respond(stream, "200 OK", "text/plain", "Control is running.", "");
             return true;
