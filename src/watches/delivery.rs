@@ -19,6 +19,16 @@ fn index(state: &State, attempt: &AttemptRef<'_>) -> io::Result<usize> {
     crate::identity::authorize(&state.runtime.runs[index].actor, state.runtime.runs[index].action).map_err(io::Error::other)?;
     Ok(index)
 }
+/// Whether a committed source can still deliver events. Reads and receipts
+/// require the watch record, and watch ids are never reused, so a deleted
+/// watch's watermark cannot guard against redelivery and is retired at
+/// publication. Rooms and conversations keep their watermarks.
+pub(crate) fn live(state: &State) -> impl Fn(&Range) -> bool + '_ {
+    |range| match range {
+        Range::Watch { watch, .. } => state.watches.iter().any(|w| &w.id == watch),
+        Range::Room { .. } | Range::Conversation { .. } => true,
+    }
+}
 fn position(range: &Range, watch: &str) -> Option<u64> {
     match range { Range::Watch { watch: id, through, .. } if id == watch => Some(*through), _ => None }
 }
