@@ -218,3 +218,8 @@ messages to release a selective wait selects its own `conversation:<chat>` topic
 which `wake_topics` always offers. Operator input queues its own turn and is
 unaffected. The supervisor core only matches topics and cursors; claim meaning
 stays in Control's adapter.
+
+An [advisor note](LENSES.md#team-advisor) is a direct peer message from the
+team's approved read-only advisor to the lead's steering chat, and these rules
+apply to it unchanged. The advisor itself sleeps only on its `task:<root>`
+lifecycle topic; it holds no room inbox and never posts to rooms.

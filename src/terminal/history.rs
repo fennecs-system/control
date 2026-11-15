@@ -4,11 +4,24 @@ use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Style},
-    text::Line,
+    text::{Line, Span},
     widgets::{Paragraph, Widget, Wrap},
 };
 pub(super) const CARD: Color = Color::Rgb(31, 31, 38);
 pub(super) const PURPLE: Color = Color::Rgb(181, 160, 255);
+/// The theme's cyan accent, as `--cyan` in the web stylesheet.
+pub(super) const CYAN: Color = Color::Rgb(140, 218, 203);
+/// An advisor note as a boxed card: a cyan rule and label over the card
+/// background, distinct from user input and Control events.
+pub(super) fn advisor_note(text: &str) -> Vec<Line<'static>> {
+    let (label, note) = text.split_once('\n').unwrap_or((text, ""));
+    let edge = Style::default().fg(CYAN).bg(CARD);
+    let body = Style::default().fg(Color::Rgb(233, 232, 237)).bg(CARD);
+    let mut lines = vec![Line::styled(format!("┌ {label} · read-only evidence"), edge)];
+    lines.extend(note.lines().map(|line| Line::from(vec![Span::styled("│ ", edge), Span::styled(line.to_owned(), body)]).style(body)));
+    lines.push(Line::styled("└", edge));
+    lines
+}
 pub(super) fn user_line(mut line: Line<'static>) -> Line<'static> {
     line.style = Style::default().fg(Color::Rgb(233, 232, 237)).bg(CARD);
     line

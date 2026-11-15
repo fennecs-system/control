@@ -68,6 +68,8 @@ fn dispatch_at(
     }
     let claude = run.backend == crate::backend::Backend::Claude;
     let judge = crate::delegation::is_judge(run);
+    // An approved advisor is a judge whose one extra effect is evidence notes.
+    let advisor = judge && run.chat_id.as_deref().is_some_and(|chat| state.bots.advises(chat));
     // Enabling a bot affects the next admission, not the protocol of an
     // already-running provider session whose input was captured earlier.
     let managed=crate::turn_context::managed(&state,run)
@@ -83,7 +85,7 @@ fn dispatch_at(
                 tools.retain(|tool|!matches!(tool["name"].as_str(),Some("control_turn_context"|"control_turn_handoff")));
             }
             if judge {
-                tools.retain(|tool|matches!(tool["name"].as_str(),Some("control.web.search"|"control.rust.run"|"control.rust.bench"|"control_agent_result"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_knowledge_read"|"control_knowledge_search")));
+                tools.retain(|tool|(advisor && tool["name"]=="control_agent_message") || matches!(tool["name"].as_str(),Some("control.web.search"|"control.rust.run"|"control.rust.bench"|"control_agent_result"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_knowledge_read"|"control_knowledge_search")));
             }
             if claude {
                 tools.push(crate::claude::definition());
@@ -115,7 +117,7 @@ fn dispatch_at(
             if matches!(request["params"]["name"].as_str(),Some("control_room_ack"|"control_room_notifications")) && managed {
                 return error("Managed sessions acknowledge delivered callback receipts through control_turn_handoff after processing; use control_turn_context with source=room.");
             }
-            if judge && !matches!(request["params"]["name"].as_str(),Some("control_workspace_run"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_web_search"|"control_rust_run"|"control_rust_bench"|"control_room_list"|"control_room_read"|"control_room_post"|"control_agent_result"|"control_knowledge_read"|"control_knowledge_search")) {
+            if judge && !(advisor && request["params"]["name"]=="control_agent_message") && !matches!(request["params"]["name"].as_str(),Some("control_workspace_run"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_web_search"|"control_rust_run"|"control_rust_bench"|"control_room_list"|"control_room_read"|"control_room_post"|"control_agent_result"|"control_knowledge_read"|"control_knowledge_search")) {
                 return error("Judge policy permits read-only source inspection, isolated verification and room collaboration only.");
             }
             let blocking_spawn=request["params"]["name"]=="control_agent_spawn_blocking";

@@ -412,6 +412,12 @@ impl App {
         }
         if let Some(messages) = self.detail["messages"].as_array() {
             for (position, message) in messages.iter().enumerate() {
+                if message["advisor_note"] == true {
+                    // Retained evidence with no reply: one distinct box.
+                    lines.extend(history::advisor_note(&clean(message["text"].as_str().unwrap_or(""))));
+                    lines.push(Line::from(""));
+                    continue;
+                }
                 let user=control_context::agent_policy::MessageSpeaker::for_run_kind(message["kind"].as_str())==control_context::agent_policy::MessageSpeaker::User;
                 if user {
                     lines.push(history::user_line(Line::from(" ")));

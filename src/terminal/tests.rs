@@ -17,6 +17,24 @@ fn missing_history_warning_remains_visible_when_activity_is_folded() {
 }
 
 #[test]
+fn advisor_notes_render_as_a_distinct_box() {
+    let app = App {
+        detail: json!({"messages":[
+            {"text":"Ship it","reply":"Working","kind":"task","status":"completed"},
+            {"text":"Advisor note from c-advisor\nTester waits on build\nSuggest: tell the builder","reply":"","kind":"agent_message","status":"completed","advisor_note":true}
+        ]}),
+        ..Default::default()
+    };
+    let text = app.transcript();
+    let lines = text.lines.iter().map(ToString::to_string).collect::<Vec<_>>();
+    let top = lines.iter().position(|line| line == "┌ Advisor note from c-advisor · read-only evidence").unwrap();
+    assert_eq!(lines[top + 1..top + 4], ["│ Tester waits on build", "│ Suggest: tell the builder", "└"]);
+    assert_eq!(text.lines[top].style.fg, Some(history::CYAN));
+    assert_eq!(text.lines[top + 1].style.bg, Some(history::CARD));
+    assert_eq!(lines.iter().filter(|line| line.contains("Advisor note")).count(), 1, "not also rendered as an event");
+}
+
+#[test]
 fn github_inspection_uses_the_typed_read_without_sending_a_chat_message() {
     use std::io::{BufRead, Read, Write};
     for (input,tool,arguments) in [

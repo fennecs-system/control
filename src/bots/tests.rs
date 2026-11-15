@@ -2187,3 +2187,8 @@ fn node_wide_requests_route_a_descendant_bot_request_to_its_top_level_chat() {
     assert!(crate::chat::send(&mut state, &parent, &command, "discord:2").is_err());
     assert!(crate::chat::pending_requests(&state).as_array().unwrap().is_empty());
 }
+
+#[path = "tests/reconcile_profile.rs"]
+mod reconcile_profile;
+#[path = "tests/advisor.rs"]
+mod advisor;

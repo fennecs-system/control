@@ -12,6 +12,12 @@ pub struct Limits {
     pub max_parallel_runs: usize,
     pub max_agents_per_root: usize,
     pub max_pending_agent_intents: usize,
+    /// Read-only team advisors per root task, separate from its one blocking
+    /// judge review. 0 disables advisors.
+    pub max_advisors_per_root: usize,
+    /// Consecutive failed or blocked turns of one member before its advisor
+    /// hears of it. Single failures, provider errors included, are not facts.
+    pub advisor_failure_streak: usize,
 }
 impl Default for Limits {
     fn default() -> Self {
@@ -19,6 +25,8 @@ impl Default for Limits {
             max_parallel_runs: 3,
             max_agents_per_root: 64,
             max_pending_agent_intents: 256,
+            max_advisors_per_root: 1,
+            advisor_failure_streak: 3,
         }
     }
 }
@@ -32,6 +40,9 @@ impl Limits {
         if !(1..=65536).contains(&self.max_agents_per_root)
             || !(1..=65536).contains(&self.max_pending_agent_intents) {
             return Err(io::Error::other("Agent root and pending-intent budgets must be positive integers up to 65536"));
+        }
+        if self.max_advisors_per_root > 8 || !(2..=64).contains(&self.advisor_failure_streak) {
+            return Err(io::Error::other("max_advisors_per_root must be 0–8 and advisor_failure_streak 2–64"));
         }
         Ok(self)
     }

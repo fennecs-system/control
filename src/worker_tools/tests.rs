@@ -466,6 +466,39 @@ fn judge_tools_are_enforced_even_when_unadvertised_names_are_forged() {
     assert_eq!(shared.lock().unwrap().runtime.runs.len(), 1);
 }
 #[test]
+fn an_approved_advisor_judge_gains_only_evidence_notes() {
+    let mut s = State::default();
+    let lead = crate::chat::create(&mut s);
+    s.chats[0].lenses = Some(vec!["advisor".into()]);
+    crate::chat::send(&mut s, &lead, "Lead the team", "test").unwrap();
+    s.runtime.runs[0].status = "completed".into();
+    let chat = crate::chat::create(&mut s);
+    let session = s.chats.iter_mut().find(|c| c.id == chat).unwrap();
+    (session.parent_chat, session.room) = (Some(lead.clone()), Some("general".into()));
+    crate::chat::send(&mut s, &chat, "Advise the team", "test").unwrap();
+    let run = s.runtime.runs.last_mut().unwrap();
+    let id = run.id.clone();
+    run.status = "running".into();
+    run.persona = Some(crate::delegation::Persona { role: crate::delegation::Role::Judge, root: "root".into(), depth: 1, parent: None });
+    let names = |shared: &Arc<Mutex<State>>| rpc_at(shared, &id, &json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/list"}}), None)["result"]["tools"]
+        .as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+    let shared = Arc::new(Mutex::new(s));
+    let judge = names(&shared);
+    assert!(!judge.iter().any(|name| name == "control_agent_message"));
+    crate::bots::command(&mut shared.lock().unwrap(), &chat, "on").unwrap();
+    let advisor = names(&shared);
+    assert_eq!(advisor.iter().filter(|name| !judge.contains(name)).collect::<Vec<_>>(), ["control_agent_message"]);
+    for name in ["control_agent_spawn", "control_service_start", "control_design_ask", "control_room_watch"] {
+        let denied = rpc_at(&shared, &id, &json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":{}}}}), None);
+        assert!(denied["error"]["message"].as_str().unwrap().contains("Judge policy"), "{name}");
+    }
+    let post = |delivery: &str| rpc_at(&shared, &id, &json!({"nonce":if delivery == "record" { "1" } else { "2" },"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_room_post","arguments":{"message":"Build claim looks abandoned","delivery":delivery}}}}), None);
+    for delivery in ["notify", "record"] {
+        assert!(post(delivery).to_string().contains("does not post to rooms"), "an advisor only steers the lead: {delivery}");
+    }
+    assert!(shared.lock().unwrap().collective.posts.is_empty());
+}
+#[test]
 fn every_advertised_worker_tool_has_ui_registration() {
     for backend in [
         crate::backend::Backend::Codex,

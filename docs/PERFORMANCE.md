@@ -1049,3 +1049,75 @@ stacks and four SVGs are under
 `.control/performance/github-inspection-20261114/`. The profiling helper is
 stopped; the separate inference service is retained.
 
+
+## Team advisor lifecycle facts (2026-11-15)
+
+The advisor's lifecycle facts are computed inside `bots::reconcile`, so the
+fixture `bots::tests::reconcile_profile` measures one reconcile pass on a single
+task tree: a root, N helper chats with 16 executed turns each (one in twenty
+failed), 128 live claims and one persistent room bot. `idle` passes find nothing
+to do; `offered` passes are forced through the full path by an own-chat post
+that admits no turn. The before case ran the identical fixture copied to
+`36e09dd`. Release builds on one Apple Silicon laptop, three alternating
+rounds of ten 1,000-pass batches; the table shows the median of the round medians.
+No credentials or model calls are involved.
+
+| Case | Before | After, no advisor | After, one advisor |
+| --- | ---: | ---: | ---: |
+| idle, 64 chats / 1,153 runs | 27.7 µs | 27.8 µs | 42.4 µs |
+| offered, 64 chats / 1,153 runs | 35.0 µs | 35.6 µs | 49.9 µs |
+| idle, 512 chats / 9,217 runs | 208.7 µs | 206.6 µs | 339.4 µs |
+| offered, 512 chats / 9,217 runs | 214.9 µs | 213.1 µs | 350.7 µs |
+
+Nodes without an advisor are unchanged within noise: the check reads only bot
+definitions and adds no state, lock or copy. An advisor adds one read-only pass
+over chats and runs per reconcile, about 14 ns per run. A `sample` call tree
+showed that pass dominated by SipHash lookups of chat IDs. Replacing them with a
+per-pass word-at-a-time (Fx-style) hasher cut the advisor overhead at 9,217 runs
+from about 200 µs to 131 µs; a byte-wise FNV hasher was slower and was dropped.
+The rest is one cache-missing read per run, comparable to the existing claim
+abandonment pass. Terminal statuses are not final (operator retry re-queues
+failed runs), so an incremental watermark was not used. Reconciliation is
+event-triggered, not polled. Reproduce with
+`cargo test --release --locked --bin control bots::tests::reconcile_profile -- --ignored --nocapture`,
+adding `CONTROL_PROFILE_ADVISOR=1` for the advisor cases.
+
+**Fact set and advisor-note revisions.** Replacing per-turn failure counts with
+per-member consecutive-failure streaks keeps the same single pass: one extra
+`(count, open)` slot per chat, indexed by position, and one O(chats) sweep. The
+web transcript and TUI box advisor notes with one source check per message. A
+single paired run of each fixture before (`2938d51`) and after this revision, on
+the same laptop (one round of ten 200-pass batches, median):
+
+| Case | Before | After |
+| --- | ---: | ---: |
+| idle, 64 chats | 32.2 µs (min 27.5) | 27.9 µs |
+| offered, 64 chats | 35.5 µs | 34.9 µs |
+| idle, 512 chats | 207.0 µs | 203.8 µs |
+| offered, 512 chats | 217.2 µs | 212.9 µs |
+| idle, 64 chats, one advisor | 44.1 µs | 43.7 µs |
+| offered, 64 chats, one advisor | 50.2 µs | 52.0 µs |
+| idle, 512 chats, one advisor | 356.0 µs | 336.0 µs |
+| offered, 512 chats, one advisor | 347.9 µs | 343.2 µs |
+| TUI render, 100 / 500 messages | 50.6 / 50.4 µs | 49.6 / 49.6 µs |
+| TUI scroll, 10,000 messages | 60.3 µs | 59.0 µs |
+
+All differences are within single-run noise; TUI render output hashes are
+unchanged. Reproduce the terminal cases with
+`cargo test --release --locked --lib terminal::profiling -- --ignored --nocapture --test-threads=1`.
+
+**Strict opt-in.** Advisors exist only when the root chat's lenses offer the
+`advisor` lens's `team.advisor` tool, and the lifecycle topic is computed only
+for such trees. `CONTROL_PROFILE_ADVISOR=off` measures the remaining cost: an
+advisor bot still defined but its lens unticked. Each check is one bot
+definition scan, then one root-chat lookup and a walk of its few selected
+lenses. A single run on the final head (median of ten 200-pass batches):
+
+| Case | No advisor | Lens off, advisor defined | One advisor |
+| --- | ---: | ---: | ---: |
+| idle, 64 chats | 36.6 µs (min 27.4) | 28.2 µs | 43.6 µs |
+| offered, 64 chats | 35.2 µs | 35.9 µs | 52.2 µs |
+| idle, 512 chats | 207.5 µs | 206.8 µs | 339.1 µs |
+| offered, 512 chats | 213.9 µs | 213.6 µs | 347.2 µs |
+
+With the lens off, a pass costs the same as with no advisor, within noise.

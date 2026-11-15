@@ -139,8 +139,8 @@ fn transact_at(state: &mut State, attempt: &AttemptRef<'_>, call: MessageCall, i
 
 /// Bounded receipt metadata supplies deferred private events. Actual admission
 /// happens after published processing receipts, never inside a tool call.
-pub(crate) fn peer_cursors(state: &State) -> impl Iterator<Item = (&str, u64)> {
-    state.agent_messages.iter().filter_map(|sent| sent.peer_cursor.map(|cursor| (sent.chat.as_str(), cursor)))
+pub(crate) fn peer_cursors(state: &State) -> impl Iterator<Item = (&str, u64, bool)> {
+    state.agent_messages.iter().filter_map(|sent| sent.peer_cursor.map(|cursor| (sent.chat.as_str(), cursor, sent.note)))
 }
 
 #[cfg(test)]

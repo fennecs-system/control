@@ -20,7 +20,7 @@ pub struct Tool {
     pub aliases: &'static str,
     pub mcp_names: &'static [&'static str],
 }
-pub const TOOLS: [Tool; 24] = [
+pub const TOOLS: [Tool; 25] = [
     Tool {
         name: "service.watch", title: "Watches", description: "Program output that wakes bots",
         href: None, aliases: "watch monitor stream stdout events wake tail websocket ssh",
@@ -56,6 +56,13 @@ pub const TOOLS: [Tool; 24] = [
         name:"agent.delegate",title:"Spawn agents",description:"Background tasks · blocking worker or judge",
         href: None,aliases:"persona review judge subagent spawn delegation",
         mcp_names:&["control_agent_spawn_blocking", "control_agent_spawn", "control_agent_spawn_status", "control_agent_spawn_cancel", "control_agent_result", "control_agent_message"],execution:"local Rust / durable bounded task queue",surface:"chat / worker MCP",available:true,
+    },
+    // Offered only by the `advisor` lens. Selecting it makes the option exist
+    // for that task tree; the operator's bot approval is still the authority.
+    Tool {
+        name: "team.advisor", title: "Team advisor", description: "Opt-in read-only judge that notes the lead · operator approval",
+        href: None, aliases: "advisor judge steer stall gaps lead swarm",
+        mcp_names: &[], execution: "Rust lifecycle facts / judge bot", surface: "control_agent_spawn role=judge · control_bot_request", available: true,
     },
     Tool {
         name: "workspace.commands", title: "Workspace commands", description: "Offline jobs · live output",
