@@ -58,7 +58,9 @@ dependency. Agents wait only on a producer that can act, and when that producer 
 blocked, offline or slow, or several peers wait on one, they produce the input
 themselves or take a reversible step. When nobody can unblock the goal they ask
 the operator with options, and apply standing risk guidance to similar reversible
-steps.
+steps. Revision 4 asks the team to turn a broad goal into a short backlog of
+concrete, checkable milestones kept current in the room, so a worker that finishes
+one claims the next instead of idling.
 
 Select **Coordination & planning** in the lens picker, or use `/use coordination`.
 For a team, select **Swarm** (`/use swarm`), which includes `coordination`,

@@ -211,8 +211,14 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     let autonomy = Library::default().get("autonomy").unwrap().clone();
     assert_eq!(autonomy.revision, 2);
     assert!(autonomy.instructions.contains("must never sit idle silently"));
+    let coordination = Library::default().get("coordination").unwrap().clone();
+    assert_eq!(coordination.revision, 4);
+    assert!(coordination.instructions.contains("short backlog of concrete, checkable milestones"));
     let previous: Vec<Definition> = serde_json::from_str(include_str!("../builtin-lens-history.json")).unwrap();
     assert!(previous.iter().any(|d| d.id == "autonomy" && d.revision == 1));
+    for revision in 1..=3 {
+        assert!(previous.iter().any(|d| d.id == "coordination" && d.revision == revision));
+    }
     for earlier in previous {
         let shipped = Library::default().get(&earlier.id).unwrap().clone();
         assert!(earlier.revision < shipped.revision, "{} history must predate the shipped revision", earlier.id);
