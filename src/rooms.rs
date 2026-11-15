@@ -233,6 +233,11 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
                         let room = room()?;
                         let delivery = args.get("delivery").map(|value| serde_json::from_value::<Delivery>(value.clone()))
                             .transpose().map_err(|_| "Expected delivery=record or notify.")?.unwrap_or_default();
+                        // An advisor's posts are records: notes are its only way to reach an
+                        // agent, so its observations can never wake the team it advises.
+                        if delivery == Delivery::Notify && crate::delegation::is_judge(run) && state.bots.advises(&chat.id) {
+                            return Err("An advisor posts records only (delivery=record); send an actionable note with control_agent_message.");
+                        }
                         let text = args["message"]
                             .as_str()
                             .unwrap_or("")

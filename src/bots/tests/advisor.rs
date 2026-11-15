@@ -1,0 +1,212 @@
+//! The advisor: a read-only judge persona run as a persistent bot whose only
+//! source is its task tree's host lifecycle facts.
+use super::*;
+
+/// Appends one executed member turn with `status`.
+pub(super) fn turn(state: &mut State, chat: &str, status: &str) -> usize {
+    let mut run = state.runtime.runs[0].clone();
+    run.id = format!("turn-{}", state.runtime.runs.len());
+    run.chat_id = Some(chat.into());
+    run.status = status.into();
+    run.persona = None;
+    run.bot_turn = None;
+    run.attempts = vec![crate::usage::Attempt::default()];
+    state.runtime.runs.push(run);
+    state.runtime.runs.len() - 1
+}
+/// A completed read-only judge child of `root`, started as its advisor.
+pub(super) fn advisor(state: &mut State, root: &str) -> String {
+    let chat = spawned(state, root, "Advisor");
+    let lead = state.runtime.runs[0].id.clone();
+    state.runtime.runs.last_mut().unwrap().persona = Some(crate::delegation::Persona { role: crate::delegation::Role::Judge, root: lead, depth: 1, parent: None });
+    state.runtime.runs.last_mut().unwrap().attempts = vec![crate::usage::Attempt { review_only: true, ..Default::default() }];
+    command_at(state, &chat, "on", Now(0)).unwrap();
+    chat
+}
+fn advisor_runs<'a>(state: &'a State, chat: &str) -> Vec<&'a crate::runtime::Run> {
+    bot_runs(state).into_iter().filter(|run| run.chat_id.as_deref() == Some(chat)).collect()
+}
+fn facts(run: &crate::runtime::Run) -> Vec<Facts> {
+    run.bot_turn.as_ref().unwrap().reasons.iter().filter_map(|reason| match reason {
+        Reason::Info { info: Message::Lifecycle(facts), .. } => Some(facts.clone()),
+        _ => None,
+    }).collect()
+}
+fn ok(_: &State) -> io::Result<()> {
+    Ok(())
+}
+fn finish(state: &mut State, chat: &str) {
+    for run in state.runtime.runs.iter_mut().filter(|run| run.chat_id.as_deref() == Some(chat) && run.bot_turn.is_some()) {
+        run.status = "completed".into();
+        run.attempts = vec![crate::usage::Attempt { review_only: true, ..Default::default() }];
+    }
+}
+
+#[test]
+fn a_judge_advises_on_team_facts_only_without_timers_rooms_or_grants() {
+    let (mut state, root) = fixture();
+    let advisor = advisor(&mut state, &root);
+    let definition = state.bots.supervisor.definitions().find(|d| d.chat.0 == advisor).unwrap();
+    assert_eq!(definition.sources, [lifecycle::source(&root)], "no room inbox, watch or timer");
+    assert!(state.bots.advises(&advisor) && !state.bots.advises(&root));
+    assert!(status(&state, &advisor).unwrap().starts_with("Advisor · sleeping · team facts"));
+    assert!(state.collective.room_watches.iter().all(|watch| watch.chat != advisor));
+    assert!(command_at(&mut state, &advisor, "on every 5", Now(1)).is_err(), "facts trigger; no clock rule");
+    // A judge that is not an approved advisor still cannot take a bot turn.
+    let other = spawned(&mut state, &root, "Reviewer");
+    state.runtime.runs.last_mut().unwrap().persona = state.runtime.runs.iter().find(|run| run.chat_id.as_deref() == Some(&advisor)).unwrap().persona.clone();
+    let request = Request { bot: bot(&other), chat: ChatId(other.clone()), turn: TurnId(99), reasons: Vec::new() };
+    assert!(queue(&mut state, &request).is_err());
+    command_at(&mut state, &advisor, "off", Now(2)).unwrap();
+    assert!(!state.bots.advises(&advisor));
+}
+
+#[test]
+fn quiescence_fires_once_per_settled_activity_and_history_before_subscription_is_not_reported() {
+    let (mut state, root) = fixture();
+    let worker = spawned(&mut state, &root, "Builder");
+    turn(&mut state, &worker, "failed");
+    let advisor = advisor(&mut state, &root);
+    reconcile_at(&mut state, 1, ok).unwrap();
+    assert!(state.bots.teams.contains_key(&root), "the subscription snapshot is recorded");
+    let mut saves = 0;
+    reconcile_at(&mut state, 2, |_| { saves += 1; Ok(()) }).unwrap();
+    assert_eq!(saves, 0, "an unchanged team does no work");
+    assert!(advisor_runs(&state, &advisor).is_empty(), "earlier failures are not replayed");
+
+    let active = turn(&mut state, &worker, "running");
+    reconcile_at(&mut state, 3, ok).unwrap();
+    assert!(advisor_runs(&state, &advisor).is_empty(), "an active team is not quiet");
+    state.runtime.runs[active].status = "completed".into();
+    reconcile_at(&mut state, 4, ok).unwrap();
+    let runs = advisor_runs(&state, &advisor);
+    assert_eq!(runs.len(), 1, "the edge wakes the advisor once");
+    assert_eq!(facts(runs[0]), [Facts { quiescent: true, ..Facts::default() }]);
+    assert!(crate::delegation::is_judge(runs[0]) && runs[0].resource_grants.is_empty());
+    assert!(runs[0].objective.contains("read-only advisor") && runs[0].objective.contains("team went quiet"));
+    finish(&mut state, &advisor);
+    reconcile_at(&mut state, 40_000, ok).unwrap();
+    reconcile_at(&mut state, 80_000, ok).unwrap();
+    assert_eq!(advisor_runs(&state, &advisor).len(), 1, "its own turn is not team activity");
+}
+
+#[test]
+fn notes_and_turns_woken_only_by_notes_do_not_re_trigger_the_advisor() {
+    let (mut state, root) = fixture();
+    let worker = spawned(&mut state, &root, "Builder");
+    command_at(&mut state, &worker, "on", Now(0)).unwrap();
+    let advisor = advisor(&mut state, &root);
+    reconcile_at(&mut state, 1, ok).unwrap();
+    turn(&mut state, &worker, "completed");
+    reconcile_at(&mut state, 2, ok).unwrap();
+    assert_eq!(advisor_runs(&state, &advisor).len(), 1);
+    finish(&mut state, &advisor);
+    reconcile_at(&mut state, 3, ok).unwrap();
+
+    // The advisor's note is retained evidence (a run without an attempt)...
+    let cursor = state.chats.iter().find(|chat| chat.id == worker).unwrap().messages.len() as u64 + 1;
+    let mut note = state.runtime.runs[0].clone();
+    (note.id, note.chat_id, note.status, note.kind, note.attempts) = ("note-1".into(), Some(worker.clone()), "completed".into(), RunKind::AgentMessage, Vec::new());
+    note.bot_turn = None;
+    state.runtime.runs.push(note);
+    state.chats.iter_mut().find(|chat| chat.id == worker).unwrap().messages.push(crate::chat::Message { text: "Advisor note".into(), run_id: Some("note-1".into()), reply: String::new() });
+    state.agent_messages.push(crate::application::messages::Sent { key: "advisor/note".into(), origin: "advisor-turn".into(), chat: worker.clone(),
+        run: "note-1".into(), services: vec![], peer_cursor: Some(cursor), note: true });
+    // ...that wakes the approved worker like a peer message, as a `Note` reason.
+    reconcile_at(&mut state, 40_000, ok).unwrap();
+    let woken = bot_runs(&state).into_iter().filter(|run| run.chat_id.as_deref() == Some(&worker)).collect::<Vec<_>>();
+    assert_eq!(woken.len(), 1);
+    assert!(matches!(woken[0].bot_turn.as_ref().unwrap().reasons.as_slice(), [Reason::Info { info: Message::Note, .. }]));
+    assert!(woken[0].objective.contains("advisor note"));
+    let id = woken[0].id.clone();
+    let woken = state.runtime.runs.iter_mut().find(|run| run.id == id).unwrap();
+    woken.status = "completed".into();
+    woken.attempts = vec![crate::usage::Attempt::default()];
+    reconcile_at(&mut state, 80_000, ok).unwrap();
+    reconcile_at(&mut state, 120_000, ok).unwrap();
+    assert_eq!(advisor_runs(&state, &advisor).len(), 1, "no advisor ping-pong through its own notes");
+    assert!(state.bots.teams[&root].settled == 1);
+}
+
+#[test]
+fn facts_coalesce_into_one_reason_and_respect_the_advisor_budget() {
+    let (mut state, root) = fixture();
+    let worker = spawned(&mut state, &root, "Builder");
+    let tester = spawned(&mut state, &root, "Tester");
+    state.collective.claim_seq += 1;
+    state.collective.claims.push(crate::rooms::claims::Claim { room: "general".into(), key: "build".into(), owner: worker.clone(),
+        status: crate::rooms::claims::Status::Working, blocked_on: None, note: String::new(), revision: 1, incarnation: 1, abandoned: false });
+    let advisor = advisor(&mut state, &root);
+    let mut definition = state.bots.supervisor.definitions().find(|d| d.chat.0 == advisor).unwrap().clone();
+    definition.budget.turns_per_window = 1;
+    state.bots.supervisor.step(Event::Define(definition), Now(0));
+    reconcile_at(&mut state, 1, ok).unwrap();
+    turn(&mut state, &worker, "failed");
+    turn(&mut state, &tester, "interrupted");
+    reconcile_at(&mut state, 2, ok).unwrap();
+    let runs = advisor_runs(&state, &advisor);
+    assert_eq!(runs.len(), 1, "several facts in one pass make one turn");
+    let observed = facts(runs[0]);
+    assert_eq!(observed.len(), 1, "one coalesced lifecycle reason");
+    assert_eq!((observed[0].failed, observed[0].abandoned, observed[0].quiescent), (2, 1, true));
+    assert!(observed[0].chats.contains(&worker) && observed[0].chats.contains(&tester));
+    finish(&mut state, &advisor);
+    turn(&mut state, &tester, "failed");
+    reconcile_at(&mut state, 40_000, ok).unwrap();
+    turn(&mut state, &tester, "blocked");
+    reconcile_at(&mut state, 80_000, ok).unwrap();
+    assert_eq!(advisor_runs(&state, &advisor).len(), 1, "the existing turn budget bounds the advisor");
+    reconcile_at(&mut state, WINDOW_MS + 10, ok).unwrap();
+    let runs = advisor_runs(&state, &advisor);
+    assert_eq!(runs.len(), 2);
+    let observed = facts(runs[1]);
+    assert_eq!(observed.len(), 1, "pending facts merged while the budget was spent");
+    assert_eq!((observed[0].failed, observed[0].quiescent), (2, true));
+}
+
+#[test]
+fn failed_saves_restore_the_team_snapshot_and_restart_keeps_the_cursor() {
+    let (mut state, root) = fixture();
+    let worker = spawned(&mut state, &root, "Builder");
+    let advisor = advisor(&mut state, &root);
+    reconcile_at(&mut state, 1, ok).unwrap();
+    turn(&mut state, &worker, "failed");
+    let before = state.bots.teams[&root].clone();
+    assert!(reconcile_at(&mut state, 2, |_| Err(io::Error::other("disk full"))).is_err());
+    assert_eq!(state.bots.teams[&root], before, "the fact stays pending");
+    assert!(advisor_runs(&state, &advisor).is_empty());
+    let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+    reconcile_at(&mut restored, 3, ok).unwrap();
+    assert_eq!(advisor_runs(&restored, &advisor).len(), 1);
+    assert_eq!(facts(advisor_runs(&restored, &advisor)[0])[0].failed, 1);
+}
+
+#[test]
+fn nodes_without_advisors_skip_team_observation() {
+    let (mut state, root) = fixture();
+    let worker = spawned(&mut state, &root, "Builder");
+    command_at(&mut state, &worker, "on", Now(0)).unwrap();
+    turn(&mut state, &worker, "failed");
+    assert!(lifecycle::observe(&state).is_empty());
+    reconcile_at(&mut state, 1, ok).unwrap();
+    assert!(state.bots.teams.is_empty());
+    let saved = serde_json::to_value(&state.bots).unwrap();
+    assert!(saved.get("teams").is_none(), "no persisted state without an advisor");
+}
+
+#[test]
+fn a_lead_requests_its_judge_as_advisor_and_the_operator_approves_it() {
+    let (mut state, lead, _) = requester();
+    let judge = spawned(&mut state, &lead, "Advisor");
+    let persona = crate::delegation::Persona { role: crate::delegation::Role::Judge, root: state.runtime.runs[0].id.clone(), depth: 1, parent: None };
+    state.runtime.runs.last_mut().unwrap().persona = Some(persona);
+    assert!(ask(&mut state, "timer", &judge, Some(5)).is_err(), "an advisor takes no interval");
+    let request = ask(&mut state, "advisor", &judge, None).unwrap();
+    assert!(!state.bots.advises(&judge), "a request grants nothing");
+    assert!(pending_panel(&state, &lead).contains("team facts (read-only advisor)"));
+    let id = request["request_id"].as_str().unwrap().to_owned();
+    decide(&mut state, &id, true, Some(&lead), Now(1)).unwrap();
+    assert!(state.bots.advises(&judge));
+    let definition = state.bots.supervisor.definitions().find(|d| d.chat.0 == judge).unwrap();
+    assert_eq!(definition.sources, [lifecycle::source(&lead)]);
+}

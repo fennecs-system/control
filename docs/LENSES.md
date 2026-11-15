@@ -161,6 +161,51 @@ The three-probe allowance is prompt guidance, not a host-enforced counter. This
 change does not establish that a model follows it or improves at every workload;
 measure repeated actions, useful outcomes and intervention in opt-in trials.
 
+## Team advisor
+
+Select **Team advisor** (`/use advisor`), usually alongside `swarm`, before
+launching a team. It is a lightweight observer, not a supervisor, planner or
+relay: it adds short evidence notes to an agent's next turn, much like a side
+note or reminder, and holds no authority.
+
+The advisor is an existing persona, not a new role: a read-only **judge**
+(see [delegation](DELEGATION.md)). The lens is its procedure and voice; policy
+comes from the judge role and the operator's bot approval.
+
+1. The lead starts it with `control_agent_spawn` and `role: "judge"`, one
+   objective naming the shared outcome. It uses the root task's single judge
+   allowance and gets no resources.
+2. The lead asks for it with `control_bot_request` (no interval). The operator
+   approves it like any bot, or types `/bot on` in its chat. A lens selection or
+   a request alone enables nothing.
+3. The approved judge sleeps on its task tree's lifecycle topic,
+   `task:<root chat>`. Control offers host facts there, edge-triggered from records
+   reconciliation already reads: a member turn failed, was interrupted or blocked;
+   a watched process exited with a failure, a signal or a retired restart loop;
+   a claim was abandoned by a lost owner; or the team went quiet with no member
+   turn running or queued. Facts coalesce into one reason under the bot's existing
+   30-second cooldown and 60 turns per hour. There is no clock rule: a quiet team
+   is reported once per settled change, and elapsed time is never a fact.
+4. On waking, the advisor reads the facts and `control_room_read` (participants,
+   posts and claims with `owner_idle`/`abandoned` flags) and sends at most a short
+   note with `control_agent_message` to an agent who can act, citing the evidence
+   and one next step. It sends nothing when evidence is unchanged.
+
+A note is retained peer evidence with source `advisor-note`, shown as
+"Advisor note from …". It follows the existing peer-message path: an active
+recipient gets one callback hint at its next tool response; an idle approved bot
+wakes within its own budget; a selective wait keeps it for the next turn.
+The host refuses notes from judges that are not approved advisors, notes that
+share services, notes to the steering chat, a judge or another advisor, and a
+note identical to one already delivered to that agent. An advisor's room posts
+must use `delivery=record`.
+
+Loop safety is structural. Judge turns, retained notes (runs without an
+attempt) and turns woken only by advisor notes are not team activity, so the
+advisor cannot re-trigger itself through the team it advises. Stopping the
+advisor (`/bot off`) drops its team snapshot; a later advisor reports only facts
+after its own subscription. Nodes without an advisor do no lifecycle work.
+
 ## Current boundaries
 
 Tool hints contribute to context and catalogue discovery. They do not currently

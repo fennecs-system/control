@@ -16,6 +16,14 @@ pub struct Input {
     objectives: Vec<String>,
     #[serde(default,skip_serializing_if="Option::is_none")]
     model:Option<String>,
+    /// A judge batch starts one read-only reviewer, for example a team advisor.
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    role:Option<Role>,
+}
+impl Input {
+    fn role(&self) -> Role {
+        self.role.unwrap_or(Role::Worker)
+    }
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -88,7 +96,7 @@ pub fn definition() -> Value {
     definition
 }
 fn inherited_definition()->Value {
-    json!({"name":"control_agent_spawn","description":"Start independent or background worker objectives without pausing this conversation. Give each worker ownership of its goal and dependencies, including ongoing infrastructure when needed. Workers coordinate directly with same-task peers; keep the root chat for steering and consequential decisions rather than relaying routine updates. Continue useful work in this session; spawning does not require ending it. Control queues completion updates automatically. Yield when genuinely waiting with no independent work remaining. Use control_agent_spawn_status only when a current status check is needed, never in a polling loop. Configured team budget (default 64), pending-intent budget and 24000-byte payload apply independently of model slots. Children inherit captured model, lenses, actor, linked room and immutable baseline, never live edits. Mentioning a room in an objective does not link it. First Improve turns without a published baseline must checkpoint via control_agent_spawn_blocking or finish first. Depth limit 2; children and blocking spawns share one root budget. Cancellation fences backlog and descendants; later originating-chat turns can inspect or cancel retained batches.","inputSchema":{"type":"object","properties":{"objectives":{"type":"array","description":"One concise task per child, 1–2000 characters each and 24000 UTF-8 bytes total. Example: [\"Inspect the API\",\"Review the tests\"]. Request identity comes from the transport; do not supply nonce or identity fields.","minItems":1,"items":{"type":"string","minLength":1,"maxLength":2000}}},"required":["objectives"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
+    json!({"name":"control_agent_spawn","description":"Start independent or background worker objectives without pausing this conversation. Give each worker ownership of its goal and dependencies, including ongoing infrastructure when needed. Workers coordinate directly with same-task peers; keep the root chat for steering and consequential decisions rather than relaying routine updates. Continue useful work in this session; spawning does not require ending it. Control queues completion updates automatically. Yield when genuinely waiting with no independent work remaining. Use control_agent_spawn_status only when a current status check is needed, never in a polling loop. Configured team budget (default 64), pending-intent budget and 24000-byte payload apply independently of model slots. Children inherit captured model, lenses, actor, linked room and immutable baseline, never live edits. Mentioning a room in an objective does not link it. First Improve turns without a published baseline must checkpoint via control_agent_spawn_blocking or finish first. Depth limit 2; children and blocking spawns share one root budget. Cancellation fences backlog and descendants; later originating-chat turns can inspect or cancel retained batches.","inputSchema":{"type":"object","properties":{"objectives":{"type":"array","description":"One concise task per child, 1–2000 characters each and 24000 UTF-8 bytes total. Example: [\"Inspect the API\",\"Review the tests\"]. Request identity comes from the transport; do not supply nonce or identity fields.","minItems":1,"items":{"type":"string","minLength":1,"maxLength":2000}},"role":{"type":"string","enum":["worker","judge"],"default":"worker","description":"judge starts exactly one isolated read-only reviewer with no resources, sharing the root task's single judge allowance. An approved judge bot becomes the team's advisor."}},"required":["objectives"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
 }
 pub fn management_definitions() -> Vec<Value> {
     vec![
@@ -155,7 +163,10 @@ pub fn request(
             Err("Spawn request identity already has different objectives.")
         };
     }
-    delegation::budget_for(state, run, Role::Worker, input.objectives.len(), false)?;
+    if input.role() == Role::Judge && input.objectives.len() != 1 {
+        return Err("A judge batch starts exactly one read-only reviewer.");
+    }
+    delegation::budget_for(state, run, input.role(), input.objectives.len(), false)?;
     let pending = state
         .runtime
         .runs
@@ -192,7 +203,10 @@ pub fn request(
     }
     // Clone only captured inputs needed by children, never attempts/history.
     let actor = run.actor.clone();
-    let action = run.action;
+    // Judges get the task-level read-only review scope and no resources, as
+    // with blocking delegation.
+    let judge = input.role() == Role::Judge;
+    let action = if judge { identity::Action::Task } else { run.action };
     let selected=crate::providers::selection::resolve(&state.runtime,run.backend,&run.model.clone().unwrap_or_else(||run.backend.default_model()),input.model.as_deref())?;
     let backend = selected.backend;
     let model = Some(selected.model);
@@ -210,7 +224,7 @@ pub fn request(
     let before = (state.chats.len(), state.runtime.runs.len());
     let previous_notice = state.runtime.notice.clone();
     let seed = Seed {
-        resource_grants: crate::services::grants(state,run),
+        resource_grants: if judge { Vec::new() } else { crate::services::grants(state,run) },
         actor,
         action,
         backend,
@@ -269,6 +283,7 @@ fn materialize(state: &mut State, index: usize, batch_index: usize) -> Result<()
         .clone()
         .ok_or("Spawn batch has no frozen source seed.")?;
     let offset = batch.children.len();
+    let role = batch.input.role();
     let capacity = control_core::scheduling::MAX_PENDING.saturating_sub(
         state
             .runtime
@@ -323,7 +338,7 @@ fn materialize(state: &mut State, index: usize, batch_index: usize) -> Result<()
         *run.context = seed.context.clone();
         run.lenses = seed.lenses.clone();
         run.persona = Some(Persona {
-            role: Role::Worker,
+            role,
             root: seed.lineage.root.clone(),
             depth: seed.lineage.depth + 1,
             parent: Some(parent_id.clone()),

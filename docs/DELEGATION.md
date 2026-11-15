@@ -127,8 +127,8 @@ a root or actor does not grant access to unrelated chats or sibling agents.
 The tool never reads live workspaces. If no viewer artifact was published, it
 reports that explicitly; existing artifact size and file-type limits still apply.
 
-Personas currently capture a role and enforced policy, not persistent autonomous
-bots. A worker may delegate to depth two; a root task uses its configured total
+Personas currently capture a role and enforced policy. The one persistent
+persona is the opt-in advisor judge below; there are no persona bundles yet. A worker may delegate to depth two; a root task uses its configured total
 agent budget and permits one independent judge review. Workers and judges inherit the parent's
 captured provider and model. A configured alternate provider is not evidence of
 available credentials. Explicit cross-model selection with availability checks
@@ -140,6 +140,15 @@ verification tools and collaborate through the linked room. Claude workspace
 commands inspect `/workspace`; Codex inspects `/review` and uses `/workspace`
 only for scratch and transport. `/tmp` is available for disposable verification
 outputs. Their reports do not advance the development workspace.
+
+`control_agent_spawn` accepts `"role":"judge"` with exactly one objective to
+start that single judge without pausing the parent; it receives no services and
+the task-level review scope, as with blocking delegation. An operator-approved
+judge bot is the team's [advisor](LENSES.md#team-advisor): its only source is
+the `task:<root>` lifecycle topic and its only additional effect is evidence
+notes through `control_agent_message`. It never sends services, never messages
+the steering chat, judges or advisors, and posts room records only. Other judges
+still cannot run as bots or message agents.
 
 Waiting state and child/continuation IDs are persisted together. Restart does not
 create duplicate children; interrupted or failed children return that status to

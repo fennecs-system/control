@@ -38,6 +38,16 @@ WASM tooling fix shipped in #143; both platform checks passed before merging.
   reads retain them. No workload-specific parser or timeout was added to core.
 - [x] **Opt-in autonomy/investigation lenses (#144):** declarative guidance is
   captured with runs; adding a lens does not grant resource or tool authority.
+- [ ] **Opt-in team advisor (in review, not deployed):** coordination lens r6
+  (tell dependents directly; claim shared fixes, not roles) and an `advisor`
+  lens. The advisor is the existing read-only judge persona run as an
+  operator-approved bot, woken only by edge-triggered host facts on a
+  `task:<root>` topic (member failure, failed watch exit, abandoned claim, team
+  quiescence) and limited to evidence notes on the existing peer-message path.
+  No new role, supervisor state, clock rule or core concept; judge turns, notes
+  and note-only wakes are not team activity, so it cannot wake itself. See
+  [LENSES.md](LENSES.md#team-advisor). Whether it reduces stalls or noise still
+  needs an opt-in paired trial.
 - [x] **First typed message operation (#148):** borrowed application views and
   ordered archive/checkpoint/wake effects, with blocking/Tokio conformance tests.
   Shared conversation/run records no longer belong to rendering modules. The
@@ -903,6 +913,12 @@ history by default.
 Acceptance: stable composition and source traces, bounded progressive disclosure,
 conflicting lens/persona inputs, revision changes during a run, rejection of
 capability escalation, independent sibling identities and restart/reuse.
+
+The team advisor is a first concrete persona under these rules: role = the
+existing judge (read-only, no grants), behaviour = the versioned `advisor` lens
+(standing in for its future bundle and `SOUL.md`), policy = operator bot
+approval plus host checks on notes. When persona bundles land, it becomes a
+bundle referencing that lens; no supervisor change is needed.
 
 ## P2: a reviewed self-improvement loop
 

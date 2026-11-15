@@ -34,6 +34,7 @@ pub(super) fn input(n: usize) -> Input {
     Input {
         objectives: (0..n).map(|n| format!("Inspect page {n}")).collect(),
         model:None,
+        role:None,
     }
 }
 #[test]
@@ -541,4 +542,18 @@ fn profile_idle_backlog_reconciliation() {
         s.runtime.runs.len(),
         start.elapsed() / 1000
     );
+}
+#[test]
+fn a_judge_batch_starts_one_read_only_reviewer_within_the_single_judge_allowance() {
+    let (mut s, id) = active();
+    let judge = |n| Input { role: Some(Role::Judge), ..input(n) };
+    assert!(request(&mut s, &id, "parent-attempt", "two", judge(2), |_| panic!("one reviewer only")).is_err());
+    request(&mut s, &id, "parent-attempt", "advisor", judge(1), |_| Ok(())).unwrap();
+    let child = s.runtime.runs.last().unwrap();
+    assert!(delegation::is_judge(child), "spawned with the existing judge persona, not a new role");
+    assert_eq!((child.kind, child.action), (RunKind::Spawned, Action::Task));
+    assert!(child.resource_grants.is_empty(), "a judge receives no services");
+    assert!(request(&mut s, &id, "parent-attempt", "second", judge(1), |_| panic!("one judge per root")).is_err());
+    request(&mut s, &id, "parent-attempt", "workers", input(1), |_| Ok(())).unwrap();
+    assert!(!delegation::is_judge(s.runtime.runs.last().unwrap()), "omitting the role keeps workers");
 }

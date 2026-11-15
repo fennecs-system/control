@@ -516,6 +516,7 @@ fn receipts_of_running_attempts_are_never_evicted() {
         run: format!("r{index}"),
         services: vec![],
         peer_cursor: None,
+        note: false,
     }));
     assert!(
         send(&mut state, "n1", &child).is_err(),
@@ -791,3 +792,6 @@ fn late_grants_reject_foreign_services_and_roll_back_atomically() {
         Phase::Stopped(control_core::resources::StopReason::Requested);
     assert!(handle(&mut state, &attempt, call(), |_| Ok(())).is_err());
 }
+
+#[path = "tests/advisor.rs"]
+mod advisor;
