@@ -1,6 +1,6 @@
 use crate::identity::{Action, Actor, DiscordId, DmBinding, DmBindings, Policy};
 use crate::{config, discord, identity};
-use super::{permissions as discord_permissions, delivery::Snapshot};
+use super::{components, gateway, permissions as discord_permissions, delivery::Snapshot};
 use crate::client::{channel::{self, Channel, Inbound, Posted, Recipient}, operator};
 use reqwest::{
     blocking::Client,
@@ -14,7 +14,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-const API: &str = "https://discord.com/api/v10";
+pub(super) const API: &str = "https://discord.com/api/v10";
 #[derive(Clone)]
 struct Route {
     channel: DiscordId,
@@ -40,6 +40,8 @@ struct Bridge {
     state: std::cell::RefCell<StateCache>,
     /// The shared operator channel core; this bridge is its Discord transport.
     channel: std::cell::RefCell<Channel>,
+    /// This node's tag in button custom IDs.
+    tag: String,
 }
 /// Cache only delivery fields; reload on size, modification time or inode changes.
 #[derive(Default)]
@@ -118,17 +120,69 @@ fn operating(policy: &Policy, dms: &DmBindings, routes: &[Route]) -> Vec<Recipie
         identity::operates(policy, &route.actor(user)?, dms).then(|| recipient(user, route.channel))
     }).collect()
 }
-/// Discord as an operator channel transport: DMs only, replies by message reference.
+fn posted(sent: Sent) -> Posted {
+    match sent {
+        Ok(message) => Posted::Sent(message.map(|id| id.to_string())),
+        Err(Some(_)) => Posted::Retry,
+        Err(None) => Posted::Refused,
+    }
+}
+/// Discord as an operator channel transport: DMs only, replies by message
+/// reference, requests as embeds with buttons (pressed through the gateway).
 impl channel::Transport for Bridge {
     fn capabilities(&self) -> channel::Capabilities {
-        channel::Capabilities { replies: true, direct_only: true, max_text: 1800, ..Default::default() }
+        channel::Capabilities { replies: true, buttons: true, edits: true, direct_only: true, max_text: 1800, ..Default::default() }
     }
     fn post(&self, to: &Recipient, text: &str, _reply_to: Option<&str>, key: &str) -> Posted {
         let Ok(channel) = to.conversation.parse::<DiscordId>() else { return Posted::Refused };
-        match self.send(channel, text, Some(&nonce(key))) {
-            Ok(message) => Posted::Sent(message.map(|id| id.to_string())),
-            Err(Some(_)) => Posted::Retry,
-            Err(None) => Posted::Refused,
+        posted(self.send(channel, text, Some(&nonce(key))))
+    }
+    /// An embed with buttons. If Discord rejects the body (for example a link
+    /// button's local URL), it is retried without link buttons, then as text.
+    fn post_request(&self, to: &Recipient, request: &channel::Request, text: &str, key: &str) -> Posted {
+        let Ok(channel) = to.conversation.parse::<DiscordId>() else { return Posted::Refused };
+        let nonce = nonce(key);
+        for links in [true, false] {
+            let mut body = components::message(request, &self.tag, links);
+            body["nonce"] = json!(nonce);
+            body["enforce_nonce"] = json!(true);
+            match self.send_body(channel, &body) {
+                Err(Failure::Invalid) => continue,
+                other => return posted(other.map_err(Failure::sent)),
+            }
+        }
+        posted(self.send(channel, text, Some(&nonce)))
+    }
+    fn settle(&self, to: &Recipient, message: &str, settled: &channel::Settled) -> Posted {
+        let (Ok(channel), Ok(message)) = (to.conversation.parse::<DiscordId>(), message.parse::<DiscordId>()) else { return Posted::Refused };
+        if let Err(failure) = self.allowed(channel) {
+            return posted(Err(failure));
+        }
+        let url = format!("{API}/channels/{channel}/messages/{message}");
+        let current = match self.client.get(&url).send() {
+            Ok(r) if r.status().is_success() => r.json::<Value>().unwrap_or_default(),
+            Ok(r) if r.status().as_u16() == 429 => return Posted::Retry,
+            Ok(r) if r.status().is_client_error() => return Posted::Refused,
+            _ => return Posted::Retry,
+        };
+        let Some(edit) = components::settled(&current, settled) else { return Posted::Sent(None) };
+        posted(Self::outcome(self.client.patch(&url).json(&edit).send()).map_err(Failure::sent))
+    }
+}
+/// Why Discord did not take a message.
+enum Failure {
+    /// Rate-limited or unavailable: retry after the delay.
+    Retry(Duration),
+    /// The body was rejected (HTTP 400); a simpler body may be accepted.
+    Invalid,
+    /// Refused for good (403, cannot DM the user, ...).
+    Refused,
+}
+impl Failure {
+    fn sent(self) -> Option<Duration> {
+        match self {
+            Failure::Retry(delay) => Some(delay),
+            Failure::Invalid | Failure::Refused => None,
         }
     }
 }
@@ -416,10 +470,11 @@ impl Bridge {
             bot_name: user["username"].as_str().unwrap_or("Control").into(),
             state: Default::default(),
             channel: std::cell::RefCell::new(Channel::open(CHANNEL)),
+            tag: components::tag(),
         })
     }
     fn status(&self, routes: &[Route], ready: bool, message: &str) {
-        let value = json!({"ready":ready,"updated_unix":now(),"message":message,"bot_id":self.bot_id,"bot_name":self.bot_name,"dm_users":routes.iter().filter_map(|r|r.recipient).collect::<Vec<_>>(),"transport":"REST / direct messages"});
+        let value = json!({"ready":ready,"updated_unix":now(),"message":message,"bot_id":self.bot_id,"bot_name":self.bot_name,"dm_users":routes.iter().filter_map(|r|r.recipient).collect::<Vec<_>>(),"transport":"REST / direct messages; gateway for buttons"});
         if let (Ok(bytes), Ok(path)) = (
             serde_json::to_vec(&value),
             config::state("discord-status.json"),
@@ -487,40 +542,48 @@ impl Bridge {
     /// Posts a message. A `nonce` makes Discord drop a repeat of the same send
     /// (a retry after a crash or a lost response) instead of posting it twice.
     fn send(&self, channel: DiscordId, content: &str, nonce: Option<&str>) -> Sent {
+        let content: String = content.chars().take(1800).collect();
+        let body = match nonce {
+            Some(nonce) => json!({"content":content,"allowed_mentions":{"parse":[]},"nonce":nonce,"enforce_nonce":true}),
+            None => json!({"content":content,"allowed_mentions":{"parse":[]}}),
+        };
+        self.send_body(channel, &body).map_err(Failure::sent)
+    }
+    /// Only bound DM channels whose recipient may run tasks are written to.
+    fn allowed(&self, channel: DiscordId) -> Result<(), Option<Duration>> {
         let bindings = DmBindings::load().map_err(|_| Some(Duration::from_secs(5)))?;
         let mut authorize = identity::authorizer();
-        let allowed = {
-            bindings.recipients.iter().any(|r| {
-                r.channel_id == channel
-                    && authorize(
-                        &Actor::DiscordDm {
-                            user_id: r.user_id,
-                            channel_id: channel,
-                        },
-                        Action::Task,
-                    )
-                    .is_ok()
-            })
-        };
-        if !allowed {
-            return Err(None);
-        }
-        let safe = content.replace(&self.token, "[REDACTED]");
-        let content: String = safe.chars().take(1800).collect();
-        match self
-            .client
-            .post(format!("{API}/channels/{channel}/messages"))
-            .json(&match nonce {
-                Some(nonce) => json!({"content":content,"allowed_mentions":{"parse":[]},"nonce":nonce,"enforce_nonce":true}),
-                None => json!({"content":content,"allowed_mentions":{"parse":[]}}),
-            })
-            .send()
-        {
+        let allowed = bindings.recipients.iter().any(|r| {
+            r.channel_id == channel && authorize(&Actor::DiscordDm { user_id: r.user_id, channel_id: channel }, Action::Task).is_ok()
+        });
+        if allowed { Ok(()) } else { Err(None) }
+    }
+    /// Posts a message body, with the credential redacted from its text.
+    fn send_body(&self, channel: DiscordId, body: &Value) -> Result<Option<DiscordId>, Failure> {
+        self.allowed(channel).map_err(|delay| delay.map_or(Failure::Refused, Failure::Retry))?;
+        let text = body.to_string();
+        let body = if text.contains(&self.token) { serde_json::from_str(&text.replace(&self.token, "[REDACTED]")).map_err(|_| Failure::Refused)? } else { body.clone() };
+        Self::outcome(self.client.post(format!("{API}/channels/{channel}/messages")).json(&body).send())
+    }
+    fn outcome(response: reqwest::Result<reqwest::blocking::Response>) -> Result<Option<DiscordId>, Failure> {
+        match response {
             Ok(r) if r.status().is_success() => Ok(r.json::<Value>().ok().and_then(|v| v["id"].as_str()?.parse().ok())),
-            Ok(r) if r.status().as_u16() == 429 => Err(Some(retry_after(r))),
+            Ok(r) if r.status().as_u16() == 429 => Err(Failure::Retry(retry_after(r))),
+            Ok(r) if r.status().as_u16() == 400 => Err(Failure::Invalid),
             // Other 4xx (403, 50007 cannot DM user, ...) will not succeed on retry.
-            Ok(r) if r.status().is_client_error() => Err(None),
-            _ => Err(Some(Duration::from_secs(5))),
+            Ok(r) if r.status().is_client_error() => Err(Failure::Refused),
+            _ => Err(Failure::Retry(Duration::from_secs(5))),
+        }
+    }
+    /// Decides a button press or modal answer through the channel core, as
+    /// a typed reply would, if it comes from an operator in their own DM.
+    fn press(&self, routes: &[Route], press: &components::Press) {
+        let Some(route) = routes.iter().find(|r| r.channel == press.channel && r.recipient == Some(press.user)) else { return };
+        let (settings, operating) = operators(std::slice::from_ref(route));
+        let Some(to) = operating.iter().find(|to| to.person == press.user.to_string()) else { return };
+        let pressed = self.channel.borrow_mut().press(self, &settings, to, &press.message, &press.action, press.text.as_deref());
+        if let channel::Pressed::Reply(text) = pressed {
+            let _ = self.reply(route.channel, &text);
         }
     }
     fn receive(
@@ -599,7 +662,7 @@ impl Bridge {
             if let Some((to, routed)) = next {
                 cursors.insert(channel.clone(), id.to_string());
                 save_cursors(cursors)?;
-                let outcome = self.channel.borrow_mut().run(&settings, to, routed, text);
+                let outcome = self.channel.borrow_mut().run(self, &settings, to, routed, text);
                 let _ = self.reply(route.channel, &outcome);
                 continue;
             }
@@ -851,6 +914,7 @@ fn run(check_only: bool) -> Result<(), &'static str> {
         undelivered: load_json(config::state("discord-undelivered.json")?),
         ..Default::default()
     };
+    let presses = gateway::spawn(bridge.token.clone(), bridge.tag.clone());
     let mut refresh = now();
     loop {
         if now().saturating_sub(refresh) >= 60 {
@@ -887,7 +951,18 @@ fn run(check_only: bool) -> Result<(), &'static str> {
                 "Discord read unavailable; retrying."
             },
         );
-        std::thread::sleep(Duration::from_secs(3));
+        // Wait for the next poll, deciding button presses as they arrive.
+        let next = std::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            match presses.recv_timeout(next.saturating_duration_since(std::time::Instant::now())) {
+                Ok(press) => bridge.press(&routes, &press),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    std::thread::sleep(next.saturating_duration_since(std::time::Instant::now()));
+                    break;
+                }
+            }
+        }
     }
 }
 pub fn command(args: &[String]) {

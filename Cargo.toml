@@ -31,6 +31,7 @@ ring = "0.17.14"
 base64 = "0.23"
 scraper = { version = "0.29", default-features = false }
 libc = "0.2"
+tungstenite = { version = "0.30.0", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
 
 [dev-dependencies]
 # Alternate-driver conformance only; production runtime remains unchanged.

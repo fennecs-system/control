@@ -1,6 +1,8 @@
 pub mod bridge;
 mod permissions;
 mod delivery;
+mod components;
+mod gateway;
 // Shared ingress types. Credential loading belongs only to the explicitly activated bridge.
 use crate::identity::{Action, DiscordId};
 use serde::{Deserialize, Serialize};
