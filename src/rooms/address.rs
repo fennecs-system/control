@@ -50,6 +50,23 @@ pub(super) fn for_worker(state: &State, chat: &str, room: &str) -> Result<String
     Err("Chat lineage is too deep or cyclic.")
 }
 
+/// The room a chat coordinates in by default: its own link, else the nearest
+/// ancestor's link within the same actor. Spawned workers thereby join their
+/// lead's room, including one linked after they started; a different actor's
+/// or unrelated task's link is never inherited.
+pub(crate) fn team_room(state: &State, chat: &str) -> Option<String> {
+    let mut session = state.chats.iter().find(|session| session.id == chat)?;
+    let actor = &session.actor;
+    for _ in 0..64 {
+        if let Some(room) = session.room.as_deref().filter(|room| Address::parse(room).is_some()) {
+            return Some(room.to_owned());
+        }
+        let parent = session.parent_chat.as_deref()?;
+        session = state.chats.iter().find(|candidate| candidate.id == parent && &candidate.actor == actor)?;
+    }
+    None
+}
+
 pub(crate) fn names(state: &State) -> Vec<String> {
     let mut names = super::NAMES.map(str::to_owned).to_vec();
     for room in state.chats.iter().rev().filter_map(|chat| chat.room.as_deref())

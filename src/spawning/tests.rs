@@ -572,3 +572,27 @@ fn a_judge_batch_starts_one_advisor_within_its_own_allowance_beside_the_review_j
     request(&mut s, &id, "parent-attempt", "workers", input(1), |_| Ok(())).unwrap();
     assert!(!delegation::is_judge(s.runtime.runs.last().unwrap()), "omitting the role keeps workers");
 }
+#[test]
+fn spawned_workers_join_the_team_room_within_one_actor_and_tree() {
+    // A depth-1 worker without its own link spawns under a linked lead.
+    let (mut s, id) = active();
+    let worker = s.chats[0].id.clone();
+    let lead = chat::create(&mut s);
+    let team = format!("general/{lead}");
+    s.chats[1].room = Some(team.clone());
+    s.chats[0].parent_chat = Some(lead.clone());
+    let objectives = input(2);
+    request(&mut s, &id, "parent-attempt", "team", objectives, |_| Ok(())).unwrap();
+    let children = s.chats.iter().filter(|chat| chat.parent_chat.as_deref() == Some(worker.as_str())).collect::<Vec<_>>();
+    assert_eq!(children.len(), 2);
+    assert!(children.iter().all(|chat| chat.room.as_deref() == Some(team.as_str())), "objectives never had to name the room");
+    // Another actor's link is never inherited, and nothing else is widened.
+    s.chats[1].actor = Actor::Unknown;
+    request(&mut s, &id, "parent-attempt", "foreign", input(1), |_| Ok(())).unwrap();
+    assert_eq!(s.chats.last().unwrap().room, None);
+    // An unrelated task's link is never inherited.
+    s.chats[0].parent_chat = None;
+    s.chats[1].actor = Actor::LocalOperator;
+    request(&mut s, &id, "parent-attempt", "unrelated", input(1), |_| Ok(())).unwrap();
+    assert_eq!(s.chats.last().unwrap().room, None);
+}
