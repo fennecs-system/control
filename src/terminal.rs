@@ -417,6 +417,9 @@ impl App {
                 );
                 if let Some(attempts) = message["attempts"].as_array() {
                     for (index, attempt) in attempts.iter().enumerate() {
+                        if let Some(error) = attempt["history_error"].as_str() {
+                            lines.push(Line::styled(format!("  ! {}",clean(error)),Style::default().fg(Color::Rgb(237,139,155))));
+                        }
                         if let Some(count) = attempt["omitted_history"].as_u64().filter(|n| *n > 0)
                         {
                             lines.push(Line::styled(format!("Context window · {count} earlier exchanges excluded from attempt {}. History retained.", index + 1), Style::default().fg(Color::Rgb(133, 133, 143))));

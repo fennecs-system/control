@@ -54,6 +54,22 @@ fn pause(s: &mut State, role: Role) {
     a.artifact = Some("immutable-paused-source".into());
 }
 #[test]
+fn delegated_feedback_reports_unavailable_diff_evidence() {
+    let mut state = crate::State::default();
+    state.runtime.enqueue("Review changes".into(), crate::runtime::RunKind::Chat, "test");
+    let child = &mut state.runtime.runs[0];
+    child.chat_id = Some("c-test-delegation-history-error".into());
+    child.status = "completed".into();
+    child.attempts.push(crate::usage::Attempt { journal:Some(u64::MAX),..Default::default() });
+    let before = serde_json::to_vec(child).unwrap();
+    let text = feedback(child);
+    assert!(text.contains("Activity history unavailable"));
+    assert!(text.contains("missing record"));
+    assert!(text.contains("c-test-delegation-history-error"));
+    assert_eq!(serde_json::to_vec(child).unwrap(), before);
+}
+
+#[test]
 fn explicit_reviewer_model_is_captured_without_changing_parent_or_granting_authority() {
     let mut state=active(Action::Task);
     state.runtime.models.push(crate::providers::Model::captured(Backend::Claude,"reviewer".into()));

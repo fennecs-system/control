@@ -52,28 +52,102 @@ pub(crate) fn with_path<T>(path: PathBuf, f: impl FnOnce(&mut FileJournal) -> io
     f(open.get_mut(&path).expect("just opened"))
 }
 
-/// An attempt's activity, from state while it runs or from its journal after.
-pub(crate) fn activity<'a>(chat: Option<&str>, attempt: &'a Attempt) -> Cow<'a, [Activity]> {
-    match attempt.journal {
-        None => Cow::Borrowed(&attempt.activity),
-        Some(pos) => Cow::Owned(read(chat, pos).unwrap_or_default()),
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ReadCause {
+    Missing,
+    Invalid,
+    Io(io::ErrorKind),
+}
+#[derive(Debug)]
+pub(crate) struct ReadError {
+    pub source: String,
+    pub journal: u64,
+    pub cause: ReadCause,
+}
+impl std::fmt::Display for ReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Activity history unavailable: {}, entry {} (",
+            self.source, self.journal
+        )?;
+        match self.cause {
+            ReadCause::Missing => f.write_str("missing record"),
+            ReadCause::Invalid => f.write_str("invalid record"),
+            ReadCause::Io(kind) => write!(f, "I/O {kind:?}"),
+        }?;
+        f.write_str("). This is missing evidence, not an empty activity record.")
     }
 }
-fn read(chat: Option<&str>, pos: u64) -> io::Result<Vec<Activity>> {
-    let line = with(chat, |journal| journal.read(pos))?.ok_or_else(|| io::Error::other("History entry missing"))?;
-    Ok(serde_json::from_slice::<Entry<'static>>(&line).map_err(io::Error::other)?.activity.into_owned())
+
+/// An attempt's activity, from state while it runs or from its journal after.
+/// An unavailable record must never masquerade as successful empty history.
+pub(crate) fn activity<'a>(
+    chat: Option<&str>,
+    attempt: &'a Attempt,
+) -> Result<Cow<'a, [Activity]>, ReadError> {
+    match attempt.journal {
+        None => Ok(Cow::Borrowed(&attempt.activity)),
+        Some(pos) => read(chat, pos).map(Cow::Owned),
+    }
+}
+fn read(chat: Option<&str>, pos: u64) -> Result<Vec<Activity>, ReadError> {
+    let error = |cause| ReadError {
+        source: format!(
+            "history/{}.jsonl",
+            chat.filter(|id| crate::chat::valid_id(id))
+                .unwrap_or(UNSCOPED)
+        ),
+        journal: pos,
+        cause,
+    };
+    let line = with(chat, |journal| journal.read(pos))
+        .map_err(|e| {
+            error(if e.kind() == io::ErrorKind::NotFound {
+                ReadCause::Missing
+            } else {
+                ReadCause::Io(e.kind())
+            })
+        })?
+        .ok_or_else(|| error(ReadCause::Missing))?;
+    Ok(serde_json::from_slice::<Entry<'static>>(&line)
+        .map_err(|_| error(ReadCause::Invalid))?
+        .activity
+        .into_owned())
 }
 
+/// A read view, never a replacement for the persisted attempt or its reference.
+#[derive(Serialize)]
+pub(crate) struct HydratedAttempt {
+    #[serde(flatten)]
+    attempt: Attempt,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    history_error: Option<String>,
+}
 /// Attempts with their activity filled in, for views that show everything.
-pub(crate) fn hydrated(chat: Option<&str>, attempts: &[Attempt]) -> Vec<Attempt> {
-    attempts.iter().map(|attempt| {
-        let mut full = attempt.clone();
-        if attempt.journal.is_some() {
-            full.activity = activity(chat, attempt).into_owned();
-            full.journal = None;
-        }
-        full
-    }).collect()
+pub(crate) fn hydrated(chat: Option<&str>, attempts: &[Attempt]) -> Vec<HydratedAttempt> {
+    attempts
+        .iter()
+        .map(|attempt| {
+            let mut full = attempt.clone();
+            let history_error = if attempt.journal.is_some() {
+                match activity(chat, attempt) {
+                    Ok(events) => {
+                        full.activity = events.into_owned();
+                        full.journal = None;
+                        None
+                    }
+                    Err(error) => Some(error.to_string()),
+                }
+            } else {
+                None
+            };
+            HydratedAttempt {
+                attempt: full,
+                history_error,
+            }
+        })
+        .collect()
 }
 
 /// Statuses after which an attempt's activity no longer changes.
@@ -309,9 +383,14 @@ pub(crate) fn emit(state: &mut crate::State, save: impl FnOnce(&crate::State) ->
         if !DELIVERABLE.contains(&run.status.as_str()) || run.emitted.as_deref() == Some(run.status.as_str()) {
             continue;
         }
-        let change = run.attempts.last().and_then(|attempt| {
-            activity(run.chat_id.as_deref(), attempt).iter().rev().find(|e| e.kind == "file_change" && !e.output.is_empty()).map(|e| Change { text: e.text.clone(), output: e.output.clone() })
-        });
+        let change = run.attempts.last().map(|attempt| {
+            activity(run.chat_id.as_deref(), attempt).map(|events|events.iter().rev().find(|e| e.kind == "file_change" && !e.output.is_empty()).map(|e| Change { text: e.text.clone(), output: e.output.clone() }))
+        }).transpose();
+        let mut report = run.result.split_once("\n\nReview workspace: ").map_or(run.result.as_str(), |(reply, _)| reply).to_owned();
+        let change = match change {
+            Ok(change) => change.flatten(),
+            Err(error) => { report.push_str(&format!("\n\n{error}")); None },
+        };
         let delivery = Delivery {
             run: run.id.clone(),
             source: run.source.clone(),
@@ -319,7 +398,7 @@ pub(crate) fn emit(state: &mut crate::State, save: impl FnOnce(&crate::State) ->
             actor: run.actor.clone(),
             action: run.action,
             status: run.status.clone(),
-            report: run.result.split_once("\n\nReview workspace: ").map_or(run.result.as_str(), |(reply, _)| reply).to_owned(),
+            report,
             question: serde_json::to_value(&run.question).unwrap_or_default(),
             change,
         };

@@ -603,7 +603,9 @@ pub fn prompt(state: &State, run_id: &str) -> Option<String> {
     let window = crate::compaction::selector(state).window(&conversation, current);
     let carry = conversation.carry(current, &window);
     let activity = carry.previous.and_then(|run| run.attempts.last()).map(|attempt| crate::history::activity(run.chat_id.as_deref(), attempt));
-    let handoff = crate::conversation::handoff(&carry.instructions, carry.previous.map(|run| run.id.as_str()), activity.as_deref().unwrap_or(&[]));
+    let events = activity.as_ref().and_then(|read|read.as_deref().ok()).unwrap_or(&[]);
+    let mut handoff = crate::conversation::handoff(&carry.instructions, carry.previous.map(|run| run.id.as_str()), events);
+    if let Some(Err(error)) = activity { handoff.push_str(&format!("{error}\n")); }
     let history = window.render(&conversation);
     let prefix=prompt_prefix(run,session);
     Some(format!(
@@ -819,7 +821,10 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
                 if let Some(count) = Some(attempt.omitted_history).filter(|n| *n > 0) {
                     html.push_str(&format!("<p class='message-status'>Context window · {count} earlier exchanges excluded from attempt {}. Chat history retained.</p>", index + 1));
                 }
-                let events=crate::history::activity(run.and_then(|r|r.chat_id.as_deref()),attempt);
+                let events=match crate::history::activity(run.and_then(|r|r.chat_id.as_deref()),attempt) {
+                    Ok(events)=>events,
+                    Err(error)=>{html.push_str(&format!("<p class='message-status' role='alert'>{}</p>",escape(&error.to_string())));continue;},
+                };
                 for event in events.iter().filter(|event|event.kind == "file_change") {
                     let patch=&event.output;
                     if patch.is_empty() {continue;}

@@ -82,7 +82,7 @@ fn unfinished_codex_tool_prevents_success_without_publishing_or_retrying() {
     assert_eq!(state.runtime.runs.len(), 1);
     assert_eq!(state.runtime.runs[0].status, "interrupted");
     assert_eq!(state.chats[0].workspace.as_deref(), Some("previous-output"));
-    let events = crate::history::activity(Some(&chat), &state.runtime.runs[0].attempts[0]);
+    let events = crate::history::activity(Some(&chat), &state.runtime.runs[0].attempts[0]).unwrap();
     assert_eq!(events[0].status, "interrupted");
     assert!(events[0]
         .output
@@ -529,7 +529,7 @@ fn result_rollback_preserves_attempt_history_and_live_diagnostics() {
         crate::history::activity(
             state.runtime.runs[0].chat_id.as_deref(),
             &state.runtime.runs[0].attempts[1]
-        )[0]
+        ).unwrap()[0]
         .output,
         "retained diagnostics"
     );
@@ -1399,7 +1399,7 @@ fn shutdown_fences_success_preserves_diagnostics_queue_and_checkpoint() {
         crate::history::activity(
             state.runtime.runs[0].chat_id.as_deref(),
             &state.runtime.runs[0].attempts[0]
-        )[0]
+        ).unwrap()[0]
         .output,
         "retained diagnostics"
     );
