@@ -1,6 +1,7 @@
 use super::*;
 use crate::client::operator::{Command, reply};
 use crate::client::PortDecision;
+use crate::client::chats::Navigation;
 
 fn id(value: &str) -> DiscordId {
     value.parse().unwrap()
@@ -66,4 +67,32 @@ fn notices_name_the_chat_the_request_and_how_to_decide() {
     assert!(text.starts_with("Control · Swarm lead\nBot request · c-child"));
     assert!(text.contains("/bot allow bot-1 · /bot deny bot-1"));
     assert!(text.ends_with("open http://127.0.0.1:8080/chat/c-lead"));
+}
+
+#[test]
+fn operator_messages_route_to_decisions_navigation_replied_or_selected_chats() {
+    let mut ledger = ledger();
+    let me = (id("1"), id("100"));
+    assert_eq!(ledger.destination(me.0, me.1, Some(id("500")), "2"), Destination::Decide(&ledger.notices[0]));
+    assert_eq!(ledger.destination(me.0, me.1, None, "/chats"), Destination::Navigate(Navigation::List));
+    assert_eq!(ledger.destination(me.0, me.1, None, "/resume c-lead"), Destination::Navigate(Navigation::Open("c-lead".into())));
+    // Without a selection, ordinary messages keep the DM's own chat.
+    assert_eq!(ledger.destination(me.0, me.1, None, "fix the build"), Destination::Dm);
+    ledger.select(me.0, me.1, Some(("c-lead".into(), 4)));
+    assert_eq!(ledger.active(me.0, me.1).unwrap().delivered, 4);
+    assert_eq!(ledger.destination(me.0, me.1, None, "/steer use the cache"), Destination::Chat("c-lead"));
+    // Replying to a relayed reply continues that chat, whatever is selected.
+    ledger.relay(Relayed { user: me.0, channel: me.1, message: id("700"), chat: "c-helper".into() });
+    assert_eq!(ledger.destination(me.0, me.1, Some(id("700")), "more detail"), Destination::Chat("c-helper"));
+    // Another person's DM is unaffected by this selection or relay.
+    assert_eq!(ledger.destination(id("2"), me.1, Some(id("700")), "hi"), Destination::Dm);
+    assert_eq!(ledger.destination(me.0, id("200"), None, "hi"), Destination::Dm);
+    ledger.select(me.0, me.1, Some(("c-other".into(), 0)));
+    assert_eq!(ledger.active.len(), 1, "one selection per DM");
+    ledger.select(me.0, me.1, None);
+    assert_eq!(ledger.destination(me.0, me.1, None, "hi"), Destination::Dm);
+    let round = serde_json::to_vec(&ledger).unwrap();
+    assert_eq!(serde_json::from_slice::<Ledger>(&round).unwrap(), ledger);
+    // Tables written before selections existed still load.
+    assert!(serde_json::from_str::<Ledger>(r#"{"notices":[]}"#).is_ok());
 }

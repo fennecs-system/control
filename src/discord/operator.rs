@@ -2,6 +2,7 @@
 //! stands for which pending request in which chat. This table is the only
 //! Discord-specific state; requests, commands and authorization are the
 //! shared ones in `crate::client::operator` and the server.
+use crate::client::chats::{Navigation, navigation};
 use crate::client::operator::{Kind, Pending};
 use crate::identity::DiscordId;
 use serde::{Deserialize, Serialize};
@@ -28,10 +29,49 @@ impl Notice {
     }
 }
 
+/// The chat an operator DM is talking to after `/resume ID`, and how far its
+/// replies have been relayed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Active {
+    pub user: DiscordId,
+    pub channel: DiscordId,
+    pub chat: String,
+    /// The next message index whose finished reply is relayed.
+    pub delivered: usize,
+    /// The chat's `control.chats.list` revision when last read.
+    #[serde(default)]
+    pub revision: serde_json::Value,
+}
+/// A relayed chat reply, so replying to it continues that chat.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Relayed {
+    pub user: DiscordId,
+    pub channel: DiscordId,
+    pub message: DiscordId,
+    pub chat: String,
+}
+
+/// Where an operator's DM goes.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Destination<'a> {
+    /// A decision for a notified request.
+    Decide(&'a Notice),
+    /// `/chats`, `/resume ID` or `/new`.
+    Navigate(Navigation),
+    /// A message to a chat through `control.chat.send`.
+    Chat(&'a str),
+    /// The DM's own Discord chat, as before.
+    Dm,
+}
+
 #[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Ledger {
     pub notices: Vec<Notice>,
+    pub active: Vec<Active>,
+    pub relayed: Vec<Relayed>,
 }
 impl Ledger {
     /// The idempotency key of one request for one recipient; also the send nonce.
@@ -58,6 +98,39 @@ impl Ledger {
                 self.notices.iter().rev().filter(mine).find(|n| n.kind == kind && n.id == id)
             }
         }
+    }
+    /// Where a message goes, in order: a decision for a notified request,
+    /// navigation, a reply to a relayed chat message, the chat selected with
+    /// `/resume`, otherwise the DM's own chat.
+    pub fn destination(&self, user: DiscordId, channel: DiscordId, replied: Option<DiscordId>, text: &str) -> Destination<'_> {
+        if let Some(notice) = self.target(user, channel, replied, text) {
+            return Destination::Decide(notice);
+        }
+        if let Some(navigation) = navigation(text) {
+            return Destination::Navigate(navigation);
+        }
+        let relayed = replied.and_then(|message| self.relayed.iter().rev().find(|r| r.user == user && r.channel == channel && r.message == message));
+        match (relayed, self.active(user, channel)) {
+            (Some(relayed), _) => Destination::Chat(&relayed.chat),
+            (None, Some(active)) => Destination::Chat(&active.chat),
+            (None, None) => Destination::Dm,
+        }
+    }
+    pub fn active(&self, user: DiscordId, channel: DiscordId) -> Option<&Active> {
+        self.active.iter().find(|a| a.user == user && a.channel == channel)
+    }
+    /// Talk to `chat` from now on, relaying replies from message `delivered`;
+    /// `None` returns to the DM's own chat.
+    pub fn select(&mut self, user: DiscordId, channel: DiscordId, chat: Option<(String, usize)>) {
+        self.active.retain(|a| !(a.user == user && a.channel == channel));
+        if let Some((chat, delivered)) = chat {
+            self.active.push(Active { user, channel, chat, delivered, revision: serde_json::Value::Null });
+        }
+    }
+    pub fn relay(&mut self, relayed: Relayed) {
+        self.relayed.push(relayed);
+        let excess = self.relayed.len().saturating_sub(LIMIT);
+        self.relayed.drain(..excess);
     }
 }
 

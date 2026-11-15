@@ -56,7 +56,7 @@ fn composer_line<'a>(text: &'a str, lenses: &lens_input::Catalog) -> Line<'a> {
     marked_line(text, command_menu::highlight(text).map(|range| (range, COMMAND_STYLE)).into_iter()
         .chain(names.map(|(range, valid)| (range, if valid { LENS_STYLE } else { UNKNOWN_LENS_STYLE }))))
 }
-use crate::client::{Hive, operator};
+use crate::client::{Hive, chats::{self, Navigation}, operator};
 fn failure(message:impl std::fmt::Display)->io::Error {io::Error::other(message.to_string())}
 #[cfg(test)]
 use crate::client::local_server;
@@ -274,13 +274,16 @@ impl App {
                 self.inspector=None;self.status="Folder ready · isolated worktree".into();
             }
             "/quit" => return Ok(true),
-            "/new" => self.new_chat(hive)?,
-            "/chats" | "/resume" => {
-                self.refresh(hive)?;
-                self.menu=Some(Menu {entries:self.chats.iter().map(|c| (format!("{}{}", "  ".repeat(c["depth"].as_u64().unwrap_or(0).min(8) as usize),c["title"].as_str().unwrap_or("Chat")),c["lenses"].as_array().map(|a|a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" + ")).unwrap_or_default(),c["id"].as_str().unwrap_or("").into())).collect(),selected:0,multiple:false,checked:Vec::new()});
-                let lines=self.chats.iter().map(|c|format!("{}\n  /resume {}",c["title"].as_str().unwrap_or("Chat"),c["id"].as_str().unwrap_or(""))).collect::<Vec<_>>().join("\n\n");
-                self.inspector=Some(("Conversations".into(),lines));self.scroll=0;self.follow=false;self.status="↑ ↓ choose · Enter open · Esc back".into();
-            }
+            _ if let Some(navigation) = chats::navigation(&text) => match navigation {
+                Navigation::New => self.new_chat(hive)?,
+                Navigation::Open(id) => { self.active = id; self.inspector=None;self.refresh(hive)?; }
+                Navigation::List => {
+                    self.refresh(hive)?;
+                    let entries=chats::entries(&self.chats);
+                    self.menu=Some(Menu {entries:entries.iter().zip(&self.chats).map(|(e,c)| (format!("{}{}", "  ".repeat(e.depth),e.title),c["lenses"].as_array().map(|a|a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" + ")).unwrap_or_default(),e.id.into())).collect(),selected:0,multiple:false,checked:Vec::new()});
+                    self.inspector=Some(("Conversations".into(),chats::resume_list(&entries)));self.scroll=0;self.follow=false;self.status="↑ ↓ choose · Enter open · Esc back".into();
+                }
+            },
             "/help" => {
                 self.inspector = Some(("Help".into(), command_menu::help()));
                 self.scroll = 0;
@@ -320,7 +323,6 @@ impl App {
                 self.set_detail(hive.tool("control.chat.lenses",json!({"id":self.active,"lenses":lenses}))?);
                 self.inspector=None;self.status=format!("Future messages: {}",lens_label(&self.detail));self.follow=true;
             }
-            _ if text.starts_with("/resume ") => { self.active = text[8..].trim().into(); self.inspector=None;self.refresh(hive)?; }
             _ if text.starts_with('/') && commands::parse(&text).is_none()=>return Err(failure("Unknown command. Use /help.")),
             _ if !text.is_empty() => {
                 if control_context::limits::message_too_long(&text) { return Err(failure(control_context::limits::CHAT_MESSAGE_ERROR)); }
