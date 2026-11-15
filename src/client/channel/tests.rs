@@ -133,7 +133,7 @@ fn navigation_selection_and_relayed_replies_steer_chats() {
 fn routing_state_is_bounded_and_platform_neutral() {
     let mut ledger = Ledger::default();
     for n in 0..LIMIT + 5 {
-        ledger.record(Notice { person: "alice".into(), conversation: "dm".into(), message: format!("m{n}"), chat: "c".into(), kind: Kind::Question, id: format!("q-{n}"), loopback: false });
+        ledger.record(Notice { person: "alice".into(), conversation: "dm".into(), message: format!("m{n}"), chat: "c".into(), kind: Kind::Question, id: format!("q-{n}"), loopback: false, settled: false, actions: false });
     }
     assert_eq!(ledger.notices.len(), LIMIT);
     assert_eq!(ledger.notices[0].message, "m5");

@@ -241,6 +241,33 @@ use this node's local operator session for exactly the commands the TUI sends,
 so the server rechecks that the request is still pending and refuses a
 duplicate reply. User-role identities keep the DM-only behaviour.
 
+On Discord a request arrives as an embed coloured by severity (blue question,
+amber approval, red loopback port) with its chat, target and other details as
+fields, and buttons: **Approve**/**Allow**/**Allow loopback**, **Deny**, one
+button per question option, **Answer…** (opens a text box) and **Open chat**.
+A press runs exactly the reply it stands for (`allow`, `deny`,
+`allow --loopback`, an option number or the typed answer) through the same
+decision path as a text reply. The message then turns green or grey with
+"Allowed by you", "Denied by you" or "Answered by you" and drops its decision
+buttons; a request decided elsewhere or expired shows "No longer pending".
+Typing a reply or the command in the footer still works. Buttons are matched
+to requests through the routing table by the pressed message, only for the
+operator's own DM and this node's messages; a stale or already decided
+request is refused with a short note.
+
+Buttons need a gateway connection, which `control discord --enable` opens
+alongside REST polling. It requests no privileged intents. In the Discord
+developer portal, leave the application's **Interactions Endpoint URL**
+empty: when it is set, Discord sends presses there instead of the gateway.
+If the gateway is unavailable, buttons fail visibly and replies still work.
+
+The structured form is generic (`client::channel::request`): a title, a
+body, fields, a severity and actions, each action being a reply the
+operator could type. Adapters that report `buttons` render it
+(`Transport::post_request`) and route presses to `Channel::press`; others
+post the plain text. Telegram inline keyboards or WhatsApp reply buttons can
+implement the same model; they are not implemented yet.
+
 Architects can steer any chat, with forwarding on or off: `!chats` lists the most recently active
 chats, `!resume ID` selects one, `!new` starts one and `!use LENS…` sets lenses
 for the selected chat (`!use none` clears). While a chat is selected, messages

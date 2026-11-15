@@ -21,13 +21,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{path::PathBuf, time::{Duration, Instant}};
 
+pub mod request;
+pub use request::{Refusal, Request, Settled};
+
 /// What a messaging service supports; the core degrades to plain text.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Capabilities {
     /// A message can reply to an earlier one (reply-to routing).
     pub replies: bool,
     pub threads: bool,
-    /// Inline buttons for allow/deny.
+    /// Structured requests with actions ([`Transport::post_request`]).
     pub buttons: bool,
     pub edits: bool,
     pub attachments: bool,
@@ -75,6 +78,18 @@ pub trait Transport {
     fn post(&self, to: &Recipient, text: &str, reply_to: Option<&str>, key: &str) -> Posted;
     /// Replace an earlier message's text, where `capabilities().edits`.
     fn edit(&self, _to: &Recipient, _message: &str, _text: &str) -> Posted {
+        Posted::Refused
+    }
+    /// Post an operator request, where `capabilities().buttons`, as a
+    /// structured message whose actions come back through
+    /// [`Channel::press`]. `text` is the plain rendering, which the default
+    /// posts for services without rich messages.
+    fn post_request(&self, to: &Recipient, _request: &Request, text: &str, key: &str) -> Posted {
+        self.post(to, text, None, key)
+    }
+    /// Mark a request's message decided or closed (for example by removing
+    /// its buttons), where `capabilities().edits`.
+    fn settle(&self, _to: &Recipient, _message: &str, _settled: &Settled) -> Posted {
         Posted::Refused
     }
 }
@@ -196,6 +211,20 @@ pub struct Notice {
     pub id: String,
     #[serde(default)]
     pub loopback: bool,
+    /// Decided through this message, or seen no longer pending; its actions
+    /// are refused (typed replies still reach the server, which rechecks).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub settled: bool,
+    /// Posted as a structured request with actions, so settling edits it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub actions: bool,
+}
+/// Every pending request in a `control.requests.list` view, as (chat, kind, ID).
+fn open_requests(groups: &Value) -> std::collections::HashSet<(&str, Kind, &str)> {
+    groups.as_array().into_iter().flatten()
+        .filter_map(|group| Some((group["chat_id"].as_str()?, group)))
+        .flat_map(|(chat, group)| operator::pending(group).into_iter().map(move |p| (chat, p.kind, p.id)))
+        .collect()
 }
 impl Notice {
     pub fn pending(&self) -> Pending<'_> {
@@ -303,6 +332,18 @@ pub enum Routed {
     Help,
 }
 
+/// What became of an action pressed on a request message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Pressed {
+    /// Not one of the recipient's request messages from this node: say nothing.
+    Ignored,
+    /// Decided; the edited message shows the outcome.
+    Settled,
+    /// Tell the recipient this (an error, or the outcome when the message
+    /// could not be edited).
+    Reply(String),
+}
+
 /// `/chats`: the recent chats in a `control.chats.list` view, with how to
 /// select one and how to return to this conversation's own chat.
 pub fn chat_list(to: &Recipient, list: &Value) -> String {
@@ -393,17 +434,27 @@ impl Channel {
     }
     /// Carries out a routed message and returns the reply for the recipient,
     /// in this channel's command spelling.
-    pub fn run(&mut self, settings: &Settings, to: &Recipient, routed: Routed, text: &str) -> String {
+    pub fn run(&mut self, transport: &impl Transport, settings: &Settings, to: &Recipient, routed: Routed, text: &str) -> String {
         let text = settings.command(text);
         let result = match routed {
             Routed::Help => Ok(settings.help()),
-            Routed::Decide(notice) => self.decide(&notice, &text),
+            Routed::Decide(notice) => {
+                let result = self.decide(&notice, &text);
+                if result.is_ok() {
+                    self.settle(transport, &notice, &Settled { text: "Decided by you".into(), severity: request::Severity::Success });
+                }
+                result
+            }
             Routed::Navigate(navigation) => self.navigate(to, navigation),
             Routed::Chat(chat) if text.is_empty() => Ok(format!("Control: send the message as text.\n{}", Self::link(&chat))),
             Routed::Chat(chat) => self.hive().map_err(str::to_owned)
                 .and_then(|hive| operator::execute(hive, &chat, &operator::Command::Send(text.as_ref().into())).map_err(|e| e.to_string()))
                 .map(|()| format!("Sent.\n{}", Self::link(&chat))),
         };
+        self.answer(settings, result)
+    }
+    /// Saves the routing table and returns `result` for the recipient.
+    fn answer(&mut self, settings: &Settings, result: Result<String, String>) -> String {
         self.save();
         settings.present(&result.unwrap_or_else(|error| {
             if error.starts_with("Control is unavailable") {
@@ -411,6 +462,55 @@ impl Channel {
             }
             format!("Control: {error}")
         }))
+    }
+    /// Carries out action `action` pressed on request message `message` (with
+    /// prompted `text` for `answer`) as the reply it stands for, through the
+    /// same decision path as a typed reply, then settles the message. `None`
+    /// means the message is not one of `to`'s request notifications from this
+    /// node: the adapter ignores the press.
+    pub fn press(&mut self, transport: &impl Transport, settings: &Settings, to: &Recipient, message: &str, action: &str, text: Option<&str>) -> Pressed {
+        let (notice, reply) = match self.ledger.press(to, message, action, text) {
+            Err(Refusal::Unknown) => return Pressed::Ignored,
+            Err(Refusal::Settled) => return Pressed::Reply("Control: that request was already decided or is no longer pending.".into()),
+            Err(Refusal::Invalid) => return Pressed::Reply("Control: that action does not apply to this request.".into()),
+            Ok(pressed) => pressed,
+        };
+        if !settings.enabled {
+            return Pressed::Reply("Control: request forwarding is off, so decide this request on the website or in the TUI.".into());
+        }
+        let result = self.decide(&notice, &settings.command(&reply));
+        let edited = match &result {
+            Ok(_) => self.settle(transport, &notice, &request::decided(action)),
+            // A refusal for a request that is gone closes its message.
+            Err(_) if self.pending_now(&notice) == Some(false) => self.settle(transport, &notice, &request::closed()),
+            Err(_) => false,
+        };
+        let answer = self.answer(settings, result);
+        // The edited message already shows a successful decision.
+        if edited && !answer.starts_with("Control: ") { Pressed::Settled } else { Pressed::Reply(answer) }
+    }
+    /// Marks `notice` settled and, if it carries actions, edits its message.
+    /// Returns whether the message was edited.
+    fn settle(&mut self, transport: &impl Transport, notice: &Notice, settled: &Settled) -> bool {
+        let Some(slot) = self.ledger.notices.iter_mut().find(|n| n.person == notice.person && n.conversation == notice.conversation && n.message == notice.message) else { return false };
+        slot.settled = true;
+        if !slot.actions {
+            return false;
+        }
+        let to = Recipient { person: notice.person.clone(), conversation: notice.conversation.clone(), home: None };
+        match transport.settle(&to, &notice.message, settled) {
+            Posted::Sent(_) => true,
+            Posted::Retry => {
+                eprintln!("A channel could not update a decided request's message.");
+                false
+            }
+            Posted::Refused => false,
+        }
+    }
+    /// Whether `notice`'s request is still pending, when that can be read.
+    fn pending_now(&mut self, notice: &Notice) -> Option<bool> {
+        let groups = self.hive().ok()?.tool("control.requests.list", json!({})).ok()?;
+        Some(open_requests(&groups).contains(&(notice.chat.as_str(), notice.kind, notice.id.as_str())))
     }
     /// A reply to `notice`, as the TUI would decide it in that chat; the
     /// server rechecks that it is still pending.
@@ -517,20 +617,28 @@ impl Channel {
     /// once per recipient. Returns whether a send should be retried.
     pub fn notify(&mut self, transport: &impl Transport, settings: &Settings, recipients: &[Recipient], groups: &Value) -> bool {
         let mut retry = false;
+        let actions = transport.capabilities().buttons;
         for group in groups.as_array().into_iter().flatten() {
             let (Some(chat), title) = (group["chat_id"].as_str(), group["title"].as_str().unwrap_or("Chat")) else { continue };
             for pending in operator::pending(group) {
-                if pending.id.is_empty() || !settings.forwards(chat, pending.kind) {
+                if pending.id.is_empty() || !settings.forwards(chat, pending.kind) || recipients.iter().all(|to| self.ledger.sent(to, chat, pending.kind, pending.id)) {
                     continue;
                 }
+                let link = Self::link(chat);
+                let text = settings.present(&notice_text(title, &link, &pending));
+                let rich = actions.then(|| request::request(settings, title, &link, &pending, group));
                 for to in recipients {
                     if self.ledger.sent(to, chat, pending.kind, pending.id) {
                         continue;
                     }
                     let key = format!("{}:request:{}:{}:{chat}:{}:{}", self.name, to.person, to.conversation, pending.kind.as_str(), pending.id);
-                    match transport.post(to, &settings.present(&notice_text(title, &Self::link(chat), &pending)), None, &key) {
+                    let posted = match &rich {
+                        Some(rich) => transport.post_request(to, rich, &text, &key),
+                        None => transport.post(to, &text, None, &key),
+                    };
+                    match posted {
                         Posted::Sent(Some(message)) => {
-                            self.ledger.record(Notice { person: to.person.clone(), conversation: to.conversation.clone(), message, chat: chat.into(), kind: pending.kind, id: pending.id.into(), loopback: pending.loopback });
+                            self.ledger.record(Notice { person: to.person.clone(), conversation: to.conversation.clone(), message, chat: chat.into(), kind: pending.kind, id: pending.id.into(), loopback: pending.loopback, settled: false, actions });
                             self.save();
                         }
                         // Without a message ID a reply could not be routed: retry.
@@ -539,6 +647,18 @@ impl Channel {
                     }
                 }
             }
+        }
+        // Requests decided elsewhere (the website, the TUI, another recipient)
+        // or expired: their messages stop offering actions.
+        let open = open_requests(groups);
+        let closed = self.ledger.notices.iter()
+            .filter(|n| !n.settled && recipients.iter().any(|to| mine(to)(&n.person, &n.conversation)) && !open.contains(&(n.chat.as_str(), n.kind, n.id.as_str())))
+            .cloned().collect::<Vec<_>>();
+        for notice in &closed {
+            self.settle(transport, notice, &request::closed());
+        }
+        if !closed.is_empty() {
+            self.save();
         }
         retry
     }
