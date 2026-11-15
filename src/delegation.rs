@@ -364,13 +364,15 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
         budget_for(state, &parent, d.input.role, 0, true)?;
         let resources = if d.input.role == Role::Judge { vec![] } else { crate::services::grants(state, &parent) };
         crate::scheduler::admit(&state.runtime)?;
+        // A child joins its team room: the parent chat's link, else its lead's.
+        let room = crate::rooms::team_room(state, &chat.id);
         let id = chat::create(state);
         let child_chat = state.chats.last_mut().unwrap();
         child_chat.actor = parent.actor.clone();
         child_chat.parent_chat = parent.chat_id.clone();
         child_chat.model=Some(crate::providers::Model::captured(d.backend,d.model.clone()));
         child_chat.lenses = parent.lenses.clone();
-        child_chat.room = chat.room.clone();
+        child_chat.room = room;
         child_chat.title = d.input.objective.chars().take(60).collect();
         child_chat.project = chat.project.as_ref().and_then(|p|p.approved());
         if let Some(project) = &mut child_chat.project {

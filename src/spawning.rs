@@ -123,7 +123,7 @@ pub fn definition() -> Value {
     definition
 }
 fn inherited_definition()->Value {
-    json!({"name":"control_agent_spawn","description":"Start independent or background worker objectives without pausing this conversation. Give each worker ownership of its goal and dependencies, including ongoing infrastructure when needed. Workers coordinate directly with same-task peers; keep the root chat for steering and consequential decisions rather than relaying routine updates. Continue useful work in this session; spawning does not require ending it. Control queues completion updates automatically. Yield when genuinely waiting with no independent work remaining. Use control_agent_spawn_status only when a current status check is needed, never in a polling loop. Configured team budget (default 64), pending-intent budget and 24000-byte payload apply independently of model slots. Children inherit captured model, lenses, actor, linked room and immutable baseline, never live edits. Mentioning a room in an objective does not link it. First Improve turns without a published baseline must checkpoint via control_agent_spawn_blocking or finish first. Depth limit 2; children and blocking spawns share one root budget. Cancellation fences backlog and descendants; later originating-chat turns can inspect or cancel retained batches.","inputSchema":{"type":"object","properties":{"objectives":{"type":"array","description":"One concise task per child, 1–2000 characters each and 24000 UTF-8 bytes total. Example: [\"Inspect the API\",\"Review the tests\"]. Request identity comes from the transport; do not supply nonce or identity fields.","minItems":1,"items":{"type":"string","minLength":1,"maxLength":2000}},"role":{"type":"string","enum":["worker","judge"],"default":"worker","description":"judge starts exactly one isolated read-only advisor candidate with no resources, within the root task's advisor allowance (default 1), separate from its one blocking judge review. Available only when the root chat selects the advisor lens; request it as a bot to make it the team's advisor."}},"required":["objectives"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
+    json!({"name":"control_agent_spawn","description":"Start independent or background worker objectives without pausing this conversation. Give each worker ownership of its goal and dependencies, including ongoing infrastructure when needed. Workers coordinate directly with same-task peers; keep the root chat for steering and consequential decisions rather than relaying routine updates. Continue useful work in this session; spawning does not require ending it. Control queues completion updates automatically. Yield when genuinely waiting with no independent work remaining. Use control_agent_spawn_status only when a current status check is needed, never in a polling loop. Configured team budget (default 64), pending-intent budget and 24000-byte payload apply independently of model slots. Children inherit captured model, lenses, actor and immutable baseline, never live edits, and share this chat's team room (its linked room, else its lead's), so objectives need not name a room; agents cannot create rooms. First Improve turns without a published baseline must checkpoint via control_agent_spawn_blocking or finish first. Depth limit 2; children and blocking spawns share one root budget. Cancellation fences backlog and descendants; later originating-chat turns can inspect or cancel retained batches.","inputSchema":{"type":"object","properties":{"objectives":{"type":"array","description":"One concise task per child, 1–2000 characters each and 24000 UTF-8 bytes total. Example: [\"Inspect the API\",\"Review the tests\"]. Request identity comes from the transport; do not supply nonce or identity fields.","minItems":1,"items":{"type":"string","minLength":1,"maxLength":2000}},"role":{"type":"string","enum":["worker","judge"],"default":"worker","description":"judge starts exactly one isolated read-only advisor candidate with no resources, within the root task's advisor allowance (default 1), separate from its one blocking judge review. Available only when the root chat selects the advisor lens; request it as a bot to make it the team's advisor."}},"required":["objectives"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
 }
 pub fn management_definitions() -> Vec<Value> {
     vec![
@@ -251,7 +251,8 @@ pub fn request(
         project.head = attempt.project_parent.clone();
     }
     let parent_chat = parent.id.clone();
-    let room = parent.room.clone();
+    // Children join the team room: this chat's link, else its lead's.
+    let room = crate::rooms::team_room(state, &parent.id);
     let design = parent.design_context.clone();
     let before = (state.chats.len(), state.runtime.runs.len());
     let previous_notice = state.runtime.notice.clone();
@@ -316,6 +317,8 @@ fn materialize(state: &mut State, index: usize, batch_index: usize) -> Result<()
         .ok_or("Spawn batch has no frozen source seed.")?;
     let offset = batch.children.len();
     let role = batch.input.role();
+    // Backlog admitted after the lead linked a room still joins it.
+    let room = seed.room.clone().or_else(|| crate::rooms::team_room(state, &seed.parent_chat));
     let capacity = control_core::scheduling::MAX_PENDING.saturating_sub(
         state
             .runtime
@@ -345,7 +348,7 @@ fn materialize(state: &mut State, index: usize, batch_index: usize) -> Result<()
             .as_ref()
             .filter(|l| l.len() == 1)
             .map(|l| l[0].clone());
-        child.room = seed.room.clone();
+        child.room = room.clone();
         child.design_context = seed.design.clone();
         child.project = seed.project.clone();
         child.title = objective.chars().take(60).collect();

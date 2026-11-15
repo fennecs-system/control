@@ -475,3 +475,56 @@ fn a_late_reply_cannot_remove_the_next_mailbox_request() {
     assert!(take_request(&dir).is_err());
     fs::remove_dir_all(dir).unwrap();
 }
+
+fn room_failure(state: &mut State, run: &str, tool: &str, args: Value) -> String {
+    let response = worker_rpc(state, run, &json!({"nonce":"9-9","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":tool,"arguments":args}}}));
+    crate::toolbox::failure_text(&response).unwrap().to_owned()
+}
+
+#[test]
+fn omitted_room_uses_the_team_room_and_unknown_names_point_to_it() {
+    let mut state = State::default();
+    let (lead, _) = active(&mut state, None);
+    let team = format!("research/{lead}");
+    state.chats[0].room = Some(team.clone());
+    // A worker started before or without inheriting a link still finds its team.
+    let (child, child_run) = active(&mut state, Some(&lead));
+    assert_eq!(state.chats[1].room, None);
+    assert_eq!(room_call(&mut state, &child_run, "control_room_list", json!({}), "2-1")["attached"], team);
+    assert_eq!(room_call(&mut state, &child_run, "control_room_read", json!({}), "2-2")["room"], team);
+    let claim = room_call(&mut state, &child_run, "control_room_claim", json!({"key":"m1","action":"acquire"}), "2-3");
+    assert_eq!(claim["applied"], true, "{claim}");
+    assert_eq!(state.collective.claims[0].room, team);
+    // A mistaken name fails visibly and names the team room instead of redirecting.
+    let error = room_failure(&mut state, &child_run, "control_room_post", json!({"room":"castle","message":"joined"}));
+    assert_eq!(error, format!("Unknown room castle. This chat's team room is {team}; omit room to use it."));
+    assert!(state.collective.posts.is_empty() && state.chats[1].room.is_none());
+    let posted = room_call(&mut state, &child_run, "control_room_post", json!({"message":"joined"}), "2-4");
+    assert_eq!(posted["room"], team);
+    assert_eq!(state.chats.iter().find(|chat| chat.id == child).unwrap().room.as_deref(), Some(team.as_str()), "posting links it to hear replies");
+    // Neither an unrelated task nor another actor's descendant inherits the link.
+    let (_, other_run) = active(&mut state, None);
+    assert!(room_failure(&mut state, &other_run, "control_room_read", json!({})).contains("No room attached"));
+    assert_eq!(room_failure(&mut state, &other_run, "control_room_post", json!({"room":"castle","message":"x"})), "Unknown room. Call control_room_list.");
+    let (_, foreign_run) = active(&mut state, Some(&lead));
+    state.chats[0].actor = crate::identity::Actor::Unknown;
+    assert!(room_failure(&mut state, &foreign_run, "control_room_read", json!({})).contains("No room attached"));
+}
+
+#[test]
+fn an_advisor_does_not_post_through_its_inherited_team_room() {
+    let mut state = State::default();
+    let lead = crate::chat::create(&mut state);
+    state.chats[0].lenses = Some(vec!["advisor".into()]);
+    state.chats[0].room = Some(format!("general/{lead}"));
+    crate::chat::send(&mut state, &lead, "Lead the team", "test").unwrap();
+    state.runtime.runs[0].status = "completed".into();
+    let (advisor, run) = active(&mut state, Some(&lead));
+    let session = state.runtime.runs.iter_mut().find(|r| r.id == run).unwrap();
+    session.persona = Some(crate::delegation::Persona { role: crate::delegation::Role::Judge, root: "root".into(), depth: 1, parent: None });
+    crate::bots::command(&mut state, &advisor, "on").unwrap();
+    assert!(state.bots.advises(&advisor));
+    assert!(room_failure(&mut state, &run, "control_room_post", json!({"message":"Build claim looks abandoned"})).contains("does not post to rooms"));
+    assert!(state.collective.posts.is_empty());
+    assert_eq!(state.chats[1].room, None, "a refused post links nothing");
+}
