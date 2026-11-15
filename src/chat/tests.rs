@@ -221,7 +221,7 @@ fn conversation_index_preserves_first_matches_and_missing_run_replies() {
     assert!(!html.contains("Later duplicate"));
 }
 #[test]
-fn completed_file_diffs_are_visible_escaped_and_separate_from_command_logs() {
+fn completed_file_diffs_are_collapsed_escaped_and_separate_from_command_logs() {
     let mut state = State::default();
     let id = create(&mut state);
     send(&mut state, &id, "Edit the file", "test").unwrap();
@@ -245,7 +245,7 @@ fn completed_file_diffs_are_visible_escaped_and_separate_from_command_logs() {
         .next()
         .unwrap();
     assert!(
-        diff.split_ascii_whitespace()
+        !diff.split_ascii_whitespace()
             .any(|attribute| attribute == "open")
     );
     assert!(html.contains("diff-line diff-add'>+&lt;script&gt;"));
