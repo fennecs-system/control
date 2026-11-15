@@ -681,7 +681,7 @@ fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
     run.bot_turn = Some(Box::new(Turn { bot: request.bot.0.clone(), turn: request.turn.0, reasons:request.reasons.clone(), recovery }));
     let id = run.id.clone();
     let session = state.chats.iter_mut().find(|session| session.id == chat).unwrap();
-    session.messages.push(crate::chat::Message { text: format!("Bot woke: {woke}"), run_id: Some(id), reply: String::new() });
+    session.messages.push(crate::chat::Message { speaker: Default::default(), text: format!("Bot woke: {woke}"), run_id: Some(id), reply: String::new() });
     session.revision = session.revision.saturating_add(1);
     Ok(())
 }
@@ -1142,7 +1142,7 @@ fn advance(state: &mut State) -> (bool, bool) {
         let origins = decided.iter().map(|a| a.origin.as_str()).collect::<Vec<_>>();
         let task = state.runtime.runs.iter().rev().find(|run| run.chat_id.as_deref() == Some(requester.as_str())).map(|run| run.objective.clone()).unwrap_or_default();
         let outcome = crate::approvals::resume(state, crate::approvals::Decisions {
-            chat: &requester, origins: &origins, heading: "Bot decisions", lines: &lines,
+            chat: &requester, origins: &origins, heading: crate::application::approval_resume::BOT_DECISIONS, lines: &lines,
             instruction: "Continue the original task. Approved chats now sleep until room messages or their timers wake them.",
             task: &task, kind: RunKind::BotDecision, source: "bot", grants: Vec::new(),
         });

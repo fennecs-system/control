@@ -35,6 +35,25 @@ fn advisor_notes_render_as_a_distinct_box() {
 }
 
 #[test]
+fn control_notices_render_as_one_muted_line_not_user_input() {
+    let app = App {
+        detail: json!({"messages":[
+            {"text":"Run the server","reply":"Started","kind":"task","status":"completed"},
+            {"text":"Port decisions\nrelay (p-1): approved.\nweb (p-2): denied.","reply":"","run_id":null,"status":"completed","notice":true}
+        ]}),
+        ..Default::default()
+    };
+    let text = app.transcript();
+    let lines = text.lines.iter().map(ToString::to_string).collect::<Vec<_>>();
+    let at = lines.iter().position(|line| line == "◇ Control · Port decisions: relay (p-1): approved.").unwrap();
+    assert_eq!(lines[at + 1], "  web (p-2): denied.");
+    assert!(text.lines[at..at + 2].iter().all(|line| line.style.bg != Some(history::CARD)), "not a user card");
+    assert!(!lines.iter().any(|line| line == "◇ Event"), "one notice line, not an event block");
+    let user = lines.iter().position(|line| line == "Run the server").unwrap();
+    assert_eq!(text.lines[user].style.bg, Some(history::CARD), "operator input keeps its card");
+}
+
+#[test]
 fn github_inspection_uses_the_typed_read_without_sending_a_chat_message() {
     use std::io::{BufRead, Read, Write};
     for (input,tool,arguments) in [

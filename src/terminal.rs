@@ -418,6 +418,13 @@ impl App {
                     lines.push(Line::from(""));
                     continue;
                 }
+                if message["notice"] == true {
+                    // A Control notice without a run (operator decisions): muted lines, no reply.
+                    let text=control_context::agent_policy::notice_line(&clean(message["text"].as_str().unwrap_or("")));
+                    lines.extend(text.lines().enumerate().map(|(index,line)|Line::styled(if index==0 {format!("◇ {line}")} else {format!("  {line}")},Style::default().fg(Color::Rgb(133,133,143)))));
+                    lines.push(Line::from(""));
+                    continue;
+                }
                 let user=control_context::agent_policy::MessageSpeaker::for_run_kind(message["kind"].as_str())==control_context::agent_policy::MessageSpeaker::User;
                 if user {
                     lines.push(history::user_line(Line::from(" ")));

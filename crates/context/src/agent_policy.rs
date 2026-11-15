@@ -76,8 +76,10 @@ impl std::fmt::Display for RunKind {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum MessageSpeaker {
+    #[default]
     User,
     Control,
 }
@@ -88,11 +90,24 @@ impl MessageSpeaker {
         kind.and_then(RunKind::parse).map_or(Self::User, RunKind::speaker)
     }
 
+    pub fn is_user(&self) -> bool {
+        *self == Self::User
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::User => "You",
             Self::Control => "Control",
         }
+    }
+}
+
+/// A Control notice recorded without a run (such as operator decisions) as one
+/// compact transcript line: "Control · Port decisions: <lines>".
+pub fn notice_line(text: &str) -> String {
+    match text.split_once('\n') {
+        Some((heading, lines)) => format!("{} · {heading}: {lines}", MessageSpeaker::Control.label()),
+        None => format!("{} · {text}", MessageSpeaker::Control.label()),
     }
 }
 

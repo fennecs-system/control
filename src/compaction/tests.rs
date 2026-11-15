@@ -3,7 +3,7 @@ pub(super) fn fixture() -> (State, Job) {
     let mut state = State::default();
     let chat = crate::chat::create(&mut state);
     for index in 0..32 {
-        state.chats[0].messages.push(crate::chat::Message {
+        state.chats[0].messages.push(crate::chat::Message { speaker: Default::default(),
             text: format!("Entry {index}: preserve the original task and resource id svc-a"),
             run_id: None,
             reply: "Verified a finding".into(),
@@ -230,7 +230,7 @@ fn shared_local_summaries_feed_both_cli_chat_projections() {
         assert!(projected.text.contains("LOCAL SUMMARY SENTINEL"));
         assert!(projected.text.contains("Continue the task"));
     }
-    state.chats[0].messages.push(crate::chat::Message {
+    state.chats[0].messages.push(crate::chat::Message { speaker: Default::default(),
         text: "New appended evidence".into(),
         run_id: None,
         reply: "A fresh result".into(),
@@ -271,7 +271,7 @@ fn paged_history_exceeds_old_entry_and_text_limits_with_bounded_model_inputs() {
     private_directory(&dir).unwrap();
     state.chats[0].messages.resize(
         5000,
-        crate::chat::Message {
+        crate::chat::Message { speaker: Default::default(),
             text: "Retained constraint ".repeat(30),
             reply: "Verified finding".into(),
             run_id: None,

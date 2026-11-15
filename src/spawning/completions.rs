@@ -189,7 +189,7 @@ pub(super) fn reconcile(
             response: response.clone(),
         }));
     let session = &mut state.chats[chat_index];
-    session.messages.push(chat::Message {
+    session.messages.push(chat::Message { speaker: Default::default(),
         text: "Background agents finished".into(),
         run_id: Some(response),
         reply: String::new(),

@@ -89,7 +89,7 @@ fn wake(state: &mut State, chat: &str, kind: crate::runtime::RunKind, text: &str
     run.status = "completed".into();
     *run.result = "Read room, read watch, checked status, acknowledged; still waiting".into();
     let id = run.id.clone();
-    state.chats[0].messages.push(crate::chat::Message {
+    state.chats[0].messages.push(crate::chat::Message { speaker: Default::default(),
         text: text.into(),
         run_id: Some(id.clone()),
         reply: String::new(),

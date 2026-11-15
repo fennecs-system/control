@@ -10,7 +10,7 @@ pub(crate) struct Decisions<'a> {
     /// Requester chat and the runs that made the requests.
     pub chat: &'a str,
     pub origins: &'a [&'a str],
-    /// e.g. "Port decisions"; also the chat note's heading.
+    /// One of `approval_resume::HEADINGS`; also the chat note's heading.
     pub heading: &'a str,
     pub lines: &'a str,
     /// What the resumed agent should do next.

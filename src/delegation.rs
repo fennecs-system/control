@@ -350,7 +350,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
             child.id, child.status
         );
         let session = state.chats.iter_mut().find(|c| c.id == chat.id).unwrap();
-        session.messages.push(chat::Message {
+        session.messages.push(chat::Message { speaker: Default::default(),
             text: format!(
                 "Delegated {} · {}",
                 if is_judge(&child) { "review" } else { "task" },
@@ -414,7 +414,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
             .last_mut()
             .unwrap()
             .messages
-            .push(chat::Message {
+            .push(chat::Message { speaker: Default::default(),
                 text: d.input.objective,
                 run_id: Some(child_id.clone()),
                 reply: String::new(),

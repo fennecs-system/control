@@ -72,7 +72,7 @@ fn advance_with_wake(state: &mut State, save: impl FnOnce(&State) -> io::Result<
     let notice = state.runtime.notice.clone();
     let origin_ids = origins.iter().map(String::as_str).collect::<Vec<_>>();
     let outcome = crate::approvals::resume(state, crate::approvals::Decisions {
-        chat: &chat_id, origins: &origin_ids, heading: "Port decisions", lines: &decisions,
+        chat: &chat_id, origins: &origin_ids, heading: crate::application::approval_resume::PORT_DECISIONS, lines: &decisions,
         instruction: "Continue the original task within these grants. Do not assume traffic is ready; inspect status first.",
         task: &task, kind: RunKind::PortDecision, source: "port-decision", grants,
     });

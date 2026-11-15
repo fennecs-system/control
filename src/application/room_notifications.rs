@@ -91,7 +91,7 @@ pub(crate) fn queue(
     Ok(Change::Queue(Box::new(Delivery {
         run,
         target,
-        message: Message {
+        message: Message { speaker: Default::default(),
             text: format!("Room #{room} updated"),
             run_id: Some(id),
             reply: String::new(),

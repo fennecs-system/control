@@ -364,7 +364,7 @@ pub fn answer(
     *state.runtime.runs[index].result =
         summary(state.runtime.runs[index].question.as_ref().unwrap());
     let session = &mut state.chats[session_index];
-    session.messages.push(chat::Message {
+    session.messages.push(chat::Message { speaker: Default::default(),
         text: answer,
         run_id: Some(next_id),
         reply: String::new(),

@@ -192,12 +192,12 @@ fn conversation_index_preserves_first_matches_and_missing_run_replies() {
     let mut duplicate = state.runtime.runs[0].clone();
     duplicate.result = "Later duplicate".into();
     state.runtime.runs.push(duplicate);
-    state.chats[0].messages.push(Message {
+    state.chats[0].messages.push(Message { speaker: Default::default(),
         text: "Missing run".into(),
         run_id: Some("missing".into()),
         reply: "Retained reply".into(),
     });
-    state.chats[0].messages.push(Message {
+    state.chats[0].messages.push(Message { speaker: Default::default(),
         text: "No run".into(),
         run_id: None,
         reply: "Local reply".into(),
@@ -493,7 +493,7 @@ fn improve_mode_persists_discussion_and_can_exit_without_changing_queued_authori
 fn attempt_activity_and_context_trimming_survive_serialization_and_escape_html() {
     let mut state = State::default();
     let id = create(&mut state);
-    state.chats[0].messages.push(Message {
+    state.chats[0].messages.push(Message { speaker: Default::default(),
         text: "x".repeat(21000),
         run_id: None,
         reply: String::new(),
@@ -593,7 +593,7 @@ fn preview_library_and_chat() {
     state.chats[0].lenses = Some(vec!["engineering".into(), "evidence".into()]);
     state.chats[0].room = Some("engineering".into());
     state.chats[0].title = "Architecture discussion".into();
-    state.chats[0].messages.push(Message{text:"How should the context fit together?".into(),run_id:None,reply:"Engineering composes repository tools, evidence guidance, and architecture notes. Each run keeps its resolved context.".into()});
+    state.chats[0].messages.push(Message { speaker: Default::default(), text:"How should the context fit together?".into(),run_id:None,reply:"Engineering composes repository tools, evidence guidance, and architecture notes. Each run keeps its resolved context.".into()});
     state.collective.posts.push(crate::rooms::Post { room: "engineering".into(), text: "The layout now keeps room navigation on the left and linked chats on the right. Shared updates use the same theme as the chat window.".into(), chat: Some(id.clone()), run: None, key: String::new(), delivery: Default::default() });
     let inline = |html: String| {
         let mut html = html;
@@ -755,7 +755,7 @@ fn optional_guidance_survives_child_wake_and_library_edits_without_retroactive_c
         .find(|chat| chat.id == id)
         .unwrap()
         .messages
-        .push(Message {
+        .push(Message { speaker: Default::default(),
             text: "Inspect a changed observation".into(),
             run_id: Some(wake.clone()),
             reply: String::new(),
