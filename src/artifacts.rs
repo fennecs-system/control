@@ -40,7 +40,8 @@ fn fail(message: &str) -> io::Error {
 fn root() -> io::Result<PathBuf> {
     crate::config::state("artifacts").map_err(io::Error::other)
 }
-fn excluded(name: &str) -> bool {
+/// Credential, Control-internal and generated names never leave a workspace.
+pub(crate) fn excluded(name: &str) -> bool {
     name.starts_with(".control-")
         || matches!(
             name,
@@ -58,7 +59,7 @@ fn excluded(name: &str) -> bool {
         )
         || name.starts_with(".env.")
 }
-fn valid_path(path: &str) -> bool {
+pub(crate) fn valid_path(path: &str) -> bool {
     !path.is_empty()
         && path.len() <= 1024
         && path.split('/').count() <= 32

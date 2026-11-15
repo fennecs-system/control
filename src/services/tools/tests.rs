@@ -14,6 +14,7 @@ impl ServiceOps for Recorder {
             ServiceCall::Stop(service) => format!("stop {}", id(service)),
             ServiceCall::Exec(_) => "exec".to_owned(),
             ServiceCall::ExecStatus(_) => "exec_status".to_owned(),
+            ServiceCall::Copy(_) => "copy".to_owned(),
         };
         self.0.lock().unwrap().push(format!(
             "{}/{}/{} {call}",

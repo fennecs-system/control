@@ -42,8 +42,18 @@ pub(super) struct Execution {
     truncated: bool,
     exit_code: Option<i32>,
     diagnostic: String,
+    /// A file copy from the requesting attempt's workspace. It shares the
+    /// command lane, receipts and recovery; `command` stays empty, so an older
+    /// Control that ignores this field would launch nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    copy: Option<copy::Transfer>,
 }
 impl Execution {
+    /// Command, operator label and copy request, for sibling test suites.
+    #[cfg(test)]
+    pub(super) fn request(&self) -> (&str, &str, Option<&copy::Transfer>) {
+        (&self.command, &self.display_command, self.copy.as_ref())
+    }
     /// The first line of a command still running, for operator views.
     pub(super) fn running_label(&self) -> Option<String> {
         let command = if self.display_command.is_empty() { &self.command } else { &self.display_command };
@@ -89,7 +99,7 @@ impl Receipt {
         json!({"execution_id":self.id,"status":self.status,"exit_code":self.exit_code,"diagnostic":self.diagnostic,"output":"","output_evicted":true,"output_truncated":true,"output_limit_bytes":OUTPUT})
     }
 }
-fn live_attempt(state: &State, run: &str, attempt: &str) -> bool {
+pub(super) fn live_attempt(state: &State, run: &str, attempt: &str) -> bool {
     state.runtime.runs.iter().any(|r| {
         r.id == run
             && r.status == "running"
@@ -191,18 +201,18 @@ pub(crate) fn enqueue_test(
 }
 pub(super) fn definitions() -> Vec<Value> {
     vec![
-        json!({"name":"control_service_exec","description":"Run a command asynchronously inside an exact chat-owned running service, using its private files and approved loopback relays. Use shell commands/heredocs to create task files, configure clients or install dependencies; no host paths, mounts or engine options. Returns an execution_id; inspect control_service_exec_status. One active command per service. Commands are bounded by timeout_seconds; they survive model turns only until then. Use control_watch_start for long-running work: restart=transient runs finite work such as large downloads once; restart=permanent restarts persistent clients, servers or daemons after exit. Both survive model turns without a task deadline. Use exec for bounded commands: a timed-out or interrupted command is stopped inside the service with every process it started, detached ones included. The service keeps running; it is stopped only if that cannot be verified. Background programs must redirect their output to private files; the service foreground process must remain alive. Uncertain commands are never replayed.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"command":{"type":"string","minLength":1,"maxLength":16000},"timeout_seconds":{"type":"integer","minimum":1,"maximum":1800,"default":120}},"required":["service_id","command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":true}}),
+        json!({"name":"control_service_exec","description":"Run a command asynchronously inside an exact chat-owned running service, using its private files and approved loopback relays. Use shell commands/heredocs to create small task files, configure clients or install dependencies; bring files or trees from your task workspace with control_service_copy instead. No host paths, mounts or engine options. Returns an execution_id; inspect control_service_exec_status. One active command per service. Commands are bounded by timeout_seconds; they survive model turns only until then. Use control_watch_start for long-running work: restart=transient runs finite work such as large downloads once; restart=permanent restarts persistent clients, servers or daemons after exit. Both survive model turns without a task deadline. Use exec for bounded commands: a timed-out or interrupted command is stopped inside the service with every process it started, detached ones included. The service keeps running; it is stopped only if that cannot be verified. Background programs must redirect their output to private files; the service foreground process must remain alive. Uncertain commands are never replayed.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"command":{"type":"string","minLength":1,"maxLength":16000},"timeout_seconds":{"type":"integer","minimum":1,"maximum":1800,"default":120}},"required":["service_id","command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":true}}),
         json!({"name":"control_service_exec_status","description":"Read a chat-owned service command's bounded live output, exit code and durable outcome. Use a fresh execution_id only for a deliberate new command; retries with the same request identity never replay effects.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"execution_id":{"type":"string"}},"required":["service_id","execution_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
     ]
 }
-fn hash(value: &[u8]) -> String {
+pub(super) fn hash(value: &[u8]) -> String {
     ring::digest::digest(&ring::digest::SHA256, value)
         .as_ref()
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
 }
-fn owned(
+pub(super) fn owned(
     state: &State,
     run: &str,
     generation: &str,
@@ -243,6 +253,16 @@ pub(super) fn status(shared: &Arc<Mutex<State>>, run: &str, generation: &str, no
         })
         .ok_or_else(|| fail("Service command not found"))
 }
+/// One request in a service's single command lane: a shell command or a copy.
+pub(super) struct Work {
+    pub(super) service_id: String,
+    /// Argument digest; a nonce reused with different arguments is refused.
+    pub(super) digest: String,
+    pub(super) command: String,
+    pub(super) display: String,
+    pub(super) timeout_seconds: u64,
+    pub(super) copy: Option<copy::Transfer>,
+}
 fn admit(
     state: &mut State,
     run: &str,
@@ -252,6 +272,18 @@ fn admit(
     input: Input,
     save: impl FnOnce(&State) -> io::Result<()>,
 ) -> io::Result<Value> {
+    let digest = hash(&serde_json::to_vec(&(&input.command, input.timeout_seconds)).map_err(fail)?);
+    let work = Work {
+        service_id: input.service_id,
+        digest,
+        command: input.command.0.to_string(),
+        display: input.command.0.chars().take(2000).collect(),
+        timeout_seconds: input.timeout_seconds,
+        copy: None,
+    };
+    admit_work(state, run, generation, nonce, node, work, save)
+}
+fn valid_nonce(nonce: &str) -> io::Result<()> {
     if nonce.is_empty()
         || nonce.len() > 128
         || !nonce
@@ -260,36 +292,53 @@ fn admit(
     {
         return Err(fail("Invalid service command identity"));
     }
-    if !(1..=1800).contains(&input.timeout_seconds) {
+    Ok(())
+}
+/// The durable execution ID of one tool request; shared by commands and copies.
+fn identity(service_id: &str, run: &str, generation: &str, nonce: &str) -> io::Result<String> {
+    Ok(hash(&serde_json::to_vec(&(service_id, run, generation, nonce)).map_err(fail)?))
+}
+/// The recorded outcome of an already-admitted request, never a new effect.
+pub(super) fn previous(service: &Service, run: &str, generation: &str, nonce: &str, digest: &str) -> io::Result<Option<Value>> {
+    valid_nonce(nonce)?;
+    let id = identity(service.resource.id.as_str(), run, generation, nonce)?;
+    let found = service
+        .executions
+        .iter()
+        .find(|e| e.id == id)
+        .map(|e| (e.digest == digest, e.summary()))
+        .or_else(|| {
+            service
+                .command_receipts
+                .iter()
+                .find(|r| r.id == id)
+                .map(|r| (r.digest == digest, r.summary()))
+        });
+    match found {
+        Some((true, value)) => Ok(Some(value)),
+        Some((false, _)) => Err(fail("Service command identity was reused with different arguments")),
+        None => Ok(None),
+    }
+}
+pub(super) fn admit_work(
+    state: &mut State,
+    run: &str,
+    generation: &str,
+    nonce: &str,
+    node: &NodeId,
+    work: Work,
+    save: impl FnOnce(&State) -> io::Result<()>,
+) -> io::Result<Value> {
+    valid_nonce(nonce)?;
+    if !(1..=1800).contains(&work.timeout_seconds) {
         return Err(fail("timeout_seconds must be 1–1800"));
     }
-    let index = owned(state, run, generation, node, &input.service_id)?;
-    let id = hash(
-        &serde_json::to_vec(&(input.service_id.as_str(), run, generation, nonce)).map_err(fail)?,
-    );
-    let digest = hash(&serde_json::to_vec(&(&input.command, input.timeout_seconds)).map_err(fail)?);
+    let index = owned(state, run, generation, node, &work.service_id)?;
+    let id = identity(&work.service_id, run, generation, nonce)?;
+    let digest = work.digest;
     let service = &state.services[index];
-    if let Some(previous) = service.executions.iter().find(|e| e.id == id) {
-        return if previous.digest == digest {
-            Ok(previous.summary())
-        } else {
-            Err(fail(
-                "Service command identity was reused with different arguments",
-            ))
-        };
-    }
-    if let Some(receipt) = service
-        .command_receipts
-        .iter()
-        .find(|receipt| receipt.id == id)
-    {
-        return if receipt.digest == digest {
-            Ok(receipt.summary())
-        } else {
-            Err(fail(
-                "Service command identity was reused with different arguments",
-            ))
-        };
+    if let Some(value) = previous(service, run, generation, nonce, &digest)? {
+        return Ok(value);
     }
     if !matches!(service.resource.phase, Phase::Running(_)) || service.resource.lease.expired(now())
     {
@@ -346,14 +395,15 @@ fn admit(
         digest,
         run: run.into(),
         attempt: generation.into(),
-        command: input.command.0.to_string(),
-        display_command: input.command.0.chars().take(2000).collect(),
-        timeout_seconds: input.timeout_seconds,
+        command: work.command,
+        display_command: work.display,
+        timeout_seconds: work.timeout_seconds,
         status: Status::Requested,
         output: String::new(),
         truncated: false,
         exit_code: None,
         diagnostic: String::new(),
+        copy: work.copy,
     };
     let value = execution.summary();
     state.services[index].executions.push(execution);
@@ -404,20 +454,37 @@ fn capture(
 }
 /// Shutdown cancellation interrupts the command like a failed `cancel` check.
 fn capture_with(
-    mut command: Command,
+    command: Command,
     timeout: Duration,
     cancel: impl Fn() -> bool,
     progress: impl Fn(&Output),
     shutdown: &CancelToken,
 ) -> io::Result<ResultOutput> {
+    capture_fed(command, timeout, cancel, progress, shutdown, None)
+}
+/// Writes a command's stdin on its own thread; dropping the pipe ends input.
+/// Killing the command breaks the pipe, so the writer cannot outlive it.
+pub(super) type Feed = Box<dyn FnOnce(std::process::ChildStdin) + Send>;
+fn capture_fed(
+    mut command: Command,
+    timeout: Duration,
+    cancel: impl Fn() -> bool,
+    progress: impl Fn(&Output),
+    shutdown: &CancelToken,
+    feed: Option<Feed>,
+) -> io::Result<ResultOutput> {
     if timeout.is_zero() || cancel() {
         return Err(fail("Service command is no longer eligible"));
     }
     let mut child = command
-        .stdin(Stdio::null())
+        .stdin(if feed.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()?;
+    let writer = match (feed, child.stdin.take()) {
+        (Some(feed), Some(stdin)) => Some(std::thread::spawn(move || feed(stdin))),
+        _ => None,
+    };
     let mut stdout = child
         .stdout
         .take()
@@ -442,6 +509,9 @@ fn capture_with(
         Ok(watched) => watched,
         Err(error) => {
             let _ = reader.join();
+            if let Some(writer) = writer {
+                let _ = writer.join();
+            }
             return Err(error);
         }
     };
@@ -468,6 +538,9 @@ fn capture_with(
         }
     };
     let _ = reader.join();
+    if let Some(writer) = writer {
+        let _ = writer.join();
+    }
     let status = status?;
     let output = Arc::try_unwrap(output)
         .map_err(|_| fail("Output reader did not finish"))?
@@ -585,6 +658,25 @@ fn reap(service: &Service, execution: &str) -> bool {
     capture(command, Duration::from_secs(10), || false, |_| {}).is_ok_and(|r| r.exit_code == Some(0) && !r.timed_out)
 }
 fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
+    // A copy reads its requesting attempt's live workspace. A source that is
+    // gone, unsafe or over its bounds fails before anything enters the service.
+    let copy = match execution.copy.as_ref().map(|transfer| copy::Job::prepare(&shared, &service, &execution.run, &execution.attempt, transfer)) {
+        None => None,
+        Some(Ok(job)) => Some(job),
+        Some(Err(error)) => {
+            let _ = update(
+                &shared,
+                &service,
+                &execution.id,
+                |e| {
+                    e.status = Status::Failed;
+                    e.diagnostic = format!("Nothing was copied: {error}");
+                },
+                true,
+            );
+            return;
+        }
+    };
     let result = (|| -> io::Result<ResultOutput> {
         identity::authorize(&service.actor, Action::Task).map_err(fail)?;
         let id = service
@@ -598,10 +690,17 @@ fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
         if observed.status != "running" || service.resource.lease.expired(now()) {
             return Err(fail("Service is no longer running"));
         }
-        let command = crate::engine::exec(id.as_str(), &format!("{}:{}", service.uid, service.gid), Some("/workspace"), &[(MARKER, &execution.id)], &["bash", "-c", &launch(&execution.command)]);
+        let user = format!("{}:{}", service.uid, service.gid);
+        let marker = [(MARKER, execution.id.as_str())];
+        // Both run as the service user under the same marker, so a copy that
+        // outlives its client is reaped exactly like a command.
+        let (command, feed) = match &copy {
+            Some(job) => (crate::engine::exec_input(id.as_str(), &user, Some("/workspace"), &marker, &["bash", "-c", copy::EXTRACT]), Some(job.feed())),
+            None => (crate::engine::exec(id.as_str(), &user, Some("/workspace"), &marker, &["bash", "-c", &launch(&execution.command)]), None),
+        };
         let checked = std::cell::Cell::new(Instant::now());
         let authorized = std::cell::Cell::new(true);
-        capture(
+        capture_fed(
             command,
             Duration::from_secs(
                 execution
@@ -631,8 +730,12 @@ fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
                     false,
                 );
             },
+            &crate::shutdown::token(),
+            feed,
         )
     })();
+    // A copy completes only when the whole archive was streamed and extracted.
+    let streamed = copy.as_ref().map(copy::Job::outcome);
     let unfinished = !result
         .as_ref()
         .is_ok_and(|r| !r.interrupted && !r.timed_out && r.exit_code.is_some());
@@ -665,6 +768,26 @@ fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
                     e.output = result.output.text();
                     e.truncated = result.output.truncated;
                     e.exit_code = result.exit_code;
+                    match streamed {
+                        Some(Some(Ok(report))) if e.status == Status::Completed => {
+                            let mut text = report + &e.output;
+                            text.truncate(text.floor_char_boundary(OUTPUT));
+                            e.output = text;
+                        }
+                        Some(Some(Ok(_))) => {
+                            e.diagnostic = "Extraction in the service failed; see output. Files already extracted remain.".into();
+                        }
+                        Some(stopped) => {
+                            if e.status == Status::Completed {
+                                e.status = Status::Failed;
+                            }
+                            e.diagnostic = format!(
+                                "Copy stopped: {}. Files already extracted remain in the service.",
+                                stopped.and_then(Result::err).unwrap_or_else(|| "the archive was not streamed".into())
+                            );
+                        }
+                        None => {}
+                    }
                     if uncertain {
                         e.diagnostic =
                             "Service stop requested because command completion was uncertain"

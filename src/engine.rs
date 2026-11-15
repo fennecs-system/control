@@ -40,8 +40,20 @@ pub fn ready() -> bool {
 /// with `env` set when it starts.
 /// The caller owns its I/O and lifetime; process semantics stay in the program.
 pub(crate) fn exec(container: &str, user: &str, workdir: Option<&str>, env: &[(&str, &str)], program: &[&str]) -> Command {
+    exec_with(false, container, user, workdir, env, program)
+}
+/// Like [`exec`], with the caller's stdin forwarded to the program, e.g. to
+/// stream an archive into it without a host mount.
+pub(crate) fn exec_input(container: &str, user: &str, workdir: Option<&str>, env: &[(&str, &str)], program: &[&str]) -> Command {
+    exec_with(true, container, user, workdir, env, program)
+}
+fn exec_with(interactive: bool, container: &str, user: &str, workdir: Option<&str>, env: &[(&str, &str)], program: &[&str]) -> Command {
     let mut command = cli();
-    command.args(["exec", "--user", user]);
+    command.arg("exec");
+    if interactive {
+        command.arg("--interactive");
+    }
+    command.args(["--user", user]);
     for (name, value) in env {
         command.args(["--env", &format!("{name}={value}")]);
     }

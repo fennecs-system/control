@@ -2,6 +2,7 @@
 //! reducer decides effects, and one supervisor interprets durable intents.
 mod commands;
 mod compute;
+mod copy;
 mod page;
 pub use page::http;
 #[cfg(test)]
@@ -231,6 +232,7 @@ pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
         ServiceCall::Start(input) => return start(shared, run, generation, nonce, node, input),
         ServiceCall::Exec(input) => return commands::exec(shared, run, generation, nonce, &node, input),
         ServiceCall::ExecStatus(handle) => return commands::status(shared, run, generation, &node, handle),
+        ServiceCall::Copy(input) => return copy::request(shared, attempt, &node, input),
         ServiceCall::Status(id) => (false, true, id),
         ServiceCall::Attach(id) => (false, false, id),
         ServiceCall::Stop(id) => (true, false, id),

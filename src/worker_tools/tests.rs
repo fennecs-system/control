@@ -482,6 +482,7 @@ fn judge_tools_are_enforced_even_when_unadvertised_names_are_forged() {
         "control_service_stop",
         "control_service_exec",
         "control_service_exec_status",
+        "control_service_copy",
         "control_knowledge_propose",
     ] {
         assert!(!names.contains(&name));

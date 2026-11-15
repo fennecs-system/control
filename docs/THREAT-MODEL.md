@@ -102,6 +102,14 @@ arbitrary downloaded code safe.
   Evidence: [service commands](../src/services/commands.rs),
   `restart_never_replays_uncertain_execution_and_save_failure_rolls_back`,
   `live_service_commands_download_and_connect_two_private_services`.
+  Copies into a service reuse that lane and its receipts. They read only the
+  caller's active attempt workspace through no-follow descriptor walks, skip
+  links, special files and credential names, and are bounded before launch. They
+  extract as the service user, never with host mounts or engine copy. Evidence:
+  [service copy](../src/services/copy.rs),
+  `trees_stream_regular_files_and_never_follow_links_or_special_files`,
+  `admission_rejects_foreign_services_judges_stale_attempts_and_oversized_sources`,
+  `live_copy_streams_a_tree_into_a_real_service_as_its_user`.
 
 - **GitHub side effects.** A private broker credential is bound to the operator's
   configured repository/source. Only completed same-chat improvements with captured
