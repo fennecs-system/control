@@ -10,7 +10,9 @@
 //!
 //! Configuration is per channel in the configuration directory's `channels.json`:
 //! `{"discord":{"enabled":true,"kinds":["question","bot","port"],"chats":[]}}`.
-//! Settings is opt-in: a channel without `"enabled":true` forwards nothing.
+//! Forwarding is opt-in: a channel without `"enabled":true` forwards no
+//! requests. Commands and steering (`help`, `chats`, `resume`, `new`, `use`)
+//! do not depend on it; the adapter decides who may use them by identity.
 //! Each channel's routing table is `channels/NAME.json` in the state directory.
 use super::chats::{self, Navigation, navigation};
 use super::operator::{self, Kind, Pending};
@@ -77,12 +79,13 @@ pub trait Transport {
     }
 }
 
-/// One channel's settings in `channels.json`. Settings is opt-in: absent
-/// settings forward nothing; `"enabled":true` alone forwards every kind from
-/// every chat.
+/// One channel's settings in `channels.json`. Forwarding is opt-in: absent
+/// settings forward no requests; `"enabled":true` alone forwards every kind
+/// from every chat. Commands and steering work either way.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    /// Whether operator requests are forwarded (and so can be answered here).
     pub enabled: bool,
     pub kinds: Vec<Kind>,
     /// Top-level chat IDs; empty forwards all chats.
@@ -271,11 +274,12 @@ impl Ledger {
         let excess = self.relayed.len().saturating_sub(LIMIT);
         self.relayed.drain(..excess);
     }
-    /// Where a message goes, in order: a decision for a notified request,
-    /// navigation, a reply to a relayed chat message, the selected chat. `None`
-    /// leaves it to the adapter (a Discord DM's own chat).
-    pub fn route(&self, to: &Recipient, inbound: Inbound<'_>) -> Option<Routed> {
-        if let Some(notice) = self.target(to, inbound) {
+    /// Where a message goes, in order: a decision for a notified request
+    /// (only while `forwarding`), navigation, a reply to a relayed chat
+    /// message, the selected chat. `None` leaves it to the adapter (a Discord
+    /// DM's own chat).
+    pub fn route(&self, to: &Recipient, inbound: Inbound<'_>, forwarding: bool) -> Option<Routed> {
+        if forwarding && let Some(notice) = self.target(to, inbound) {
             return Some(Routed::Decide(notice.clone()));
         }
         if let Some(navigation) = navigation(inbound.text) {
@@ -297,6 +301,14 @@ pub enum Routed {
     Chat(String),
     /// The command list.
     Help,
+}
+
+/// `/chats`: the recent chats in a `control.chats.list` view, with how to
+/// select one and how to return to this conversation's own chat.
+pub fn chat_list(to: &Recipient, list: &Value) -> String {
+    let recent = chats::recent(&chats::entries(list.as_array().map(Vec::as_slice).unwrap_or(&[])), RECENT);
+    let back = to.home.as_ref().map(|home| format!(", /resume {home} for this conversation's own chat")).unwrap_or_default();
+    format!("Recent chats. Reply /resume ID to talk to one, /new for a new chat{back}.\n\n{}", chats::resume_list(&recent))
 }
 
 /// The notification for one pending request.
@@ -369,16 +381,15 @@ impl Channel {
     }
 
     /// Whether the core handles this message; the adapter consumes it before
-    /// calling [`Channel::run`], so a crash cannot repeat it.
+    /// calling [`Channel::run`], so a crash cannot repeat it. Only operators
+    /// reach here (the adapter checks identity); forwarding only gates
+    /// decisions, since without it there is no request to reply to.
     pub fn route(&self, settings: &Settings, to: &Recipient, inbound: Inbound<'_>) -> Option<Routed> {
-        if !settings.enabled {
-            return None;
-        }
         let text = settings.command(inbound.text);
         if text == "/help" {
             return Some(Routed::Help);
         }
-        self.ledger.route(to, Inbound { replied: inbound.replied, text: &text })
+        self.ledger.route(to, Inbound { replied: inbound.replied, text: &text }, settings.enabled)
     }
     /// Carries out a routed message and returns the reply for the recipient,
     /// in this channel's command spelling.
@@ -431,9 +442,7 @@ impl Channel {
             }
             Navigation::List => {
                 let list = hive.tool("control.chats.list", json!({})).map_err(fail)?;
-                let recent = chats::recent(&chats::entries(list.as_array().map(Vec::as_slice).unwrap_or(&[])), RECENT);
-                let back = to.home.as_ref().map(|home| format!(", /resume {home} for this conversation's own chat")).unwrap_or_default();
-                Ok(format!("Recent chats. Reply /resume ID to talk to one, /new for a new chat{back}.\n\n{}", chats::resume_list(&recent)))
+                Ok(chat_list(to, &list))
             }
             Navigation::Open(id) => {
                 let detail = hive.tool("control.chat.read", json!({"id":id})).map_err(fail)?;
@@ -453,9 +462,10 @@ impl Channel {
     /// Follows the node as the TUI does: on the server's change hints (or
     /// every 10 s while they are disconnected) it reads `control.chats.list`,
     /// then re-reads only what moved: pending requests when a decision revision
-    /// changed, and a selected chat when its revision changed.
+    /// changed and forwarding is on, and a selected chat when its revision
+    /// changed (relayed whether or not requests are forwarded).
     pub fn follow(&mut self, transport: &impl Transport, settings: &Settings, recipients: &[Recipient]) -> Result<(), &'static str> {
-        if !settings.enabled || recipients.is_empty() {
+        if recipients.is_empty() || (!settings.enabled && self.ledger.active.is_empty()) {
             self.hive = None;
             return Ok(());
         }
@@ -473,7 +483,10 @@ impl Channel {
         self.refreshed = Some(Instant::now());
         let mut retry = false;
         let revisions = json!([list[0]["decision_revision"], list[0]["port_revision"], list[0]["bot_revision"]]);
-        if first || revisions != self.revisions {
+        if !settings.enabled {
+            // Turning forwarding on later reads the pending requests afresh.
+            self.revisions = Value::Null;
+        } else if first || revisions != self.revisions {
             match hive.tool("control.requests.list", json!({})) {
                 Ok(groups) => {
                     self.revisions = revisions;

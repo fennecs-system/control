@@ -190,3 +190,36 @@ fn help_is_generated_from_the_shared_command_tables() {
     }
     assert!(help.contains("!help") && !help.contains(" /chats"));
 }
+
+#[test]
+fn commands_work_with_forwarding_off_and_only_decisions_need_it() {
+    let off = Settings::default();
+    assert!(!off.enabled);
+    let (fake, mut channel) = (Fake::default(), channel());
+    // `!help` answers with the command list instead of reaching the DM's chat.
+    assert_eq!(channel.route(&off, &me(), inbound(None, "!help")), Some(Routed::Help));
+    // `run` answers Help with `help()` (not called here: it saves channel state).
+    let help = off.help();
+    assert!(help.starts_with("Commands (anything else goes to the selected chat):") && help.contains("!chats"));
+    // Navigation routes too, and `!chats` lists the recent chats.
+    assert_eq!(channel.route(&off, &me(), inbound(None, "!chats")), Some(Routed::Navigate(Navigation::List)));
+    assert_eq!(channel.route(&off, &me(), inbound(None, "!new")), Some(Routed::Navigate(Navigation::New)));
+    let list = json!([{"id":"c-lead","title":"Swarm lead","revision":1},{"id":"c-two","title":"Second","revision":2}]);
+    let listed = off.present(&chat_list(&me(), &list));
+    assert!(listed.starts_with("Recent chats. Reply !resume ID") && listed.contains("c-lead") && listed.contains("Second"));
+    assert!(listed.contains("!resume home-chat"));
+    // A selected chat is steered with forwarding off.
+    channel.ledger.select(&me(), Some(("c-lead".into(), 0)));
+    assert_eq!(channel.route(&off, &me(), inbound(None, "!steer go left")), Some(Routed::Chat("c-lead".into())));
+    channel.ledger.select(&me(), None);
+    // Nothing is forwarded while off.
+    assert!(!channel.notify(&fake, &off, &[me()], &groups()));
+    assert!(fake.posts.borrow().is_empty() && channel.ledger.notices.is_empty());
+    // With forwarding on, requests are forwarded and replies decide them.
+    assert!(!channel.notify(&fake, &on(), &[me()], &groups()));
+    assert_eq!(fake.posts.borrow().len(), 3);
+    assert!(matches!(channel.route(&on(), &me(), inbound(Some("m1"), "2")), Some(Routed::Decide(n)) if n.id == "q-1"));
+    // Turned off again, a reply to an old request is not a decision.
+    assert_eq!(channel.route(&off, &me(), inbound(Some("m1"), "2")), None);
+    assert_eq!(channel.route(&off, &me(), inbound(None, "!bot deny bot-1")), None);
+}

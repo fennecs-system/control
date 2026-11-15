@@ -216,7 +216,7 @@ WhatsApp, Slack) can be added as adapters over the same core
 (`client::channel`). The core reaches Control only through the operator
 interface `control tui` uses.
 
-Forwarding is **off by default**. Turn it on, and set the command prefix, on
+Request forwarding is **off by default**. Turn it on, and set the command prefix, on
 the web Connections page (`/?view=integrations`). The page saves the
 configuration directory's `channels.json`, which adapters re-read on every
 poll; `control tui` shows the state under `/help`:
@@ -229,7 +229,8 @@ poll; `control tui` shows the state under `/help`:
 narrows what is forwarded. The prefix defaults to `!` because Discord reserves
 `/` for its own commands; a service with native `/` commands can keep `/`.
 Type `!help` in a DM for the command list, generated from the same tables as
-the TUI and the server.
+the TUI and the server. Commands and steering work for architects whether or
+not forwarding is on; the toggle only controls forwarding operator requests.
 
 When enabled, architect identities (the role the local operator holds) receive
 agent design questions, bot requests and port approvals from every chat on the
@@ -240,7 +241,7 @@ use this node's local operator session for exactly the commands the TUI sends,
 so the server rechecks that the request is still pending and refuses a
 duplicate reply. User-role identities keep the DM-only behaviour.
 
-Architects can also steer any chat: `!chats` lists the most recently active
+Architects can steer any chat, with forwarding on or off: `!chats` lists the most recently active
 chats, `!resume ID` selects one, `!new` starts one and `!use LENS…` sets lenses
 for the selected chat (`!use none` clears). While a chat is selected, messages
 go to it, so `!steer`, `!cancel`, `!btw` and the other chat commands behave as

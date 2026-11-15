@@ -150,3 +150,13 @@ fn server_messages_are_rejected_even_with_a_prefix() {
     assert!(incoming(&row, &route, id("99")).is_none());
     assert!(route.actor(id("2")).is_none());
 }
+#[test]
+fn operators_are_chosen_by_identity_not_by_the_forwarding_toggle() {
+    let policy: Policy = serde_json::from_str(r#"{"channel_id":null,"principals":[{"label":"arch","user_id":"1","role":"architect"},{"label":"guest","user_id":"2","role":"user"}]}"#).unwrap();
+    let dms: DmBindings = serde_json::from_str(r#"{"recipients":[{"user_id":"1","channel_id":"101"},{"user_id":"2","channel_id":"102"}]}"#).unwrap();
+    let route = |user: &str, channel: &str| Route { channel: id(channel), recipient: Some(id(user)) };
+    // `operating` takes no channel settings: forwarding off still lets the
+    // architect use commands, while a user-role DM keeps the DM-only path.
+    let operating = operating(&policy, &dms, &[route("1", "101"), route("2", "102"), route("1", "102")]);
+    assert_eq!(operating, vec![recipient(id("1"), id("101"))]);
+}
