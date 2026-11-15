@@ -28,6 +28,17 @@ arbitrary downloaded code safe.
   `project_request_is_only_intent_and_cannot_replace_an_approved_grant`,
   `import_ignores_links_to_files_directories_missing_paths_and_cycles`.
 
+- **Tool packages.** Only an authenticated local operator imports or revokes a
+  [tool package](TOOL-PACKAGES.md); import and revoke are hidden from the stdio
+  bridge. Admission rejects links, submodules, special files, and credential,
+  environment and generated paths before checkout, and bounds size and entries.
+  Control never runs package code or setup on the host. Runs receive a private
+  copy of their captured version; the store is never mounted. Evidence:
+  [packages.rs](../src/packages.rs),
+  `import_rejects_unsafe_trees_and_rolls_back_a_failed_save`,
+  `workers_discover_only_captured_packages_and_read_them_as_evidence`,
+  `revocation_is_terminal_and_removes_the_version_from_new_contexts_and_attempts`.
+
 - **Credentials and executable code.** Codex credentials are read-only mounts
   into its account-bearing harness. Its inner execution sandbox denies credential
   paths and network access; a canary/PID-namespace probe must pass before real

@@ -972,6 +972,11 @@ packages, proposal/activation/revocation, scoped discovery/execution and a measu
 two-agent reuse demonstration. Keep service CPU/RAM requests in S1's tool/adapter
 slice; a larger Docker VM alone does not change captured service limits.
 
+[Tool packages](TOOL-PACKAGES.md) describes the design. The first slice is
+implemented: a node-local Git store, operator import, revocation, lens opt-in,
+scoped discovery and a pinned per-attempt copy. Agent proposals with operator
+review, and the measured reuse demonstration, come next.
+
 The 2026-11-14 isolated `/improve` trial reproduced a stale build-image dependency
 failure, then passed a real offline Cargo test and independent read-only judge
 after refreshing the image. This proves edit/build/review/artifact recovery, not

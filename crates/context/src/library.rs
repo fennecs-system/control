@@ -22,6 +22,33 @@ pub struct Definition {
     pub tools: Vec<String>,
     pub documents: Vec<String>,
     pub instructions: String,
+    /// Admitted tool packages this lens opts a run into: `name` (latest
+    /// admitted when captured) or `name@version` (pinned). Context, not a grant.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub packages: Vec<String>,
+}
+/// One admitted package version offered to resolution, like `DocumentInput`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackageInput {
+    pub name: String,
+    pub version: u64,
+    pub commit: String,
+    pub description: String,
+}
+/// Split a lens package reference into its name and optional pinned version.
+pub fn package_reference(reference: &str) -> Option<(&str, Option<u64>)> {
+    let (name, version) = match reference.split_once('@') {
+        Some((name, version)) => (name, Some(version.parse::<u64>().ok().filter(|v| *v > 0)?)),
+        None => (reference, None),
+    };
+    valid_id(name).then_some((name, version))
+}
+#[derive(Clone, Copy)]
+struct Inputs<'a> {
+    documents: &'a [DocumentInput],
+    /// `None` checks package reference syntax only.
+    packages: Option<&'a [PackageInput]>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Library {
@@ -61,6 +88,8 @@ pub struct Resolved {
     pub tools: Vec<String>,
     pub documents: Vec<DocumentInput>,
     pub instructions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub packages: Vec<PackageInput>,
 }
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty()
@@ -112,11 +141,24 @@ impl Library {
         let ids: BTreeSet<_> = self.definitions.iter().map(|d| d.id.as_str()).collect();
         ids.into_iter().filter_map(|id| self.get(id)).collect()
     }
+    /// Resolve without admitted packages; a lens that names one fails here.
     pub fn resolve(
         &self,
         roots: &[String],
         documents: &[DocumentInput],
     ) -> Result<Resolved, String> {
+        self.resolve_with(roots, documents, &[])
+    }
+    /// Resolve against explicit document and admitted package snapshots.
+    pub fn resolve_with(
+        &self,
+        roots: &[String],
+        documents: &[DocumentInput],
+        packages: &[PackageInput],
+    ) -> Result<Resolved, String> {
+        self.resolve_inputs(roots, Inputs { documents, packages: Some(packages) })
+    }
+    fn resolve_inputs(&self, roots: &[String], inputs: Inputs<'_>) -> Result<Resolved, String> {
         let roots: Vec<_> = roots
             .iter()
             .cloned()
@@ -133,7 +175,7 @@ impl Library {
         let mut done = BTreeSet::new();
         let mut visiting = BTreeSet::new();
         for root in &roots {
-            self.visit(root, documents, &mut resolved, &mut done, &mut visiting)?;
+            self.visit(root, inputs, &mut resolved, &mut done, &mut visiting)?;
         }
         resolved.tools = TOOLS
             .iter()
@@ -141,6 +183,7 @@ impl Library {
             .map(|t| t.name.into())
             .collect();
         resolved.documents.sort_by(|a, b| a.id.cmp(&b.id));
+        resolved.packages.sort_by(|a, b| a.name.cmp(&b.name));
         if resolved
             .documents
             .iter()
@@ -163,7 +206,7 @@ impl Library {
     fn visit(
         &self,
         id: &str,
-        documents: &[DocumentInput],
+        inputs: Inputs<'_>,
         out: &mut Resolved,
         done: &mut BTreeSet<String>,
         visiting: &mut BTreeSet<String>,
@@ -176,7 +219,7 @@ impl Library {
         }
         let d = self.get(id).ok_or_else(|| format!("Unknown lens: {id}."))?;
         for child in &d.includes {
-            self.visit(child, documents, out, done, visiting)?;
+            self.visit(child, inputs, out, done, visiting)?;
         }
         for tool in &d.tools {
             if !TOOLS.iter().any(|t| t.name == tool) {
@@ -187,12 +230,31 @@ impl Library {
             }
         }
         for doc in &d.documents {
-            let input = documents
+            let input = inputs
+                .documents
                 .iter()
                 .find(|i| &i.id == doc)
                 .ok_or_else(|| format!("Missing knowledge document: {doc}."))?;
             if !out.documents.iter().any(|i| i.id == *doc) {
                 out.documents.push(input.clone());
+            }
+        }
+        for reference in &d.packages {
+            let (name, pinned) = package_reference(reference)
+                .ok_or_else(|| format!("Invalid tool package reference: {reference}."))?;
+            // Library validation checks references only; admission is a resolution input.
+            let Some(admitted) = inputs.packages else { continue };
+            let input = admitted
+                .iter()
+                .filter(|p| p.name == name && pinned.is_none_or(|v| v == p.version))
+                .max_by_key(|p| p.version)
+                .ok_or_else(|| format!("Tool package not admitted: {reference}."))?;
+            match out.packages.iter().find(|p| p.name == name) {
+                Some(existing) if existing.version != input.version => {
+                    return Err(format!("Selected lenses name different versions of tool package {name}."));
+                }
+                Some(_) => {}
+                None => out.packages.push(input.clone()),
             }
         }
         if !d.instructions.trim().is_empty() && !out.instructions.contains(&d.instructions) {
@@ -220,13 +282,16 @@ impl Library {
                 || d.instructions.chars().count() > 4000
                 || d.includes.len() > MAX_REFERENCES
                 || d.documents.len() > MAX_REFERENCES
+                || d.packages.len() > MAX_REFERENCES
                 || !versions.insert((&d.id, d.revision))
             {
                 return Err("Invalid lens definition or duplicate revision.".into());
             }
         }
+        // Revoking a package must not block edits to unrelated lenses, so
+        // package admission is checked when a context is captured.
         for d in self.current() {
-            self.resolve(std::slice::from_ref(&d.id), documents)?;
+            self.resolve_inputs(std::slice::from_ref(&d.id), Inputs { documents, packages: None })?;
         }
         Ok(())
     }

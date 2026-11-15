@@ -161,6 +161,8 @@ pub fn rpc(state: &mut State, request: &Value) -> Value {
                     Some(crate::tool_registry::Route::Artifacts) => crate::artifacts::tool(state, name, arguments),
                     Some(crate::tool_registry::Route::Room) => crate::rooms::tool(state, name, arguments),
                     Some(crate::tool_registry::Route::Lens) => crate::lens_library::tool(state, name, arguments),
+                    // Served by `packages::http` before the state lock is taken.
+                    Some(crate::tool_registry::Route::Package) => Err("Package tools are served by the HTTP MCP endpoint."),
                     _ => chat::tool(state, name, arguments),
                 }
             };

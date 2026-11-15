@@ -49,6 +49,7 @@ mod performance;
 mod providers;
 mod model_calls;
 mod compaction;
+mod packages;
 mod projects;
 mod ports;
 mod previews;
@@ -99,6 +100,7 @@ struct State {
     agent_messages: Vec<application::messages::Sent>,
     documents: Vec<knowledge::Document>,
     lens_library: control_context::Library,
+    packages: Vec<packages::Manifest>,
     messages: Vec<String>,
     agents: Vec<String>,
     note: String,
@@ -330,6 +332,7 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
     if web_access::http(&mut stream, &state, method, path, &data[header_end..header_end + length]) { return; }
     if github::http(&mut stream,&state,method,path,&data[header_end..header_end+length]) {return;}
     if projects::http(&mut stream,&state,method,path,&data[header_end..header_end+length]) {return;}
+    if packages::http(&mut stream,&state,method,path,&data[header_end..header_end+length]) {return;}
     if tools_http::handle(
         &mut stream,
         method,
@@ -563,8 +566,11 @@ fn main() -> std::io::Result<()> {
     if args.get(1).is_some_and(|s| s == "github") {
         return github::cli(&args[2..]);
     }
+    if args.get(1).is_some_and(|s| s == "package") {
+        return packages::cli(&args[2..]);
+    }
     if args.get(1).is_some_and(|s| s == "--help" || s == "help") {
-        println!("control [serve | tui | mcp | discord | doctor | config | open | browser | federation]\nserve: local web/MCP server on CONTROL_ADDR (default 127.0.0.1:8080)\ntui: Rust terminal client\nmcp [--root DIRECTORY]: local tools for an external harness\ndiscord --enable: listen to this node's configured DMs\ndoctor: offline prerequisites; no model calls\nconfig init | path: initialize or locate personal configuration\nopen: sign in to the local website\nbrowser capture FILE [WIDTH HEIGHT]: offline Nix Firefox capture\nfederation help: signed offline lens exchange\n--check-worker: one authenticated sandbox test (uses model usage)\n--version [--json]: version, platform and optional build identification");
+        println!("control [serve | tui | mcp | discord | doctor | config | open | browser | federation | package]\nserve: local web/MCP server on CONTROL_ADDR (default 127.0.0.1:8080)\ntui: Rust terminal client\nmcp [--root DIRECTORY]: local tools for an external harness\ndiscord --enable: listen to this node's configured DMs\ndoctor: offline prerequisites; no model calls\nconfig init | path: initialize or locate personal configuration\nopen: sign in to the local website\nbrowser capture FILE [WIDTH HEIGHT]: offline Nix Firefox capture\nfederation help: signed offline lens exchange\npackage import | revoke | list | show: admit and inspect reusable tool packages\n--check-worker: one authenticated sandbox test (uses model usage)\n--version [--json]: version, platform and optional build identification");
         println!("claude login | check: container login or offline tool isolation check\nconfig init [--provider codex|claude] [--source-root PATH]: initialize private configuration without replacing saved choices\nconfig path: show the node configuration directory\n--bind-discord LABEL ID: bind a configured principal locally");
         println!("open --link: print a one-use local browser sign-in link");
         println!("github configure: bind improvement PR publication to a repository and private credential reference");

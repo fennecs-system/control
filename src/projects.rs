@@ -171,6 +171,11 @@ pub fn message_index(chat: &crate::chat::Session) -> Option<usize> {
     ).or_else(||chat.messages.len().checked_sub(1))
 }
 fn git(args: &[&std::ffi::OsStr]) -> io::Result<()> {
+    git_output(args, &[]).map(drop).map_err(|_| fail("Could not prepare an isolated Git worktree; check that Git is installed and this is a readable checkout with a commit."))
+}
+/// Host Git with no system/global config, hooks, fsmonitor, prompts or
+/// credential helpers. Returns stdout; stderr is discarded.
+pub(crate) fn git_output(args: &[&std::ffi::OsStr], envs: &[(&str, &std::ffi::OsStr)]) -> io::Result<Vec<u8>> {
     let mut command = Command::new("git");
     command
         .env_clear()
@@ -178,6 +183,7 @@ fn git(args: &[&std::ffi::OsStr]) -> io::Result<()> {
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_ATTR_NOSYSTEM", "1")
+        .envs(envs.iter().copied())
         .args([
             "-c",
             "core.hooksPath=/dev/null",
@@ -190,16 +196,21 @@ fn git(args: &[&std::ffi::OsStr]) -> io::Result<()> {
         ])
         .args(args)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null());
     if let Some(path) = std::env::var_os("PATH") {
         command.env("PATH", path);
     }
-    if command.status()?.success() {
-        Ok(())
+    let output = command.output()?;
+    if output.status.success() {
+        Ok(output.stdout)
     } else {
-        Err(fail("Could not prepare an isolated Git worktree; check that Git is installed and this is a readable checkout with a commit."))
+        Err(fail("Git command failed"))
     }
+}
+/// Names project import never copies. Tool package admission rejects them.
+pub(crate) fn excluded_name(name: &str) -> bool {
+    skip(name, false)
 }
 fn skip(name: &str, metadata: bool) -> bool {
     (name.starts_with(".control-") && !(metadata && name == ".control-git"))
@@ -236,6 +247,10 @@ fn skip(name: &str, metadata: bool) -> bool {
 /// Imports and published checkpoints must be durable before being referenced.
 pub(crate) fn copy_tree(source: &Path, destination: &Path, metadata: bool) -> io::Result<()> {
     copy_tree_with(source, destination, metadata, Durability::Checkpoint)
+}
+/// A disposable attempt view of an already durable source; no per-file sync.
+pub(crate) fn copy_working(source: &Path, destination: &Path) -> io::Result<()> {
+    copy_tree_with(source, destination, false, Durability::WorkingCopy)
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Durability { WorkingCopy, Checkpoint }
@@ -345,7 +360,9 @@ fn copy_tree_with(source: &Path, destination: &Path, metadata: bool, durability:
         .open(source)?;
     walk(&source, destination, metadata, 0, false, durability)
 }
-fn seed(source: &Path, destination: &Path) -> io::Result<()> {
+/// Operator-chosen host folders must not be the home directory, the
+/// filesystem root, or Control's own configuration or state.
+pub(crate) fn check_source(source: &Path) -> io::Result<PathBuf> {
     let source = source.canonicalize()?;
     if source == Path::new("/")
         || std::env::var_os("HOME").is_some_and(|home| source == Path::new(&home))
@@ -365,6 +382,10 @@ fn seed(source: &Path, destination: &Path) -> io::Result<()> {
                 ));
             }
     }
+    Ok(source)
+}
+fn seed(source: &Path, destination: &Path) -> io::Result<()> {
+    let source = check_source(source)?;
     // Start with the current files, including uncommitted edits. Reading is an
     // explicit operator action, and no source Git metadata is ever mounted.
     copy_tree(&source, destination, false)?;
