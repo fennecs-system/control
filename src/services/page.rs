@@ -98,7 +98,7 @@ fn render(shared: &Arc<Mutex<State>>) -> io::Result<String> {
         format!("<form class='decision-form' method='post' action='/tools/services'><input type='hidden' name='action' value='cleanup'><button>Clean up {stopped} stopped service{}</button><span class='muted'> Removes their records and each chat's retained /workspace once no service of that chat remains.</span></form>", if stopped == 1 { "" } else { "s" })
     };
     let page = crate::render(&state, "tool-page", "none", &format!("<h2>Persistent services</h2>{compute}{cleanup}<div data-live-src='/tools/services/live'>{empty}{cards}</div>"));
-    Ok(page.replacen("</head>", "<script type='module' src='/tool-window/chat-bootstrap.js'></script></head>", 1))
+    Ok(crate::web_assets::with_client(&page))
 }
 fn listed(state: &State) -> Vec<Service> {
     let active = state.services.iter().rev().filter(|s| s.resource.phase.reserves_capacity());

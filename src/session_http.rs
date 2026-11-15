@@ -33,10 +33,7 @@ fn respond_chat_status(stream: &mut impl Write, status: &str, html: &str) {
     respond_chat_headers(stream,status,html,"");
 }
 fn respond_chat_headers(stream:&mut impl Write,status:&str,html:&str,extra:&str) {
-    let page = html.replace(
-        "</head>",
-        "<script type='module' src='/tool-window/chat-bootstrap.js'></script></head>",
-    );
+    let page = crate::web_assets::with_client(html);
     respond_with_policy(
         stream,
         status,

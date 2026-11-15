@@ -2,6 +2,12 @@ use std::{net::TcpStream, path::Path};
 
 include!(concat!(env!("OUT_DIR"), "/web_assets.rs"));
 
+/// Loads the Rust/WASM client into a server-rendered page. Serve the result
+/// with a policy that permits it (`Policy::Client` or `Policy::Chat`).
+pub(crate) fn with_client(page: &str) -> String {
+    page.replacen("</head>", "<script type='module' src='/tool-window/chat-bootstrap.js'></script></head>", 1)
+}
+
 pub fn ready() -> bool {
     ASSETS.iter().any(|(name, _)| name.ends_with(".wasm")) && asset("index.html").is_some()
 }

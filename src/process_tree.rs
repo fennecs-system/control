@@ -348,9 +348,11 @@ pub(crate) fn render(state: &State) -> Option<String> {
         height = height.max((depth + 1) as f64 * (HEIGHT + V_GAP) - V_GAP);
     }
     let width = (offset - TREE_GAP).max(WIDTH);
+    // The viewBox is the drawing's bounds: without the client it fits the
+    // canvas; the client reads it back to fit, pan and zoom.
     Some(format!(
-        "<div class='process-tree' role='region' aria-label='Process tree' tabindex='0'><svg role='img' aria-label='Task trees: steering chats, agents, bots, services and processes' viewBox='-2 -2 {:.0} {:.0}' width='{:.0}' height='{:.0}'>{body}</svg></div><p class='muted tiny'>Purple: steering chats and bots · grey: agents · cyan: services · dim: watches and running commands · dot: active.</p>",
-        width + 4.0, height + 4.0, width + 4.0, height + 4.0
+        "<div class='process-tree' role='region' aria-label='Process tree' tabindex='0' data-canvas><div class='canvas-controls' hidden><button type='button' data-zoom='in' aria-label='Zoom in'>+</button><button type='button' data-zoom='out' aria-label='Zoom out'>−</button><button type='button' data-zoom='fit' aria-label='Fit to view'>Fit</button></div><svg role='img' aria-label='Task trees: steering chats, agents, bots, services and processes' viewBox='-2 -2 {:.0} {:.0}'>{body}</svg></div><p class='muted tiny'>Purple: steering chats and bots · grey: agents · cyan: services · dim: watches and running commands · dot: active. Drag to pan; scroll or pinch to zoom.</p>",
+        width + 4.0, height + 4.0
     ))
 }
 

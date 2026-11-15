@@ -1,6 +1,7 @@
 use std::{cell::{Cell, RefCell}, rc::Rc};
 use wasm_bindgen::{closure::Closure, JsCast, JsValue};
 
+mod canvas;
 use control_context::commands::{self, DEFINITIONS as COMMANDS};
 
 fn completions(value: &str) -> Vec<usize> { commands::completions(value) }
@@ -669,6 +670,9 @@ fn main() -> Result<(), JsValue> {
         .and_then(|w| w.document())
         .ok_or_else(|| JsValue::from_str("No document"))?;
     if attach_live(&document)? {
+        return Ok(());
+    }
+    if canvas::attach(&document)? {
         return Ok(());
     }
     if let Some(input) = document.query_selector(".conversation-composer textarea[name=message]")? {
