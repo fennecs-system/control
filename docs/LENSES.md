@@ -31,7 +31,11 @@ recovery path. A task-local guard can embody an incorrect assumption; investigat
 its rationale rather than treating every guard rejection as a reason to wait
 forever. Host-enforced permissions, mandatory safety constraints, cancellation
 and explicit user limits remain binding. The lens does not authorize broader
-access or consequential actions beyond the task's mandate.
+access or consequential actions beyond the task's mandate. A long-lived
+program the agent runs, such as a persistent watch, should never sit idle
+silently: it notifies the agent when its job finishes, after a period of idleness
+and on state changes that open new work, so the agent wakes and assigns the next
+job. Revision 2 added that line.
 
 ## Coordination and planning
 

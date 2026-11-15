@@ -760,7 +760,7 @@ fn optional_guidance_survives_child_wake_and_library_edits_without_retroactive_c
     for run in [&parent, &child, &wake] {
         let text = prompt(&restored, run).unwrap();
         assert!(text.contains("investigation@1") && text.contains("three distinct probes"));
-        assert!(text.contains("coordination@3"));
+        assert!(text.contains("coordination@3") && text.contains("autonomy@2"));
         assert_eq!(text.matches("three distinct probes").count(), 1);
         assert!(!text.contains("Future investigation guidance only"));
         assert!(!text.contains("Future coordination guidance only"));

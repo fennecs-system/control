@@ -206,3 +206,22 @@ fn newer_built_in_revisions_reach_nodes_unless_the_lens_was_edited_locally() {
     assert!(!unknown.merge_defaults(), "an unrecognised copy may be a local edit");
     assert_eq!(unknown.get("coordination").unwrap(), &older);
 }
+#[test]
+fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
+    let autonomy = Library::default().get("autonomy").unwrap().clone();
+    assert_eq!(autonomy.revision, 2);
+    assert!(autonomy.instructions.contains("must never sit idle silently"));
+    let previous: Vec<Definition> = serde_json::from_str(include_str!("../builtin-lens-history.json")).unwrap();
+    assert!(previous.iter().any(|d| d.id == "autonomy" && d.revision == 1));
+    for earlier in previous {
+        let shipped = Library::default().get(&earlier.id).unwrap().clone();
+        assert!(earlier.revision < shipped.revision, "{} history must predate the shipped revision", earlier.id);
+        let mut node = Library::default();
+        node.definitions.retain(|d| d.id != earlier.id);
+        node.definitions.push(earlier.clone());
+        node.builtin.remove(&earlier.id);
+        assert!(node.merge_defaults());
+        assert_eq!(node.get(&earlier.id).unwrap(), &shipped);
+        assert!(node.definitions.contains(&earlier), "earlier revisions stay for captured runs");
+    }
+}
