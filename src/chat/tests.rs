@@ -763,7 +763,7 @@ fn optional_guidance_survives_child_wake_and_library_edits_without_retroactive_c
     let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
     for run in [&parent, &child, &wake] {
         let text = prompt(&restored, run).unwrap();
-        assert!(text.contains("investigation@1") && text.contains("three distinct probes"));
+        assert!(text.contains("investigation@2") && text.contains("three distinct probes"));
         assert!(text.contains("coordination@8") && text.contains("autonomy@4"));
         assert!(text.contains("planning@3"));
         assert_eq!(text.matches("three distinct probes").count(), 1);
@@ -774,7 +774,7 @@ fn optional_guidance_survives_child_wake_and_library_edits_without_retroactive_c
     send(&mut state, &id, "Start a new authorized step", "test").unwrap();
     let next = prompt(&state, &state.runtime.runs.last().unwrap().id).unwrap();
     assert!(
-        next.contains("investigation@2") && next.contains("Future investigation guidance only")
+        next.contains("investigation@3") && next.contains("Future investigation guidance only")
     );
     assert!(next.contains("coordination@9") && next.contains("Future coordination guidance only"));
     assert!(next.contains("planning@4") && next.contains("Future planning guidance only"));

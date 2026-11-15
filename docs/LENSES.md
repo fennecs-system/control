@@ -151,12 +151,21 @@ When an assumption or repeated failed action blocks a plan:
    expected observation and what would disconfirm it.
 3. Run the probe with existing inspect/execute tools; record the result and next
    decision. Repeating an unchanged rejected action is not a new experiment.
-4. Use at most three distinct probes for the same question unless the operator
-   specifies another allowance, within the existing task/resource/model budgets.
-   Do not reset that allowance by renaming the investigation.
-5. Change approach, seek targeted peer help, or record an explicit blocker and
-   yield on a real dependency. Consequential choices outside the mandate use the
-   existing design-question path.
+4. Use at most three distinct probes for one approach unless the operator
+   specifies another allowance. At that checkpoint stop repeating the approach
+   and compare established alternatives. A materially different adapter, proxy or
+   tool starts a fresh allowance; record why it addresses the failure. Renaming
+   the investigation, changing a minor parameter or assigning another worker does
+   not reset the same approach's allowance. Overall effort/resource/model budgets
+   still apply across approaches. Do not present this default as an operator-imposed
+   effort limit.
+5. Check known alternatives and peer findings before escalating. Continue an
+   authorized, reversible alternative that preserves the requested outcome;
+   reaching three probes alone does not require operator permission. Use the
+   existing design-question path when no justified authorized alternative remains
+   and operator input is needed, or before changing the goal, broadening access,
+   exceeding the user's budget or taking a consequential action outside the mandate.
+   Otherwise pursue independent useful work or yield on a real dependency.
 
 Keep the record in the task's normal notes and working-state handoff/checkpoint:
 blocker, hypothesis, probe, expected/actual evidence and next decision. On restart,
@@ -164,9 +173,11 @@ inspect uncertain outcomes before retrying. A quiet healthy download or calculat
 does not itself call for investigation or a new deadline. Verified reusable
 findings can be proposed for knowledge review; they are not admitted automatically.
 
-The three-probe allowance is prompt guidance, not a host-enforced counter. This
-change does not establish that a model follows it or improves at every workload;
-measure repeated actions, useful outcomes and intervention in opt-in trials.
+Investigation revision 2 scopes the allowance to an approach rather than the
+whole blocker. The allowance is prompt guidance, not a host-enforced counter;
+it grants no new authority. Existing captured contexts retain their revision.
+This change does not establish that a model follows it or improves at every workload;
+measure repeated actions, useful outcomes and operator interventions in opt-in trials.
 
 ## Team advisor
 
