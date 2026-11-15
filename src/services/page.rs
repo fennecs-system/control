@@ -21,7 +21,13 @@ pub fn http(stream: &mut TcpStream, shared: &Arc<Mutex<State>>, method: &str, pa
         return false;
     }
     let fields = crate::fields(&String::from_utf8_lossy(body));
-    let back = fields.get("return_chat").filter(|id| crate::chat::valid_id(id)).map_or("/tools/services".to_owned(), |chat| format!("/chat/{chat}"));
+    let return_chat = fields.get("return_chat").filter(|id| crate::chat::valid_id(id));
+    let back = return_chat.map_or("/tools/services".to_owned(), |chat| format!("/chat/{chat}"));
+    // Per-card actions return to their card, not the top of the page.
+    let place = match (method, return_chat, fields.get("id")) {
+        ("POST", None, Some(id)) => shared.lock().map(|state| nearby(&state, id)).unwrap_or_default(),
+        _ => Vec::new(),
+    };
     let result = match method {
         "GET" => render(shared).map(Some),
         "POST" if matches!(fields.get("action").map(String::as_str), Some("delete" | "cleanup")) => {
@@ -36,7 +42,10 @@ pub fn http(stream: &mut TcpStream, shared: &Arc<Mutex<State>>, method: &str, pa
     };
     let _ = match result {
         Ok(Some(page)) => control_http::respond(stream, "200 OK", "text/html; charset=utf-8", page.as_bytes(), "", control_http::Policy::Client),
-        Ok(None) => control_http::respond(stream, "303 See Other", "text/plain", b"", &format!("Location: {back}\r\n"), control_http::Policy::Page),
+        Ok(None) => {
+            let anchor = shared.lock().map(|state| fragment(&state, &place)).unwrap_or_default();
+            control_http::respond(stream, "303 See Other", "text/plain", b"", &format!("Location: {back}{anchor}\r\n"), control_http::Policy::Page)
+        }
         Err(error) => control_http::respond(stream, "400 Bad Request", "text/html; charset=utf-8", crate::error_page(&error.to_string(), &back).as_bytes(), "", control_http::Policy::Page),
     };
     true
@@ -101,9 +110,26 @@ fn render(shared: &Arc<Mutex<State>>) -> io::Result<String> {
     Ok(crate::web_assets::with_client(&page))
 }
 fn listed(state: &State) -> Vec<Service> {
+    shown(state).map(snapshot).collect()
+}
+/// The services the page shows as cards, in page order.
+fn shown(state: &State) -> impl Iterator<Item = &Service> {
     let active = state.services.iter().rev().filter(|s| s.resource.phase.reserves_capacity());
     let stopped = state.services.iter().rev().filter(|s| !s.resource.phase.reserves_capacity()).take(RECENT_STOPPED);
-    active.chain(stopped).map(snapshot).collect()
+    active.chain(stopped)
+}
+/// Card IDs nearest the acted-on one: itself, then later cards, then earlier
+/// ones. Taken before an action so its redirect can find the same place even
+/// when the card is removed or leaves the page. IDs come from state only.
+fn nearby(state: &State, id: &str) -> Vec<String> {
+    let ids = shown(state).map(|service| service.resource.id.as_str()).collect::<Vec<_>>();
+    let Some(index) = ids.iter().position(|shown| *shown == id) else { return Vec::new() };
+    ids[index..].iter().chain(ids[..index].iter().rev()).map(|id| (*id).to_owned()).collect()
+}
+/// The URL fragment of the first of `nearby` still shown, or none (page top).
+fn fragment(state: &State, nearby: &[String]) -> String {
+    let ids = shown(state).map(|service| service.resource.id.as_str()).collect::<HashSet<_>>();
+    nearby.iter().find(|id| ids.contains(id.as_str())).map(|id| format!("#{id}")).unwrap_or_default()
 }
 /// Live usage per service ID as HTML fragments, read outside the state lock.
 fn live(shared: &Arc<Mutex<State>>) -> io::Result<String> {
@@ -266,7 +292,8 @@ fn card(service: &Service) -> String {
     };
     let compute = compute_label(service.shape, service.limits(), service.pids_limit());
     format!(
-        "<article class='record service-record'><h3><code>{}</code></h3><p>{} · {compute}</p><p>{:?} image · {storage} · {lease}</p><p>{conversation}{container}image {}</p>{live}{diagnostic}{action}</article>",
+        "<article class='record service-record' id='{}'><h3><code>{}</code></h3><p>{} · {compute}</p><p>{:?} image · {storage} · {lease}</p><p>{conversation}{container}image {}</p>{live}{diagnostic}{action}</article>",
+        crate::escape(resource.id.as_str()),
         crate::escape(&command),
         phase(&resource.phase),
         service.profile,
