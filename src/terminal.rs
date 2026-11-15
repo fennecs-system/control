@@ -313,8 +313,9 @@ impl App {
             }
             "/chat"=>{self.inspector=None;self.follow=true;self.scroll=usize::MAX;}
             _ if lens_input::parse(&text).is_some()=>{
+                // Nothing selected is not a command: keep the draft and change nothing.
+                if lens_input::names(&text).is_some_and(|names|names.is_empty()) {return Ok(false);}
                 let lenses=lens_input::parse(&text).unwrap_or_default();
-                if lens_input::names(&text).is_some_and(|names|names.is_empty()) {return Err(failure("Use /use ID ID, /use ID, ID or /use none."));}
                 // Name every unknown lens against the current library; the server applies the list atomically.
                 self.lenses=lens_input::Catalog::from_list(&hive.tool("control.lenses.list",json!({}))?);
                 let ids=self.lenses.known().ok_or_else(||failure("Invalid lens library response."))?;
