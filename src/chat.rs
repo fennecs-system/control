@@ -828,7 +828,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
                         let class=match control::diff::kind(line) {control::diff::Kind::Add=>"diff-add",control::diff::Kind::Remove=>"diff-remove",control::diff::Kind::Header=>"diff-header",control::diff::Kind::Context=>"diff-context"};
                         body.push_str(&format!("<span class='diff-line {class}'>{}</span>",escape(line)));
                     }
-                    html.push_str(&format!("<details class='edit-diff' data-transcript-key='{position}-{index}-diff-{}'{}><summary>Changes · attempt {} <span>{}</span></summary><pre aria-label='File changes'>{body}</pre></details>",escape(&event.id),if position + 1 == messages.len() && index + 1 == attempts.len() {" open"} else {""},index+1,escape(&event.text)));
+                    html.push_str(&format!("<details class='edit-diff' data-transcript-key='{position}-{index}-diff-{}'><summary>Changes · attempt {} <span>{}</span></summary><pre aria-label='File changes'>{body}</pre></details>",escape(&event.id),index+1,escape(&event.text)));
                 }
                 for event in events.iter().filter(|event|event.kind=="message" && event.text.trim()!=run_reply.trim()) {
                     html.push_str(&format!("<article class='assistant-message' data-transcript-key='{position}-{index}-message-{}'><p class='preserve'>{}</p></article>",escape(&event.id),escape(&event.text)));
@@ -836,21 +836,19 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
                 let mut events=events.iter().filter(|event|event.kind != "file_change" && event.kind != "message").enumerate().peekable();
                 if events.peek().is_none() {continue;}
                 html.push_str(&format!(
-                    "<details class='run-activity' data-transcript-key='{position}-{index}-activity'{}><summary>Recent activity · attempt {}</summary>",
-                    if run_status == "running" && index + 1 == attempts.len() { " open" } else { "" }, index + 1
+                    "<details class='run-activity' data-transcript-key='{position}-{index}-activity'><summary>Recent activity · attempt {}</summary>", index + 1
                 ));
-                while let Some((event_index,event))=events.next() {
-                    html.push_str(&format!("<details class='command-activity' data-transcript-key='{position}-{index}-event-{event_index}'{}><summary><span>{}</span> <code>{}</code></summary><pre>{}</pre></details>", if events.peek().is_none() {" open"} else {""}, escape(&event.status), escape(&event.text), escape(&event.output)));
+                for (event_index,event) in events {
+                    html.push_str(&format!("<details class='command-activity' data-transcript-key='{position}-{index}-event-{event_index}'><summary><span>{}</span> <code>{}</code></summary><pre>{}</pre></details>", escape(&event.status), escape(&event.text), escape(&event.output)));
                 }
                 html.push_str("</details>");
             }
         }
         if let Some(run)=message.run_id.as_deref() {
-            let live=run_status=="running";
             let commands:Vec<_>=crate::services::command_activity(state,run).collect();
-            if let Some(last)=commands.len().checked_sub(1) {
-                html.push_str(&format!("<details class='run-activity' data-transcript-key='{position}-commands'{}><summary>Commands · {}</summary>",if live {" open"} else {""},commands.len()));
-                for (index,event) in commands.iter().enumerate() { html.push_str(&command_html(event,live && index==last)); }
+            if !commands.is_empty() {
+                html.push_str(&format!("<details class='run-activity' data-transcript-key='{position}-commands'><summary>Commands · {}</summary>",commands.len()));
+                for event in &commands { html.push_str(&command_html(event)); }
                 html.push_str("</details>");
             }
         }
@@ -860,7 +858,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
         let agents = activity.iter().map(|entry| entry.chat).collect::<std::collections::HashSet<_>>().len();
         html.push_str(&format!("<details class='run-activity' data-transcript-key='agent-activity'><summary>Agent activity · {agents} active {}</summary>",if agents == 1 {"agent"} else {"agents"}));
         for entry in activity {
-            html.push_str(&format!("<p class='message-status'><a target='_top' href='/chat/{}'>View agent ↗</a></p>{}",escape(entry.chat),command_html(&entry.activity,false)));
+            html.push_str(&format!("<p class='message-status'><a target='_top' href='/chat/{}'>View agent ↗</a></p>{}",escape(entry.chat),command_html(&entry.activity)));
         }
         html.push_str("</details>");
     }
