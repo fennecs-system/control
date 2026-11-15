@@ -95,3 +95,38 @@ fn command_profile() {
         println!("{}", json!({"workload":"terminal_commands","input":input,"median_ns":samples[4]}));
     }
 }
+
+/// Per-keystroke composer cost: draft bookkeeping plus the wrapped input paragraph,
+/// against the largest lens library and longest draft the server accepts.
+#[test]
+#[ignore = "offline composer keystroke timing; no server, credentials or model calls"]
+fn composer_profile() {
+    let library = (0..4096).map(|n| json!({"id": format!("lens-{n:04}")})).collect::<Vec<_>>();
+    let names = |count: usize| (0..count).map(|n| format!("lens-{:04}", n * 37 % 8192)).collect::<Vec<_>>();
+    let mut long = format!("/use {}", names(4000).join(", "));
+    long.truncate(control_context::limits::CHAT_MESSAGE_CHARS);
+    let prose = "verify the next change ".repeat(870);
+    for (workload, input) in [("use_short", "/use lens-0001 lens-9999".to_owned()), ("use_selected_max", format!("/use {}", names(128).join(", "))), ("use_long", long), ("prose_long", prose)] {
+        let mut app = App { input: input.clone(), lenses: lens_input::Catalog::from_list(&json!(library)), ..Default::default() };
+        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(100, 5)).unwrap();
+        let rounds = 200;
+        let mut samples = Vec::new();
+        for batch in 0..10 {
+            let start = Instant::now();
+            for _ in 0..rounds {
+                app.input_changed();
+                let input = clean(&app.input);
+                let lines: Vec<_> = input.split('\n').map(|line| {
+                    let mut spans = vec![Span::raw("> ")];
+                    spans.extend(composer_line(line, &app.lenses).spans);
+                    Line::from(spans)
+                }).collect();
+                let text = black_box(Text::from(lines));
+                terminal.draw(|frame| frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), frame.area())).unwrap();
+            }
+            if batch > 0 { samples.push(start.elapsed().as_nanos() / rounds as u128); }
+        }
+        samples.sort_unstable();
+        println!("{}", json!({"workload": "terminal_composer", "input": workload, "chars": input.chars().count(), "lenses": library.len(), "median_ns": samples[4]}));
+    }
+}
