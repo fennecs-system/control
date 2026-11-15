@@ -7,3 +7,4 @@
 /web/target
 *.tmp
 /result*
+.DS_Store

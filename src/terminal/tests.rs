@@ -1,5 +1,22 @@
 
 #[test]
+fn missing_history_warning_remains_visible_when_activity_is_folded() {
+    for show_activity in [false, true] {
+        let app = App {
+            show_activity,
+            detail: json!({"messages":[{"text":"Build","reply":"Done","attempts":[{
+                "history_error":"Activity history unavailable: history/c-test.jsonl, entry 42 (missing record).",
+                "journal":42,"activity":[]
+            }]}]}),
+            ..Default::default()
+        };
+        let text = app.transcript().to_string();
+        assert!(text.contains("Activity history unavailable"));
+        assert!(text.contains("entry 42"));
+    }
+}
+
+#[test]
 fn github_inspection_uses_the_typed_read_without_sending_a_chat_message() {
     use std::io::{BufRead, Read, Write};
     for (input,tool,arguments) in [

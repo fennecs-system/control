@@ -98,6 +98,9 @@ These options preserve existing source and model choices.
 | `model.json` | Saved models and default; managed by the web UI. |
 | `source-root` / `CONTROL_SOURCE_ROOT` | Absolute source path for explicit improvements. |
 | `worker-timeout-secs` / `CONTROL_WORKER_TIMEOUT_SECS` | Explicit attempt deadline, captured at admission and clamped to 60 s–24 h. When unset, ordinary attempts default to 600 s; approved persistent bots have no wall-clock deadline. Approval during an active attempt removes only its implicit default, never an explicit limit. |
+| `service-memory-gib` | Service pool memory budget, a strict sum of service limits; default 20, 1–4096. |
+| `service-cpus` | Service pool CPUs; default 8, 1–1024. |
+| `service-cpu-oversubscription` | Factor applied to `service-cpus` when admitting CPU limits; default 2, 1–8. Containers keep their hard CPU caps. |
 | `CONTROL_ADDR` | Loopback bind address; default `127.0.0.1:8080`. |
 
 Without explicit directory overrides, `XDG_CONFIG_HOME/control` and
@@ -136,6 +139,16 @@ install -m 755 target/release/control "$HOME/.local/bin/control"
 Use `~/.local/bin/control`, or add that directory to your shell's PATH. Reinstall
 the binary after rebuilding. For development checks, see
 [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+`control --version --json` identifies the installed binary; `GET /health/build`
+identifies the serving binary with the same typed fields (`version`, `revision`,
+`dirty`, `arch`, `os`). The existing `/health` liveness response is unchanged.
+Nix flake packages capture the source revision and whether it was modified.
+Plain Cargo/source-export builds report `revision: null` unless the builder
+explicitly supplies `CONTROL_BUILD_REVISION=<full-sha>` (or `<full-sha>-dirty`).
+Unknown or dirty builds must not count as verification of an exact merged
+revision. These fields are build identification, not signed provenance, and
+grant no deployment or restart authority.
 
 ## Terminal chat
 

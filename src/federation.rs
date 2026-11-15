@@ -143,6 +143,7 @@ impl Bundle {
         }
         let library = Library {
             definitions: self.definitions.clone(),
+            builtin: Default::default(),
         };
         library
             .validate(&self.documents)

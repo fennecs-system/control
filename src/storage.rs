@@ -79,7 +79,7 @@ pub fn load() -> io::Result<State> {
     crate::history::hydrate_text(&mut state)?;
     crate::turn_context::recover(&state)?;
     let mut changed = crate::knowledge::migrate(&mut state);
-    changed |= state.lens_library.add_missing_defaults();
+    changed |= state.lens_library.merge_defaults();
     changed |= interrupt_active(&mut state);
     if changed {
         save(&state)?;

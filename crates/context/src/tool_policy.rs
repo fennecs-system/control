@@ -1,5 +1,16 @@
 //! Pure MCP transport metadata, shared by the server and standalone TUI.
 //! This classifies calls; execution and actor authorization stay in the brokers.
+/// MCP protocol revisions this node speaks, newest first.
+pub const MCP_VERSIONS: [&str; 2] = ["2025-11-25", "2025-03-26"];
+pub const MCP_LATEST: &str = MCP_VERSIONS[0];
+/// The revision answered to `initialize`: the client's own when supported,
+/// otherwise the latest.
+pub fn negotiate(requested: Option<&str>) -> &'static str {
+    MCP_VERSIONS.into_iter().find(|version| Some(*version) == requested).unwrap_or(MCP_LATEST)
+}
+pub fn supported(version: &str) -> bool {
+    MCP_VERSIONS.contains(&version)
+}
 /// Host policy, never a caller-supplied MCP annotation. Unknown tools fail
 /// closed. Isolated execution still starts work, so it is fenced after yield.
 pub fn after_handoff(name:&str)->bool {

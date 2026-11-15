@@ -79,6 +79,10 @@ jobs:
         run: |
           nix develop --command rustc --edition=2024 --test -D warnings tools/service-runner/main.rs -o "$RUNNER_TEMP/control-service-runner-tests"
           "$RUNNER_TEMP/control-service-runner-tests"
+      - name: Compile and test standalone MCP bridge
+        run: |
+          nix develop --command rustc --edition=2024 --test -D warnings tools/room-mcp/main.rs -o "$RUNNER_TEMP/control-room-mcp-tests"
+          "$RUNNER_TEMP/control-room-mcp-tests"
       - name: Rust UI tests
         run: nix develop --command cargo test --locked --manifest-path web/Cargo.toml
       - name: Clippy

@@ -26,6 +26,12 @@ WASM tooling fix shipped in #143; both platform checks passed before merging.
   Idle peer wakes use existing bot approval, budgets, pause and stop intent.
 - [x] **Steering-chat relay removal:** workers can coordinate directly with
   siblings; the root conversation need not be a bot or relay their routine work.
+- [x] **Room claims and selective waits:** advisory, revisioned ownership per task
+  room with operator-only reclaim of abandoned claims. Bots can wait on a claim
+  without lost wakes, and selective waits retain unrelated direct messages.
+  See [ROOM-NOTIFICATIONS.md](ROOM-NOTIFICATIONS.md#claims).
+- [x] **MCP bridge transport:** mailbox I/O errors on shared mounts answer the
+  affected call instead of closing the provider session.
 - [x] **R2 explicit callback channel (#146):** opt-in watches deliver application
   notifications separately from diagnostic stdout/stderr; process exits remain
   host-observed facts. Default callback reads omit logs; explicit diagnostic
@@ -52,8 +58,13 @@ WASM tooling fix shipped in #143; both platform checks passed before merging.
   comparisons and finer causal classification of raw watch output. Creator identity alone does
   not establish which attempt caused each line. Deliver these only as narrow
   tool/adapter fixes when needed; do not add workload semantics to the supervisor.
-- [ ] **R3/R4:** visible history-read failures and bounded HTTP admission remain
-  open. They can ship independently alongside the architecture slice.
+- [ ] **R3 implementation in review:** missing/invalid/unavailable activity reads
+  return a typed failure; chat API retains the journal reference and reports it
+  in web/TUI, legacy context, delegated feedback and notifications. Empty records
+  remain empty, repaired reads recover and no synthetic tool event is introduced.
+  Fault and read-only regressions pass; this is not yet deployed.
+- [ ] **R4:** bounded HTTP handler admission remains open. It can ship
+  independently alongside the architecture slice.
 - [x] **Minimum architecture checkpoint: first A1/A2/A4 boundary**, then
   consumer-led A3. The directed-message increment in #148 establishes the first typed
   transition/effect boundary, with a blocking production interpreter and Tokio
@@ -970,6 +981,16 @@ comments, title/description updates and exact-head merges through
 `control_github_write` and `/github`. Merge requires an explicit node binding
 permission and operator authorization; GitHub branch rules remain authoritative.
 Resource/mount profiles and deployment/restart jobs remain separate slices.
+
+Deployment's first verification slice stamps Nix packages with their Git revision
+and dirty flag, exposed as typed JSON by `control --version --json` and the
+state-free `/health/build` probe. Unstamped builds report a null revision, and a
+dirty build must not satisfy an exact merged-revision check. This is build
+identification, not signed provenance or deployment permission. The remaining
+job runner must be managed separately from the service it restarts (for example,
+a separate launchd job or systemd unit); detaching a child process alone does not
+escape a service manager's process-group/cgroup cleanup. Keep its durable journal,
+rollback installation and health result outside application State.
 
 **Chat latency boundary.** Deliver update hints through transport adapters, not
 agent wakes: event-driven HTTP admission, mailbox notifications and authenticated

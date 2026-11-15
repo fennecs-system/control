@@ -40,9 +40,6 @@ fn fail(message: &str) -> io::Error {
 fn root() -> io::Result<PathBuf> {
     crate::config::state("artifacts").map_err(io::Error::other)
 }
-fn valid_id(id: &str) -> bool {
-    crate::chat::valid_id(id)
-}
 fn excluded(name: &str) -> bool {
     name.starts_with(".control-")
         || matches!(
@@ -293,7 +290,7 @@ fn walk(
     Ok(())
 }
 pub(crate) fn publish_in(root: &Path, source: &Path, id: &str) -> io::Result<Manifest> {
-    if !valid_id(id) {
+    if !crate::chat::valid_id(id) {
         return Err(fail("Invalid artifact ID"));
     }
     let staging = root.join(format!("{id}.staging"));
@@ -370,7 +367,7 @@ pub fn manifest(id: &str) -> io::Result<Manifest> {
     manifest_in(&root()?, id)
 }
 pub(crate) fn manifest_in(root: &Path, id: &str) -> io::Result<Manifest> {
-    if !valid_id(id) {
+    if !crate::chat::valid_id(id) {
         return Err(fail("Invalid artifact ID"));
     }
     let bytes = safe_read(&root.join(id), "manifest.json", 256 * 1024)?;

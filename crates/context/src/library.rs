@@ -3,6 +3,15 @@ use crate::TOOLS;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+/// Stored definitions, all revisions included.
+const MAX_DEFINITIONS: usize = 4096;
+/// Distinct current lenses.
+const MAX_LENSES: usize = 128;
+/// Lenses selected for one resolution.
+const MAX_SELECTED: usize = 128;
+/// Includes or documents named by one definition.
+const MAX_REFERENCES: usize = 128;
+
 #[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Definition {
@@ -17,13 +26,18 @@ pub struct Definition {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Library {
     pub definitions: Vec<Definition>,
+    /// The built-in revision this node last installed per lens. A later
+    /// built-in revision is installed only while that one is still current,
+    /// so a local edit (a newer local revision) is never replaced.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub builtin: std::collections::BTreeMap<String, u64>,
 }
 impl Default for Library {
     fn default() -> Self {
-        Self {
-            definitions: serde_json::from_str(include_str!("builtin-lenses.json"))
-                .expect("Built-in lens definitions must be valid"),
-        }
+        let definitions: Vec<Definition> = serde_json::from_str(include_str!("builtin-lenses.json"))
+            .expect("Built-in lens definitions must be valid");
+        let builtin = definitions.iter().map(|d| (d.id.clone(), d.revision)).collect();
+        Self { definitions, builtin }
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,18 +70,34 @@ pub fn valid_id(id: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 impl Library {
-    /// Offer new built-ins to existing nodes without replacing local revisions
-    /// or selecting anything for a chat. Captured run contexts are independent.
-    pub fn add_missing_defaults(&mut self) -> bool {
+    /// Offer new built-ins and newer built-in revisions to existing nodes
+    /// without replacing local edits or selecting anything for a chat. New
+    /// revisions are appended, so captured run contexts keep their revision.
+    pub fn merge_defaults(&mut self) -> bool {
+        // Earlier shipped revisions identify unedited copies on nodes that
+        // predate the installed-revision record.
+        let shipped: Vec<Definition> = serde_json::from_str(include_str!("builtin-lens-history.json"))
+            .expect("Built-in lens history must be valid");
         let mut changed = false;
+        let mut lenses = self.current().len();
         for definition in Self::default().definitions {
-            if self.get(&definition.id).is_none()
-                && self.definitions.len() < 4096
-                && self.current().len() < 128
-            {
-                self.definitions.push(definition);
+            let current = self.get(&definition.id).cloned();
+            let mut installed = self.builtin.get(&definition.id).copied();
+            if let Some(current) = current.as_ref().filter(|c| installed.is_none() && (**c == definition || shipped.contains(c))) {
+                self.builtin.insert(definition.id.clone(), current.revision);
+                installed = Some(current.revision);
                 changed = true;
             }
+            match current {
+                None if self.definitions.len() < MAX_DEFINITIONS && lenses < MAX_LENSES => lenses += 1,
+                Some(current) if installed == Some(current.revision)
+                    && definition.revision > current.revision
+                    && self.definitions.len() < MAX_DEFINITIONS => {}
+                _ => continue,
+            }
+            self.builtin.insert(definition.id.clone(), definition.revision);
+            self.definitions.push(definition);
+            changed = true;
         }
         changed
     }
@@ -93,8 +123,8 @@ impl Library {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
-        if roots.len() > 128 {
-            return Err("Select at most 128 lenses.".into());
+        if roots.len() > MAX_SELECTED {
+            return Err(format!("Select at most {MAX_SELECTED} lenses."));
         }
         let mut resolved = Resolved {
             roots: roots.clone(),
@@ -178,7 +208,7 @@ impl Library {
         Ok(())
     }
     pub fn validate(&self, documents: &[DocumentInput]) -> Result<(), String> {
-        if self.current().len() > 128 || self.definitions.len() > 4096 {
+        if self.current().len() > MAX_LENSES || self.definitions.len() > MAX_DEFINITIONS {
             return Err("The local lens library is full.".into());
         }
         let mut versions = BTreeSet::new();
@@ -188,8 +218,8 @@ impl Library {
                 || d.name.chars().count() > 80
                 || d.revision == 0
                 || d.instructions.chars().count() > 4000
-                || d.includes.len() > 128
-                || d.documents.len() > 128
+                || d.includes.len() > MAX_REFERENCES
+                || d.documents.len() > MAX_REFERENCES
                 || !versions.insert((&d.id, d.revision))
             {
                 return Err("Invalid lens definition or duplicate revision.".into());

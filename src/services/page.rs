@@ -2,7 +2,7 @@
 //! Engine queries run on a bounded snapshot outside the state lock, and only for
 //! containers whose identity was verified first.
 use super::*;
-use std::{net::TcpStream, time::Instant};
+use std::{collections::HashSet, net::TcpStream, time::Instant};
 
 const RECENT_STOPPED: usize = 5;
 const PROCESSES: usize = 20;
@@ -24,6 +24,10 @@ pub fn http(stream: &mut TcpStream, shared: &Arc<Mutex<State>>, method: &str, pa
     let back = fields.get("return_chat").filter(|id| crate::chat::valid_id(id)).map_or("/tools/services".to_owned(), |chat| format!("/chat/{chat}"));
     let result = match method {
         "GET" => render(shared).map(Some),
+        "POST" if matches!(fields.get("action").map(String::as_str), Some("delete" | "cleanup")) => {
+            let id = fields.get("id").filter(|_| fields.get("action").map(String::as_str) == Some("delete"));
+            clean_up(shared, id.map(String::as_str)).map(|()| None)
+        }
         "POST" => fields.get("id").ok_or_else(|| fail("Missing service ID")).and_then(|id| {
             let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
             stop(&mut state, id, now(), crate::storage::save)
@@ -50,6 +54,32 @@ pub(crate) fn stop(state: &mut State, id: &str, time: u64, save: impl FnOnce(&St
     transition(state, index, Event::Stop(StopReason::Requested), time, save).map(|_| ())
 }
 
+/// Removes stopped service records: one by ID, or all. Live services are never
+/// touched. Returns the chats that still have services, whose workspaces stay,
+/// and the deleted service's chat when one was named.
+pub(crate) fn forget(state: &mut State, id: Option<&str>, save: impl FnOnce(&State) -> io::Result<()>) -> io::Result<(HashSet<String>, Option<String>)> {
+    let removable = |service: &Service| !service.resource.phase.reserves_capacity() && id.is_none_or(|id| service.resource.id.as_str() == id);
+    let chat = match id {
+        Some(_) => Some(state.services.iter().find(|s| removable(s)).ok_or_else(|| fail("Only a stopped service can be deleted"))?.resource.owner.chat.as_str().to_owned()),
+        None => None,
+    };
+    let previous = state.services.clone();
+    state.services.retain(|service| !removable(service));
+    if let Err(error) = save(state) {
+        state.services = previous;
+        return Err(error);
+    }
+    let keep = state.services.iter().map(|service| service.resource.owner.chat.as_str().to_owned()).collect();
+    Ok((keep, chat))
+}
+/// Records change under the lock; engine volume removal runs after it is released.
+fn clean_up(shared: &Arc<Mutex<State>>, id: Option<&str>) -> io::Result<()> {
+    let (keep, chat) = forget(&mut *shared.lock().map_err(|_| fail("State unavailable"))?, id, crate::storage::save)?;
+    let node = crate::config::node_id().map_err(fail)?;
+    let (_, failures) = workspace::remove_unused(&node, &keep, chat.as_deref());
+    if failures.is_empty() { Ok(()) } else { Err(fail(format!("Records were removed, but some workspaces remain: {}", failures.join("; ")))) }
+}
+
 struct Live {
     stats: Option<crate::engine::Stats>,
     processes: Vec<crate::engine::Process>,
@@ -63,7 +93,11 @@ fn render(shared: &Arc<Mutex<State>>) -> io::Result<String> {
     let cards = services.iter().map(card).collect::<String>();
     let compute = compute_panel(&state.services);
     let empty = if services.is_empty() { "<p class='muted'>No persistent services yet. Agents start them from chat.</p>" } else { "" };
-    let page = crate::render(&state, "tool-page", "none", &format!("<h2>Persistent services</h2>{compute}<div data-live-src='/tools/services/live'>{empty}{cards}</div>"));
+    let stopped = state.services.iter().filter(|s| !s.resource.phase.reserves_capacity()).count();
+    let cleanup = if stopped == 0 { String::new() } else {
+        format!("<form class='decision-form' method='post' action='/tools/services'><input type='hidden' name='action' value='cleanup'><button>Clean up {stopped} stopped service{}</button><span class='muted'> Removes their records and each chat's retained /workspace once no service of that chat remains.</span></form>", if stopped == 1 { "" } else { "s" })
+    };
+    let page = crate::render(&state, "tool-page", "none", &format!("<h2>Persistent services</h2>{compute}{cleanup}<div data-live-src='/tools/services/live'>{empty}{cards}</div>"));
     Ok(page.replacen("</head>", "<script type='module' src='/tool-window/chat-bootstrap.js'></script></head>", 1))
 }
 fn listed(state: &State) -> Vec<Service> {
@@ -153,7 +187,7 @@ fn gather<T: Send + 'static>(jobs: Vec<(String, Job<T>)>, deadline: Instant) -> 
     collected
 }
 
-fn phase(phase: &Phase) -> &'static str {
+pub(super) fn phase(phase: &Phase) -> &'static str {
     match phase {
         Phase::Requested => "Requested",
         Phase::Creating => "Creating",
@@ -185,12 +219,12 @@ fn compute_label(shape: Option<compute::Shape>, limits: compute::Limits) -> Stri
 
 fn compute_panel(services: &[Service]) -> String {
     let used = compute::reserved(services);
-    let capacity = compute::CAPACITY;
+    let capacity = compute::capacity();
     let rows = compute::SHAPES.map(|shape| {
         let limits = shape.limits();
         format!("<tr><td><code>{}</code></td><td>{} GiB</td><td>{}</td></tr>", shape.name(), limits.memory_bytes / compute::GIB, limits.cpus)
     }).join("");
-    format!("<section class='record service-record'><h3>Service resources</h3><p>{} MiB of {} GiB RAM · {} of {} CPUs reserved</p><table><thead><tr><th>Shape</th><th>Memory limit</th><th>CPU limit</th></tr></thead><tbody>{rows}</tbody></table><p class='muted'>Ask an agent to use a shape when starting a service. Defaults: Lite 512 MiB, Full 2 GiB; 1 CPU. To change size, stop and replace in the same chat; /workspace is retained.</p><p class='muted'>This budget covers Control services only. Allow headroom for models, workers and the host. Reserved limits are separate from live usage below.</p></section>", used.memory_bytes / (1024 * 1024), capacity.memory_bytes / compute::GIB, used.cpus, capacity.cpus)
+    format!("<section class='record service-record'><h3>Service resources</h3><p>{} MiB of {} GiB RAM · {} of {} CPU limits reserved ({} CPUs, {}x oversubscription)</p><table><thead><tr><th>Shape</th><th>Memory limit</th><th>CPU limit</th></tr></thead><tbody>{rows}</tbody></table><p class='muted'>Ask an agent to use a shape when starting a service. Defaults: Lite {} MiB, Full {} MiB; 1 CPU. To change size, stop and replace in the same chat; /workspace is retained.</p><p class='muted'>This budget covers Control services only. Allow headroom for models, workers and the host. Reserved limits are separate from live usage below.</p></section>", used.memory_bytes / (1024 * 1024), capacity.memory_bytes / compute::GIB, used.cpus, capacity.admitted_cpus(), capacity.cpus, capacity.cpu_oversubscription, crate::worker_profile::Profile::Lite.service_memory() / (1024 * 1024), crate::worker_profile::Profile::Full.service_memory() / (1024 * 1024))
 }
 
 fn card(service: &Service) -> String {
@@ -215,6 +249,8 @@ fn card(service: &Service) -> String {
     let diagnostic = if service.diagnostic.is_empty() { String::new() } else { format!("<p class='muted'>{}</p>", crate::escape(&service.diagnostic)) };
     let action = if resource.phase.reserves_capacity() && !matches!(resource.phase, Phase::Stopping { .. }) {
         format!("<form class='decision-form' method='post' action='/tools/services'><input type='hidden' name='id' value='{}'><button>Stop service</button></form>", crate::escape(resource.id.as_str()))
+    } else if !resource.phase.reserves_capacity() {
+        format!("<form class='decision-form' method='post' action='/tools/services'><input type='hidden' name='action' value='delete'><input type='hidden' name='id' value='{}'><button>Delete</button></form>", crate::escape(resource.id.as_str()))
     } else {
         String::new()
     };

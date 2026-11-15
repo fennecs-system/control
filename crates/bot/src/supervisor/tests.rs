@@ -9,10 +9,14 @@ enum Msg {
     Lines(u64),
     Exit(Option<i32>),
     Kind(String),
+    Direct,
 }
 impl Info for Msg {
     fn urgent(&self) -> bool {
         matches!(self, Self::Exit(_))
+    }
+    fn direct(&self) -> bool {
+        matches!(self, Self::Direct)
     }
     fn merge(&mut self, newer: &Self) -> bool {
         match (self, newer) {
@@ -26,6 +30,7 @@ impl Info for Msg {
                 true
             }
             (Msg::Kind(held), Msg::Kind(kind)) => held == kind,
+            (Msg::Direct, Msg::Direct) => true,
             _ => false,
         }
     }
@@ -1012,4 +1017,58 @@ fn pause_intent_is_observable_without_discarding_an_outstanding_turn() {
     restored.step(Event::Resume(bot("bot")), Now(3));
     assert!(!restored.paused(&bot("bot")));
     assert!(restored.may_start(&bot("bot"), &turn));
+}
+#[test]
+fn selective_waits_retain_direct_input_while_open_waits_and_early_input_release() {
+    let direct = |cursor| Event::Info {
+        topic: topic("conversation", "chat-agent"),
+        cursor,
+        from: None,
+        info: Msg::Direct,
+    };
+    let wait = |topics: Vec<Topic>| Event::Wait {
+        bot: bot("agent"),
+        topics,
+        until: None,
+    };
+    let mut s = S::default();
+    define(
+        &mut s,
+        "agent",
+        vec![
+            room("dependency"),
+            Source::Topic(topic("conversation", "chat-agent")),
+        ],
+        budget(0, 60_000, 10),
+        0,
+    );
+    let active = turns(&s.step(direct(1), Now(1)))[0].1;
+    s.step(wait(vec![topic("room", "dependency")]), Now(2));
+    s.step(done("agent", active), Now(3));
+    assert!(
+        s.step(direct(2), Now(4)).is_empty(),
+        "unselected direct input is retained, not a wake"
+    );
+    let released = s.step(
+        Event::Info {
+            topic: topic("room", "dependency"),
+            cursor: 1,
+            from: None,
+            info: Msg::Post,
+        },
+        Now(5),
+    );
+    let (_, active, reasons) = turns(&released)[0];
+    assert_eq!(reasons.len(), 2, "retained input arrives with the release");
+
+    // An open wait still wakes for direct input.
+    s.step(wait(vec![]), Now(6));
+    s.step(done("agent", active), Now(7));
+    let woken = s.step(direct(3), Now(8));
+    let active = turns(&woken)[0].1;
+
+    // Input admitted during the turn releases a wait registered afterwards.
+    s.step(direct(4), Now(9));
+    s.step(wait(vec![]), Now(10));
+    assert_eq!(turns(&s.step(done("agent", active), Now(11))).len(), 1);
 }

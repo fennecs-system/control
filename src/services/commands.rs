@@ -44,6 +44,11 @@ pub(super) struct Execution {
     diagnostic: String,
 }
 impl Execution {
+    /// The first line of a command still running, for operator views.
+    pub(super) fn running_label(&self) -> Option<String> {
+        let command = if self.display_command.is_empty() { &self.command } else { &self.display_command };
+        matches!(self.status, Status::Running).then(|| command.lines().next().unwrap_or_default().chars().take(80).collect())
+    }
     pub(super) fn brief(&self) -> Value {
         json!({"execution_id":self.id,"status":self.status,"exit_code":self.exit_code,"diagnostic":self.diagnostic})
     }

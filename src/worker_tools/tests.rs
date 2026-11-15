@@ -85,8 +85,15 @@ fn live_mailbox_notifications_and_tool_calls_roundtrip() {
             json!({"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":i}}),
         );
     }
+    requests.push(json!([
+        {"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"control_room_post","arguments":{"room":"general","message":"batch milestone one","delivery":"record"}}},
+        {"jsonrpc":"2.0","method":"notifications/progress"},
+        {"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"control_room_post","arguments":{"room":"general","message":"batch milestone two","delivery":"record"}}},
+        {"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"control_agent_spawn","arguments":{"objectives":["Own infrastructure","Own farming","Own building","Own mining","Own exploration"]}}}
+    ]));
     let expected = requests
         .iter()
+        .flat_map(|r| r.as_array().cloned().unwrap_or_else(|| vec![r.clone()]))
         .filter_map(|r| r.get("id").cloned())
         .collect::<Vec<_>>();
     for request in requests {
@@ -106,8 +113,10 @@ fn live_mailbox_notifications_and_tool_calls_roundtrip() {
         pump(&shared, &run, &workspace, false);
         while let Ok(line) = replies.try_recv() {
             let value: Value = serde_json::from_str(&line.unwrap()).unwrap();
-            assert!(value.get("error").is_none(), "{value}");
-            observed.push(value["id"].clone());
+            for value in value.as_array().cloned().unwrap_or_else(|| vec![value]) {
+                assert!(value.get("error").is_none(), "{value}");
+                observed.push(value["id"].clone());
+            }
         }
         if child.try_wait().unwrap().is_some() {
             break;
@@ -121,15 +130,28 @@ fn live_mailbox_notifications_and_tool_calls_roundtrip() {
     reader.join().unwrap();
     while let Ok(line) = replies.try_recv() {
         let value: Value = serde_json::from_str(&line.unwrap()).unwrap();
-        assert!(value.get("error").is_none(), "{value}");
-        observed.push(value["id"].clone());
+        for value in value.as_array().cloned().unwrap_or_else(|| vec![value]) {
+            assert!(value.get("error").is_none(), "{value}");
+            observed.push(value["id"].clone());
+        }
     }
     assert!(
         status.success(),
         "MCP bridge did not complete; replies: {observed:?}"
     );
     assert_eq!(observed, expected);
-    assert_eq!(shared.lock().unwrap().collective.posts.len(), 20);
+    let state = shared.lock().unwrap();
+    assert_eq!(state.collective.posts.len(), 22);
+    assert_eq!(state.chats.len(), 6);
+    assert!(state.chats.iter().all(|chat| chat.room.as_deref().is_some_and(|room| room.starts_with("general/"))), "children inherit the room established before their spawn");
+    let children = state.chats.iter().filter(|chat| chat.parent_chat.is_some()).map(|chat| chat.id.clone()).collect::<Vec<_>>();
+    assert_eq!(children.len(), 5);
+    drop(state);
+    for (index, child) in children.iter().enumerate() {
+        let response = dispatch_at(&shared, &run, &json!({"nonce":format!("9-{index}"),"request":{"jsonrpc":"2.0","id":index,"method":"tools/call","params":{"name":"control_bot_request","arguments":{"chat_id":child}}}}), Some(&workspace));
+        assert!(response.get("error").is_none(), "{response}");
+        assert_eq!(response["result"]["structuredContent"]["data"]["decision"], "pending", "{response}");
+    }
 }
 #[test]
 fn ordinary_agents_receive_the_shared_continuity_mcp_without_bot_authority() {
@@ -688,4 +710,135 @@ fn workers_get_concrete_tools_without_operator_authority_or_room_access() {
         .get("error")
         .is_some()
     );
+}
+
+#[test]
+#[ignore = "requires CONTROL_QA_SERVICE_IMAGE and isolated CONTROL_STATE_DIR; stresses the real bridge with wake-driven host pumping"]
+fn live_mailbox_survives_sustained_wake_driven_traffic() {
+    use std::{
+        io::{BufRead, BufReader, Read, Write},
+        process::Stdio,
+        time::{Duration, Instant},
+    };
+    let root = crate::config::state_directory().unwrap();
+    assert!(root.to_string_lossy().starts_with("/private/tmp/control-mailbox-qa."));
+    let image = std::env::var("CONTROL_QA_SERVICE_IMAGE").unwrap();
+    let calls: i64 = std::env::var("CONTROL_QA_CALLS").ok().and_then(|n| n.parse().ok()).unwrap_or(2000);
+    let mut state = State::default();
+    let chat = crate::chat::create(&mut state);
+    crate::chat::send(&mut state, &chat, "Mailbox stress probe", "test").unwrap();
+    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].attempts.push(crate::usage::Attempt {
+        workspace_id: Some("attempt-stress".into()),
+        image: Some(image.clone()),
+        ..Default::default()
+    });
+    let run = state.runtime.runs[0].id.clone();
+    let workspace = crate::runtime::workspace("attempt-stress").unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let workspace = workspace.canonicalize().unwrap();
+    let shared = Arc::new(Mutex::new(state));
+    let name = format!("control-mailbox-stress-{}", std::process::id());
+    struct Cleanup(String);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = crate::engine::query(&["rm", "-f", &self.0]);
+        }
+    }
+    let _cleanup = Cleanup(name.clone());
+    let mut command = crate::engine::scrubbed();
+    command.args([
+        "run", "--rm", "--interactive", "--pull=never", "--name", &name, "--network=none",
+        "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--memory=128m",
+        "--cpus=1", "--pids-limit=32", "--user",
+        &format!("{}:{}", unsafe { libc::getuid() }, unsafe { libc::getgid() }),
+        "--mount", &format!("type=bind,src={},dst=/workspace", workspace.display()),
+    ]);
+    // A locally built bridge can be tested before it is baked into the image.
+    if let Ok(bridge) = std::env::var("CONTROL_QA_BRIDGE") {
+        command.args(["--mount", &format!("type=bind,src={bridge},dst=/opt/control-room-mcp,readonly"), "--entrypoint=/opt/control-room-mcp"]);
+    } else {
+        command.arg("--entrypoint=/bin/control-room-mcp");
+    }
+    command.arg(&image);
+    let mut child = command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let mut input = child.stdin.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+    let errors = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = stderr.read_to_string(&mut text);
+        text
+    });
+    let output = child.stdout.take().unwrap();
+    let (sender, replies) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        for line in BufReader::new(output).lines() {
+            let _ = sender.send(line);
+        }
+    });
+    let writer = std::thread::spawn(move || {
+        writeln!(input, "{}", json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"qa","version":"1"}}})).unwrap();
+        writeln!(input, "{}", json!({"jsonrpc":"2.0","method":"notifications/initialized"})).unwrap();
+        for i in 1..=calls {
+            let request = if i % 2 == 0 {
+                json!({"jsonrpc":"2.0","id":i,"method":"tools/list"})
+            } else {
+                json!({"jsonrpc":"2.0","id":i,"method":"tools/call","params":{"name":"control_room_read","arguments":{"room":"general"}}})
+            };
+            if writeln!(input, "{request}").is_err() {
+                return;
+            }
+        }
+    });
+    let wake = crate::mailbox_wake::MailboxWake::new(&workspace);
+    let deadline = Instant::now() + Duration::from_secs(600);
+    let mut observed = 0i64;
+    while Instant::now() < deadline && observed <= calls {
+        pump(&shared, &run, &workspace, false);
+        while let Ok(line) = replies.try_recv() {
+            let value: Value = serde_json::from_str(&line.unwrap()).unwrap();
+            assert_eq!(value["id"], json!(observed), "{value}");
+            observed += 1;
+        }
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
+        wake.wait(Duration::from_millis(250));
+    }
+    let alive = child.try_wait().unwrap().is_none();
+    let _ = child.kill();
+    let status = child.wait().unwrap();
+    let _ = writer.join();
+    reader.join().unwrap();
+    let errors = errors.join().unwrap();
+    assert!(alive || status.success(), "bridge exited early after {observed} replies: {status:?} {errors}");
+    assert_eq!(observed, calls + 1, "stderr: {errors}");
+}
+#[test]
+fn json_rpc_batches_are_answered_per_element_with_distinct_nonces() {
+    let envelope = json!({"nonce":"7-3","request":[
+        {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_room_post"}},
+        {"jsonrpc":"2.0","method":"notifications/progress"},
+        {"jsonrpc":"2.0","id":"b","method":"tools/list"}]});
+    let seen = std::cell::RefCell::new(Vec::new());
+    let reply = answer(&envelope, |element| {
+        seen.borrow_mut().push(element["nonce"].as_str().unwrap().to_owned());
+        match element["request"].get("id") {
+            Some(id) => json!({"jsonrpc":"2.0","id":id,"result":{}}),
+            None => Value::Null,
+        }
+    });
+    assert_eq!(seen.into_inner(), ["7-3-0", "7-3-1", "7-3-2"]);
+    let replies = reply.as_array().expect("a batch is answered with an array");
+    assert_eq!(replies.iter().map(|r| r["id"].clone()).collect::<Vec<_>>(), [json!(1), json!("b")], "notifications get no reply");
+    let single = json!({"nonce":"1","request":{"jsonrpc":"2.0","id":5,"method":"ping"}});
+    assert_eq!(answer(&single, |e| e["request"]["id"].clone()), json!(5));
+    let notifications = json!({"nonce":"2","request":[{"jsonrpc":"2.0","method":"notifications/initialized"}]});
+    assert!(answer(&notifications, |_| Value::Null).is_null(), "an all-notification batch has no reply");
+    assert!(answer(&json!({"nonce":"3","request":[]}), |_| Value::Null)["error"].is_object());
+    let malformed = answer(&json!({"nonce":"4","request":[42,{}, {"jsonrpc":"2.0","method":"ping","id":8}]}), |e| json!({"id":e["request"]["id"],"result":{}}));
+    assert_eq!(malformed.as_array().unwrap().len(), 3);
+    assert_eq!(malformed[0]["error"]["code"], -32600);
+    assert_eq!(malformed[1]["error"]["code"], -32600);
+    assert_eq!(malformed[2]["id"], 8);
 }

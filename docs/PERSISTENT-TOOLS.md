@@ -134,8 +134,13 @@ The initial scope is deliberately small:
 
   Preset identifiers have immutable limits and are saved with the service.
   Existing records without a shape keep their original limits and PID policy.
-  The node's service pool admits at most 20 GiB and 8 CPUs in total, atomically
-  with the durable reservation. Pending, stopping and fenced resources count;
+  The node's service pool admits services atomically with the durable
+  reservation. Memory is a strict sum of limits, 20 GiB by default. CPU limits are
+  caps rather than reservations, so CPU is admitted against the node's CPUs times
+  an oversubscription factor, 8 x 2 = 16 by default; each container keeps its hard
+  CPU cap and excess demand is throttled. Operators size the pool with
+  `service-memory-gib`, `service-cpus` and `service-cpu-oversubscription` (1-8)
+  in the node configuration directory. Pending, stopping and fenced resources count;
   only confirmed teardown releases capacity. An over-capacity request fails
   without creating a service; retries do not reserve twice. This is a service
   admission budget, not a host allocator: external model servers, worker
@@ -145,6 +150,11 @@ The initial scope is deliberately small:
   `control_service_status` without an ID returns presets and remaining budget.
   Each service reports its shape and effective `limits` (bytes and CPU count).
   The Services page shows these limits separately from observed live usage.
+  Stopped services can be deleted there one at a time, or all at once with
+  **Clean up stopped services**. Deletion removes the stopped records and, once no
+  service record of that chat remains, the chat's retained `/workspace` volume;
+  only volumes carrying this node's Control labels are removed, and the engine
+  refuses one still mounted. Running services must be stopped first.
   Start with `{"command":"exec your-server", "shape":"medium"}` for 4 GiB,
   or `"large"` for 8 GiB. Allow room inside the limit for application overhead;
   a managed runtime's heap must be smaller than its container memory limit.
@@ -245,6 +255,21 @@ a VM isolation claim. Host/engine clocks should be synchronized; a separate
 maximum duration bounds the watchdog even if clocks differ.
 
 ## Verification and cost
+
+The worker MCP mailbox handles both individual JSON-RPC requests and batches.
+Batch elements execute in order through the same attempt authorization checks,
+with separate delivery identities; notifications produce no JSON-RPC reply.
+Versioned bridge deliveries correlate host replies by nonce, including batches
+and notifications. Older pinned bridges keep their original reply format.
+The host claims a mailbox request before executing it, so a late reply cannot
+delete the next request. A missing reply never automatically replays an effect.
+Transport errors distinguish a request that was not sent from an uncertain
+outcome that must be inspected before retrying.
+
+The bounded `.control-room-mcp.log` records exchange steps and tool names, without
+arguments or results, alongside the latest-step `.last` file. These internal
+files are excluded from published workspaces. They distinguish a provider that
+has not sent a call from a host that has not answered it.
 
 Native fault tests cover checkpoint failures, duplicate/replayed requests,
 bounded retention, ownership/scope mismatches, permission revocation, expired

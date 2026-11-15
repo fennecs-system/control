@@ -6,7 +6,7 @@ use reqwest::{
 };
 use serde_json::{Value, json};
 use std::{fs, io, time::Duration};
-const VERSION: &str = "2025-11-25";
+const VERSION: &str = control_context::tool_policy::MCP_LATEST;
 pub mod github;
 pub mod updates;
 pub struct Hive {

@@ -28,6 +28,7 @@ fn custom_defaults_and_instruction_only_lenses_reach_the_chat_composer() {
     assert!(cookie("bad\r\nInjected").starts_with("Set-Cookie: control_lens=none;"));
     let cards = library(&state, "field-work");
     assert!(cards.contains("Field &lt;work&gt;") && cards.contains("id=autonomy"));
+    assert!(cards.contains("Coordination &amp; planning") && cards.contains("id=coordination"));
     let page = crate::chat::landing(&state, "field-work", None);
     assert!(page.contains("value='field-work' form='chat-list-new' checked"));
     assert_eq!(

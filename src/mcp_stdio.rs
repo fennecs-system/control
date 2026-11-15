@@ -133,7 +133,7 @@ fn dispatch(connection: &mut Option<Hive>, root: &Path, request: &Value) -> Valu
         }
         match request["method"].as_str().unwrap_or("") {
             "initialize" => Ok(
-                json!({"protocolVersion":if request["params"]["protocolVersion"]=="2025-03-26" {"2025-03-26"}else{"2025-11-25"},"capabilities":{"tools":{}},"serverInfo":{"name":"control-local-tools","version":env!("CARGO_PKG_VERSION")}}),
+                json!({"protocolVersion":control_context::tool_policy::negotiate(request["params"]["protocolVersion"].as_str()),"capabilities":{"tools":{}},"serverInfo":{"name":"control-local-tools","version":env!("CARGO_PKG_VERSION")}}),
             ),
             "ping" => Ok(json!({})),
             "tools/list" => {

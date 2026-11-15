@@ -189,3 +189,28 @@ fn live_docker_enforces_all_shapes_without_changing_image_capabilities() {
         assert_eq!(observed.pids, profile.service_pids());
     }
 }
+
+#[test]
+fn cpu_limits_oversubscribe_while_memory_stays_a_strict_sum() {
+    let capacity = Capacity::DEFAULT;
+    let cpus = |cpus| Limits { memory_bytes: GIB, cpus };
+    assert!(admit_within(&[], cpus(12), capacity).is_ok(), "CPU caps beyond the 8 physical CPUs are admitted");
+    assert!(admit_within(&[], cpus(16), capacity).is_ok());
+    assert!(admit_within(&[], cpus(17), capacity).unwrap_err().to_string().contains("x2 oversubscription"));
+    assert!(admit_within(&[], Limits { memory_bytes: 21 * GIB, cpus: 1 }, capacity).is_err(), "memory is never oversubscribed");
+    let strict = Capacity { cpu_oversubscription: 1, ..capacity };
+    assert!(admit_within(&[], cpus(9), strict).is_err());
+}
+
+#[test]
+fn node_settings_size_the_pool_and_invalid_values_keep_defaults() {
+    let settings = |pairs: &'static [(&'static str, &'static str)]| move |name: &str| {
+        pairs.iter().find(|(key, _)| *key == name).map(|(_, value)| (*value).to_owned())
+    };
+    assert_eq!(Capacity::from_settings(|_| None), Capacity::DEFAULT);
+    let sized = Capacity::from_settings(settings(&[("service-memory-gib", "40\n"), ("service-cpus", "14"), ("service-cpu-oversubscription", "3")]));
+    assert_eq!(sized, Capacity { memory_bytes: 40 * GIB, cpus: 14, cpu_oversubscription: 3 });
+    assert_eq!(sized.admitted_cpus(), 42);
+    let invalid = Capacity::from_settings(settings(&[("service-memory-gib", "0"), ("service-cpus", "many"), ("service-cpu-oversubscription", "100")]));
+    assert_eq!(invalid, Capacity::DEFAULT);
+}
