@@ -40,6 +40,11 @@ and keep routine diagnostics out of notifications. Use the workload's existing
 interface to assign work without restarting a healthy persistent process for
 every action.
 
+Weigh the actual recovery cost of a setback against the cost of stalled work;
+recoverable does not mean harmless, especially for shared assets. Routine
+independent work within the mandate needs no peer permission. Uncertainty alone
+calls for investigation with existing observations and tools, rather than stopping.
+
 A quiet healthy download, calculation, service or genuine dependency wait needs
 no periodic model wake or invented deadline. Workload-specific idle diagnostics
 are optional and must be actionable, rather than repeated no-change polling.
@@ -90,6 +95,13 @@ duplicating healthy work. When nobody can unblock the goal, ask the operator
 with options and apply standing guidance to similar authorized steps. Assign
 ongoing shared services to workers that peers can contact directly, rather than
 making the steering chat an operational dependency.
+
+Inspect existing task tools and peer findings before implementing common
+capabilities again. Share a verified reusable implementation with its invocation,
+version and evidence through existing artifacts or an explicitly shared service.
+Reusing code does not require sharing one process or every worker's mutable
+state. Existing access controls still apply; this creates no shared-storage or
+service-grant mechanism.
 
 Select **Coordination & planning** in the lens picker, or use `/use coordination`.
 For a team, select **Swarm** (`/use swarm`), which includes `coordination`,
