@@ -64,9 +64,14 @@ fn live_mailbox_notifications_and_tool_calls_roundtrip() {
         }),
         "--mount",
         &format!("type=bind,src={},dst=/workspace", workspace.display()),
-        "--entrypoint=/bin/control-room-mcp",
-        &image,
     ]);
+    // Exercise a patched bridge without replacing any deployed worker image.
+    if let Ok(bridge) = std::env::var("CONTROL_QA_BRIDGE") {
+        command.args(["--mount", &format!("type=bind,src={bridge},dst=/opt/control-room-mcp,readonly"), "--entrypoint=/opt/control-room-mcp"]);
+    } else {
+        command.arg("--entrypoint=/bin/control-room-mcp");
+    }
+    command.arg(&image);
     let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -80,11 +85,17 @@ fn live_mailbox_notifications_and_tool_calls_roundtrip() {
         json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
     ];
     for i in 3..23 {
-        requests.push(json!({"jsonrpc":"2.0","id":i,"method":"tools/call","params":{"name":"control_room_post","arguments":{"room":"general","message":format!("isolated-probe-{i}"),"delivery":"record"}}}));
+        requests.push(json!({"jsonrpc":"2.0","id":i,"method":"tools/call","params":{"name":"control_room_post","arguments":{"room":"general","message":format!("isolated-probe-{i}\nquoted: \"text\"; braces: }} ]; slash: \\; unicode: 🦊\r\nlast line"),"delivery":"record"}}}));
         requests.push(
             json!({"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":i}}),
         );
     }
+    // A client may reject a well-formed but unrecognised MCP reply with an
+    // id-less error. It has no request to answer and must not break later calls.
+    requests.push(json!({"jsonrpc":"2.0","error":{"code":-32600,"message":"Invalid request"}}));
+    let note = "first line\nquoted: \"note\"; braces: } ]; slash: \\; unicode: 🦊\r\nlast line";
+    requests.push(json!({"jsonrpc":"2.0","id":"claim-note","method":"tools/call","params":{"name":"control_room_claim","arguments":{"room":"general","key":"frame-check","action":"acquire","status":"working","note":note}}}));
+    requests.push(json!({"jsonrpc":"2.0","id":"room-read","method":"tools/call","params":{"name":"control_room_read","arguments":{"room":"general"}}}));
     requests.push(json!([
         {"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"control_room_post","arguments":{"room":"general","message":"batch milestone one","delivery":"record"}}},
         {"jsonrpc":"2.0","method":"notifications/progress"},
@@ -97,7 +108,13 @@ fn live_mailbox_notifications_and_tool_calls_roundtrip() {
         .filter_map(|r| r.get("id").cloned())
         .collect::<Vec<_>>();
     for request in requests {
-        writeln!(input, "{request}").unwrap();
+        let frame = format!("{request}\n");
+        assert_eq!(frame.bytes().filter(|&byte| byte == b'\n').count(), 1);
+        // Pipe reads may split anywhere, including inside a UTF-8 character or
+        // an escape. Only the final delimiter ends a frame.
+        for chunk in frame.as_bytes().chunks(7) {
+            input.write_all(chunk).unwrap();
+        }
     }
     drop(input);
     let (sender, replies) = std::sync::mpsc::channel();
@@ -109,12 +126,16 @@ fn live_mailbox_notifications_and_tool_calls_roundtrip() {
     });
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut observed = Vec::new();
+    let mut room_read = None;
     while Instant::now() < deadline {
         pump(&shared, &run, &workspace, false);
         while let Ok(line) = replies.try_recv() {
             let value: Value = serde_json::from_str(&line.unwrap()).unwrap();
             for value in value.as_array().cloned().unwrap_or_else(|| vec![value]) {
                 assert!(value.get("error").is_none(), "{value}");
+                if value["id"] == "room-read" {
+                    room_read = Some(serde_json::from_str::<Value>(value["result"]["content"][0]["text"].as_str().unwrap()).unwrap());
+                }
                 observed.push(value["id"].clone());
             }
         }
@@ -132,6 +153,9 @@ fn live_mailbox_notifications_and_tool_calls_roundtrip() {
         let value: Value = serde_json::from_str(&line.unwrap()).unwrap();
         for value in value.as_array().cloned().unwrap_or_else(|| vec![value]) {
             assert!(value.get("error").is_none(), "{value}");
+            if value["id"] == "room-read" {
+                room_read = Some(serde_json::from_str::<Value>(value["result"]["content"][0]["text"].as_str().unwrap()).unwrap());
+            }
             observed.push(value["id"].clone());
         }
     }
@@ -140,6 +164,9 @@ fn live_mailbox_notifications_and_tool_calls_roundtrip() {
         "MCP bridge did not complete; replies: {observed:?}"
     );
     assert_eq!(observed, expected);
+    let room_read = room_read.expect("a room read must complete after the id-less peer error");
+    assert_eq!(room_read["claims"][0]["note"], note);
+    assert_eq!(room_read["posts"][0]["text"], "isolated-probe-22\nquoted: \"text\"; braces: } ]; slash: \\; unicode: 🦊\r\nlast line");
     let state = shared.lock().unwrap();
     assert_eq!(state.collective.posts.len(), 22);
     assert_eq!(state.chats.len(), 6);

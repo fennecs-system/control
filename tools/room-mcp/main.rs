@@ -121,6 +121,26 @@ fn correlated_response(text: &str, nonce: &str) -> Option<String> {
         .then(|| member(text, "\"response\""))
         .flatten()
 }
+/// Content-free wire diagnostics. An id-less peer error is not a notification:
+/// clients can send one when a reply is valid JSON but not a valid MCP message.
+/// Do not log error messages/data, tool arguments or returned content.
+fn wire_summary(text: &str) -> String {
+    let error = member(text, "\"error\"");
+    let kind = if text.starts_with('[') {
+        "batch"
+    } else if error.is_some() {
+        "error"
+    } else if member(text, "\"method\"").is_some() {
+        if request_id(text).is_some() { "request" } else { "notification" }
+    } else if member(text, "\"result\"").is_some() {
+        "response"
+    } else {
+        "unknown"
+    };
+    let code = error.and_then(|error| member(&error, "\"code\""))
+        .and_then(|code| code.parse::<i64>().ok());
+    format!("kind={kind} bytes={} error_code={}", text.len(), code.map_or_else(|| "-".into(), |code| code.to_string()))
+}
 fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
@@ -273,7 +293,7 @@ fn main() -> io::Result<()> {
             let id = request_id(line.trim());
             let method = member(line.trim(), "\"method\"").unwrap_or_else(|| if line.trim_start().starts_with('[') { "batch".to_owned() } else { String::new() });
             let tool = member(line.trim(), "\"params\"").and_then(|params| member(&params, "\"name\"")).unwrap_or_default();
-            trace(&format!("received {count} {method} {tool} id={}", id.as_deref().unwrap_or("-")));
+            trace(&format!("received {count} {method} {tool} id={} {}", id.as_deref().unwrap_or("-"), wire_summary(line.trim())));
             let nonce = format!("\"{stamp}-{count}\"");
             let envelope = format!("{{\"version\":1,\"nonce\":{nonce},\"request\":{}}}", line.trim());
             if let Err(error) = send(&envelope, stamp, count, &mut tries) {
@@ -291,9 +311,9 @@ fn main() -> io::Result<()> {
                     };
                     if response.trim() != "null" {
                         reply(&mut stdout, response.trim())?;
-                        trace(&format!("replied {count} {method} id={}", id.as_deref().unwrap_or("-")));
+                        trace(&format!("replied {count} {method} id={} wire_id={} {}", id.as_deref().unwrap_or("-"), request_id(response.trim()).as_deref().unwrap_or("-"), wire_summary(response.trim())));
                     } else {
-                        trace(&format!("acknowledged {count} {method}"));
+                        trace(&format!("acknowledged {count} {method} {}", wire_summary(line.trim())));
                     }
                     break;
                 }
