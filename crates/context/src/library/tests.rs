@@ -218,11 +218,11 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     let autonomy = Library::default().get("autonomy").unwrap().clone();
     assert_eq!(autonomy.revision, 3);
     let coordination = Library::default().get("coordination").unwrap().clone();
-    assert_eq!(coordination.revision, 5);
+    assert_eq!(coordination.revision, 6);
     assert_eq!(coordination.includes, ["planning"]);
     let previous: Vec<Definition> = serde_json::from_str(include_str!("../builtin-lens-history.json")).unwrap();
     assert!(previous.iter().any(|d| d.id == "autonomy" && d.revision == 1));
-    for revision in 1..=4 {
+    for revision in 1..=5 {
         assert!(previous.iter().any(|d| d.id == "coordination" && d.revision == revision));
     }
     for earlier in previous {

@@ -91,7 +91,10 @@ Roles and claims own shared deliverables, not exclusive rights to routine inputs
 or another agent's basic task prerequisites. Check that a dependency's producer
 can act and is not waiting on you. If it cannot act, coordinate a handoff of
 ownership or do independent authorized work; elapsed time alone does not justify
-duplicating healthy work. When nobody can unblock the goal, ask the operator
+duplicating healthy work. An agent that observes or produces the condition a
+dependent waits on tells that dependent directly, rather than assuming it will
+notice a record or claim note. Claims name shared deliverables and fixes, not
+personal roles or standing titles. When nobody can unblock the goal, ask the operator
 with options and apply standing guidance to similar authorized steps. Assign
 ongoing shared services to workers that peers can contact directly, rather than
 making the steering chat an operational dependency.
