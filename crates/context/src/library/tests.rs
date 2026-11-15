@@ -223,15 +223,19 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert_eq!(investigation.includes, ["evidence"]);
     assert!(investigation.tools.is_empty());
     let autonomy = Library::default().get("autonomy").unwrap().clone();
-    assert_eq!(autonomy.revision, 4);
+    assert_eq!(autonomy.revision, 5);
     assert!(autonomy.instructions.contains("a setback means recover, not quit"));
+    assert!(autonomy.instructions.contains("two consecutive routine cycles"));
     let coordination = Library::default().get("coordination").unwrap().clone();
-    assert_eq!(coordination.revision, 9);
+    assert_eq!(coordination.revision, 10);
     assert_eq!(coordination.includes, ["planning"]);
     assert!(coordination.instructions.starts_with("Whoever steers a team posts the milestone backlog"));
     assert!(coordination.instructions.contains("Wait on a claim only for an output you cannot reasonably produce yourself"));
     assert!(coordination.instructions.contains("briefs each worker with the shared goal and its first milestone"));
-    assert!(coordination.instructions.contains("a room post or note awaiting direction is not a question"));
+    assert!(coordination.instructions.contains("room post or note awaiting direction is not a question"));
+    assert!(coordination.instructions.contains("routine and repeated outcomes stay in your own notes"));
+    assert!(coordination.instructions.contains("ask once per blocker, not per member"));
+    assert!(coordination.instructions.contains("refreshing the backlog is not a response"));
     let planning = Library::default().get("planning").unwrap().clone();
     assert_eq!(planning.revision, 3);
     assert!(planning.instructions.contains("checkable done-condition"));
@@ -244,10 +248,10 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert!(swarm.includes.contains(&"planning".to_string()));
     let previous: Vec<Definition> = serde_json::from_str(include_str!("../builtin-lens-history.json")).unwrap();
     assert!(previous.iter().any(|d| d.id == "investigation" && d.revision == 1));
-    for revision in 1..=3 {
+    for revision in 1..=4 {
         assert!(previous.iter().any(|d| d.id == "autonomy" && d.revision == revision));
     }
-    for revision in 1..=8 {
+    for revision in 1..=9 {
         assert!(previous.iter().any(|d| d.id == "coordination" && d.revision == revision));
     }
     for revision in 1..=2 {

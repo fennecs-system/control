@@ -124,6 +124,18 @@ working, so no blocked or advisor signal fired. Assign
 ongoing shared services to workers that peers can contact directly, rather than
 making the steering chat an operational dependency.
 
+Coordination revision 10 and autonomy revision 5 favour progress over proof. Post
+to the room only what others need (a milestone advanced, a handoff, a blocker
+raised or resolved, a reusable finding), briefly and citing evidence; routine
+outcomes stay in the agent's notes. A repeating routine is not progress: after
+two routine cycles without milestone progress, report the blocker, take unblocked
+work or ask for a new assignment. When several members report one blocker or
+milestones stall, whoever steers re-plans or reassigns around it and escalates
+once; an operator question opens with what is blocked, the impact and the
+requested decision. An overnight team run showed why: every member fell back to
+a safe repeating routine behind one host blocker, posting a verbose record each
+cycle, while the lead only refreshed the backlog.
+
 Inspect existing task tools and peer findings before implementing common
 capabilities again. Share a verified reusable implementation with its invocation,
 version and evidence through existing artifacts or an explicitly shared service.
