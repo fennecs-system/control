@@ -35,7 +35,7 @@ pub(super) fn large(chats: usize, runs: usize) -> (State, String, Vec<String>) {
         state.collective.claims.push(crate::rooms::claims::Claim {
             room: "general".into(), key: format!("deliverable-{index}"), owner: helpers[index % chats].clone(),
             status: crate::rooms::claims::Status::Working, blocked_on: None, note: String::new(),
-            revision: state.collective.claim_seq, incarnation: state.collective.claim_seq, abandoned: false,
+            revision: state.collective.claim_seq, incarnation: state.collective.claim_seq, abandoned: false, blocked_at: 0,
         });
     }
     command_at(&mut state, &helpers[0], "on", Now(0)).unwrap();

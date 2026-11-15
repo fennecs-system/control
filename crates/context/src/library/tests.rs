@@ -222,13 +222,17 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert_eq!(autonomy.revision, 4);
     assert!(autonomy.instructions.contains("a setback means recover, not quit"));
     let coordination = Library::default().get("coordination").unwrap().clone();
-    assert_eq!(coordination.revision, 6);
+    assert_eq!(coordination.revision, 7);
     assert_eq!(coordination.includes, ["planning"]);
     assert!(coordination.instructions.starts_with("Whoever steers a team posts the milestone backlog"));
+    assert!(coordination.instructions.contains("Wait on a claim only for an output you cannot reasonably produce yourself"));
     let planning = Library::default().get("planning").unwrap().clone();
     assert_eq!(planning.revision, 3);
     assert!(planning.instructions.contains("checkable done-condition"));
     assert!(planning.instructions.contains("treat reaching its done-condition as the tool's test"));
+    let advisor = Library::default().get("advisor").unwrap().clone();
+    assert_eq!(advisor.revision, 2);
+    assert!(advisor.instructions.contains("members marked claims blocked"));
     let swarm = Library::default().get("swarm").unwrap().clone();
     assert_eq!(swarm.revision, 2);
     assert!(swarm.includes.contains(&"planning".to_string()));
@@ -236,13 +240,14 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     for revision in 1..=3 {
         assert!(previous.iter().any(|d| d.id == "autonomy" && d.revision == revision));
     }
-    for revision in 1..=5 {
+    for revision in 1..=6 {
         assert!(previous.iter().any(|d| d.id == "coordination" && d.revision == revision));
     }
     for revision in 1..=2 {
         assert!(previous.iter().any(|d| d.id == "planning" && d.revision == revision));
     }
     assert!(previous.iter().any(|d| d.id == "swarm" && d.revision == 1));
+    assert!(previous.iter().any(|d| d.id == "advisor" && d.revision == 1));
     for earlier in previous {
         let shipped = Library::default().get(&earlier.id).unwrap().clone();
         assert!(earlier.revision < shipped.revision, "{} history must predate the shipped revision", earlier.id);

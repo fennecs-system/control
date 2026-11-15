@@ -57,6 +57,14 @@ pub struct Claim {
     /// Host-observed loss of the owner, cleared by the owner's next update.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub abandoned: bool,
+    /// Revision at which the current blocked state began: kept while updates
+    /// stay blocked on the same claim, 0 when not blocked. Advisor facts are
+    /// edge-triggered on it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub blocked_at: u64,
+}
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 impl Claim {
     fn outcome(&self) -> Option<Outcome> {
@@ -271,19 +279,28 @@ pub(crate) fn call(state: &mut State, chat: &str, room: &str, args: &Value) -> R
     state.collective.claim_seq += 1;
     let revision = state.collective.claim_seq;
     let release = call.action == Action::Release;
+    let blocked_on = if release { None } else { blocked_on };
+    let incarnation = match &current {
+        Some(previous) if call.action != Action::Acquire => previous.incarnation,
+        _ => revision,
+    };
+    // Staying blocked on the same claim keeps the transition's revision.
+    let blocked_at = match &current {
+        _ if blocked_on.is_none() => 0,
+        Some(previous) if previous.incarnation == incarnation && previous.status == Status::Blocked && previous.blocked_on == blocked_on => previous.blocked_at,
+        _ => revision,
+    };
     let claim = Claim {
         room: room.to_owned(),
         key: call.key,
         owner: chat.to_owned(),
         status: if release { Status::Released } else { status },
-        blocked_on: if release { None } else { blocked_on },
+        blocked_on,
         note: if release { String::new() } else { note.to_owned() },
         revision,
-        incarnation: match &current {
-            Some(previous) if call.action != Action::Acquire => previous.incarnation,
-            _ => revision,
-        },
+        incarnation,
         abandoned: false,
+        blocked_at,
     };
     // Resolution is a transition: re-reporting done is progress, not a new outcome.
     let resolved = claim.outcome().filter(|_| current.as_ref().is_none_or(|c| c.incarnation != claim.incarnation || c.outcome().is_none_or(|o| o == Outcome::Abandoned)))
