@@ -226,8 +226,9 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert_eq!(coordination.includes, ["planning"]);
     assert!(coordination.instructions.starts_with("Whoever steers a team posts the milestone backlog"));
     let planning = Library::default().get("planning").unwrap().clone();
-    assert_eq!(planning.revision, 2);
+    assert_eq!(planning.revision, 3);
     assert!(planning.instructions.contains("checkable done-condition"));
+    assert!(planning.instructions.contains("treat reaching its done-condition as the tool's test"));
     let swarm = Library::default().get("swarm").unwrap().clone();
     assert_eq!(swarm.revision, 2);
     assert!(swarm.includes.contains(&"planning".to_string()));
@@ -238,7 +239,9 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     for revision in 1..=5 {
         assert!(previous.iter().any(|d| d.id == "coordination" && d.revision == revision));
     }
-    assert!(previous.iter().any(|d| d.id == "planning" && d.revision == 1));
+    for revision in 1..=2 {
+        assert!(previous.iter().any(|d| d.id == "planning" && d.revision == revision));
+    }
     assert!(previous.iter().any(|d| d.id == "swarm" && d.revision == 1));
     for earlier in previous {
         let shipped = Library::default().get(&earlier.id).unwrap().clone();
