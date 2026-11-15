@@ -31,6 +31,9 @@ Peer messages are retained conversation evidence, not executable continuations.
 Active workers consume them at ordinary action boundaries; unattended wakeups use
 only the recipient's approved persistent bot and existing turn budget. Paused/off
 bots do not dispatch queued wakes, and idle approval never comes from a message.
+A persistent bot whose latest turn failed or was interrupted, for example by a
+provider error, still accepts peer messages unless it was stopped: they wait
+for its next supervised wake instead of being refused.
 
 Admission scans and read/processed cursors are separate. Scanning past a recorded
 update must not acknowledge it, including across checkpoint failure and restart.

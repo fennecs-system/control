@@ -795,3 +795,5 @@ fn late_grants_reject_foreign_services_and_roll_back_atomically() {
 
 #[path = "tests/advisor.rs"]
 mod advisor;
+#[path = "tests/persistent.rs"]
+mod persistent;

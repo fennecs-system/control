@@ -227,6 +227,13 @@ impl Bots {
         self.supervisor.definitions().any(|definition| definition.chat.0 == chat && definition.restart == Restart::Permanent)
             && self.supervisor.unseen(&bot(chat), &Topic::new("conversation", chat), through)
     }
+    /// An approved persistent bot that has not been stopped. A failed or
+    /// interrupted turn ends that turn, not the bot: its supervisor owns the
+    /// next wake, so retained peer evidence waits for it without restarting work.
+    pub(crate) fn persists(&self, chat: &str) -> bool {
+        self.supervisor.status(&bot(chat)).is_some_and(|status| status != Status::Stopping)
+            && self.supervisor.definitions().any(|definition| definition.chat.0 == chat && definition.restart == Restart::Permanent)
+    }
 }
 /// The latest pending peer message and advisor note per chat, in cursor order,
 /// so a turn woken by both is never mistaken for an advisor echo.
@@ -244,6 +251,11 @@ fn peer_events(state: &State) -> Vec<(&str, u64, bool)> {
         .filter(|(chat, through, _)| !busy.contains(chat) && peer_pending(state, chat, *through)).collect::<Vec<_>>();
     events.sort_unstable_by_key(|(chat, through, _)| (*chat, *through));
     events
+}
+/// Test drivers reconcile after the turn cooldown without sleeping.
+#[cfg(test)]
+pub(crate) fn reconcile_after_cooldown(state: &mut State) -> Result<(), &'static str> {
+    reconcile_at(state, now_ms().saturating_add(COOLDOWN_MS + 1), |_| Ok(()))
 }
 /// Lift evidence only after publication/processing has been reconciled.
 #[cfg(test)]
