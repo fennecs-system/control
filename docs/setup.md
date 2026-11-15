@@ -235,6 +235,17 @@ Optional `operator` settings in `discord-access.json` narrow this:
 `chats` lists top-level chat IDs to forward (empty forwards all); set
 `enabled` to false to keep architects DM-only.
 
+### Steering chats from Discord
+
+Architects can also drive any chat from their DM with the TUI's navigation:
+`/chats` lists the most recently active chats, `/resume ID` selects one and
+`/new` starts one. While a chat is selected, messages go to it through
+`control.chat.send`, so chat commands such as `/steer`, `/cancel`, `/btw` and
+`/answer` behave as on the web and in the TUI. Its finished replies are relayed
+to the DM; replying to a relayed reply continues that chat. `/resume` with the
+DM's own chat ID (shown by `/chats`) returns to the DM chat. The selection is
+kept in `discord-operator.json`.
+
 If delivery fails, run `control discord --diagnose`. To inspect server role and
 channel permissions without reading messages, use
 `control discord --audit-server-permissions`. A zero-permission invite can still
