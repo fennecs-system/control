@@ -1656,7 +1656,7 @@ fn watch_read_receipts_retire_only_published_evidence_and_survive_restart() {
             )
             .unwrap();
         let working = mailbox
-            .publication(None, &id, "attempt", "published")
+            .publication(None, &id, "attempt", "published", |_| true)
             .unwrap()
             .unwrap();
         state.runtime.runs[0].status = "completed".into();
@@ -1683,6 +1683,95 @@ fn watch_read_receipts_retire_only_published_evidence_and_survive_restart() {
         reconcile_at(&mut state, 2001, |_| Ok(())).unwrap();
         assert_eq!(bot_runs(&state).len(), 1);
     }
+}
+
+#[test]
+fn deleted_watch_sources_retire_at_publication_without_redelivery() {
+    use crate::watches::delivery::{live, prepare, record};
+    use control_context::{
+        turn_mailbox::{Disposition, Handoff, Mailbox, Range, WorkingState},
+        working_state::Payload,
+    };
+    let (mut state, chat) = fixture();
+    watching(&mut state, &chat, "w-live");
+    command_at(&mut state, &chat, "on", Now(0)).unwrap();
+    // A persistent bot that armed a watch per task: its committed state is
+    // already at the source budget, almost entirely deleted watches.
+    let mut processed = (0..126)
+        .map(|n| Range::Watch { watch: format!("w-gone-{n}"), after: 0, through: 3 })
+        .collect::<Vec<_>>();
+    processed.push(Range::Watch { watch: "w-live".into(), after: 0, through: 1 });
+    processed.push(Range::Conversation { chat: chat.clone(), after: 0, through: 1 });
+    let previous = WorkingState {
+        revision: 7,
+        run: "earlier".into(),
+        generation: "earlier".into(),
+        checkpoint: "earlier".into(),
+        payload: Payload { subgoal: "Sleep each night".into(), ..Default::default() },
+        processed,
+        disposition: Disposition::Continue,
+    };
+    state.chats[0].continuity = Some(Box::new(crate::turn_context::Managed {
+        working: Some(previous.clone()),
+        ..Default::default()
+    }));
+    state.watches[0].observe_for_test(1, None);
+    state.watches[0].observe_for_test(2, None);
+    state.runtime.runs[0].status = "running".into();
+    let id = state.runtime.runs[0].id.clone();
+    state.runtime.runs[0].attempts.push(crate::usage::Attempt {
+        workspace_id: Some("attempt".into()),
+        turn_mailbox: Some(Box::new(Mailbox::default())).into(),
+        ..Default::default()
+    });
+    let cx = AttemptRef { run: &id, generation: "attempt", nonce: "read" };
+    let page = prepare(&state, &cx, "w-live", None).unwrap();
+    assert_eq!(page.after, 1, "the live watch resumes from its committed watermark");
+    let receipt = record(&mut state, &cx, "w-live", &page, 2, false, |_| Ok(())).unwrap().unwrap();
+    // A new task watch would push the source count past the budget.
+    let mut mailbox = state.runtime.runs[0].attempts[0].turn_mailbox.as_ref().unwrap().as_ref().clone();
+    mailbox.baseline.push(Range::Watch { watch: "w-new".into(), after: 0, through: 0 });
+    mailbox
+        .stage(
+            "handoff".into(),
+            Handoff {
+                base_revision: 7,
+                payload: Payload { subgoal: "Sleep each night".into(), ..Default::default() },
+                processed: vec![receipt],
+                resynchronised: vec![],
+                disposition: Disposition::Continue,
+                progress: None,
+            },
+            7,
+        )
+        .unwrap();
+    assert!(
+        mailbox.publication(Some(&previous), &id, "attempt", "cp", |_| true).is_err(),
+        "without retirement the stuck state stays over budget"
+    );
+    watching(&mut state, &chat, "w-new");
+    let working = mailbox
+        .publication(Some(&previous), &id, "attempt", "cp", live(&state))
+        .unwrap()
+        .unwrap();
+    assert_eq!(working.revision, 8);
+    assert!(!working.processed.iter().any(|r| matches!(r, Range::Watch { watch, .. } if watch.starts_with("w-gone"))));
+    assert!(working.processed.iter().any(|r| matches!(r, Range::Watch { watch, through: 2, .. } if watch == "w-live")));
+    assert!(working.processed.iter().any(|r| matches!(r, Range::Watch { watch, .. } if watch == "w-new")));
+    assert!(working.processed.iter().any(|r| matches!(r, Range::Conversation { through: 1, .. })));
+    assert_eq!(working.processed.len(), 3);
+    // Commit, then read again from a later attempt: the live watch does not
+    // redeliver processed events, and a retired watch can issue no receipt.
+    state.chats[0].continuity.as_mut().unwrap().working = Some(working);
+    state.runtime.runs[0].attempts.push(crate::usage::Attempt {
+        workspace_id: Some("later".into()),
+        turn_mailbox: Some(Box::new(Mailbox::default())).into(),
+        ..Default::default()
+    });
+    let later = AttemptRef { run: &id, generation: "later", nonce: "read" };
+    assert_eq!(prepare(&state, &later, "w-live", None).unwrap().after, 2);
+    let gone = prepare(&state, &later, "w-gone-0", None).unwrap();
+    assert_eq!(record(&mut state, &later, "w-gone-0", &gone, 3, false, |_| panic!("no receipt")).unwrap(), None);
 }
 
 #[test]

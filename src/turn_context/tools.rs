@@ -159,6 +159,7 @@ fn handle(
                 attempt.run,
                 attempt.generation,
                 "pending-workspace",
+                crate::watches::delivery::live(state),
             )
             .map_err(|message| {
                 let selected = mailbox.accepted().map(|h| h.processed.as_slice()).unwrap_or_default();

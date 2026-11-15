@@ -723,7 +723,7 @@ fn commit(
         && mailbox.accepted().is_some()
     {
         let candidate=attempt.project_checkpoint.as_deref().or(attempt.artifact.as_deref()).zip(attempt.workspace_id.as_deref()).ok_or("Handoff requires a published workspace")
-            .and_then(|(checkpoint,generation)|mailbox.publication(chat_index.and_then(|i|s.chats[i].continuity.as_ref()).and_then(|c|c.working.as_ref()),id,generation,checkpoint));
+            .and_then(|(checkpoint,generation)|mailbox.publication(chat_index.and_then(|i|s.chats[i].continuity.as_ref()).and_then(|c|c.working.as_ref()),id,generation,checkpoint,crate::watches::delivery::live(s)));
         match candidate {Ok(candidate)=>working=candidate,Err(message)=>outcome=Err(("interrupted",message.into()))}
     }
     // A callback consumed by this writer must not become a second model turn.

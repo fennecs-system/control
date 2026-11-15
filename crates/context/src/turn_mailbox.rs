@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub const MAX_DELIVERIES: usize = 128;
+/// Committed watermarks per working state. Sources the host reports as retired
+/// are dropped at publication and never count against this budget.
+pub const MAX_SOURCES: usize = 128;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "source", rename_all = "snake_case", deny_unknown_fields)]
@@ -232,12 +235,20 @@ impl Mailbox {
     /// Construct a publication candidate, without changing committed state.
     /// Exact contiguous ranges may advance; unseen gaps cannot be skipped by
     /// acknowledging a later page. The host commits this with its workspace.
+    ///
+    /// `live` reports whether a source can still deliver events. A watermark
+    /// is only needed to prevent redelivery, so the host may report a source
+    /// retired only once nothing can read from it again (for example a watch
+    /// record it has deleted). Retired watermarks are dropped after this
+    /// publication's ranges are checked, so a contiguous receipt for a source
+    /// retired mid-attempt is still accepted rather than stranding the bot.
     pub fn publication(
         &self,
         previous: Option<&WorkingState>,
         run: &str,
         generation: &str,
         checkpoint: &str,
+        live: impl Fn(&Range) -> bool,
     ) -> Result<Option<WorkingState>, &'static str> {
         let Some(handoff) = self.accepted() else {
             return Ok(None);
@@ -288,8 +299,11 @@ impl Mailbox {
                 processed.push(range.clone());
             }
         }
-        if processed.len() > 128 {
-            return Err("Processed source budget exceeded; retire obsolete sources explicitly");
+        processed.retain(|range| live(range));
+        if processed.len() > MAX_SOURCES {
+            return Err(
+                "More than 128 live callback sources (rooms, watches, conversations) would be tracked. Sources of deleted watches are retired automatically; stop watches you no longer need with control_watch_stop, or report this host limit",
+            );
         }
         Ok(Some(WorkingState {
             revision: revision
