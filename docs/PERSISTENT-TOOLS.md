@@ -89,6 +89,7 @@ them. Operator stdio/HTTP MCP does not yet expose service management.
 | `control_service_stop` | Record stop intent. Wait for `Stopped` before assuming removal succeeded. |
 | `control_service_exec` | Submit a bounded command inside an owned running service; returns an execution ID. |
 | `control_service_exec_status` | Read that command's live output, durable status and exit code. |
+| `control_service_copy` | Copy a file or tree from the task workspace into an owned running service's `/workspace`; returns an execution ID. |
 
 Commands run in a fresh container from the attempt's captured, immutable Nix
 worker image. Rebuild worker/Claude images with the documented Nix setup before
@@ -194,6 +195,73 @@ download binaries directly into `/workspace`, without passing them through model
 text or mounting a host folder. The service's foreground process must stay alive;
 `exec sleep infinity` keeps an idle worker alive while setting up other processes.
 Long-lived background programs must redirect stdin/stdout/stderr to private files.
+
+### Copying task files into a service
+
+`control_service_copy {"service_id", "from", "to"}` brings a reusable tool, such
+as a project folder opened with `/open`, into a service without a host mount or
+exec heredocs. `from` is relative to the attempt's task workspace (`/workspace`
+in its run container, approved project folders included); `to` is relative to
+the service's `/workspace`. A leading `/workspace/` is accepted on either. Every
+segment must be a plain name: no absolute paths, `..`, `.` or empty segments.
+The tool accepts no host paths and results never contain them.
+
+- **Authority.** Only the caller's active, non-judge attempt can copy, and only
+  from its own workspace, into a service it can already exec in: the same chat
+  ownership, actor, node and exact-generation grant checks as
+  `control_service_exec`. Judges are denied at the tool gate as well.
+- **Source safety.** Host-side reads walk pinned directory descriptors with
+  no-follow opens, reusing the artifact publication path policy. The source and
+  its parents must be real directories or a regular file. Inside the tree,
+  symlinks (dangling ones too), FIFOs, sockets, devices, non-UTF-8 names and
+  credential, Control-internal or generated names (`.git`, `.env*`, `auth.json`,
+  `.claude`, `.codex`, `.control-*`, `target`, `node_modules`) are skipped
+  without being followed. They are counted, with up to eight examples, in the
+  result. Depth is limited to 32, like publication.
+- **Tool packages.** Admitted tool packages ([TOOL-PACKAGES.md](TOOL-PACKAGES.md))
+  appear at `/workspace/.control-tools/<name>` and are the one Control-internal
+  source a copy may read, with the same link, special-file, name and bound rules
+  for the rest of the path and tree. Other `.control-*` sources (mailbox, room
+  and result files) stay refused, and no destination may use a `.control-*` name.
+- **Bounds.** The whole tree is checked against the byte and entry bounds
+  before admission and again before launch, so an oversized source writes
+  nothing. Streaming enforces them a third time. Defaults are 256 MiB of file
+  content and 20,000 files plus directories; operators can set
+  `service-copy-max-mib` (1–8191) and `service-copy-max-entries` (1–1,000,000)
+  in the node configuration directory. A memory-backed or capped legacy
+  `/workspace` lowers the byte bound to its size. A retained workspace volume
+  has no Control cap (`storage_limit_mb` excludes it); the engine's disk still
+  applies, and running out fails the copy.
+- **Streaming.** Control writes a minimal ustar/pax archive (directories and
+  regular files only, executable bits kept) straight from each open file into
+  `tar -x` run by `docker exec --interactive` as the service's uid/gid in
+  `/workspace`. Nothing is buffered beyond a 64 KiB writer. Files are owned by
+  the service user, and the copy can write nothing that user could not already
+  write with a command. Existing files at the same paths are replaced and other
+  files are kept. A file that shrinks while streaming fails the copy; growth
+  after it was opened is not copied.
+- **One lane.** A copy is an entry in the service's single command lane, not a
+  separate one. It waits for, and blocks, other commands on that service, so a
+  copy cannot race a build reading the same files. It reuses the command
+  machinery: durable intent before launch, request-identity receipts (a retried
+  nonce returns the recorded outcome without rescanning or recopying, and a
+  reused nonce with different arguments is refused), the timeout
+  (`timeout_seconds`, default 300) and in-service reaping on timeout or
+  interruption, and restart recovery that never replays it.
+  `control_service_exec_status` reports progress, a summary and skipped entries.
+- **Failure.** The source is read only while the requesting attempt is active.
+  Finish polling before ending the turn: a copy dispatched after its attempt
+  ended, or whose source vanished or grew past a bound, fails before anything
+  enters the service. Extraction failures such as a full disk or a file over an
+  existing directory mark the copy failed without stopping the service. Copies
+  are not atomic: a failed or interrupted copy may leave earlier files written.
+
+The reverse direction (service to task workspace) is deliberately not provided.
+It would extract untrusted service output into a host directory: a new
+host-write boundary that needs its own safe extractor, interaction with the
+checkpoint barrier and node storage accounting. Until such a capability is
+separately reviewed, small results can be read back through bounded command
+output.
 
 Commands survive model turns and have a 1–1800 second timeout (default 120), capped
 by the service lease. Poll `control_service_exec_status` until complete. One active
@@ -322,6 +390,21 @@ fails explicitly rather than silently dropping the requested limit.
 CONTROL_QA_SERVICE_IMAGE=sha256:<worker-image-id> \
 nix develop --command cargo test --locked --bin control \
   services::tests::live_workspace_survives_restart_exit_cleanup_and_container_replacement \
+  -- --ignored --exact --nocapture
+```
+
+The copy regression admits copies through the real dispatcher into a running
+service: a 3 MiB tree with a long (pax) path, an executable and a skipped
+symlink and `.env`. It checks service-user ownership and that the copied program
+runs, then that a later copy replaces one file and keeps the rest. Finally, an
+extraction conflict fails without stopping the service. It writes state and the
+attempt workspace under the isolated `CONTROL_STATE_DIR`:
+
+```sh
+CONTROL_QA_SERVICE_IMAGE=sha256:<worker-image-id> \
+CONTROL_STATE_DIR=/private/tmp/control-copy-qa \
+nix develop --command cargo test --locked --bin control \
+  services::copy::tests::live_copy_streams_a_tree_into_a_real_service_as_its_user \
   -- --ignored --exact --nocapture
 ```
 

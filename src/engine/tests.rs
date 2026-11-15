@@ -29,3 +29,15 @@ fn stats_and_processes_parse_engine_output_and_stay_bounded() {
     );
     assert_eq!(parse_top("PID USER COMMAND\n5 502\n", 5)[0].command, "");
 }
+
+#[test]
+fn only_input_exec_forwards_stdin() {
+    let arguments = |command: Command| command.get_args().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>();
+    let plain = arguments(exec("c1", "7:8", Some("/workspace"), &[("A", "b")], &["tar", "-x"]));
+    let input = arguments(exec_input("c1", "7:8", Some("/workspace"), &[("A", "b")], &["tar", "-x"]));
+    assert!(!plain.contains(&"--interactive".to_owned()));
+    let expected = ["--user", "7:8", "--env", "A=b", "--workdir", "/workspace", "c1", "tar", "-x"];
+    assert!(plain.ends_with(&expected.map(str::to_owned)));
+    assert!(input.ends_with(&expected.map(str::to_owned)));
+    assert_eq!(input.iter().position(|a| a == "--interactive"), input.iter().position(|a| a == "exec").map(|i| i + 1));
+}

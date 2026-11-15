@@ -1,6 +1,6 @@
 //! Service tool schemas and input decoding. Ownership, the resource reducer,
 //! container checks and checkpoints stay behind `ServiceOps`.
-use super::{Input, commands};
+use super::{Input, commands, copy};
 use crate::tool_registry::{AttemptCall, AttemptRef, AttemptTools, LocalHost};
 use serde_json::{Value, json};
 use std::io;
@@ -12,6 +12,7 @@ pub enum ServiceCall {
     Stop(Option<String>),
     Exec(commands::Input),
     ExecStatus(commands::Handle),
+    Copy(copy::Input),
 }
 pub trait ServiceOps {
     fn service(&self, attempt: &AttemptRef<'_>, call: ServiceCall) -> io::Result<Value>;
@@ -42,6 +43,7 @@ impl AttemptTools for Tools {
             tools.push(json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":{"service_id":{"type":"string"}},"required":if name=="control_service_status"{json!([])}else{json!(["service_id"])},"additionalProperties":false},"annotations":{"readOnlyHint":readonly,"openWorldHint":false}}));
         }
         tools.extend(commands::definitions());
+        tools.push(copy::definition());
         tools
     }
     fn known(&self, name: &str) -> bool {
@@ -53,6 +55,7 @@ impl AttemptTools for Tools {
                 | "control_service_stop"
                 | "control_service_exec"
                 | "control_service_exec_status"
+                | "control_service_copy"
         )
     }
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
@@ -83,6 +86,9 @@ fn decode(name: &str, args: &Value) -> io::Result<ServiceCall> {
         "control_service_exec_status" => serde_json::from_value(args.clone())
             .map(ServiceCall::ExecStatus)
             .map_err(|_| io::Error::other("Expected service_id and execution_id")),
+        "control_service_copy" => serde_json::from_value(args.clone())
+            .map(ServiceCall::Copy)
+            .map_err(|_| io::Error::other("Expected service_id, from, to and optional timeout_seconds")),
         _ => Err(io::Error::other("Unknown service tool")),
     }
 }
