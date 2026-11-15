@@ -176,7 +176,7 @@ fn the_prefix_maps_to_control_commands_both_ways() {
     assert!(fake.posts.borrow()[0].1.contains("!answer q-1 YOUR_ANSWER") || fake.posts.borrow()[1].1.contains("!port allow"));
     assert_eq!(channel.route(&bang, &me(), inbound(None, "!help")), Some(Routed::Help));
     assert!(matches!(channel.route(&bang, &me(), inbound(None, "!bot deny bot-1")), Some(Routed::Decide(n)) if n.id == "bot-1"));
-    assert_eq!(channel.route(&bang, &me(), inbound(None, "!use swarm, review")), Some(Routed::Navigate(Navigation::Use(vec!["swarm".into(), "review".into()]))));
+    assert_eq!(channel.route(&bang, &me(), inbound(None, "!use swarm, review")), Some(Routed::Navigate(Navigation::Use(Some(vec!["swarm".into(), "review".into()])))));
 }
 
 #[test]

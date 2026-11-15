@@ -277,10 +277,13 @@ impl App {
             _ if let Some(navigation) = chats::navigation(&text) => match navigation {
                 Navigation::New => self.new_chat(hive)?,
                 Navigation::Open(id) => { self.active = id; self.inspector=None;self.refresh(hive)?; }
-                Navigation::Use(lenses) => {
-                    // Resolve before creating a conversation: invalid input has no side effects.
-                    if self.active.is_empty(){hive.tool("control.lenses.resolve",json!({"lenses":lenses}))?;self.new_chat(hive)?;}
-                    self.set_detail(chats::use_lenses(hive,&self.active,&lenses)?);
+                // Nothing selected is not a command: keep the draft and change nothing.
+                Navigation::Use(None) => return Ok(false),
+                Navigation::Use(Some(lenses)) => {
+                    // Check against the library before creating a conversation: invalid input has no side effects.
+                    self.lenses=lens_input::Catalog::from_list(&chats::check_lenses(hive,&lenses)?);
+                    if self.active.is_empty(){self.new_chat(hive)?;}
+                    self.set_detail(hive.tool("control.chat.lenses",json!({"id":self.active,"lenses":lenses}))?);
                     self.inspector=None;self.status=format!("Future messages: {}",lens_label(&self.detail));self.follow=true;
                 }
                 Navigation::List => {

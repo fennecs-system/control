@@ -10,8 +10,9 @@ pub enum Navigation {
     List,
     Open(String),
     New,
-    /// `/use LENS…` for future messages; `/use none` clears.
-    Use(Vec<String>),
+    /// `/use LENS…` for future messages; `/use none` clears. `None` when it
+    /// names no lens: a no-op on every client.
+    Use(Option<Vec<String>>),
 }
 /// Client navigation commands, for help text and menus.
 pub const COMMANDS: &[(&str, &str)] = &[
@@ -21,26 +22,70 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/use LENS…", "Compose future messages with lenses; /use none clears"),
 ];
 pub fn navigation(text: &str) -> Option<Navigation> {
-    match text.trim() {
+    let text = text.trim();
+    if let Some(arguments) = use_arguments(text) {
+        return Some(Navigation::Use(lenses(arguments).map(|names| names.into_iter().map(str::to_owned).collect())));
+    }
+    match text {
         "/chats" | "/resume" => Some(Navigation::List),
         "/new" => Some(Navigation::New),
-        text if text.starts_with("/use ") => lenses(&text[5..]).map(|names| Navigation::Use(names.into_iter().map(str::to_owned).collect())),
         text => text.strip_prefix("/resume ").map(str::trim).filter(|id| !id.is_empty() && !id.contains(char::is_whitespace)).map(|id| Navigation::Open(id.into())),
     }
 }
-/// Lens names after `/use`, separated by spaces or commas; `none` clears.
-pub fn lenses(names: &str) -> Option<Vec<&str>> {
-    let names = names.split(|c: char| c.is_whitespace() || c == ',').filter(|s| !s.is_empty()).collect::<Vec<_>>();
+
+// The one `/use` grammar, shared by every client's submission and the TUI's
+// live highlighting.
+/// Lens names are separated by whitespace and/or commas.
+pub fn lens_separator(c: char) -> bool {
+    c.is_whitespace() || c == ','
+}
+/// The argument text of a `/use` command (empty for a bare `/use`).
+pub fn use_arguments(text: &str) -> Option<&str> {
+    let tail = text.strip_prefix("/use")?;
+    (tail.is_empty() || tail.starts_with(char::is_whitespace)).then_some(tail)
+}
+/// Each lens name in `/use` arguments, in order.
+pub fn lens_names(arguments: &str) -> impl Iterator<Item = &str> {
+    arguments.split(lens_separator).filter(|name| !name.is_empty())
+}
+/// The lenses `/use` arguments select: `None` when they name none (a no-op),
+/// empty for `none` (clear).
+pub fn lenses(arguments: &str) -> Option<Vec<&str>> {
+    let names = lens_names(arguments).collect::<Vec<_>>();
     match names.as_slice() {
         [] => None,
         ["none"] => Some(Vec::new()),
         _ => Some(names),
     }
 }
-/// Applies lenses to `chat` as the TUI and web lens picker do: resolved first,
-/// so invalid names change nothing, then set atomically. Returns the chat view.
+/// Selected names absent from the library, in input order without repeats.
+pub fn unknown<'a>(names: &[&'a str], known: impl Fn(&str) -> bool) -> Vec<&'a str> {
+    let mut missing = Vec::new();
+    for name in names.iter().copied().filter(|name| !known(name)) {
+        if !missing.contains(&name) {
+            missing.push(name);
+        }
+    }
+    missing
+}
+/// Checks lenses against the server's library (`control.lenses.list`) and
+/// resolves them, so invalid names change nothing. Returns the library.
+pub fn check_lenses(hive: &mut super::Hive, lenses: &[impl AsRef<str>]) -> std::io::Result<Value> {
+    let library = hive.tool("control.lenses.list", serde_json::json!({}))?;
+    let ids = library.as_array().ok_or_else(|| std::io::Error::other("Invalid lens library response."))?
+        .iter().filter_map(|d| d["id"].as_str()).collect::<std::collections::HashSet<_>>();
+    let names = lenses.iter().map(AsRef::as_ref).collect::<Vec<_>>();
+    let missing = unknown(&names, |id| ids.contains(id));
+    if !missing.is_empty() {
+        return Err(std::io::Error::other(format!("Unknown {}: {}. Nothing changed; /lenses lists the library.", if missing.len() == 1 { "lens" } else { "lenses" }, missing.join(", "))));
+    }
+    hive.tool("control.lenses.resolve", serde_json::json!({"lenses":names}))?;
+    Ok(library)
+}
+/// Applies lenses to `chat` as the TUI and web lens picker do: checked first,
+/// then set atomically. Returns the chat view.
 pub fn use_lenses(hive: &mut super::Hive, chat: &str, lenses: &[String]) -> std::io::Result<Value> {
-    hive.tool("control.lenses.resolve", serde_json::json!({"lenses":lenses}))?;
+    check_lenses(hive, lenses)?;
     hive.tool("control.chat.lenses", serde_json::json!({"id":chat,"lenses":lenses}))
 }
 

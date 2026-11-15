@@ -421,7 +421,9 @@ impl Channel {
         let hive = self.hive()?;
         let fail = |e: std::io::Error| e.to_string();
         match navigation {
-            Navigation::Use(lenses) => {
+            // Naming no lens changes nothing; say how to use it.
+            Navigation::Use(None) => Ok("Usage: /use LENS… (space or comma separated), or /use none to clear.".into()),
+            Navigation::Use(Some(lenses)) => {
                 let chat = target.ok_or("Select a chat with /chats first.")?;
                 let detail = chats::use_lenses(hive, &chat, &lenses).map_err(fail)?;
                 let names = if lenses.is_empty() { "no lenses".to_owned() } else { lenses.join(" + ") };
