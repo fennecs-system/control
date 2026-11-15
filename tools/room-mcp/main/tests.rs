@@ -70,3 +70,31 @@ fn the_largest_versioned_envelope_still_fits_the_host_reader() {
     let envelope = format!("{{\"version\":1,\"nonce\":\"{}-{}\",\"request\":{request}}}", u128::MAX, u64::MAX);
     assert_eq!(envelope.len(), mailbox_limits::REQUEST_ENVELOPE_BYTES);
 }
+
+#[test]
+fn diagnostics_distinguish_idless_errors_from_notifications_without_payloads() {
+    let error = r#"{"jsonrpc":"2.0","error":{"code":-32600,"message":"private error text","data":{"secret":"not for logs"}}}"#;
+    assert_eq!(wire_summary(error), format!("kind=error bytes={} error_code=-32600", error.len()));
+    let notification = r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":3,"reason":"private reason"}}"#;
+    assert_eq!(wire_summary(notification), format!("kind=notification bytes={} error_code=-", notification.len()));
+    for (text, kind) in [
+        (r#"{"id":3,"method":"tools/call","params":{"error":{"code":-1}}}"#, "request"),
+        (r#"{"id":3,"result":{"content":[{"type":"text","text":"private"}]}}"#, "response"),
+        (r#"[{"id":3,"method":"ping"}]"#, "batch"),
+        ("{}", "unknown"),
+    ] {
+        assert_eq!(wire_summary(text), format!("kind={kind} bytes={} error_code=-", text.len()));
+    }
+}
+
+#[test]
+fn escaped_room_text_remains_one_complete_response_frame() {
+    let body = r#"{"id":3,"jsonrpc":"2.0","result":{"content":[{"type":"text","text":"{\"message\":\"first\\nsecond\\r\\nquote: \\\" slash: \\\\ } ] 🦊\"}"}],"isError":false}}"#;
+    let envelope = format!("{{\"nonce\":\"7-3\",\"response\":{body}}}");
+    let response = correlated_response(&envelope, r#""7-3""#).unwrap();
+    assert_eq!(response, body);
+    let mut output = Vec::new();
+    reply(&mut output, &response).unwrap();
+    assert_eq!(output.iter().filter(|&&byte| byte == b'\n').count(), 1);
+    assert_eq!(&output[..output.len()-1], body.as_bytes());
+}
