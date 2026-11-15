@@ -35,7 +35,7 @@ pub(super) fn large(chats: usize, runs: usize) -> (State, String, Vec<String>) {
         state.collective.claims.push(crate::rooms::claims::Claim {
             room: "general".into(), key: format!("deliverable-{index}"), owner: helpers[index % chats].clone(),
             status: crate::rooms::claims::Status::Working, blocked_on: None, note: String::new(),
-            revision: state.collective.claim_seq, incarnation: state.collective.claim_seq, abandoned: false, blocked_at: 0,
+            revision: state.collective.claim_seq, incarnation: state.collective.claim_seq, abandoned: false, blocked_at: 0, advanced_at: 0,
         });
     }
     command_at(&mut state, &helpers[0], "on", Now(0)).unwrap();
@@ -70,11 +70,21 @@ fn reconcile_profile() {
     // `1`: one advisor observes the whole tree each pass. `off`: an advisor bot
     // remains defined but the root chat no longer selects the advisor lens, so
     // the lifecycle topic is not computed.
+    // `blocked`: as `1`, with a quarter of the claims blocked on another claim
+    // with similar free-text notes, so the advisor compares blocker reasons.
     let mode = std::env::var("CONTROL_PROFILE_ADVISOR").unwrap_or_default();
-    let (advised, lens_off) = (mode == "1" || mode == "off", mode == "off");
+    let (advised, lens_off) = (matches!(mode.as_str(), "1" | "off" | "blocked"), mode == "off");
     for (chats, runs) in [(64, 16), (512, 16)] {
         for offered in [false, true] {
             let (mut state, root, helpers) = large(chats, runs);
+            if mode == "blocked" {
+                for (index, claim) in state.collective.claims.iter_mut().enumerate().filter(|(index, _)| index % 4 == 1) {
+                    claim.status = crate::rooms::claims::Status::Blocked;
+                    claim.blocked_on = Some("deliverable-0".into());
+                    claim.blocked_at = claim.revision;
+                    claim.note = format!("Host error {index}: the shared service refused connections at 10.0.0.{index}, falling back to routine work");
+                }
+            }
             if advised {
                 super::advisor::advisor(&mut state, &root);
                 reconcile_at(&mut state, 1, |_| Ok(())).unwrap();

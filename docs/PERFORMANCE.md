@@ -1121,3 +1121,28 @@ lenses. A single run on the final head (median of ten 200-pass batches):
 | offered, 512 chats | 213.9 µs | 213.6 µs | 347.2 µs |
 
 With the lens off, a pass costs the same as with no advisor, within noise.
+
+**Shared-blocker and stall facts (2026-11-16).** The same pass now also counts
+each team's open claims and latest `advanced_at`, and compares blocker reasons.
+`CONTROL_PROFILE_ADVISOR=blocked` is the advisor case with a quarter of the 128
+claims blocked with similar free-text notes, so reasons form one shared group.
+Before is `0097058` with the identical fixture. Alternating before/after
+binaries, three rounds of ten 1,000-pass batches; the table shows the median of
+the round medians.
+
+| Case | Before | After |
+| --- | ---: | ---: |
+| idle, 64 / 512 chats, no advisor | 27.7 / 206.8 µs | 27.7 / 206.0 µs |
+| offered, 64 / 512 chats, no advisor | 35.5 / 214.5 µs | 35.5 / 214.1 µs |
+| idle, 64 / 512 chats, one advisor | 43.8 / 347.8 µs | 45.1 / 347.4 µs |
+| offered, 64 / 512 chats, one advisor | 51.6 / 355.8 µs | 52.6 / 355.5 µs |
+| idle, 64 / 512 chats, blocked | 44.1 / 344.6 µs | 46.1 / 351.5 µs |
+| offered, 64 / 512 chats, blocked | 53.5 / 356.1 µs | 55.6 / 358.7 µs |
+
+Nodes without an advisor are unchanged. With one, every member claim now costs
+one owner lookup (about 10 ns each for 128 claims) instead of only blocked
+ones. A first version re-tokenised every blocked note on every pass and cost
++25 µs in the blocked case at 64 chats; the team snapshot now keeps a
+fingerprint of the reasons (claim revisions and run positions), so unchanged
+reasons are not compared again. Tokenising and grouping run only when a
+blocked note or a failing member's latest result changes.

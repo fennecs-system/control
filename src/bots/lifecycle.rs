@@ -3,7 +3,8 @@
 //! already reads; there is no clock, classifier or supervisor state for them.
 //! They are gaps a lead could miss (the team went quiet, a member keeps
 //! failing, a restart loop was retired, a claim lost its owner, members became
-//! blocked on a claim), never single failures. Judge turns, retained peer
+//! blocked on a claim, members report a similar blocker, turns keep settling
+//! while open claims do not advance), never single failures. Judge turns, retained peer
 //! evidence (runs without an attempt) and turns woken only by advisor notes,
 //! including the lead's, are not team activity, so an advisor cannot wake
 //! itself through the team it advises. The model interprets; the host only
@@ -71,6 +72,12 @@ pub struct Facts {
     /// The last active member yielded with nothing queued or running.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub quiescent: bool,
+    /// Team turns kept settling while claims stayed open and none advanced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stalled: Option<Stall>,
+    /// Members blocked or failing with similar reasons, one entry per reason.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shared: Vec<Shared>,
     /// Chats the facts concern, newest first and bounded.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub chats: Vec<String>,
@@ -118,6 +125,85 @@ impl Blocked {
         }
     }
 }
+/// Activity without progress: `turns` member turns settled since any claim
+/// last advanced (became done, or resumed working after being blocked) while
+/// `open` claims stayed working or blocked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Stall {
+    pub turns: u32,
+    pub open: u32,
+}
+/// Two or more members reporting a similar blocker: a blocked claim's note or
+/// the latest result of a member on a failure streak. `reason` is one member's
+/// text as reported, untrusted and shortened.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Shared {
+    pub reason: String,
+    pub members: Vec<String>,
+}
+/// Characters of a reported reason kept in a fact.
+const REASON: usize = 120;
+/// Reasons compared per team per pass; the comparison is pairwise.
+const REASONS: usize = 64;
+
+/// A reason's distinct words for a cheap similarity check: lower-cased words of
+/// three or more letters, hashed and sorted. Words containing digits (IDs,
+/// ports, counts, times) are dropped because they vary between members
+/// reporting one cause. No embeddings or vocabulary.
+fn words(text: &str) -> Vec<u64> {
+    let text = &text[..text.floor_char_boundary(512)];
+    let mut words = text.split(|c: char| !c.is_alphanumeric())
+        .filter(|word| word.chars().nth(2).is_some() && !word.chars().any(|c| c.is_numeric()))
+        .map(|word| {
+            let mut hash = Fx::default();
+            for c in word.chars().flat_map(char::to_lowercase) {
+                hash.add(u64::from(c));
+            }
+            hash.finish()
+        })
+        .take(64)
+        .collect::<Vec<_>>();
+    words.sort_unstable();
+    words.dedup();
+    words
+}
+/// Whether two word sets share at least two words and most of their union
+/// (Jaccard ≥ 0.6).
+fn similar(a: &[u64], b: &[u64]) -> bool {
+    let (mut i, mut j, mut common) = (0, 0, 0);
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => (i, j, common) = (i + 1, j + 1, common + 1),
+        }
+    }
+    common >= 2 && common * 5 >= (a.len() + b.len() - common) * 3
+}
+/// Groups `(member, reason)` pairs with similar reasons; only groups of two or
+/// more distinct members are shared blockers.
+fn share<'a>(reasons: &[(&'a str, &'a str, u64)]) -> Vec<(Vec<u64>, &'a str, Vec<&'a str>)> {
+    let mut groups: Vec<(Vec<u64>, &str, Vec<&str>)> = Vec::new();
+    for &(member, reason, _) in reasons.iter().take(REASONS) {
+        let words = words(reason);
+        if words.len() < 2 {
+            continue;
+        }
+        match groups.iter_mut().find(|(known, ..)| similar(known, &words)) {
+            Some((_, _, members)) => if !members.contains(&member) { members.push(member) },
+            None => groups.push((words, reason, vec![member])),
+        }
+    }
+    groups.retain(|(.., members)| members.len() >= 2);
+    groups
+}
+fn excerpt(reason: &str) -> String {
+    let reason = reason.split_whitespace().collect::<Vec<_>>().join(" ");
+    match reason.char_indices().nth(REASON) {
+        Some((end, _)) => format!("{}…", &reason[..end]),
+        None => reason,
+    }
+}
 fn is_zero(value: &u32) -> bool {
     *value == 0
 }
@@ -133,8 +219,26 @@ impl Facts {
             self.block(blocked);
         }
         self.quiescent |= newer.quiescent;
+        self.stalled = newer.stalled.or(self.stalled);
+        for shared in &newer.shared {
+            self.share(shared);
+        }
         for chat in &newer.chats {
             self.concern(chat);
+        }
+    }
+    /// Folds a shared blocker into an entry with the same reason or a common
+    /// member, keeping the newer reason text.
+    fn share(&mut self, newer: &Shared) {
+        if let Some(held) = self.shared.iter_mut().find(|held| held.reason == newer.reason || held.members.iter().any(|member| newer.members.contains(member))) {
+            held.reason.clone_from(&newer.reason);
+            for member in &newer.members {
+                if held.members.len() < CHATS && !held.members.contains(member) {
+                    held.members.push(member.clone());
+                }
+            }
+        } else if self.shared.len() < CHATS {
+            self.shared.push(newer.clone());
         }
     }
     fn concern(&mut self, chat: &str) {
@@ -156,6 +260,7 @@ impl Facts {
     }
     fn is_empty(&self) -> bool {
         self.repeated == 0 && self.retired == 0 && self.abandoned == 0 && self.blocked.is_empty() && !self.quiescent
+            && self.stalled.is_none() && self.shared.is_empty()
     }
     pub(super) fn describe(&self, root: &str) -> String {
         let mut parts = Vec::new();
@@ -166,6 +271,12 @@ impl Facts {
             let producer = blocked.producer.as_ref().map_or(blocked.status.clone(), |owner| format!("owner {owner}, {}", blocked.status));
             let keys = blocked.waiting.iter().map(|waiter| waiter.key.as_str()).collect::<Vec<_>>().join(", ");
             parts.push(format!("{} claim(s) newly blocked on {}/{} ({producer}): {keys}", blocked.waiting.len(), blocked.room, blocked.on));
+        }
+        for shared in &self.shared {
+            parts.push(format!("{} members report a similar blocker ({}): \"{}\"", shared.members.len(), shared.members.join(", "), shared.reason));
+        }
+        if let Some(stall) = self.stalled {
+            parts.push(format!("busy but stalled: {} team turns settled while {} claim(s) stayed open and none became done or resumed from blocked", stall.turns, stall.open));
         }
         if self.quiescent { parts.push("the team went quiet: no member turn is running or queued".into()); }
         let chats = if self.chats.is_empty() { String::new() } else { format!(" (chats: {})", self.chats.join(", ")) };
@@ -187,6 +298,30 @@ pub(super) struct Team {
     /// blocked state is reported once, and again only after a new transition.
     #[serde(default, skip_serializing_if = "is_zero_revision")]
     pub(super) blocked: u64,
+    /// Latest member claim `advanced_at` observed.
+    #[serde(default, skip_serializing_if = "is_zero_revision")]
+    pub(super) progress: u64,
+    /// Settled member turns when a claim last advanced or open claims last
+    /// appeared or cleared: the start of the stall window.
+    #[serde(default, skip_serializing_if = "is_zero_count")]
+    pub(super) since: usize,
+    /// Whether members held working or blocked claims when last observed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(super) open: bool,
+    /// The current stall was reported; progress or clearing claims re-arms it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(super) stalled: bool,
+    /// Members currently in a reported shared blocker, sorted and bounded; a
+    /// member is reported again only after it leaves every such group.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) sharing: Vec<String>,
+    /// Fingerprint of the blocker reasons `sharing` was computed from, so
+    /// unchanged reasons are not compared again.
+    #[serde(default, skip_serializing_if = "is_zero_revision")]
+    pub(super) reasons: u64,
+}
+fn is_zero_count(value: &usize) -> bool {
+    *value == 0
 }
 /// Members on a failure streak a snapshot remembers.
 const FAILING: usize = 64;
@@ -260,9 +395,11 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
     // turn that settled otherwise. Interrupted and cancelled turns neither
     // extend nor break a streak.
     let mut streak = vec![(0usize, true); state.chats.len()];
+    // Per member, its newest failed or blocked turn: the reason a streak reports.
+    let mut latest = vec![None; state.chats.len()];
     struct Scan { active: bool, settled: usize }
     let mut scans = roots.iter().map(|_| Scan { active: false, settled: 0 }).collect::<Vec<_>>();
-    for run in state.runtime.runs.iter().rev() {
+    for (index, run) in state.runtime.runs.iter().enumerate().rev() {
         let Some(&position) = run.chat_id.as_deref().and_then(|chat| member.get(chat)) else { continue };
         if crate::delegation::is_judge(run) {
             continue;
@@ -274,7 +411,10 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
                 if !echo(run) { scan.settled += 1; }
                 let (count, open) = &mut streak[position];
                 match status {
-                    "failed" | "blocked" if *open => *count += 1,
+                    "failed" | "blocked" if *open => {
+                        *count += 1;
+                        latest[position].get_or_insert((index, run.result.as_str()));
+                    }
                     "interrupted" | "cancelled" | "failed" | "blocked" => {}
                     _ => *open = false,
                 }
@@ -285,28 +425,60 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
     for request in &state.bots.requests {
         if let Some(&position) = member.get(request.chat.0.as_str()) { scans[team_at[position]].active = true; }
     }
-    // Live member claims blocked on another claim, by team.
-    let mut blocked = roots.iter().map(|_| Vec::new()).collect::<Vec<Vec<&Claim>>>();
+    // Per team: live member claims blocked on another claim, open (working or
+    // blocked) claims, the latest claim advance and reported blocker reasons.
+    #[derive(Default)]
+    struct Claims<'a> { blocked: Vec<&'a Claim>, open: u32, progress: u64, reasons: Vec<(&'a str, &'a str, u64)> }
+    let mut held = roots.iter().map(|_| Claims::default()).collect::<Vec<_>>();
     for claim in &state.collective.claims {
-        if claim.status != Status::Blocked || claim.abandoned || claim.blocked_at == 0 {
+        let Some(&position) = member.get(claim.owner.as_str()) else { continue };
+        let team = &mut held[team_at[position]];
+        team.progress = team.progress.max(claim.advanced_at);
+        if claim.abandoned || !matches!(claim.status, Status::Working | Status::Blocked) {
             continue;
         }
-        if let Some(&position) = member.get(claim.owner.as_str()) {
-            blocked[team_at[position]].push(claim);
+        team.open += 1;
+        if claim.status == Status::Blocked && claim.blocked_at != 0 {
+            team.blocked.push(claim);
+            if !claim.note.is_empty() {
+                team.reasons.push((claim.owner.as_str(), claim.note.as_str(), claim.revision));
+            }
         }
     }
     let mut failing = roots.iter().map(|_| Vec::new()).collect::<Vec<Vec<&str>>>();
     for (position, (count, _)) in streak.iter().enumerate() {
         if *count >= threshold && failing[team_at[position]].len() < FAILING {
-            failing[team_at[position]].push(state.chats[position].id.as_str());
+            let chat = state.chats[position].id.as_str();
+            failing[team_at[position]].push(chat);
+            if let Some((index, reason)) = latest[position].filter(|(_, reason)| !reason.is_empty()) {
+                // Run positions are tagged apart from claim revisions.
+                held[team_at[position]].reasons.push((chat, reason, index as u64 | 1 << 63));
+            }
         }
     }
-    roots.into_iter().zip(scans).zip(failing).zip(blocked).filter_map(|(((root, scan), failing), blocked)| {
+    let window = state.runtime.execution.advisor_stall_turns.max(4);
+    roots.into_iter().zip(scans).zip(failing).zip(held).filter_map(|(((root, scan), failing), held)| {
+        let Claims { blocked, open, progress, reasons } = held;
         let newest = blocked.iter().map(|claim| claim.blocked_at).max().unwrap_or(0);
-        let Some(known) = state.bots.teams.get(root) else {
+        // Reasons are compared only when two members could share one and the
+        // reasons changed since the last observation (claim revisions and run
+        // positions identify them), so steady blocked teams do no text work.
+        let mut fingerprint = Fx::default();
+        for (_, _, tag) in &reasons {
+            fingerprint.add(*tag);
+        }
+        let fingerprint = if reasons.len() >= 2 { fingerprint.finish() } else { 0 };
+        let known = state.bots.teams.get(root);
+        let shared = if fingerprint != 0 && known.is_none_or(|known| known.reasons != fingerprint) { share(&reasons) } else { Vec::new() };
+        let mut sharing = shared.iter().flat_map(|(.., members)| members.iter().copied()).collect::<Vec<_>>();
+        sharing.sort_unstable();
+        sharing.dedup();
+        sharing.truncate(FAILING);
+        let Some(known) = known else {
             // Subscription starts here: earlier history is not reported.
             let failing = failing.into_iter().map(str::to_owned).collect();
-            return Some((root.to_owned(), Team { cursor: 0, failing, settled: scan.settled, blocked: newest }, Facts::default()));
+            let sharing = sharing.into_iter().map(str::to_owned).collect();
+            return Some((root.to_owned(), Team { cursor: 0, failing, settled: scan.settled, blocked: newest, progress, since: scan.settled, open: open > 0, stalled: false, sharing, reasons: fingerprint }, Facts::default()));
         };
         let mut team = known.clone();
         let mut facts = Facts::default();
@@ -324,6 +496,29 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
             facts.concern(&claim.owner);
         }
         team.blocked = team.blocked.max(newest);
+        // A shared blocker is reported when a member joins it.
+        for (_, reason, members) in shared.iter().filter(|(.., members)| members.iter().any(|member| known.sharing.binary_search_by(|known| known.as_str().cmp(member)).is_err())) {
+            facts.share(&Shared { reason: excerpt(reason), members: members.iter().take(CHATS).map(|member| (*member).to_owned()).collect() });
+            for member in members {
+                facts.concern(member);
+            }
+        }
+        if fingerprint != known.reasons {
+            team.reasons = fingerprint;
+            if team.sharing.len() != sharing.len() || team.sharing.iter().zip(&sharing).any(|(known, now)| known != now) {
+                team.sharing = sharing.into_iter().map(str::to_owned).collect();
+            }
+        }
+        // Busy but stalled: turns keep settling while claims stay open and
+        // none advances. Progress, or open claims appearing or clearing,
+        // restarts the window; a stall is reported once until then.
+        let open_now = open > 0;
+        if progress > known.progress || open_now != known.open || scan.settled < known.since {
+            (team.progress, team.open, team.since, team.stalled) = (progress.max(known.progress), open_now, scan.settled, false);
+        } else if open_now && !known.stalled && scan.settled - known.since >= window {
+            facts.stalled = Some(Stall { turns: u32::try_from(scan.settled - known.since).unwrap_or(u32::MAX), open });
+            team.stalled = true;
+        }
         if !scan.active && scan.settled > team.settled {
             facts.quiescent = true;
             team.settled = scan.settled;

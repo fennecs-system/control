@@ -44,8 +44,9 @@ WASM tooling fix shipped in #143; both platform checks passed before merging.
   strictly opt-in through the `advisor` lens (not part of `swarm`),
   woken only by edge-triggered host facts on a `task:<root>` topic (team
   quiescence, a member's repeated consecutive failures, a retired restart loop,
-  an abandoned claim, members newly blocked on a claim; never single failures
-  or exits). It helps the lead steer:
+  an abandoned claim, members newly blocked on a claim, members reporting a
+  similar blocker, turns settling while open claims do not advance; never
+  single failures or exits). It helps the lead steer:
   each evidence note goes only to the lead's steering chat, and the lead
   decides what reaches the team.
   No new role, supervisor state, clock rule or core concept; judge turns, notes

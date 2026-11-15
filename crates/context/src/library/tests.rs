@@ -241,8 +241,10 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert!(planning.instructions.contains("checkable done-condition"));
     assert!(planning.instructions.contains("treat reaching its done-condition as the tool's test"));
     let advisor = Library::default().get("advisor").unwrap().clone();
-    assert_eq!(advisor.revision, 2);
+    assert_eq!(advisor.revision, 3);
     assert!(advisor.instructions.contains("members marked claims blocked"));
+    assert!(advisor.instructions.contains("several members report a similar blocker"));
+    assert!(advisor.instructions.contains("(busy but stalled)"));
     let swarm = Library::default().get("swarm").unwrap().clone();
     assert_eq!(swarm.revision, 2);
     assert!(swarm.includes.contains(&"planning".to_string()));
@@ -258,7 +260,9 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
         assert!(previous.iter().any(|d| d.id == "planning" && d.revision == revision));
     }
     assert!(previous.iter().any(|d| d.id == "swarm" && d.revision == 1));
-    assert!(previous.iter().any(|d| d.id == "advisor" && d.revision == 1));
+    for revision in 1..=2 {
+        assert!(previous.iter().any(|d| d.id == "advisor" && d.revision == revision));
+    }
     for earlier in previous {
         let shipped = Library::default().get(&earlier.id).unwrap().clone();
         assert!(earlier.revision < shipped.revision, "{} history must predate the shipped revision", earlier.id);

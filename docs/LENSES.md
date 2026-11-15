@@ -238,7 +238,21 @@ comes from the judge role and the operator's bot approval.
      claim are summarised in one entry, so several members waiting on one
      producer read as one bottleneck. A blocked state is reported once per claim
      incarnation; updates that stay blocked on the same claim do not repeat it,
-     and becoming blocked again after working is a new fact.
+     and becoming blocked again after working is a new fact;
+   - two or more members report a similar blocker: blocked claims' notes and
+     the latest result of members on a failure streak are compared as
+     lower-cased word sets (words with digits, such as IDs, ports and times,
+     are ignored; Jaccard ≥ 0.6, no embeddings). One entry lists the members
+     and one reported reason. A group is reported when a member joins it;
+     unchanged reasons are not compared again;
+   - the team is busy but stalled: `advisor_stall_turns` (default 24) member
+     turns settled while members held working or blocked claims and none
+     advanced. A claim advances when it becomes done or resumes working after
+     being blocked (the host records `advanced_at` on the claim); acquiring,
+     re-reporting or posting is not progress. A stall is reported once; an
+     advance, or open claims appearing or clearing, restarts the window. The
+     window counts turns, not elapsed time. Teams that do not use claims never
+     stall.
 
    A single failed, interrupted or cancelled turn (provider errors included)
    and a single failed watch exit are never facts. Facts coalesce into one
