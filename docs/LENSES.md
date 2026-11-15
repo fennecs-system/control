@@ -81,13 +81,16 @@ next action in the existing handoff. Simple local tasks need no team plan.
 
 Planning has no single point of failure: the team plans like a hivemind rather
 than waiting on its lead. Whoever steers a team first posts the milestone backlog
-in the shared room, before spawning or briefing workers. The backlog is shared
-team state, so any member may revise it. A worker that finishes a milestone claims
-the next one; if the backlog is empty or stale, or the steering chat is quiet with
-no shared next step, the worker proposes the next milestone towards the goal in the
-room and claims it. Claims, rather than permission or a central planner, keep two
-workers off the same milestone. Claim shared deliverables, not personal roles. When
-you observe a condition a dependent is waiting on, tell it.
+in the shared room, before spawning or briefing workers, and briefs each worker
+with the shared goal and its first milestone from that backlog rather than a
+permanent role or area. Specialization may emerge from what workers repeatedly
+claim. The backlog is shared team state, so any member may revise it. A worker
+that finishes a milestone claims the next one; if the backlog is empty or stale,
+or the steering chat is quiet with no shared next step, the worker proposes the
+next milestone towards the goal in the room and claims it. Claims, rather than
+permission or a central planner, keep two workers off the same milestone. Claim
+shared deliverables, not personal roles. When you observe a condition a dependent
+is waiting on, tell it.
 
 The optional `coordination` lens helps a team turn a shared outcome into small,
 verifiable deliverables with accountable owners. Roles can change as work changes.
