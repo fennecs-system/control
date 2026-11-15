@@ -67,6 +67,9 @@ fn optional_procedures_compose_without_adding_tools_or_authority() {
     let swarm = library.resolve(&["swarm".into(), "planning".into()], &[]).unwrap();
     assert_eq!(swarm.lenses.iter().filter(|lens| lens.id == "planning").count(), 1);
     assert_eq!(swarm.instructions.iter().filter(|text| planning.instructions.contains(text)).count(), 1);
+    let swarm_only = library.resolve(&["swarm".into()], &[]).unwrap();
+    assert!(swarm_only.lenses.iter().any(|lens| lens.id == "planning"));
+    assert!(swarm_only.instructions.contains(&planning.instructions[0]));
     assert_eq!(selected.lenses.iter().filter(|lens| lens.id == "planning").count(), 1);
     assert!(!ordinary.lenses.iter().any(|lens| lens.id == "coordination"));
     assert_eq!(
@@ -216,15 +219,27 @@ fn newer_built_in_revisions_reach_nodes_unless_the_lens_was_edited_locally() {
 #[test]
 fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     let autonomy = Library::default().get("autonomy").unwrap().clone();
-    assert_eq!(autonomy.revision, 3);
+    assert_eq!(autonomy.revision, 4);
+    assert!(autonomy.instructions.contains("a setback means recover, not quit"));
     let coordination = Library::default().get("coordination").unwrap().clone();
-    assert_eq!(coordination.revision, 5);
+    assert_eq!(coordination.revision, 6);
     assert_eq!(coordination.includes, ["planning"]);
+    assert!(coordination.instructions.starts_with("Whoever steers a team posts the milestone backlog"));
+    let planning = Library::default().get("planning").unwrap().clone();
+    assert_eq!(planning.revision, 2);
+    assert!(planning.instructions.contains("checkable done-condition"));
+    let swarm = Library::default().get("swarm").unwrap().clone();
+    assert_eq!(swarm.revision, 2);
+    assert!(swarm.includes.contains(&"planning".to_string()));
     let previous: Vec<Definition> = serde_json::from_str(include_str!("../builtin-lens-history.json")).unwrap();
-    assert!(previous.iter().any(|d| d.id == "autonomy" && d.revision == 1));
-    for revision in 1..=4 {
+    for revision in 1..=3 {
+        assert!(previous.iter().any(|d| d.id == "autonomy" && d.revision == revision));
+    }
+    for revision in 1..=5 {
         assert!(previous.iter().any(|d| d.id == "coordination" && d.revision == revision));
     }
+    assert!(previous.iter().any(|d| d.id == "planning" && d.revision == 1));
+    assert!(previous.iter().any(|d| d.id == "swarm" && d.revision == 1));
     for earlier in previous {
         let shipped = Library::default().get(&earlier.id).unwrap().clone();
         assert!(earlier.revision < shipped.revision, "{} history must predate the shipped revision", earlier.id);

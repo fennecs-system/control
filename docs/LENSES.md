@@ -33,7 +33,8 @@ forever. Host-enforced permissions, mandatory safety constraints, cancellation
 and explicit user limits remain binding. The lens does not authorize broader
 access or consequential actions beyond the task's mandate. Long-lived workloads
 need a current job and a path to the next authorized job, rather than only a
-connection or health monitor. Test their notification path before waiting, then
+connection or health monitor. A finished job means notify and take the next one,
+not exit; a setback means recover, not quit. Test their notification path before waiting, then
 notify on completion, actionable blockers or transitions that open useful work.
 Include the job ID, outcome and evidence reference; deduplicate repeated outcomes
 and keep routine diagnostics out of notifications. Use the workload's existing
@@ -57,22 +58,34 @@ The existing lens library is the versioned procedure mechanism: there is no new
 planner API, task queue, scheduler or provider-specific skill loader. The same
 procedure is available in the web picker, TUI and `control.chat.lenses`.
 
-Keep a short rolling plan in the task's normal notes or shared room. Reference it
-instead of mirroring the whole backlog in every message. For each active
-deliverable record its outcome, completion evidence, owner, actual prerequisites
-and next action or release signal. Start with a useful end-to-end result and
+Keep a short rolling backlog of milestones in the task's normal notes or shared
+room. Reference it instead of mirroring it in every message. Give each milestone a
+checkable done-condition that names the observable result, such as an artifact
+that exists and passes a stated check. For each active milestone record its
+done-condition, owner, actual prerequisites, completion evidence and next action
+or release signal. Add, split, re-prioritise or drop milestones as evidence
+changes. Start with a useful end-to-end result and
 reliable reusable capabilities, then expand. For example, a team building an
 integration might first deliver one working request, then error handling and
 recovery, then additional operations. Connection health alone is not the feature.
 
-Use existing room claims for overlapping shared work, not every local action.
-Workers choose ready work, update their claims and take the next authorized step
-without a steering relay. A workload may chain its remaining authorized jobs
+Use existing room claims for overlapping shared work, not every local action. A
+workload may chain its remaining authorized jobs
 itself, or notify its owner to assign the next job. Before yielding, retain the
 current job, remaining work and the callback or claim release that enables the
 next action in the existing handoff. Simple local tasks need no team plan.
 
 ## Coordination and planning
+
+Planning has no single point of failure: the team plans like a hivemind rather
+than waiting on its lead. Whoever steers a team first posts the milestone backlog
+in the shared room, before spawning or briefing workers. The backlog is shared
+team state, so any member may revise it. A worker that finishes a milestone claims
+the next one; if the backlog is empty or stale, or the steering chat is quiet with
+no shared next step, the worker proposes the next milestone towards the goal in the
+room and claims it. Claims, rather than permission or a central planner, keep two
+workers off the same milestone. Claim shared deliverables, not personal roles. When
+you observe a condition a dependent is waiting on, tell it.
 
 The optional `coordination` lens helps a team turn a shared outcome into small,
 verifiable deliverables with accountable owners. Roles can change as work changes.
@@ -104,8 +117,10 @@ state. Existing access controls still apply; this creates no shared-storage or
 service-grant mechanism.
 
 Select **Coordination & planning** in the lens picker, or use `/use coordination`.
-For a team, select **Swarm** (`/use swarm`), which includes `coordination`,
-`planning`, `autonomy` and `investigation`: the first run with coordination alone showed
+For a team, select **Swarm** (`/use swarm`), which includes `planning`,
+`coordination`, `autonomy` and `investigation`. Swarm revision 2 includes
+`planning` directly; a run whose lead posted only a role split and no milestone
+backlog showed why the backlog must come first. The first run with coordination alone showed
 agents sleeping behind self-imposed safety guards. This is versioned guidance over existing tools, not a central
 planner, permission grant or guarantee against deadlock. Its ownership and
 blocker advice uses advisory room claims (see
