@@ -2195,3 +2195,31 @@ fn live_model_library_selection_and_reload() {
     assert!(!html.contains("<select"));
     assert!(!html.contains("provider-new"));
 }
+#[test]
+#[ignore = "explicit release-mode synthetic timing; no server, credentials or model calls"]
+fn transcript_render_timing() {
+    // More samples for profiling: CONTROL_TIMING_ROUNDS=2000.
+    let rounds = std::env::var("CONTROL_TIMING_ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(9);
+    use std::{hint::black_box, time::Instant};
+    for (messages, pending) in [(10, 0), (200, 10), (1000, 50)] {
+        let app = super::App {
+            detail: json!({
+                "messages":(0..messages).map(|i| json!({"text":format!("Prompt {i} <&> λ"),"reply":format!("Reply {i}\nline two"),"status":"completed"})).collect::<Vec<_>>(),
+                "pending_questions":(0..pending).map(|i| json!({"question":{"id":format!("q-{i}")},"summary":format!("Choose {i}\n1. Relay\n2. Stop\n/answer q-{i} YOUR_ANSWER")})).collect::<Vec<_>>(),
+                "pending_ports":(0..pending).map(|i| json!({"port_id":format!("port-{i}"),"name":"relay","target":{"host":"127.0.0.1","port":25565},"loopback_required":i % 2 == 0})).collect::<Vec<_>>(),
+                "pending_bots":(0..pending).map(|i| json!({"request_id":format!("bot-{i}"),"chat_id":format!("c-{i}")})).collect::<Vec<_>>(),
+            }),
+            ..Default::default()
+        };
+        let mut samples = Vec::new();
+        for _ in 0..rounds {
+            let start = Instant::now();
+            for _ in 0..20 {
+                black_box(app.transcript());
+            }
+            samples.push(start.elapsed().as_nanos() / 20);
+        }
+        samples.sort_unstable();
+        println!("{}", json!({"workload":"tui_transcript","messages":messages,"pending_each":pending,"median_ns":samples[samples.len() / 2],"min_ns":samples[0],"lines":app.transcript().lines.len()}));
+    }
+}

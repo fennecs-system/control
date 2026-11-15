@@ -2169,3 +2169,21 @@ fn stopping_a_producer_bot_wakes_its_dependents_but_an_idle_one_does_not() {
     assert_eq!(woken.len(), 1, "stopping the producer resolves its claim as abandoned");
     assert!(woken[0].bot_turn.as_ref().unwrap().reasons.iter().any(|reason| matches!(reason, Reason::Info { info: Message::Resolved(crate::rooms::claims::Outcome::Abandoned), .. })));
 }
+#[test]
+fn node_wide_requests_route_a_descendant_bot_request_to_its_top_level_chat() {
+    let (mut state, parent, child) = requester();
+    let value = ask(&mut state, "node-wide", &child, Some(5)).unwrap();
+    let id = value["request_id"].as_str().unwrap().to_owned();
+    let view = crate::chat::pending_requests(&state);
+    let groups = view.as_array().unwrap();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0]["chat_id"], parent.as_str());
+    let pending = control::client::operator::pending(&groups[0]);
+    assert_eq!((pending[0].kind, pending[0].id), (control::client::operator::Kind::Bot, id.as_str()));
+    let control::client::operator::Command::Send(command) = control::client::operator::reply(&pending[0], "allow").unwrap() else { panic!() };
+    crate::chat::send(&mut state, &parent, &command, "discord:1").unwrap();
+    assert!(defined(&state, &child));
+    // The same reply again finds nothing pending and changes nothing.
+    assert!(crate::chat::send(&mut state, &parent, &command, "discord:2").is_err());
+    assert!(crate::chat::pending_requests(&state).as_array().unwrap().is_empty());
+}

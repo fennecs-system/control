@@ -56,7 +56,7 @@ fn composer_line<'a>(text: &'a str, lenses: &lens_input::Catalog) -> Line<'a> {
     marked_line(text, command_menu::highlight(text).map(|range| (range, COMMAND_STYLE)).into_iter()
         .chain(names.map(|(range, valid)| (range, if valid { LENS_STYLE } else { UNKNOWN_LENS_STYLE }))))
 }
-use crate::client::Hive;
+use crate::client::{Hive, operator};
 fn failure(message:impl std::fmt::Display)->io::Error {io::Error::other(message.to_string())}
 #[cfg(test)]
 use crate::client::local_server;
@@ -250,16 +250,9 @@ impl App {
                 self.status = "Compaction is independent of the chat model · /chat returns".into();
             }
             _ if text.starts_with("/port ") => {
-                let parts=text.split_whitespace().collect::<Vec<_>>();
-                if !(3..=4).contains(&parts.len()) || !matches!(parts[1],"allow"|"deny") || (parts.len()==4 && parts[3]!="--loopback") {
-                    return Err(failure("Use /port allow ID [--loopback] or /port deny ID. Review the exact target before allowing loopback."));
-                }
-                let request=self.detail["pending_ports"].as_array().and_then(|ports|ports.iter().find(|port|port["port_id"]==parts[2]))
-                    .ok_or_else(||failure("Port request changed. Refresh the conversation before approving it."))?;
-                let loopback=parts.get(3)==Some(&"--loopback");
-                if parts[1]=="allow" && request["loopback_required"]==true && !loopback {return Err(failure("This exact loopback target requires /port allow ID --loopback."));}
-                let decision = if parts[1] == "allow" { crate::client::PortDecision::Allow } else { crate::client::PortDecision::Deny };
-                hive.decide_port(&self.active, parts[2], decision, loopback)?;
+                let shown=operator::pending(&self.detail);
+                let command=operator::port(&text,|id|shown.iter().find(|p|p.kind==operator::Kind::Port && p.id==id).map(|p|p.loopback)).map_err(failure)?;
+                operator::execute(hive,&self.active,&command)?;
                 self.set_detail(hive.tool("control.chat.read",json!({"id":self.active}))?);
                 self.status="Port decision saved".into();
             }
@@ -514,22 +507,11 @@ impl App {
                 else {folded_activity(&mut lines,std::slice::from_ref(&command["activity"]));}
             }
         }
-        if let Some(questions) = self.detail["pending_questions"].as_array() {
-            for question in questions {
-                lines.push(Line::styled("Decision requested",Style::default().fg(Color::Rgb(181,160,255))));
-                lines.extend(clean(question["summary"].as_str().unwrap_or("")).lines().map(|line|Line::from(line.to_owned())));
-            }
+        for request in operator::pending(&self.detail) {
+            lines.push(Line::styled(request.heading,Style::default().fg(Color::Rgb(181,160,255))));
+            lines.extend(clean(request.body).lines().map(|line|Line::from(line.to_owned())));
+            if let Some(usage)=request.usage {lines.push(Line::from(usage));}
         }
-        if let Some(ports)=self.detail["pending_ports"].as_array() {for port in ports {
-            lines.push(Line::styled(format!("Port request · {} · {}",clean(port["name"].as_str().unwrap_or("")),clean(&port["target"].to_string())),Style::default().fg(Color::Rgb(181,160,255))));
-            let id=clean(port["port_id"].as_str().unwrap_or(""));
-            lines.push(Line::from(format!("/port allow {id}{} · /port deny {id}",if port["loopback_required"]==true {" --loopback"}else{""})));
-        }}
-        if let Some(bots)=self.detail["pending_bots"].as_array() {for bot in bots {
-            lines.push(Line::styled(format!("Bot request · {}",clean(bot["chat_id"].as_str().unwrap_or(""))),Style::default().fg(Color::Rgb(181,160,255))));
-            let id=clean(bot["request_id"].as_str().unwrap_or(""));
-            lines.push(Line::from(format!("/bot allow {id} · /bot deny {id}")));
-        }}
         if let Some(project)=pending_project(&self.detail) {
             lines.push(Line::styled(format!("Folder access requested · {}",clean(project["path"].as_str().unwrap_or(""))),Style::default().fg(Color::Rgb(181,160,255))));
             lines.push(Line::from(format!("Open as /workspace/{}",clean(project["name"].as_str().unwrap_or("")))));

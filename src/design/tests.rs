@@ -349,3 +349,26 @@ fn answering_at_capacity_replaces_wait_instead_of_exceeding_admission() {
         crate::scheduler::MAX_PENDING
     );
 }
+#[test]
+fn node_wide_requests_group_descendant_questions_under_their_top_level_chat() {
+    let (mut state, child) = paused();
+    let root = chat::create(&mut state);
+    state.chats.iter_mut().find(|s| s.id == child).unwrap().parent_chat = Some(root.clone());
+    let question = state.runtime.runs[0].question.as_ref().unwrap().id.clone();
+    let view = chat::pending_requests(&state);
+    let groups = view.as_array().unwrap();
+    assert_eq!(groups.len(), 1, "one group per top-level chat, not per descendant");
+    assert_eq!(groups[0]["chat_id"], root.as_str());
+    let pending = control::client::operator::pending(&groups[0]);
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].id, question);
+    // Deciding from the group is the chat command a person types in that chat.
+    let control::client::operator::Command::Send(command) = control::client::operator::reply(&pending[0], "2").unwrap() else { panic!() };
+    chat::send(&mut state, &root, &command, "discord:1").unwrap();
+    assert_eq!(state.runtime.runs[0].question.as_ref().unwrap().answer.as_deref(), Some(input().options[1].as_str()));
+    // A duplicate reply is refused and changes nothing.
+    let before = serde_json::to_vec(&state).unwrap();
+    assert!(chat::send(&mut state, &root, &command, "discord:2").is_err());
+    assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+    assert!(chat::pending_requests(&state).as_array().unwrap().is_empty());
+}

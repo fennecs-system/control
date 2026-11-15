@@ -12,7 +12,10 @@ arbitrary downloaded code safe.
 
 - **Identity and host resources.** Node policy uses canonical Discord IDs and
   recorded DM bindings, independently of model text or display names. Worker
-  requests cannot supply operator identity. Opening a host directory records an
+  requests cannot supply operator identity. An architect identity, the role the
+  local operator holds, may decide operator requests over Discord; the bridge
+  then uses the local operator session for exactly the commands the TUI sends,
+  and only for replies to its own notifications in that architect's bound DM. Opening a host directory records an
   intent; a separate authenticated operator action approves an isolated import.
   Imports skip symlinks without following targets, exclude known credential/generated paths and isolate
   Git metadata from the original checkout. Lenses compose context and tools;

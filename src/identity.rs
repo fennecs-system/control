@@ -81,6 +81,10 @@ pub struct Policy {
     #[serde(default, rename = "codex_owner_id", skip_serializing)]
     _legacy_owner_id: Option<DiscordId>,
     pub principals: Vec<Principal>,
+    /// Operator requests forwarded to architect principals, who hold the local
+    /// operator's role (see `authorize_with_dms`).
+    #[serde(default)]
+    pub operator: crate::client::operator::Forwarding,
 }
 #[derive(Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -210,6 +214,12 @@ impl Policy {
         crate::config::write_in(directory, "discord-access.json", &bytes)
             .map_err(|_| "Could not save private Discord policy")
     }
+}
+/// Whether a Discord principal may use the operator interface away from the
+/// keyboard: only an architect, the role the local operator holds, and only
+/// while its DM binding matches and forwarding is enabled.
+pub fn operates(policy: &Policy, actor: &Actor, dms: &DmBindings) -> bool {
+    matches!(actor, Actor::DiscordDm { .. }) && policy.operator.enabled && policy.authorize_with_dms(actor, Action::Improve, dms).is_ok()
 }
 pub fn authorize(actor: &Actor, action: Action) -> Result<Workspace, &'static str> {
     if *actor == Actor::LocalOperator {
