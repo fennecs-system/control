@@ -95,6 +95,9 @@ pub struct Service {
     profile: crate::worker_profile::Profile,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     shape: Option<compute::Shape>,
+    /// Captured at admission; absent on records that predate shape-derived limits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pids_limit: Option<u64>,
     #[serde(default, skip_serializing_if = "Storage::is_memory")]
     storage: Storage,
     #[serde(default)]
@@ -146,7 +149,7 @@ impl Service {
         Grant { id:self.resource.id.clone(),owner:self.resource.owner.clone(),generation:self.resource.generation }
     }
     pub(crate) fn binding_snapshot(&self)->Self {
-        Self {resource:self.resource.clone(),origin:self.origin.clone(),actor:self.actor.clone(),command:self.command.clone(),uid:self.uid,gid:self.gid,workspace_exec:self.workspace_exec,profile:self.profile,shape:self.shape,storage:self.storage,diagnostic:String::new(),output:String::new(),exit_code:None,executions:Vec::new(),command_receipts:Vec::new()}
+        Self {resource:self.resource.clone(),origin:self.origin.clone(),actor:self.actor.clone(),command:self.command.clone(),uid:self.uid,gid:self.gid,workspace_exec:self.workspace_exec,profile:self.profile,shape:self.shape,pids_limit:self.pids_limit,storage:self.storage,diagnostic:String::new(),output:String::new(),exit_code:None,executions:Vec::new(),command_receipts:Vec::new()}
     }
     pub(crate) fn owned_by(&self, node: &NodeId, chat: &str, actor: &Actor) -> bool {
         self.resource.owner.node == *node
@@ -164,6 +167,10 @@ impl Service {
         self.storage == Storage::Memory && self.profile.readonly_root()
     }
     fn limits(&self) -> compute::Limits { compute::limits(self.shape, self.profile) }
+    /// The one process limit used to create and to verify the container. Records
+    /// without a captured value were created with the profile default; keeping it
+    /// means a changed formula or setting never fences a live service.
+    fn pids_limit(&self) -> u64 { self.pids_limit.unwrap_or_else(|| self.profile.service_pids()) }
     /// Commands still running inside this service, for the process tree.
     pub(crate) fn running_commands(&self) -> Vec<String> { self.executions.iter().filter_map(commands::Execution::running_label).collect() }
     pub(crate) fn label(&self) -> String { self.command.0.lines().next().unwrap_or_default().chars().take(80).collect() }
@@ -171,7 +178,7 @@ impl Service {
     pub(crate) fn shape_name(&self) -> &'static str { self.shape.map_or("default", compute::Shape::name) }
     pub(crate) fn phase_name(&self) -> &'static str { page::phase(&self.resource.phase) }
     fn summary(&self) -> Value {
-        json!({"service_id":self.resource.id,"platform":format!("linux/{}", std::env::consts::ARCH),"shape":self.shape,"limits":self.limits(),"phase":self.resource.phase,"scope":self.resource.scope,"storage":self.storage,"workspace":workspace::Workspace::of(self).map(|workspace|json!({"path":"/workspace","volume":workspace.name(),"retained_on_removal":true,"shared_with":"same_chat_services"})),"workspace_executable":self.workspace_exec,"expires_unix":(!self.resource.lease.is_until_stopped()).then(||self.resource.lease.expires()),"until_stopped":self.resource.lease.is_until_stopped(),"diagnostic":self.diagnostic,"output":self.output,"exit_code":self.exit_code,"output_limit_bytes":OUTPUT,"executions":self.executions.iter().map(|e|e.brief()).collect::<Vec<_>>()})
+        json!({"service_id":self.resource.id,"platform":format!("linux/{}", std::env::consts::ARCH),"shape":self.shape,"limits":self.limits(),"pids_limit":self.pids_limit(),"phase":self.resource.phase,"scope":self.resource.scope,"storage":self.storage,"workspace":workspace::Workspace::of(self).map(|workspace|json!({"path":"/workspace","volume":workspace.name(),"retained_on_removal":true,"shared_with":"same_chat_services"})),"workspace_executable":self.workspace_exec,"expires_unix":(!self.resource.lease.is_until_stopped()).then(||self.resource.lease.expires()),"until_stopped":self.resource.lease.is_until_stopped(),"diagnostic":self.diagnostic,"output":self.output,"exit_code":self.exit_code,"output_limit_bytes":OUTPUT,"executions":self.executions.iter().map(|e|e.brief()).collect::<Vec<_>>()})
     }
 }
 #[derive(Deserialize)]
@@ -390,7 +397,8 @@ fn admit_profile(
             "Service capacity reached; stop an owned service before starting more",
         ));
     }
-    compute::admit(&s.services, compute::limits(input.shape, profile))?;
+    let (limits, capacity) = (compute::limits(input.shape, profile), compute::capacity());
+    compute::admit_within(&s.services, limits, capacity)?;
     let actor = run.actor.clone();
     let origin = Origin {
         run: run.id.clone().try_into().map_err(fail)?,
@@ -427,6 +435,7 @@ fn admit_profile(
         workspace_exec: true,
         profile,
         shape: input.shape,
+        pids_limit: Some(compute::pids_limit(limits.memory_bytes, profile, capacity)),
         storage: Storage::Workspace { limit_mb: input.storage_limit_mb },
         diagnostic: String::new(),
         output: String::new(),
@@ -585,7 +594,7 @@ fn verify<'a>(service: &'a Service, inspection: &Inspection) -> io::Result<Verif
         || !inspection.security.iter().any(|s| s == "no-new-privileges")
         || inspection.memory != service.limits().memory_bytes
         || inspection.cpu != service.limits().cpus * 1_000_000_000
-        || inspection.pids != service.profile.service_pids()
+        || inspection.pids != service.pids_limit()
         || inspection.tmpfs != expected_tmpfs
         || match &inspection.storage_opts {
             Some(options) => *options != expected_storage,
@@ -717,7 +726,7 @@ impl Engine for Docker {
             "--network=none".into(),
             "--cap-drop=ALL".into(),
             "--security-opt=no-new-privileges".into(),
-            format!("--pids-limit={}", service.profile.service_pids()),
+            format!("--pids-limit={}", service.pids_limit()),
             format!("--memory={}", service.limits().memory_bytes),
             format!("--cpus={}", service.limits().cpus),
             "--log-driver=local".into(),

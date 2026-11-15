@@ -7,16 +7,21 @@ pub(super) const GIB: u64 = 1024 * 1024 * 1024;
 /// CPU limits are caps, not reservations: idle services use little, and excess
 /// demand is throttled rather than killed, so CPU is admitted against
 /// `cpus * cpu_oversubscription` while every container keeps its hard cap.
+/// Process limits are per-container caps, not budgeted; see [`pids_limit`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub(super) struct Capacity {
     pub memory_bytes: u64,
     pub cpus: u64,
     pub cpu_oversubscription: u64,
+    pub pids_per_gib: u64,
+    pub pids_max: u64,
 }
 impl Capacity {
-    pub(super) const DEFAULT: Self = Self { memory_bytes: 20 * GIB, cpus: 8, cpu_oversubscription: 2 };
-    /// Node settings `service-memory-gib`, `service-cpus` and
-    /// `service-cpu-oversubscription`; invalid or absent values keep defaults.
+    pub(super) const DEFAULT: Self = Self { memory_bytes: 20 * GIB, cpus: 8, cpu_oversubscription: 2, pids_per_gib: 64, pids_max: 1024 };
+    /// Node settings `service-memory-gib`, `service-cpus`,
+    /// `service-cpu-oversubscription`, and the process-limit scale
+    /// `service-pids-per-gib` and ceiling `service-pids-max`; invalid or absent
+    /// values keep defaults.
     pub(super) fn from_settings(setting: impl Fn(&str) -> Option<String>) -> Self {
         let read = |name: &str, range: std::ops::RangeInclusive<u64>| {
             setting(name).and_then(|value| value.trim().parse::<u64>().ok()).filter(|value| range.contains(value))
@@ -25,6 +30,8 @@ impl Capacity {
             memory_bytes: read("service-memory-gib", 1..=4096).map_or(Self::DEFAULT.memory_bytes, |gib| gib * GIB),
             cpus: read("service-cpus", 1..=1024).unwrap_or(Self::DEFAULT.cpus),
             cpu_oversubscription: read("service-cpu-oversubscription", 1..=8).unwrap_or(Self::DEFAULT.cpu_oversubscription),
+            pids_per_gib: read("service-pids-per-gib", 1..=4096).unwrap_or(Self::DEFAULT.pids_per_gib),
+            pids_max: read("service-pids-max", 128..=65536).unwrap_or(Self::DEFAULT.pids_max),
         }
     }
     pub(super) fn admitted_cpus(self) -> u64 {
@@ -84,6 +91,17 @@ impl Shape {
     }
 }
 
+/// The container process (pids cgroup) limit for a service with this memory
+/// limit: `pids_per_gib` per GiB, capped at `pids_max`, never below the image
+/// profile's historical default. Threads count as processes, so JVMs and Node
+/// clients need headroom that grows with the RAM they are given. Admission
+/// captures the result (`Service::pids_limit`) so the Docker flag and the drift
+/// check share one recorded value and setting changes never touch live services.
+pub(super) fn pids_limit(memory_bytes: u64, profile: crate::worker_profile::Profile, capacity: Capacity) -> u64 {
+    let scaled = u128::from(memory_bytes) * u128::from(capacity.pids_per_gib) / u128::from(GIB);
+    u64::try_from(scaled).unwrap_or(u64::MAX).min(capacity.pids_max).max(profile.service_pids())
+}
+
 pub(super) fn limits(shape: Option<Shape>, profile: crate::worker_profile::Profile) -> Limits {
     shape.map(Shape::limits).unwrap_or(Limits {
         memory_bytes: profile.service_memory(),
@@ -111,9 +129,6 @@ pub(super) fn reserved(services: &[Service]) -> Limits {
 }
 
 /// Stopping and fenced resources keep capacity until cleanup releases it.
-pub(super) fn admit(services: &[Service], requested: Limits) -> io::Result<()> {
-    admit_within(services, requested, capacity())
-}
 pub(super) fn admit_within(services: &[Service], requested: Limits, capacity: Capacity) -> io::Result<()> {
     let used = reserved(services);
     if used.memory_bytes.saturating_add(requested.memory_bytes) > capacity.memory_bytes
@@ -129,7 +144,11 @@ pub(super) fn admit_within(services: &[Service], requested: Limits, capacity: Ca
 
 pub(super) fn status(services: &[Service]) -> Value {
     let (used, capacity) = (reserved(services), capacity());
-    json!({"shapes":SHAPES.map(|shape|json!({"shape":shape,"limits":shape.limits()})),
+    // Shape process limits use the Lite floor; Full images never go below 128.
+    json!({"shapes":SHAPES.map(|shape|json!({"shape":shape,"limits":shape.limits(),
+            "pids_limit":pids_limit(shape.limits().memory_bytes, crate::worker_profile::Profile::Lite, capacity)})),
+        "pids":{"per_gib":capacity.pids_per_gib,"max":capacity.pids_max,
+            "floor":{"lite":crate::worker_profile::Profile::Lite.service_pids(),"full":crate::worker_profile::Profile::Full.service_pids()}},
         "capacity":{"limit":{"memory_bytes":capacity.memory_bytes,"cpus":capacity.cpus},
             "cpu_oversubscription":capacity.cpu_oversubscription,"admitted_cpus":capacity.admitted_cpus(),"reserved":used,
             "available":{"memory_bytes":capacity.memory_bytes.saturating_sub(used.memory_bytes),"cpus":capacity.admitted_cpus().saturating_sub(used.cpus)}}})

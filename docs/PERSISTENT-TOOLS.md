@@ -126,21 +126,34 @@ The initial scope is deliberately small:
   one CPU, 512 MiB RAM and 64 processes (Full: 2 GiB and 128 processes).
   Optional compute presets are independent of Lite/Full image capabilities:
 
-  | `shape` | RAM limit | CPU limit |
-  | --- | --- | --- |
-  | `small` | 2 GiB | 1 |
-  | `medium` | 4 GiB | 2 |
-  | `large` | 8 GiB | 2 |
+  | `shape` | RAM limit | CPU limit | Process limit (default) |
+  | --- | --- | --- | --- |
+  | `small` | 2 GiB | 1 | 128 |
+  | `medium` | 4 GiB | 2 | 256 |
+  | `large` | 8 GiB | 2 | 512 |
 
   Preset identifiers have immutable limits and are saved with the service.
   Existing records without a shape keep their original limits and PID policy.
+  The process (pids cgroup) limit counts threads, so JVMs and multi-client Node
+  workloads need more of it as RAM grows. It is `service-pids-per-gib` (default
+  64) per GiB of the RAM limit, capped at `service-pids-max` (default 1024) and
+  never below the image default (Lite 64, Full 128). Control captures the value
+  when the service is admitted and uses that same value to create the container
+  and to check it afterwards, so changing these settings affects only new
+  services. Services created before process limits followed RAM keep their
+  original image-default limit and are not fenced; replace one to get the
+  larger limit. `pids_limit` appears in service status and on the services page.
+  When a service reaches its limit, new commands fail with
+  `Resource temporarily unavailable`; stop extra processes or replace the
+  service with a larger shape.
   The node's service pool admits services atomically with the durable
   reservation. Memory is a strict sum of limits, 20 GiB by default. CPU limits are
   caps rather than reservations, so CPU is admitted against the node's CPUs times
   an oversubscription factor, 8 x 2 = 16 by default; each container keeps its hard
   CPU cap and excess demand is throttled. Operators size the pool with
   `service-memory-gib`, `service-cpus` and `service-cpu-oversubscription` (1-8)
-  in the node configuration directory. Pending, stopping and fenced resources count;
+  in the node configuration directory, and set process limits with
+  `service-pids-per-gib` and `service-pids-max`. Pending, stopping and fenced resources count;
   only confirmed teardown releases capacity. An over-capacity request fails
   without creating a service; retries do not reserve twice. This is a service
   admission budget, not a host allocator: external model servers, worker

@@ -34,7 +34,8 @@ because the enclosing container supplies the isolation boundary; builds cannot
 obtain privileges, host credentials or host daemon access.
 
 Full persistent services use 2 GiB RAM and 128 processes; Lite uses 512 MiB RAM and
-64 processes. New services have a disk-backed executable workspace and home, with
+64 processes. These are floors: a service shape with more RAM gets a process limit
+that scales with it (see [persistent tools](PERSISTENT-TOOLS.md)). New services have a disk-backed executable workspace and home, with
 no default disk cap. `/tmp` remains 128 MiB of RAM-backed disposable scratch.
 Both retain one CPU and their service lease.
 An optional `storage_limit_mb` requires Docker quota support and limits only the
