@@ -218,6 +218,10 @@ fn newer_built_in_revisions_reach_nodes_unless_the_lens_was_edited_locally() {
 }
 #[test]
 fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
+    let investigation = Library::default().get("investigation").unwrap().clone();
+    assert_eq!(investigation.revision, 2);
+    assert_eq!(investigation.includes, ["evidence"]);
+    assert!(investigation.tools.is_empty());
     let autonomy = Library::default().get("autonomy").unwrap().clone();
     assert_eq!(autonomy.revision, 4);
     assert!(autonomy.instructions.contains("a setback means recover, not quit"));
@@ -238,6 +242,7 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert_eq!(swarm.revision, 2);
     assert!(swarm.includes.contains(&"planning".to_string()));
     let previous: Vec<Definition> = serde_json::from_str(include_str!("../builtin-lens-history.json")).unwrap();
+    assert!(previous.iter().any(|d| d.id == "investigation" && d.revision == 1));
     for revision in 1..=3 {
         assert!(previous.iter().any(|d| d.id == "autonomy" && d.revision == revision));
     }
