@@ -149,3 +149,32 @@ fn operators_forget_stopped_services_and_keep_workspaces_of_live_chats() {
     assert_eq!(state.services.len(), 1, "cleanup removes every stopped record and only those");
     assert!(target.is_none() && keep.contains(&chat));
 }
+
+#[test]
+fn card_actions_return_to_their_card_or_its_neighbour() {
+    let (mut state, run, _chat, time) = super::super::tests::fixture();
+    for nonce in ["a", "b", "c"] {
+        admit(&mut state, Request { run: &run, generation: "attempt-a", nonce },
+            Input { command: "sleep 30".to_owned().try_into().unwrap(), lease_seconds: -1, storage_limit_mb: None, shape: None },
+            "node-a".to_owned().try_into().unwrap(), time, |_| Ok(())).unwrap();
+    }
+    let ids = state.services.iter().map(|s| s.resource.id.as_str().to_owned()).collect::<Vec<_>>();
+    for id in &ids {
+        assert!(id.starts_with("svc-"));
+        assert!(card(&state.services.iter().find(|s| s.resource.id.as_str() == id).unwrap().binding_snapshot()).contains(&format!("<article class='record service-record' id='{id}'>")),
+            "each card carries its service ID as a stable anchor");
+    }
+    // Page order is newest first: c, b, a.
+    let place = nearby(&state, &ids[1]);
+    assert_eq!(place, [ids[1].clone(), ids[0].clone(), ids[2].clone()]);
+    stop(&mut state, &ids[1], time, |_| Ok(())).unwrap();
+    assert_eq!(fragment(&state, &place), format!("#{}", ids[1]), "a stopped service's card stays in view");
+
+    state.services[1].resource.phase = Phase::Stopped(StopReason::Requested);
+    let place = nearby(&state, &ids[1]);
+    forget(&mut state, Some(&ids[1]), |_| Ok(())).unwrap();
+    assert_eq!(fragment(&state, &place), format!("#{}", ids[0]), "a deleted card returns to the card that takes its place");
+
+    assert!(nearby(&state, "svc-unknown'\r\nSet-Cookie: x").is_empty(), "anchors come from state, never the request");
+    assert_eq!(fragment(&state, &[]), "", "page-wide actions return to the top");
+}
