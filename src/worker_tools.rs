@@ -12,7 +12,9 @@ fn rpc_at(
     let mut response=dispatch_at(shared,run_id,envelope,workspace);
     if envelope["request"]["method"]=="tools/call"
         && !matches!(envelope["request"]["params"]["name"].as_str(),Some("control_turn_context"|"control_turn_handoff"))
-        && let Some(content)=response["result"]["content"].as_array_mut()
+        // get_mut, not IndexMut: indexing would insert "result":null into an
+        // error reply, which clients reject as an invalid JSON-RPC response.
+        && let Some(content)=response.get_mut("result").and_then(|result|result.get_mut("content")).and_then(Value::as_array_mut)
         && let Ok(mut state)=shared.lock()
         && crate::turn_context::callback_notice(&mut state,run_id)
     {
@@ -30,12 +32,14 @@ fn dispatch_at(
     let Some(id) = request.get("id") else {
         return Value::Null;
     };
-    let error =
-        |message: &str| json!({"jsonrpc":"2.0","id":id,"error":{"code":-32602,"message":message}});
-    if crate::shutdown::requested() { return error("Control is stopping; no new tools may run."); }
-    if request["jsonrpc"] != "2.0" {
-        return error("Invalid JSON-RPC request");
+    if let Some(fault) = crate::toolbox::request_fault(request) {
+        return fault;
     }
+    // Every tools/call failure past the protocol checks is a tool result.
+    let call = request["method"] == "tools/call";
+    let error = |message: &str| if call { crate::toolbox::tool_error(id, message) }
+        else { crate::toolbox::protocol_error(id, -32602, message) };
+    if crate::shutdown::requested() { return error("Control is stopping; no new tools may run."); }
     let Ok(mut state) = shared.lock() else {
         return error(
             "State unavailable; tools are disabled until Control is checked and restarted",
@@ -350,7 +354,7 @@ fn dispatch_at(
                 return error("Tool is not allowed for this worker");
             }
         }
-        _ => return error("Unsupported worker method"),
+        _ => return crate::toolbox::protocol_error(id, -32601, "Unsupported worker method"),
     };
     json!({"jsonrpc":"2.0","id":id,"result":result})
 }

@@ -1,7 +1,8 @@
 //! Credential-free stdio MCP transport. The host authorizes every request.
 //!
-//! The transport answers every request it cannot deliver with a JSON-RPC
-//! error and keeps serving: exiting would close the provider's MCP session and
+//! The transport answers every request it cannot deliver and keeps serving: a
+//! tool call gets an isError result, other methods a JSON-RPC error. It never
+//! exits: exiting would close the provider's MCP session and
 //! fail every later tool call in the turn. Only a closed stdin or stdout ends it.
 #[path = "../platform-flags.rs"]
 mod platform_flags;
@@ -153,17 +154,22 @@ fn escape(text: &str) -> String {
     }
     out
 }
-fn error_reply(id: &str, message: &str) -> String {
-    format!(
-        "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"error\":{{\"code\":-32000,\"message\":\"{}\"}}}}",
-        escape(message)
-    )
+/// A tool call's failure is a result with isError, as MCP specifies for tool
+/// execution errors: Codex does not correlate a JSON-RPC error with its call
+/// and would leave it pending. Other methods keep a JSON-RPC error.
+fn error_reply(request: &str, id: &str, message: &str) -> String {
+    let message = escape(message);
+    if member(request, "\"method\"").as_deref() == Some("\"tools/call\"") {
+        format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"content\":[{{\"type\":\"text\",\"text\":\"{message}\"}}],\"isError\":true}}}}")
+    } else {
+        format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"error\":{{\"code\":-32000,\"message\":\"{message}\"}}}}")
+    }
 }
 /// A failed batch must resolve every request ID, rather than silently leaving
 /// all of its calls pending. Notifications still receive no wire response.
 fn delivery_error(request: &str, message: &str) -> Option<String> {
     if !request.starts_with('[') {
-        return request_id(request).map(|id| error_reply(&id, message));
+        return request_id(request).map(|id| error_reply(request, &id, message));
     }
     let (mut depth, mut quoted, mut escaped, mut start) = (0usize, false, false, 0usize);
     let mut replies = Vec::new();
@@ -183,7 +189,7 @@ fn delivery_error(request: &str, message: &str) -> Option<String> {
             b'}' | b']' => {
                 depth = depth.saturating_sub(1);
                 if depth == 1 && let Some(id) = request_id(&request[start..=i]) {
-                    replies.push(error_reply(&id, message));
+                    replies.push(error_reply(&request[start..=i], &id, message));
                 }
             }
             _ => {}

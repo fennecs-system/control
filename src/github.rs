@@ -882,12 +882,10 @@ pub fn http(
             return false;
         }
         let id = request.get("id").cloned().unwrap_or(Value::Null);
-        let result = if id.is_null() || request["jsonrpc"] != "2.0" {
-            Err(fail(
-                "Publication requires an acknowledged JSON-RPC request",
-            ))
+        let value = if id.is_null() || request["jsonrpc"] != "2.0" {
+            crate::toolbox::protocol_error(&id, -32600, "Publication requires an acknowledged JSON-RPC request")
         } else {
-            serde_json::from_value::<Input>(request["params"]["arguments"].clone())
+            let result = serde_json::from_value::<Input>(request["params"]["arguments"].clone())
                 .map_err(|_| fail("Expected run_id, title and optional body"))
                 .and_then(|input| {
                     let chat = shared
@@ -900,15 +898,8 @@ pub fn http(
                         .and_then(|r| r.chat_id.clone())
                         .ok_or_else(|| fail("Run not found"))?;
                     open(shared, &chat, input)
-                })
-        };
-        let value = match result {
-            Ok(value) => {
-                json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":value.to_string()}],"structuredContent":{"data":value},"isError":false}})
-            }
-            Err(error) => {
-                json!({"jsonrpc":"2.0","id":id,"error":{"code":-32602,"message":error.to_string()}})
-            }
+                });
+            json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(result)})
         };
         let body = value.to_string();
         let _ = control_http::respond(stream, "200 OK", "application/json", body.as_bytes(), "", control_http::Policy::Restricted);
