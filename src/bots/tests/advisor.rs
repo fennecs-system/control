@@ -14,12 +14,22 @@ pub(super) fn turn(state: &mut State, chat: &str, status: &str) -> usize {
     state.runtime.runs.push(run);
     state.runtime.runs.len() - 1
 }
-/// A completed read-only judge child of `root`, started as its advisor.
-pub(super) fn advisor(state: &mut State, root: &str) -> String {
+/// Ticks (or unticks) the advisor lens on the root chat.
+pub(super) fn opt_in(state: &mut State, root: &str, on: bool) {
+    state.chats.iter_mut().find(|chat| chat.id == root).unwrap().lenses = Some(if on { vec!["advisor".into()] } else { Vec::new() });
+}
+/// A completed read-only judge child of `root`, before it runs as a bot.
+fn judge(state: &mut State, root: &str) -> String {
     let chat = spawned(state, root, "Advisor");
     let lead = state.runtime.runs[0].id.clone();
     state.runtime.runs.last_mut().unwrap().persona = Some(crate::delegation::Persona { role: crate::delegation::Role::Judge, root: lead, depth: 1, parent: None });
     state.runtime.runs.last_mut().unwrap().attempts = vec![crate::usage::Attempt { review_only: true, ..Default::default() }];
+    chat
+}
+/// A judge child of `root`, opted in with the advisor lens and started as its advisor.
+pub(super) fn advisor(state: &mut State, root: &str) -> String {
+    opt_in(state, root, true);
+    let chat = judge(state, root);
     command_at(state, &chat, "on", Now(0)).unwrap();
     chat
 }
@@ -59,6 +69,31 @@ fn a_judge_advises_on_team_facts_only_without_timers_rooms_or_grants() {
     assert!(queue(&mut state, &request).is_err());
     command_at(&mut state, &advisor, "off", Now(2)).unwrap();
     assert!(!state.bots.advises(&advisor));
+}
+
+#[test]
+fn advisors_are_strictly_opt_in_through_the_advisor_lens() {
+    let (mut state, root) = fixture();
+    let worker = spawned(&mut state, &root, "Builder");
+    // The swarm preset does not include the advisor.
+    state.chats[0].lenses = Some(vec!["swarm".into()]);
+    assert!(!advisor_offered(&state, &root));
+    let judge = judge(&mut state, &root);
+    let error = command_at(&mut state, &judge, "on", Now(0)).unwrap_err();
+    assert_eq!(error, ADVISOR_OFF, "without the lens there is no advisor option");
+    assert!(!state.bots.advises(&judge));
+    // Ticking the lens (with or beside swarm) makes the option exist; approval runs it.
+    state.chats[0].lenses = Some(vec!["swarm".into(), "advisor".into()]);
+    assert!(advisor_offered(&state, &root) && advisor_offered_for(&state, &worker));
+    command_at(&mut state, &judge, "on", Now(1)).unwrap();
+    reconcile_at(&mut state, 2, ok).unwrap();
+    assert!(state.bots.teams.contains_key(&root));
+    // Unticking it stops the lifecycle topic: no observation and no facts.
+    opt_in(&mut state, &root, false);
+    assert!(lifecycle::observe(&state).is_empty(), "the topic is not computed with the lens off");
+    turn(&mut state, &worker, "completed");
+    reconcile_at(&mut state, 3, ok).unwrap();
+    assert!(advisor_runs(&state, &judge).is_empty());
 }
 
 #[test]
@@ -256,6 +291,8 @@ fn a_lead_requests_its_judge_as_advisor_and_the_operator_approves_it() {
     let judge = spawned(&mut state, &lead, "Advisor");
     let persona = crate::delegation::Persona { role: crate::delegation::Role::Judge, root: state.runtime.runs[0].id.clone(), depth: 1, parent: None };
     state.runtime.runs.last_mut().unwrap().persona = Some(persona);
+    assert!(ask(&mut state, "off", &judge, None).is_err(), "no request without the advisor lens");
+    opt_in(&mut state, &lead, true);
     assert!(ask(&mut state, "timer", &judge, Some(5)).is_err(), "an advisor takes no interval");
     let request = ask(&mut state, "advisor", &judge, None).unwrap();
     assert!(!state.bots.advises(&judge), "a request grants nothing");

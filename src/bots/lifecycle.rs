@@ -122,14 +122,20 @@ pub(super) fn topic(root: &str) -> Topic {
 pub(super) fn source(root: &str) -> Source {
     Source::Topic(topic(root))
 }
-/// Roots with an advisor subscribed, without allocating when there are none.
+/// Roots with an advisor subscribed whose root chat still selects the advisor
+/// lens, without allocating when there are none. With the lens off, a tree's
+/// topic is not computed at all.
 fn advised(state: &State) -> Vec<&str> {
     let mut roots = state.bots.supervisor.definitions().flat_map(|definition| &definition.sources).filter_map(|source| match source {
         Source::Topic(topic) if topic.kind == KIND => Some(topic.name.as_str()),
         _ => None,
     }).collect::<Vec<_>>();
+    if roots.is_empty() {
+        return roots;
+    }
     roots.sort_unstable();
     roots.dedup();
+    roots.retain(|root| super::advisor_offered(state, root));
     roots
 }
 pub(super) fn advises(definition: &control_bot::Definition) -> bool {
@@ -237,7 +243,7 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
 /// Teams without a recorded snapshot have not started their subscription.
 pub(super) fn concern(state: &State, pending: &mut BTreeMap<String, Facts>, chat: &str, add: impl FnOnce(&mut Facts)) {
     let Some(root) = super::root(state, chat) else { return };
-    if !state.bots.teams.contains_key(root) {
+    if !state.bots.teams.contains_key(root) || !super::advisor_offered(state, root) {
         return;
     }
     let facts = pending.entry(root.to_owned()).or_default();

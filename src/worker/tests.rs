@@ -353,7 +353,6 @@ fn bot_activation_keeps_the_live_protocol_and_captures_only_the_next_admission()
         run: None,
         key: "old".into(),
         delivery: Default::default(),
-        source: None,
     });
     crate::bots::command(&mut state, &chat, "on").unwrap();
     assert!(state.runtime.runs[0].attempts[0].context_trace.is_none());
@@ -557,7 +556,6 @@ fn working_state_and_processed_receipts_publish_with_the_matching_workspace_only
                 run: None,
                 key: String::new(),
                 delivery: Default::default(),
-                source: None,
             });
         }
         state.chats[0].continuity = Some(Box::new(crate::turn_context::Managed::default()));

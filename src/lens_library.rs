@@ -20,6 +20,22 @@ pub fn inputs(state: &State) -> Vec<DocumentInput> {
 pub fn resolve(state: &State, roots: &[String]) -> Result<Resolved, String> {
     state.lens_library.resolve(roots, &inputs(state))
 }
+/// Whether the selected lenses, with their includes, offer the catalogue tool
+/// `tool`. This decides whether an opt-in option exists at all (availability),
+/// never whether a call is authorized; host policy and operator approvals do
+/// that. It walks definitions only, without resolving documents.
+pub(crate) fn offers(state: &State, roots: &[String], tool: &str) -> bool {
+    let mut pending = roots.iter().map(String::as_str).collect::<Vec<_>>();
+    for _ in 0..256 {
+        let Some(id) = pending.pop() else { return false };
+        let Some(definition) = state.lens_library.get(id) else { continue };
+        if definition.tools.iter().any(|offered| offered == tool) {
+            return true;
+        }
+        pending.extend(definition.includes.iter().map(String::as_str));
+    }
+    false
+}
 /// Render the captured context, never the current editable library. Instructions
 /// appear once as guidance, separately from documents and descriptive tool hints.
 pub fn prompt(context: &Resolved) -> String {

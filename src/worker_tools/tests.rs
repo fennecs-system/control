@@ -469,6 +469,7 @@ fn judge_tools_are_enforced_even_when_unadvertised_names_are_forged() {
 fn an_approved_advisor_judge_gains_only_evidence_notes() {
     let mut s = State::default();
     let lead = crate::chat::create(&mut s);
+    s.chats[0].lenses = Some(vec!["advisor".into()]);
     crate::chat::send(&mut s, &lead, "Lead the team", "test").unwrap();
     s.runtime.runs[0].status = "completed".into();
     let chat = crate::chat::create(&mut s);
@@ -492,9 +493,10 @@ fn an_approved_advisor_judge_gains_only_evidence_notes() {
         assert!(denied["error"]["message"].as_str().unwrap().contains("Judge policy"), "{name}");
     }
     let post = |delivery: &str| rpc_at(&shared, &id, &json!({"nonce":if delivery == "record" { "1" } else { "2" },"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_room_post","arguments":{"message":"Build claim looks abandoned","delivery":delivery}}}}), None);
-    assert!(post("notify").to_string().contains("records only"), "an advisor cannot wake the team through the room");
-    let recorded = post("record");
-    assert!(recorded["error"].is_null() && recorded.to_string().contains("posted"), "{recorded}");
+    for delivery in ["notify", "record"] {
+        assert!(post(delivery).to_string().contains("does not post to rooms"), "an advisor only steers the lead: {delivery}");
+    }
+    assert!(shared.lock().unwrap().collective.posts.is_empty());
 }
 #[test]
 fn every_advertised_worker_tool_has_ui_registration() {

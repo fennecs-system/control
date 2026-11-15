@@ -214,7 +214,6 @@ fn room_sidebar_scopes_activity_and_keeps_message_chat_links() {
         run: Some(state.runtime.runs[0].id.clone()),
         key: String::new(),
         delivery: Default::default(),
-        source: None,
     });
     let page = crate::render(&state, "rooms", "none", "research");
     let (_, sidebar) = page.split_once("aria-label='Room details'").unwrap();

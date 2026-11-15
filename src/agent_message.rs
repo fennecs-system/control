@@ -98,7 +98,7 @@ struct InFlight<'a> {
 }
 impl<'a> InFlight<'a> {
     fn new(state: &'a mut State, delivery: operation::Delivery) -> Self {
-        let pending = delivery.apply(operation::Edit {runs:&mut state.runtime.runs,notice:&mut state.runtime.notice,chats:&mut state.chats,sent:&mut state.agent_messages,posts:&mut state.collective.posts});
+        let pending = delivery.apply(operation::Edit {runs:&mut state.runtime.runs,notice:&mut state.runtime.notice,chats:&mut state.chats,sent:&mut state.agent_messages});
         Self {state,pending:Some(pending),durable:false}
     }
     fn next(&self) -> Option<operation::Effect> {self.pending.as_ref().unwrap().next()}
@@ -114,7 +114,7 @@ impl<'a> InFlight<'a> {
 impl Drop for InFlight<'_> {
     fn drop(&mut self) {
         if !self.durable && let Some(pending)=self.pending.take() {
-            pending.rollback(operation::Edit {runs:&mut self.state.runtime.runs,notice:&mut self.state.runtime.notice,chats:&mut self.state.chats,sent:&mut self.state.agent_messages,posts:&mut self.state.collective.posts});
+            pending.rollback(operation::Edit {runs:&mut self.state.runtime.runs,notice:&mut self.state.runtime.notice,chats:&mut self.state.chats,sent:&mut self.state.agent_messages});
         }
     }
 }

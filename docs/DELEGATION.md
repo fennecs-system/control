@@ -146,15 +146,15 @@ commands inspect `/workspace`; Codex inspects `/review` and uses `/workspace`
 only for scratch and transport. `/tmp` is available for disposable verification
 outputs. Their reports do not advance the development workspace.
 
-`control_agent_spawn` accepts `"role":"judge"` with exactly one objective to
-start an advisor candidate without pausing the parent; it receives no services
+When the root chat selects the advisor lens, `control_agent_spawn` accepts
+`"role":"judge"` with exactly one objective to start an advisor candidate without pausing the parent; it receives no services
 and the task-level review scope, as with blocking delegation. It uses the root's
 advisor allowance (`max_advisors_per_root`), not its blocking review. An
 operator-approved judge bot is the team's [advisor](LENSES.md#team-advisor): its
 only source is the `task:<root>` lifecycle topic and its only additional effect
-is evidence notes through `control_agent_message` to the lead's steering chat,
-each also recorded once in the lead's room. It never sends services, never
-messages members, judges or advisors, and posts room records only. Other judges
+is evidence notes through `control_agent_message` to the lead's steering chat.
+It never sends services, never messages members, judges or advisors, and never
+posts to rooms. Other judges
 still cannot run as bots or message agents.
 
 Waiting state and child/continuation IDs are persisted together. Restart does not

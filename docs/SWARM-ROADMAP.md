@@ -41,11 +41,12 @@ WASM tooling fix shipped in #143; both platform checks passed before merging.
 - [ ] **Opt-in team advisor (in review, not deployed):** an `advisor` lens on
   top of coordination lens r6. The advisor is the existing read-only judge
   persona run as an operator-approved bot with its own per-root allowance,
+  strictly opt-in through the `advisor` lens (not part of `swarm`),
   woken only by edge-triggered host facts on a `task:<root>` topic (team
   quiescence, a member's repeated consecutive failures, a retired restart loop,
   an abandoned claim; never single failures or exits). It helps the lead steer:
-  each evidence note wakes only the lead's steering chat and is recorded once in
-  the lead's room, so the collective acts on it through its normal channels.
+  each evidence note goes only to the lead's steering chat, and the lead
+  decides what reaches the team.
   No new role, supervisor state, clock rule or core concept; judge turns, notes
   and note-only wakes are not team activity, so it cannot wake itself. See
   [LENSES.md](LENSES.md#team-advisor). Whether it reduces stalls or noise still

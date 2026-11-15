@@ -1105,3 +1105,19 @@ the same laptop (one round of ten 200-pass batches, median):
 All differences are within single-run noise; TUI render output hashes are
 unchanged. Reproduce the terminal cases with
 `cargo test --release --locked --lib terminal::profiling -- --ignored --nocapture --test-threads=1`.
+
+**Strict opt-in.** Advisors exist only when the root chat's lenses offer the
+`advisor` lens's `team.advisor` tool, and the lifecycle topic is computed only
+for such trees. `CONTROL_PROFILE_ADVISOR=off` measures the remaining cost: an
+advisor bot still defined but its lens unticked. Each check is one bot
+definition scan, then one root-chat lookup and a walk of its few selected
+lenses. A single run on the final head (median of ten 200-pass batches):
+
+| Case | No advisor | Lens off, advisor defined | One advisor |
+| --- | ---: | ---: | ---: |
+| idle, 64 chats | 36.6 µs (min 27.4) | 28.2 µs | 43.6 µs |
+| offered, 64 chats | 35.2 µs | 35.9 µs | 52.2 µs |
+| idle, 512 chats | 207.5 µs | 206.8 µs | 339.1 µs |
+| offered, 512 chats | 213.9 µs | 213.6 µs | 347.2 µs |
+
+With the lens off, a pass costs the same as with no advisor, within noise.

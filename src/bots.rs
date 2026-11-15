@@ -481,6 +481,9 @@ fn advise(state: &mut State, chat: &str, minutes: Option<u64>, now: Now) -> Resu
         return Err("An advisor wakes only on its team's host facts; it takes no timer.");
     }
     let team = root(state, chat).filter(|team| *team != chat).ok_or("An advisor must belong to a spawned task tree.")?.to_owned();
+    if !advisor_offered(state, &team) {
+        return Err(ADVISOR_OFF);
+    }
     let definition = Definition {
         bot: bot(chat),
         chat: ChatId(chat.into()),
@@ -976,6 +979,22 @@ fn root<'a>(state: &'a State, chat: &str) -> Option<&'a str> {
     }
     None
 }
+/// The catalogue tool the `advisor` lens offers.
+pub(crate) const ADVISOR_TOOL: &str = "team.advisor";
+pub(crate) const ADVISOR_OFF: &str = "Advisors are opt-in: select the advisor lens on the root chat (/use advisor) first.";
+/// Whether the task tree rooted at `top` opted in to an advisor: the root
+/// chat's selected lenses (ticked in the UI or with `/use advisor`) offer
+/// [`ADVISOR_TOOL`]. This is availability, not authority: without it there is
+/// no advisor option or lifecycle topic; with it, operator bot approval still
+/// decides whether one runs.
+pub(crate) fn advisor_offered(state: &State, top: &str) -> bool {
+    state.chats.iter().find(|session| session.id == top && session.parent_chat.is_none())
+        .is_some_and(|session| crate::lens_library::offers(state, &crate::chat::selected_lenses(session), ADVISOR_TOOL))
+}
+/// [`advisor_offered`] for the task tree `chat` belongs to.
+pub(crate) fn advisor_offered_for(state: &State, chat: &str) -> bool {
+    root(state, chat).is_some_and(|top| advisor_offered(state, top))
+}
 /// Whether two chats of one actor belong to the same top-level conversation:
 /// a lead, its helpers and every agent they spawned.
 fn related(state: &State, chat: &str, requester: &str, actor: &identity::Actor) -> bool {
@@ -1038,6 +1057,9 @@ fn handle(state: &mut State, attempt: &AttemptRef<'_>, call: BotCall, save: impl
             let linked = target.room.as_deref().is_some_and(crate::rooms::valid);
             // A read-only judge becomes its team's advisor: host facts, no timer or room.
             let advisor = judge_chat(state, &chat_id);
+            if advisor && !advisor_offered_for(state, &chat_id) {
+                return Err(fail(ADVISOR_OFF));
+            }
             if advisor && every_minutes.is_some() {
                 return Err(fail("An advisor wakes only on its team's host facts; omit every_minutes"));
             }

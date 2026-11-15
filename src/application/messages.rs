@@ -74,7 +74,6 @@ pub(crate) struct Edit<'a> {
     pub notice: &'a mut String,
     pub chats: &'a mut [Session],
     pub sent: &'a mut Vec<Sent>,
-    pub posts: &'a mut Vec<crate::rooms::Post>,
 }
 /// Effects are application instructions, not domain-specific supervisor states.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,9 +93,6 @@ pub(crate) struct Delivery {
     message: Message,
     receipt: Sent,
     retained: Option<Vec<Sent>>,
-    /// An advisor note's record in the team's shared room, so the collective
-    /// sees it without being woken.
-    record: Option<crate::rooms::Post>,
 }
 pub(crate) struct Pending {
     pub result: MessageResult,
@@ -111,7 +107,6 @@ struct Undo {
     revision: u64,
     sent: usize,
     pruned: Option<Vec<Sent>>,
-    posts: usize,
 }
 impl Delivery {
     pub fn apply(self, state: Edit<'_>) -> Pending {
@@ -127,15 +122,11 @@ impl Delivery {
             pruned: self
                 .retained
                 .map(|retained| std::mem::replace(state.sent, retained)),
-            posts: state.posts.len(),
         };
         state.runs.push(self.run);
         chat.messages.push(self.message);
         chat.revision = chat.revision.saturating_add(1);
         state.sent.push(self.receipt);
-        if let Some(record) = self.record {
-            state.posts.push(record);
-        }
         Pending {
             result: self.result,
             next: Some(if peer {
@@ -175,7 +166,6 @@ impl Pending {
         } else {
             state.sent.truncate(undo.sent);
         }
-        state.posts.truncate(undo.posts);
     }
 }
 fn ancestry<'a>(
@@ -442,19 +432,6 @@ pub(crate) fn plan(
         run_id: Some(id.clone()),
         reply: String::new(),
     };
-    // The same note propagates through the collective: one record in the lead's
-    // shared room that members read at their next room read or turn context,
-    // without a wake. The lead and hivemind members act on it through the
-    // backlog, claims or messages; the advisor never fans out to members.
-    let record = advisor.then(|| session.room.clone()).flatten().map(|room| crate::rooms::Post {
-        room,
-        text: format!("Advisor note (read-only evidence, not steering): {text}"),
-        chat: Some(sender.to_owned()),
-        run: Some(attempt.run.to_owned()),
-        key: format!("advisor-note:{id}"),
-        delivery: crate::rooms::Delivery::Record,
-        source: Some("advisor-note".into()),
-    });
     let receipt = Sent {
         key,
         origin: attempt.run.into(),
@@ -472,6 +449,5 @@ pub(crate) fn plan(
         message,
         receipt,
         retained,
-        record,
     })))
 }

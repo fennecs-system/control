@@ -547,6 +547,12 @@ fn profile_idle_backlog_reconciliation() {
 fn a_judge_batch_starts_one_advisor_within_its_own_allowance_beside_the_review_judge() {
     let (mut s, id) = active();
     let judge = |n| Input { role: Some(Role::Judge), ..input(n) };
+    // Strictly opt-in: no advisor option until the root chat selects the advisor lens.
+    let error = request(&mut s, &id, "parent-attempt", "off", judge(1), |_| panic!("lens off")).unwrap_err();
+    assert_eq!(error, crate::bots::ADVISOR_OFF);
+    s.chats[0].lenses = Some(vec!["swarm".into()]);
+    assert!(request(&mut s, &id, "parent-attempt", "swarm", judge(1), |_| panic!("swarm excludes it")).is_err());
+    s.chats[0].lenses = Some(vec!["swarm".into(), "advisor".into()]);
     assert!(request(&mut s, &id, "parent-attempt", "two", judge(2), |_| panic!("one advisor per batch")).is_err());
     request(&mut s, &id, "parent-attempt", "advisor", judge(1), |_| Ok(())).unwrap();
     let child = s.runtime.runs.last().unwrap();

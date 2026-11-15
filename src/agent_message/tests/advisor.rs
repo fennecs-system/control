@@ -1,5 +1,5 @@
 //! Advisor notes: the one extra effect of an approved read-only judge bot. They
-//! go to the lead's steering chat and are recorded once in its shared room.
+//! go only to the lead's steering chat; the lead decides what reaches the team.
 use super::*;
 
 /// The lead's task tree, linked to a room, with a builder and an advisor
@@ -8,6 +8,7 @@ fn team() -> (State, String, String, String, String) {
     let (mut state, lead, builder, _) = family();
     state.runtime.runs[0].status = "completed".into();
     state.chats[0].room = Some("general".into());
+    state.chats[0].lenses = Some(vec!["advisor".into()]);
     let advisor = spawned(&mut state, &lead);
     let index = crate::chat::latest_task(&state, &advisor, &state.chats[0].actor).unwrap();
     let mut persona = crate::delegation::lineage(&state.runtime.runs[index]);
@@ -20,12 +21,9 @@ fn note(state: &mut State, run: &str, nonce: &str, chat: &str, text: &str) -> io
     handle(state, &AttemptRef { run, generation: "peer-attempt", nonce },
         MessageCall { chat_id: chat.into(), text: text.into(), services: vec![] }, |_| Ok(()))
 }
-fn records(state: &State) -> Vec<&crate::rooms::Post> {
-    state.collective.posts.iter().filter(|post| post.source.as_deref() == Some("advisor-note")).collect()
-}
 
 #[test]
-fn an_approved_advisor_notes_the_lead_and_records_the_note_once_for_the_team() {
+fn an_approved_advisor_notes_only_the_lead_and_posts_nothing_to_the_room() {
     let (mut state, lead, _, advisor, run) = team();
     assert!(note(&mut state, &run, "unapproved", &lead, "Claim build is abandoned").is_err(),
         "an ordinary judge still cannot message agents");
@@ -41,13 +39,7 @@ fn an_approved_advisor_notes_the_lead_and_records_the_note_once_for_the_team() {
     assert!(state.agent_messages.last().unwrap().note);
     let shown = state.chats[0].messages.last().unwrap();
     assert!(shown.text.starts_with("Advisor note from"));
-    // The collective sees it without a wake: one record in the lead's room.
-    let posts = records(&state);
-    assert_eq!(posts.len(), 1);
-    assert_eq!((posts[0].room.as_str(), posts[0].delivery), ("general", crate::rooms::Delivery::Record));
-    assert!(posts[0].text.contains("Suggest reassigning it") && posts[0].text.starts_with("Advisor note"));
-    let read = crate::rooms::read(&state, "general");
-    assert_eq!(read["posts"][0]["source"], "advisor-note");
+    assert!(state.collective.posts.is_empty(), "the advisor steers; it never posts to the room");
     // The web transcript shows it as one distinct box, and the TUI detail marks it.
     let html = crate::chat::transcript(&state, &lead).unwrap();
     assert!(html.contains("<article class='advisor-note' aria-label='Advisor note'><p class='advisor-note-label'>Advisor note from"));
@@ -56,9 +48,10 @@ fn an_approved_advisor_notes_the_lead_and_records_the_note_once_for_the_team() {
     let shown = detail["messages"].as_array().unwrap().last().unwrap();
     assert_eq!(shown["advisor_note"], true);
     assert!(detail["messages"][0].get("advisor_note").is_none(), "ordinary messages are unchanged");
-    // A retried request identity neither delivers nor records twice.
+    // A retried request identity does not deliver twice.
+    let runs = state.runtime.runs.len();
     note(&mut state, &run, "n1", &lead, "Claim build is abandoned; its owner failed. Suggest reassigning it.").unwrap();
-    assert_eq!(records(&state).len(), 1);
+    assert_eq!(state.runtime.runs.len(), runs);
 }
 
 #[test]
@@ -66,14 +59,14 @@ fn advisor_notes_refuse_members_judges_repeats_and_services() {
     let (mut state, lead, builder, advisor, run) = team();
     crate::bots::command(&mut state, &advisor, "on").unwrap();
     let error = note(&mut state, &run, "n0", &builder, "Tester waits on build").unwrap_err();
-    assert!(error.to_string().contains("steering chat"), "members hear advice through the lead and the room: {error}");
+    assert!(error.to_string().contains("steering chat"), "members hear advice only through the lead: {error}");
     note(&mut state, &run, "n1", &lead, "Tester waits on build; the builder already published it").unwrap();
-    let (runs, posts) = (state.runtime.runs.len(), state.collective.posts.len());
+    let runs = state.runtime.runs.len();
     let error = note(&mut state, &run, "n2", &lead, "Tester waits on build; the builder already published it").unwrap_err();
     assert!(error.to_string().contains("already delivered"), "identical notes are noise");
-    assert_eq!((state.runtime.runs.len(), state.collective.posts.len()), (runs, posts), "no wake and no record");
+    assert_eq!(state.runtime.runs.len(), runs, "no second wake");
     note(&mut state, &run, "n3", &lead, "Tester now also waits on the schema").unwrap();
-    assert_eq!(records(&state).len(), 2);
+    assert_eq!(state.runtime.runs.len(), runs + 1);
 
     let other = spawned(&mut state, &lead);
     let index = crate::chat::latest_task(&state, &other, &state.chats[0].actor).unwrap();
@@ -84,18 +77,6 @@ fn advisor_notes_refuse_members_judges_repeats_and_services() {
     let shared = handle(&mut state, &AttemptRef { run: &run, generation: "peer-attempt", nonce: "n6" },
         MessageCall { chat_id: lead.clone(), text: "Use this service".into(), services: vec![ResourceId::try_from("svc".to_owned()).unwrap()] }, |_| Ok(()));
     assert!(shared.is_err(), "advisors transfer no authority");
-}
-
-#[test]
-fn a_failed_checkpoint_rolls_back_the_note_and_its_record() {
-    let (mut state, lead, _, advisor, run) = team();
-    crate::bots::command(&mut state, &advisor, "on").unwrap();
-    let posts = state.collective.posts.len();
-    let failed = handle(&mut state, &AttemptRef { run: &run, generation: "peer-attempt", nonce: "n1" },
-        MessageCall { chat_id: lead.clone(), text: "The team is idle with an unclaimed deliverable".into(), services: vec![] },
-        |_| Err(io::Error::other("disk full")));
-    assert!(failed.is_err());
-    assert_eq!(state.collective.posts.len(), posts);
 }
 
 #[test]

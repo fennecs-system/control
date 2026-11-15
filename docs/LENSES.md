@@ -163,10 +163,18 @@ measure repeated actions, useful outcomes and intervention in opt-in trials.
 
 ## Team advisor
 
-Select **Team advisor** (`/use advisor`), usually alongside `swarm`, before
-launching a team. It is a lightweight observer that helps the lead steer, like
-a subagent catching gaps the lead could miss. It is not a supervisor, planner,
-relay or churn monitor, and it holds no authority.
+The team advisor helps the lead steer, like a subagent catching gaps the lead
+could miss. It is not a supervisor, planner, relay or churn monitor, and it
+holds no authority.
+
+**Strictly opt-in.** Select **Team advisor** on the root chat (tick it, or
+`/use advisor`), usually alongside `swarm`. The `swarm` preset does not include
+it. The lens offers the `team.advisor` tool; unless the root chat's lenses offer
+it, no advisor can be spawned or requested, and Control does not compute the
+team's lifecycle topic at all. This is an availability gate, not authority:
+selecting the lens only makes the option exist for that task tree. The
+operator's bot approval still decides whether an advisor runs, and host checks
+still bound what it can do. Unticking the lens stops its facts.
 
 The advisor is an existing persona, not a new role: a read-only **judge**
 (see [delegation](DELEGATION.md)). The lens is its procedure and voice; policy
@@ -177,8 +185,8 @@ comes from the judge role and the operator's bot approval.
    task's advisor allowance (`max_advisors_per_root`, default 1), which is
    separate from the root's one blocking judge review, so a team can have both.
 2. The lead asks for it with `control_bot_request` (no interval). The operator
-   approves it like any bot, or types `/bot on` in its chat. A lens selection or
-   a request alone enables nothing.
+   approves it like any bot, or types `/bot on` in its chat. The lens or a
+   request alone runs nothing.
 3. The approved judge sleeps on its task tree's lifecycle topic,
    `task:<root chat>`. Control offers host facts there, edge-triggered from records
    reconciliation already reads. Facts are gaps, not churn:
@@ -200,39 +208,33 @@ comes from the judge role and the operator's bot approval.
    the evidence and a suggested steering step. It sends nothing when evidence
    is unchanged.
 
-A note propagates through the collective rather than a private channel:
-
-- It wakes only the lead. The note is retained peer evidence with source
-  `advisor-note`, shown as "Advisor note from …" in its own box. An active lead
-  gets one callback hint at its next tool response; a lead running as an
-  approved bot wakes within its own budget; otherwise the lead sees it at its
-  next turn.
-- The same note is recorded once in the lead's linked room as a
-  `delivery=record` post with source `advisor-note`. Members see it at their
-  next room read or turn context without being woken. With no linked room,
-  only the lead receives it.
-- The lead, or any member working under the coordination lens, acts on it
-  through the team's normal channels: revising the backlog, claiming or
-  adjusting work, or messaging a specific worker. The advisor never messages
-  members itself.
+The advisor only steers. A note goes only to the lead's steering chat, as
+retained peer evidence with source `advisor-note`, shown as "Advisor note from …"
+in its own box. An active lead gets one callback hint at its next tool
+response; a lead running as an approved bot wakes within its own budget;
+otherwise the lead sees it at its next turn. The lead decides what, if
+anything, reaches the team, for example by revising the backlog or messaging a
+worker. The advisor never messages members and never posts to rooms.
 
 The host refuses notes from judges that are not approved advisors, notes to any
 chat but the advised team's steering chat (members, judges, other advisors),
-notes that share services, and a note identical to one already delivered. One
-note is one lead wake plus one room record, with no fan-out to members. An
-advisor's own room posts must use `delivery=record`.
+notes that share services, and a note identical to one already delivered. A
+note to a lead whose latest turn failed or was cancelled is refused by the
+existing peer rule that messages cannot restart stopped work.
 
 Loop safety is structural. Judge turns, retained notes (runs without an
 attempt) and turns woken only by advisor notes, including the lead's, are not
 team activity, so the advisor cannot re-trigger itself through the team it
 advises. Stopping the advisor (`/bot off`) drops its team snapshot; a later
 advisor reports only facts after its own subscription. Nodes without an
-advisor do no lifecycle work.
+opted-in advisor do no lifecycle work.
 
 ## Current boundaries
 
 Tool hints contribute to context and catalogue discovery. They do not currently
 filter every callable worker tool, and deselecting a hint does not revoke a grant.
+The one exception is `team.advisor`, which decides whether the opt-in advisor
+option exists for a task tree. It is an availability gate, not a grant.
 Host operations enforce actual execution authority independently. Captured
 documents are attributed evidence/context, not instructions or automatically
 accepted facts. Inspect the captured context when checking what a worker received.

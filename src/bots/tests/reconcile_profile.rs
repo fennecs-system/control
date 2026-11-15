@@ -67,16 +67,26 @@ pub(super) fn measure(label: &str, chats: usize, state: &mut State, bot: &str, o
 #[test]
 #[ignore = "explicit synthetic release timing/flamegraph; no models, personal state or credentials"]
 fn reconcile_profile() {
-    let advised = std::env::var("CONTROL_PROFILE_ADVISOR").is_ok_and(|value| value == "1");
+    // `1`: one advisor observes the whole tree each pass. `off`: an advisor bot
+    // remains defined but the root chat no longer selects the advisor lens, so
+    // the lifecycle topic is not computed.
+    let mode = std::env::var("CONTROL_PROFILE_ADVISOR").unwrap_or_default();
+    let (advised, lens_off) = (mode == "1" || mode == "off", mode == "off");
     for (chats, runs) in [(64, 16), (512, 16)] {
         for offered in [false, true] {
             let (mut state, root, helpers) = large(chats, runs);
             if advised {
-                // After-only case: one advisor observes the whole tree each pass.
                 super::advisor::advisor(&mut state, &root);
                 reconcile_at(&mut state, 1, |_| Ok(())).unwrap();
+                if lens_off {
+                    super::advisor::opt_in(&mut state, &root, false);
+                }
             }
-            let label = match (offered, advised) { (false, false) => "idle", (true, false) => "offered", (false, true) => "idle_advised", (true, true) => "offered_advised" };
+            let label = match (offered, advised, lens_off) {
+                (false, false, _) => "idle", (true, false, _) => "offered",
+                (false, true, false) => "idle_advised", (true, true, false) => "offered_advised",
+                (false, true, true) => "idle_lens_off", (true, true, true) => "offered_lens_off",
+            };
             measure(label, chats, &mut state, &helpers[0], offered);
         }
     }

@@ -339,7 +339,6 @@ fn post(state: &mut State, text: &str) {
         run: None,
         key: String::new(),
         delivery: Default::default(),
-        source: None,
     });
 }
 #[test]
