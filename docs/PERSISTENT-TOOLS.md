@@ -24,7 +24,11 @@ broadcast. The steering/root chat is not a peer destination; consequential
 operator decisions use `control_design_ask`. Joining a shared room alone does
 not permit messaging unrelated task trees. Peer messages cannot bypass a bot's
 pause/stop, revive cancelled or failed work, change its action scope, or continue
-a read-only judge.
+a read-only judge. An approved persistent bot that is not stopped is the one
+exception for failed or interrupted turns (a transient provider error, for
+example): its turn ended, not the bot, so the message is retained for the wake
+its supervisor already owns. The message never starts or restarts a run itself.
+Stopped bots (`/bot off`) and cancelled work still refuse it.
 
 The message and selected exact owner/generation grants commit together without
 interrupting or changing an active attempt. Descendant follow-ups queue as before.

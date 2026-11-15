@@ -254,7 +254,9 @@ The host refuses notes from judges that are not approved advisors, notes to any
 chat but the advised team's steering chat (members, judges, other advisors),
 notes that share services, and a note identical to one already delivered. A
 note to a lead whose latest turn failed or was cancelled is refused by the
-existing peer rule that messages cannot restart stopped work.
+existing peer rule that messages cannot restart stopped work. The exception is
+a lead that is itself an approved persistent bot, not stopped, whose turn
+failed or was interrupted: the note then waits for its next supervised wake.
 
 Loop safety is structural. Judge turns, retained notes (runs without an
 attempt) and turns woken only by advisor notes, including the lead's, are not

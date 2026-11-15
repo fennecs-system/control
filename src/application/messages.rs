@@ -312,13 +312,15 @@ pub(crate) fn plan(
     }
     // A note is retained evidence in the lead's own scope, so the advisor's
     // read-only review scope does not have to match the lead's action.
-    if !descendant
-        && ((from.action != run.action && !advisor)
-            || !matches!(
-                from.status.as_str(),
-                "queued" | "running" | "waiting" | "continued" | "completed"
-            ))
-    {
+    // A live persistent bot's failed or interrupted turn (e.g. a provider
+    // error) is not stopped work: the message is retained for the wake its
+    // supervisor already owns and never starts a run itself.
+    let open = matches!(
+        from.status.as_str(),
+        "queued" | "running" | "waiting" | "continued" | "completed"
+    ) || (matches!(from.status.as_str(), "interrupted" | "failed")
+        && state.bots.persists(&call.chat_id));
+    if !descendant && ((from.action != run.action && !advisor) || !open) {
         return Err("Peer messages cannot restart stopped work or change its action scope");
     }
     let title = state
