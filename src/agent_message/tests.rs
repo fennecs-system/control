@@ -715,6 +715,7 @@ fn late_grants_survive_design_answers_inserted_before_the_grant_turn() {
                     run: None,
                     key: "test-post".into(),
                     delivery: Default::default(),
+                    source: None,
                 });
                 crate::rooms::reconcile(&mut restored, |_| Ok(())).unwrap();
                 assert_eq!(
@@ -737,6 +738,7 @@ fn late_grants_survive_design_answers_inserted_before_the_grant_turn() {
                     run: None,
                     key: "test-post".into(),
                     delivery: Default::default(),
+                    source: None,
                 });
                 crate::bots::reconcile(&mut restored, |_| Ok(())).unwrap();
                 assert_eq!(restored.runtime.runs.last().unwrap().kind, RunKind::BotWake);

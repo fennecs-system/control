@@ -101,7 +101,8 @@ pub(crate) fn budget_for(state: &State, run: &runtime::Run, role: Role, addition
     if additional > 0 {
         spawn_rate(state, run, additional, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64))?;
     }
-    if role == Role::Judge && (children.iter().any(|r| is_judge(r)) || state.runtime.runs.iter().any(|candidate|root(candidate)==persona.root && (!reserved || candidate.id!=run.id) && candidate.delegation.as_ref().is_some_and(|d|d.child.is_none()&&d.input.role==Role::Judge))) {
+    // The one blocking review judge; spawned advisor judges have their own allowance.
+    if role == Role::Judge && (children.iter().any(|r| r.kind == RunKind::Delegated && is_judge(r)) || state.runtime.runs.iter().any(|candidate|root(candidate)==persona.root && (!reserved || candidate.id!=run.id) && candidate.delegation.as_ref().is_some_and(|d|d.child.is_none()&&d.input.role==Role::Judge))) {
         return Err("One judge review is allowed per root task.");
     }
     Ok(())

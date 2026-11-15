@@ -544,16 +544,25 @@ fn profile_idle_backlog_reconciliation() {
     );
 }
 #[test]
-fn a_judge_batch_starts_one_read_only_reviewer_within_the_single_judge_allowance() {
+fn a_judge_batch_starts_one_advisor_within_its_own_allowance_beside_the_review_judge() {
     let (mut s, id) = active();
     let judge = |n| Input { role: Some(Role::Judge), ..input(n) };
-    assert!(request(&mut s, &id, "parent-attempt", "two", judge(2), |_| panic!("one reviewer only")).is_err());
+    assert!(request(&mut s, &id, "parent-attempt", "two", judge(2), |_| panic!("one advisor per batch")).is_err());
     request(&mut s, &id, "parent-attempt", "advisor", judge(1), |_| Ok(())).unwrap();
     let child = s.runtime.runs.last().unwrap();
     assert!(delegation::is_judge(child), "spawned with the existing judge persona, not a new role");
     assert_eq!((child.kind, child.action), (RunKind::Spawned, Action::Task));
     assert!(child.resource_grants.is_empty(), "a judge receives no services");
-    assert!(request(&mut s, &id, "parent-attempt", "second", judge(1), |_| panic!("one judge per root")).is_err());
+    let error = request(&mut s, &id, "parent-attempt", "second", judge(1), |_| panic!("one advisor per root")).unwrap_err();
+    assert!(error.contains("max_advisors_per_root"), "{error}");
+    // The advisor does not consume the root's one blocking judge review.
+    let parent = s.runtime.runs.iter().find(|run| run.id == id).unwrap();
+    assert!(delegation::budget_for(&s, parent, Role::Judge, 1, false).is_ok());
+    // The cap is configuration: raise it for a second advisor, or 0 disables them.
+    s.runtime.execution.max_advisors_per_root = 2;
+    request(&mut s, &id, "parent-attempt", "second", judge(1), |_| Ok(())).unwrap();
+    s.runtime.execution.max_advisors_per_root = 0;
+    assert!(request(&mut s, &id, "parent-attempt", "third", judge(1), |_| panic!("advisors disabled")).is_err());
     request(&mut s, &id, "parent-attempt", "workers", input(1), |_| Ok(())).unwrap();
     assert!(!delegation::is_judge(s.runtime.runs.last().unwrap()), "omitting the role keeps workers");
 }

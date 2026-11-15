@@ -119,6 +119,7 @@ pub(super) fn post(state: &mut State, room: &str, text: &str, chat: Option<Strin
         run: None,
         key: String::new(),
         delivery: Default::default(),
+        source: None,
     });
 }
 fn rpc(name: &str, args: Value) -> Value {

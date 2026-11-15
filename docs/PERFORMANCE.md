@@ -1081,3 +1081,27 @@ failed runs), so an incremental watermark was not used. Reconciliation is
 event-triggered, not polled. Reproduce with
 `cargo test --release --locked --bin control bots::tests::reconcile_profile -- --ignored --nocapture`,
 adding `CONTROL_PROFILE_ADVISOR=1` for the advisor cases.
+
+**Fact set and advisor-note revisions.** Replacing per-turn failure counts with
+per-member consecutive-failure streaks keeps the same single pass: one extra
+`(count, open)` slot per chat, indexed by position, and one O(chats) sweep. The
+web transcript and TUI box advisor notes with one source check per message. A
+single paired run of each fixture before (`2938d51`) and after this revision, on
+the same laptop (one round of ten 200-pass batches, median):
+
+| Case | Before | After |
+| --- | ---: | ---: |
+| idle, 64 chats | 32.2 µs (min 27.5) | 27.9 µs |
+| offered, 64 chats | 35.5 µs | 34.9 µs |
+| idle, 512 chats | 207.0 µs | 203.8 µs |
+| offered, 512 chats | 217.2 µs | 212.9 µs |
+| idle, 64 chats, one advisor | 44.1 µs | 43.7 µs |
+| offered, 64 chats, one advisor | 50.2 µs | 52.0 µs |
+| idle, 512 chats, one advisor | 356.0 µs | 336.0 µs |
+| offered, 512 chats, one advisor | 347.9 µs | 343.2 µs |
+| TUI render, 100 / 500 messages | 50.6 / 50.4 µs | 49.6 / 49.6 µs |
+| TUI scroll, 10,000 messages | 60.3 µs | 59.0 µs |
+
+All differences are within single-run noise; TUI render output hashes are
+unchanged. Reproduce the terminal cases with
+`cargo test --release --locked --lib terminal::profiling -- --ignored --nocapture --test-threads=1`.

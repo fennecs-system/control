@@ -68,6 +68,7 @@ impl Collective {
                         run: None,
                         key: String::new(),
                         delivery: crate::rooms::Delivery::Notify,
+                        source: None,
                     });
                 }
                 match value(f, "channel").as_str() {

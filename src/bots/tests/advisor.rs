@@ -91,30 +91,33 @@ fn quiescence_fires_once_per_settled_activity_and_history_before_subscription_is
 }
 
 #[test]
-fn notes_and_turns_woken_only_by_notes_do_not_re_trigger_the_advisor() {
+fn notes_and_lead_turns_woken_only_by_notes_do_not_re_trigger_the_advisor() {
     let (mut state, root) = fixture();
     let worker = spawned(&mut state, &root, "Builder");
-    command_at(&mut state, &worker, "on", Now(0)).unwrap();
+    // The lead runs as a bot, so a note to its steering chat wakes it.
+    command_at(&mut state, &root, "on", Now(0)).unwrap();
     let advisor = advisor(&mut state, &root);
     reconcile_at(&mut state, 1, ok).unwrap();
     turn(&mut state, &worker, "completed");
     reconcile_at(&mut state, 2, ok).unwrap();
     assert_eq!(advisor_runs(&state, &advisor).len(), 1);
+    assert!(advisor_runs(&state, &advisor)[0].objective.contains(&format!("steering chat {root}")), "the advisor advises the lead");
     finish(&mut state, &advisor);
     reconcile_at(&mut state, 3, ok).unwrap();
+    let settled = state.bots.teams[&root].settled;
 
     // The advisor's note is retained evidence (a run without an attempt)...
-    let cursor = state.chats.iter().find(|chat| chat.id == worker).unwrap().messages.len() as u64 + 1;
+    let cursor = state.chats.iter().find(|chat| chat.id == root).unwrap().messages.len() as u64 + 1;
     let mut note = state.runtime.runs[0].clone();
-    (note.id, note.chat_id, note.status, note.kind, note.attempts) = ("note-1".into(), Some(worker.clone()), "completed".into(), RunKind::AgentMessage, Vec::new());
+    (note.id, note.chat_id, note.status, note.kind, note.attempts) = ("note-1".into(), Some(root.clone()), "completed".into(), RunKind::AgentMessage, Vec::new());
     note.bot_turn = None;
     state.runtime.runs.push(note);
-    state.chats.iter_mut().find(|chat| chat.id == worker).unwrap().messages.push(crate::chat::Message { text: "Advisor note".into(), run_id: Some("note-1".into()), reply: String::new() });
-    state.agent_messages.push(crate::application::messages::Sent { key: "advisor/note".into(), origin: "advisor-turn".into(), chat: worker.clone(),
+    state.chats.iter_mut().find(|chat| chat.id == root).unwrap().messages.push(crate::chat::Message { text: "Advisor note".into(), run_id: Some("note-1".into()), reply: String::new() });
+    state.agent_messages.push(crate::application::messages::Sent { key: "advisor/note".into(), origin: "advisor-turn".into(), chat: root.clone(),
         run: "note-1".into(), services: vec![], peer_cursor: Some(cursor), note: true });
-    // ...that wakes the approved worker like a peer message, as a `Note` reason.
+    // ...that wakes the approved lead once, as a `Note` reason.
     reconcile_at(&mut state, 40_000, ok).unwrap();
-    let woken = bot_runs(&state).into_iter().filter(|run| run.chat_id.as_deref() == Some(&worker)).collect::<Vec<_>>();
+    let woken = bot_runs(&state).into_iter().filter(|run| run.chat_id.as_deref() == Some(&root)).collect::<Vec<_>>();
     assert_eq!(woken.len(), 1);
     assert!(matches!(woken[0].bot_turn.as_ref().unwrap().reasons.as_slice(), [Reason::Info { info: Message::Note, .. }]));
     assert!(woken[0].objective.contains("advisor note"));
@@ -124,8 +127,8 @@ fn notes_and_turns_woken_only_by_notes_do_not_re_trigger_the_advisor() {
     woken.attempts = vec![crate::usage::Attempt::default()];
     reconcile_at(&mut state, 80_000, ok).unwrap();
     reconcile_at(&mut state, 120_000, ok).unwrap();
-    assert_eq!(advisor_runs(&state, &advisor).len(), 1, "no advisor ping-pong through its own notes");
-    assert!(state.bots.teams[&root].settled == 1);
+    assert_eq!(advisor_runs(&state, &advisor).len(), 1, "the lead's note-woken turn is not team activity");
+    assert_eq!(state.bots.teams[&root].settled, settled);
 }
 
 #[test]
@@ -143,16 +146,18 @@ fn facts_coalesce_into_one_reason_and_respect_the_advisor_budget() {
     reconcile_at(&mut state, 1, ok).unwrap();
     turn(&mut state, &worker, "failed");
     turn(&mut state, &tester, "interrupted");
+    turn(&mut state, &tester, "failed");
     reconcile_at(&mut state, 2, ok).unwrap();
     let runs = advisor_runs(&state, &advisor);
     assert_eq!(runs.len(), 1, "several facts in one pass make one turn");
     let observed = facts(runs[0]);
     assert_eq!(observed.len(), 1, "one coalesced lifecycle reason");
-    assert_eq!((observed[0].failed, observed[0].abandoned, observed[0].quiescent), (2, 1, true));
-    assert!(observed[0].chats.contains(&worker) && observed[0].chats.contains(&tester));
+    assert_eq!((observed[0].repeated, observed[0].abandoned, observed[0].quiescent), (0, 1, true), "single failures are not facts");
+    assert!(observed[0].chats.contains(&worker));
     finish(&mut state, &advisor);
     turn(&mut state, &tester, "failed");
     reconcile_at(&mut state, 40_000, ok).unwrap();
+    // The third consecutive failure (the interruption neither extends nor breaks it).
     turn(&mut state, &tester, "blocked");
     reconcile_at(&mut state, 80_000, ok).unwrap();
     assert_eq!(advisor_runs(&state, &advisor).len(), 1, "the existing turn budget bounds the advisor");
@@ -161,7 +166,58 @@ fn facts_coalesce_into_one_reason_and_respect_the_advisor_budget() {
     assert_eq!(runs.len(), 2);
     let observed = facts(runs[1]);
     assert_eq!(observed.len(), 1, "pending facts merged while the budget was spent");
-    assert_eq!((observed[0].failed, observed[0].quiescent), (2, true));
+    assert_eq!((observed[0].repeated, observed[0].quiescent), (1, true));
+    assert!(observed[0].chats.contains(&tester));
+    assert!(runs[1].objective.contains("failed several turns in a row"));
+    // A streak is reported once; it must break before it is reported again.
+    finish(&mut state, &advisor);
+    turn(&mut state, &tester, "failed");
+    reconcile_at(&mut state, 2 * WINDOW_MS + 20, ok).unwrap();
+    assert!(advisor_runs(&state, &advisor).get(2).is_none_or(|run| facts(run)[0].repeated == 0));
+}
+
+#[test]
+fn single_failures_and_exits_are_not_facts_but_a_retired_restart_loop_is() {
+    let (mut state, root) = fixture();
+    let worker = spawned(&mut state, &root, "Builder");
+    let tester = spawned(&mut state, &root, "Tester");
+    watching(&mut state, &worker, "w-build");
+    let advisor = advisor(&mut state, &root);
+    // A running member keeps the team from going quiet.
+    turn(&mut state, &tester, "running");
+    reconcile_at(&mut state, 1, ok).unwrap();
+    turn(&mut state, &worker, "failed");
+    let exit = |gave_up| crate::watches::Exit { seq: 1, code: Some(1), signal: None, restarts: 0, gave_up };
+    state.watches.iter_mut().find(|w| w.id == "w-build").unwrap().exits.push(exit(false));
+    reconcile_at(&mut state, 2, ok).unwrap();
+    assert!(advisor_runs(&state, &advisor).is_empty(), "one failed turn and one failed exit are ordinary work");
+    turn(&mut state, &worker, "failed");
+    reconcile_at(&mut state, 3, ok).unwrap();
+    assert!(advisor_runs(&state, &advisor).is_empty(), "two in a row are below the default streak");
+    state.watches.iter_mut().find(|w| w.id == "w-build").unwrap().exits.push(crate::watches::Exit { seq: 2, ..exit(true) });
+    reconcile_at(&mut state, 4, ok).unwrap();
+    let runs = advisor_runs(&state, &advisor);
+    assert_eq!(runs.len(), 1);
+    assert_eq!(facts(runs[0]), [Facts { retired: 1, chats: vec![worker.clone()], ..Facts::default() }]);
+}
+
+#[test]
+fn the_failure_streak_is_configurable() {
+    let (mut state, root) = fixture();
+    let worker = spawned(&mut state, &root, "Builder");
+    let tester = spawned(&mut state, &root, "Tester");
+    state.runtime.execution.advisor_failure_streak = 2;
+    let advisor = advisor(&mut state, &root);
+    turn(&mut state, &tester, "running");
+    reconcile_at(&mut state, 1, ok).unwrap();
+    turn(&mut state, &worker, "failed");
+    turn(&mut state, &worker, "completed");
+    turn(&mut state, &worker, "failed");
+    reconcile_at(&mut state, 2, ok).unwrap();
+    assert!(advisor_runs(&state, &advisor).is_empty(), "a completed turn breaks the streak");
+    turn(&mut state, &worker, "blocked");
+    reconcile_at(&mut state, 3, ok).unwrap();
+    assert_eq!(facts(advisor_runs(&state, &advisor)[0]), [Facts { repeated: 1, chats: vec![worker.clone()], ..Facts::default() }]);
 }
 
 #[test]
@@ -170,7 +226,7 @@ fn failed_saves_restore_the_team_snapshot_and_restart_keeps_the_cursor() {
     let worker = spawned(&mut state, &root, "Builder");
     let advisor = advisor(&mut state, &root);
     reconcile_at(&mut state, 1, ok).unwrap();
-    turn(&mut state, &worker, "failed");
+    turn(&mut state, &worker, "completed");
     let before = state.bots.teams[&root].clone();
     assert!(reconcile_at(&mut state, 2, |_| Err(io::Error::other("disk full"))).is_err());
     assert_eq!(state.bots.teams[&root], before, "the fact stays pending");
@@ -178,7 +234,7 @@ fn failed_saves_restore_the_team_snapshot_and_restart_keeps_the_cursor() {
     let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
     reconcile_at(&mut restored, 3, ok).unwrap();
     assert_eq!(advisor_runs(&restored, &advisor).len(), 1);
-    assert_eq!(facts(advisor_runs(&restored, &advisor)[0])[0].failed, 1);
+    assert!(facts(advisor_runs(&restored, &advisor)[0])[0].quiescent);
 }
 
 #[test]

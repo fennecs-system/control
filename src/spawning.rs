@@ -83,6 +83,28 @@ impl Batch {
     fn id(&self, parent: &str) -> String {
         format!("{parent}:{}:{}", self.generation, self.nonce)
     }
+}
+/// Spawned judges are the root task's advisors: at most the configured
+/// `max_advisors_per_root`, counting started and pending ones, separately from
+/// its one blocking judge review. Like other root reservations, a started
+/// advisor keeps its slot after it finishes.
+fn advisor_allowance(state: &State, run: &crate::runtime::Run) -> Result<(), &'static str> {
+    let root = delegation::lineage(run).root;
+    let started = state.runtime.runs.iter()
+        .filter(|candidate| candidate.kind == RunKind::Spawned && delegation::is_judge(candidate) && delegation::lineage(candidate).root == root)
+        .count();
+    let pending = state.runtime.runs.iter()
+        .filter(|candidate| delegation::lineage(candidate).root == root)
+        .flat_map(|candidate| &candidate.spawns)
+        .filter(|batch| batch.input.role() == Role::Judge)
+        .map(Batch::pending)
+        .sum::<usize>();
+    if started.saturating_add(pending) >= state.runtime.execution.max_advisors_per_root {
+        return Err("This root task's advisor allowance (max_advisors_per_root) is used.");
+    }
+    Ok(())
+}
+impl Batch {
     fn summary(&self, state: &State) -> Value {
         self.page(state, 0, 10)
     }
@@ -96,7 +118,7 @@ pub fn definition() -> Value {
     definition
 }
 fn inherited_definition()->Value {
-    json!({"name":"control_agent_spawn","description":"Start independent or background worker objectives without pausing this conversation. Give each worker ownership of its goal and dependencies, including ongoing infrastructure when needed. Workers coordinate directly with same-task peers; keep the root chat for steering and consequential decisions rather than relaying routine updates. Continue useful work in this session; spawning does not require ending it. Control queues completion updates automatically. Yield when genuinely waiting with no independent work remaining. Use control_agent_spawn_status only when a current status check is needed, never in a polling loop. Configured team budget (default 64), pending-intent budget and 24000-byte payload apply independently of model slots. Children inherit captured model, lenses, actor, linked room and immutable baseline, never live edits. Mentioning a room in an objective does not link it. First Improve turns without a published baseline must checkpoint via control_agent_spawn_blocking or finish first. Depth limit 2; children and blocking spawns share one root budget. Cancellation fences backlog and descendants; later originating-chat turns can inspect or cancel retained batches.","inputSchema":{"type":"object","properties":{"objectives":{"type":"array","description":"One concise task per child, 1–2000 characters each and 24000 UTF-8 bytes total. Example: [\"Inspect the API\",\"Review the tests\"]. Request identity comes from the transport; do not supply nonce or identity fields.","minItems":1,"items":{"type":"string","minLength":1,"maxLength":2000}},"role":{"type":"string","enum":["worker","judge"],"default":"worker","description":"judge starts exactly one isolated read-only reviewer with no resources, sharing the root task's single judge allowance. An approved judge bot becomes the team's advisor."}},"required":["objectives"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
+    json!({"name":"control_agent_spawn","description":"Start independent or background worker objectives without pausing this conversation. Give each worker ownership of its goal and dependencies, including ongoing infrastructure when needed. Workers coordinate directly with same-task peers; keep the root chat for steering and consequential decisions rather than relaying routine updates. Continue useful work in this session; spawning does not require ending it. Control queues completion updates automatically. Yield when genuinely waiting with no independent work remaining. Use control_agent_spawn_status only when a current status check is needed, never in a polling loop. Configured team budget (default 64), pending-intent budget and 24000-byte payload apply independently of model slots. Children inherit captured model, lenses, actor, linked room and immutable baseline, never live edits. Mentioning a room in an objective does not link it. First Improve turns without a published baseline must checkpoint via control_agent_spawn_blocking or finish first. Depth limit 2; children and blocking spawns share one root budget. Cancellation fences backlog and descendants; later originating-chat turns can inspect or cancel retained batches.","inputSchema":{"type":"object","properties":{"objectives":{"type":"array","description":"One concise task per child, 1–2000 characters each and 24000 UTF-8 bytes total. Example: [\"Inspect the API\",\"Review the tests\"]. Request identity comes from the transport; do not supply nonce or identity fields.","minItems":1,"items":{"type":"string","minLength":1,"maxLength":2000}},"role":{"type":"string","enum":["worker","judge"],"default":"worker","description":"judge starts exactly one isolated read-only advisor candidate with no resources, within the root task's advisor allowance (default 1), separate from its one blocking judge review. Request it as a bot to make it the team's advisor."}},"required":["objectives"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
 }
 pub fn management_definitions() -> Vec<Value> {
     vec![
@@ -163,10 +185,15 @@ pub fn request(
             Err("Spawn request identity already has different objectives.")
         };
     }
-    if input.role() == Role::Judge && input.objectives.len() != 1 {
-        return Err("A judge batch starts exactly one read-only reviewer.");
+    if input.role() == Role::Judge {
+        if input.objectives.len() != 1 {
+            return Err("A judge batch starts exactly one read-only advisor candidate.");
+        }
+        advisor_allowance(state, run)?;
     }
-    delegation::budget_for(state, run, input.role(), input.objectives.len(), false)?;
+    // A spawned judge is a team advisor candidate: it uses the root's advisor
+    // allowance, not the one blocking judge review.
+    delegation::budget_for(state, run, Role::Worker, input.objectives.len(), false)?;
     let pending = state
         .runtime
         .runs

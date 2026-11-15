@@ -50,9 +50,13 @@ Private `~/.config/control/execution.json` (mode 0600) configures these separate
 limits; omitted fields retain their defaults:
 
 ```json
-{"max_parallel_runs":3,"max_agents_per_root":64,"max_pending_agent_intents":256}
+{"max_parallel_runs":3,"max_agents_per_root":64,"max_pending_agent_intents":256,"max_advisors_per_root":1,"advisor_failure_streak":3}
 ```
 
+`max_advisors_per_root` (0–8; 0 disables advisors) caps the
+[team advisors](LENSES.md#team-advisor) a root task may start, separately from
+its one blocking judge review. `advisor_failure_streak` (2–64) is how many
+consecutive failed or blocked turns of one member make a fact for its advisor.
 Agent budgets must be positive integers up to 65,536. The MCP transport's
 input-size limit also applies. Node pending-intent capacity is
 shared across roots; root reservations include spawned and delegated descendants,
@@ -129,7 +133,8 @@ reports that explicitly; existing artifact size and file-type limits still apply
 
 Personas currently capture a role and enforced policy. The one persistent
 persona is the opt-in advisor judge below; there are no persona bundles yet. A worker may delegate to depth two; a root task uses its configured total
-agent budget and permits one independent judge review. Workers and judges inherit the parent's
+agent budget and permits one independent blocking judge review, plus its
+configured advisor allowance (default one). Workers and judges inherit the parent's
 captured provider and model. A configured alternate provider is not evidence of
 available credentials. Explicit cross-model selection with availability checks
 is a later feature; judge context and source access remain isolated now.
@@ -142,12 +147,14 @@ only for scratch and transport. `/tmp` is available for disposable verification
 outputs. Their reports do not advance the development workspace.
 
 `control_agent_spawn` accepts `"role":"judge"` with exactly one objective to
-start that single judge without pausing the parent; it receives no services and
-the task-level review scope, as with blocking delegation. An operator-approved
-judge bot is the team's [advisor](LENSES.md#team-advisor): its only source is
-the `task:<root>` lifecycle topic and its only additional effect is evidence
-notes through `control_agent_message`. It never sends services, never messages
-the steering chat, judges or advisors, and posts room records only. Other judges
+start an advisor candidate without pausing the parent; it receives no services
+and the task-level review scope, as with blocking delegation. It uses the root's
+advisor allowance (`max_advisors_per_root`), not its blocking review. An
+operator-approved judge bot is the team's [advisor](LENSES.md#team-advisor): its
+only source is the `task:<root>` lifecycle topic and its only additional effect
+is evidence notes through `control_agent_message` to the lead's steering chat,
+each also recorded once in the lead's room. It never sends services, never
+messages members, judges or advisors, and posts room records only. Other judges
 still cannot run as bots or message agents.
 
 Waiting state and child/continuation IDs are persisted together. Restart does not

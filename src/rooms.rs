@@ -42,10 +42,17 @@ pub struct Post {
     pub key: String,
     #[serde(default)]
     pub delivery: Delivery,
+    /// `advisor-note` for an advisor's note recorded for the collective.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 pub fn read(state: &State, room: &str) -> Value {
     let posts = state.collective.posts.iter().filter(|p| p.room == room).rev().take(50)
-        .map(|p| json!({"text":p.text,"chat":p.chat,"run":p.run,"delivery":p.delivery,"author":if p.run.is_some(){"agent"}else{"operator"}}));
+        .map(|p| {
+            let mut post = json!({"text":p.text,"chat":p.chat,"run":p.run,"delivery":p.delivery,"author":if p.run.is_some(){"agent"}else{"operator"}});
+            if let Some(source) = &p.source { post["source"] = json!(source); }
+            post
+        });
     json!({"room":room,"posts":posts.collect::<Vec<_>>(),"claims":claims::listed(state, room),
         "chats":state.chats.iter().rev().filter(|c| c.room.as_deref()==Some(room)).take(50).map(|c|json!({"id":c.id,"title":c.title})).collect::<Vec<_>>()})
 }
@@ -71,6 +78,7 @@ pub fn tool(state: &mut State, name: &str, args: &Value) -> Result<Value, &'stat
                 run: None,
                 key: String::new(),
                 delivery: Delivery::Notify,
+                source: None,
             });
             Ok(json!({"posted":true}))
         }
@@ -260,7 +268,7 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
                             }
                         }
                         if !state.collective.posts.iter().any(|p| p.key == key) {
-                            state.collective.posts.push(Post { room: room.clone(), text, chat: Some(chat), run: Some(run), key: key.clone(), delivery });
+                            state.collective.posts.push(Post { room: room.clone(), text, chat: Some(chat), run: Some(run), key: key.clone(), delivery, source: None });
                         }
                         let stored = state.collective.posts.iter().find(|p| p.key == key).unwrap();
                         json!({"posted":true,"room":room,"delivery":stored.delivery})

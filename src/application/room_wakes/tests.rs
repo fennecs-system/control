@@ -52,6 +52,7 @@ fn borrowed_admission_requires_authority_generation_and_actionable_peer_evidence
             run: None,
             key: String::new(),
             delivery: crate::rooms::Delivery::Notify,
+            source: None,
         },
         Post {
             room: "research".into(),
@@ -60,6 +61,7 @@ fn borrowed_admission_requires_authority_generation_and_actionable_peer_evidence
             run: None,
             key: String::new(),
             delivery: crate::rooms::Delivery::Record,
+            source: None,
         },
     ];
     assert_eq!(

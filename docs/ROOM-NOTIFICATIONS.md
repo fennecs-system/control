@@ -220,6 +220,8 @@ unaffected. The supervisor core only matches topics and cursors; claim meaning
 stays in Control's adapter.
 
 An [advisor note](LENSES.md#team-advisor) is a direct peer message from the
-team's approved read-only advisor, and these rules apply to it unchanged. The
-advisor itself sleeps only on its `task:<root>` lifecycle topic; it holds no
-room inbox and its room posts are records.
+team's approved read-only advisor to the lead's steering chat, and these rules
+apply to it unchanged. The same note is recorded once in the lead's room as a
+`delivery=record` post with source `advisor-note`, so members read it without
+being woken. The advisor itself sleeps only on its `task:<root>` lifecycle
+topic; it holds no room inbox and its room posts are records.

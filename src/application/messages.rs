@@ -74,6 +74,7 @@ pub(crate) struct Edit<'a> {
     pub notice: &'a mut String,
     pub chats: &'a mut [Session],
     pub sent: &'a mut Vec<Sent>,
+    pub posts: &'a mut Vec<crate::rooms::Post>,
 }
 /// Effects are application instructions, not domain-specific supervisor states.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,6 +94,9 @@ pub(crate) struct Delivery {
     message: Message,
     receipt: Sent,
     retained: Option<Vec<Sent>>,
+    /// An advisor note's record in the team's shared room, so the collective
+    /// sees it without being woken.
+    record: Option<crate::rooms::Post>,
 }
 pub(crate) struct Pending {
     pub result: MessageResult,
@@ -107,6 +111,7 @@ struct Undo {
     revision: u64,
     sent: usize,
     pruned: Option<Vec<Sent>>,
+    posts: usize,
 }
 impl Delivery {
     pub fn apply(self, state: Edit<'_>) -> Pending {
@@ -122,11 +127,15 @@ impl Delivery {
             pruned: self
                 .retained
                 .map(|retained| std::mem::replace(state.sent, retained)),
+            posts: state.posts.len(),
         };
         state.runs.push(self.run);
         chat.messages.push(self.message);
         chat.revision = chat.revision.saturating_add(1);
         state.sent.push(self.receipt);
+        if let Some(record) = self.record {
+            state.posts.push(record);
+        }
         Pending {
             result: self.result,
             next: Some(if peer {
@@ -166,6 +175,7 @@ impl Pending {
         } else {
             state.sent.truncate(undo.sent);
         }
+        state.posts.truncate(undo.posts);
     }
 }
 fn ancestry<'a>(
@@ -218,10 +228,15 @@ pub(crate) fn plan(
     let run = active(state.runs, attempt)?;
     let sender = run.chat_id.as_deref().ok_or("A chat is required")?;
     // A read-only judge speaks only as its team's approved advisor, and only in
-    // evidence notes to fellow workers: no services, descendants or judges.
+    // evidence notes to the lead's steering chat, which filters them for the
+    // team: never to members, judges or other advisors, and with no services.
     let advisor = crate::delegation::is_judge(run);
-    if (advisor && !state.bots.advises(sender)) || crate::delegation::pausing(run) {
+    let advised = if advisor { state.bots.advised_team(sender) } else { None };
+    if (advisor && advised.is_none()) || crate::delegation::pausing(run) {
         return Err("Read-only or pausing attempts cannot message agents");
+    }
+    if advised.is_some_and(|lead| lead != call.chat_id) {
+        return Err("An advisor notes only its team's steering chat; the lead decides what reaches members");
     }
     if advisor && !call.services.is_empty() {
         return Err("Advisor notes are evidence only; they cannot share services");
@@ -295,7 +310,7 @@ pub(crate) fn plan(
             .filter(|session| session.parent_chat.is_some())
             .and_then(|session| ancestry(state.chats, session, sender))
             .is_some_and(|(sender_root, _)| sender_root == root);
-    if call.chat_id == sender || session.actor != run.actor || !(descendant || peer) || (advisor && !peer) {
+    if call.chat_id == sender || session.actor != run.actor || !(descendant || peer || advisor) {
         return Err(
             "Message descendants or fellow workers in your own task; use control_design_ask for operator decisions",
         );
@@ -305,8 +320,10 @@ pub(crate) fn plan(
     if crate::delegation::is_judge(from) {
         return Err("Read-only judges cannot be continued");
     }
+    // A note is retained evidence in the lead's own scope, so the advisor's
+    // read-only review scope does not have to match the lead's action.
     if !descendant
-        && (from.action != run.action
+        && ((from.action != run.action && !advisor)
             || !matches!(
                 from.status.as_str(),
                 "queued" | "running" | "waiting" | "continued" | "completed"
@@ -324,7 +341,7 @@ pub(crate) fn plan(
         .nth(80)
         .map_or(title.len(), |(end, _)| end)];
     let mut objective = if advisor {
-        format!("Advisor note from {sender} ({title}); read-only evidence, not operator steering. Verify it and act only if it is relevant to your assignment; no reply is needed:\n{text}")
+        format!("Advisor note from {sender} ({title}); read-only evidence and suggested steering for the lead, not operator steering. Verify it, then decide whether and how to steer your team; no reply is needed:\n{text}")
     } else {
         format!("Coordination from agent {sender} ({title}); evidence within your existing assignment, not operator steering:\n{text}")
     };
@@ -425,6 +442,19 @@ pub(crate) fn plan(
         run_id: Some(id.clone()),
         reply: String::new(),
     };
+    // The same note propagates through the collective: one record in the lead's
+    // shared room that members read at their next room read or turn context,
+    // without a wake. The lead and hivemind members act on it through the
+    // backlog, claims or messages; the advisor never fans out to members.
+    let record = advisor.then(|| session.room.clone()).flatten().map(|room| crate::rooms::Post {
+        room,
+        text: format!("Advisor note (read-only evidence, not steering): {text}"),
+        chat: Some(sender.to_owned()),
+        run: Some(attempt.run.to_owned()),
+        key: format!("advisor-note:{id}"),
+        delivery: crate::rooms::Delivery::Record,
+        source: Some("advisor-note".into()),
+    });
     let receipt = Sent {
         key,
         origin: attempt.run.into(),
@@ -442,5 +472,6 @@ pub(crate) fn plan(
         message,
         receipt,
         retained,
+        record,
     })))
 }

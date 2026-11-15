@@ -38,12 +38,14 @@ WASM tooling fix shipped in #143; both platform checks passed before merging.
   reads retain them. No workload-specific parser or timeout was added to core.
 - [x] **Opt-in autonomy/investigation lenses (#144):** declarative guidance is
   captured with runs; adding a lens does not grant resource or tool authority.
-- [ ] **Opt-in team advisor (in review, not deployed):** coordination lens r6
-  (tell dependents directly; claim shared fixes, not roles) and an `advisor`
-  lens. The advisor is the existing read-only judge persona run as an
-  operator-approved bot, woken only by edge-triggered host facts on a
-  `task:<root>` topic (member failure, failed watch exit, abandoned claim, team
-  quiescence) and limited to evidence notes on the existing peer-message path.
+- [ ] **Opt-in team advisor (in review, not deployed):** an `advisor` lens on
+  top of coordination lens r6. The advisor is the existing read-only judge
+  persona run as an operator-approved bot with its own per-root allowance,
+  woken only by edge-triggered host facts on a `task:<root>` topic (team
+  quiescence, a member's repeated consecutive failures, a retired restart loop,
+  an abandoned claim; never single failures or exits). It helps the lead steer:
+  each evidence note wakes only the lead's steering chat and is recorded once in
+  the lead's room, so the collective acts on it through its normal channels.
   No new role, supervisor state, clock rule or core concept; judge turns, notes
   and note-only wakes are not team activity, so it cannot wake itself. See
   [LENSES.md](LENSES.md#team-advisor). Whether it reduces stalls or noise still

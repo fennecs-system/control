@@ -164,47 +164,70 @@ measure repeated actions, useful outcomes and intervention in opt-in trials.
 ## Team advisor
 
 Select **Team advisor** (`/use advisor`), usually alongside `swarm`, before
-launching a team. It is a lightweight observer, not a supervisor, planner or
-relay: it adds short evidence notes to an agent's next turn, much like a side
-note or reminder, and holds no authority.
+launching a team. It is a lightweight observer that helps the lead steer, like
+a subagent catching gaps the lead could miss. It is not a supervisor, planner,
+relay or churn monitor, and it holds no authority.
 
 The advisor is an existing persona, not a new role: a read-only **judge**
 (see [delegation](DELEGATION.md)). The lens is its procedure and voice; policy
 comes from the judge role and the operator's bot approval.
 
 1. The lead starts it with `control_agent_spawn` and `role: "judge"`, one
-   objective naming the shared outcome. It uses the root task's single judge
-   allowance and gets no resources.
+   objective naming the shared outcome. It gets no resources. It uses the root
+   task's advisor allowance (`max_advisors_per_root`, default 1), which is
+   separate from the root's one blocking judge review, so a team can have both.
 2. The lead asks for it with `control_bot_request` (no interval). The operator
    approves it like any bot, or types `/bot on` in its chat. A lens selection or
    a request alone enables nothing.
 3. The approved judge sleeps on its task tree's lifecycle topic,
    `task:<root chat>`. Control offers host facts there, edge-triggered from records
-   reconciliation already reads: a member turn failed, was interrupted or blocked;
-   a watched process exited with a failure, a signal or a retired restart loop;
-   a claim was abandoned by a lost owner; or the team went quiet with no member
-   turn running or queued. Facts coalesce into one reason under the bot's existing
-   30-second cooldown and 60 turns per hour. There is no clock rule: a quiet team
-   is reported once per settled change, and elapsed time is never a fact.
-4. On waking, the advisor reads the facts and `control_room_read` (participants,
-   posts and claims with `owner_idle`/`abandoned` flags) and sends at most a short
-   note with `control_agent_message` to an agent who can act, citing the evidence
-   and one next step. It sends nothing when evidence is unchanged.
+   reconciliation already reads. Facts are gaps, not churn:
+   - the team went quiet, with no member turn running or queued;
+   - a member's latest turns failed or were blocked several times in a row
+     (`advisor_failure_streak`, default 3; interrupted and cancelled turns
+     neither extend nor break a streak), reported once per streak;
+   - a watched restart loop was retired after repeated exits;
+   - a claim was abandoned by a lost owner.
 
-A note is retained peer evidence with source `advisor-note`, shown as
-"Advisor note from …". It follows the existing peer-message path: an active
-recipient gets one callback hint at its next tool response; an idle approved bot
-wakes within its own budget; a selective wait keeps it for the next turn.
-The host refuses notes from judges that are not approved advisors, notes that
-share services, notes to the steering chat, a judge or another advisor, and a
-note identical to one already delivered to that agent. An advisor's room posts
-must use `delivery=record`.
+   A single failed, interrupted or cancelled turn (provider errors included)
+   and a single failed watch exit are never facts. Facts coalesce into one
+   reason under the bot's existing 30-second cooldown and 60 turns per hour.
+   There is no clock rule: a quiet team is reported once per settled change,
+   and elapsed time is never a fact.
+4. On waking, the advisor reads the facts and `control_room_read` (participants,
+   posts and claims with `owner_idle`/`abandoned` flags). If there is a gap, it
+   sends the lead's steering chat one concise note with `control_agent_message`:
+   the evidence and a suggested steering step. It sends nothing when evidence
+   is unchanged.
+
+A note propagates through the collective rather than a private channel:
+
+- It wakes only the lead. The note is retained peer evidence with source
+  `advisor-note`, shown as "Advisor note from …" in its own box. An active lead
+  gets one callback hint at its next tool response; a lead running as an
+  approved bot wakes within its own budget; otherwise the lead sees it at its
+  next turn.
+- The same note is recorded once in the lead's linked room as a
+  `delivery=record` post with source `advisor-note`. Members see it at their
+  next room read or turn context without being woken. With no linked room,
+  only the lead receives it.
+- The lead, or any member working under the coordination lens, acts on it
+  through the team's normal channels: revising the backlog, claiming or
+  adjusting work, or messaging a specific worker. The advisor never messages
+  members itself.
+
+The host refuses notes from judges that are not approved advisors, notes to any
+chat but the advised team's steering chat (members, judges, other advisors),
+notes that share services, and a note identical to one already delivered. One
+note is one lead wake plus one room record, with no fan-out to members. An
+advisor's own room posts must use `delivery=record`.
 
 Loop safety is structural. Judge turns, retained notes (runs without an
-attempt) and turns woken only by advisor notes are not team activity, so the
-advisor cannot re-trigger itself through the team it advises. Stopping the
-advisor (`/bot off`) drops its team snapshot; a later advisor reports only facts
-after its own subscription. Nodes without an advisor do no lifecycle work.
+attempt) and turns woken only by advisor notes, including the lead's, are not
+team activity, so the advisor cannot re-trigger itself through the team it
+advises. Stopping the advisor (`/bot off`) drops its team snapshot; a later
+advisor reports only facts after its own subscription. Nodes without an
+advisor do no lifecycle work.
 
 ## Current boundaries
 

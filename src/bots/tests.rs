@@ -48,6 +48,7 @@ fn post(state: &mut State, chat: Option<&str>, text: &str) {
         run: None,
         key: format!("k{}", state.collective.posts.len()),
         delivery: Default::default(),
+        source: None,
     });
 }
 #[test]
