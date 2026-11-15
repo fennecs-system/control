@@ -6,7 +6,7 @@ Use **Lenses** to create/edit definitions and inspect their effective instructio
 Select them in a chat's lens picker, or use terminal commands:
 
 ```text
-/use engineering coordination autonomy investigation
+/use engineering swarm
 /context
 ```
 
@@ -31,7 +31,46 @@ recovery path. A task-local guard can embody an incorrect assumption; investigat
 its rationale rather than treating every guard rejection as a reason to wait
 forever. Host-enforced permissions, mandatory safety constraints, cancellation
 and explicit user limits remain binding. The lens does not authorize broader
-access or consequential actions beyond the task's mandate.
+access or consequential actions beyond the task's mandate. Long-lived workloads
+need a current job and a path to the next authorized job, rather than only a
+connection or health monitor. Test their notification path before waiting, then
+notify on completion, actionable blockers or transitions that open useful work.
+Include the job ID, outcome and evidence reference; deduplicate repeated outcomes
+and keep routine diagnostics out of notifications. Use the workload's existing
+interface to assign work without restarting a healthy persistent process for
+every action.
+
+Weigh the actual recovery cost of a setback against the cost of stalled work;
+recoverable does not mean harmless, especially for shared assets. Routine
+independent work within the mandate needs no peer permission. Uncertainty alone
+calls for investigation with existing observations and tools, rather than stopping.
+
+A quiet healthy download, calculation, service or genuine dependency wait needs
+no periodic model wake or invented deadline. Workload-specific idle diagnostics
+are optional and must be actionable, rather than repeated no-change polling.
+
+## Reusable planning procedure
+
+Select **Planning procedure** (`/use planning`) for a broad outcome, or select
+**Swarm** (`/use swarm`) to combine it with coordination, autonomy and investigation.
+The existing lens library is the versioned procedure mechanism: there is no new
+planner API, task queue, scheduler or provider-specific skill loader. The same
+procedure is available in the web picker, TUI and `control.chat.lenses`.
+
+Keep a short rolling plan in the task's normal notes or shared room. Reference it
+instead of mirroring the whole backlog in every message. For each active
+deliverable record its outcome, completion evidence, owner, actual prerequisites
+and next action or release signal. Start with a useful end-to-end result and
+reliable reusable capabilities, then expand. For example, a team building an
+integration might first deliver one working request, then error handling and
+recovery, then additional operations. Connection health alone is not the feature.
+
+Use existing room claims for overlapping shared work, not every local action.
+Workers choose ready work, update their claims and take the next authorized step
+without a steering relay. A workload may chain its remaining authorized jobs
+itself, or notify its owner to assign the next job. Before yielding, retain the
+current job, remaining work and the callback or claim release that enables the
+next action in the existing handoff. Simple local tasks need no team plan.
 
 ## Coordination and planning
 
@@ -48,17 +87,25 @@ no-change messages out of the steering chat. Changed evidence or repeated lack
 of useful results calls for revisiting the plan. Healthy long-running work can
 still wait on callbacks without a new deadline or forced intervention.
 
-Roles and claims own shared deliverables, not each agent's basic needs: every
-agent keeps itself fed, safe and supplied, and its own caution is not a
-dependency. Agents wait only on a producer that can act, and when that producer is
-blocked, offline or slow, or several peers wait on one, they produce the input
-themselves or take a reversible step. When nobody can unblock the goal they ask
-the operator with options, and apply standing risk guidance to similar reversible
-steps.
+Roles and claims own shared deliverables, not exclusive rights to routine inputs
+or another agent's basic task prerequisites. Check that a dependency's producer
+can act and is not waiting on you. If it cannot act, coordinate a handoff of
+ownership or do independent authorized work; elapsed time alone does not justify
+duplicating healthy work. When nobody can unblock the goal, ask the operator
+with options and apply standing guidance to similar authorized steps. Assign
+ongoing shared services to workers that peers can contact directly, rather than
+making the steering chat an operational dependency.
+
+Inspect existing task tools and peer findings before implementing common
+capabilities again. Share a verified reusable implementation with its invocation,
+version and evidence through existing artifacts or an explicitly shared service.
+Reusing code does not require sharing one process or every worker's mutable
+state. Existing access controls still apply; this creates no shared-storage or
+service-grant mechanism.
 
 Select **Coordination & planning** in the lens picker, or use `/use coordination`.
 For a team, select **Swarm** (`/use swarm`), which includes `coordination`,
-`autonomy` and `investigation`: the first run with coordination alone showed
+`planning`, `autonomy` and `investigation`: the first run with coordination alone showed
 agents sleeping behind self-imposed safety guards. This is versioned guidance over existing tools, not a central
 planner, permission grant or guarantee against deadlock. Its ownership and
 blocker advice uses advisory room claims (see

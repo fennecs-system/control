@@ -736,6 +736,10 @@ fn optional_guidance_survives_child_wake_and_library_edits_without_retroactive_c
     revised.revision += 1;
     revised.instructions = "Future coordination guidance only".into();
     state.lens_library.definitions.push(revised);
+    let mut revised = state.lens_library.get("planning").unwrap().clone();
+    revised.revision += 1;
+    revised.instructions = "Future planning guidance only".into();
+    state.lens_library.definitions.push(revised);
     let wake = enqueue_continuation(
         &mut state,
         &id,
@@ -760,17 +764,20 @@ fn optional_guidance_survives_child_wake_and_library_edits_without_retroactive_c
     for run in [&parent, &child, &wake] {
         let text = prompt(&restored, run).unwrap();
         assert!(text.contains("investigation@1") && text.contains("three distinct probes"));
-        assert!(text.contains("coordination@3"));
+        assert!(text.contains("coordination@5") && text.contains("autonomy@3"));
+        assert!(text.contains("planning@1"));
         assert_eq!(text.matches("three distinct probes").count(), 1);
         assert!(!text.contains("Future investigation guidance only"));
         assert!(!text.contains("Future coordination guidance only"));
+        assert!(!text.contains("Future planning guidance only"));
     }
     send(&mut state, &id, "Start a new authorized step", "test").unwrap();
     let next = prompt(&state, &state.runtime.runs.last().unwrap().id).unwrap();
     assert!(
         next.contains("investigation@2") && next.contains("Future investigation guidance only")
     );
-    assert!(next.contains("coordination@4") && next.contains("Future coordination guidance only"));
+    assert!(next.contains("coordination@6") && next.contains("Future coordination guidance only"));
+    assert!(next.contains("planning@2") && next.contains("Future planning guidance only"));
     tool(
         &mut state,
         "control.chat.lenses",

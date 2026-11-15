@@ -61,6 +61,13 @@ fn optional_procedures_compose_without_adding_tools_or_authority() {
         .unwrap();
     assert_eq!(selected.tools, ordinary.tools);
     assert!(selected.documents.is_empty());
+    let planning = library.resolve(&["planning".into()], &[]).unwrap();
+    assert!(planning.tools.is_empty() && planning.documents.is_empty());
+    assert_eq!(planning.lenses.len(), 1);
+    let swarm = library.resolve(&["swarm".into(), "planning".into()], &[]).unwrap();
+    assert_eq!(swarm.lenses.iter().filter(|lens| lens.id == "planning").count(), 1);
+    assert_eq!(swarm.instructions.iter().filter(|text| planning.instructions.contains(text)).count(), 1);
+    assert_eq!(selected.lenses.iter().filter(|lens| lens.id == "planning").count(), 1);
     assert!(!ordinary.lenses.iter().any(|lens| lens.id == "coordination"));
     assert_eq!(
         selected.lenses.iter().filter(|lens| lens.id == "coordination").count(),
@@ -205,4 +212,28 @@ fn newer_built_in_revisions_reach_nodes_unless_the_lens_was_edited_locally() {
     let mut unknown = node(vec![older.clone()], None);
     assert!(!unknown.merge_defaults(), "an unrecognised copy may be a local edit");
     assert_eq!(unknown.get("coordination").unwrap(), &older);
+}
+#[test]
+fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
+    let autonomy = Library::default().get("autonomy").unwrap().clone();
+    assert_eq!(autonomy.revision, 3);
+    let coordination = Library::default().get("coordination").unwrap().clone();
+    assert_eq!(coordination.revision, 5);
+    assert_eq!(coordination.includes, ["planning"]);
+    let previous: Vec<Definition> = serde_json::from_str(include_str!("../builtin-lens-history.json")).unwrap();
+    assert!(previous.iter().any(|d| d.id == "autonomy" && d.revision == 1));
+    for revision in 1..=4 {
+        assert!(previous.iter().any(|d| d.id == "coordination" && d.revision == revision));
+    }
+    for earlier in previous {
+        let shipped = Library::default().get(&earlier.id).unwrap().clone();
+        assert!(earlier.revision < shipped.revision, "{} history must predate the shipped revision", earlier.id);
+        let mut node = Library::default();
+        node.definitions.retain(|d| d.id != earlier.id);
+        node.definitions.push(earlier.clone());
+        node.builtin.remove(&earlier.id);
+        assert!(node.merge_defaults());
+        assert_eq!(node.get(&earlier.id).unwrap(), &shipped);
+        assert!(node.definitions.contains(&earlier), "earlier revisions stay for captured runs");
+    }
 }
