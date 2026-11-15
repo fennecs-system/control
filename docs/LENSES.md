@@ -64,7 +64,9 @@ checkable done-condition that names the observable result, such as an artifact
 that exists and passes a stated check. For each active milestone record its
 done-condition, owner, actual prerequisites, completion evidence and next action
 or release signal. Add, split, re-prioritise or drop milestones as evidence
-changes. Start with a useful end-to-end result and
+changes. Build the smallest tool the claimed milestone needs, test it by reaching
+that done-condition rather than a separate diagnostic proof, and extend it only
+when the next milestone needs more. Start with a useful end-to-end result and
 reliable reusable capabilities, then expand. For example, a team building an
 integration might first deliver one working request, then error handling and
 recovery, then additional operations. Connection health alone is not the feature.
