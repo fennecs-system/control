@@ -201,7 +201,7 @@ pub(super) fn phase(phase: &Phase) -> &'static str {
 
 fn usage(live: &Live) -> String {
     let stats = live.stats.as_ref().map(|stats| {
-        format!("<p>CPU {} · Memory {} · {} processes</p>", crate::escape(&stats.cpu), crate::escape(&stats.memory), crate::escape(&stats.pids))
+        format!("<p><span class='muted'>Live usage</span> · CPU {} · Memory {} · {} processes</p>", crate::escape(&stats.cpu), crate::escape(&stats.memory), crate::escape(&stats.pids))
     }).unwrap_or_default();
     if live.processes.is_empty() {
         return stats;
@@ -212,19 +212,29 @@ fn usage(live: &Live) -> String {
     format!("{stats}<table><thead><tr><th>PID</th><th>User</th><th>Command</th></tr></thead><tbody>{rows}</tbody></table>")
 }
 
+fn memory_label(bytes: u64) -> String {
+    if bytes.is_multiple_of(compute::GIB) { format!("{} GiB", bytes / compute::GIB) } else { format!("{} MiB", bytes / (1024 * 1024)) }
+}
+
 fn compute_label(shape: Option<compute::Shape>, limits: compute::Limits) -> String {
-    let memory = if limits.memory_bytes.is_multiple_of(compute::GIB) { format!("{} GiB", limits.memory_bytes / compute::GIB) } else { format!("{} MiB", limits.memory_bytes / (1024 * 1024)) };
+    let memory = memory_label(limits.memory_bytes);
     format!("{} · {memory} RAM · {} CPU{}", shape.map_or("default", compute::Shape::name), limits.cpus, if limits.cpus == 1 { "" } else { "s" })
 }
 
 fn compute_panel(services: &[Service]) -> String {
     let used = compute::reserved(services);
     let capacity = compute::capacity();
-    let rows = compute::SHAPES.map(|shape| {
+    let mut rows = compute::SHAPES.map(|shape| {
         let limits = shape.limits();
-        format!("<tr><td><code>{}</code></td><td>{} GiB</td><td>{}</td></tr>", shape.name(), limits.memory_bytes / compute::GIB, limits.cpus)
+        format!("<tr><td><code>{}</code></td><td>{}</td><td>{}</td></tr>", shape.name(), memory_label(limits.memory_bytes), limits.cpus)
     }).join("");
-    format!("<section class='record service-record'><h3>Service resources</h3><p>{} MiB of {} GiB RAM · {} of {} CPU limits reserved ({} CPUs, {}x oversubscription)</p><table><thead><tr><th>Shape</th><th>Memory limit</th><th>CPU limit</th></tr></thead><tbody>{rows}</tbody></table><p class='muted'>Ask an agent to use a shape when starting a service. Defaults: Lite {} MiB, Full {} MiB; 1 CPU. To change size, stop and replace in the same chat; /workspace is retained.</p><p class='muted'>This budget covers Control services only. Allow headroom for models, workers and the host. Reserved limits are separate from live usage below.</p></section>", used.memory_bytes / (1024 * 1024), capacity.memory_bytes / compute::GIB, used.cpus, capacity.admitted_cpus(), capacity.cpus, capacity.cpu_oversubscription, crate::worker_profile::Profile::Lite.service_memory() / (1024 * 1024), crate::worker_profile::Profile::Full.service_memory() / (1024 * 1024))
+    for profile in [crate::worker_profile::Profile::Lite, crate::worker_profile::Profile::Full] {
+        rows.push_str(&format!("<tr><td>No shape · {profile:?} profile</td><td>{}</td><td>1</td></tr>", memory_label(profile.service_memory())));
+    }
+    format!(
+        "<section class='record service-record'><h3>Service resources</h3><h4>Limits per service</h4><p class='muted'>Ask an agent to choose a shape when starting a service. Shapes set limits for one service; bots can share services or run without one.</p><table><thead><tr><th>Size choice</th><th>RAM limit</th><th>CPU limit</th></tr></thead><tbody>{rows}</tbody></table><p class='muted'>With no shape requested, the image profile supplies the defaults shown above. Lite and Full describe available tools; an explicit shape overrides those defaults.</p><h4>Total service budget</h4><p><strong>RAM limits reserved:</strong> {} of {}<br><strong>CPU limits reserved:</strong> {} of {} CPUs</p><p class='muted'>Totals add the full limits of active services, including idle ones. Containers consume RAM as needed up to their limit. The CPU budget allows {} configured CPUs × {}.</p><p class='muted'>This service budget excludes model inference, model workers and the host. Leave capacity for those separately.</p><p class='muted'>Actual consumption appears as <strong>Live usage</strong> on each running service below. To resize, stop and replace the service in the same chat; its <code>/workspace</code> is retained.</p></section>",
+        memory_label(used.memory_bytes), memory_label(capacity.memory_bytes), used.cpus, capacity.admitted_cpus(), capacity.cpus, capacity.cpu_oversubscription
+    )
 }
 
 fn card(service: &Service) -> String {
@@ -245,7 +255,7 @@ fn card(service: &Service) -> String {
     let conversation = if crate::chat::valid_id(chat) { format!("<a href='/chat/{chat}'>Conversation</a> · ") } else { String::new() };
     let container = resource.phase.container().map(|id| format!("container {} · ", crate::escape(&id.as_str().chars().take(12).collect::<String>()))).unwrap_or_default();
     let image = resource.image.as_str().trim_start_matches("sha256:").chars().take(12).collect::<String>();
-    let live = if matches!(resource.phase, Phase::Running(_)) { format!("<div class='service-live' data-live='{}'><p class='muted'>Loading usage…</p></div>", crate::escape(resource.id.as_str())) } else { String::new() };
+    let live = if matches!(resource.phase, Phase::Running(_)) { format!("<div class='service-live' data-live='{}'><p class='muted'>Live usage loading…</p></div>", crate::escape(resource.id.as_str())) } else { String::new() };
     let diagnostic = if service.diagnostic.is_empty() { String::new() } else { format!("<p class='muted'>{}</p>", crate::escape(&service.diagnostic)) };
     let action = if resource.phase.reserves_capacity() && !matches!(resource.phase, Phase::Stopping { .. }) {
         format!("<form class='decision-form' method='post' action='/tools/services'><input type='hidden' name='id' value='{}'><button>Stop service</button></form>", crate::escape(resource.id.as_str()))
