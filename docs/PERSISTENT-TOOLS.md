@@ -191,6 +191,11 @@ Only when that cannot be verified is the service stopped: killing the host
 Docker client alone would not prove its remote writer stopped. Run long-lived
 programs such as clients, servers or daemons as a permanent watch
 (`control_watch_start`, see [WATCHES.md](WATCHES.md)) instead of a command.
+Use `restart=transient` for finite work such as large downloads: it runs once,
+even when it takes longer than a model turn. Both watch modes have no task
+deadline; `restart=permanent` restarts after any exit, including success. The
+program must itself stay connected between actions if continuous participation
+is required; supervising it does not prevent deliberate disconnects or exits.
 A restart never replays an in-flight command. Other services remain running. These tools provide
 no host command execution, arbitrary container selection or new network authority.
 Task-specific adapters and server configuration remain outside Control's source.
