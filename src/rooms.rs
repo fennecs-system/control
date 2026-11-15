@@ -162,10 +162,13 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
         return Value::Null;
     }
     let id = req.get("id").cloned().unwrap_or(Value::Null);
+    if let Some(fault) = crate::toolbox::request_fault(req) {
+        return fault;
+    }
+    if !matches!(req["method"].as_str(), Some("initialize" | "ping" | "tools/list" | "tools/call")) {
+        return crate::toolbox::protocol_error(&id, -32601, "Unsupported room method.");
+    }
     let result = (|| -> Result<Value, &'static str> {
-        if req["jsonrpc"] != "2.0" {
-            return Err("Invalid JSON-RPC request.");
-        }
         let run = state
             .runtime
             .runs
@@ -274,7 +277,8 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
     })();
     match result {
         Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
-        Err(message) => json!({"jsonrpc":"2.0","id":id,"error":{"code":-32602,"message":message}}),
+        Err(message) if req["method"] == "tools/call" => crate::toolbox::tool_error(&id, message),
+        Err(message) => crate::toolbox::protocol_error(&id, -32602, message),
     }
 }
 
@@ -322,7 +326,7 @@ pub fn checkpoint(
         }
         if let Some(mailbox) = mailbox { state.runtime.runs[run_index].attempts.last_mut().unwrap().turn_mailbox = mailbox; }
         if let Some(bots) = bots { state.bots = bots; }
-        return json!({"jsonrpc":"2.0","id":envelope["request"]["id"],"error":{"code":-32603,"message":"Could not save room update. Try again."}});
+        return crate::toolbox::tool_error(&envelope["request"]["id"], "Could not save room update. Try again.");
     }
     response
 }

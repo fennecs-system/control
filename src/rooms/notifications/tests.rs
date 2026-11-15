@@ -467,9 +467,7 @@ fn self_posts_do_not_wake_and_checkpoint_failure_restores_watch_budget_and_ack()
     let (mut state, run) = fixture();
     let request = rpc("control_room_watch", json!({"enabled":true,"wake":true}));
     assert!(
-        super::super::checkpoint(&mut state, &run, &request, fail)
-            .get("error")
-            .is_some()
+        crate::toolbox::failure_text(&super::super::checkpoint(&mut state, &run, &request, fail)).is_some()
     );
     assert!(state.collective.room_watches.is_empty());
     assert!(!state.runtime.runs[0].room_wake_used);
@@ -483,25 +481,21 @@ fn self_posts_do_not_wake_and_checkpoint_failure_restores_watch_budget_and_ack()
     super::super::checkpoint(&mut state, &run, &request, |_| Ok(()));
     assert_eq!(state.collective.posts.len(), 1);
     assert!(
-        super::super::checkpoint(
+        crate::toolbox::failure_text(&super::super::checkpoint(
             &mut state,
             &run,
             &rpc("control_room_ack", json!({"through":1})),
             fail
-        )
-        .get("error")
-        .is_some()
+        )).is_some()
     );
     assert_eq!(state.collective.room_watches[0].cursor, 0);
     assert!(
-        super::super::checkpoint(
+        crate::toolbox::failure_text(&super::super::checkpoint(
             &mut state,
             &run,
             &rpc("control_room_watch", json!({"enabled":false})),
             fail
-        )
-        .get("error")
-        .is_some()
+        )).is_some()
     );
     assert_eq!(state.collective.room_watches.len(), 1);
     assert!(state.collective.room_watches[0].wake.is_some());

@@ -27,11 +27,19 @@ fn timeouts_answer_the_exact_request_id() {
 }
 #[test]
 fn undeliverable_requests_get_escaped_errors_and_keep_framing() {
-    let reply = error_reply("7", "lost \"x\"\n\\");
+    let reply = error_reply(r#"{"id":7,"method":"initialize"}"#, "7", "lost \"x\"\n\\");
     assert_eq!(
         reply,
         r#"{"jsonrpc":"2.0","id":7,"error":{"code":-32000,"message":"lost \"x\"\u000a\\"}}"#
     );
+    // Codex leaves a tools/call pending on a JSON-RPC error; it reads isError results.
+    let call = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"control_room_post"}}"#;
+    assert_eq!(
+        error_reply(call, "2", "lost \"x\""),
+        r#"{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"lost \"x\""}],"isError":true}}"#
+    );
+    // An oversized call arrives truncated; its method still selects the result form.
+    assert!(delivery_error(&call[..60], "too large").unwrap().contains(r#""id":2,"result""#));
     let mut input = io::Cursor::new(b"tail of a large line\n{\"id\":2}\n".to_vec());
     skip_line(&mut input).unwrap();
     let mut next = String::new();
@@ -59,9 +67,13 @@ fn replies_match_delivery_nonce_including_batches_and_notifications() {
 #[test]
 fn delivery_errors_answer_each_batch_call_but_not_notifications() {
     let request = r#"[{"id":7,"params":{"text":"} ] \""}},{"method":"notify"},{"id":"b"}]"#;
-    assert_eq!(delivery_error(request, "uncertain").unwrap(), format!("[{},{}]", error_reply("7", "uncertain"), error_reply(r#""b""#, "uncertain")));
+    assert_eq!(delivery_error(request, "uncertain").unwrap(), format!("[{},{}]", error_reply("", "7", "uncertain"), error_reply("", r#""b""#, "uncertain")));
     assert!(delivery_error(r#"[{"method":"notify"}]"#, "lost").is_none());
-    assert_eq!(delivery_error(r#"{"id":null}"#, "lost").unwrap(), error_reply("null", "lost"));
+    assert_eq!(delivery_error(r#"{"id":null}"#, "lost").unwrap(), error_reply("", "null", "lost"));
+    let mixed = r#"[{"id":1,"method":"tools/call","params":{"name":"x"}},{"id":2,"method":"tools/list"}]"#;
+    let replies = delivery_error(mixed, "lost").unwrap();
+    assert!(replies.starts_with(r#"[{"jsonrpc":"2.0","id":1,"result":{"content""#), "{replies}");
+    assert!(replies.ends_with(r#"{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"lost"}}]"#), "{replies}");
 }
 
 #[test]

@@ -95,6 +95,9 @@ fn live_mailbox_notifications_and_tool_calls_roundtrip() {
     requests.push(json!({"jsonrpc":"2.0","error":{"code":-32600,"message":"Invalid request"}}));
     let note = "first line\nquoted: \"note\"; braces: } ]; slash: \\; unicode: 🦊\r\nlast line";
     requests.push(json!({"jsonrpc":"2.0","id":"claim-note","method":"tools/call","params":{"name":"control_room_claim","arguments":{"room":"general","key":"frame-check","action":"acquire","status":"working","note":note}}}));
+    // A tool's validation failure is a result Codex correlates with its call,
+    // never a JSON-RPC error it rejects as an id-less Invalid Request.
+    requests.push(json!({"jsonrpc":"2.0","id":"bad-post","method":"tools/call","params":{"name":"control_room_post","arguments":{"room":"general","message":"never posted","delivery":"shout"}}}));
     requests.push(json!({"jsonrpc":"2.0","id":"room-read","method":"tools/call","params":{"name":"control_room_read","arguments":{"room":"general"}}}));
     requests.push(json!([
         {"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"control_room_post","arguments":{"room":"general","message":"batch milestone one","delivery":"record"}}},
@@ -127,12 +130,15 @@ fn live_mailbox_notifications_and_tool_calls_roundtrip() {
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut observed = Vec::new();
     let mut room_read = None;
+    let mut bad_post = None;
     while Instant::now() < deadline {
         pump(&shared, &run, &workspace, false);
         while let Ok(line) = replies.try_recv() {
             let value: Value = serde_json::from_str(&line.unwrap()).unwrap();
             for value in value.as_array().cloned().unwrap_or_else(|| vec![value]) {
                 assert!(value.get("error").is_none(), "{value}");
+                if value["id"] == "bad-post" { bad_post = Some(value.clone()); }
+                else { assert_ne!(value["result"]["isError"], true, "{value}"); }
                 if value["id"] == "room-read" {
                     room_read = Some(serde_json::from_str::<Value>(value["result"]["content"][0]["text"].as_str().unwrap()).unwrap());
                 }
@@ -153,6 +159,8 @@ fn live_mailbox_notifications_and_tool_calls_roundtrip() {
         let value: Value = serde_json::from_str(&line.unwrap()).unwrap();
         for value in value.as_array().cloned().unwrap_or_else(|| vec![value]) {
             assert!(value.get("error").is_none(), "{value}");
+            if value["id"] == "bad-post" { bad_post = Some(value.clone()); }
+            else { assert_ne!(value["result"]["isError"], true, "{value}"); }
             if value["id"] == "room-read" {
                 room_read = Some(serde_json::from_str::<Value>(value["result"]["content"][0]["text"].as_str().unwrap()).unwrap());
             }
@@ -164,6 +172,8 @@ fn live_mailbox_notifications_and_tool_calls_roundtrip() {
         "MCP bridge did not complete; replies: {observed:?}"
     );
     assert_eq!(observed, expected);
+    let bad_post = bad_post.expect("the invalid post must be answered");
+    assert_eq!(crate::toolbox::failure_text(&bad_post), Some("Expected delivery=record or notify."), "{bad_post}");
     let room_read = room_read.expect("a room read must complete after the id-less peer error");
     assert_eq!(room_read["claims"][0]["note"], note);
     assert_eq!(room_read["posts"][0]["text"], "isolated-probe-22\nquoted: \"text\"; braces: } ]; slash: \\; unicode: 🦊\r\nlast line");
@@ -293,9 +303,7 @@ fn staged_handoffs_fence_mutators_by_host_policy_and_legacy_chats_hide_continuit
             None,
         );
         assert!(
-            denied["error"]["message"]
-                .as_str()
-                .unwrap()
+            crate::toolbox::failure_text(&denied).unwrap()
                 .contains("handoff is staged"),
             "{name}"
         );
@@ -363,7 +371,7 @@ fn design_rpc_reports_fields_without_blaming_transport_and_retains_pause_fences(
         let mut malformed = envelope.clone();
         malformed["request"]["params"]["arguments"][field] = value;
         let response = rpc_at(&shared, &id, &malformed, None);
-        let message = response["error"]["message"].as_str().unwrap();
+        let message = crate::toolbox::failure_text(&response).unwrap();
         assert!(message.starts_with(expected), "{message}");
         assert!(!message.contains("identity"));
         assert_eq!(
@@ -382,26 +390,26 @@ fn design_rpc_reports_fields_without_blaming_transport_and_retains_pause_fences(
     let mut unknown = envelope.clone();
     unknown["request"]["params"]["arguments"]["extra"] = json!("do-not-echo-this-value");
     let response = rpc_at(&shared, &id, &unknown, None);
-    let message = response["error"]["message"].as_str().unwrap();
+    let message = crate::toolbox::failure_text(&response).unwrap();
     assert!(message.contains("an object containing only"));
     assert!(!message.contains("do-not-echo-this-value"));
     for nonce in ["", "unsupported_identity", &"a".repeat(129)] {
         let mut bad_identity = envelope.clone();
         bad_identity["nonce"] = json!(nonce);
         assert_eq!(
-            rpc_at(&shared, &id, &bad_identity, None)["error"]["message"],
+            crate::toolbox::failure_text(&rpc_at(&shared, &id, &bad_identity, None)).unwrap(),
             "Invalid design request identity; retry the tool call."
         );
     }
     let mut different = envelope.clone();
     different["request"]["params"]["arguments"]["question"] = json!("A different valid question?");
     assert_eq!(
-        rpc_at(&shared, &id, &different, None)["error"]["message"],
+        crate::toolbox::failure_text(&rpc_at(&shared, &id, &different, None)).unwrap(),
         "This attempt already has a design question."
     );
     let write = json!({"nonce":"1793455807009221658-6","request":{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"control_workspace_start","arguments":{"command":"true"}}}});
     assert_eq!(
-        rpc_at(&shared, &id, &write, None)["error"]["message"],
+        crate::toolbox::failure_text(&rpc_at(&shared, &id, &write, None)).unwrap(),
         "This attempt is pausing for a design answer; no more tools may run."
     );
     assert_eq!(
@@ -484,9 +492,7 @@ fn judge_tools_are_enforced_even_when_unadvertised_names_are_forged() {
             None,
         );
         assert!(
-            denied["error"]["message"]
-                .as_str()
-                .unwrap()
+            crate::toolbox::failure_text(&denied).unwrap()
                 .contains("Judge policy")
         );
     }
@@ -517,7 +523,7 @@ fn an_approved_advisor_judge_gains_only_evidence_notes() {
     assert_eq!(advisor.iter().filter(|name| !judge.contains(name)).collect::<Vec<_>>(), ["control_agent_message"]);
     for name in ["control_agent_spawn", "control_service_start", "control_design_ask", "control_room_watch"] {
         let denied = rpc_at(&shared, &id, &json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":{}}}}), None);
-        assert!(denied["error"]["message"].as_str().unwrap().contains("Judge policy"), "{name}");
+        assert!(crate::toolbox::failure_text(&denied).unwrap().contains("Judge policy"), "{name}");
     }
     let post = |delivery: &str| rpc_at(&shared, &id, &json!({"nonce":if delivery == "record" { "1" } else { "2" },"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_room_post","arguments":{"message":"Build claim looks abandoned","delivery":delivery}}}}), None);
     for delivery in ["notify", "record"] {
@@ -598,9 +604,7 @@ fn delegated_pause_fences_command_writers_and_github_before_dispatch() {
             &json!({"nonce":"request-fixture","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":args}}}),
         );
         assert!(
-            response["error"]["message"]
-                .as_str()
-                .unwrap()
+            crate::toolbox::failure_text(&response).unwrap()
                 .contains("pausing for delegated")
         );
     }
@@ -639,9 +643,7 @@ fn design_pause_blocks_further_tool_effects_until_user_answers() {
         &json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_rust_run","arguments":{"code":"fn main() {}"}}}}),
     );
     assert!(
-        response["error"]["message"]
-            .as_str()
-            .unwrap()
+        crate::toolbox::failure_text(&response).unwrap()
             .contains("pausing")
     );
     state.lock().unwrap().runtime.runs[0].attempts[0].workspace_id =
@@ -650,6 +652,60 @@ fn design_pause_blocks_further_tool_effects_until_user_answers() {
 }
 fn rpc(state: &Arc<Mutex<State>>, run: &str, value: &Value) -> Value {
     rpc_at(state, run, value, None)
+}
+/// Codex leaves a tools/call pending when its reply is a JSON-RPC error, so
+/// every tool failure is a result; only protocol faults stay JSON-RPC errors.
+#[test]
+fn tool_failures_are_results_and_protocol_faults_stay_errors() {
+    let mut state = State::default();
+    let chat = crate::chat::create(&mut state);
+    crate::chat::send(&mut state, &chat, "Tool error shapes", "test").unwrap();
+    state.runtime.runs[0].status = "running".into();
+    let run = state.runtime.runs[0].id.clone();
+    let shared = Arc::new(Mutex::new(state));
+    let call = |id: Value, name: &str, arguments: Value| rpc(&shared, &run, &json!({"nonce":"7-1","request":{"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":name,"arguments":arguments}}}));
+    for (id, name, arguments, expected) in [
+        (json!(2), "control_room_post", json!({"room":"general","message":"never posted","delivery":"shout"}), Some("Expected delivery=record or notify.")),
+        (json!("bad-room"), "control_room_post", json!({"room":"no such room","message":"never posted"}), Some("Unknown room. Call control_room_list.")),
+        (json!(3), "control_room_claim", json!({"room":"general","key":"k","action":"acquire","status":"released"}), None),
+        (json!(4), "control_agent_spawn_blocking", json!({"unexpected":true}), Some("Expected a delegation objective and role")),
+        // MCP names unknown tools a protocol error; a tool result keeps Codex's call
+        // resolved and is indistinguishable from a policy denial of a known tool.
+        (json!(5), "control_no_such_tool", json!({}), Some("Tool is not allowed for this worker")),
+    ] {
+        let response = call(id.clone(), name, arguments);
+        assert_eq!(response["id"], id, "{response}");
+        let message = crate::toolbox::failure_text(&response).unwrap_or_else(|| panic!("{name}: {response}"));
+        if let Some(expected) = expected { assert_eq!(message, expected); }
+    }
+    assert!(shared.lock().unwrap().collective.posts.is_empty());
+    for (request, code) in [
+        (json!({"jsonrpc":"1.0","id":6,"method":"tools/call","params":{"name":"control_room_list"}}), -32600),
+        (json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"arguments":{}}}), -32602),
+        (json!({"jsonrpc":"2.0","id":8,"method":"resources/list"}), -32601),
+    ] {
+        let response = rpc(&shared, &run, &json!({"nonce":"7-2","request":request}));
+        assert_eq!((response["id"].clone(), response["error"]["code"].clone()), (request["id"].clone(), json!(code)), "{response}");
+        assert!(response.get("result").is_none());
+    }
+    // A managed session's callback hint joins a failed tool's content, and a
+    // protocol error never gains a "result" member beside its "error".
+    let mut state = State::default();
+    let chat = crate::chat::create(&mut state);
+    crate::chat::send(&mut state, &chat, "Carry out the assigned work", "test").unwrap();
+    crate::worker::checkpoint_next(&mut state, |_| Ok(())).unwrap();
+    let managed = state.runtime.runs[0].id.clone();
+    crate::chat::send(&mut state, &chat, "/steer Keep the public API", "test").unwrap();
+    let managed_state = Arc::new(Mutex::new(state));
+    let failed = rpc(&managed_state, &managed, &json!({"nonce":"8-1","request":{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"control_room_post","arguments":{"room":"general","message":"x","delivery":"shout"}}}}));
+    assert_eq!(crate::toolbox::failure_text(&failed), Some("Expected delivery=record or notify."), "{failed}");
+    assert!(failed["result"]["content"][1]["text"].as_str().unwrap().contains("control_turn_context"), "{failed}");
+    let fault = rpc(&managed_state, &managed, &json!({"nonce":"8-2","request":{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{}}}));
+    assert_eq!(fault["error"]["code"], -32602);
+    assert!(fault.get("result").is_none(), "{fault}");
+    // Room-only methods keep their own protocol errors as well.
+    let unsupported = crate::rooms::worker_rpc(&mut shared.lock().unwrap(), &run, &json!({"request":{"jsonrpc":"2.0","id":9,"method":"prompts/list"}}));
+    assert_eq!(unsupported["error"]["code"], -32601);
 }
 #[test]
 fn stale_workspace_is_rejected_for_room_posts_before_dispatch() {
@@ -666,7 +722,7 @@ fn stale_workspace_is_rejected_for_room_posts_before_dispatch() {
     let request = json!({"nonce":"late-proposal","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_knowledge_propose","arguments":{"claim":"Must not persist","evidence":"stale mailbox","scope":"fixture","validity":"always"}}}});
     let response = rpc_at(&state, &id, &request, Some(&stale));
     assert_eq!(
-        response["error"]["message"],
+        crate::toolbox::failure_text(&response).unwrap(),
         "Mailbox belongs to an inactive attempt"
     );
     assert!(state.lock().unwrap().collective.proposals.is_empty());
@@ -678,7 +734,7 @@ fn stale_workspace_is_rejected_for_room_posts_before_dispatch() {
         let request = json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":args}}});
         let response = rpc_at(&state, &id, &request, Some(&stale));
         assert_eq!(
-            response["error"]["message"],
+            crate::toolbox::failure_text(&response).unwrap(),
             "Mailbox belongs to an inactive attempt"
         );
     }
@@ -693,7 +749,7 @@ fn workspace_execution_is_backend_scoped_and_rejects_model_supplied_mounts() {
     let id = state.runtime.runs[0].id.clone();
     let state = Arc::new(Mutex::new(state));
     let request = json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_workspace_run","arguments":{"command":"true"}}}});
-    assert!(rpc(&state, &id, &request).get("error").is_some());
+    assert!(crate::toolbox::failure_text(&rpc(&state, &id, &request)).is_some());
     state.lock().unwrap().runtime.runs[0].backend = crate::backend::Backend::Claude;
     let tools = rpc(
         &state,
@@ -709,8 +765,8 @@ fn workspace_execution_is_backend_scoped_and_rejects_model_supplied_mounts() {
     );
     let mut forged = request.clone();
     forged["request"]["params"]["arguments"]["mount"] = json!("/Users/operator/.config/control");
-    assert!(rpc(&state, &id, &forged).get("error").is_some());
-    assert!(rpc(&state, &id, &request).get("error").is_some()); // no captured attempt
+    assert!(crate::toolbox::failure_text(&rpc(&state, &id, &forged)).is_some());
+    assert!(crate::toolbox::failure_text(&rpc(&state, &id, &request)).is_some()); // no captured attempt
 }
 #[test]
 fn workers_get_concrete_tools_without_operator_authority_or_room_access() {
@@ -744,12 +800,12 @@ fn workers_get_concrete_tools_without_operator_authority_or_room_access() {
     let request = |name| json!({"nonce":"1-1","request":{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":name,"arguments":{"unexpected":true}}}});
     let response = rpc(&state, &run, &request("control_agent_spawn_blocking"));
     assert_eq!(
-        response["error"]["message"],
+        crate::toolbox::failure_text(&response).unwrap(),
         "Expected a delegation objective and role"
     );
     let retired = rpc(&state, &run, &request("control_agent_delegate"));
-    assert!(retired.get("error").is_some());
-    assert_ne!(retired["error"]["message"], response["error"]["message"]);
+    assert!(crate::toolbox::failure_text(&retired).is_some());
+    assert_ne!(crate::toolbox::failure_text(&retired).unwrap(), crate::toolbox::failure_text(&response).unwrap());
     assert!(
         !names.contains("control_github_open_pr"),
         "Ordinary tasks have no publication grant"
@@ -759,7 +815,7 @@ fn workers_get_concrete_tools_without_operator_authority_or_room_access() {
         &run,
         &json!({"request":{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"control.chat.send"}}}),
     );
-    assert!(forbidden.get("error").is_some());
+    assert!(crate::toolbox::failure_text(&forbidden).is_some());
     state.lock().unwrap().runtime.runs[0].status = "completed".into();
     assert!(
         rpc(

@@ -19,7 +19,7 @@ fn room_call(state: &mut State, run: &str, tool: &str, args: Value, nonce: &str)
         &json!({"nonce":nonce,"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":tool,"arguments":args}}}),
         |_| Ok(()),
     );
-    assert!(response.get("error").is_none(), "{response}");
+    assert!(response.get("error").is_none() && response["result"]["isError"] == false, "{response}");
     serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap()).unwrap()
 }
 
@@ -87,9 +87,7 @@ fn task_threads_isolate_history_participants_and_inboxes_without_timers() {
         &json!({"nonce":"1-6","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_room_read","arguments":{"room":thread}}}}),
     );
     assert!(
-        foreign["error"]["message"]
-            .as_str()
-            .unwrap()
+        crate::toolbox::failure_text(&foreign).unwrap()
             .contains("another task")
     );
     // An operator targets a thread explicitly; only that thread's inbox sees it.
@@ -262,14 +260,12 @@ fn worker_is_scoped_and_cannot_forge_authority_or_duplicate_posts() {
     );
     assert!(render(&state, "engineering").contains("&lt;shared&gt;"));
     let forbidden =
-        json!({"request":{"id":2,"method":"tools/call","params":{"name":"control.chat.send"}}});
-    assert!(
-        worker_rpc(&mut state, &run, &forbidden)
-            .get("error")
-            .is_some()
-    );
+        json!({"request":{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"control.chat.send"}}});
+    let denied = worker_rpc(&mut state, &run, &forbidden);
+    assert_eq!(crate::toolbox::failure_text(&denied), Some("Tool is not allowed for this worker."), "{denied}");
+    assert_eq!(denied["id"], 2);
     state.runtime.runs[0].status = "completed".into();
-    assert!(worker_rpc(&mut state, &run, &req).get("error").is_some());
+    assert_eq!(crate::toolbox::failure_text(&worker_rpc(&mut state, &run, &req)), Some("Run is not active."));
 }
 #[test]
 fn delivery_is_explicit_durable_and_cannot_be_changed_by_retry() {
@@ -297,9 +293,10 @@ fn delivery_is_explicit_durable_and_cannot_be_changed_by_retry() {
     let invalid = worker_rpc(
         &mut state,
         &run,
-        &json!({"nonce":"1-2","request":{"id":1,"method":"tools/call","params":{"name":"control_room_post","arguments":{"message":"Bad","delivery":"maybe"}}}}),
+        &json!({"nonce":"1-2","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_room_post","arguments":{"message":"Bad","delivery":"maybe"}}}}),
     );
-    assert!(invalid.get("error").is_some());
+    assert_eq!(crate::toolbox::failure_text(&invalid), Some("Expected delivery=record or notify."), "{invalid}");
+    assert_eq!(invalid["id"], 1);
     assert_eq!(state.collective.posts.len(), 1);
     let legacy = room_call(
         &mut state,
@@ -363,24 +360,15 @@ fn unlinked_chats_discover_rooms_and_posting_links_them() {
         (Value::Null, NAMES.len())
     );
     assert!(
-        worker_rpc(
+        crate::toolbox::failure_text(&worker_rpc(
             &mut state,
             &run,
             &call("control_room_post", json!({"message":"hi"}), "1-2")
-        )["error"]["message"]
-            .as_str()
-            .unwrap()
+        )).unwrap()
             .contains("control_room_list")
     );
-    assert!(
-        worker_rpc(
-            &mut state,
-            &run,
-            &call("control_room_read", json!({"room":"lobby"}), "1-3")
-        )
-        .get("error")
-        .is_some()
-    );
+    let unknown = worker_rpc(&mut state, &run, &call("control_room_read", json!({"room":"lobby"}), "1-3"));
+    assert_eq!(crate::toolbox::failure_text(&unknown), Some("Unknown room. Call control_room_list."));
     let failed = checkpoint(
         &mut state,
         &run,
@@ -391,7 +379,7 @@ fn unlinked_chats_discover_rooms_and_posting_links_them() {
         ),
         |_| Err(std::io::Error::other("disk")),
     );
-    assert!(failed.get("error").is_some());
+    assert_eq!(crate::toolbox::failure_text(&failed), Some("Could not save room update. Try again."));
     assert_eq!(
         (state.chats[0].room.as_deref(), state.collective.posts.len()),
         (None, 0),
@@ -442,13 +430,8 @@ fn a_bot_whose_chat_links_by_posting_hears_that_room() {
     state.runtime.runs[0].status = "running".into();
     let run = state.runtime.runs[0].id.clone();
     let post = json!({"nonce":"2-1","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_room_post","arguments":{"room":"research","message":"here"}}}});
-    assert!(
-        checkpoint(&mut state, &run, &post, |_| Err(std::io::Error::other(
-            "disk"
-        )))
-        .get("error")
-        .is_some()
-    );
+    let failed = checkpoint(&mut state, &run, &post, |_| Err(std::io::Error::other("disk")));
+    assert!(crate::toolbox::failure_text(&failed).is_some(), "{failed}");
     assert!(
         !crate::bots::status(&state, &id)
             .unwrap()

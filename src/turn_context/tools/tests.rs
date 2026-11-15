@@ -236,7 +236,7 @@ fn failed_late_link_restores_the_room_origin_and_active_mailbox() {
         &json!({"nonce":"123-1","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_room_post","arguments":{"room":"general","message":"Joining"}}}}),
         |_| Err(err("disk full")),
     );
-    assert!(response.get("error").is_some());
+    assert!(crate::toolbox::failure_text(&response).is_some(), "{response}");
     assert_eq!(serde_json::to_value(state).unwrap(), before);
 }
 #[test]
