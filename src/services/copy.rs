@@ -50,7 +50,7 @@ pub(super) struct Transfer {
 }
 
 pub(super) fn definition() -> Value {
-    json!({"name":"control_service_copy","description":"Copy a file or directory tree from your task workspace (/workspace in your run container, including approved project folders) into an accessible running service's /workspace, e.g. to bring a reusable tool into a service. from and to are paths relative to /workspace (a leading /workspace/ is accepted); no host paths, mounts or engine options. Files are written as the service user; existing files at the same paths are replaced and other files are kept. Symlinks, special files, non-UTF-8 names and credential, Control-internal or generated names (.git, .env*, auth.json, target, node_modules, .control-*) are skipped and reported, never followed. Total bytes and entries are bounded by node settings (default 256 MiB and 20000 entries) and by memory-backed or capped legacy workspaces; the tree is checked before anything is written. The copy is asynchronous and uses the service's single command lane: returns an execution_id; poll control_service_exec_status until it completes before finishing your turn, because the copy reads your live workspace. A failed or interrupted copy may leave some files written; retries with the same request identity never replay it.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"from":{"type":"string","minLength":1,"maxLength":1024},"to":{"type":"string","minLength":1,"maxLength":1024},"timeout_seconds":{"type":"integer","minimum":1,"maximum":1800,"default":300}},"required":["service_id","from","to"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":false}})
+    json!({"name":"control_service_copy","description":"Copy a file or directory tree from your task workspace (/workspace in your run container, including approved project folders) into an accessible running service's /workspace, e.g. to bring a reusable tool into a service. from and to are paths relative to /workspace (a leading /workspace/ is accepted); no host paths, mounts or engine options. Files are written as the service user; existing files at the same paths are replaced and other files are kept. Symlinks, special files, non-UTF-8 names and credential, Control-internal or generated names (.git, .env*, auth.json, target, node_modules, .control-*) are skipped and reported, never followed. Admitted tool packages at .control-tools/<name> are the one Control-internal source you may copy; destinations cannot use .control-* names. Total bytes and entries are bounded by node settings (default 256 MiB and 20000 entries) and by memory-backed or capped legacy workspaces; the tree is checked before anything is written. The copy is asynchronous and uses the service's single command lane: returns an execution_id; poll control_service_exec_status until it completes before finishing your turn, because the copy reads your live workspace. A failed or interrupted copy may leave some files written; retries with the same request identity never replay it.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"from":{"type":"string","minLength":1,"maxLength":1024},"to":{"type":"string","minLength":1,"maxLength":1024},"timeout_seconds":{"type":"integer","minimum":1,"maximum":1800,"default":300}},"required":["service_id","from","to"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":false}})
 }
 
 /// Normalizes a `/workspace`-relative path. Each segment must be a plain name:
@@ -64,12 +64,23 @@ fn relative(path: &str) -> Option<&str> {
         && path.split('/').all(|segment| !matches!(segment, "" | "." | "..") && !segment.chars().any(char::is_control)))
     .then_some(path)
 }
+/// Admitted tool packages are materialized read-only at
+/// `/workspace/.control-tools/<name>` (tool packages, #216). They are the one
+/// Control-internal source a copy may read; the rest of each path, and every
+/// other `.control-*` path such as mailbox or room files, keeps the publication
+/// policy, and tree walks apply the same link, special-file and bound rules.
+const TOOL_PACKAGES: &str = ".control-tools/";
+fn copyable_source(path: &str) -> bool {
+    valid_path(path) || path.strip_prefix(TOOL_PACKAGES).is_some_and(valid_path)
+}
 impl Transfer {
     pub(super) fn new(from: &str, to: &str) -> io::Result<Self> {
         let from = relative(from)
-            .filter(|path| valid_path(path))
-            .ok_or_else(|| fail("from must be a path under /workspace without '..', links or excluded names such as .git, .env or target"))?;
-        let to = relative(to).ok_or_else(|| fail("to must be a path under the service's /workspace without '..'"))?;
+            .filter(|path| copyable_source(path))
+            .ok_or_else(|| fail("from must be a path under /workspace without '..', links or excluded names such as .git, .env or target; .control-tools/<name> is the only Control-internal source"))?;
+        let to = relative(to)
+            .filter(|path| !path.split('/').any(|segment| segment.starts_with(".control-")))
+            .ok_or_else(|| fail("to must be a path under the service's /workspace without '..' or .control-* names"))?;
         Ok(Self { from: from.into(), to: to.into() })
     }
     fn display(&self) -> String {

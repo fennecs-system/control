@@ -214,6 +214,11 @@ The tool accepts no host paths and results never contain them.
   `.claude`, `.codex`, `.control-*`, `target`, `node_modules`) are skipped
   without being followed. They are counted, with up to eight examples, in the
   result. Depth is limited to 32, like publication.
+- **Tool packages.** Admitted tool packages ([TOOL-PACKAGES.md](TOOL-PACKAGES.md))
+  appear at `/workspace/.control-tools/<name>` and are the one Control-internal
+  source a copy may read, with the same link, special-file, name and bound rules
+  for the rest of the path and tree. Other `.control-*` sources (mailbox, room
+  and result files) stay refused, and no destination may use a `.control-*` name.
 - **Bounds.** The whole tree is checked against the byte and entry bounds
   before admission and again before launch, so an oversized source writes
   nothing. Streaming enforces them a third time. Defaults are 256 MiB of file

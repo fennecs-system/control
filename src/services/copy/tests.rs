@@ -386,3 +386,39 @@ fn live_copy_streams_a_tree_into_a_real_service_as_its_user() {
     assert_eq!(check("test -x /workspace/tools/mc/bin/run && echo intact").trim(), "intact");
     drop(cleanup);
 }
+
+#[test]
+fn tool_packages_are_the_only_control_internal_source_and_never_a_destination() {
+    // Admitted packages (#216) live at /workspace/.control-tools/<name>.
+    assert_eq!(transfer("/workspace/.control-tools/mc-client", "tools/mc").from, ".control-tools/mc-client");
+    assert_eq!(transfer(".control-tools/mc-client/bin/run", "run").from, ".control-tools/mc-client/bin/run");
+    for from in [".control-tools", ".control-tools/", ".control-tools/../x", ".control-tools/pkg/.control-mailbox", ".control-tools/pkg/.env", ".control-tools/.git", ".control-room-mcp.log", ".control-mailbox/request", "pkg/.control-tools/x"] {
+        assert!(Transfer::new(from, "x").is_err(), "{from:?}");
+    }
+    for to in [".control-tools/pkg", "tools/.control-tools/pkg", ".control-mailbox", "a/.control-result"] {
+        assert!(Transfer::new("x", to).is_err(), "{to:?}");
+    }
+
+    let root = Scratch::new("packages");
+    let outside = Scratch::new("packages-outside");
+    outside.write("secret", b"host secret");
+    root.write(".control-tools/mc-client/README", b"package");
+    root.write(".control-tools/mc-client/data/assets.bin", &[9; 32]);
+    root.write(".control-tools/mc-client/.control-state", b"internal");
+    symlink(outside.0.join("secret"), root.0.join(".control-tools/mc-client/link")).unwrap();
+    let fifo = CString::new(root.0.join(".control-tools/mc-client/fifo").as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    symlink(outside.0.clone(), root.0.join(".control-tools/linked")).unwrap();
+
+    let mut archive = Vec::new();
+    let streamed = stream(&root.0, &transfer(".control-tools/mc-client", "tools/mc"), Bounds::DEFAULT, (1000, 1000), &mut archive).unwrap();
+    assert_eq!((streamed.files, streamed.directories, streamed.bytes, streamed.skipped), (2, 2, 7 + 32, 3));
+    let extracted = extract(&archive);
+    assert_eq!(fs::read(extracted.0.join("tools/mc/README")).unwrap(), b"package");
+    for absent in [".control-state", "link", "fifo"] {
+        assert!(fs::symlink_metadata(extracted.0.join("tools/mc").join(absent)).is_err(), "{absent}");
+    }
+    // A linked package is never followed, and bounds still apply.
+    assert!(scan(&root.0, ".control-tools/linked", Bounds::DEFAULT).unwrap_err().to_string().contains("symlinks are not followed"));
+    assert!(scan(&root.0, ".control-tools/mc-client", Bounds { bytes: 38, entries: 100 }).unwrap_err().to_string().contains("byte limit"));
+}
