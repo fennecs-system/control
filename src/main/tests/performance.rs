@@ -68,31 +68,31 @@ fn fingerprint(text: &str) -> String {
         .collect()
 }
 #[test]
-fn transcript_fixtures_only_change_by_removing_the_unsolicited_folder_picker() {
+fn transcript_fixtures_keep_activity_collapsed_without_a_folder_picker() {
     for (messages, unrelated, expected) in [
         (
             10,
             0,
-            "f52d426a0b476425d117f6d93c99958ab14244eec9a748a52cb163dacb5ba88e",
+            "554970efa3a2565da043c6f012c7976a5011470e2f9c36d2d927daeb91692b39",
         ),
         (
             100,
             1000,
-            "cb30ca991ab4e4ae7c4db9e6869d687dd8ec9ca21fb7a382449ea3e5982e1051",
+            "af34f02d5139219fd19d702527d9bfeaf07e828474d586cd7268b9aaae9d67a8",
         ),
         (
             500,
             5000,
-            "f9e21edf6e6e78b585b4d29d3bba6d6ca01bd19905f53cd9599d58afc1fece37",
+            "822798200d64f130c74ce9c2e01f480d606a1abb37dbb81ee8791135e6e5780a",
         ),
     ] {
         let state = fixture(messages, unrelated);
         let html = chat::transcript(&state, "benchmark-chat").unwrap();
         assert!(!html.contains("project-picker"));
-        // Restore only the intentionally removed picker to compare every other
-        // byte against the original performance regression fixtures.
-        let previous = html.replace("<div id='latest'>", &format!("{}<div id='latest'>", crate::projects::panel(&state, "benchmark-chat")));
-        assert_eq!(fingerprint(&previous), expected);
+        assert!(!html.contains("' open><summary>"));
+        // Snapshots include the intentional closed activity defaults and keep
+        // the rest of the transcript byte-for-byte stable across fixture sizes.
+        assert_eq!(fingerprint(&html), expected);
     }
 }
 #[test]

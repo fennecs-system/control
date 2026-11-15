@@ -314,7 +314,7 @@ fn live_port_controls_have_equal_buttons_and_themed_checkbox() {
     );
 }
 #[test]
-fn service_commands_collapse_once_their_run_finishes() {
+fn service_commands_start_collapsed_during_and_after_their_run() {
     let (mut state, run, chat) = fixture();
     let mut second = serde_json::to_value(&state.services[0]).unwrap();
     second["resource"]["id"] = json!("svc-b");
@@ -332,8 +332,8 @@ fn service_commands_collapse_once_their_run_finishes() {
     );
     assert_eq!(
         live.matches("' open><summary><span>").count(),
-        1,
-        "Only the newest live command is expanded"
+        0,
+        "Live commands start collapsed and remain available to expand"
     );
     state.runtime.runs[0].status = "completed".into();
     let done = crate::chat::transcript(&state, &chat).unwrap();
