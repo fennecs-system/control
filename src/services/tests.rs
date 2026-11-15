@@ -78,7 +78,7 @@ pub(super) fn inspection(s: &Service, id: &str) -> Inspection {
         security: vec!["no-new-privileges".into()],
         memory: 512 * 1024 * 1024,
         cpu: 1_000_000_000,
-        pids: 64,
+        pids: s.pids_limit(),
         mounts: workspace::Workspace::of(s).map(|workspace| vec![json!({"Type":"volume","Name":workspace.name(),"Driver":"local","Destination":"/workspace","RW":true})]).unwrap_or_default(),
         tmpfs: tmpfs(s),
         storage_opts: Some(s.storage.options()),
@@ -808,7 +808,7 @@ fn full_profile_captures_private_store_policy_and_legacy_stays_readonly() {
     service.profile = crate::worker_profile::Profile::Full;
     assert!(verify(&service, &observed).is_err());
     observed.memory = service.profile.service_memory();
-    observed.pids = service.profile.service_pids();
+    observed.pids = service.pids_limit();
     observed.tmpfs = tmpfs(&service);
     observed.readonly = false;
     assert!(verify(&service, &observed).is_ok());

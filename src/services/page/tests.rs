@@ -39,7 +39,7 @@ fn cards_escape_commands_and_show_live_data_only_when_observed() {
         !plain.contains("data-live="),
         "only running services wait for live usage"
     );
-    assert!(plain.contains("large · 8 GiB RAM · 2 CPUs") && !plain.contains("<table>"));
+    assert!(plain.contains("large · 8 GiB RAM · 2 CPUs · 512 processes") && !plain.contains("<table>"));
     // Optional local preview uses only this synthetic state and repository CSS.
     if let Some(path) = std::env::var_os("CONTROL_QA_SERVICES_PREVIEW") {
         let mut page = render(&Arc::new(Mutex::new(state))).unwrap();
