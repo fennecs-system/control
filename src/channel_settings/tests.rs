@@ -29,4 +29,7 @@ fn the_panel_offers_each_adapter_with_its_prefix_hint() {
     let html = panel();
     assert!(html.contains("action='/tools/channels'") && html.contains("value='discord'"));
     assert!(html.contains("name='enabled'") && html.contains("name='prefix'") && html.contains("help in a DM"));
+    // The toggle is about forwarding only; commands do not depend on it.
+    assert!(html.contains("Forward operator requests to") && !html.contains("allow steering"));
+    assert!(html.contains("forwarding on or off"));
 }

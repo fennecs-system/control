@@ -9,7 +9,7 @@ pub(crate) fn panel() -> String {
     channel::ADAPTERS.iter().map(|(name, title)| {
         let settings = channel::settings(name);
         let prefix = crate::escape(&settings.prefix);
-        format!("<form class='decision-form channel-settings' method='post' action='/tools/channels'><input type='hidden' name='channel' value='{name}'><label><input type='checkbox' name='enabled' value='yes'{}> Forward operator requests to {} and allow steering chats (architects only)</label><label>Command prefix <input name='prefix' value='{prefix}' size='3' maxlength='3' required pattern='[!-/:-@\\[-`{{-~]{{1,3}}'></label><button>Save</button><p class='muted'>Type {prefix}help in a DM to see the commands.</p></form>",
+        format!("<form class='decision-form channel-settings' method='post' action='/tools/channels'><input type='hidden' name='channel' value='{name}'><label><input type='checkbox' name='enabled' value='yes'{}> Forward operator requests to {} (architects only)</label><label>Command prefix <input name='prefix' value='{prefix}' size='3' maxlength='3' required pattern='[!-/:-@\\[-`{{-~]{{1,3}}'></label><button>Save</button><p class='muted'>Commands and steering work for architects with forwarding on or off. Type {prefix}help in a DM to see them.</p></form>",
             if settings.enabled { " checked" } else { "" }, crate::escape(title))
     }).collect()
 }

@@ -103,15 +103,20 @@ fn recipient(user: DiscordId, channel: DiscordId) -> Recipient {
     Recipient { person: user.to_string(), conversation: channel.to_string(), home: Some(discord::chat_id(user, channel)) }
 }
 /// This channel's settings and the DM recipients who may use the operator
-/// interface: architects with a matching binding.
+/// interface: architects with a matching binding. Identity alone decides who
+/// operates; the settings' forwarding toggle only decides whether requests
+/// are forwarded to them.
 fn operators(routes: &[Route]) -> (channel::Settings, Vec<Recipient>) {
     let settings = channel::settings(CHANNEL);
-    let (Ok(policy), Ok(dms), true) = (Policy::load(), DmBindings::load(), settings.enabled) else { return (settings, Vec::new()) };
-    let recipients = routes.iter().filter_map(|route| {
+    let (Ok(policy), Ok(dms)) = (Policy::load(), DmBindings::load()) else { return (settings, Vec::new()) };
+    (settings, operating(&policy, &dms, routes))
+}
+/// The DM routes whose recipient operates under `policy` and `dms`.
+fn operating(policy: &Policy, dms: &DmBindings, routes: &[Route]) -> Vec<Recipient> {
+    routes.iter().filter_map(|route| {
         let user = route.recipient?;
-        identity::operates(&policy, &route.actor(user)?, &dms).then(|| recipient(user, route.channel))
-    }).collect();
-    (settings, recipients)
+        identity::operates(policy, &route.actor(user)?, dms).then(|| recipient(user, route.channel))
+    }).collect()
 }
 /// Discord as an operator channel transport: DMs only, replies by message reference.
 impl channel::Transport for Bridge {
@@ -681,7 +686,7 @@ impl Bridge {
         let events = crate::outbox::read(&crate::outbox::path()?, outbound.cursor).map_err(|_| "Could not read the delivery outbox.")?;
         // Recipients who receive design questions as operator requests.
         let (forwarding, operating) = operators(routes);
-        let questions: Vec<DiscordId> = if forwarding.chats.is_empty() && forwarding.kinds.contains(&operator::Kind::Question) { operating.iter().filter_map(|to| to.conversation.parse().ok()).collect() } else { Vec::new() };
+        let questions: Vec<DiscordId> = if forwarding.enabled && forwarding.chats.is_empty() && forwarding.kinds.contains(&operator::Kind::Question) { operating.iter().filter_map(|to| to.conversation.parse().ok()).collect() } else { Vec::new() };
         let mut authorize = identity::authorizer();
         // Events parked until their authorization or route is available again;
         // anything not yet retried stays parked if a receipt cannot be saved.
