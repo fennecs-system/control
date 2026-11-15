@@ -185,9 +185,13 @@ Evicted output leaves a lightweight retry receipt while its attempt can still
 submit tools (at most 1,024 per service). Status reports `output_evicted=true`
 when only that receipt remains. Retries return the recorded outcome rather than
 re-executing; a full live receipt budget asks the worker to finish its turn.
-Timeout, shutdown or uncertain completion requests service stop: killing the host
-Docker client alone would not prove its remote writer stopped. A restart never
-replays an in-flight command. Other services remain running. These tools provide
+A timed-out or interrupted command is stopped inside the service together with
+every process it started, detached ones included; the service keeps running.
+Only when that cannot be verified is the service stopped: killing the host
+Docker client alone would not prove its remote writer stopped. Run long-lived
+programs such as clients, servers or daemons as a permanent watch
+(`control_watch_start`, see [WATCHES.md](WATCHES.md)) instead of a command.
+A restart never replays an in-flight command. Other services remain running. These tools provide
 no host command execution, arbitrary container selection or new network authority.
 Task-specific adapters and server configuration remain outside Control's source.
 
