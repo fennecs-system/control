@@ -7,6 +7,7 @@ use reqwest::{
 use serde_json::{Value, json};
 use std::{fs, io, time::Duration};
 const VERSION: &str = control_context::tool_policy::MCP_LATEST;
+pub mod channel;
 pub mod chats;
 pub mod github;
 pub mod operator;

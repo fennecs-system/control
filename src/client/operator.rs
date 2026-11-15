@@ -18,6 +18,13 @@ pub enum Kind {
 }
 impl Kind {
     pub const ALL: [Kind; 3] = [Kind::Question, Kind::Bot, Kind::Port];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kind::Question => "question",
+            Kind::Bot => "bot",
+            Kind::Port => "port",
+        }
+    }
 }
 
 /// One pending decision, rendered as plain text borrowed from its view.
@@ -117,6 +124,13 @@ pub fn port(text: &str, loopback_required: impl Fn(&str) -> Option<bool>) -> Res
     Ok(Command::Port { id: parts[2].into(), decision, loopback })
 }
 
+/// Decision commands, for help text.
+pub const COMMANDS: &[(&str, &str)] = &[
+    ("/answer ID ANSWER", "Answer a design question"),
+    ("/bot allow|deny ID", "Decide a bot request"),
+    ("/port allow|deny ID [--loopback]", "Decide a port request"),
+];
+
 /// The request a typed decision command names: `/answer ID ANSWER`,
 /// `/bot allow|deny ID` or `/port allow|deny ID [--loopback]`.
 pub fn named(text: &str) -> Option<(Kind, &str)> {
@@ -164,26 +178,6 @@ pub fn execute(hive: &mut Hive, chat: &str, command: &Command) -> io::Result<()>
     }
 }
 
-/// Which requests an away-from-keyboard client forwards. Absent settings
-/// forward every kind from every chat.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct Forwarding {
-    pub enabled: bool,
-    pub kinds: Vec<Kind>,
-    /// Top-level chat IDs; empty forwards all chats.
-    pub chats: Vec<String>,
-}
-impl Default for Forwarding {
-    fn default() -> Self {
-        Self { enabled: true, kinds: Kind::ALL.to_vec(), chats: Vec::new() }
-    }
-}
-impl Forwarding {
-    pub fn forwards(&self, chat: &str, kind: Kind) -> bool {
-        self.enabled && self.kinds.contains(&kind) && (self.chats.is_empty() || self.chats.iter().any(|c| c == chat))
-    }
-}
 
 #[cfg(test)]
 mod tests;

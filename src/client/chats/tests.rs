@@ -46,3 +46,12 @@ fn finished_replies_are_delivered_in_order_once() {
     assert_eq!(super::replies(&waiting, 0).1, 0, "a waiting question is an operator request, not a reply");
     assert_eq!(super::replies(&detail, 99).1, 5, "a shorter history clamps the cursor");
 }
+
+#[test]
+fn use_takes_the_tuis_lens_list() {
+    assert_eq!(navigation("/use engineering evidence"), Some(Navigation::Use(vec!["engineering".into(), "evidence".into()])));
+    assert_eq!(navigation("/use a,b , c"), Some(Navigation::Use(vec!["a".into(), "b".into(), "c".into()])));
+    assert_eq!(navigation("/use none"), Some(Navigation::Use(vec![])));
+    assert_eq!(navigation("/use  "), None);
+    assert_eq!(lenses(""), None);
+}

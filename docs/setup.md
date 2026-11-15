@@ -209,42 +209,49 @@ DMs and replies with links to the local chat. Server-channel messages are never
 requested or processed. The bot and user may need a shared server and compatible
 Discord privacy settings for DMs to work.
 
-### Operator requests away from the keyboard
+### Messaging channels: operator requests and steering
 
-Architect identities also receive operator requests from every chat on the
-node, not only the chats they started over Discord: agent design questions, bot
-requests and port approvals. Reply to a request's message (an option number or
-direction for a question, `allow`/`deny` for a bot, `allow`/`allow --loopback`/
-`deny` for a port), or send the command it shows. The bridge decides it through
-the same operator interface as `control tui` (`control.requests.list`,
-`control.chat.send` and the port decision form), using this node's local
-operator session, so the server rechecks the request is still pending and a
-duplicate reply is refused. User-role identities keep the DM-only behaviour.
-Each request is sent once per recipient; `discord-operator.json` in the state
-directory maps notification messages to their chat and request. The bridge
-re-reads requests only when the server's change hints move the decision
-revisions in `control.chats.list`, as the TUI does.
+Discord is the first operator messaging channel; other services (Telegram,
+WhatsApp, Slack) can be added as adapters over the same core
+(`client::channel`). The core reaches Control only through the operator
+interface `control tui` uses.
 
-Optional `operator` settings in `discord-access.json` narrow this:
+Forwarding is **off by default**. Turn it on, and set the command prefix, on
+the web Connections page (`/?view=integrations`). The page saves the
+configuration directory's `channels.json`, which adapters re-read on every
+poll; `control tui` shows the state under `/help`:
 
 ```json
-{"channel_id":null,"principals":[],
- "operator":{"enabled":true,"kinds":["question","bot","port"],"chats":[]}}
+{"discord":{"enabled":true,"kinds":["question","bot","port"],"chats":[],"prefix":"!"}}
 ```
 
-`chats` lists top-level chat IDs to forward (empty forwards all); set
-`enabled` to false to keep architects DM-only.
+`chats` lists top-level chat IDs to forward (empty forwards all), `kinds`
+narrows what is forwarded. The prefix defaults to `!` because Discord reserves
+`/` for its own commands; a service with native `/` commands can keep `/`.
+Type `!help` in a DM for the command list, generated from the same tables as
+the TUI and the server.
 
-### Steering chats from Discord
+When enabled, architect identities (the role the local operator holds) receive
+agent design questions, bot requests and port approvals from every chat on the
+node. Reply to a request's message (an option number or direction for a
+question, `allow`/`deny` for a bot, `allow`/`allow --loopback`/`deny` for a
+port), or send the command it shows (`!answer …`, `!bot allow …`). Decisions
+use this node's local operator session for exactly the commands the TUI sends,
+so the server rechecks that the request is still pending and refuses a
+duplicate reply. User-role identities keep the DM-only behaviour.
 
-Architects can also drive any chat from their DM with the TUI's navigation:
-`/chats` lists the most recently active chats, `/resume ID` selects one and
-`/new` starts one. While a chat is selected, messages go to it through
-`control.chat.send`, so chat commands such as `/steer`, `/cancel`, `/btw` and
-`/answer` behave as on the web and in the TUI. Its finished replies are relayed
-to the DM; replying to a relayed reply continues that chat. `/resume` with the
-DM's own chat ID (shown by `/chats`) returns to the DM chat. The selection is
-kept in `discord-operator.json`.
+Architects can also steer any chat: `!chats` lists the most recently active
+chats, `!resume ID` selects one, `!new` starts one and `!use LENS…` sets lenses
+for the selected chat (`!use none` clears). While a chat is selected, messages
+go to it, so `!steer`, `!cancel`, `!btw` and the other chat commands behave as
+on the web and in the TUI. Finished replies are relayed back; replying to one
+continues that chat. `!resume` with the DM's own chat ID (shown by `!chats`)
+returns to the DM chat.
+
+Each channel's routing table (which message stands for which request or chat,
+and each conversation's selected chat) is `channels/NAME.json` in the state
+directory. Requests and selected chats are re-read only when the server's
+change hints move their revisions in `control.chats.list`, as in the TUI.
 
 If delivery fails, run `control discord --diagnose`. To inspect server role and
 channel permissions without reading messages, use

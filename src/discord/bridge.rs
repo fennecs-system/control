@@ -1,7 +1,7 @@
 use crate::identity::{Action, Actor, DiscordId, DmBinding, DmBindings, Policy};
 use crate::{config, discord, identity};
-use super::{permissions as discord_permissions, delivery::Snapshot, operator::{self as routing, Ledger, Notice}};
-use crate::client::{Hive, chats::{self, Navigation}, operator, updates::Updates};
+use super::{permissions as discord_permissions, delivery::Snapshot};
+use crate::client::{channel::{self, Channel, Inbound, Posted, Recipient}, operator};
 use reqwest::{
     blocking::Client,
     header::{HeaderMap, HeaderValue, AUTHORIZATION},
@@ -38,16 +38,8 @@ struct Bridge {
     bot_id: DiscordId,
     bot_name: String,
     state: std::cell::RefCell<StateCache>,
-    operator: std::cell::RefCell<Operator>,
-}
-/// The operator interface connection (the one the TUI uses) and the reply routing table.
-#[derive(Default)]
-struct Operator {
-    hive: Option<(Hive, Updates)>,
-    refreshed: Option<std::time::Instant>,
-    /// Decision, port and bot revisions from `control.chats.list` at the last read.
-    revisions: Value,
-    ledger: Ledger,
+    /// The shared operator channel core; this bridge is its Discord transport.
+    channel: std::cell::RefCell<Channel>,
 }
 /// Cache only delivery fields; reload on size, modification time or inode changes.
 #[derive(Default)]
@@ -104,28 +96,35 @@ fn credential() -> Result<String, &'static str> {
     }
     Err("Missing DISCORD_TOKEN.")
 }
-/// DM recipients who may use the operator interface, and what is forwarded to them.
-fn operators(routes: &[Route]) -> (crate::client::operator::Forwarding, Vec<(DiscordId, DiscordId)>) {
-    let (Ok(policy), Ok(dms)) = (Policy::load(), DmBindings::load()) else { return (Default::default(), Vec::new()) };
+/// This adapter's name in `channels.json` and the channel state directory.
+const CHANNEL: &str = "discord";
+/// A DM as the channel core addresses it.
+fn recipient(user: DiscordId, channel: DiscordId) -> Recipient {
+    Recipient { person: user.to_string(), conversation: channel.to_string(), home: Some(discord::chat_id(user, channel)) }
+}
+/// This channel's settings and the DM recipients who may use the operator
+/// interface: architects with a matching binding.
+fn operators(routes: &[Route]) -> (channel::Settings, Vec<Recipient>) {
+    let settings = channel::settings(CHANNEL);
+    let (Ok(policy), Ok(dms), true) = (Policy::load(), DmBindings::load(), settings.enabled) else { return (settings, Vec::new()) };
     let recipients = routes.iter().filter_map(|route| {
         let user = route.recipient?;
-        identity::operates(&policy, &route.actor(user)?, &dms).then_some((user, route.channel))
+        identity::operates(&policy, &route.actor(user)?, &dms).then(|| recipient(user, route.channel))
     }).collect();
-    (policy.operator, recipients)
+    (settings, recipients)
 }
-/// Recent chats listed by `/chats`.
-const RECENT: usize = 15;
-/// What an operator DM asked for, once routed.
-enum Next {
-    Decide(Notice),
-    Navigate(DiscordId, Navigation),
-    Chat(String),
-}
-fn save_ledger(ledger: &Ledger) {
-    let saved = serde_json::to_vec(ledger).map_err(|_| "Could not encode operator routing.")
-        .and_then(|bytes| checkpoint(config::state("discord-operator.json")?, &bytes));
-    if let Err(message) = saved {
-        eprintln!("{message}");
+/// Discord as an operator channel transport: DMs only, replies by message reference.
+impl channel::Transport for Bridge {
+    fn capabilities(&self) -> channel::Capabilities {
+        channel::Capabilities { replies: true, direct_only: true, max_text: 1800, ..Default::default() }
+    }
+    fn post(&self, to: &Recipient, text: &str, _reply_to: Option<&str>, key: &str) -> Posted {
+        let Ok(channel) = to.conversation.parse::<DiscordId>() else { return Posted::Refused };
+        match self.send(channel, text, Some(&nonce(key))) {
+            Ok(message) => Posted::Sent(message.map(|id| id.to_string())),
+            Err(Some(_)) => Posted::Retry,
+            Err(None) => Posted::Refused,
+        }
     }
 }
 fn save_cursors(cursors: &HashMap<String, String>) -> Result<(), &'static str> {
@@ -411,7 +410,7 @@ impl Bridge {
             bot_id,
             bot_name: user["username"].as_str().unwrap_or("Control").into(),
             state: Default::default(),
-            operator: std::cell::RefCell::new(Operator { ledger: config::state("discord-operator.json").map(load_json).unwrap_or_default(), ..Default::default() }),
+            channel: std::cell::RefCell::new(Channel::open(CHANNEL)),
         })
     }
     fn status(&self, routes: &[Route], ready: bool, message: &str) {
@@ -532,7 +531,7 @@ impl Bridge {
             Action::Task,
         )?;
         let channel = route.channel.to_string();
-        let operating = !operators(std::slice::from_ref(route)).1.is_empty();
+        let (settings, operating) = operators(std::slice::from_ref(route));
         let endpoint = format!("{API}/channels/{channel}/messages");
         if !cursors.contains_key(&channel) {
             let response = self
@@ -586,23 +585,16 @@ impl Bridge {
             // go through the shared operator interface instead of the DM chat.
             // They are consumed before they run, so a crash cannot repeat one.
             let text = row["content"].as_str().unwrap_or("");
-            let next = sender(&row, route, self.bot_id).filter(|_| operating).and_then(|user| {
-                let replied = row["message_reference"]["message_id"].as_str().and_then(|s| s.parse().ok());
-                Some(match self.operator.borrow().ledger.destination(user, route.channel, replied, text) {
-                    routing::Destination::Decide(notice) => Next::Decide(notice.clone()),
-                    routing::Destination::Navigate(navigation) => Next::Navigate(user, navigation),
-                    routing::Destination::Chat(chat) => Next::Chat(chat.to_owned()),
-                    routing::Destination::Dm => return None,
-                })
+            let next = sender(&row, route, self.bot_id).and_then(|user| {
+                let to = operating.iter().find(|to| to.person == user.to_string())?;
+                let replied = row["message_reference"]["message_id"].as_str();
+                let routed = self.channel.borrow().route(&settings, to, Inbound { replied, text })?;
+                Some((to, routed))
             });
-            if let Some(next) = next {
+            if let Some((to, routed)) = next {
                 cursors.insert(channel.clone(), id.to_string());
                 save_cursors(cursors)?;
-                let outcome = match next {
-                    Next::Decide(notice) => self.decide(route, &notice, text),
-                    Next::Navigate(user, navigation) => self.navigate(route, user, navigation),
-                    Next::Chat(chat) => self.steer(&chat, text),
-                };
+                let outcome = self.channel.borrow_mut().run(&settings, to, routed, text);
                 let _ = self.reply(route.channel, &outcome);
                 continue;
             }
@@ -652,193 +644,6 @@ impl Bridge {
         }
         Ok(true)
     }
-    /// The operator interface, connected on first use and after a failure.
-    fn hive(operator: &mut Operator) -> Result<&mut (Hive, Updates), &'static str> {
-        if operator.hive.is_none() {
-            let hive = Hive::connect(&config::server_url()).map_err(|_| "Operator interface unavailable; is control serve running?")?;
-            let updates = hive.updates().map_err(|_| "Operator update stream unavailable.")?;
-            operator.hive = Some((hive, updates));
-            operator.refreshed = None;
-        }
-        Ok(operator.hive.as_mut().unwrap())
-    }
-    /// Follows the node for operator principals as the TUI does: on the
-    /// server's change hints (or every 10 s while they are disconnected) it
-    /// reads `control.chats.list`, then re-reads only what moved: the pending
-    /// requests when a decision revision changed, and a selected chat when its
-    /// revision changed, relaying its finished replies.
-    fn follow(&self, routes: &[Route]) -> Result<(), &'static str> {
-        let (forwarding, recipients) = operators(routes);
-        let mut operator = self.operator.borrow_mut();
-        if recipients.is_empty() {
-            operator.hive = None;
-            return Ok(());
-        }
-        Self::hive(&mut operator)?;
-        let stale = operator.refreshed.is_none_or(|at| at.elapsed() >= Duration::from_secs(10));
-        let first = operator.refreshed.is_none();
-        let operator = &mut *operator;
-        let Some((hive, updates)) = operator.hive.as_mut() else { return Ok(()) };
-        if !(updates.changed() || first || (stale && !updates.connected())) {
-            return Ok(());
-        }
-        let list = match hive.tool("control.chats.list", json!({})) {
-            Ok(list) => list,
-            Err(_) => {
-                operator.hive = None;
-                return Err("Could not read the chat list; retrying.");
-            }
-        };
-        operator.refreshed = Some(std::time::Instant::now());
-        let mut retry = false;
-        let revisions = json!([list[0]["decision_revision"], list[0]["port_revision"], list[0]["bot_revision"]]);
-        if first || revisions != operator.revisions {
-            match hive.tool("control.requests.list", json!({})) {
-                Ok(groups) => {
-                    operator.revisions = revisions;
-                    retry |= self.notify(&groups, &forwarding, &recipients, &mut operator.ledger);
-                }
-                Err(_) => retry = true,
-            }
-        }
-        let entries = chats::entries(list.as_array().map(Vec::as_slice).unwrap_or(&[]));
-        for index in 0..operator.ledger.active.len() {
-            let active = operator.ledger.active[index].clone();
-            let Some(entry) = entries.iter().find(|entry| entry.id == active.chat) else { continue };
-            if !recipients.contains(&(active.user, active.channel)) || *entry.revision == active.revision {
-                continue;
-            }
-            let Ok(detail) = hive.tool("control.chat.read", json!({"id":active.chat})) else { retry = true; continue };
-            let (replies, next) = chats::replies(&detail, active.delivered);
-            let link = format!("{}/chat/{}", config::server_url(), active.chat);
-            let mut delivered = next;
-            for reply in replies {
-                let receipt = format!("reply:{}:{}:{}", active.user, active.chat, reply.index);
-                let report = format!("{}\n\n{}", entry.title, if reply.text.is_empty() { "No report was produced." } else { reply.text });
-                match self.send(active.channel, &delivery_message(None, reply.status, &link, &report), Some(&nonce(&receipt))) {
-                    Ok(message) => {
-                        if let Some(message) = message {
-                            operator.ledger.relay(routing::Relayed { user: active.user, channel: active.channel, message, chat: active.chat.clone() });
-                        }
-                    }
-                    Err(None) => eprintln!("Discord refused a chat reply."),
-                    Err(Some(_)) => {
-                        delivered = reply.index;
-                        retry = true;
-                        break;
-                    }
-                }
-            }
-            let slot = &mut operator.ledger.active[index];
-            slot.delivered = delivered;
-            if delivered == next {
-                slot.revision = entry.revision.clone();
-            }
-        }
-        save_ledger(&operator.ledger);
-        if retry {
-            operator.refreshed = None;
-        }
-        Ok(())
-    }
-    /// Sends each forwarded pending request once per recipient. Returns whether
-    /// a send should be retried.
-    fn notify(&self, groups: &Value, forwarding: &operator::Forwarding, recipients: &[(DiscordId, DiscordId)], ledger: &mut Ledger) -> bool {
-        let mut retry = false;
-        for group in groups.as_array().into_iter().flatten() {
-            let (Some(chat), title) = (group["chat_id"].as_str(), group["title"].as_str().unwrap_or("Chat")) else { continue };
-            let link = format!("{}/chat/{chat}", config::server_url());
-            for pending in operator::pending(group) {
-                if pending.id.is_empty() || !forwarding.forwards(chat, pending.kind) {
-                    continue;
-                }
-                for &(user, channel) in recipients {
-                    if ledger.sent(user, chat, pending.kind, pending.id) {
-                        continue;
-                    }
-                    let receipt = Ledger::receipt(user, chat, pending.kind, pending.id);
-                    match self.send(channel, &routing::text(title, &link, &pending), Some(&nonce(&receipt))) {
-                        Ok(Some(message)) => {
-                            ledger.record(Notice { user, channel, message, chat: chat.into(), kind: pending.kind, id: pending.id.into(), loopback: pending.loopback });
-                            save_ledger(ledger);
-                        }
-                        Ok(None) | Err(Some(_)) => retry = true,
-                        Err(None) => eprintln!("Discord refused an operator notification."),
-                    }
-                }
-            }
-        }
-        retry
-    }
-    /// `/chats`, `/resume ID` and `/new`, with the TUI's meaning, for one DM.
-    fn navigate(&self, route: &Route, user: DiscordId, navigation: Navigation) -> String {
-        let own = discord::chat_id(user, route.channel);
-        let mut state = self.operator.borrow_mut();
-        if let Err(error) = Self::hive(&mut state) {
-            return error.into();
-        }
-        let state = &mut *state;
-        let Some((hive, _)) = state.hive.as_mut() else { return "Operator interface unavailable.".into() };
-        let server = config::server_url();
-        let result = match navigation {
-            Navigation::List => hive.tool("control.chats.list", json!({})).map(|list| {
-                let recent = chats::recent(&chats::entries(list.as_array().map(Vec::as_slice).unwrap_or(&[])), RECENT);
-                format!("Recent chats. Reply /resume ID to talk to one, /new for a new chat, /resume {own} for this DM's own chat.\n\n{}", chats::resume_list(&recent))
-            }),
-            Navigation::Open(id) if id == own => {
-                state.ledger.select(user, route.channel, None);
-                Ok("Back to this DM's own chat.".into())
-            }
-            Navigation::Open(id) => hive.tool("control.chat.read", json!({"id":id})).map(|detail| {
-                let count = detail["messages"].as_array().map_or(0, Vec::len);
-                state.ledger.select(user, route.channel, Some((id.clone(), count)));
-                format!("Now talking to {}. Messages go to that chat and its replies come here; /chats to switch.\n{server}/chat/{id}", detail["title"].as_str().unwrap_or("Chat"))
-            }),
-            Navigation::New => hive.tool("control.chat.create", json!({})).map(|detail| {
-                let id = detail["id"].as_str().unwrap_or("").to_owned();
-                state.ledger.select(user, route.channel, Some((id.clone(), 0)));
-                format!("New chat started. Messages go to it and its replies come here.\n{server}/chat/{id}")
-            }),
-        };
-        save_ledger(&state.ledger);
-        result.unwrap_or_else(|error| format!("Control: {error}"))
-    }
-    /// A message for `chat`, sent as the TUI and web send it; the server
-    /// interprets chat commands such as /steer and /cancel.
-    fn steer(&self, chat: &str, text: &str) -> String {
-        if text.trim().is_empty() {
-            return "Control: send the message as text.".into();
-        }
-        let mut state = self.operator.borrow_mut();
-        let result = Self::hive(&mut state).map_err(str::to_owned)
-            .and_then(|(hive, _)| operator::execute(hive, chat, &operator::Command::Send(text.into())).map_err(|e| e.to_string()));
-        match result {
-            Ok(()) => format!("Sent.\n{}/chat/{chat}", config::server_url()),
-            Err(error) => format!("Control could not send that: {error}"),
-        }
-    }
-    /// Applies a reply to `notice` through the shared operator interface, as
-    /// the TUI would in that chat; the server rechecks that it is still pending.
-    fn decide(&self, route: &Route, notice: &Notice, text: &str) -> String {
-        let (_, recipients) = operators(std::slice::from_ref(route));
-        if !recipients.contains(&(notice.user, notice.channel)) {
-            return "Operator requests are not enabled for this account.".into();
-        }
-        let command = match operator::reply(&notice.pending(), text) {
-            Ok(command) => command,
-            Err(error) => return format!("Control: {error}"),
-        };
-        let mut state = self.operator.borrow_mut();
-        let result = Self::hive(&mut state).map_err(str::to_owned)
-            .and_then(|(hive, _)| operator::execute(hive, &notice.chat, &command).map_err(|e| e.to_string()));
-        match result {
-            Ok(()) => format!("Decision sent.\n{}/chat/{}", config::server_url(), notice.chat),
-            Err(error) => {
-                if error.starts_with("Control is unavailable") { state.hive = None; }
-                format!("Control could not apply that decision: {error}")
-            }
-        }
-    }
     /// One delivery attempt honouring per-receipt backoff. Permanent refusals are recorded and not retried.
     fn attempt(&self, receipt: &str, channel: DiscordId, content: &str, outbound: &mut Outbound) -> bool {
         if outbound.backoff.get(receipt).is_some_and(|(until, _)| now() < *until) {
@@ -876,7 +681,7 @@ impl Bridge {
         let events = crate::outbox::read(&crate::outbox::path()?, outbound.cursor).map_err(|_| "Could not read the delivery outbox.")?;
         // Recipients who receive design questions as operator requests.
         let (forwarding, operating) = operators(routes);
-        let questions = if forwarding.enabled && forwarding.chats.is_empty() && forwarding.kinds.contains(&operator::Kind::Question) { operating.into_iter().map(|(_, channel)| channel).collect() } else { Vec::new() };
+        let questions: Vec<DiscordId> = if forwarding.chats.is_empty() && forwarding.kinds.contains(&operator::Kind::Question) { operating.iter().filter_map(|to| to.conversation.parse().ok()).collect() } else { Vec::new() };
         let mut authorize = identity::authorizer();
         // Events parked until their authorization or route is available again;
         // anything not yet retried stays parked if a receipt cannot be saved.
@@ -1064,7 +869,8 @@ fn run(check_only: bool) -> Result<(), &'static str> {
         if let Err(m) = bridge.deliver(&routes, &mut outbound).and_then(|()| bridge.outbox(&routes, &mut outbound)) {
             eprintln!("{m}");
         }
-        if let Err(m) = bridge.follow(&routes) {
+        let (settings, recipients) = operators(&routes);
+        if let Err(m) = bridge.channel.borrow_mut().follow(&bridge, &settings, &recipients) {
             eprintln!("{m}");
         }
         bridge.status(

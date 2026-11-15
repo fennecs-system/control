@@ -1,6 +1,6 @@
 //! Chat navigation as every operator client offers it, over `control.chats.list`
 //! and `control.chat.read`. `/chats` lists, `/resume ID` switches and `/new`
-//! starts a chat; anything else is sent to the active chat with
+//! starts a chat and `/use LENS…` sets lenses; anything else is sent to the active chat with
 //! `control.chat.send`, where the server interprets chat commands (/steer,
 //! /cancel, /answer …) the same way for the web, TUI and Discord.
 use serde_json::Value;
@@ -10,13 +10,38 @@ pub enum Navigation {
     List,
     Open(String),
     New,
+    /// `/use LENS…` for future messages; `/use none` clears.
+    Use(Vec<String>),
 }
+/// Client navigation commands, for help text and menus.
+pub const COMMANDS: &[(&str, &str)] = &[
+    ("/chats", "List recent chats"),
+    ("/resume ID", "Talk to a chat"),
+    ("/new", "Start a chat"),
+    ("/use LENS…", "Compose future messages with lenses; /use none clears"),
+];
 pub fn navigation(text: &str) -> Option<Navigation> {
     match text.trim() {
         "/chats" | "/resume" => Some(Navigation::List),
         "/new" => Some(Navigation::New),
+        text if text.starts_with("/use ") => lenses(&text[5..]).map(|names| Navigation::Use(names.into_iter().map(str::to_owned).collect())),
         text => text.strip_prefix("/resume ").map(str::trim).filter(|id| !id.is_empty() && !id.contains(char::is_whitespace)).map(|id| Navigation::Open(id.into())),
     }
+}
+/// Lens names after `/use`, separated by spaces or commas; `none` clears.
+pub fn lenses(names: &str) -> Option<Vec<&str>> {
+    let names = names.split(|c: char| c.is_whitespace() || c == ',').filter(|s| !s.is_empty()).collect::<Vec<_>>();
+    match names.as_slice() {
+        [] => None,
+        ["none"] => Some(Vec::new()),
+        _ => Some(names),
+    }
+}
+/// Applies lenses to `chat` as the TUI and web lens picker do: resolved first,
+/// so invalid names change nothing, then set atomically. Returns the chat view.
+pub fn use_lenses(hive: &mut super::Hive, chat: &str, lenses: &[String]) -> std::io::Result<Value> {
+    hive.tool("control.lenses.resolve", serde_json::json!({"lenses":lenses}))?;
+    hive.tool("control.chat.lenses", serde_json::json!({"id":chat,"lenses":lenses}))
 }
 
 /// One `control.chats.list` row.

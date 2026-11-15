@@ -277,6 +277,12 @@ impl App {
             _ if let Some(navigation) = chats::navigation(&text) => match navigation {
                 Navigation::New => self.new_chat(hive)?,
                 Navigation::Open(id) => { self.active = id; self.inspector=None;self.refresh(hive)?; }
+                Navigation::Use(lenses) => {
+                    // Resolve before creating a conversation: invalid input has no side effects.
+                    if self.active.is_empty(){hive.tool("control.lenses.resolve",json!({"lenses":lenses}))?;self.new_chat(hive)?;}
+                    self.set_detail(chats::use_lenses(hive,&self.active,&lenses)?);
+                    self.inspector=None;self.status=format!("Future messages: {}",lens_label(&self.detail));self.follow=true;
+                }
                 Navigation::List => {
                     self.refresh(hive)?;
                     let entries=chats::entries(&self.chats);
@@ -285,7 +291,11 @@ impl App {
                 }
             },
             "/help" => {
-                self.inspector = Some(("Help".into(), command_menu::help()));
+                let channels=crate::client::channel::ADAPTERS.iter().map(|(name,title)| {
+                    let settings=crate::client::channel::settings(name);
+                    format!("{title}: operator forwarding {} · prefix {}",if settings.enabled {"on"} else {"off"},settings.prefix)
+                }).collect::<Vec<_>>().join("\n");
+                self.inspector = Some(("Help".into(), format!("{}\n\nMessaging channels (change on the web Connections page)\n{channels}",command_menu::help())));
                 self.scroll = 0;
                 self.follow = false;
                 self.status = "PageUp / PageDown scroll · Esc or /chat returns".into();
@@ -308,21 +318,6 @@ impl App {
                 self.inspector=Some(("Next-message context preview".into(),serde_json::to_string_pretty(&resolved).map_err(|_|failure("Could not display context."))?));self.scroll=0;self.follow=false;self.status="Live library preview; existing runs retain their captured snapshots. /chat to return.".into();
             }
             "/chat"=>{self.inspector=None;self.follow=true;self.scroll=usize::MAX;}
-            _ if lens_input::parse(&text).is_some()=>{
-                // Nothing selected is not a command: keep the draft and change nothing.
-                if lens_input::names(&text).is_some_and(|names|names.is_empty()) {return Ok(false);}
-                let lenses=lens_input::parse(&text).unwrap_or_default();
-                // Name every unknown lens against the current library; the server applies the list atomically.
-                self.lenses=lens_input::Catalog::from_list(&hive.tool("control.lenses.list",json!({}))?);
-                let ids=self.lenses.known().ok_or_else(||failure("Invalid lens library response."))?;
-                let unknown=lens_input::unknown(&lenses,|id|ids.contains(id));
-                if !unknown.is_empty() {return Err(failure(format!("Unknown {}: {}. Nothing changed; /lenses lists the library.",if unknown.len()==1{"lens"}else{"lenses"},unknown.join(", "))));}
-                // Resolve before creating a conversation: invalid input has no side effects.
-                hive.tool("control.lenses.resolve",json!({"lenses":lenses}))?;
-                if self.active.is_empty(){self.new_chat(hive)?;}
-                self.set_detail(hive.tool("control.chat.lenses",json!({"id":self.active,"lenses":lenses}))?);
-                self.inspector=None;self.status=format!("Future messages: {}",lens_label(&self.detail));self.follow=true;
-            }
             _ if text.starts_with('/') && commands::parse(&text).is_none()=>return Err(failure("Unknown command. Use /help.")),
             _ if !text.is_empty() => {
                 if control_context::limits::message_too_long(&text) { return Err(failure(control_context::limits::CHAT_MESSAGE_ERROR)); }

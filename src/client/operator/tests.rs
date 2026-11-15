@@ -56,17 +56,6 @@ fn typed_port_commands_are_checked_against_the_displayed_request() {
     assert_eq!(named("/bot on"), None);
 }
 
-#[test]
-fn forwarding_defaults_to_everything_and_filters_by_kind_and_chat() {
-    assert!(Forwarding::default().forwards("c-1", Kind::Port));
-    let only = Forwarding { kinds: vec![Kind::Question], chats: vec!["c-1".into()], ..Default::default() };
-    assert!(only.forwards("c-1", Kind::Question));
-    assert!(!only.forwards("c-1", Kind::Bot) && !only.forwards("c-2", Kind::Question));
-    assert!(!Forwarding { enabled: false, ..Default::default() }.forwards("c-1", Kind::Port));
-    let parsed: Forwarding = serde_json::from_str(r#"{"kinds":["bot"]}"#).unwrap();
-    assert_eq!(parsed, Forwarding { kinds: vec![Kind::Bot], ..Default::default() });
-    assert!(serde_json::from_str::<Forwarding>(r#"{"chat":"c-1"}"#).is_err());
-}
 
 #[test]
 fn rendered_server_text_carries_no_control_characters() {
