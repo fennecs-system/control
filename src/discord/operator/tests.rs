@@ -60,7 +60,8 @@ fn each_request_is_sent_once_per_recipient_and_the_table_is_bounded() {
 
 #[test]
 fn notices_name_the_chat_the_request_and_how_to_decide() {
-    let pending = crate::client::operator::pending(&serde_json::json!({"pending_bots":[{"request_id":"bot-1","chat_id":"c-child"}]})).remove(0);
+    let view = serde_json::json!({"pending_bots":[{"request_id":"bot-1","chat_id":"c-child"}]});
+    let pending = crate::client::operator::pending(&view).remove(0);
     let text = text("Swarm lead", "http://127.0.0.1:8080/chat/c-lead", &pending);
     assert!(text.starts_with("Control · Swarm lead\nBot request · c-child"));
     assert!(text.contains("/bot allow bot-1 · /bot deny bot-1"));

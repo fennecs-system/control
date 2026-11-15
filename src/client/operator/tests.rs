@@ -7,14 +7,15 @@ fn view() -> Value {
         "pending_bots":[{"request_id":"bot-1","chat_id":"c-child"}]
     })
 }
-fn item(kind: Kind) -> Pending {
-    pending(&view()).into_iter().find(|p| p.kind == kind).unwrap()
+fn item(view: &Value, kind: Kind) -> Pending<'_> {
+    pending(view).into_iter().find(|p| p.kind == kind).unwrap()
 }
 
 #[test]
 fn views_from_chat_read_and_requests_list_render_alike() {
-    let items = pending(&view());
-    assert_eq!(items.iter().map(|p| (p.kind, p.id.as_str())).collect::<Vec<_>>(), [(Kind::Question, "q-1"), (Kind::Port, "port-1"), (Kind::Bot, "bot-1")]);
+    let view = view();
+    let items = pending(&view);
+    assert_eq!(items.iter().map(|p| (p.kind, p.id)).collect::<Vec<_>>(), [(Kind::Question, "q-1"), (Kind::Port, "port-1"), (Kind::Bot, "bot-1")]);
     assert_eq!(items[1].usage.as_deref(), Some("/port allow port-1 --loopback · /port deny port-1"));
     assert!(items[1].loopback && items[1].heading.starts_with("Port request · relay · "));
     assert_eq!(items[2].usage.as_deref(), Some("/bot allow bot-1 · /bot deny bot-1"));
@@ -23,19 +24,20 @@ fn views_from_chat_read_and_requests_list_render_alike() {
 
 #[test]
 fn replies_become_the_commands_the_web_and_tui_send() {
-    let question = item(Kind::Question);
+    let view = view();
+    let question = item(&view, Kind::Question);
     assert_eq!(reply(&question, " 2 "), Ok(Command::Send("/answer q-1 2".into())));
     assert_eq!(reply(&question, "use JSON"), Ok(Command::Send("/answer q-1 use JSON".into())));
     assert_eq!(reply(&question, "/answer q-1 1"), Ok(Command::Send("/answer q-1 1".into())));
     // A command naming another request, or none, is never redirected here.
     assert!(reply(&question, "/answer q-2 1").is_err());
     assert!(reply(&question, "/cancel all").is_err());
-    let bot = item(Kind::Bot);
+    let bot = item(&view, Kind::Bot);
     assert_eq!(reply(&bot, "Yes"), Ok(Command::Send("/bot allow bot-1".into())));
     assert_eq!(reply(&bot, "deny"), Ok(Command::Send("/bot deny bot-1".into())));
     assert_eq!(reply(&bot, "/bot deny bot-1"), Ok(Command::Send("/bot deny bot-1".into())));
     assert!(reply(&bot, "maybe").is_err() && reply(&bot, "yes please").is_err());
-    let port = item(Kind::Port);
+    let port = item(&view, Kind::Port);
     assert!(reply(&port, "allow").unwrap_err().contains("--loopback"));
     assert_eq!(reply(&port, "allow --loopback"), Ok(Command::Port { id: "port-1".into(), decision: PortDecision::Allow, loopback: true }));
     assert_eq!(reply(&port, "no"), Ok(Command::Port { id: "port-1".into(), decision: PortDecision::Deny, loopback: false }));
@@ -64,4 +66,13 @@ fn forwarding_defaults_to_everything_and_filters_by_kind_and_chat() {
     let parsed: Forwarding = serde_json::from_str(r#"{"kinds":["bot"]}"#).unwrap();
     assert_eq!(parsed, Forwarding { kinds: vec![Kind::Bot], ..Default::default() });
     assert!(serde_json::from_str::<Forwarding>(r#"{"chat":"c-1"}"#).is_err());
+}
+
+#[test]
+fn rendered_server_text_carries_no_control_characters() {
+    let view = json!({"pending_bots":[{"request_id":"bot-\u{1b}[2J1","chat_id":"c-\u{7}x"}],"pending_ports":[{"port_id":"p\u{0}1","name":"re\u{1b}lay","target":{"host":"h\u{1b}","port":1}}]});
+    for item in pending(&view) {
+        let rendered = format!("{}{}", item.heading, item.usage.unwrap());
+        assert!(!rendered.chars().any(char::is_control), "{rendered:?}");
+    }
 }

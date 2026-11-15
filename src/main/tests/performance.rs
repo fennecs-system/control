@@ -192,12 +192,15 @@ fn ownership_snapshots() {
         serde_json::json!({"workload":"ownership_snapshot","attempts":500,"median_ns":samples[4],"min_ns":samples[0]})
     );
 }
+type View = dyn Fn(&State) -> usize;
 /// Operator-facing views: the web chat page, its requests panel, the Bots page,
 /// `control.chat.read`/`control.chats.list` (TUI) and the node-wide request
 /// view an away-from-keyboard adapter reads on change hints.
 #[test]
 #[ignore = "explicit release-mode synthetic timing; no credentials, models or source execution"]
 fn operator_views() {
+    // More samples for profiling: CONTROL_TIMING_ROUNDS=2000.
+    let rounds = std::env::var("CONTROL_TIMING_ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(9);
     for (messages, unrelated, questions) in [(10, 0, 0), (100, 1000, 10), (500, 5000, 50)] {
         let mut state = fixture(messages, unrelated);
         for (index, run) in state.runtime.runs.iter_mut().filter(|run| run.chat_id.as_deref() == Some("benchmark-chat")).take(questions).enumerate() {
@@ -211,7 +214,7 @@ fn operator_views() {
                 continuation: None,
             });
         }
-        let workloads: [(&str, &dyn Fn(&State) -> usize); 6] = [
+        let workloads: [(&str, &View); 6] = [
             ("web_chat_page", &|s| chat::render(s, "benchmark-chat").unwrap().len()),
             ("web_requests_panel", &|s| chat::requests(s, "benchmark-chat").unwrap().len()),
             ("web_bots_page", &|s| crate::bots::overview(s).len()),
@@ -221,7 +224,7 @@ fn operator_views() {
         ];
         for (name, workload) in workloads {
             let mut samples = Vec::new();
-            for _ in 0..9 {
+            for _ in 0..rounds {
                 let start = Instant::now();
                 for _ in 0..10 {
                     black_box(workload(black_box(&state)));
@@ -229,7 +232,7 @@ fn operator_views() {
                 samples.push(start.elapsed().as_nanos() / 10);
             }
             samples.sort_unstable();
-            println!("{}", serde_json::json!({"workload":name,"messages":messages,"unrelated_runs":unrelated,"questions":questions,"median_ns":samples[4],"min_ns":samples[0],"bytes":workload(&state)}));
+            println!("{}", serde_json::json!({"workload":name,"messages":messages,"unrelated_runs":unrelated,"questions":questions,"median_ns":samples[samples.len() / 2],"min_ns":samples[0],"bytes":workload(&state)}));
         }
     }
 }

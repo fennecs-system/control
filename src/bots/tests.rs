@@ -2179,7 +2179,7 @@ fn node_wide_requests_route_a_descendant_bot_request_to_its_top_level_chat() {
     assert_eq!(groups.len(), 1);
     assert_eq!(groups[0]["chat_id"], parent.as_str());
     let pending = control::client::operator::pending(&groups[0]);
-    assert_eq!((pending[0].kind, pending[0].id.as_str()), (control::client::operator::Kind::Bot, id.as_str()));
+    assert_eq!((pending[0].kind, pending[0].id), (control::client::operator::Kind::Bot, id.as_str()));
     let control::client::operator::Command::Send(command) = control::client::operator::reply(&pending[0], "allow").unwrap() else { panic!() };
     crate::chat::send(&mut state, &parent, &command, "discord:1").unwrap();
     assert!(defined(&state, &child));

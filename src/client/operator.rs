@@ -7,7 +7,7 @@
 use super::{Hive, PortDecision};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::io;
+use std::{borrow::Cow, io};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -20,30 +20,47 @@ impl Kind {
     pub const ALL: [Kind; 3] = [Kind::Question, Kind::Bot, Kind::Port];
 }
 
-/// One pending decision, rendered as plain text.
+/// One pending decision, rendered as plain text borrowed from its view.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Pending {
+pub struct Pending<'a> {
     pub kind: Kind,
-    pub id: String,
-    pub heading: String,
-    pub body: String,
+    pub id: &'a str,
+    /// Free of control characters, like `usage`.
+    pub heading: Cow<'static, str>,
+    pub body: &'a str,
     /// How to decide it when `body` does not already say.
     pub usage: Option<String>,
     /// A port whose exact target is loopback must be allowed explicitly.
     pub loopback: bool,
 }
 
+/// Server text without control characters, written without an intermediate copy.
+struct Clean<T>(T);
+impl<T: std::fmt::Display> std::fmt::Display for Clean<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        struct Filter<'a, 'b>(&'a mut std::fmt::Formatter<'b>);
+        impl std::fmt::Write for Filter<'_, '_> {
+            fn write_str(&mut self, text: &str) -> std::fmt::Result {
+                text.chars().filter(|c| !c.is_control()).try_for_each(|c| self.0.write_char(c))
+            }
+        }
+        std::fmt::write(&mut Filter(f), format_args!("{}", self.0))
+    }
+}
+
 /// The pending decisions of a `control.chat.read` view or a
 /// `control.requests.list` entry, in display order.
-pub fn pending(view: &Value) -> Vec<Pending> {
+pub fn pending(view: &Value) -> Vec<Pending<'_>> {
     let list = |field: &str| view[field].as_array().map(Vec::as_slice).unwrap_or(&[]);
-    let text = |value: &Value| value.as_str().unwrap_or("").to_owned();
+    fn text(value: &Value) -> &str {
+        value.as_str().unwrap_or("")
+    }
     let mut items = Vec::new();
     for question in list("pending_questions") {
         items.push(Pending {
             kind: Kind::Question,
             id: text(&question["question"]["id"]),
-            heading: "Decision requested".into(),
+            heading: Cow::Borrowed("Decision requested"),
             body: text(&question["summary"]),
             usage: None,
             loopback: false,
@@ -54,9 +71,9 @@ pub fn pending(view: &Value) -> Vec<Pending> {
         let loopback = port["loopback_required"] == true;
         items.push(Pending {
             kind: Kind::Port,
-            heading: format!("Port request · {} · {}", text(&port["name"]), port["target"]),
-            body: String::new(),
-            usage: Some(format!("/port allow {id}{} · /port deny {id}", if loopback { " --loopback" } else { "" })),
+            heading: Cow::Owned(format!("Port request · {} · {}", Clean(text(&port["name"])), Clean(&port["target"]))),
+            body: "",
+            usage: Some(format!("/port allow {0}{1} · /port deny {0}", Clean(id), if loopback { " --loopback" } else { "" })),
             id,
             loopback,
         });
@@ -65,9 +82,9 @@ pub fn pending(view: &Value) -> Vec<Pending> {
         let id = text(&bot["request_id"]);
         items.push(Pending {
             kind: Kind::Bot,
-            heading: format!("Bot request · {}", text(&bot["chat_id"])),
-            body: String::new(),
-            usage: Some(format!("/bot allow {id} · /bot deny {id}")),
+            heading: Cow::Owned(format!("Bot request · {}", Clean(text(&bot["chat_id"])))),
+            body: "",
+            usage: Some(format!("/bot allow {0} · /bot deny {0}", Clean(id))),
             id,
             loopback: false,
         });
@@ -113,8 +130,8 @@ pub fn named(text: &str) -> Option<(Kind, &str)> {
 
 /// A reply to `pending`'s notification as the command that decides it: an
 /// answer, allow/deny (yes/no), or a typed command naming this request.
-pub fn reply(pending: &Pending, text: &str) -> Result<Command, &'static str> {
-    let (text, id) = (text.trim(), pending.id.as_str());
+pub fn reply(pending: &Pending<'_>, text: &str) -> Result<Command, &'static str> {
+    let (text, id) = (text.trim(), pending.id);
     let words = text.to_lowercase().split_whitespace().map(str::to_owned).collect::<Vec<_>>();
     let verdict = match words.first().map(String::as_str) {
         Some("allow" | "approve" | "yes" | "y") => "allow",

@@ -23,8 +23,8 @@ pub(crate) struct Notice {
     pub loopback: bool,
 }
 impl Notice {
-    pub fn pending(&self) -> Pending {
-        Pending { kind: self.kind, id: self.id.clone(), heading: String::new(), body: String::new(), usage: None, loopback: self.loopback }
+    pub fn pending(&self) -> Pending<'_> {
+        Pending { kind: self.kind, id: &self.id, heading: Default::default(), body: "", usage: None, loopback: self.loopback }
     }
 }
 
@@ -62,7 +62,7 @@ impl Ledger {
 }
 
 /// The notification for one pending request.
-pub(crate) fn text(title: &str, link: &str, pending: &Pending) -> String {
+pub(crate) fn text(title: &str, link: &str, pending: &Pending<'_>) -> String {
     let mut text = format!("Control · {}\n{}", title.chars().take(100).collect::<String>(), pending.heading);
     if !pending.body.is_empty() {
         text.push_str(&format!("\n{}", pending.body.chars().take(1200).collect::<String>()));

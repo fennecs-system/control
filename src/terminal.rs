@@ -508,9 +508,9 @@ impl App {
             }
         }
         for request in operator::pending(&self.detail) {
-            lines.push(Line::styled(clean(&request.heading),Style::default().fg(Color::Rgb(181,160,255))));
-            lines.extend(clean(&request.body).lines().map(|line|Line::from(line.to_owned())));
-            if let Some(usage)=request.usage {lines.push(Line::from(clean(&usage)));}
+            lines.push(Line::styled(request.heading,Style::default().fg(Color::Rgb(181,160,255))));
+            lines.extend(clean(request.body).lines().map(|line|Line::from(line.to_owned())));
+            if let Some(usage)=request.usage {lines.push(Line::from(usage));}
         }
         if let Some(project)=pending_project(&self.detail) {
             lines.push(Line::styled(format!("Folder access requested · {}",clean(project["path"].as_str().unwrap_or(""))),Style::default().fg(Color::Rgb(181,160,255))));

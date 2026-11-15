@@ -2198,6 +2198,8 @@ fn live_model_library_selection_and_reload() {
 #[test]
 #[ignore = "explicit release-mode synthetic timing; no server, credentials or model calls"]
 fn transcript_render_timing() {
+    // More samples for profiling: CONTROL_TIMING_ROUNDS=2000.
+    let rounds = std::env::var("CONTROL_TIMING_ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(9);
     use std::{hint::black_box, time::Instant};
     for (messages, pending) in [(10, 0), (200, 10), (1000, 50)] {
         let app = super::App {
@@ -2210,7 +2212,7 @@ fn transcript_render_timing() {
             ..Default::default()
         };
         let mut samples = Vec::new();
-        for _ in 0..9 {
+        for _ in 0..rounds {
             let start = Instant::now();
             for _ in 0..20 {
                 black_box(app.transcript());
@@ -2218,6 +2220,6 @@ fn transcript_render_timing() {
             samples.push(start.elapsed().as_nanos() / 20);
         }
         samples.sort_unstable();
-        println!("{}", json!({"workload":"tui_transcript","messages":messages,"pending_each":pending,"median_ns":samples[4],"min_ns":samples[0],"lines":app.transcript().lines.len()}));
+        println!("{}", json!({"workload":"tui_transcript","messages":messages,"pending_each":pending,"median_ns":samples[samples.len() / 2],"min_ns":samples[0],"lines":app.transcript().lines.len()}));
     }
 }

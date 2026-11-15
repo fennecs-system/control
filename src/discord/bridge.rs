@@ -685,13 +685,13 @@ impl Bridge {
                     continue;
                 }
                 for &(user, channel) in &recipients {
-                    if operator.ledger.sent(user, chat, pending.kind, &pending.id) {
+                    if operator.ledger.sent(user, chat, pending.kind, pending.id) {
                         continue;
                     }
-                    let receipt = Ledger::receipt(user, chat, pending.kind, &pending.id);
+                    let receipt = Ledger::receipt(user, chat, pending.kind, pending.id);
                     match self.send(channel, &routing::text(title, &link, &pending), Some(&nonce(&receipt))) {
                         Ok(Some(message)) => {
-                            operator.ledger.record(Notice { user, channel, message, chat: chat.into(), kind: pending.kind, id: pending.id.clone(), loopback: pending.loopback });
+                            operator.ledger.record(Notice { user, channel, message, chat: chat.into(), kind: pending.kind, id: pending.id.into(), loopback: pending.loopback });
                             let saved = serde_json::to_vec(&operator.ledger).map_err(|_| "Could not encode operator routing.")
                                 .and_then(|bytes| checkpoint(config::state("discord-operator.json")?, &bytes));
                             if let Err(message) = saved { eprintln!("{message}"); }

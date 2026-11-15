@@ -209,6 +209,32 @@ DMs and replies with links to the local chat. Server-channel messages are never
 requested or processed. The bot and user may need a shared server and compatible
 Discord privacy settings for DMs to work.
 
+### Operator requests away from the keyboard
+
+Architect identities also receive operator requests from every chat on the
+node, not only the chats they started over Discord: agent design questions, bot
+requests and port approvals. Reply to a request's message (an option number or
+direction for a question, `allow`/`deny` for a bot, `allow`/`allow --loopback`/
+`deny` for a port), or send the command it shows. The bridge decides it through
+the same operator interface as `control tui` (`control.requests.list`,
+`control.chat.send` and the port decision form), using this node's local
+operator session, so the server rechecks the request is still pending and a
+duplicate reply is refused. User-role identities keep the DM-only behaviour.
+Each request is sent once per recipient; `discord-operator.json` in the state
+directory maps notification messages to their chat and request. The bridge
+re-reads requests only when the server's change hints move the decision
+revisions in `control.chats.list`, as the TUI does.
+
+Optional `operator` settings in `discord-access.json` narrow this:
+
+```json
+{"channel_id":null,"principals":[],
+ "operator":{"enabled":true,"kinds":["question","bot","port"],"chats":[]}}
+```
+
+`chats` lists top-level chat IDs to forward (empty forwards all); set
+`enabled` to false to keep architects DM-only.
+
 If delivery fails, run `control discord --diagnose`. To inspect server role and
 channel permissions without reading messages, use
 `control discord --audit-server-permissions`. A zero-permission invite can still
