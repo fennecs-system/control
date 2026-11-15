@@ -523,6 +523,22 @@ fn completing_commands_only_edits_the_draft_and_never_changes_the_conversation()
     assert_eq!(command_line("/con").spans[0].style.fg, Some(Color::Rgb(181, 160, 255)));
 }
 #[test]
+fn composer_marks_known_and_unknown_use_lenses() {
+    let catalog = lens_input::Catalog::from_list(&json!([{"id":"evidence"},{"id":"swarm"}]));
+    let line = composer_line("/use swarm, typo evidence", &catalog);
+    let spans: Vec<_> = line.spans.iter().map(|span| (span.content.as_ref(), span.style)).collect();
+    assert_eq!(spans, vec![
+        ("/use", COMMAND_STYLE), (" ", Style::default()), ("swarm", LENS_STYLE), (", ", Style::default()),
+        ("typo", UNKNOWN_LENS_STYLE), (" ", Style::default()), ("evidence", LENS_STYLE),
+    ]);
+    assert_eq!(line.to_string(), "/use swarm, typo evidence");
+    // Without a library the draft keeps plain command highlighting.
+    let plain = composer_line("/use swarm", &lens_input::Catalog::Unavailable);
+    assert_eq!(plain.spans.len(), 2);
+    assert_eq!(plain.spans[1].style, Style::default());
+    assert_eq!(composer_line("", &catalog).to_string(), "");
+}
+#[test]
 #[ignore = "requires isolated control-bench-qa server with benchmark worker image; no model calls"]
 fn live_rust_benchmarks_use_mcp_and_compare_html_escaping() {
     let directory = crate::config::directory().unwrap();
@@ -1527,12 +1543,12 @@ fn live_tui_lens_commands() {
     let server = std::env::var("CONTROL_QA_URL").expect("Use an isolated server");
     let mut hive = Hive::connect(&server).unwrap();
     let mut app = App {
-        input: "/use missing-lens".into(),
+        input: "/use engineering, missing-lens".into(),
         ..App::default()
     };
-    assert!(app.submit(&mut hive).is_err());
+    assert!(app.submit(&mut hive).unwrap_err().to_string().contains("Unknown lens: missing-lens."));
     assert!(app.active.is_empty());
-    app.input = "/use engineering evidence".into();
+    app.input = "/use engineering, evidence".into();
     app.submit(&mut hive).unwrap();
     assert_eq!(app.detail["lenses"], json!(["engineering", "evidence"]));
     app.input = "/lenses".into();

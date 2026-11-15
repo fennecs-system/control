@@ -7,7 +7,7 @@ use crossterm::{
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Paragraph, Wrap},
     Terminal,
@@ -27,13 +27,34 @@ use std::fs;
 use control_context::commands;
 mod command_menu;
 mod history;
+mod lens_input;
 
-fn command_line(text: &str) -> Line<'static> {
-    if let Some(highlight) = command_menu::highlight(text) {
-        Line::from(vec![Span::styled(text[highlight.clone()].to_owned(), Style::default().fg(Color::Rgb(181, 160, 255))), Span::raw(text[highlight.end..].to_owned())])
-    } else {
-        Line::from(text.to_owned())
+const COMMAND_STYLE: Style = Style::new().fg(Color::Rgb(181, 160, 255));
+/// Known lenses render as chips; unknown names use the error colour before submission.
+const LENS_STYLE: Style = Style::new().fg(Color::Rgb(12, 13, 16)).bg(Color::Rgb(181, 160, 255));
+const UNKNOWN_LENS_STYLE: Style = Style::new().fg(Color::Rgb(237, 139, 155)).add_modifier(Modifier::CROSSED_OUT);
+
+/// Style ordered, non-overlapping byte ranges of `text`; a range overlapping an earlier one is ignored.
+fn marked_line<'a>(text: &'a str, marks: impl IntoIterator<Item = (std::ops::Range<usize>, Style)>) -> Line<'a> {
+    let (mut spans, mut at) = (Vec::new(), 0);
+    for (range, style) in marks {
+        if range.start < at { continue; }
+        if range.start > at { spans.push(Span::raw(&text[at..range.start])); }
+        spans.push(Span::styled(&text[range.clone()], style));
+        at = range.end;
     }
+    if at < text.len() || spans.is_empty() { spans.push(Span::raw(&text[at..])); }
+    Line::from(spans)
+}
+fn command_line(text: &str) -> Line<'static> {
+    let line = marked_line(text, command_menu::highlight(text).map(|range| (range, COMMAND_STYLE)));
+    Line::from(line.spans.into_iter().map(|span| Span::styled(span.content.into_owned(), span.style)).collect::<Vec<_>>())
+}
+/// Draft rendering: command highlighting plus live `/use` lens validity.
+fn composer_line<'a>(text: &'a str, lenses: &lens_input::Catalog) -> Line<'a> {
+    let names = lenses.known().and_then(|ids| lens_input::highlight(text, |id| ids.contains(id))).into_iter().flatten();
+    marked_line(text, command_menu::highlight(text).map(|range| (range, COMMAND_STYLE)).into_iter()
+        .chain(names.map(|(range, valid)| (range, if valid { LENS_STYLE } else { UNKNOWN_LENS_STYLE }))))
 }
 use crate::client::Hive;
 fn failure(message:impl std::fmt::Display)->io::Error {io::Error::other(message.to_string())}
@@ -52,6 +73,7 @@ struct App {
     active: String,
     detail: Value,
     input: String,
+    lenses: lens_input::Catalog,
     status: String,
     scroll: usize,
 }
@@ -156,6 +178,14 @@ impl App {
     fn input_changed(&mut self) {
         self.command_selection = 0;
         self.commands_hidden = false;
+        // Each `/use` draft reads the library once, so lens edits elsewhere show up.
+        if !lens_input::is_use(&self.input) { self.lenses = lens_input::Catalog::Unloaded; }
+    }
+    /// Fetch lens IDs for live `/use` highlighting; failure leaves names unstyled.
+    fn load_lenses(&mut self, hive: &mut Hive) -> bool {
+        if !matches!(self.lenses, lens_input::Catalog::Unloaded) || !lens_input::is_use(&self.input) { return false; }
+        self.lenses = hive.tool("control.lenses.list", json!({})).map_or(lens_input::Catalog::Unavailable, |list| lens_input::Catalog::from_list(&list));
+        true
     }
     fn refresh(&mut self, hive: &mut Hive) -> io::Result<()> {
         self.chats = hive
@@ -282,9 +312,15 @@ impl App {
                 self.inspector=Some(("Next-message context preview".into(),serde_json::to_string_pretty(&resolved).map_err(|_|failure("Could not display context."))?));self.scroll=0;self.follow=false;self.status="Live library preview; existing runs retain their captured snapshots. /chat to return.".into();
             }
             "/chat"=>{self.inspector=None;self.follow=true;self.scroll=usize::MAX;}
-            _ if text.starts_with("/use ")=>{
-                let names=text[5..].split(|c:char|c.is_whitespace()||c==',').filter(|s|!s.is_empty()).collect::<Vec<_>>();
-                let lenses=if names==["none"]{Vec::new()}else{names};
+            _ if lens_input::parse(&text).is_some()=>{
+                // Nothing selected is not a command: keep the draft and change nothing.
+                if lens_input::names(&text).is_some_and(|names|names.is_empty()) {return Ok(false);}
+                let lenses=lens_input::parse(&text).unwrap_or_default();
+                // Name every unknown lens against the current library; the server applies the list atomically.
+                self.lenses=lens_input::Catalog::from_list(&hive.tool("control.lenses.list",json!({}))?);
+                let ids=self.lenses.known().ok_or_else(||failure("Invalid lens library response."))?;
+                let unknown=lens_input::unknown(&lenses,|id|ids.contains(id));
+                if !unknown.is_empty() {return Err(failure(format!("Unknown {}: {}. Nothing changed; /lenses lists the library.",if unknown.len()==1{"lens"}else{"lenses"},unknown.join(", "))));}
                 // Resolve before creating a conversation: invalid input has no side effects.
                 hive.tool("control.lenses.resolve",json!({"lenses":lenses}))?;
                 if self.active.is_empty(){self.new_chat(hive)?;}
@@ -564,6 +600,7 @@ pub fn run() -> io::Result<()> {
     let mut updates = hive.updates()?;
     let mut dirty = true;
     loop {
+        if app.load_lenses(&mut hive) { dirty = true; }
         if dirty {
             let matches = app.command_matches();
             let selection = app.command_selection.min(matches.len().saturating_sub(1));
@@ -635,7 +672,7 @@ pub fn run() -> io::Result<()> {
                                 if i == 0 { "> " } else { "  " },
                                 Style::default().fg(Color::Rgb(181, 160, 255)),
                             )];
-                        spans.extend(command_line(line).spans);
+                        spans.extend(composer_line(line, &app.lenses).spans);
                         Line::from(spans)
                     })
                     .collect();

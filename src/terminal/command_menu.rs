@@ -20,7 +20,7 @@ const LOCAL: &[Entry] = &[
     Entry { text: "/resume", usage: "/resume [ID]", description: "Choose or resume a conversation" },
     Entry { text: "/new", usage: "/new", description: "Start a fresh conversation" },
     Entry { text: "/lenses", usage: "/lenses", description: "Browse and select context lenses" },
-    Entry { text: "/use", usage: "/use ID ID | /use none", description: "Set lenses for future messages" },
+    Entry { text: "/use", usage: "/use ID ID | /use ID, ID | /use none", description: "Set lenses for future messages" },
     Entry { text: "/trust", usage: "/trust [REQUEST]", description: "Approve the folder request displayed in this chat" },
     Entry { text: "/port allow", usage: "/port allow ID [--loopback]", description: "Approve the exact displayed port request" },
     Entry { text: "/port deny", usage: "/port deny ID", description: "Deny a port request" },
