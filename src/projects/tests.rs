@@ -486,7 +486,7 @@ fn repeated_folder_requests_keep_message_provenance_and_replace_panel_approval()
     assert!(!rendered.contains("Synthetic import failure"));
     // Old state still binds a request to its matching command, not later chat.
     state.chats[0].project.as_mut().unwrap().message_index = None;
-    state.chats[0].messages.push(crate::chat::Message {
+    state.chats[0].messages.push(crate::chat::Message { speaker: Default::default(),
         text: "Later message".into(),
         run_id: None,
         reply: "Later response".into(),

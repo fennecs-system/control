@@ -49,7 +49,7 @@ fn fixture(messages: usize, unrelated: usize) -> State {
             ..Default::default()
         });
         if index < messages {
-            state.chats[0].messages.push(chat::Message {
+            state.chats[0].messages.push(chat::Message { speaker: Default::default(),
                 text: format!("Question {index}: <&> λ"),
                 run_id: Some(run.id.clone()),
                 reply: String::new(),

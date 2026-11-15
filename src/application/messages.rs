@@ -427,7 +427,7 @@ pub(crate) fn plan(
             queued.resource_grants.push(grant);
         }
     }
-    let message = Message {
+    let message = Message { speaker: Default::default(),
         text: format!("{} from {sender}\n{text}", if advisor { "Advisor note" } else { "Message" }),
         run_id: Some(id.clone()),
         reply: String::new(),

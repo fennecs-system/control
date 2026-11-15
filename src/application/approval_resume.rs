@@ -4,6 +4,12 @@ use super::runs::Run;
 use control_context::agent_policy::{MessageSpeaker, RunKind};
 use super::conversations::{Message, Session};
 
+/// Chat note headings for operator decisions. Notes stored before messages
+/// recorded a speaker are recognised by these exact headings.
+pub(crate) const PORT_DECISIONS: &str = "Port decisions";
+pub(crate) const BOT_DECISIONS: &str = "Bot decisions";
+pub(crate) const HEADINGS: [&str; 2] = [PORT_DECISIONS, BOT_DECISIONS];
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Outcome {
     /// The chat is busy or there is no capacity; try again later.
@@ -32,7 +38,8 @@ pub(crate) fn record(edit: Edit<'_>, chat: &str, run: Option<Run>, text: String)
         *edit.notice = "Run queued.".into();
     }
     if let Some(session) = edit.chats.iter_mut().find(|session| session.id == chat) {
-        session.messages.push(Message { text, run_id: run_id.clone(), reply: String::new() });
+        // A Control notice, never operator input, with or without a continuation.
+        session.messages.push(Message::notice(text, run_id.clone()));
         session.revision = session.revision.saturating_add(1);
     }
     run_id.map_or(Outcome::Noted, Outcome::Resumed)

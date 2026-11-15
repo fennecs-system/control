@@ -381,7 +381,7 @@ fn materialize(state: &mut State, index: usize, batch_index: usize) -> Result<()
             .last_mut()
             .unwrap()
             .messages
-            .push(chat::Message {
+            .push(chat::Message { speaker: Default::default(),
                 text: objective,
                 run_id: Some(child_run.clone()),
                 reply: String::new(),

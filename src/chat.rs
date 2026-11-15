@@ -377,14 +377,14 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
     if let Some(option)=commands::tail(text.trim(),Kind::Model) {
         let reply=crate::providers::selection::command(state,id,option)?;
         let session=state.chats.iter_mut().find(|c|c.id==id).ok_or("Chat not found.")?;
-        session.messages.push(Message{text:text.trim().into(),run_id:None,reply});
+        session.messages.push(Message { speaker: Default::default(), text:text.trim().into(),run_id:None,reply});
         session.revision=session.revision.saturating_add(1);
         return Ok(());
     }
     if let Some(option)=commands::tail(text.trim(),Kind::Bot) {
         let reply=crate::bots::command(state,id,option)?;
         let session=state.chats.iter_mut().find(|session|session.id==id).unwrap();
-        session.messages.push(Message{text:text.trim().into(),run_id:None,reply:reply.into()});
+        session.messages.push(Message { speaker: Default::default(), text:text.trim().into(),run_id:None,reply:reply.into()});
         session.revision=session.revision.saturating_add(1);
         return Ok(());
     }
@@ -393,14 +393,14 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
         if crate::bots::defined(state,id) {return Err("This chat runs a bot, which owns its room inbox. Use /bot off first.");}
         let reply=crate::rooms::listen(state,id,enabled)?;
         let session=state.chats.iter_mut().find(|session|session.id==id).unwrap();
-        session.messages.push(Message{text:text.trim().into(),run_id:None,reply:reply.into()});
+        session.messages.push(Message { speaker: Default::default(), text:text.trim().into(),run_id:None,reply:reply.into()});
         session.revision=session.revision.saturating_add(1);
         return Ok(());
     }
     if let Some(option)=commands::tail(text.trim(),Kind::Room) {
         let reply=attach_room(state,id,option.trim())?;
         let session=state.chats.iter_mut().find(|session|session.id==id).unwrap();
-        session.messages.push(Message{text:text.trim().into(),run_id:None,reply});
+        session.messages.push(Message { speaker: Default::default(), text:text.trim().into(),run_id:None,reply});
         session.revision=session.revision.saturating_add(1);
         return Ok(());
     }
@@ -410,7 +410,7 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
             crate::projects::request_named(state,id,path,Some(name))?;
         }else{crate::projects::request(state,id,path)?;}
         let session = state.chats.iter_mut().find(|s| s.id == id).unwrap();
-        session.messages.push(Message { text: text.trim().into(), run_id: None, reply: format!("Review and approve folder access: /chat/{id}/project") });
+        session.messages.push(Message { speaker: Default::default(), text: text.trim().into(), run_id: None, reply: format!("Review and approve folder access: /chat/{id}/project") });
         session.project.as_mut().unwrap().message_index=Some(session.messages.len()-1);
         return Ok(());
     }
@@ -437,7 +437,7 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
             }
             let bots = crate::bots::stop_all(state, &chats);
             let session = state.chats.iter_mut().find(|s| s.id == id).unwrap();
-            session.messages.push(Message {
+            session.messages.push(Message { speaker: Default::default(),
                 text: text.trim().into(), run_id: None,
                 reply: format!("Cancelled {} run(s) and stopped {bots} bot(s) across {} chat(s). Services keep running; stop them on the services page.", runs.len(), chats.len()),
             });
@@ -454,7 +454,7 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
         crate::lifecycle::request_cancel(&mut state.runtime, &run_id, &actor)?;
         let stopping = state.runtime.runs.iter().any(|run| run.id == run_id && run.status == "cancelling");
         let session = state.chats.iter_mut().find(|s| s.id == id).unwrap();
-        session.messages.push(Message {
+        session.messages.push(Message { speaker: Default::default(),
             text: text.trim().into(), run_id: None,
             reply: if stopping { "Stopping the current run…" } else { "Pending run cancelled." }.into(),
         });
@@ -467,14 +467,14 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
         }
         let child = fork(state, id, question.trim(), source)?;
         let session = state.chats.iter_mut().find(|s| s.id == id).unwrap();
-        session.messages.push(Message { text: text.trim().into(), run_id: None, reply: format!("Agent conversation: /chat/{child}") });
+        session.messages.push(Message { speaker: Default::default(), text: text.trim().into(), run_id: None, reply: format!("Agent conversation: /chat/{child}") });
         session.revision = session.revision.saturating_add(1);
         return Ok(());
     }
     if let Some(objective) = commands::tail(text.trim(), Kind::Spawn) {
         let child = fork(state, id, objective, source)?;
         let session = state.chats.iter_mut().find(|s| s.id == id).unwrap();
-        session.messages.push(Message { text: text.trim().into(), run_id: None, reply: format!("Agent conversation: /chat/{child}") });
+        session.messages.push(Message { speaker: Default::default(), text: text.trim().into(), run_id: None, reply: format!("Agent conversation: /chat/{child}") });
         session.revision = session.revision.saturating_add(1);
         return Ok(());
     }
@@ -508,7 +508,7 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
         )?;
         let session = &mut state.chats[index];
         session.improve_mode = improve;
-        session.messages.push(Message {
+        session.messages.push(Message { speaker: Default::default(),
             text: text.trim().into(),
             run_id: None,
             reply: if improve {
@@ -583,7 +583,7 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
     if session.messages.is_empty() || session.title == "New chat" {
         session.title = objective.chars().take(60).collect();
     }
-    session.messages.push(Message {
+    session.messages.push(Message { speaker: Default::default(),
         text: text.trim().into(),
         run_id,
         reply: native.unwrap_or_default(),
@@ -696,6 +696,7 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
         let (status, reply) = response_from_run(m,run);
         let mut message = json!({"text":m.text,"reply":reply,"status":status,"run_id":m.run_id,"kind":run.map(|r| &r.kind),"persona":run.and_then(|r|r.persona.as_ref()),"delegation":run.and_then(|r|r.delegation.as_ref()),"question":run.and_then(|r|r.question.as_ref()),"attempts":run.map(|r| crate::history::hydrated(r.chat_id.as_deref(),&r.attempts))});
         if run.is_some_and(|r| r.source.as_str() == "advisor-note") { message["advisor_note"] = json!(true); }
+        if m.is_notice(run) { message["notice"] = json!(true); }
         message
     }).collect::<Vec<_>>(),"pending_questions":pending_questions,"decision_revision":crate::design::decision_revision(state)}),
     )
@@ -832,7 +833,12 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
             html.push_str(&format!("<article class='advisor-note' aria-label='Advisor note'><p class='advisor-note-label'>{} · read-only evidence</p><p class='preserve'>{}</p></article>", escape(label), escape(note)));
             continue;
         }
-        let input = match run.map_or(control_context::agent_policy::MessageSpeaker::User, |r| r.kind.speaker()) {
+        // A Control notice without a run (operator decisions): one status line.
+        if message.is_notice(run) {
+            html.push_str(&format!("<p class='message-status preserve' aria-label='Control notice'>{}</p>", escape(&control_context::agent_policy::notice_line(&message.text))));
+            continue;
+        }
+        let input = match message.speaker(run) {
             control_context::agent_policy::MessageSpeaker::User => format!("<article class='user-message' aria-label='You'><p class='preserve'>{}</p></article>", command_text(&message.text)),
             control_context::agent_policy::MessageSpeaker::Control => format!("<p class='message-status' aria-label='Control update'>{}</p>", escape(&message.text)),
         };

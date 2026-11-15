@@ -64,7 +64,7 @@ impl<'a> Entry<'a> {
         crate::chat::response_from_run(self.message, self.run)
     }
     pub fn speaker(&self) -> &'static str {
-        match self.run.map_or(control_context::agent_policy::MessageSpeaker::User, |r| r.kind.speaker()) {
+        match self.message.speaker(self.run) {
             control_context::agent_policy::MessageSpeaker::User => "User",
             control_context::agent_policy::MessageSpeaker::Control => "Control event",
         }
@@ -72,6 +72,9 @@ impl<'a> Entry<'a> {
     /// The entry as prompt history shows it.
     pub fn render(&self) -> String {
         if self.run.is_none() && control_context::commands::tail(self.message.text.trim(),control_context::commands::Kind::Model).is_some() {return String::new();}
+        // A Control notice is evidence of what happened, not operator input, and
+        // has no reply of its own.
+        if self.message.is_notice(self.run) {return format!("{}: {}\n", self.speaker(), self.message.text);}
         if self.task_view {
             use control_context::agent_policy::PromptRole;
             if let Some(run) = self.run.filter(|run| run.kind.prompt_role() == PromptRole::Wake) {

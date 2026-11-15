@@ -297,7 +297,7 @@ pub(super) fn reconcile(
             .unwrap();
         let revision = session.revision;
         let messages = session.messages.len();
-        session.messages.push(crate::chat::Message {
+        session.messages.push(crate::chat::Message { speaker: Default::default(),
             text: format!("Room #{room} updated"),
             run_id: Some(next),
             reply: String::new(),
