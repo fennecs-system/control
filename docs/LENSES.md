@@ -113,8 +113,14 @@ the claim for the shared deliverable. Marking yourself blocked on a peer is for
 genuine dependencies, not convenience. Check that a dependency's producer
 can act and is not waiting on you. If it cannot act, coordinate a handoff of
 ownership or do independent authorized work; elapsed time alone does not justify
-duplicating healthy work. When nobody can unblock the goal, ask the operator
-with options and apply standing guidance to similar authorized steps. Assign
+duplicating healthy work. When nobody can unblock the goal, or a worker needs the
+operator's approval to proceed, ask through the decision path
+(`control_design_ask`) with options and apply standing guidance to similar
+authorized steps. A room post or note awaiting direction is not a question, and
+nobody will answer it. Coordination revision 9 added that distinction after a
+worker announced a team-disrupting shared-server restart in the room as "pending
+direction" and waited: nothing reached the operator, and its claim still read
+working, so no blocked or advisor signal fired. Assign
 ongoing shared services to workers that peers can contact directly, rather than
 making the steering chat an operational dependency.
 
