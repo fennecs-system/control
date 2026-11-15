@@ -140,3 +140,15 @@ fn encoded_maximum_chat_messages_fit_their_transport_limits() {
     assert_eq!(body_limit("/lenses/save"), 512 * 1024);
     assert_eq!(body_limit("/chat/invalid/path/messages"), 32768);
 }
+#[test]
+fn only_the_bots_page_loads_the_client_for_its_canvas() {
+    let state = State::default();
+    let (page, policy) = public_page(&state, &fields("view=agents"), "none");
+    assert_eq!(policy, control_http::Policy::Client);
+    assert_eq!(page.matches("/tool-window/chat-bootstrap.js").count(), 1);
+    for query in ["", "view=hub", "view=rooms"] {
+        let (page, policy) = public_page(&state, &fields(query), "none");
+        assert_eq!(policy, control_http::Policy::Page, "{query}");
+        assert!(!page.contains("<script"), "{query}");
+    }
+}

@@ -194,6 +194,16 @@ fn public_render(state: &State, query: &HashMap<String, String>, lens: &str) -> 
     }
     render(state, view, lens, channel)
 }
+/// `GET /` with its response policy. The Bots page's process tree is a
+/// pan/zoom canvas run by the Rust/WASM client; other views run no script.
+fn public_page(state: &State, query: &HashMap<String, String>, lens: &str) -> (String, control_http::Policy) {
+    let page = public_render(state, query, lens);
+    if query.get("view").map(String::as_str) == Some("agents") {
+        (web_assets::with_client(&page), control_http::Policy::Client)
+    } else {
+        (page, control_http::Policy::Page)
+    }
+}
 /// `/?view=session` predates `/chat/{id}`; send it to the page that renders chat state.
 fn legacy_session_location(state: &State, query: &HashMap<String, String>) -> Option<String> {
     (query.get("view")? == "session").then(|| {
@@ -399,6 +409,7 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         ) {
             return;
         }
+        let mut policy = control_http::Policy::Page;
         let (status, mime, body, extra) = if method == "POST" {
             let f = fields(&String::from_utf8_lossy(
                 &data[header_end..header_end + length],
@@ -459,12 +470,9 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         } else if let Some(location) = (path == "/").then(|| legacy_session_location(state, &query)).flatten() {
             ("303 See Other", "text/plain", String::new(), format!("Location: {location}\r\n"))
         } else if path == "/" {
-            (
-                "200 OK",
-                "text/html; charset=utf-8",
-                public_render(state, &query, lens),
-                String::new(),
-            )
+            let page;
+            (page, policy) = public_page(state, &query, lens);
+            ("200 OK", "text/html; charset=utf-8", page, String::new())
         } else {
             (
                 "404 Not Found",
@@ -478,7 +486,7 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         } else {
             String::new()
         };
-        let _ = control_http::respond(stream, status, mime, body.as_bytes(), &format!("{extra}{preference}"), control_http::Policy::Page);
+        let _ = control_http::respond(stream, status, mime, body.as_bytes(), &format!("{extra}{preference}"), policy);
     });
 }
 

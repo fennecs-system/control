@@ -95,6 +95,14 @@ fn the_tree_shows_bots_services_and_processes_of_active_task_trees() {
     assert!(html.contains("<svg") && html.contains("pt-steering") && html.contains("pt-agent"));
     assert!(html.contains("Run a &lt;civilisation&gt;") && !html.contains("<civilisation>"));
     assert!(html.contains(&format!("href='/chat/{worker}'")));
+    // A canvas the client pans and zooms: the viewBox is the drawing's bounds
+    // (a parent over one child, plus the stroke margin) and nothing fixes its size.
+    assert!(html.contains("<div class='process-tree' role='region' aria-label='Process tree' tabindex='0' data-canvas>"));
+    let svg = &html[html.find("<svg").unwrap()..];
+    let svg = &svg[..svg.find('>').unwrap()];
+    assert!(svg.contains(&format!("viewBox='-2 -2 {:.0} {:.0}'", WIDTH + 4.0, 2.0 * HEIGHT + V_GAP + 4.0)), "{svg}");
+    assert!(!svg.contains("width=") && !svg.contains("height="), "the canvas, not the drawing, sets the size");
+    assert!(html.contains("<div class='canvas-controls' hidden>") && html.contains("data-zoom='fit'"), "controls appear once the client runs");
     state.runtime.runs.iter_mut().for_each(|run| run.status = "completed".into());
     assert!(render(&state).is_none(), "trees without bots, services or active turns are omitted");
 }
