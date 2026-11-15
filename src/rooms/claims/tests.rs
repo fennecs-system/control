@@ -142,3 +142,13 @@ fn rule_messages_state_the_enforced_limits() {
     assert!(KEY_RULE.contains(&format!("1–{MAX_KEY} ")));
     assert!(NOTE_RULE.contains(&format!(" {MAX_NOTE} ")));
 }
+
+#[test]
+fn an_operator_release_ends_the_blocked_state() {
+    let (mut state, a, _) = setup();
+    let revision = claim(&mut state, &a, json!({"key":"house","action":"acquire","status":"blocked","blocked_on":"wood"}))["claim"]["revision"].as_u64().unwrap();
+    assert_eq!(find(&state, "general", "house").unwrap().blocked_at, revision);
+    operator_release(&mut state, "general", "house", revision).unwrap();
+    let released = find(&state, "general", "house").unwrap();
+    assert_eq!((released.status, released.blocked_on.as_deref(), released.blocked_at), (Status::Released, None, 0));
+}

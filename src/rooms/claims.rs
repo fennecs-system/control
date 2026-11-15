@@ -391,7 +391,7 @@ pub(crate) fn operator_release(state: &mut State, room: &str, key: &str, revisio
     state.collective.claim_seq += 1;
     let revision = state.collective.claim_seq;
     let claim = &mut state.collective.claims[index];
-    (claim.status, claim.blocked_on, claim.revision) = (Status::Released, None, revision);
+    (claim.status, claim.blocked_on, claim.blocked_at, claim.revision) = (Status::Released, None, 0, revision);
     claim.note.clear();
     Ok(Resolved { room: room.to_owned(), key: key.to_owned(), incarnation: claim.incarnation, revision, outcome: Outcome::Released, by: None })
 }
