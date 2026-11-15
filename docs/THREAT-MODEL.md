@@ -15,7 +15,8 @@ arbitrary downloaded code safe.
   requests cannot supply operator identity. An architect identity, the role the
   local operator holds, may decide operator requests over Discord; the bridge
   then uses the local operator session for exactly the commands the TUI sends,
-  and only for replies to its own notifications in that architect's bound DM. Opening a host directory records an
+  only when that channel is enabled on the web Connections page, and only for
+  messages in that architect's bound DM. Opening a host directory records an
   intent; a separate authenticated operator action approves an isolated import.
   Imports skip symlinks without following targets, exclude known credential/generated paths and isolate
   Git metadata from the original checkout. Lenses compose context and tools;

@@ -7,25 +7,12 @@ fn marks(text: &str) -> Option<Vec<(&str, bool)>> {
 }
 
 #[test]
-fn parses_single_space_and_comma_lists() {
-    assert_eq!(parse("/use alpha"), Some(vec!["alpha"]));
-    assert_eq!(parse("/use alpha beta  gamma"), Some(vec!["alpha", "beta", "gamma"]));
-    assert_eq!(parse("/use alpha,beta"), Some(vec!["alpha", "beta"]));
-    assert_eq!(parse("/use alpha, beta ,gamma,"), Some(vec!["alpha", "beta", "gamma"]));
-    assert_eq!(parse("/use none"), Some(Vec::new()));
-    assert_eq!(parse("/use none alpha"), Some(vec!["none", "alpha"]));
-    assert_eq!(names("/use , "), Some(Vec::new()));
-    assert_eq!(parse("/user alpha"), None);
-    assert_eq!(parse("/use"), None);
-    assert_eq!(parse("use alpha"), None);
+fn draft_detection_and_ranges_follow_the_shared_grammar() {
     assert!(is_use("/use ") && !is_use("/use") && !is_use("/users"));
-}
-
-#[test]
-fn reports_unknown_names_once_in_input_order() {
-    let names = parse("/use zeta alpha typo, zeta").unwrap();
-    assert_eq!(unknown(&names, library), vec!["zeta", "typo"]);
-    assert!(unknown(&parse("/use alpha,beta").unwrap(), library).is_empty());
+    let text = "/use alpha, beta ,gamma,";
+    assert_eq!(names(text).unwrap().into_iter().map(|range| &text[range]).collect::<Vec<_>>(), ["alpha", "beta", "gamma"]);
+    assert_eq!(names("/use , "), Some(Vec::new()));
+    assert_eq!(names("/user alpha"), None);
 }
 
 #[test]

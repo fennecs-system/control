@@ -46,3 +46,33 @@ fn finished_replies_are_delivered_in_order_once() {
     assert_eq!(super::replies(&waiting, 0).1, 0, "a waiting question is an operator request, not a reply");
     assert_eq!(super::replies(&detail, 99).1, 5, "a shorter history clamps the cursor");
 }
+
+#[test]
+fn use_takes_the_tuis_lens_list() {
+    assert_eq!(navigation("/use engineering evidence"), Some(Navigation::Use(Some(vec!["engineering".into(), "evidence".into()]))));
+    assert_eq!(navigation("/use a,b , c"), Some(Navigation::Use(Some(vec!["a".into(), "b".into(), "c".into()]))));
+    assert_eq!(navigation("/use none"), Some(Navigation::Use(Some(vec![]))));
+    assert_eq!(navigation("/use  "), Some(Navigation::Use(None)));
+    assert_eq!(lenses(""), None);
+}
+
+#[test]
+fn the_shared_use_grammar_parses_lists_clears_and_ignores_empty_selections() {
+    assert_eq!(lenses(" alpha"), Some(vec!["alpha"]));
+    assert_eq!(lenses(" alpha beta  gamma"), Some(vec!["alpha", "beta", "gamma"]));
+    assert_eq!(lenses(" alpha, beta ,gamma,"), Some(vec!["alpha", "beta", "gamma"]));
+    assert_eq!(lenses(" none"), Some(Vec::new()));
+    assert_eq!(lenses(" none alpha"), Some(vec!["none", "alpha"]));
+    assert_eq!(lenses(" , "), None, "no names: a no-op, not a clear");
+    assert_eq!(use_arguments("/use"), Some(""));
+    assert_eq!(use_arguments("/user alpha"), None);
+    assert_eq!(use_arguments("use alpha"), None);
+    // Every empty form is the same no-op on every client.
+    for text in ["/use", "/use ", "/use ,", "/use , ,"] {
+        assert_eq!(navigation(text), Some(Navigation::Use(None)), "{text:?}");
+    }
+    assert_eq!(navigation("/use none"), Some(Navigation::Use(Some(vec![]))));
+    let library = |id: &str| matches!(id, "alpha" | "beta" | "gamma");
+    assert_eq!(unknown(&lenses(" zeta alpha typo, zeta").unwrap(), library), vec!["zeta", "typo"]);
+    assert!(unknown(&lenses(" alpha,beta").unwrap(), library).is_empty());
+}

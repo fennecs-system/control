@@ -455,7 +455,7 @@ fn integrations() -> String {
         )
     })
     .collect();
-    format!("<h2>Connections</h2><div class='record'><h3>Local service</h3><p>Running on this laptop</p></div><div class='section-heading'><h3>Agent backends</h3><a href='/?view=providers'>Models &amp; providers ↗</a></div>{backends}<div class='record'><h3>Control MCP</h3><p>Local stdio · <code>control mcp</code></p></div><div class='record'><span class='tag'>{label}</span><h3>Discord · direct messages</h3>{profile}<p class='muted'>Only approved users can chat. DMs are not shared with rooms.</p><a href='/?view=discord-access'>Manage access ↗</a></div>")
+    format!("<h2>Connections</h2><div class='record'><h3>Local service</h3><p>Running on this laptop</p></div><div class='section-heading'><h3>Agent backends</h3><a href='/?view=providers'>Models &amp; providers ↗</a></div>{backends}<div class='record'><h3>Control MCP</h3><p>Local stdio · <code>control mcp</code></p></div><div class='record'><span class='tag'>{label}</span><h3>Discord · direct messages</h3>{profile}<p class='muted'>Only approved users can chat. DMs are not shared with rooms.</p>{}<a href='/?view=discord-access'>Manage access ↗</a></div>", crate::channel_settings::panel())
 }
 
 #[cfg(test)]

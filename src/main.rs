@@ -12,6 +12,7 @@ mod watches;
 #[path = "../tools/browser/main.rs"]
 mod browser;
 mod browser_ui;
+mod channel_settings;
 mod chat;
 mod child;
 mod claude;
@@ -324,6 +325,7 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
     if compaction::http(&mut stream,&state,method,path,query){return;}
     if ports::http(&mut stream, &state, method, path, &data[header_end..header_end + length]) { return; }
     if bots::http(&mut stream, &state, method, path, &data[header_end..header_end + length]) { return; }
+    if channel_settings::http(&mut stream, method, path, &data[header_end..header_end + length]) { return; }
     if services::http(&mut stream, &state, method, path, &data[header_end..header_end + length]) { return; }
     if web_access::http(&mut stream, &state, method, path, &data[header_end..header_end + length]) { return; }
     if github::http(&mut stream,&state,method,path,&data[header_end..header_end+length]) {return;}

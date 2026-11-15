@@ -20,7 +20,7 @@ pub struct Tool {
     pub aliases: &'static str,
     pub mcp_names: &'static [&'static str],
 }
-pub const TOOLS: [Tool; 23] = [
+pub const TOOLS: [Tool; 24] = [
     Tool {
         name: "service.watch", title: "Watches", description: "Program output that wakes bots",
         href: None, aliases: "watch monitor stream stdout events wake tail websocket ssh",
@@ -212,6 +212,17 @@ pub const TOOLS: [Tool; 23] = [
         available: true,
     },
     Tool {
+        name: "channels.operator",
+        title: "Messaging channels",
+        description: "Operator requests and chat steering away from the keyboard · Discord DMs",
+        href: Some("/?view=integrations"),
+        aliases: "discord telegram whatsapp slack notify approvals away mobile",
+        mcp_names: &["control.requests.list"],
+        execution: "local Rust / channel adapter over the operator interface",
+        surface: "messaging service / operator MCP",
+        available: true,
+    },
+    Tool {
         name: "chats.manage",
         title: "Chats",
         description: "Conversations · operator MCP",
@@ -223,7 +234,6 @@ pub const TOOLS: [Tool; 23] = [
             "control.chat.read",
             "control.chat.send",
             "control.chat.lenses",
-            "control.requests.list",
         ],
         execution: "local Rust / chat service",
         surface: "chat / operator MCP",
