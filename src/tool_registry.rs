@@ -21,7 +21,7 @@ pub trait AttemptTools: Sync {
     fn known(&self, name: &str) -> bool;
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value>;
 }
-static ATTEMPT_TOOLS: [&dyn AttemptTools; 10] = [
+static ATTEMPT_TOOLS: [&dyn AttemptTools; 11] = [
     &crate::github::inspection::Tools,
     &crate::compaction::Tools,
     &crate::recovery::Tools,
@@ -32,6 +32,7 @@ static ATTEMPT_TOOLS: [&dyn AttemptTools; 10] = [
     &crate::bots::Tools,
     &crate::agent_message::Tools,
     &crate::watches::Tools,
+    &crate::packages::Tools,
 ];
 pub fn attempt_tools(name: &str) -> Option<&'static dyn AttemptTools> {
     ATTEMPT_TOOLS.iter().copied().find(|tools| tools.known(name))
@@ -94,6 +95,7 @@ pub fn entries() -> &'static [Entry] {
         entries.push(entry(crate::github::operations::definition(true)));
         entries.extend(crate::toolbox::definitions().into_iter().map(entry));
         entries.extend(crate::artifacts::definitions().into_iter().map(entry));
+        entries.extend(crate::packages::definitions().into_iter().map(entry));
         entries.push(entry(browser_definition()));
         let mut names = std::collections::HashSet::new();
         assert!(

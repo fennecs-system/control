@@ -265,6 +265,15 @@ advises. Stopping the advisor (`/bot off`) drops its team snapshot; a later
 advisor reports only facts after its own subscription. Nodes without an
 opted-in advisor do no lifecycle work.
 
+## Tool packages
+
+A lens can also name operator-admitted [tool packages](TOOL-PACKAGES.md), such as
+`mc263-client@1` (pinned) or `mc263-client` (the latest admitted version when a
+message is sent). Runs capture the exact version and commit with the rest of the
+context. Each attempt then gets a private copy at `/workspace/.control-tools/NAME`
+and can read the manifest with `control_package_read`. Runs without such a lens
+see no packages, so a run that should rebuild a tool from scratch leaves it out.
+
 ## Current boundaries
 
 Tool hints contribute to context and catalogue discovery. They do not currently

@@ -1321,6 +1321,13 @@ fn execute(
         crate::github::prepare(attempt, &baseline)
             .map_err(|_|blocked("Could not capture the configured GitHub source baseline; inspect the node binding before retrying."))?;
     }
+    if let Some((state, run)) = bridge {
+        let packages = crate::packages::planned(state, run).map_err(|e| failed(&e.to_string()))?;
+        if !packages.is_empty() {
+            project_operation(bridge, id, "tool-packages", "Copying tool packages", || crate::packages::copy_into(&crate::packages::store()?, &packages, &workspace))
+                .map_err(|error| blocked(&format!("Could not prepare tool packages: {error}")))?;
+        }
+    }
     let absolute =
         fs::canonicalize(&workspace).map_err(|_| failed("Could not resolve worker workspace."))?;
     if attempt.backend == crate::backend::Backend::Claude {

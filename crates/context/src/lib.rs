@@ -7,7 +7,7 @@ pub mod tool_policy;
 pub mod turn_context;
 pub mod working_state;
 pub mod turn_mailbox;
-pub use library::{valid_id, Definition, DocumentInput, LensVersion, Library, Resolved};
+pub use library::{package_reference, valid_id, Definition, DocumentInput, LensVersion, Library, PackageInput, Resolved};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tool {
     pub name: &'static str,
@@ -20,7 +20,7 @@ pub struct Tool {
     pub aliases: &'static str,
     pub mcp_names: &'static [&'static str],
 }
-pub const TOOLS: [Tool; 25] = [
+pub const TOOLS: [Tool; 26] = [
     Tool {
         name: "service.watch", title: "Watches", description: "Program output that wakes bots",
         href: None, aliases: "watch monitor stream stdout events wake tail websocket ssh",
@@ -128,6 +128,17 @@ pub const TOOLS: [Tool; 25] = [
         mcp_names: &["control.knowledge.search", "control.knowledge.read", "control.knowledge.propose", "control_knowledge_search", "control_knowledge_read", "control_knowledge_propose"],
         execution: "local Rust server",
         surface: "MCP / operator review",
+        available: true,
+    },
+    Tool {
+        name: "packages.reuse",
+        title: "Tool packages",
+        description: "Operator-admitted reusable tools · lens opt-in",
+        href: None,
+        aliases: "tool package reuse version client library install",
+        mcp_names: &["control.packages.search", "control.package.read", "control.package.import", "control.package.revoke", "control_packages_search", "control_package_read"],
+        execution: "local Rust / node Git store / per-attempt copy",
+        surface: "lens / worker MCP / operator CLI",
         available: true,
     },
     Tool {

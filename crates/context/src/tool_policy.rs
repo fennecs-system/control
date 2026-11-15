@@ -21,6 +21,7 @@ pub fn after_handoff(name:&str)->bool {
         "control_workspace_status"|"control_watch_status"|"control_watch_events"|
         "control_room_list"|"control_room_read"|"control_room_notifications"|
         "control_knowledge_read"|"control_knowledge_search"|
+        "control_packages_search"|"control_package_read"|
         "control_agent_result"|"control_agent_spawn_status"|"control_github_read")
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,6 +35,7 @@ pub enum Route {
     Github,
     Toolbox,
     Browser,
+    Package,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Bridge {
@@ -81,6 +83,10 @@ policies! {
     "control.artifacts.list" => (Artifacts,false,Read,true),
     "control.artifact.read" => (Artifacts,false,Read,true),
     "control.browser.capture" => (Browser,false,Local,false),
+    "control.packages.search" => (Package,false,Read,true),
+    "control.package.read" => (Package,false,Read,true),
+    "control.package.import" => (Package,true,Hidden,true),
+    "control.package.revoke" => (Package,true,Hidden,true),
 }
 pub fn lookup(name: &str) -> Option<&'static Policy> {
     POLICIES.iter().find(|p| p.name == name)

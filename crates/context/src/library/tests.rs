@@ -267,3 +267,42 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
         assert!(node.definitions.contains(&earlier), "earlier revisions stay for captured runs");
     }
 }
+#[test]
+fn packages_resolve_pinned_or_latest_and_validate_without_admission() {
+    let package = |version: u64| PackageInput {
+        name: "mc263-client".into(),
+        version,
+        commit: format!("{version:040x}"),
+        description: "Client".into(),
+    };
+    let mut library = Library::default();
+    for (id, reference) in [("latest", "mc263-client"), ("pinned", "mc263-client@1"), ("other", "mc263-client@2")] {
+        library.definitions.push(Definition {
+            id: id.into(),
+            name: id.into(),
+            revision: 1,
+            packages: vec![reference.into()],
+            ..Default::default()
+        });
+    }
+    let admitted = [package(1), package(2)];
+    let latest = library.resolve_with(&["latest".into()], &[], &admitted).unwrap();
+    assert_eq!(latest.packages, vec![package(2)]);
+    let pinned = library.resolve_with(&["pinned".into()], &[], &admitted).unwrap();
+    assert_eq!(pinned.packages, vec![package(1)]);
+    // Two lenses naming the same version share one entry; different versions conflict.
+    assert_eq!(library.resolve_with(&["latest".into(), "other".into()], &[], &admitted).unwrap().packages.len(), 1);
+    assert!(library.resolve_with(&["pinned".into(), "other".into()], &[], &admitted).unwrap_err().contains("different versions"));
+    // Revoked or unknown versions are not inputs: pinned fails closed, latest falls back.
+    assert!(library.resolve_with(&["pinned".into()], &[], &[package(2)]).unwrap_err().contains("not admitted"));
+    assert_eq!(library.resolve_with(&["latest".into()], &[], &[package(1)]).unwrap().packages, vec![package(1)]);
+    assert!(library.resolve(&["latest".into()], &[]).is_err());
+    // Library validation checks syntax only, so revocation never blocks other edits.
+    library.validate(&[]).unwrap();
+    library.definitions.push(Definition { id: "bad".into(), name: "Bad".into(), revision: 1, packages: vec!["Bad Name@0".into()], ..Default::default() });
+    assert!(library.validate(&[]).is_err());
+    // Lenses without packages keep their serialized form.
+    assert!(!serde_json::to_string(library.get("engineering").unwrap()).unwrap().contains("packages"));
+    assert!(!serde_json::to_string(&pinned).unwrap().is_empty());
+    assert!(!serde_json::to_string(&library.resolve(&["engineering".into()], &[]).unwrap()).unwrap().contains("packages"));
+}
