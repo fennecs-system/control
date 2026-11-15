@@ -102,8 +102,12 @@ no-change messages out of the steering chat. Changed evidence or repeated lack
 of useful results calls for revisiting the plan. Healthy long-running work can
 still wait on callbacks without a new deadline or forced intervention.
 
-Roles and claims own shared deliverables, not exclusive rights to routine inputs
-or another agent's basic task prerequisites. Check that a dependency's producer
+Roles and claims own shared deliverables, not exclusive rights to routine inputs.
+Wait on a claim only for an output you cannot reasonably produce yourself. If an
+input is quick to make, such as a small command, script, file or basic material
+you could produce in about the time it takes to ask, make it yourself and keep
+the claim for the shared deliverable. Marking yourself blocked on a peer is for
+genuine dependencies, not convenience. Check that a dependency's producer
 can act and is not waiting on you. If it cannot act, coordinate a handoff of
 ownership or do independent authorized work; elapsed time alone does not justify
 duplicating healthy work. When nobody can unblock the goal, ask the operator
@@ -195,7 +199,14 @@ comes from the judge role and the operator's bot approval.
      (`advisor_failure_streak`, default 3; interrupted and cancelled turns
      neither extend nor break a streak), reported once per streak;
    - a watched restart loop was retired after repeated exits;
-   - a claim was abandoned by a lost owner.
+   - a claim was abandoned by a lost owner;
+   - a member's claim became blocked. The fact names the claim it is blocked on
+     (`blocked_on`) with that claim's owner and status (`working`, `blocked`,
+     `done`, `abandoned`, `released` or `unclaimed`). Members blocked on the same
+     claim are summarised in one entry, so several members waiting on one
+     producer read as one bottleneck. A blocked state is reported once per claim
+     incarnation; updates that stay blocked on the same claim do not repeat it,
+     and becoming blocked again after working is a new fact.
 
    A single failed, interrupted or cancelled turn (provider errors included)
    and a single failed watch exit are never facts. Facts coalesce into one
@@ -205,8 +216,11 @@ comes from the judge role and the operator's bot approval.
 4. On waking, the advisor reads the facts and `control_room_read` (participants,
    posts and claims with `owner_idle`/`abandoned` flags). If there is a gap, it
    sends the lead's steering chat one concise note with `control_agent_message`:
-   the evidence and a suggested steering step. It sends nothing when evidence
-   is unchanged.
+   the evidence and a suggested steering step. For blocked members it checks
+   whether the input is one they could quickly make themselves, or several wait
+   on one producer, and suggests an unblocking step: produce the input
+   themselves, reassign the blocking claim, or an alternative. It sends nothing
+   when evidence is unchanged.
 
 The advisor only steers. A note goes only to the lead's steering chat, as
 retained peer evidence with source `advisor-note`, shown as "Advisor note from …"

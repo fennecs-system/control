@@ -173,7 +173,7 @@ fn facts_coalesce_into_one_reason_and_respect_the_advisor_budget() {
     let tester = spawned(&mut state, &root, "Tester");
     state.collective.claim_seq += 1;
     state.collective.claims.push(crate::rooms::claims::Claim { room: "general".into(), key: "build".into(), owner: worker.clone(),
-        status: crate::rooms::claims::Status::Working, blocked_on: None, note: String::new(), revision: 1, incarnation: 1, abandoned: false });
+        status: crate::rooms::claims::Status::Working, blocked_on: None, note: String::new(), revision: 1, incarnation: 1, abandoned: false, blocked_at: 0 });
     let advisor = advisor(&mut state, &root);
     let mut definition = state.bots.supervisor.definitions().find(|d| d.chat.0 == advisor).unwrap().clone();
     definition.budget.turns_per_window = 1;
@@ -302,4 +302,112 @@ fn a_lead_requests_its_judge_as_advisor_and_the_operator_approves_it() {
     assert!(state.bots.advises(&judge));
     let definition = state.bots.supervisor.definitions().find(|d| d.chat.0 == judge).unwrap();
     assert_eq!(definition.sources, [lifecycle::source(&lead)]);
+}
+
+/// Acquires `key` for `chat` in `general`, or updates it to `status`.
+fn claim(state: &mut State, chat: &str, key: &str, status: &str, on: Option<&str>) {
+    let live = crate::rooms::claims::find(state, "general", key).filter(|c| c.status != crate::rooms::claims::Status::Released).map(|c| c.revision);
+    let mut args = match live {
+        None => json!({"key":key,"action":"acquire"}),
+        Some(revision) => json!({"key":key,"action":"update","status":status,"revision":revision,"note":format!("r{revision}")}),
+    };
+    if let Some(on) = on { args["blocked_on"] = json!(on); }
+    let (value, _) = crate::rooms::claims::call(state, chat, "general", &args).unwrap();
+    assert_eq!(value["applied"], true, "{value}");
+}
+fn blocked(on: &str, producer: &str, status: &str, waiting: &[(&str, &str)]) -> lifecycle::Blocked {
+    lifecycle::Blocked { room: "general".into(), on: on.into(), producer: Some(producer.into()), status: status.into(),
+        waiting: waiting.iter().map(|(key, chat)| lifecycle::Waiter { key: (*key).into(), chat: (*chat).into() }).collect() }
+}
+
+#[test]
+fn a_member_becoming_blocked_is_one_fact_per_transition() {
+    let (mut state, root) = fixture();
+    let producer = spawned(&mut state, &root, "Producer");
+    let miner = spawned(&mut state, &root, "Miner");
+    claim(&mut state, &producer, "wood-tools", "working", None);
+    claim(&mut state, &miner, "mine", "working", None);
+    let advisor = advisor(&mut state, &root);
+    reconcile_at(&mut state, 1, ok).unwrap();
+    // working → blocked: one fact naming the claim, its producer and status.
+    claim(&mut state, &miner, "mine", "blocked", Some("wood-tools"));
+    reconcile_at(&mut state, 2, ok).unwrap();
+    let runs = advisor_runs(&state, &advisor);
+    assert_eq!(runs.len(), 1);
+    assert_eq!(facts(runs[0]), [Facts { blocked: vec![blocked("wood-tools", &producer, "working", &[("mine", &miner)])], chats: vec![miner.clone()], ..Facts::default() }]);
+    assert!(runs[0].objective.contains("1 claim(s) newly blocked on general/wood-tools") && runs[0].objective.contains("produce the input themselves"));
+    finish(&mut state, &advisor);
+    // Staying blocked, even with a new note and revision, is the same state.
+    let since = crate::rooms::claims::find(&state, "general", "mine").unwrap().blocked_at;
+    claim(&mut state, &miner, "mine", "blocked", Some("wood-tools"));
+    assert_eq!(crate::rooms::claims::find(&state, "general", "mine").unwrap().blocked_at, since);
+    reconcile_at(&mut state, 40_000, ok).unwrap();
+    assert_eq!(advisor_runs(&state, &advisor).len(), 1, "an unchanged blocked state does not re-fire");
+    // blocked → working → blocked is a new transition, even between passes.
+    claim(&mut state, &miner, "mine", "working", None);
+    claim(&mut state, &miner, "mine", "blocked", Some("wood-tools"));
+    reconcile_at(&mut state, 80_000, ok).unwrap();
+    let runs = advisor_runs(&state, &advisor);
+    assert_eq!(runs.len(), 2);
+    assert_eq!(facts(runs[1])[0].blocked, [blocked("wood-tools", &producer, "working", &[("mine", &miner)])]);
+}
+
+#[test]
+fn members_blocked_on_one_claim_coalesce_into_one_bottleneck() {
+    let (mut state, root) = fixture();
+    let producer = spawned(&mut state, &root, "Producer");
+    let members = ["Miner", "Builder", "Smith", "Scout"].map(|name| spawned(&mut state, &root, name));
+    claim(&mut state, &producer, "wood-tools", "working", None);
+    for (member, key) in members.iter().zip(["mine", "build", "smelt", "scout"]) {
+        claim(&mut state, member, key, "working", None);
+    }
+    let advisor = advisor(&mut state, &root);
+    reconcile_at(&mut state, 1, ok).unwrap();
+    for (member, key) in members.iter().zip(["mine", "build", "smelt"]) {
+        claim(&mut state, member, key, "blocked", Some("wood-tools"));
+    }
+    reconcile_at(&mut state, 2, ok).unwrap();
+    let runs = advisor_runs(&state, &advisor);
+    assert_eq!(runs.len(), 1, "one wake");
+    let observed = facts(runs[0]);
+    assert_eq!(observed[0].blocked, [blocked("wood-tools", &producer, "working", &[("mine", &members[0]), ("build", &members[1]), ("smelt", &members[2])])]);
+    assert!(runs[0].objective.contains("3 claim(s) newly blocked on general/wood-tools (owner"));
+    // A later member blocked during the cooldown merges into the same entry,
+    // with the producer's newer state.
+    finish(&mut state, &advisor);
+    claim(&mut state, &members[3], "scout", "blocked", Some("wood-tools"));
+    claim(&mut state, &producer, "wood-tools", "blocked", Some("mine"));
+    reconcile_at(&mut state, 3, ok).unwrap();
+    claim(&mut state, &members[0], "mine", "working", None);
+    claim(&mut state, &members[0], "mine", "blocked", Some("wood-tools"));
+    reconcile_at(&mut state, 4, ok).unwrap();
+    assert_eq!(advisor_runs(&state, &advisor).len(), 1, "the cooldown holds the facts");
+    reconcile_at(&mut state, 40_000, ok).unwrap();
+    let runs = advisor_runs(&state, &advisor);
+    assert_eq!(runs.len(), 2);
+    let observed = facts(runs[1]);
+    assert_eq!(observed.len(), 1);
+    // The producer now waits on a member's claim too: a circular wait the advisor can see.
+    assert_eq!(observed[0].blocked, [
+        blocked("mine", &members[0], "blocked", &[("wood-tools", &producer)]),
+        blocked("wood-tools", &producer, "blocked", &[("scout", &members[3]), ("mine", &members[0])]),
+    ]);
+}
+
+#[test]
+fn blocked_members_are_not_observed_with_the_lens_off() {
+    let (mut state, root) = fixture();
+    let producer = spawned(&mut state, &root, "Producer");
+    let miner = spawned(&mut state, &root, "Miner");
+    claim(&mut state, &producer, "wood-tools", "working", None);
+    claim(&mut state, &miner, "mine", "working", None);
+    let advisor = advisor(&mut state, &root);
+    reconcile_at(&mut state, 1, ok).unwrap();
+    let before = state.bots.teams[&root].clone();
+    opt_in(&mut state, &root, false);
+    claim(&mut state, &miner, "mine", "blocked", Some("wood-tools"));
+    assert!(lifecycle::observe(&state).is_empty());
+    reconcile_at(&mut state, 2, ok).unwrap();
+    assert!(advisor_runs(&state, &advisor).is_empty());
+    assert_eq!(state.bots.teams[&root], before);
 }

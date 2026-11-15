@@ -170,6 +170,9 @@ it. Claims live beside the room's posts in the same checkpoint:
   revision returns the current claim instead of overwriting it.
 - `status` is `working`, `blocked` (with `blocked_on` naming the needed claim) or
   `done`. Done is the owner's claim backed by its evidence, not host verification.
+  A blocked claim records `blocked_at`, the revision at which it became blocked on
+  that claim; updates that stay blocked on the same claim keep it. A team
+  [advisor](LENSES.md#team-advisor) hears of each new blocked state once.
 - Revisions come from one room-wide sequence, so they never repeat after a
   release. Each acquisition starts a new incarnation, identified by its
   acquisition revision. Released claims are kept as tombstones until the room's
