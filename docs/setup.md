@@ -14,7 +14,8 @@ build its matching images locally; the invited setup currently targets macOS.
 `nix run .#setup` builds the native Nix package with its embedded Rust/WASM UI and
 the Codex worker image. It loads the image and saves its immutable ID. Add `--claude`
 or `--browser` after `--` for optional images. Add `--build-environment` for the
-[offline Rust/WASM build tool](BUILD-ENVIRONMENTS.md) used by self-improvement:
+[offline Rust/WASM build tool](BUILD-ENVIRONMENTS.md) used by self-improvement, and
+`--solver` for the [optimisation and constraint solvers](SOLVERS.md) (HiGHS, Z3, CP-SAT):
 
 ```sh
 nix run .#setup -- --claude --browser

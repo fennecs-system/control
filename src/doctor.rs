@@ -73,6 +73,14 @@ pub fn run() -> io::Result<()> {
         Ok(_) => {}
         Err(error) => check("declared build environment", false, &error.to_string()),
     }
+    match crate::solver::image() {
+        Ok(Some(image)) if engine => match crate::solver::installed(&image) {
+            Ok(solvers) => check(&format!("solver image ({solvers})"), true, ""),
+            Err(error) => check("solver image", false, &error.to_string()),
+        },
+        Ok(_) => {}
+        Err(error) => check("solver image", false, &error.to_string()),
+    }
     let mut runtime = crate::runtime::Runtime::default();
     crate::providers::load_settings(&mut runtime)?;
     // Every backend with a pinned image is checked; the selected one must be complete.
@@ -92,6 +100,7 @@ pub fn run() -> io::Result<()> {
                 crate::backend::Backend::Claude => {
                     "set claude-image-id in the configuration directory to the Nix image digest"
                 }
+                crate::backend::Backend::Local => "local endpoints run no worker image",
             },
         );
         if let (true, Some(image)) = (engine, &image) {
@@ -105,6 +114,7 @@ pub fn run() -> io::Result<()> {
                         .map_err(io::Error::other)
                         .and_then(|node| crate::claude::probe(image, &node, &crate::config::state("claude-check").map_err(io::Error::other)?))
                         .map_err(|_| "the offline Claude tool-isolation probe failed; check the pinned image and container sandbox support"),
+                    crate::backend::Backend::Local => Err("local endpoints run no worker image"),
                 };
                 match probe {
                     Ok(()) => check(&format!("{name}: offline sandbox probe"), true, ""),
@@ -116,6 +126,7 @@ pub fn run() -> io::Result<()> {
             crate::backend::Backend::Codex => crate::worker::credentials_ready(),
             crate::backend::Backend::Claude => crate::claude::credentials_ready()
                 .map_err(|_| "run ./target/release/control claude login; its private login stays outside the checkout"),
+            crate::backend::Backend::Local => Ok(()),
         };
         match credentials {
             Ok(()) => check(&format!("{name}: credential metadata"), true, ""),

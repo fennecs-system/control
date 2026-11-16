@@ -87,6 +87,7 @@ fn environment_image(attempt: &Attempt, environment: &str) -> io::Result<String>
     let image = match environment {
         "worker" => attempt.image.clone().ok_or_else(|| fail("Missing captured worker image"))?,
         "build" => crate::build_environment::image()?.ok_or_else(|| fail("No declared build environment; build/load the Nix build-image and configure build-image-id"))?,
+        "solver" => crate::solver::image()?.ok_or_else(|| fail("No pinned solver image; run nix run .#setup -- --solver to build it and configure solver-image-id"))?,
         _ => return Err(fail("Unknown declared environment")),
     };
     if !crate::runtime::pinned_image(&image) {
@@ -178,7 +179,7 @@ fn start(
         if let Some(job) = attempt.command_jobs.iter().find(|j| j.id == id) { return Ok(job.summary()); }
         environment_image(attempt, &input.environment)?
     };
-    let profile = if input.environment == "build" { crate::worker_profile::Profile::Lite } else { crate::worker_profile::Profile::inspect(&image)? };
+    let profile = if input.environment != "worker" { crate::worker_profile::Profile::Lite } else { crate::worker_profile::Profile::inspect(&image)? };
     let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
     let owner_deadline = state.runtime.runs.iter().find(|r| r.id == run).and_then(|r| {
         r.attempts.last().and_then(|a| crate::attempt_control::deadline(&state, r, a).map(|limit| a.started_unix.saturating_add(limit)))

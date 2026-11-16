@@ -7,10 +7,11 @@ while [ "$#" -ne 0 ]; do
     --claude) images+=(claude); provider=claude ;;
     --browser) images+=(browser) ;;
     --build-environment) images+=(build) ;;
+    --solver) images+=(solver) ;;
     --full) profile=full ;;
     --help|-h)
-      printf '%s\n' 'Usage: nix run .#setup [-- --claude] [--full] [--browser] [--build-environment]' \
-        'Build the Nix package and Codex worker, load images and save immutable pins; optionally add Claude Code, browser capture and offline Rust/WASM build environments.' \
+      printf '%s\n' 'Usage: nix run .#setup [-- --claude] [--full] [--browser] [--build-environment] [--solver]' \
+        'Build the Nix package and Codex worker, load images and save immutable pins; optionally add Claude Code, browser capture, offline Rust/WASM build environments and optimisation/constraint solvers (HiGHS, Z3, OR-Tools CP-SAT).' \
         '--full adds private single-user Nix, Node/npm, JDK, Python and curl to worker images; lite remains the default.' \
         'Requires a running Docker-compatible engine; macOS also needs a Linux Nix builder.' \
         'Preserves private configuration and state. Does not sign in or start services.'
