@@ -9,25 +9,28 @@ use std::{sync::{Arc, Mutex}, time::Duration};
 pub enum Termination { TimedOut, Cancelled, Restarted, ProviderError, PublicationFailed }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Decision { Continue, Finish(String), TimedOut }
+pub enum Decision { Continue, Finish(String), TimedOut(u64) }
 
-pub fn limit(explicit: Option<u64>, persistent: bool) -> Option<u64> {
-    explicit.or_else(|| (!persistent).then_some(600))
+/// The attempt time limit: an explicit operator limit, else the bot turn limit
+/// captured at admission for an approved persistent bot (None: unlimited),
+/// else the 600-second default.
+pub fn limit(explicit: Option<u64>, persistent: bool, bot: Option<u64>) -> Option<u64> {
+    explicit.or(if persistent { bot } else { Some(600) })
 }
 pub fn deadline(state: &State, run: &crate::runtime::Run, attempt: &Attempt) -> Option<u64> {
     limit(attempt.explicit_timeout_seconds, run.chat_id.as_ref()
-        .is_some_and(|chat| crate::bots::continuation_enabled(state, chat)))
+        .is_some_and(|chat| crate::bots::continuation_enabled(state, chat)), attempt.bot_timeout_seconds)
 }
 fn decide(limit: Option<u64>, elapsed: Duration, handoff: Option<String>) -> Decision {
     // An already accepted handoff is a host finish request, even at the deadline.
     // Cancellation/authority are checked by the caller and again at publication.
     if let Some(summary) = handoff { Decision::Finish(summary) }
-    else if limit.is_some_and(|seconds| elapsed >= Duration::from_secs(seconds)) { Decision::TimedOut }
+    else if let Some(seconds) = limit.filter(|seconds| elapsed >= Duration::from_secs(*seconds)) { Decision::TimedOut(seconds) }
     else { Decision::Continue }
 }
 pub fn poll(bridge: Option<(&Arc<Mutex<State>>, &str)>, attempt: &Attempt, elapsed: Duration) -> Decision {
     let Some((shared, id)) = bridge else {
-        return decide(limit(attempt.explicit_timeout_seconds, false), elapsed, None);
+        return decide(limit(attempt.explicit_timeout_seconds, false, None), elapsed, None);
     };
     let Ok(state) = shared.lock() else { return Decision::Continue; };
     let Some(run) = state.runtime.runs.iter().find(|r| r.id == id) else { return Decision::Continue; };

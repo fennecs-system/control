@@ -199,7 +199,8 @@ fn recovery_wake_text_carries_the_last_rejection_not_a_generic_continue() {
     reconcile_at(&mut state, 40_000, ok).unwrap();
     let run = chat_runs(&state, &chat).into_iter().last().unwrap();
     assert!(continues(run));
-    assert!(run.objective.contains("Host error: \"Cannot process an unseen event range. No draft was accepted and no cursor advanced.\""), "{}", run.objective);
+    assert!(run.objective.contains("Host error: \"Cannot process an unseen event range\""), "{}", run.objective);
+    assert!(run.objective.contains("Read each source you handle again from its committed position"), "{}", run.objective);
     assert!(run.objective.contains("do not re-verify them or start new watches"));
     assert!(!run.objective.contains("unfinished runnable work from your committed checkpoint"));
     let woke = &state.chats[0].messages.last().unwrap().text;
@@ -405,4 +406,77 @@ fn the_streak_and_collected_watches_are_journal_patches_and_failed_saves_commit_
     assert!(state.watches.is_empty());
     assert_eq!(journal.document["watches"], json!([]));
     assert_eq!(journal.document["chats"][0]["continuity"]["checkpointing"]["failures"], json!(0));
+}
+
+/// Fails the chat's queued bot turn as stopped at its time limit: no handoff,
+/// no publication, the previous workspace head unchanged.
+fn time_out_queued(state: &mut State, chat: &str) -> bool {
+    if !fail_queued(state, chat, None) { return false; }
+    let index = state.runtime.runs.iter().rposition(|run| run.chat_id.as_deref() == Some(chat) && run.bot_turn.is_some()).unwrap();
+    let run = &mut state.runtime.runs[index];
+    run.status = "failed".into();
+    *run.result = crate::worker::timeout_message(std::time::Duration::from_secs(600));
+    let attempt = run.attempts.last_mut().unwrap();
+    attempt.termination = Some(crate::attempt_control::Termination::TimedOut);
+    attempt.artifact = None;
+    true
+}
+
+#[test]
+fn a_timed_out_turn_continues_promptly_within_the_bounded_streak() {
+    let (mut state, chat) = fixture();
+    managed_bot(&mut state, &chat);
+    post(&mut state, Some("peer"), "A relevant callback");
+    reconcile_at(&mut state, 1_000, ok).unwrap();
+    assert!(time_out_queued(&mut state, &chat));
+    reconcile_at(&mut state, 40_000, ok).unwrap();
+    let runs = chat_runs(&state, &chat);
+    assert_eq!(runs.len(), 2, "cut off mid-work is runnable, not a parked recheck");
+    let run = runs[1];
+    assert!(continues(run));
+    assert!(run.objective.contains(crate::bots::TIMEOUT_NOTE), "{}", run.objective);
+    assert!(!run.objective.contains("unfinished runnable work from your committed checkpoint"), "{}", run.objective);
+    assert!(run.bot_turn.as_ref().unwrap().recovery.is_none(), "no published report to recover from");
+    let woke = &state.chats[0].messages.last().unwrap().text;
+    assert!(woke.starts_with("Bot woke: a turn stopped at its time limit. Your previous turn reached its time limit"), "{woke}");
+    assert_eq!(checkpointing(&state, &chat).failures, 1, "it counts toward the recovery streak");
+    // Repeated timeouts stay bounded: two prompt continues, then a recheck.
+    assert!(time_out_queued(&mut state, &chat));
+    reconcile_at(&mut state, 80_000, ok).unwrap();
+    assert!(continues(chat_runs(&state, &chat).into_iter().last().unwrap()));
+    assert!(time_out_queued(&mut state, &chat));
+    reconcile_at(&mut state, 120_000, ok).unwrap();
+    assert_eq!(chat_runs(&state, &chat).len(), 3, "past the allowance it waits");
+    assert!(checkpointing(&state, &chat).reported);
+    reconcile_at(&mut state, 120_000 + 300_000, ok).unwrap();
+    let latest = chat_runs(&state, &chat).into_iter().last().unwrap();
+    assert_eq!(latest.bot_turn.as_ref().unwrap().reasons, [Reason::Timer]);
+}
+
+#[test]
+fn an_unseen_range_rejection_says_how_to_resynchronise() {
+    let (mut state, chat) = fixture();
+    managed_bot(&mut state, &chat);
+    post(&mut state, Some("peer"), "A relevant callback");
+    reconcile_at(&mut state, 1_000, ok).unwrap();
+    let omitted = format!("Cannot process an unseen event range. No draft was accepted and no cursor advanced. Retained receipts omitted from this handoff (up to 32): [{}]", "\"r\",".repeat(120));
+    fail_queued(&mut state, &chat, Some(&omitted));
+    reconcile_at(&mut state, 40_000, ok).unwrap();
+    let run = chat_runs(&state, &chat).into_iter().last().unwrap();
+    assert!(continues(run));
+    assert!(run.objective.contains("Host error: \"Cannot process an unseen event range\""), "{}", run.objective);
+    assert!(run.objective.contains(crate::bots::UNSEEN_RANGE.trim()), "the guidance is not truncated: {}", run.objective);
+    assert!(!run.objective.contains("Retained receipts omitted"), "the previous turn's receipt list is stale");
+    // Other rejections quote the host error in full and get no such guidance.
+    let other = recovery_wake("Processed source budget exceeded");
+    assert!(other.contains("Host error: \"Processed source budget exceeded\"") && !other.contains(crate::bots::UNSEEN_RANGE.trim()));
+}
+fn recovery_wake(error: &str) -> String {
+    let (mut state, chat) = fixture();
+    managed_bot(&mut state, &chat);
+    post(&mut state, Some("peer"), "A relevant callback");
+    reconcile_at(&mut state, 1_000, ok).unwrap();
+    fail_queued(&mut state, &chat, Some(error));
+    reconcile_at(&mut state, 40_000, ok).unwrap();
+    chat_runs(&state, &chat).into_iter().last().unwrap().objective.to_string()
 }

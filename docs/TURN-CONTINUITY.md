@@ -6,11 +6,18 @@ Provider-session contract clarified 2026-11-06.
 
 ## Persistent attempts and R1 (2026-11-07)
 
-Approved persistent bots have no implicit attempt deadline. An explicit operator
-`worker-timeout-secs` / `CONTROL_WORKER_TIMEOUT_SECS` limit is captured at admission
-and remains authoritative. Ordinary attempts retain the 600-second default.
-Approval during an active attempt removes only the implicit limit. Context budget
-responses return `null` for unlimited remaining time. Quiet output is not a health
+Approved persistent bots get their own default turn limit, 1,200 seconds
+(`bot-turn-timeout-secs` / `CONTROL_BOT_TURN_TIMEOUT_SECS`, 60 s–24 h; `0` or
+`none` for unlimited), captured at admission. Bots continue across turns through
+handoffs, routines and bounded recovery, so the limit loses nothing a handoff
+keeps, and with a limit the deadline warning tells the bot to checkpoint first.
+(Until 2026-11-16 bots had no implicit limit; a lead then lost a whole turn of
+work at another limit, and member bots ran single turns for 45 minutes while
+messages queued behind them.) An explicit operator `worker-timeout-secs` /
+`CONTROL_WORKER_TIMEOUT_SECS` limit is captured at admission and takes priority
+for every attempt. Ordinary attempts retain the 600-second default. Approval
+during an active attempt switches only the implicit default to the captured bot
+limit. Context budget responses return `null` for unlimited remaining time. Quiet output is not a health
 failure, and no periodic finish window or automatic progress extension is used.
 
 `control_turn_handoff` is an explicit yield: once its validated draft is durable,
@@ -401,9 +408,15 @@ storage failure is not a rejection). For a persistent bot:
 - A rejected handoff gets an immediate recovery turn, at most
   `bot_recovery_continues` times per streak (default 2). Its wake text quotes
   the rejection and asks the agent to repair the receipt rather than re-verify
-  the world or start new watches.
-- A turn that never called the handoff is waiting, not runnable work: it is
-  never answered with `continue`.
+  the world or start new watches. For an unseen or unbaselined event range it
+  quotes only the error's first sentence (the previous turn's receipt list is
+  stale) and says how to resynchronise: read each handled source again from its
+  committed position and list every receipt read, oldest first, skipping none.
+- A turn the host stopped at its time limit was cut off mid-work, not waiting:
+  it gets the same bounded immediate recovery turn, counted in the same streak,
+  with the timeout wake text below.
+- A turn that ended without calling the handoff is waiting, not runnable work:
+  it is never answered with `continue`.
 - Otherwise the bot waits on all its current subscriptions (own conversation
   first; a wait names at most 16 topics, and urgent watch exits and gaps release
   any wait) with a recheck after `bot_recovery_recheck_seconds` (default 300),
@@ -426,6 +439,48 @@ final exit, given up or transient, or stopped), fully offered, processed through
 their last observed sequence, and no turn of that chat is queued or active; the
 next publication then drops their watermarks. Retiring a watermark while
 keeping the record would let a later read restart from zero, so that is not done.
+
+### Deadline and steering notes
+
+A turn stopped at its attempt limit loses everything since its last published
+checkpoint, so the host warns before that happens. Every managed session's tool
+results (other than `control_turn_handoff`) can carry two advisory notes, each
+at most once per attempt and never after a handoff is staged:
+
+- When an attempt with a time limit has at most 90 seconds, or 15% of its limit
+  if larger, left (half the limit for limits under 180 seconds):
+  `N s left in this turn: publish your checkpoint (control_turn_handoff) now and
+  continue in a routine or the next turn.` Attempts without a limit get none.
+  The limit is decided by the chat, not the run kind: every run in a chat
+  that is an approved permanent bot (its wakes and any queued message turns)
+  uses the bot turn limit (default 1,200 s), while a chat that is not
+  (including a temporary or stopped bot) keeps the 600-second default; an
+  explicit `worker-timeout-secs` overrides both.
+- When the acting chat steers active members (chats spawned from it, directly or
+  through members, with a turn queued, running or waiting, or approved as
+  persistent bots) and its turn has run `steering_turn_seconds` (default 240) or
+  requested `steering_exec_calls` (default 6) command executions
+  (`control_service_exec`, `control_workspace_run`, `control_workspace_start`):
+  `You are steering N active members: delegate this work to a member and end
+  your turn.`
+
+Both are evidence on an ordinary tool result. They stop nothing and grant
+nothing; commands run inside a provider's own shell are not counted. The
+attempt records which were sent (`nudges`), so a note is not repeated within it.
+
+A timed-out turn fails like any other. Its unpublished workspace is a recovery
+candidate. Claims of an owner that is not an approved persistent bot are marked
+abandoned, as for any failed turn, so dependents wake instead of waiting on an
+owner that will not act without new input. The owner keeps them and their
+notes: no peer can acquire them, and its next turn resumes one with `update`,
+which clears the flag. Treating a timeout differently would leave dependents
+asleep on a turn that has already ended. The team advisor hears of it once
+(`timed_out`). A persistent bot with managed continuity gets a prompt recovery
+turn within `bot_recovery_continues` rather than a parked recheck (one run
+idled ten minutes after its lead timed out); any bot's next wake says its
+previous turn reached the time limit, points to `control_recovery` and its
+claims, and suggests splitting or delegating the work. See
+`worker_tools::nudges`, `bots::tests::timeout` and `bots::tests::recovery`.
 
 ## Context projection and inspection
 

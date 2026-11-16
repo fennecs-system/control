@@ -233,7 +233,7 @@ fn sandbox_probe(
 }
 
 pub(crate) fn timeout_message(limit: Duration) -> String {
-    format!("Worker reached its {} s time limit and was stopped. Files are retained in the run directory; the previous published checkpoint is unchanged. Raise the limit with CONTROL_WORKER_TIMEOUT_SECS or worker-timeout-secs in the node configuration.", limit.as_secs())
+    format!("Worker reached its {} s time limit and was stopped. Files are retained in the run directory; the previous published checkpoint is unchanged. Hand off before the limit and continue in the next turn; operators can raise it with worker-timeout-secs (all turns) or bot-turn-timeout-secs (approved persistent bots) in the node configuration.", limit.as_secs())
 }
 pub(crate) const UNKNOWN_FAILURE: &str = "Codex container exited unsuccessfully. Check host account authentication and the pinned worker configuration. No host fallback was attempted.";
 
@@ -955,6 +955,7 @@ fn checkpoint_prepared(
     run.status = "running".into();
     let mut attempt = crate::usage::Attempt::new();
     attempt.explicit_timeout_seconds = crate::config::configured_worker_deadline().map(|d| d.as_secs());
+    attempt.bot_timeout_seconds = crate::config::bot_turn_deadline();
     attempt.context_trace=captured.map(Box::new);
     attempt.turn_mailbox=turn_mailbox.into();
     attempt.github_source = github_source;
@@ -1454,9 +1455,8 @@ fn execute(
     let started = Instant::now();
     let admitted = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default().as_secs().saturating_sub(attempt.started_unix);
-    let deadline = Duration::from_secs(attempt.explicit_timeout_seconds.unwrap_or(600));
     let mailbox_wake = crate::mailbox_wake::MailboxWake::new(&absolute);
-    let mut timed_out = false;
+    let mut timed_out = None;
     let mut handoff = None;
     let result = loop {
         if crate::design::requested(bridge) {
@@ -1483,9 +1483,9 @@ fn execute(
                 handoff = Some(summary);
                 break Ok(true);
             }
-            crate::attempt_control::Decision::TimedOut => {
+            crate::attempt_control::Decision::TimedOut(seconds) => {
                 attempt.termination = Some(crate::attempt_control::Termination::TimedOut);
-                timed_out = true;
+                timed_out = Some(Duration::from_secs(seconds));
                 break Err(std::io::Error::other("Worker deadline reached"));
             }
             crate::attempt_control::Decision::Continue => {}
@@ -1512,8 +1512,8 @@ fn execute(
             )
         } else if crate::design::requested(bridge) {
             ("waiting", "Waiting for a design decision.".into())
-        } else if timed_out {
-            ("failed", timeout_message(deadline))
+        } else if let Some(limit) = timed_out {
+            ("failed", timeout_message(limit))
         } else {
             failed("Worker stopped after its deadline or a process error.")
         });

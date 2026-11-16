@@ -139,3 +139,40 @@ fn stopped_cancelled_rescoped_and_ordinary_recipients_still_refuse() {
     state.runtime.runs[woken].status = "interrupted".into();
     assert!(refused(&mut state, &alice_run, &cass).contains("cannot restart stopped work"));
 }
+
+#[test]
+fn a_lead_messaging_its_running_persistent_bot_member_queues_no_turns() {
+    // One live run: sixteen lead messages to a busy member bot became sixteen
+    // queued turns behind its running one, unseen for the whole turn.
+    let (mut state, lead, child, _) = family();
+    for chat in &mut state.chats {
+        chat.room = Some("general".into());
+    }
+    crate::bots::command(&mut state, &child, "on").unwrap();
+    let index = crate::chat::latest_task(&state, &child, &state.chats[0].actor).unwrap();
+    state.runtime.runs[index].status = "running".into();
+    let lead_run = state.runtime.runs[0].id.clone();
+    let before = state.runtime.runs.len();
+    for nonce in ["one", "two", "three"] {
+        let sent = handle(&mut state, &AttemptRef { run: &lead_run, generation: "attempt-a", nonce },
+            MessageCall { chat_id: child.clone(), text: TEXT.into(), services: vec![] }, |_| Ok(())).unwrap();
+        assert_eq!((sent["queued"].as_bool(), sent["retained"].as_bool()), (Some(false), Some(true)));
+    }
+    let delivered = &state.runtime.runs[before..];
+    assert_eq!(delivered.len(), 3);
+    assert!(delivered.iter().all(|run| run.source == "agent-message" && run.status == "completed" && run.attempts.is_empty()),
+        "retained evidence for the running session and the next wake, not queued turns");
+    let messages = &state.chats.iter().find(|chat| chat.id == child).unwrap().messages;
+    assert_eq!(messages.iter().filter(|m| m.text.starts_with(&format!("Message from {lead}"))).count(), 3);
+    // Once the running turn ends, the supervisor coalesces them into one wake.
+    state.runtime.runs[index].status = "completed".into();
+    crate::bots::reconcile(&mut state, |_| Ok(())).unwrap();
+    crate::bots::reconcile(&mut state, |_| Ok(())).unwrap();
+    assert_eq!(state.runtime.runs.iter().filter(|run| run.bot_turn.is_some() && run.chat_id.as_deref() == Some(child.as_str())).count(), 1, "one wake");
+    // A member that is not a persistent bot still gets its requested turn.
+    let (mut state, _, child, _) = family();
+    let lead_run = state.runtime.runs[0].id.clone();
+    handle(&mut state, &AttemptRef { run: &lead_run, generation: "attempt-a", nonce: "plain" },
+        MessageCall { chat_id: child, text: TEXT.into(), services: vec![] }, |_| Ok(())).unwrap();
+    assert_eq!(state.runtime.runs.last().unwrap().status, "queued");
+}

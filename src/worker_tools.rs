@@ -6,19 +6,30 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+pub(crate) mod nudges;
+
 fn rpc_at(
     shared:&Arc<Mutex<State>>,run_id:&str,envelope:&Value,workspace:Option<&Path>,
 )->Value {
     let mut response=dispatch_at(shared,run_id,envelope,workspace);
+    let name=envelope["request"]["params"]["name"].as_str().unwrap_or("");
+    // A refused call changes no state, so it neither counts nor carries notes.
+    let refused=response["result"]["isError"]==true;
     if envelope["request"]["method"]=="tools/call"
-        && !matches!(envelope["request"]["params"]["name"].as_str(),Some("control_turn_context"|"control_turn_handoff"))
+        && name!="control_turn_handoff"
         // get_mut, not IndexMut: indexing would insert "result":null into an
         // error reply, which clients reject as an invalid JSON-RPC response.
         && let Some(content)=response.get_mut("result").and_then(|result|result.get_mut("content")).and_then(Value::as_array_mut)
         && let Ok(mut state)=shared.lock()
-        && crate::turn_context::callback_notice(&mut state,run_id)
     {
-        content.push(json!({"type":"text","text":"Use control_turn_context at the next action boundary for new callbacks or remaining attempt time. Keep this session active while useful work remains; hand off when waiting or done, or before an explicitly reported deadline."}));
+        if name!="control_turn_context" && crate::turn_context::callback_notice(&mut state,run_id) {
+            content.push(json!({"type":"text","text":"Use control_turn_context at the next action boundary for new callbacks or remaining attempt time. Keep this session active while useful work remains; hand off when waiting or done, or before an explicitly reported deadline."}));
+        }
+        if !refused {
+            for note in nudges::notes(&mut state,run_id,name,nudges::now()) {
+                content.push(json!({"type":"text","text":note}));
+            }
+        }
     }
     response
 }

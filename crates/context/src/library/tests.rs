@@ -236,7 +236,8 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert!(autonomy.instructions.contains("Weigh risk by reversibility"));
     assert!(autonomy.instructions.contains("Guards should bound damage"));
     let coordination = Library::default().get("coordination").unwrap().clone();
-    assert_eq!(coordination.revision, 11);
+    assert_eq!(coordination.revision, 12);
+    assert!(coordination.instructions.contains("keeping its turns short to stay responsive: it delegates implementation, long work and ongoing infrastructure to members, spawned or assigned"));
     assert_eq!(coordination.includes, ["planning"]);
     assert!(coordination.instructions.starts_with("Whoever steers a team posts the milestone backlog"));
     assert!(coordination.instructions.contains("Wait on a claim only for an output you cannot reasonably produce yourself"));
@@ -279,7 +280,7 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     for revision in 1..=6 {
         assert!(previous.iter().any(|d| d.id == "autonomy" && d.revision == revision));
     }
-    for revision in 1..=10 {
+    for revision in 1..=11 {
         assert!(previous.iter().any(|d| d.id == "coordination" && d.revision == revision));
     }
     for revision in 1..=3 {
