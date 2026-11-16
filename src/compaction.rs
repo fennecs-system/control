@@ -697,7 +697,7 @@ pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
         crate::escape(&metadata)
     );
     Ok(format!(
-        "<h2>Compaction tree</h2><p><a href='/chat/{}'>Return to chat</a> · <a href='/providers'>Model and window settings</a></p><p>Ranges are zero-based, end-exclusive conversation positions. Leaf size is a maximum: smaller contexts split leaves further. Parent requests combine two child summaries. Token counts are reported by the endpoint; byte budgets are conservative estimates, not tokenization. Summaries are untrusted evidence; the original journal remains intact.</p>{}",
+        "<h2>Compaction tree</h2><p><a href='/chat/{}'>Return to chat</a> · <a href='/?view=providers'>Model and window settings</a></p><p>Ranges are zero-based, end-exclusive conversation positions. Leaf size is a maximum: smaller contexts split leaves further. Parent requests combine two child summaries. Token counts are reported by the endpoint; byte budgets are conservative estimates, not tokenization. Summaries are untrusted evidence; the original journal remains intact.</p>{}",
         crate::escape(id),
         metadata
     ))
