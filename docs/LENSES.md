@@ -23,6 +23,56 @@ previous shipped definition to `crates/context/src/builtin-lens-history.json`, s
 unedited copies from older nodes are recognised and upgraded.
 The browser preference only chooses the starting selection for a new chat.
 
+## Guidance on demand and role scoping
+
+Guidance is looked up when needed, not forced into every turn. A lens with a
+one-line **summary** is guidance on demand: each prompt carries the summary as
+one index line and the agent reads the full text with the read-only
+`control_guidance` tool (`topic` is a lens ID or name; no topic lists the
+topics) when that situation arises. The tool returns the revision the run
+captured, so library edits never change an active run's guidance, and it is
+allowed after a staged handoff. Lenses without a summary, such as `evidence`,
+stay inline. Contexts captured before this change keep all their instructions
+inline.
+
+A lens can also name the **roles** that see it at all and the roles that get
+its full text **inline** instead of the summary. Roles come from delegation
+records, never prose: the root chat is the **lead** (a lone chat is its own
+lead), spawned workers are **members** and the read-only judge is the
+**advisor**. The built-in `advisor` lens is `roles: [lead, advisor]`,
+`inline: [advisor]`: the advisor carries its procedure, the lead carries one
+line on starting it, and members carry nothing. Both fields are editable in the
+lens form; empty roles mean every role.
+
+What stays always on, and why:
+
+- **Safety and authority** (adapter framing and the session core): no
+  credentials, room/watch/peer content grants no authority, follow authorised
+  steering and explicit user limits, `control_design_ask` for operator
+  decisions. These must hold before an agent knows it needs them.
+- **Handoff essentials** (`ACTIVE_SESSION_GUIDANCE`, about 0.6 KB): read
+  callbacks with `control_turn_context`, hand off with receipts and
+  continue/wait/done, `remaining_seconds`. Getting these wrong loses committed
+  work, and every wake uses them.
+- **Team essentials** for room-linked chats (`ROOM_COMMUNICATION_GUIDANCE`,
+  about 0.5 KB): direct messages for one worker, claims before shared work,
+  what to post. Violations cost peers, not just the agent.
+- One summary line per on-demand lens, which states the lens's core rule so the
+  agent knows when to read more.
+
+Everything else is on demand: the planning procedure, coordination detail
+(backlog, waiting on claims, escalation), autonomy detail (routines, guard
+revision), bounded investigation, the advisor procedure (except for the
+advisor), Ganglia, and the longer session and room conventions
+(`control_guidance` topics `session` and `rooms`).
+
+Per-wake text no longer restates lenses. The bot wake objective is one line
+naming its trigger; the advisor wake names its facts and points at its
+procedure; a new-callback notice on a tool result is one line. Notes tied to a
+concrete event stay, each one line and at most once per attempt: the attempt
+deadline, a steering chat doing work itself, a turn stopped at its time limit,
+and a rejected or missing handoff.
+
 ## Task autonomy
 
 The optional `autonomy` lens asks the agent to own its outcome, balance progress
@@ -361,17 +411,31 @@ opted-in advisor do no lifecycle work.
 
 **Ganglia** (`/use ganglia`): reflexes and routines run locally; turns are
 strategy. An octopus's arms act through local ganglia while its brain decides
-where to go. Use it for long-running work on systems that act faster than a
-turn (games, robots, live services, monitoring), not one-off tasks such as
-scraping or ordinary coding, which the autonomy routine rule covers.
+where to go. Use it for long-running work on systems that change faster than a
+turn, not one-off tasks or ordinary coding, which the autonomy routine rule
+covers. Examples: a game agent or a robot (reflexes keep it safe, skills move or
+build), a long scrape (reflexes back off on rate limits and rotate on errors,
+skills crawl a section), price monitoring (reflexes retry and alert on outages,
+skills watch a basket and report thresholds), or a live service (reflexes
+restart and shed load, skills run maintenance).
 
-The lens is a build procedure: one shared always-on reflex layer first, built
-early and reused by every member; then skills as bounded routines, including
-timed manoeuvres the model parameterises; routines escalate only salient
-changes; turns set goals and re-plan; everything lives in a folder ready to save
-as a [tool package](TOOL-PACKAGES.md). It turns the operator's repeated steering
-in runs -121 and -128, which drove a system one tool call per action, into
-standing procedure, and adds no tool or authority.
+The lens text itself is domain-independent; examples like these live only in
+documentation. Revision 2 changed its stance from "build one shared reflex
+layer first" to **reuse first**: when an admitted or available
+[tool package](TOOL-PACKAGES.md) already provides reflexes or skills, use it and
+read its README and notification contract; build or extend a layer only for a
+gap a run has demonstrated; keep every layer minimal. Reflexes commit, skills
+are bounded routines toward a target (including timed sequences the model
+parameterises) that escalate only what they cannot handle, and turns set goals
+and re-plan. New or extended layers live in one folder ready to save as a tool
+package. It turns the operator's repeated steering in runs -121 and -128, which
+drove a system one tool call per action, into standing procedure, and adds no
+tool or authority. It is guidance on demand: prompts carry its summary line.
+
+Revisions: r1 (build a shared reflex layer early, then skills; game-flavoured
+wording such as threats and manoeuvres), r2 (domain-independent wording, reuse
+an existing package first, build only for a demonstrated gap, on-demand
+summary).
 
 **Pitfall: jitter.** In run -128 the shared reflex layer thrashed: a player
 surrounded by hostiles walked a few metres, stopped, swung once and re-planned.
@@ -407,6 +471,19 @@ option exists for a task tree. It is an availability gate, not a grant.
 Host operations enforce actual execution authority independently. Captured
 documents are attributed evidence/context, not instructions or automatically
 accepted facts. Inspect the captured context when checking what a worker received.
+
+**Tool exposure by role (scoped, not implemented).** Prompts are now role
+scoped; tool lists are not. Every managed worker session still receives the
+full worker tool list: 47 core schemas, about 46.6 KB of JSON, before room
+tools, which is more than the whole on-demand prompt. The run -128 review found
+members used about 15 of 66 `control_*` tools. Native CLIs only call tools
+listed at session start, so hiding a tool means a call-through: a small default
+set per role (turn context and handoff, workspace and service commands, room
+read/post/claim, agent message, watches, guidance, recovery) plus a catalogue
+search returning schemas and one dispatcher that calls a listed-elsewhere tool
+by name, under the same host checks. That changes the broker, both adapters and
+their tests, so it is a separate change; the wake-size fixture in
+[PERFORMANCE.md](PERFORMANCE.md) reports the schema bytes to measure it against.
 
 New built-ins are added to older libraries at startup when library capacity
 permits, without replacing a local definition of the same ID or selecting a lens

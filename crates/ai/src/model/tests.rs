@@ -49,3 +49,66 @@ fn truncated_tool_bearing_and_oversized_responses_are_rejected_usage_stays_unkno
     v["choices"][0]["message"]["content"] = json!("x".repeat(2049));
     assert!(decode(v, &limits()).is_err());
 }
+#[test]
+fn a_length_cut_is_reported_distinctly_and_never_returned_as_partial_text() {
+    let cut = json!({"choices":[{"finish_reason":"length","message":{"content":"half an ans"}}]});
+    let error = decode(cut, &limits()).unwrap_err().to_string();
+    assert!(error.contains("token limit"), "{error}");
+    for malformed in [
+        json!({}),
+        json!({"choices":[]}),
+        json!({"choices":[{"finish_reason":"stop","message":{}}]}),
+        json!({"choices":[{"finish_reason":"stop","message":{"content":"  "}}]}),
+        json!({"choices":[{"finish_reason":"stop","message":{"content":7}}]}),
+        json!({"choices":[{"finish_reason":"stop","message":{"content":"a"}},{"finish_reason":"stop","message":{"content":"b"}}]}),
+    ] {
+        assert!(decode(malformed.clone(), &limits()).is_err(), "{malformed}");
+    }
+}
+#[test]
+fn narrowed_limits_only_lower_output_and_widen_input_budget_accordingly() {
+    let declared = limits();
+    assert_eq!(declared.narrowed(None).unwrap(), declared);
+    let smaller = declared.narrowed(Some(128)).unwrap();
+    assert_eq!(smaller.output_tokens, 128);
+    assert!(smaller.input_budget() > declared.input_budget());
+    assert_eq!(declared.narrowed(Some(100_000)).unwrap().output_tokens, 512);
+    assert!(declared.narrowed(Some(0)).is_err());
+}
+#[test]
+fn served_identity_is_bounded_untrusted_metadata() {
+    let value = json!({"model":"qwen-local","system_fingerprint":"b11669-620d222"});
+    assert_eq!(
+        served(&value),
+        Served {
+            model: Some("qwen-local".into()),
+            fingerprint: Some("b11669-620d222".into())
+        }
+    );
+    let hostile = json!({"model":"x".repeat(300),"system_fingerprint":"a\nb"});
+    assert_eq!(served(&hostile), Served::default());
+}
+#[test]
+fn tool_steps_decode_calls_and_keep_malformed_arguments_as_errors() {
+    let value = json!({"choices":[{"finish_reason":"tool_calls","message":{"content":null,"tool_calls":[
+        {"id":"a","type":"function","function":{"name":"control_room_post","arguments":"{\"message\":\"hi\"}"}},
+        {"type":"function","function":{"name":"control_turn_handoff","arguments":""}},
+        {"id":"c","type":"function","function":{"name":"x","arguments":"{oops"}},
+        {"id":"d","type":"function","function":{"name":"y","arguments":"[1]"}}]}}],
+        "usage":{"prompt_tokens":10,"completion_tokens":3}});
+    let step = decode_step(&value, &limits()).unwrap();
+    assert_eq!(step.text, None);
+    assert!(!step.truncated);
+    assert_eq!(step.calls[0].arguments, Ok(json!({"message":"hi"})));
+    assert_eq!((step.calls[1].id.clone(), step.calls[1].arguments.clone()), (None, Ok(json!({}))));
+    assert!(step.calls[2].arguments.as_ref().unwrap_err().contains("not valid JSON"));
+    assert!(step.calls[3].arguments.as_ref().unwrap_err().contains("JSON object"));
+    assert_eq!(step.tokens.unwrap().output_tokens, 3);
+    let cut = json!({"choices":[{"finish_reason":"length","message":{"content":"partial"}}]});
+    assert!(decode_step(&cut, &limits()).unwrap().truncated);
+    for bad in [json!({}), json!({"choices":[{"message":7}]}), json!({"choices":[{"message":{"content":5}}]})] {
+        assert!(decode_step(&bad, &limits()).is_err(), "{bad}");
+    }
+    let request = tool_request("qwen", &[json!({"role":"user","content":"hi"})], &[json!({"type":"function"})], &limits()).unwrap();
+    assert_eq!((request["tool_choice"].clone(), request["max_tokens"].clone()), (json!("auto"), json!(512)));
+}

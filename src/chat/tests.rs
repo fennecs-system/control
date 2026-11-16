@@ -761,23 +761,30 @@ fn optional_guidance_survives_child_wake_and_library_edits_without_retroactive_c
             reply: String::new(),
         });
     let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+    // On-demand guidance: the prompt carries index lines and control_guidance
+    // returns the captured revision's text, never the edited library.
+    let guidance = |state: &State, run: &str, topic: &str| {
+        let run = state.runtime.runs.iter().find(|r| r.id == run).unwrap();
+        crate::guidance::answer(run, &json!({"topic":topic})).unwrap()["text"].as_str().unwrap().to_owned()
+    };
     for run in [&parent, &child, &wake] {
         let text = prompt(&restored, run).unwrap();
-        assert!(text.contains("investigation@2") && text.contains("three distinct probes"));
-        assert!(text.contains("coordination@13") && text.contains("autonomy@8"));
-        assert!(text.contains("planning@4"));
-        assert_eq!(text.matches("three distinct probes").count(), 1);
+        assert!(text.contains("investigation@3") && text.contains("- investigation: "));
+        assert!(text.contains("coordination@14") && text.contains("autonomy@9"));
+        assert!(text.contains("planning@5"));
+        assert!(!text.contains("smallest authorized probe"));
+        assert!(guidance(&restored, run, "investigation").contains("smallest authorized probe"));
+        assert!(!guidance(&restored, run, "coordination").contains("Future coordination guidance only"));
+        assert!(!guidance(&restored, run, "planning").contains("Future planning guidance only"));
         assert!(!text.contains("Future investigation guidance only"));
-        assert!(!text.contains("Future coordination guidance only"));
-        assert!(!text.contains("Future planning guidance only"));
     }
     send(&mut state, &id, "Start a new authorized step", "test").unwrap();
-    let next = prompt(&state, &state.runtime.runs.last().unwrap().id).unwrap();
-    assert!(
-        next.contains("investigation@3") && next.contains("Future investigation guidance only")
-    );
-    assert!(next.contains("coordination@14") && next.contains("Future coordination guidance only"));
-    assert!(next.contains("planning@5") && next.contains("Future planning guidance only"));
+    let last = state.runtime.runs.last().unwrap().id.clone();
+    let next = prompt(&state, &last).unwrap();
+    assert!(next.contains("investigation@4") && next.contains("coordination@15") && next.contains("planning@6"));
+    assert_eq!(guidance(&state, &last, "investigation"), "Future investigation guidance only");
+    assert_eq!(guidance(&state, &last, "coordination"), "Future coordination guidance only");
+    assert_eq!(guidance(&state, &last, "planning"), "Future planning guidance only");
     tool(
         &mut state,
         "control.chat.lenses",

@@ -13,7 +13,7 @@ claude mcp add --transport stdio control -- /absolute/path/to/control mcp
 
 Start Control first and reload Claude Code. The bridge uses the local operator
 credential internally; do not put that credential in Claude configuration.
-It exposes chat/lens/room/artifact reads, public search, the Rust playground and
+It exposes chat/lens/room/artifact reads, public search, the Rust playground, [solvers](SOLVERS.md) and
 browser capture. It does not expose job submission or Control administration.
 Browser capture needs the optional browser image: run `nix run .#setup -- --browser`
 (or the manual steps in [the browser tool README](../tools/browser/README.md)).

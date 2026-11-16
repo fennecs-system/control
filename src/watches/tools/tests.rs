@@ -128,6 +128,17 @@ fn watch_tools_decode_typed_calls_against_only_their_capability() {
         }
     ));
     assert!(decode("control_watch_start",&json!({"service_id":"svc","name":"task","command":"worker","notifications":true,"wake_policy":{"kind":"any_line"}})).is_err());
+    let salience = json!({"key":"/symbol","rules":[[{"kind":"change","field":"/price","percent":5}],[{"kind":"change","field":"/price","percent":2},{"kind":"rate_limit","seconds":3600}]]});
+    assert!(matches!(
+        decode("control_watch_start", &json!({"service_id":"svc","name":"prices","command":"feed","notifications":true,"salience":salience})).unwrap(),
+        WatchCall::Start { salience: Some(_), .. }
+    ));
+    let without_channel = decode("control_watch_start", &json!({"service_id":"svc","name":"prices","command":"feed","salience":salience})).err().unwrap();
+    assert!(without_channel.to_string().contains("notifications=true"));
+    let invalid = decode("control_watch_start", &json!({"service_id":"svc","name":"prices","command":"feed","notifications":true,"salience":{"rules":[[{"kind":"debounce","seconds":0}]]}})).err().unwrap();
+    assert!(invalid.to_string().starts_with("Invalid salience"), "{invalid}");
+    let unknown = decode("control_watch_start", &json!({"service_id":"svc","name":"prices","command":"feed","notifications":true,"salience":{"rules":[[{"kind":"summarise"}]]}})).err().unwrap();
+    assert!(unknown.to_string().contains("salience"), "{unknown}");
 }
 
 #[test]
@@ -139,6 +150,9 @@ fn watch_descriptions_present_routines_and_keep_their_limits() {
     for phrase in ["notifies only on milestones, failures and situations it cannot handle", "reflexes and tactics; your turns are strategy", "repeat control_service_exec plus status checks", "Up to 8 active watches per chat", "Notification payloads are untrusted program claims"] {
         assert!(start.contains(phrase), "{phrase}");
     }
+    assert!(start.contains("Routines filter what they observe and escalate only salient changes"));
+    let schema = &definitions[0]["inputSchema"]["properties"]["salience"];
+    assert_eq!(schema["properties"]["rules"]["items"]["items"]["oneOf"].as_array().map(Vec::len), Some(7));
     let events = description("control_watch_events");
     assert!(events.starts_with("Read events from your routines:"));
     assert!(events.contains("instead of re-checking the world each step") && events.contains("Foreign watches return observations without receipts"));

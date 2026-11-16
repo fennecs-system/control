@@ -14,6 +14,7 @@ fn watch() -> Watch {
         wake_policy: Default::default(),
         notification_channel: false,
         notifications: None,
+        salience: None,
         created_by: None,
         seen: 0,
         lines: 0,
@@ -246,3 +247,39 @@ fn observed_frames_advance_once_and_a_transient_exit_ends_the_watch() {
     });
     assert!(!permanent.active(), "until it gives up");
 }
+
+/// Run -121's record spam: every routine status became a model wake. With a
+/// salience filter the same evidence stays readable but only changes wake.
+#[test]
+fn filtered_notifications_stay_readable_without_waking_and_survive_restart() {
+    let filter = serde_json::from_value(serde_json::json!({"rules":[[{"kind":"change","field":"/record"},{"kind":"debounce","seconds":5}]]})).unwrap();
+    let mut watch = Watch { notification_channel: true, salience: Some(Box::new(Salience::new(filter))), ..watch() };
+    let notification = |seq: u64, record: &str| Frame { seq, event: Event::Notification(format!(r#"{{"record":"{record}"}}"#).into_bytes()) };
+    let frames = (1..=50).map(|seq| notification(seq, "unchanged")).chain([notification(51, "new")]).collect::<Vec<_>>();
+    for (index, frame) in frames.iter().enumerate() { watch.observe_at(frame, index as u64 * 10); }
+    assert_eq!((watch.pending_notifications(), watch.held_notifications()), (0, 1), "held until quiet");
+    let mut restored: Watch = serde_json::from_slice(&serde_json::to_vec(&watch).unwrap()).unwrap();
+    assert!(!restored.release(5_000));
+    assert!(restored.release(5_500), "the debounce releases after restart");
+    let notifications = restored.notifications.as_deref().unwrap();
+    assert_eq!((notifications.pending, notifications.through), (1, 51), "one wake with the latest record");
+    assert_eq!(notifications.recent, [r#"{"record":"new"}"#]);
+    // A change that reverts within the quiet period never wakes.
+    restored.observe_at(&notification(52, "unchanged"), 6_000);
+    restored.observe_at(&notification(53, "new"), 6_010);
+    assert!(!restored.release(20_000));
+    assert_eq!(restored.pending_notifications(), 1);
+    let summary = restored.summary();
+    assert_eq!((summary["salience"]["woke"].clone(), summary["salience"]["retained"].clone()), (1.into(), 53.into()));
+    // Every notification remains in the readable event view.
+    let spooled = frames.into_iter().map(|frame| (frame, false)).collect::<Vec<_>>();
+    assert_eq!(select_page(spooled, 0, 51, false, 200).events.len(), 51);
+    // Unfiltered and legacy watches keep waking on every notification.
+    let mut plain = Watch { notification_channel: true, ..self::watch() };
+    plain.observe(&notification(1, "a"));
+    plain.observe(&notification(2, "a"));
+    assert_eq!(plain.pending_notifications(), 2);
+    assert!(serde_json::to_value(&plain).unwrap().get("salience").is_none());
+}
+
+mod profile;

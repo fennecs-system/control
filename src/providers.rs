@@ -15,7 +15,21 @@ impl Model {
 }
 pub(crate) mod selection;
 pub fn capacity(runtime:&crate::runtime::Runtime,backend:crate::backend::Backend,model:&str)->Option<control_context::turn_context::Capacity> {
+    if backend==crate::backend::Backend::Local {
+        // Declared endpoint limits, reserving the tool loop's schemas and repair budget.
+        return endpoint(runtime,model).map(|e|control_context::turn_context::Capacity{
+            context_tokens:e.limits.context_tokens,output_tokens:e.limits.output_tokens,
+            overhead_tokens:crate::local_agent::OVERHEAD_TOKENS});
+    }
     runtime.models.iter().find(|m|m.backend==backend && m.model==model).and_then(|m|m.capacity)
+}
+/// The private endpoint a `local:NAME` selection refers to.
+pub(crate) fn endpoint<'a>(runtime:&'a crate::runtime::Runtime,name:&str)->Option<&'a crate::model_calls::Endpoint> {
+    local(runtime).find(|m|m.id==name)
+}
+/// Capability, not a listing, decides whether an agent turn can run.
+pub(crate) fn agent_capable(runtime:&crate::runtime::Runtime,model:&Model)->bool {
+    model.backend!=crate::backend::Backend::Local || endpoint(runtime,&model.model).is_some_and(|e|e.tools)
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -209,6 +223,8 @@ fn migrate(
 
 fn validate_models(models: &[Model], selected: &Model) -> std::io::Result<()> {
     if models.len() > 64
+        || !selected.backend.default_capable()
+        || models.iter().any(|m|!m.backend.default_capable())
         || !models.iter().any(|m|m.same(selected))
         || models
             .iter()
@@ -233,6 +249,16 @@ fn configured(runtime: &crate::runtime::Runtime) -> Vec<Model> {
     }
     models
 }
+/// Everything a chat or spawn may name: saved agent models plus each private
+/// endpoint text model, listed with its capability rather than as interchangeable.
+pub(crate) fn choices(runtime: &crate::runtime::Runtime) -> Vec<Model> {
+    let mut models = configured(runtime);
+    models.extend(local(runtime).map(|m|Model::captured(crate::backend::Backend::Local,m.id.clone())));
+    models
+}
+fn local(runtime: &crate::runtime::Runtime) -> impl Iterator<Item=&crate::model_calls::Endpoint> {
+    runtime.compaction.models.iter().filter(|m|m.cli.is_none())
+}
 
 pub fn render(runtime: &crate::runtime::Runtime) -> String {
     let mut html = String::from("<div class='providers-page'><h2>Models &amp; providers</h2><p class='provider-description'>Choose the default agent model and configure optional history summaries.</p><p id='saved' class='provider-saved save-confirmation' role='status'>Saved.</p><section class='provider-section' aria-labelledby='agent-models-heading'><h3 id='agent-models-heading'>Agent models</h3><p class='provider-description'>Used for chats and newly spawned agents. Select a model to make it the default.</p><div class='model-list' aria-label='Configured models'>");
@@ -250,6 +276,15 @@ pub fn render(runtime: &crate::runtime::Runtime) -> String {
         let capacity=entry.capacity;
         html.push_str(&format!("<section class='model-row'><form method='post' action='/providers'><input type='hidden' name='action' value='select'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='model' value='{model}'><button class='model-choice' aria-pressed='{selected}'><span class='model-dot' aria-hidden='true'></span><span class='model-name'><span class='model-id' title='{model}'>{model}</span><span class='model-provider'>{label}</span></span>{marker}</button></form><details class='model-edit'><summary aria-label='Edit {label} model {model}'>Edit</summary><div class='model-edit-body'><form method='post' action='/providers'><input type='hidden' name='action' value='edit'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='old_model' value='{model}'><label>Model ID<input name='model' required maxlength='100' value='{model}' spellcheck='false' autocapitalize='none'></label><button class='primary'>Save model</button></form>"));
         html.push_str(&format!("<form class='model-capacity' method='post' action='/providers'><input type='hidden' name='action' value='capacity'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='model' value='{model}'><h4>Context capacity</h4><p class='provider-description'>Leave context tokens empty to use the provider policy. Instructions that cannot fit are reported, never truncated.</p><div class='provider-fields'><label>Context tokens<input name='context_tokens' type='number' min='1' placeholder='Unknown' value='{}'></label><label>Output token reserve<input name='output_tokens' type='number' min='1' value='{}'></label><label>Provider/tool token reserve<input name='overhead_tokens' type='number' min='0' value='{}'></label></div><p class='provider-description'>Input bytes conservatively count as tokens.</p><button class='primary'>Save capacity</button></form></div></details></section>",capacity.map(|c|c.context_tokens.to_string()).unwrap_or_default(),capacity.map_or(2048,|c|c.output_tokens),capacity.map_or(4096,|c|c.overhead_tokens)));
+    }
+    for endpoint in local(runtime) {
+        let id = crate::escape(&endpoint.id);
+        let (capability,usage)=if endpoint.tools {
+            ("agent turns · text generation",format!("Select <code>/model local:{id}</code> in a chat, or pass <code>local:{id}</code> to spawn tools. Turns run Control's native tool loop and compact history on this endpoint."))
+        } else {
+            ("text generation only",format!("Use <code>control_model_generate</code> with model <code>{id}</code>. Re-add it with <em>Serves tool calls</em> to run agent turns."))
+        };
+        html.push_str(&format!("<section class='model-row'><div class='model-choice' aria-disabled='true'><span class='model-dot' aria-hidden='true'></span><span class='model-name'><span class='model-id' title='{id}'>{id}</span><span class='model-provider'>Local endpoint · {} · {capability}</span></span></div><p class='provider-description'>{usage}</p></section>", crate::escape(&endpoint.model)));
     }
     html.push_str("</div><details class='model-add'><summary>+ New model</summary>");
     for backend in [
@@ -294,7 +329,9 @@ fn render_text(runtime: &crate::runtime::Runtime) -> String {
         "<label>Private endpoint (leave empty for CLI)<input name='url' placeholder='http://127.0.0.1:8081/v1'></label><label>Weights/runtime revision<input name='revision' required maxlength='256'></label>",
         "<label>Declared context tokens<input name='context_tokens' type='number' min='1024' value='32768'></label><label>Output token reserve<input name='output_tokens' type='number' min='1' value='1024'></label>",
         "<label>Input byte ceiling<input name='input_bytes' type='number' min='1' max='1048576' value='28000'></label><label>Output byte ceiling<input name='output_bytes' type='number' min='1' max='65536' value='8192'></label>",
-        "<label>Request timeout seconds<input name='timeout_seconds' type='number' min='1' max='86400' value='1800'></label></div><button class='primary'>Add summary model</button></form></details></section>"));
+        "<label>Request timeout seconds<input name='timeout_seconds' type='number' min='1' max='86400' value='1800'></label></div>",
+        "<label class='summary-toggle'><input name='tools' type='checkbox'><span><strong>Serves tool calls</strong><small>Local endpoint only. Declares OpenAI-style tool calls (llama.cpp <code>--jinja</code>) so chats and agents may select <code>local:NAME</code> for agent turns.</small></span></label>",
+        "<button class='primary'>Add summary model</button></form></details></section>"));
     html.push_str("<section class='provider-section' aria-labelledby='compaction-heading'><h3 id='compaction-heading'>History compaction</h3><p class='provider-description'>Opt in per chat. Original messages remain available in the history tree.</p><form class='compaction-settings' method='post' action='/providers'><input type='hidden' name='action' value='compaction'>");
     html.push_str(&format!("<label class='summary-toggle'><input name='enabled' type='checkbox'{}><span><strong>Automatic summaries</strong><small>Use Control compaction for the chats listed below.</small></span></label><div class='provider-fields'><label>Summary model<select name='model'><option value=''>Select a summary model</option>",if memory.settings.enabled {" checked"}else{""}));
     for model in &memory.models { html.push_str(&format!("<option value='{}'{}>{}</option>",crate::escape(&model.id),if Some(&model.id)==memory.settings.model.as_ref(){" selected"}else{""},crate::escape(&model.id))); }
@@ -313,7 +350,8 @@ fn save_text(state: &mut crate::State, fields: &HashMap<String,String>, save: im
             models.push(crate::model_calls::Endpoint { id:get("id").into(),model:get("model").into(),url:get("url").into(),revision:get("revision").into(),
                 cli:match get("adapter") {""|"endpoint"=>None,"codex"=>Some(crate::backend::Backend::Codex),"claude"=>Some(crate::backend::Backend::Claude),_=>return Err("Unknown text adapter")},
                 limits:control_ai::model::Limits{context_tokens,output_tokens,input_bytes:get("input_bytes").parse().map_err(|_|"Invalid input byte ceiling")?,output_bytes:get("output_bytes").parse().map_err(|_|"Invalid output byte ceiling")?},
-                timeout_seconds:get("timeout_seconds").parse().map_err(|_|"Invalid request timeout")? });
+                timeout_seconds:get("timeout_seconds").parse().map_err(|_|"Invalid request timeout")?,
+                tools:fields.contains_key("tools") });
         }
         "text-remove" => { models.retain(|m|m.id!=get("id")); }
         "compaction" => {

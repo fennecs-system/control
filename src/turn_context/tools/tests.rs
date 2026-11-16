@@ -624,8 +624,9 @@ fn rejected_handoffs_are_remembered_for_the_recovery_wake() {
     let (mut state, id, generation) = fixture();
     let cx = AttemptRef { run: &id, generation: &generation, nonce: "draft" };
     let rejected = |state: &State| state.chats[0].continuity.as_ref().unwrap().checkpointing.rejected.clone();
-    // An unread receipt is the host's refusal, kept with its attempt.
-    let handoff = json!({"base_revision":0,"payload":{"subgoal":"Next useful action","findings":[],"tried":[],"pending":[],"next":[]},"processed":["never-delivered"],"disposition":{"kind":"continue"},"progress":null});
+    // Invalid notes are the host's refusal, kept with its attempt. (An unread
+    // receipt is no longer one: it is left pending and reported.)
+    let handoff = json!({"base_revision":0,"payload":{"subgoal":" ","findings":[],"tried":[],"pending":[],"next":[]},"processed":["never-delivered"],"disposition":{"kind":"continue"},"progress":null});
     let error = handle(&mut state, &cx, "control_turn_handoff", &handoff, |_| Ok(())).unwrap_err().to_string();
     let rejection = rejected(&state).unwrap();
     assert_eq!(rejection.generation, generation);
@@ -644,4 +645,79 @@ fn rejected_handoffs_are_remembered_for_the_recovery_wake() {
     // Long errors are bounded.
     reject(&mut state, &cx, &"x".repeat(5_000));
     assert_eq!(rejected(&state).unwrap().error.chars().count(), REJECTION + 1);
+}
+fn hand_off(state: &mut State, id: &str, generation: &str, nonce: &str, args: Value) -> io::Result<Value> {
+    handle(state, &AttemptRef { run: id, generation, nonce }, "control_turn_handoff", &args, |_| Ok(()))
+}
+fn read_room(state: &mut State, id: &str, generation: &str, nonce: &str) -> Value {
+    handle(state, &AttemptRef { run: id, generation, nonce }, "control_turn_context", &json!({"source":"room"}), |_| Ok(())).unwrap()
+}
+#[test]
+fn only_a_disposition_is_required_and_wait_topics_are_normalised_not_refused() {
+    let (mut state, id, generation) = fixture();
+    let chat = state.chats[0].id.clone();
+    crate::bots::command(&mut state, &chat, "on").unwrap();
+    let all = crate::bots::wait_topics(&state, &chat);
+    assert!(all.contains(&"room:general".to_owned()) && all.contains(&format!("conversation:{chat}")), "{all:?}");
+    // A bare string disposition, with no receipts, notes or revision.
+    let done = hand_off(&mut state, &id, &generation, "done", json!({"disposition":"done"})).unwrap();
+    assert_eq!(done["disposition"]["kind"], "done");
+    assert_eq!(done["adjusted"].as_array().unwrap().len(), 1, "{done}"); // the placeholder notes
+    // A #name and a bare name are read as subscriptions; unknown ones are dropped.
+    let wait = hand_off(&mut state, &id, &generation, "wait", json!({"disposition":{"kind":"wait","topics":["#general","nope"],"recheck_seconds":0}})).unwrap();
+    assert_eq!(wait["disposition"]["topics"], json!(["room:general"]), "{wait}");
+    assert!(wait["disposition"]["recheck_seconds"].is_null());
+    let adjusted = wait["adjusted"].to_string();
+    assert!(adjusted.contains("read #general as room:general") && adjusted.contains("dropped nope") && adjusted.contains("recheck_seconds 0"), "{adjusted}");
+    // Nothing matches, or nothing is named: keep every subscription.
+    for (nonce, disposition) in [("none", json!({"kind":"wait","topics":["elsewhere"]})), ("omitted", json!({"kind":"wait"}))] {
+        let widest = hand_off(&mut state, &id, &generation, nonce, json!({"disposition":disposition})).unwrap();
+        let topics: Vec<String> = serde_json::from_value(widest["disposition"]["topics"].clone()).unwrap();
+        assert_eq!(topics.len(), all.len(), "{widest}");
+        assert!(widest["adjusted"].to_string().contains("every current subscription"), "{widest}");
+    }
+    // An explicit empty selection keeps its meaning: urgent failures and direct messages only.
+    let quiet = hand_off(&mut state, &id, &generation, "quiet", json!({"disposition":{"kind":"wait","topics":[]}})).unwrap();
+    assert_eq!(quiet["disposition"]["topics"], json!([]));
+    // A stale base revision cannot race this attempt: used and reported.
+    let stale = hand_off(&mut state, &id, &generation, "stale", json!({"base_revision":7,"disposition":{"kind":"continue"}})).unwrap();
+    assert_eq!(stale["base_revision"], 0);
+    assert!(stale["adjusted"].to_string().contains("base_revision 7"), "{stale}");
+    // What cannot be honoured is refused with a callable fix.
+    let error = hand_off(&mut state, &id, &generation, "sleep", json!({"disposition":{"kind":"sleep"}})).unwrap_err().to_string();
+    assert!(crate::worker_tools::fixes::names_fix(&error), "{error}");
+    // Corrections never exhaust a budget; the last accepted draft stands.
+    for index in 0..12 {
+        hand_off(&mut state, &id, &generation, &format!("correction-{index}"), json!({"disposition":"continue","progress":format!("try {index}")})).unwrap();
+    }
+    let mailbox = state.runtime.runs[0].attempts[0].turn_mailbox.as_ref().unwrap();
+    assert!(mailbox.drafts.len() <= 8);
+    assert_eq!(mailbox.accepted().unwrap().progress.as_deref(), Some("try 11"));
+}
+#[test]
+fn omitted_receipts_process_what_was_delivered_and_explicit_ones_exactly_those() {
+    let (mut state, id, generation) = fixture();
+    post(&mut state, "first");
+    post(&mut state, "second");
+    let first = read_room(&mut state, &id, &generation, "r1");
+    post(&mut state, "third");
+    let second = read_room(&mut state, &id, &generation, "r2");
+    let publish = |state: &State| {
+        state.runtime.runs[0].attempts[0].turn_mailbox.as_ref().unwrap()
+            .publication(None, &id, &generation, "cp", |_| true).unwrap().unwrap().processed
+    };
+    let room = |processed: Vec<Range>| processed.iter().find_map(|r| match r { Range::Room { through, .. } => Some(*through), _ => None });
+    // Partial: exactly the listed receipt.
+    let partial = hand_off(&mut state, &id, &generation, "partial", json!({"processed":[first["receipt"]],"disposition":"continue"})).unwrap();
+    assert_eq!(partial["processed"], json!([first["receipt"]]));
+    assert_eq!(room(publish(&state)), Some(2));
+    // A receipt that would skip unseen events stays pending instead of failing the handoff.
+    let skip = hand_off(&mut state, &id, &generation, "skip", json!({"processed":[second["receipt"]],"disposition":"continue"})).unwrap();
+    assert_eq!(skip["processed"], json!([]), "{skip}");
+    assert_eq!(skip["left_pending"][0]["receipt"], second["receipt"]);
+    assert_eq!(room(publish(&state)), None);
+    // Omitted: everything delivered in this attempt, in order.
+    let all = hand_off(&mut state, &id, &generation, "all", json!({"disposition":"continue"})).unwrap();
+    assert_eq!(all["left_pending"], json!([]), "{all}");
+    assert_eq!(room(publish(&state)), Some(3));
 }

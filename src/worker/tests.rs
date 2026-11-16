@@ -262,7 +262,7 @@ fn consumed_steering_does_not_drop_requested_continuation() {
         .unwrap()
         .persist()
         .unwrap();
-    checkpoint_prepared(&mut state, Some(trace), |_| Ok(())).unwrap();
+    checkpoint_prepared(&mut state, Some(trace), None, |_| Ok(())).unwrap();
     crate::chat::send(
         &mut state,
         &chat,
@@ -378,7 +378,7 @@ fn bot_activation_keeps_the_live_protocol_and_captures_only_the_next_admission()
     let plan = crate::turn_context::PlannedContext::prepare(&state, queued).unwrap();
     let trace = plan.persist().unwrap();
     assert_eq!(
-        checkpoint_prepared(&mut state, Some(trace), |_| Ok(())),
+        checkpoint_prepared(&mut state, Some(trace), None, |_| Ok(())),
         Some(queued)
     );
     let attempt = state.runtime.runs[queued].attempts.last().unwrap();
@@ -386,7 +386,7 @@ fn bot_activation_keeps_the_live_protocol_and_captures_only_the_next_admission()
     let input = crate::turn_context::input(attempt).unwrap().unwrap();
     assert!(!input.contains("Old room history"));
     assert!(input.contains("Created /workspace/tool.rs"));
-    assert!(input.contains("no periodic handoff target"));
+    assert!(input.contains(control_context::agent_policy::ACTIVE_SESSION_GUIDANCE));
 }
 #[test]
 fn project_io_activity_is_live_without_holding_state_lock_and_retains_failures() {
@@ -1966,3 +1966,58 @@ fn handoff_grace_is_bounded() {
 }
 #[path = "tests/cancel_profile.rs"]
 mod cancel_profile;
+
+#[test]
+fn a_cut_off_turn_leaves_a_host_checkpoint_the_next_turn_resumes_from() {
+    use crate::attempt_control::Termination;
+    use control_context::turn_mailbox::{Disposition, Handoff};
+    let mut state = State::default();
+    let chat = crate::chat::create(&mut state);
+    crate::chat::send(&mut state, &chat, "Build the tool", "test").unwrap();
+    checkpoint_next(&mut state, |_| Ok(())).unwrap();
+    let id = state.runtime.runs[0].id.clone();
+    let generation = state.runtime.runs[0].attempts[0].workspace_id.clone().unwrap();
+    // Tool activity lives on the running attempt, not the worker's copy.
+    state.runtime.runs[0].attempts[0].activity = (0..10).map(|i| crate::usage::Activity {
+        id: format!("call-{i}"), kind: "command_execution".into(), text: format!("cargo build step {i}"),
+        output: "o".repeat(500), status: if i == 9 { "failed" } else { "completed" }.into(),
+    }).collect();
+    let mut attempt = state.runtime.runs[0].attempts[0].clone();
+    attempt.activity.clear();
+    attempt.termination = Some(Termination::TimedOut);
+    attempt.elapsed_ms = 1_200_000;
+    attempt.recovery = Some(crate::recovery::Candidate {
+        generation: generation.clone(), base: None, project: None, project_base: None,
+        cause: Termination::TimedOut, captured: true, error: None, draft: None,
+    });
+    let timed_out = Err(("failed", "Timed out after 1200 s".into()));
+    // A failed save leaves no note behind: it is part of the finish transaction.
+    assert!(commit(&mut state, &id, Action::Task, attempt.clone(), timed_out.clone(), false, |_| Err(std::io::Error::other("disk full"))).is_err());
+    assert!(state.chats[0].continuity.as_ref().unwrap().interrupted.is_none());
+    commit(&mut state, &id, Action::Task, attempt, timed_out, false, |_| Ok(())).unwrap();
+    let note = state.chats[0].continuity.as_ref().unwrap().interrupted.clone().unwrap();
+    assert_eq!((note.generation.as_str(), note.cause, note.captured, note.elapsed_seconds), (generation.as_str(), Termination::TimedOut, true, 1200));
+    assert_eq!(note.calls.len(), 8);
+    assert_eq!((note.calls[0].text.as_str(), note.calls[7].status.as_str()), ("cargo build step 2", "failed"));
+    assert_eq!(note.calls[0].output.chars().count(), 201, "outputs are bounded");
+    // No head or cursor moved; the next turn's input carries the note and the exact restore call.
+    assert!(state.chats[0].workspace.is_none());
+    assert!(state.chats[0].continuity.as_ref().unwrap().working.is_none());
+    crate::chat::send(&mut state, &chat, "Continue", "test").unwrap();
+    let next = checkpoint_next(&mut state, |_| Ok(())).unwrap();
+    let input = crate::turn_context::input(state.runtime.runs[next].attempts.last().unwrap()).unwrap().unwrap();
+    assert!(input.contains("Host checkpoint (written by Control"), "{input}");
+    assert!(input.contains(&format!("control_recovery {{\"generation\":\"{generation}\",\"restore\":true}}")), "{input}");
+    assert!(input.contains("cargo build step 9"), "{input}");
+    // A published handoff clears it.
+    let next_id = state.runtime.runs[next].id.clone();
+    let mut attempt = state.runtime.runs[next].attempts[0].clone();
+    attempt.artifact = Some("checkpoint".into());
+    state.runtime.runs[next].attempts[0].turn_mailbox.as_mut().unwrap().stage("resumed".into(), Handoff {
+        base_revision: 0, payload: control_context::working_state::Payload { subgoal: "Finish".into(), ..Default::default() },
+        processed: vec![], resynchronised: vec![], disposition: Disposition::Done, progress: None,
+    }, 0).unwrap();
+    commit(&mut state, &next_id, Action::Task, attempt, Ok("Resumed".into()), false, |_| Ok(())).unwrap();
+    let continuity = state.chats[0].continuity.as_ref().unwrap();
+    assert!(continuity.working.is_some() && continuity.interrupted.is_none());
+}

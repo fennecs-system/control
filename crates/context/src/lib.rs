@@ -7,7 +7,7 @@ pub mod tool_policy;
 pub mod turn_context;
 pub mod working_state;
 pub mod turn_mailbox;
-pub use library::{package_reference, valid_id, Definition, DocumentInput, LensVersion, Library, PackageInput, Resolved};
+pub use library::{package_reference, valid_id, Audience, Definition, DocumentInput, Guidance, LensVersion, Library, PackageInput, Resolved};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tool {
     pub name: &'static str,
@@ -20,7 +20,7 @@ pub struct Tool {
     pub aliases: &'static str,
     pub mcp_names: &'static [&'static str],
 }
-pub const TOOLS: [Tool; 27] = [
+pub const TOOLS: [Tool; 30] = [
     Tool {
         name: "service.score", title: "Score probes", description: "Workload-defined progress numbers sampled over time",
         href: None, aliases: "score progress metric probe measure outcome cost",
@@ -29,7 +29,7 @@ pub const TOOLS: [Tool; 27] = [
     Tool {
         name: "service.watch", title: "Watches", description: "Routines and program output that wake agents",
         href: None, aliases: "watch routine reflex monitor stream stdout events wake tail websocket ssh",
-        mcp_names: &["control_watch_start", "control_watch_events", "control_watch_status", "control_watch_stop", "control_watch_wake"], execution: "service PID 1 supervisor / Rust follower", surface: "chat / worker MCP", available: true,
+        mcp_names: &["control_watch_start", "control_watch_events", "control_watch_status", "control_watch_stop", "control_watch_wake", "control_observe_set"], execution: "service PID 1 supervisor / Rust follower", surface: "chat / worker MCP", available: true,
     },
     Tool {
         name: "agent.bot", title: "Persistent bot", description: "Event-woken agents · operator approval",
@@ -191,6 +191,39 @@ pub const TOOLS: [Tool; 27] = [
         available: true,
     },
     Tool {
+        name: "model.generate",
+        title: "Local model",
+        description: "Bounded text inference · configured private endpoint",
+        href: None,
+        aliases: "llm local model llama qwen gguf inference generate text completion",
+        mcp_names: &["control.model.generate", "control_model_generate"],
+        execution: "Rust adapter / operator-run inference service",
+        surface: "worker MCP / operator MCP / CLI",
+        available: true,
+    },
+    Tool {
+        name: "search.path",
+        title: "Path search",
+        description: "A* / Dijkstra over an inline graph or grid",
+        href: None,
+        aliases: "route routing shortest path planning graph grid astar dijkstra navigation",
+        mcp_names: &["control.search.path", "control_search_path"],
+        execution: "pure Rust",
+        surface: "MCP",
+        available: true,
+    },
+    Tool {
+        name: "solver.solve",
+        title: "Solver",
+        description: "Optimisation and constraints · HiGHS, Z3, CP-SAT",
+        href: None,
+        aliases: "optimization optimisation constraint lp milp mip smt sat cp scheduling assignment packing routing minizinc",
+        mcp_names: &["control.solve", "control_solve"],
+        execution: "offline Nix solver container",
+        surface: "MCP",
+        available: true,
+    },
+    Tool {
         name: "browser.capture",
         title: "Browser",
         description: "Scoped web pages · offline Firefox capture",
@@ -229,6 +262,7 @@ pub const TOOLS: [Tool; 27] = [
             "control_room_notifications",
             "control_room_ack",
             "control_room_claim",
+            "control_room_plan",
         ],
         execution: "local Rust / scoped room broker",
         surface: "rooms / MCP / room-linked agents",
@@ -269,11 +303,12 @@ pub const TOOLS: [Tool; 27] = [
         title: "Lenses",
         description: "Library · compose context and tool selections",
         href: Some("/lenses"),
-        aliases: "context composition",
+        aliases: "context composition guidance on demand",
         mcp_names: &[
             "control.lenses.list",
             "control.lens.read",
             "control.lenses.resolve",
+            "control_guidance",
         ],
         execution: "pure Rust / lens library",
         surface: "lens library / MCP",

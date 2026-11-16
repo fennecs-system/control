@@ -29,12 +29,12 @@ fn end_turn(state: &mut State, index: usize, status: &str) {
 }
 fn message(state: &mut State, run: &str, nonce: &str, chat: &str) -> io::Result<Value> {
     handle(state, &AttemptRef { run, generation: "peer-attempt", nonce },
-        MessageCall { chat_id: chat.into(), text: TEXT.into(), services: vec![] }, |_| Ok(()))
+        MessageCall { chat_id: chat.into(), text: TEXT.into(), services: vec![], urgent: true }, |_| Ok(()))
 }
 fn refused(state: &mut State, run: &str, chat: &str) -> String {
     let before = state.runtime.runs.len();
     let error = handle(state, &AttemptRef { run, generation: "peer-attempt", nonce: "refused" },
-        MessageCall { chat_id: chat.into(), text: TEXT.into(), services: vec![] },
+        MessageCall { chat_id: chat.into(), text: TEXT.into(), services: vec![], urgent: true },
         |_| panic!("refused messages must not save")).unwrap_err().to_string();
     assert_eq!(state.runtime.runs.len(), before);
     error
@@ -155,7 +155,7 @@ fn a_lead_messaging_its_running_persistent_bot_member_queues_no_turns() {
     let before = state.runtime.runs.len();
     for nonce in ["one", "two", "three"] {
         let sent = handle(&mut state, &AttemptRef { run: &lead_run, generation: "attempt-a", nonce },
-            MessageCall { chat_id: child.clone(), text: TEXT.into(), services: vec![] }, |_| Ok(())).unwrap();
+            MessageCall { chat_id: child.clone(), text: TEXT.into(), services: vec![], urgent: true }, |_| Ok(())).unwrap();
         assert_eq!((sent["queued"].as_bool(), sent["retained"].as_bool()), (Some(false), Some(true)));
     }
     let delivered = &state.runtime.runs[before..];
@@ -173,6 +173,6 @@ fn a_lead_messaging_its_running_persistent_bot_member_queues_no_turns() {
     let (mut state, _, child, _) = family();
     let lead_run = state.runtime.runs[0].id.clone();
     handle(&mut state, &AttemptRef { run: &lead_run, generation: "attempt-a", nonce: "plain" },
-        MessageCall { chat_id: child, text: TEXT.into(), services: vec![] }, |_| Ok(())).unwrap();
+        MessageCall { chat_id: child, text: TEXT.into(), services: vec![], urgent: true }, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.last().unwrap().status, "queued");
 }

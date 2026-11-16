@@ -106,6 +106,12 @@ fn candidates<'a>(state: &'a State, run: &crate::runtime::Run) -> Vec<&'a Candid
         .flat_map(|r| &r.attempts).filter_map(|a| a.recovery.as_ref()).collect()
 }
 pub fn prompt(state: &State, run: &crate::runtime::Run) -> String {
+    let host = state.chats.iter().find(|c| Some(&c.id) == run.chat_id.as_ref() && c.actor == run.actor)
+        .and_then(|c| c.continuity.as_ref()).and_then(|c| c.interrupted.as_ref())
+        .map_or(String::new(), |checkpoint| checkpoint.render());
+    host + &candidates_prompt(state, run)
+}
+fn candidates_prompt(state: &State, run: &crate::runtime::Run) -> String {
     let items = candidates(state, run);
     if items.is_empty() { return String::new(); }
     let newest: Vec<_> = items.iter().rev().take(4).map(|c| json!({"generation":c.generation,"cause":c.cause,"captured":c.captured,"error":c.error,"base":c.base})).collect();

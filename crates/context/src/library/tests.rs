@@ -66,7 +66,7 @@ fn optional_procedures_compose_without_adding_tools_or_authority() {
     assert_eq!(planning.lenses.len(), 1);
     let swarm = library.resolve(&["swarm".into(), "planning".into()], &[]).unwrap();
     assert_eq!(swarm.lenses.iter().filter(|lens| lens.id == "planning").count(), 1);
-    assert_eq!(swarm.instructions.iter().filter(|text| planning.instructions.contains(text)).count(), 1);
+    assert_eq!(swarm.guidance.iter().filter(|g| planning.guidance.contains(g)).count(), 1);
     let swarm_only = library.resolve(&["swarm".into()], &[]).unwrap();
     assert!(swarm_only.lenses.iter().any(|lens| lens.id == "planning"));
     // Ganglia is opt-in so runs with and without it can be compared.
@@ -75,7 +75,7 @@ fn optional_procedures_compose_without_adding_tools_or_authority() {
     assert_eq!(ganglia.tools, swarm_only.tools);
     assert!(ganglia.documents.is_empty() && ganglia.packages.is_empty());
     assert_eq!(ganglia.lenses.len(), swarm_only.lenses.len() + 1);
-    assert!(swarm_only.instructions.contains(&planning.instructions[0]));
+    assert!(swarm_only.guidance.contains(&planning.guidance[0]));
     assert_eq!(selected.lenses.iter().filter(|lens| lens.id == "planning").count(), 1);
     assert!(!ordinary.lenses.iter().any(|lens| lens.id == "coordination"));
     assert_eq!(
@@ -84,14 +84,12 @@ fn optional_procedures_compose_without_adding_tools_or_authority() {
     );
     assert!(
         !ordinary
-            .instructions
-            .iter()
+            .guidance.iter().map(|g| &g.text)
             .any(|s| s.contains("three distinct probes"))
     );
     assert_eq!(
         selected
-            .instructions
-            .iter()
+            .guidance.iter().map(|g| &g.text)
             .filter(|s| s.contains("three distinct probes"))
             .count(),
         1
@@ -106,14 +104,12 @@ fn optional_procedures_compose_without_adding_tools_or_authority() {
     );
     assert!(
         selected
-            .instructions
-            .iter()
+            .guidance.iter().map(|g| &g.text)
             .any(|s| s.contains("enforced limits"))
     );
     assert!(
         selected
-            .instructions
-            .iter()
+            .guidance.iter().map(|g| &g.text)
             .any(|s| s.contains("not a host-enforced experiment counter"))
     );
 }
@@ -225,11 +221,11 @@ fn newer_built_in_revisions_reach_nodes_unless_the_lens_was_edited_locally() {
 #[test]
 fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     let investigation = Library::default().get("investigation").unwrap().clone();
-    assert_eq!(investigation.revision, 2);
+    assert_eq!(investigation.revision, 3);
     assert_eq!(investigation.includes, ["evidence"]);
     assert!(investigation.tools.is_empty());
     let autonomy = Library::default().get("autonomy").unwrap().clone();
-    assert_eq!(autonomy.revision, 8);
+    assert_eq!(autonomy.revision, 9);
     assert!(autonomy.instructions.contains("routine steps need no evidence files, read-backs or proof records"));
     assert!(autonomy.instructions.contains("Never claim an outcome you have not observed"));
     assert!(autonomy.instructions.contains("when tooling work stops advancing the goal, stop and use what exists"));
@@ -239,7 +235,7 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert!(autonomy.instructions.contains("Weigh risk by reversibility"));
     assert!(autonomy.instructions.contains("Guards should bound damage"));
     let coordination = Library::default().get("coordination").unwrap().clone();
-    assert_eq!(coordination.revision, 13);
+    assert_eq!(coordination.revision, 14);
     assert!(coordination.instructions.contains("the outcome, not evidence paths or measurements"));
     assert!(coordination.instructions.chars().count() <= 4000);
     assert!(coordination.instructions.contains("keeping its turns short to stay responsive: it delegates implementation, long work and ongoing infrastructure to members, spawned or assigned"));
@@ -254,12 +250,12 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert!(coordination.instructions.contains("Coordinate only over consumable or exclusive resources"));
     assert!(coordination.instructions.contains("never invent locks or turn-taking"));
     let planning = Library::default().get("planning").unwrap().clone();
-    assert_eq!(planning.revision, 4);
+    assert_eq!(planning.revision, 5);
     assert!(planning.instructions.contains("observable outcome cheap to check"));
     assert!(planning.instructions.contains("Check it once when claiming the milestone done"));
     assert!(planning.instructions.contains("treat reaching its done-condition as the tool's test"));
     let advisor = Library::default().get("advisor").unwrap().clone();
-    assert_eq!(advisor.revision, 4);
+    assert_eq!(advisor.revision, 5);
     assert!(advisor.instructions.contains("members marked claims blocked"));
     assert!(advisor.instructions.contains("several members report a similar blocker"));
     assert!(advisor.instructions.contains("(busy but stalled)"));
@@ -268,31 +264,46 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert_eq!(swarm.revision, 2);
     assert!(swarm.includes.contains(&"planning".to_string()));
     let ganglia = Library::default().get("ganglia").unwrap().clone();
-    assert_eq!((ganglia.name.as_str(), ganglia.revision), ("Ganglia", 1));
+    assert_eq!((ganglia.name.as_str(), ganglia.revision), ("Ganglia", 2));
     assert!(ganglia.instructions.starts_with("Reflexes and routines run locally; turns are strategy."));
-    assert!(ganglia.instructions.contains("long-running work on systems faster than a turn, not one-off tasks"));
-    assert!(ganglia.instructions.contains("shared always-on reflex layer"));
+    assert!(ganglia.instructions.contains("long-running work on systems that change faster than a turn, not one-off tasks"));
+    // Reuse an existing package first; build or extend only for a demonstrated gap.
+    assert!(ganglia.instructions.contains("Reuse first: when an admitted or available tool package already provides reflexes or skills, use it"));
+    assert!(ganglia.instructions.contains("Build or extend a layer only for a gap a run has demonstrated"));
+    assert!(!ganglia.instructions.contains("always-on reflex layer first") && !ganglia.instructions.contains("builds it early"));
     // Reflexes commit (hysteresis) rather than thrash: the run -128 lesson.
     assert!(ganglia.instructions.contains("hold until the trigger stays clear a while"));
-    assert!(ganglia.instructions.contains("weigh every threat, preempt only for imminent ones"));
+    assert!(ganglia.instructions.contains("weigh every active condition, preempt only for urgent ones"));
     assert!(ganglia.instructions.contains("pause routines rather than cancel them"));
-    assert!(ganglia.instructions.contains("escalate only milestones, failures and threats they cannot handle"));
-    assert!(ganglia.instructions.contains("a layer that blocks the task is bypassed or removed, not patched again and again"));
+    assert!(ganglia.instructions.contains("escalate only milestones, failures and conditions they cannot handle"));
+    assert!(ganglia.instructions.contains("A layer that blocks the task is bypassed or removed, not patched again and again"));
     assert!(ganglia.instructions.contains("save as a tool package"));
-    assert!(ganglia.instructions.chars().count() <= 900);
+    assert!(ganglia.instructions.chars().count() <= 1200);
+    // Domain-independent: examples belong in docs, not in the lens.
+    let lowered = format!("{} {}", ganglia.instructions, ganglia.summary).to_lowercase();
+    for word in ["game", "player", "robot", "minecraft", "mob", "threat", "health", "hostile", "manoeuvre", "scrap", "price", "combat", "enemy"] {
+        assert!(!lowered.contains(word), "Ganglia lens mentions {word}");
+    }
+    // On-demand lenses carry one index line; the advisor procedure is scoped to lead and advisor.
+    for lens in [&investigation, &autonomy, &coordination, &planning, &advisor, &ganglia] {
+        assert!(!lens.summary.is_empty() && lens.summary.chars().count() <= MAX_SUMMARY, "{}", lens.id);
+    }
+    assert_eq!((advisor.roles.as_slice(), advisor.inline.as_slice()), ([Audience::Lead, Audience::Advisor].as_slice(), [Audience::Advisor].as_slice()));
+    assert!(advisor.instructions.contains("For a turn stopped at its time limit, suggest splitting the work into smaller turns or, for the lead, delegating it to a member."));
     let previous: Vec<Definition> = serde_json::from_str(include_str!("../builtin-lens-history.json")).unwrap();
-    assert!(previous.iter().any(|d| d.id == "investigation" && d.revision == 1));
-    for revision in 1..=7 {
+    assert!(previous.iter().any(|d| d.id == "investigation" && d.revision == 2));
+    assert!(previous.iter().any(|d| d.id == "ganglia" && d.revision == 1));
+    for revision in 1..=8 {
         assert!(previous.iter().any(|d| d.id == "autonomy" && d.revision == revision));
     }
-    for revision in 1..=12 {
+    for revision in 1..=13 {
         assert!(previous.iter().any(|d| d.id == "coordination" && d.revision == revision));
     }
-    for revision in 1..=3 {
+    for revision in 1..=4 {
         assert!(previous.iter().any(|d| d.id == "planning" && d.revision == revision));
     }
     assert!(previous.iter().any(|d| d.id == "swarm" && d.revision == 1));
-    for revision in 1..=2 {
+    for revision in 1..=4 {
         assert!(previous.iter().any(|d| d.id == "advisor" && d.revision == revision));
     }
     for earlier in previous {
@@ -345,4 +356,35 @@ fn packages_resolve_pinned_or_latest_and_validate_without_admission() {
     assert!(!serde_json::to_string(library.get("engineering").unwrap()).unwrap().contains("packages"));
     assert!(!serde_json::to_string(&pinned).unwrap().is_empty());
     assert!(!serde_json::to_string(&library.resolve(&["engineering".into()], &[]).unwrap()).unwrap().contains("packages"));
+}
+#[test]
+fn summaries_and_roles_make_lenses_on_demand_and_role_scoped() {
+    let mut library = Library::default();
+    let resolved = library.resolve(&["swarm".into(), "advisor".into()], &[]).unwrap();
+    // Short lenses without a summary stay inline for every role.
+    assert_eq!(resolved.instructions, ["Support factual claims with evidence. Distinguish findings from assumptions."]);
+    let ids = |role| resolved.on_demand(role).map(|g| g.id.as_str()).collect::<Vec<_>>();
+    assert_eq!(ids(Audience::Member), ["planning", "coordination", "autonomy", "investigation"]);
+    assert_eq!(ids(Audience::Lead), ["advisor", "planning", "coordination", "autonomy", "investigation"]);
+    assert_eq!(ids(Audience::Advisor), ["planning", "coordination", "autonomy", "investigation"]);
+    assert_eq!(resolved.inline(Audience::Advisor).count(), 2);
+    assert_eq!(resolved.inline(Audience::Member).count(), 1);
+    assert!(resolved.guidance_for("advisor", Audience::Member).is_none());
+    assert_eq!(resolved.guidance_for("Team advisor", Audience::Lead).unwrap().revision, 5);
+    // Role-scoped lenses without a summary are inline only for their roles.
+    library.definitions.push(Definition { id: "lead-only".into(), name: "Lead only".into(), revision: 1, instructions: "Lead text".into(), roles: vec![Audience::Lead], ..Default::default() });
+    let scoped = library.resolve(&["lead-only".into()], &[]).unwrap();
+    assert!(scoped.instructions.is_empty());
+    assert_eq!(scoped.inline(Audience::Lead).collect::<Vec<_>>(), ["Lead text"]);
+    assert_eq!(scoped.inline(Audience::Member).count() + scoped.on_demand(Audience::Member).count(), 0);
+    library.validate(&[]).unwrap();
+    for summary in ["two\nlines".to_owned(), "x".repeat(MAX_SUMMARY + 1)] {
+        let mut invalid = library.clone();
+        invalid.definitions.push(Definition { id: "bad".into(), name: "Bad".into(), revision: 1, summary, ..Default::default() });
+        assert!(invalid.validate(&[]).is_err());
+    }
+    // Contexts captured before this field still deserialize, with everything inline.
+    let mut old = serde_json::to_value(&resolved).unwrap();
+    old.as_object_mut().unwrap().remove("guidance");
+    assert!(serde_json::from_value::<Resolved>(old).unwrap().guidance.is_empty());
 }

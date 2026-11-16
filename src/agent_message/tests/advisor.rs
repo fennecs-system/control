@@ -19,7 +19,7 @@ fn team() -> (State, String, String, String, String) {
 }
 fn note(state: &mut State, run: &str, nonce: &str, chat: &str, text: &str) -> io::Result<Value> {
     handle(state, &AttemptRef { run, generation: "peer-attempt", nonce },
-        MessageCall { chat_id: chat.into(), text: text.into(), services: vec![] }, |_| Ok(()))
+        MessageCall { chat_id: chat.into(), text: text.into(), services: vec![], urgent: true }, |_| Ok(()))
 }
 
 #[test]
@@ -75,7 +75,7 @@ fn advisor_notes_refuse_members_judges_repeats_and_services() {
     state.runtime.runs[index].persona = Some(persona);
     assert!(note(&mut state, &run, "n5", &other, "Review this").is_err(), "advisors never message judges or advisors");
     let shared = handle(&mut state, &AttemptRef { run: &run, generation: "peer-attempt", nonce: "n6" },
-        MessageCall { chat_id: lead.clone(), text: "Use this service".into(), services: vec![ResourceId::try_from("svc".to_owned()).unwrap()] }, |_| Ok(()));
+        MessageCall { chat_id: lead.clone(), text: "Use this service".into(), services: vec![ResourceId::try_from("svc".to_owned()).unwrap()], urgent: true }, |_| Ok(()));
     assert!(shared.is_err(), "advisors transfer no authority");
 }
 

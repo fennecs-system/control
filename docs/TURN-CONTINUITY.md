@@ -4,6 +4,85 @@ Design for Sol, 2026-11-04. The implementation checkpoint below is historical;
 see the [current roadmap](SWARM-ROADMAP.md) for shipped scope and open follow-ups.
 Provider-session contract clarified 2026-11-06.
 
+## Cheap handoffs and host checkpoints (2026-11-16)
+
+Run -128 members averaged about 2.7 `control_turn_context` and 1.1
+`control_turn_handoff` calls per turn; 35 of 41 handoff failures were one
+refusal ("Wait can only narrow existing wake_topics"). Run -121 spent 9 h 26 min
+blocked on a rejection that named no callable fix. A checkpoint should cost one
+call, and a refusal should say what to call next.
+
+**The wake carries its delta.** At admission a bot wake (or room notification)
+gets one bounded page (16 posts, 8 KiB) of its linked room's posts after the
+committed watermark, rendered under its current event and recorded in the
+attempt's mailbox as the host-issued receipt `wake`. Both come from the same
+state snapshot at preparation, so the receipt never covers a post the
+projection did not show. Wake, bot and room guidance no longer tell agents to
+re-read these posts with `control_turn_context`; it remains for events that
+arrive after admission (the callback hint on tool results says when).
+Conversation events up to the wake were already baselined, and watch events
+are still read with `control_watch_events`.
+
+**Only the disposition is required.** `control_turn_handoff` accepts
+`{"disposition":{"kind":"done"}}` (or a bare `"done"` string):
+
+- `processed` omitted means every receipt delivered in this attempt, the
+  `wake` receipt included, that follows each source's committed position. An
+  explicit list processes exactly those receipts, for partial processing.
+- Receipts that cannot be applied (not delivered to this attempt, a gap not
+  marked resynchronised, or a range starting after an unprocessed one) are
+  left pending and reported in `left_pending` instead of failing the handoff.
+  Leaving events pending is always safe; the delivery stays at least once.
+- `payload` omitted keeps the latest draft or committed notes (a placeholder
+  subgoal if neither exists). `base_revision` omitted, or stale, uses the
+  committed revision: one writer per chat means it cannot move within an
+  attempt; publication still rechecks it.
+- Wait topics are normalised against current `wake_topics`, never widened past
+  them: `room:general`, `general` and `#general` all select `room:general`; a
+  bare kind selects its subscriptions. Unknown names are dropped. If a
+  non-empty selection matches nothing, or has more than 16 topics, or topics
+  are omitted, the wait keeps every current subscription (the park order,
+  truncated to 16) — the widest interpretation, so no event is missed. An
+  explicit `[]` keeps its meaning (urgent failures and direct messages only).
+  A claim wait on an already resolved claim records `continue`;
+  `recheck_seconds: 0` means no recheck. Over-long progress is truncated.
+- Every adjustment is listed in the result's `adjusted`. Superseded drafts no
+  longer exhaust a correction budget; only the accepted draft is kept.
+
+Payload validation (empty subgoal, oversized notes) still refuses, since
+notes are claims and are never silently rewritten; each refusal says how to
+retry, including omitting the payload.
+
+**Every refusal names a callable fix.** Turn handoff/context refusals carry
+their own concrete next call (tool and JSON arguments) or "ask the operator via
+control_design_ask". For service, room, watch and agent-message tools, worker
+dispatch appends the family's default fix to any refusal that lacks one (for
+example `control_service_status {}` then retry with a listed `service_id`).
+`worker_tools::fixes::tests` scans those tools' sources for error strings and
+asserts each reaches the model with a fix.
+
+**Exec results are final inline.** A command that finishes within
+`wait_seconds` returns its result marked `final: true`; only a result that says
+running gets a `wait` hint naming the exact `control_service_exec_status` call.
+
+**Host checkpoint on timeout or provider failure.** When a managed turn is
+stopped at its time limit or ends on a provider error before its handoff, the
+worker's finish transaction records `continuity.interrupted`: the generation,
+cause, whether the workspace was captured as a recovery candidate, elapsed
+time, any staged draft's progress, and the last 8 tool calls with outcomes
+(200 characters per field), all from host records with no model call. The next
+turn's working notes render it with the exact restore call,
+`control_recovery {"generation":"…","restore":true}`. Crash safety is
+unchanged: the note shares the finish transaction and its rollback, advances no
+head or cursor, and is cleared by the next published handoff or completed
+turn. A persistent bot treats a provider failure like a timeout: a prompt
+recovery turn within `bot_recovery_continues`, then the parked backoff.
+
+In `bots::tests::handoff_cost` a scripted agent handles five room wakes, sending
+only the fields each version's schema requires and following each refusal's
+fix. Before: 2.0 context reads, 2.0 handoffs and 1 refusal per turn. After: 0
+context reads, 1 handoff, no refusals.
+
 ## Persistent attempts and R1 (2026-11-07)
 
 Approved persistent bots get their own default turn limit, 1,200 seconds

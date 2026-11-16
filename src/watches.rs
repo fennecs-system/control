@@ -6,8 +6,10 @@
 mod ops;
 pub(crate) mod delivery;
 mod policy;
+pub(crate) mod salience;
 mod tools;
 pub use policy::WakePolicy;
+pub use salience::Salience;
 pub use tools::{Tools, WatchCall};
 use crate::{State, watch_frame::{Event, Frame}};
 use serde::{Deserialize, Serialize};
@@ -53,6 +55,14 @@ pub struct Notifications {
     pub through: u64,
     pub recent: Vec<String>,
 }
+impl Notifications {
+    fn wake(&mut self, seq: u64, preview: String) {
+        self.pending = self.pending.saturating_add(1);
+        self.through = self.through.max(seq);
+        if self.recent.len() == 5 { self.recent.remove(0); }
+        self.recent.push(preview);
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Watch {
@@ -71,6 +81,9 @@ pub struct Watch {
     pub notification_channel: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notifications: Option<Box<Notifications>>,
+    /// Declared notification filter and its bounded state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub salience: Option<Box<Salience>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<Creator>,
     /// Last sequence in the local spool: where the follower resumes.
@@ -96,11 +109,21 @@ pub struct Watch {
 }
 impl Watch {
     pub(crate) fn pending_notifications(&self) -> u64 { self.notifications.as_ref().map_or(0, |notifications| notifications.pending) }
+    /// Notifications a salience debounce holds; they may still wake later.
+    pub(crate) fn held_notifications(&self) -> usize { self.salience.as_ref().map_or(0, |salience| salience.holding()) }
+    /// Wakes with held notifications whose quiet period ended by `now`.
+    pub(crate) fn release(&mut self, now: u64) -> bool {
+        let Some(salience) = self.salience.as_deref_mut().filter(|s| s.holding() > 0) else { return false };
+        let mut woke = false;
+        let notifications = self.notifications.get_or_insert_with(Default::default);
+        salience.release(now, |seq, preview| { woke = true; notifications.wake(seq, preview.into()); });
+        woke
+    }
     pub(crate) fn active(&self) -> bool {
         !self.stopped && !self.last_exit.as_ref().is_some_and(|exit| exit.gave_up || (!self.permanent && exit.seq >= self.line_seq))
     }
     pub(crate) fn summary(&self) -> serde_json::Value {
-        serde_json::json!({"watch_id":self.id,"name":self.name,"service_id":self.service,"service_generation":self.generation,"created_by":self.created_by,"wake_policy":self.wake_policy,"notification_channel":self.notification_channel.then(|| serde_json::json!({"fd":3,"environment":"CONTROL_NOTIFY_FD","format":"newline-delimited bytes","max_bytes":crate::watch_frame::MAX_LINE})),"restart":if self.permanent {"permanent"} else {"transient"},"active":self.active(),"stopped":self.stopped,"cursor":self.seen,"last_exit":self.last_exit,"pending_source_gap":self.gap})
+        serde_json::json!({"watch_id":self.id,"name":self.name,"service_id":self.service,"service_generation":self.generation,"created_by":self.created_by,"wake_policy":self.wake_policy,"salience":self.salience.as_ref().map(|s| s.summary()),"notification_channel":self.notification_channel.then(|| serde_json::json!({"fd":3,"environment":"CONTROL_NOTIFY_FD","format":"newline-delimited bytes","max_bytes":crate::watch_frame::MAX_LINE})),"restart":if self.permanent {"permanent"} else {"transient"},"active":self.active(),"stopped":self.stopped,"cursor":self.seen,"last_exit":self.last_exit,"pending_source_gap":self.gap})
     }
     #[cfg(test)]
     pub(crate) fn observe_for_test(&mut self, seq: u64, exit: Option<i32>) {
@@ -112,6 +135,11 @@ impl Watch {
     }
     /// Records a spooled frame; returns false for a replay.
     pub(crate) fn observe(&mut self, frame: &Frame) -> bool {
+        // Only filters read the clock; unfiltered delivery stays clock-free.
+        let now = if self.salience.is_some() { crate::bots::now_ms() } else { 0 };
+        self.observe_at(frame, now)
+    }
+    pub(crate) fn observe_at(&mut self, frame: &Frame, now: u64) -> bool {
         if frame.seq <= self.seen {
             return false;
         }
@@ -133,11 +161,11 @@ impl Watch {
                 }
             }
             Event::Notification(payload) => {
-                let notifications = self.notifications.get_or_insert_with(Default::default);
-                notifications.pending = notifications.pending.saturating_add(1);
-                notifications.through = frame.seq;
-                if notifications.recent.len() == 5 { notifications.recent.remove(0); }
-                notifications.recent.push(String::from_utf8_lossy(payload).chars().take(200).collect());
+                // A hold that fell due before this event wakes first, in order.
+                self.release(now);
+                if self.salience.as_deref_mut().is_none_or(|salience| salience.admits(frame.seq, payload, now)) {
+                    self.notifications.get_or_insert_with(Default::default).wake(frame.seq, String::from_utf8_lossy(payload).chars().take(200).collect());
+                }
             }
             Event::Exit { code, signal, restarts, gave_up } => {
                 let exit = Exit { seq: frame.seq, code: *code, signal: *signal, restarts: *restarts, gave_up: *gave_up };

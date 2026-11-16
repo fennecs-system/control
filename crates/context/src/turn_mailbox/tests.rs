@@ -253,3 +253,31 @@ fn a_receipt_for_a_source_retired_mid_attempt_still_publishes() {
         .unwrap();
     assert_eq!(state.processed, vec![watch("w-live", 0, 5)]);
 }
+#[test]
+fn applicable_receipts_keep_contiguous_ranges_and_explain_the_rest() {
+    let mut mailbox = Mailbox::default();
+    mailbox.deliver("a".into(), page(0, 2)).unwrap();
+    mailbox.deliver("b".into(), page(2, 4)).unwrap();
+    mailbox.deliver("late".into(), page(6, 8)).unwrap();
+    let gap = Delivery { gap: true, ..page(4, 6) };
+    mailbox.deliver("gap".into(), gap).unwrap();
+    let all: Vec<String> = ["b", "a", "a", "late", "gap", "unknown"].map(String::from).into();
+    let (kept, dropped) = mailbox.applicable(None, &all, &[]).unwrap();
+    assert_eq!(kept, ["b", "a"]);
+    let reasons: Vec<_> = dropped.iter().map(|(r, _)| r.as_str()).collect();
+    assert_eq!(reasons, ["gap", "unknown", "late"]);
+    // The kept receipts publish; the dropped ones stay pending.
+    mailbox.stage("h".into(), handoff(&["b", "a"]), 0).unwrap();
+    let state = mailbox.publication(None, "r", "g", "cp", |_| true).unwrap().unwrap();
+    assert_eq!(state.processed[0].through(), 4);
+    // Resynchronising the gap admits it, and then the later page follows.
+    let (kept, dropped) = mailbox.applicable(None, &all, &["gap".into()]).unwrap();
+    assert_eq!(kept, ["b", "a", "late", "gap"]);
+    assert_eq!(dropped.len(), 1);
+    // Only the accepted draft survives a full correction budget.
+    for index in 0..12 {
+        mailbox.stage(format!("c{index}"), handoff(&[]), 0).unwrap();
+    }
+    assert!(mailbox.drafts.len() <= 8);
+    assert_eq!(mailbox.accepted.as_deref(), Some("c11"));
+}

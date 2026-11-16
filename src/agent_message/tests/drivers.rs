@@ -19,7 +19,7 @@ fn call(target: &str) -> MessageCall {
     MessageCall {
         chat_id: target.into(),
         text: "A dependency changed; continue independently".into(),
-        services: vec![],
+        services: vec![], urgent: true,
     }
 }
 async fn asynchronous(
@@ -77,7 +77,7 @@ fn blocking_and_tokio_drivers_share_effect_order_failure_rollback_and_restart_re
                 &mut blocking,
                 &attempt,
                 call(&target),
-                "fixed-message-id".into(),
+                ("fixed-message-id".into(), 0),
                 |_| {
                     trace.borrow_mut().push(Effect::ArchiveEvidence);
                     if failure == Some(Effect::ArchiveEvidence) {
@@ -134,7 +134,7 @@ fn blocking_and_tokio_drivers_share_effect_order_failure_rollback_and_restart_re
                     &mut restored,
                     &attempt,
                     call(&target),
-                    "unused-id".into(),
+                    ("unused-id".into(), 0),
                     |_| panic!("receipt retry must not archive"),
                     |_| panic!("receipt retry must not checkpoint"),
                     || panic!("receipt retry must not wake"),
@@ -315,6 +315,7 @@ fn transport_encodes_the_typed_result_and_can_use_a_host_without_global_state() 
                 queued: false,
                 services: call.services,
                 retained: Some(true),
+                urgent: None,
             })
         }
     }

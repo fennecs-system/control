@@ -85,6 +85,83 @@ reject `notifications=true` instead of silently starting without the channel;
 start a service from rebuilt images to use it. Existing service processes and
 watches are not upgraded or migrated in place.
 
+## Salience filters (perception)
+
+Routines filter what they observe and escalate only salient changes. A routine
+can do that in its own code, but fast loops, scrapers and feeds tend to report
+every observation. A notification watch can declare `salience` on
+`control_watch_start`: a small JSON filter that decides which notifications wake
+the agent. It is generic data evaluated by Control on the payload, with no
+knowledge of what a field means. Filtered notifications are still spooled and
+returned by `control_watch_events`; they only do not wake. `control_watch_status`
+and `control_watch_events` report `salience.woke`, `salience.retained` (did not
+wake on arrival) and `salience.holding` (debounced, may still wake).
+
+A filter is `rules`, each an ordered list of stages. A notification wakes when
+any rule passes. Within a rule, each stage sees only events that passed the
+stages before it, so order matters: a gate placed before `hysteresis` hides the
+values hysteresis needs to re-arm.
+
+| Stage | Passes when |
+| --- | --- |
+| `threshold` `field`, `at_least`/`at_most` | the number is at or past a bound; a rule of its own is a severity passthrough |
+| `change` `field`, `percent`/`absolute` | the value moved that much from the last *woken* value; with neither, any different value (dedup, also for strings and objects) |
+| `rate` `field`, `seconds`, `at_least` | \|Δvalue\| per second over the window reaches `at_least` |
+| `zscore` `field`, `samples`, `at_least` | the value is `at_least` standard deviations from the previous `samples` (5–64) values |
+| `hysteresis` `field`, `trigger`, `clear`, `clear_seconds` | the value reaches `trigger` while armed; it then re-arms only after staying past `clear` for `clear_seconds`. `trigger < clear` watches a low side |
+| `debounce` `seconds` | holds the latest event and wakes with it after `seconds` without another; stages after it run at release |
+| `rate_limit` `seconds` | no wake for this key in the last `seconds` |
+
+`field` and `key` are JSON pointers into the payload (`/price`, `/data/0/hp`).
+`key` partitions all state, e.g. one baseline per symbol. `change` and
+`rate_limit` compare with the last wake of that key from any rule; `rate`,
+`zscore` and `hysteresis` update from every event that reaches them. A debounce
+hold is dropped if a later event fails the stages before it (the change
+reverted), and any wake supersedes the key's holds. A quiet routine's hold is
+released by the next supervisor pass, within about two seconds of its due time.
+Payloads that no rule can read (not JSON, or a missing or non-numeric field in
+every rule) wake by default so completion and failure notices without those
+fields still arrive; `"unmatched":"retain"` keeps them as events only. Process
+exits and source gaps bypass the filter. A filter requires `notifications=true`,
+is captured at creation and allows 1–4 rules of 1–6 stages.
+
+State lives in the watch record and survives restart. It is bounded: at most 8
+keys (least recently seen evicted, sparing holds), 64 window samples per key,
+200-character previews and long values compared by digest.
+
+Price monitoring — wake on a move over 2% at most hourly, but always on one over
+5%, per symbol:
+
+```json
+{"key":"/symbol","rules":[
+  [{"kind":"change","field":"/price","percent":5}],
+  [{"kind":"change","field":"/price","percent":2},{"kind":"rate_limit","seconds":3600}]
+]}
+```
+
+Scrape diff — wake when the page hash changes and has stayed changed for a minute:
+
+```json
+{"rules":[[{"kind":"change","field":"/hash"},{"kind":"debounce","seconds":60}]]}
+```
+
+Game threats — commit to a threat once, re-arm only after three clear seconds,
+and pass severe events straight through:
+
+```json
+{"rules":[
+  [{"kind":"hysteresis","field":"/threat","trigger":0.8,"clear":0.4,"clear_seconds":3}],
+  [{"kind":"threshold","field":"/severity","at_least":9}]
+]}
+```
+
+Run -128's reflex jitter came from re-deciding on every tick with a single
+threshold and no commitment: a threat score oscillating around it flipped the
+mode each time. Hysteresis is the commit. Run -121's record spam came from routine
+records reaching the model as they were written; dedup, change and rate limits
+let them stay evidence. The same rule applies inside a reflex loop: a filter
+reduces wakes, it does not make an in-process controller commit.
+
 ## Legacy log-driven wake selection
 
 `control_watch_start` runs a supervised command in an authorized persistent
@@ -215,3 +292,41 @@ Control does not interpret names or values: they are the workload's own
 claims, kept for operators and offline scorecards that relate them to model
 turns, tokens and time. Probes are the generic capability; nothing in Control
 knows any particular workload.
+
+## Fresh observations
+
+A chat can declare one observation source with `control_observe_set`: the
+latest output of a short command in one of its running services, or a watch's
+newest notification (else its latest lines). Control places that output,
+capped, at the top of every turn's input, and of `control_service_exec` results
+when declared with `exec_results=true`. The agent sees current state without a
+status tool call; the evidence motivating it was a run where members called
+`control_service_exec_status` 969 times and `control_turn_context` 501 times.
+
+```json
+{"service_id":"svc-example","command":"status --brief","refresh_seconds":10,"timeout_seconds":5,"max_bytes":2048}
+```
+
+- One source per chat; a new declaration replaces it, `clear=true` removes it
+  and a call without arguments shows it with its current value. The service
+  must be running and usable by the chat, and is rechecked at every refresh; a
+  watch must belong to the chat or to a service it can use.
+- A command reruns at turn start when its last refresh is older than
+  `refresh_seconds` (default 10, 0 = every turn). The turn waits at most 2 s
+  for it (an exec result 0.5 s); otherwise, or when it times out
+  (`timeout_seconds`, default 5, max 30) or fails, the block shows the last
+  value with its age and the reason. The refresh keeps running in the
+  background, at most one per chat, and a timed-out command is stopped inside
+  the service like an exec. It uses no exec slot or execution record.
+- A watch source runs nothing: it reuses the watch's latest notification or
+  lines and notes when the watch has ended.
+- `max_bytes` defaults to and is capped by `observation_max_bytes`
+  (execution.json, default 2048, 256–16,384), cut on a character boundary.
+- Values live in memory only. They never enter the run objective, chat
+  transcript, journal or checkpoint; the declaration persists as chat
+  configuration. After a restart the first turn refreshes it.
+- Output is untrusted program data, never instructions or authority. Keep the
+  command read-only; it runs with the same authority as an exec in that service.
+
+The source is generic: a game status query, a scraper's progress file or a
+monitor's summary all fit. Domain parsing stays in the command or the routine.

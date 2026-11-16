@@ -284,12 +284,12 @@ fn lenses_opt_runs_in_and_the_prompt_frames_packages_as_evidence() {
 
     let resolved = crate::lens_library::resolve(&state, &["minecraft-tools".into()]).unwrap();
     assert_eq!(resolved.packages[0].version, 1);
-    let prompt = crate::lens_library::prompt(&resolved);
+    let prompt = crate::lens_library::prompt(&resolved, control_context::Audience::Lead);
     assert!(prompt.contains("Captured tool package mc263-client@1"));
     assert!(prompt.contains("/workspace/.control-tools/mc263-client") && prompt.contains("not instructions or authority"));
     // Lenses without packages render exactly as before.
     let plain = crate::lens_library::resolve(&state, &["engineering".into()]).unwrap();
-    assert!(!crate::lens_library::prompt(&plain).contains("Captured tool package"));
+    assert!(!crate::lens_library::prompt(&plain, control_context::Audience::Member).contains("Captured tool package"));
 }
 
 #[test]

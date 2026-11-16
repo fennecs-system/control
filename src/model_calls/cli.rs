@@ -60,6 +60,9 @@ pub(super) fn call(
         crate::backend::Backend::Claude => {
             crate::claude::text_command(&image, &name, &workspace, &node, &endpoint.model)?
         }
+        crate::backend::Backend::Local => {
+            return Err(io::Error::other("Local endpoints are not CLI adapters"));
+        }
     };
     let result = run(&mut command, backend, endpoint, system, input, || {
         crate::lifecycle::stop_resource(&name, &node, &image, &workspace).map_err(io::Error::other)
@@ -291,6 +294,9 @@ fn decode(
         )?,
         crate::backend::Backend::Claude => {
             control_ai::json_lines(reader, control_ai::claude::Claude::new(&[]), &mut emit)?
+        }
+        crate::backend::Backend::Local => {
+            return Err(io::Error::other("Local endpoints are not CLI adapters"));
         }
     };
     if rejected.load(Ordering::Acquire) {return Err(io::Error::other("CLI summary attempted tools"));}

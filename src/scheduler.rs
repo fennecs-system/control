@@ -39,6 +39,11 @@ pub struct Limits {
     /// Command executions in one turn of a chat steering active members before
     /// the same advisory suggestion.
     pub steering_exec_calls: usize,
+    /// Seconds a non-urgent agent message may wait for another wake of its
+    /// recipient before it is delivered as a digest turn of its own.
+    pub peer_digest_seconds: u64,
+    /// Bytes of a declared observation placed at the top of each turn.
+    pub observation_max_bytes: usize,
 }
 impl Default for Limits {
     fn default() -> Self {
@@ -54,6 +59,8 @@ impl Default for Limits {
             bot_recovery_recheck_seconds: 300,
             steering_turn_seconds: 240,
             steering_exec_calls: 6,
+            peer_digest_seconds: 600,
+            observation_max_bytes: 2048,
         }
     }
 }
@@ -77,6 +84,9 @@ impl Limits {
         }
         if !(30..=86_400).contains(&self.steering_turn_seconds) || !(1..=1024).contains(&self.steering_exec_calls) {
             return Err(io::Error::other("steering_turn_seconds must be 30–86400 and steering_exec_calls 1–1024"));
+        }
+        if !(30..=86_400).contains(&self.peer_digest_seconds) || !(256..=16_384).contains(&self.observation_max_bytes) {
+            return Err(io::Error::other("peer_digest_seconds must be 30–86400 and observation_max_bytes 256–16384"));
         }
         Ok(self)
     }

@@ -13,6 +13,7 @@ fn watched(id: &str, chat: &str) -> Watch {
         wake_policy: Default::default(),
         notification_channel: false,
         notifications: None,
+        salience: None,
         created_by: None,
         seen: 0,
         lines: 0,

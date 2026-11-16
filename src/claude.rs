@@ -316,7 +316,7 @@ pub fn execute(
                 }
         }, &flag)
     });
-    let prompt = captured.unwrap_or_else(|| render_prompt(objective,attempt.review_only));
+    let prompt = crate::observe::prepend(bridge, captured.unwrap_or_else(|| render_prompt(objective,attempt.review_only)));
     let sent = child
         .stdin
         .take()
