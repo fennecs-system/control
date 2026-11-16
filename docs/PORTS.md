@@ -56,12 +56,18 @@ This is TCP forwarding, not an HTTP proxy and not a container-wide egress grant.
 After approval, a service command can preserve TLS hostname verification while
 using the local relay, for example `curl --connect-to
 example.com:443:127.0.0.1:3001 https://example.com/file -o /workspace/file`.
+Service containers have no DNS or direct network, so a command that names the
+host directly fails with `Could not resolve host`. Every egress record returned by
+`control_port_request` and `control_port_status` (pending or approved) carries
+that exact line as `usage`, and the approval wake repeats it.
 Redirects or dependencies on other hosts require their own approved endpoints;
 package managers may need a task-local adapter rather than a generic proxy setting.
 Updated worker images keep the egress listener bound and allow eight concurrent
 TCP sessions per port. Each stream has independent bounded flow control, so a
 slow download does not block another stream or heartbeats. `ready` means the
-listener is running, not merely that approval was saved. Ingress also accepts
+listener is running, not merely that approval was saved. It is live relay state,
+set once the relay handshake succeeds and never persisted, so the saved state file
+has no `ready` field and a restarted node reports `false` until the relay is back. Ingress also accepts
 up to eight concurrent connections. Existing services on older images keep their
 single-session relay; start a new service with a rebuilt image to upgrade it.
 
@@ -81,6 +87,28 @@ explicit loopback checkbox. Private DNS answers, metadata, multicast and LAN
 addresses remain denied; checking the box does not authorize a hostname that
 resolves privately. A loopback grant deliberately exposes that exact node-local
 TCP endpoint to the approved service, so inspect the displayed target.
+
+**Waiting for a decision.** A pending record's `next` says not to poll: hand off
+with `control_turn_handoff {"disposition":{"kind":"wait","topics":["port:PORT_ID"]}}`.
+A `port:` topic needs no subscription; it is accepted only for a pending request
+of this chat (an unknown one is dropped, an already decided one records
+`continue`), and naming only port topics is an explicit narrow wait rather than
+every subscription. When the operator approves or denies, Control queues one
+`PortDecision` turn in the requesting conversation (bot or not) once it is idle,
+with each decision and, for an approved egress, its relay `usage`. A requester
+whose turn was cut off before its handoff (time limit, local step cap or provider
+failure, which leave a host checkpoint) is woken the same way; a cancelled or
+otherwise failed requester still is not. While a request is pending, a
+persistent bot gets no automatic recovery turn, so it sleeps until the decision.
+
+**Hints on failed commands.** When a `control_service_exec` or
+`control_service_exec_status` result shows a name-resolution or connection
+failure (`Could not resolve host`, `Name or service not known`, `Connection
+refused`, …) and the command or output names the host of one of this chat's
+pending or approved egress requests, the result gets one note: pending, hand off
+and wait on `port:PORT_ID` rather than retrying; approved, use the relay with the
+exact `--connect-to` line; already using the relay, check `control_port_status`
+for `ready` and `diagnostic`. Other hosts get no note; no domain is built in.
 
 `control_port_stop {"port_id":"PORT_ID"}` persists revocation. `stopping` is an
 intent; `stopped` acknowledges listener/connection teardown. Operator **Deny**

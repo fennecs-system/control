@@ -39,10 +39,15 @@ const CALLS_PER_STEP: usize = 8;
 const COMPACT_PERCENT: u32 = 75;
 /// Share of the input budget at which the agent is told, once, to hand off.
 const NOTE_PERCENT: u32 = 80;
+/// Model steps left in the turn at which the agent is told, once, to hand off
+/// (a quarter of the cap when that is fewer).
+const STEP_NOTE_LEFT: usize = 8;
 
 mod context;
 
 pub(crate) struct Policy {
+    /// Model steps before the turn stops with a host checkpoint
+    /// (`local_agent_steps` in execution.json).
     pub max_steps: usize,
     /// Consecutive malformed steps (bad JSON, unknown tool, empty or cut reply)
     /// answered with a corrective message before the attempt fails visibly.
@@ -82,6 +87,9 @@ pub(crate) trait Host {
     /// summary under `words` words.
     fn summarize(&mut self, evidence: &str, words: usize) -> io::Result<String>;
     fn record(&mut self, kind: &str, id: &str, text: &str, output: &str, status: &str);
+    /// The turn reached its model-step cap without a final report or handoff;
+    /// the worker then writes a host checkpoint for the next turn.
+    fn step_limit(&mut self) {}
     /// The turn's usage so far, after every model call (answered or not).
     fn metered(&mut self, meter: &Meter);
 }
@@ -185,6 +193,16 @@ fn result_text(result: &Value) -> (String, bool) {
     }
     (if failed { format!("ERROR: {text}") } else { text }, failed)
 }
+/// Appends a host note to the newest tool result, or as a user message.
+fn append_note(messages: &mut Vec<Value>, note: &str) {
+    match messages.last_mut() {
+        Some(last) if last["role"] == "tool" => {
+            let text = format!("{}\n\n{note}", last["content"].as_str().unwrap_or(""));
+            last["content"] = Value::String(text);
+        }
+        _ => messages.push(json!({"role":"user","content":note})),
+    }
+}
 fn size(messages: &[Value]) -> usize {
     serde_json::to_vec(messages).map_or(usize::MAX, |v| v.len())
 }
@@ -219,7 +237,7 @@ pub(crate) fn run(
     }
     let mut meter = Meter::default();
     let (mut steps, mut repairs, mut compactions) = (0usize, 0usize, 0usize);
-    let mut noted = false;
+    let (mut noted, mut step_noted) = (false, false);
     let mut lens = context::Lens::default();
     loop {
         match host.poll() {
@@ -230,7 +248,8 @@ pub(crate) fn run(
             Poll::Stop(failure) => return Err(failure),
         }
         if steps >= policy.max_steps {
-            return Err(failed(format!("Local agent stopped after {steps} model steps without a final report or handoff. The published checkpoint is unchanged.")));
+            host.step_limit();
+            return Err(failed(format!("Local agent reached its {steps}-step limit without a final report or handoff. The published checkpoint is unchanged; Control recorded this turn's last tool calls and workspace as a host checkpoint for the next turn to resume from (local_agent_steps in execution.json sets the limit).")));
         }
         // Context fit, re-checked every step: the request is the lens view of
         // the turn's original steps. Past the threshold, the oldest blocks are
@@ -285,13 +304,16 @@ pub(crate) fn run(
         if !noted && (reached >= NOTE_PERCENT || folded) && used(&view).saturating_add(tokens(note.len() + 16)) <= budget {
             noted = true;
             host.record("note", "local-context-note", &note, "", "completed");
-            match messages.last_mut() {
-                Some(last) if last["role"] == "tool" => {
-                    let text = format!("{}\n\n{note}", last["content"].as_str().unwrap_or(""));
-                    last["content"] = Value::String(text);
-                }
-                _ => messages.push(json!({"role":"user","content":note})),
-            }
+            append_note(&mut messages, &note);
+            view = lens.view(&messages, verbatim, shrink_all);
+        }
+        // Once per turn: few model steps remain before the cap stops the turn.
+        let left = policy.max_steps - steps;
+        if !step_noted && steps > 0 && left <= STEP_NOTE_LEFT.min(policy.max_steps / 4) {
+            step_noted = true;
+            let note = crate::worker_tools::nudges::steps_text(left, names.contains("control_turn_handoff"));
+            host.record("note", "local-step-note", &note, "", "completed");
+            append_note(&mut messages, &note);
             view = lens.view(&messages, verbatim, shrink_all);
         }
         let body = tool_request(model, &view, &tools, limits).map_err(|e| failed(e.to_string()))?;
@@ -481,6 +503,9 @@ impl Host for Live<'_> {
             });
         }
     }
+    fn step_limit(&mut self) {
+        self.attempt.termination = Some(crate::attempt_control::Termination::StepLimit);
+    }
     fn metered(&mut self, meter: &Meter) {
         self.meter = *meter;
         // Live totals: one in-memory update per model call, never a save.
@@ -561,7 +586,8 @@ pub(crate) fn execute(
     result.map(|outcome| outcome.text)
 }
 fn run_loop(live: &mut Live<'_>, model: &str, limits: &Limits, budget: Compactor, prompt: &str) -> Result<Outcome, Failure> {
-    run(live, model, limits, budget, prompt, &Policy::default())
+    let max_steps = live.shared.lock().map_or(Policy::default().max_steps, |state| state.runtime.execution.local_agent_steps);
+    run(live, model, limits, budget, prompt, &Policy { max_steps, ..Policy::default() })
 }
 
 #[cfg(test)]

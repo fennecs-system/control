@@ -698,23 +698,27 @@ fn recovery_note(state:&State, chat:&str, failed:&crate::runtime::Run) -> String
         None => "Checkpoint recovery: your previous turn ended without calling control_turn_handoff, so nothing was committed and it is treated as waiting. Do not repeat its checks; act only on new evidence, and call control_turn_handoff (continue, wait or done) before you yield.".into(),
     }
 }
-/// Wake guidance after the chat's latest turn was stopped at its attempt time
-/// limit: its unpublished work is a recovery candidate and its claims are still
-/// its own, and the work should be split or delegated rather than repeated.
+/// Wake guidance after the chat's latest turn was cut off before its handoff
+/// (time limit, model-step cap or provider failure): its unpublished work is a
+/// recovery candidate and its claims are still its own.
 fn timeout_note(latest:&crate::runtime::Run) -> Option<String> {
-    cut_off(latest).then(|| if timed_out(latest) { TIMEOUT_NOTE } else { PROVIDER_NOTE }.to_owned())
+    use crate::attempt_control::Termination;
+    cut_off(latest).then(|| match latest.attempts.last().and_then(|attempt| attempt.termination) {
+        Some(Termination::TimedOut) => TIMEOUT_NOTE,
+        Some(Termination::StepLimit) => STEP_LIMIT_NOTE,
+        _ => PROVIDER_NOTE,
+    }.to_owned())
 }
 /// The run failed because the host stopped it at its attempt time limit.
 fn timed_out(run:&crate::runtime::Run) -> bool {
-    run.status=="failed" && run.attempts.last().is_some_and(|attempt|attempt.termination==Some(crate::attempt_control::Termination::TimedOut))
+    stopped_by(run, crate::attempt_control::Termination::TimedOut)
 }
-/// The run was cut off mid-work before it checkpointed: stopped at its time
-/// limit or ended by a provider failure. Its host checkpoint lets it resume.
-fn cut_off(run:&crate::runtime::Run) -> bool {
-    run.status=="failed" && run.attempts.last().is_some_and(|attempt|matches!(attempt.termination,
-        Some(crate::attempt_control::Termination::TimedOut|crate::attempt_control::Termination::ProviderError)))
+fn stopped_by(run:&crate::runtime::Run, cause:crate::attempt_control::Termination) -> bool {
+    run.status=="failed" && run.attempts.last().is_some_and(|attempt|attempt.termination==Some(cause))
 }
+use crate::attempt_control::cut_off;
 pub(crate) const TIMEOUT_NOTE:&str="Your previous turn hit its time limit before checkpointing: resume from the host checkpoint in your working notes rather than redoing it, restoring files with the control_recovery call it names; keep your claims, delegate or run long work in a routine, and hand off before the limit.";
+pub(crate) const STEP_LIMIT_NOTE:&str="Your previous turn used all its model steps before checkpointing: resume from the host checkpoint in your working notes rather than redoing it, restoring files with the control_recovery call it names; do not retry a failing command in a loop, and hand off (waiting on what you depend on) before the step limit.";
 pub(crate) const PROVIDER_NOTE:&str="Your previous turn ended on a model provider failure before checkpointing: resume from the host checkpoint in your working notes rather than redoing it, restoring files with the control_recovery call it names, and hand off before you yield.";
 /// The handoff named a receipt that starts after its source's committed
 /// position: an earlier receipt of that source was left out. These are the
@@ -756,6 +760,7 @@ fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
     let woke = match (&note, describe(state, &reasons)) {
         (Some(_), woke) if woke.is_empty() && recovery.is_some() => "a turn that ended without an accepted handoff".to_owned(),
         (Some(_), woke) if woke.is_empty() && timed_out(latest) => "a turn stopped at its time limit".to_owned(),
+        (Some(_), woke) if woke.is_empty() && stopped_by(latest, crate::attempt_control::Termination::StepLimit) => "a turn stopped at its model-step limit".to_owned(),
         (Some(_), woke) if woke.is_empty() => "a turn ended by a provider failure".to_owned(),
         (_, woke) => woke,
     };

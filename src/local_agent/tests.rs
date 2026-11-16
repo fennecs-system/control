@@ -25,6 +25,8 @@ struct Mock {
     /// Target lengths requested from the compactor, and scripted failures.
     words: Vec<usize>,
     summary_errors: VecDeque<io::Error>,
+    /// The loop reported reaching its step cap.
+    step_limited: bool,
 }
 impl Host for Mock {
     fn tools(&mut self) -> io::Result<Vec<Value>> {
@@ -60,6 +62,9 @@ impl Host for Mock {
     }
     fn metered(&mut self, meter: &Meter) {
         self.meters.push(*meter);
+    }
+    fn step_limit(&mut self) {
+        self.step_limited = true;
     }
 }
 fn mock(replies: Vec<Value>) -> Mock {
@@ -159,7 +164,29 @@ fn cancellation_and_deadlines_stop_between_steps_and_during_calls() {
     // The step budget is a hard bound.
     let mut host = mock((0..3).map(|_| reply(None, call("control_room_post", r#"{"message":"x"}"#), "tool_calls")).collect());
     let failure = run(&mut host, "m", &limits(), compactor(20000), "p", &Policy { max_steps: 2, ..Policy::default() }).err().unwrap();
-    assert!(failure.1.contains("after 2 model steps"));
+    assert!(failure.1.contains("its 2-step limit"), "{}", failure.1);
+    assert!(host.step_limited);
+}
+#[test]
+fn a_turn_near_its_step_cap_is_told_once_and_the_cap_leaves_a_host_checkpoint() {
+    let step = || reply(None, call("control_room_post", r#"{"message":"retrying"}"#), "tool_calls");
+    let mut host = mock((0..20).map(|_| step()).collect());
+    let failure = run(&mut host, "m", &limits(), compactor(20000), "p", &Policy { max_steps: 16, ..Policy::default() }).err().unwrap();
+    assert_eq!(host.requests.len(), 16);
+    assert_eq!(failure.0, "failed");
+    assert!(failure.1.contains("host checkpoint") && failure.1.contains("local_agent_steps"), "{}", failure.1);
+    assert!(host.step_limited, "the worker is told so it records a StepLimit host checkpoint");
+    // Once, a quarter of the cap (4 steps) before it, naming the handoff.
+    let notes = host.records.iter().filter(|(k, _)| k == "note").collect::<Vec<_>>();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].1.starts_with("4 model steps left in this turn: publish your checkpoint (control_turn_handoff)"), "{notes:?}");
+    let noted = |r: &Value| r.to_string().contains("model steps left in this turn");
+    assert!(!host.requests[..12].iter().any(noted));
+    assert!(host.requests[12..].iter().all(noted), "the note stays on the tool result it was added to");
+    // A turn that hands off after the note finishes normally.
+    let mut host = mock((0..13).map(|_| step()).chain([reply(None, call("control_turn_handoff", "{}"), "tool_calls")]).collect());
+    let outcome = run(&mut host, "m", &limits(), compactor(20000), "p", &Policy { max_steps: 16, ..Policy::default() }).unwrap();
+    assert_eq!((outcome.text.as_str(), host.step_limited), ("handed off", false));
 }
 #[test]
 fn oversized_mandatory_input_is_refused_before_any_model_call() {

@@ -60,6 +60,14 @@ pub(crate) fn context_text(percent: u32, handoff: bool) -> String {
         format!("Context {percent}% full: finish with a brief final report soon.")
     }
 }
+/// The once-per-turn note when a local-model turn nears its model-step cap.
+pub(crate) fn steps_text(left: usize, handoff: bool) -> String {
+    if handoff {
+        format!("{left} model steps left in this turn: publish your checkpoint (control_turn_handoff) and continue next turn.")
+    } else {
+        format!("{left} model steps left in this turn: finish with a brief final report now.")
+    }
+}
 pub(crate) fn steering_text(members: usize) -> String {
     format!("You are steering {members} active members: delegate this work to a member and end your turn.")
 }

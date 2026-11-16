@@ -441,6 +441,23 @@ fn a_provider_failure_resumes_from_its_host_checkpoint_like_a_timeout() {
     assert_eq!(checkpointing(&state, &chat).failures, 1, "it shares the bounded recovery streak");
 }
 #[test]
+fn a_local_turn_stopped_at_its_step_cap_resumes_from_its_host_checkpoint() {
+    let (mut state, chat) = fixture();
+    managed_bot(&mut state, &chat);
+    post(&mut state, Some("peer"), "A relevant callback");
+    reconcile_at(&mut state, 1_000, ok).unwrap();
+    assert!(time_out_queued(&mut state, &chat));
+    let index = state.runtime.runs.iter().rposition(|run| run.bot_turn.is_some()).unwrap();
+    state.runtime.runs[index].attempts[0].termination = Some(crate::attempt_control::Termination::StepLimit);
+    reconcile_at(&mut state, 40_000, ok).unwrap();
+    let runs = chat_runs(&state, &chat);
+    assert_eq!(runs.len(), 2, "a turn cut off at its step cap is runnable work");
+    assert!(continues(runs[1]));
+    assert!(runs[1].objective.contains(crate::bots::STEP_LIMIT_NOTE), "{}", runs[1].objective);
+    let woke = &state.chats[0].messages.last().unwrap().text;
+    assert!(woke.starts_with("Bot woke: a turn stopped at its model-step limit."), "{woke}");
+}
+#[test]
 fn a_timed_out_turn_continues_promptly_within_the_bounded_streak() {
     let (mut state, chat) = fixture();
     managed_bot(&mut state, &chat);
