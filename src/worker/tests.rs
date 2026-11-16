@@ -1952,3 +1952,5 @@ fn mounts_reject_csv_injection_and_reports_reject_symlinks() {
     assert!(read_report(&link).is_err());
     fs::remove_dir_all(root).unwrap();
 }
+#[path = "tests/cancel_profile.rs"]
+mod cancel_profile;

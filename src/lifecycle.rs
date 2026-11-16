@@ -300,13 +300,36 @@ fn reconcile_with(
     listed: Vec<(String, String, String)>,
     mut stop: impl FnMut(&Attempt, &str) -> Result<(), &'static str>,
 ) -> Result<(), String> {
+    // Every resource name embeds its generation. Index attempts by generation
+    // once, so a container checks its own candidates rather than all history.
+    let mut generations = std::collections::HashMap::<&str, Vec<(usize, usize)>>::new();
+    for (o, owner) in owners.iter().enumerate() {
+        for (a, attempt) in owner.attempts.iter().enumerate() {
+            for generation in attempt.workspace_id.iter().chain(attempt.command_jobs.iter().map(|job| &job.generation)) {
+                let candidates = generations.entry(generation).or_default();
+                if candidates.last() != Some(&(o, a)) {
+                    candidates.push((o, a));
+                }
+            }
+        }
+    }
     for (name, owner_node, purpose) in listed {
         if format!("dev.control.purpose={purpose}") == CHECK_LABEL {
             continue;
         }
-        let owner = owners
-            .iter()
-            .find_map(|o| o.attempts.iter().find(|a| expected_path(a, &name).is_ok()).map(|a| (o, a)));
+        // Candidate generations for each name shape `expected_path` accepts;
+        // it still decides, in the original owner/attempt order.
+        let rest = name.strip_prefix("control-").unwrap_or_default();
+        let owner = std::iter::once(rest)
+            .chain(["-tool", "-probe", "-preview"].into_iter().filter_map(|suffix| rest.strip_suffix(suffix)))
+            .chain(rest.match_indices("-job-").map(|(end, _)| &rest[..end]))
+            .filter_map(|generation| generations.get(generation))
+            .flatten()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .map(|(o, a)| (&owners[o], &owners[o].attempts[a]))
+            .find(|(_, attempt)| expected_path(attempt, &name).is_ok());
         if owner.is_none() && owner_node != node {
             continue;
         }
