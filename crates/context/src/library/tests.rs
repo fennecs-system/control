@@ -229,14 +229,19 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert_eq!(investigation.includes, ["evidence"]);
     assert!(investigation.tools.is_empty());
     let autonomy = Library::default().get("autonomy").unwrap().clone();
-    assert_eq!(autonomy.revision, 7);
+    assert_eq!(autonomy.revision, 8);
+    assert!(autonomy.instructions.contains("routine steps need no evidence files, read-backs or proof records"));
+    assert!(autonomy.instructions.contains("Never claim an outcome you have not observed"));
+    assert!(autonomy.instructions.contains("when tooling work stops advancing the goal, stop and use what exists"));
     assert!(autonomy.instructions.contains("the model decides what to do, when and by whom"));
     assert!(autonomy.instructions.contains("a setback means recover, not quit"));
     assert!(autonomy.instructions.contains("two consecutive routine cycles"));
     assert!(autonomy.instructions.contains("Weigh risk by reversibility"));
     assert!(autonomy.instructions.contains("Guards should bound damage"));
     let coordination = Library::default().get("coordination").unwrap().clone();
-    assert_eq!(coordination.revision, 12);
+    assert_eq!(coordination.revision, 13);
+    assert!(coordination.instructions.contains("the outcome, not evidence paths or measurements"));
+    assert!(coordination.instructions.chars().count() <= 4000);
     assert!(coordination.instructions.contains("keeping its turns short to stay responsive: it delegates implementation, long work and ongoing infrastructure to members, spawned or assigned"));
     assert_eq!(coordination.includes, ["planning"]);
     assert!(coordination.instructions.starts_with("Whoever steers a team posts the milestone backlog"));
@@ -277,10 +282,10 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert!(ganglia.instructions.chars().count() <= 900);
     let previous: Vec<Definition> = serde_json::from_str(include_str!("../builtin-lens-history.json")).unwrap();
     assert!(previous.iter().any(|d| d.id == "investigation" && d.revision == 1));
-    for revision in 1..=6 {
+    for revision in 1..=7 {
         assert!(previous.iter().any(|d| d.id == "autonomy" && d.revision == revision));
     }
-    for revision in 1..=11 {
+    for revision in 1..=12 {
         assert!(previous.iter().any(|d| d.id == "coordination" && d.revision == revision));
     }
     for revision in 1..=3 {
