@@ -20,7 +20,7 @@ pub struct Tool {
     pub aliases: &'static str,
     pub mcp_names: &'static [&'static str],
 }
-pub const TOOLS: [Tool; 27] = [
+pub const TOOLS: [Tool; 29] = [
     Tool {
         name: "service.watch", title: "Watches", description: "Routines and program output that wake agents",
         href: None, aliases: "watch routine reflex monitor stream stdout events wake tail websocket ssh",
@@ -186,6 +186,28 @@ pub const TOOLS: [Tool; 27] = [
         available: true,
     },
     Tool {
+        name: "model.generate",
+        title: "Local model",
+        description: "Bounded text inference · configured private endpoint",
+        href: None,
+        aliases: "llm local model llama qwen gguf inference generate text completion",
+        mcp_names: &["control.model.generate", "control_model_generate"],
+        execution: "Rust adapter / operator-run inference service",
+        surface: "worker MCP / operator MCP / CLI",
+        available: true,
+    },
+    Tool {
+        name: "search.path",
+        title: "Path search",
+        description: "A* / Dijkstra over an inline graph or grid",
+        href: None,
+        aliases: "route routing shortest path planning graph grid astar dijkstra navigation",
+        mcp_names: &["control.search.path", "control_search_path"],
+        execution: "pure Rust",
+        surface: "MCP",
+        available: true,
+    },
+    Tool {
         name: "solver.solve",
         title: "Solver",
         description: "Optimisation and constraints · HiGHS, Z3, CP-SAT",
@@ -235,6 +257,7 @@ pub const TOOLS: [Tool; 27] = [
             "control_room_notifications",
             "control_room_ack",
             "control_room_claim",
+            "control_room_plan",
         ],
         execution: "local Rust / scoped room broker",
         surface: "rooms / MCP / room-linked agents",

@@ -63,7 +63,11 @@ another model; clicking its row selects it for new runs.
 
 [Local text models and compaction](docs/LOCAL-MODELS.md) describes independent
 local summarizers for Codex/Claude chats, configurable history windows and the
-web/TUI summary-tree inspector. Inference stays in an external service/container.
+web/TUI summary-tree inspector. It also covers bounded local text generation for
+agents (`control_model_generate`) and local-model agent turns (`/model
+local:NAME`, driven by Control's native tool loop). `nix run .#inference` starts
+llama.cpp with Metal on Apple Silicon or in the Nix container elsewhere. A Qwen
+27B setup and benchmark guide is included.
 
 You can also use Control's tools from your existing Claude Code or Codex CLI.
 With Control running, register its MCP server from the checkout:
@@ -142,7 +146,8 @@ These chat commands work on the web, in the TUI and in authorized Discord DMs:
 - **Tools.** Search the catalogue by tool name, MCP name or `lens:engineering`.
   [Approved web fetch and offline Firefox capture](docs/WEB-ACCESS.md), search
   and Rust playground have dedicated views.
-  MCP also offers [optimized Rust microbenchmarks](docs/PERFORMANCE.md).
+  MCP also offers [optimized Rust microbenchmarks](docs/PERFORMANCE.md) and
+  [planning tools](docs/PLANNING-TOOLS.md): a claim-graph plan and A* path search.
 - **Design decisions.** Agents can pause for a choice or your own direction,
   then continue from the saved workspace when you answer.
   Chat's Requests panel groups pending decisions, ports, folders and bot requests

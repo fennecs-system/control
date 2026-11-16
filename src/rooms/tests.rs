@@ -528,3 +528,19 @@ fn an_advisor_does_not_post_through_its_inherited_team_room() {
     assert!(state.collective.posts.is_empty());
     assert_eq!(state.chats[1].room, None, "a refused post links nothing");
 }
+
+#[test]
+fn the_room_plan_follows_room_access_rules() {
+    let mut state = State::default();
+    let (lead, lead_run) = active(&mut state, None);
+    let team = format!("general/{lead}");
+    state.chats[0].room = Some(team.clone());
+    let (_, child_run) = active(&mut state, Some(&lead));
+    room_call(&mut state, &child_run, "control_room_claim", json!({"key":"axe","action":"acquire"}), "3-1");
+    let plan = room_call(&mut state, &lead_run, "control_room_plan", json!({}), "3-2");
+    assert_eq!((&plan["room"], &plan["critical_path"]), (&json!(team), &json!(["axe"])));
+    assert!(state.collective.claim_seq == 1, "planning changes nothing");
+    let (_, other_run) = active(&mut state, None);
+    assert!(room_failure(&mut state, &other_run, "control_room_plan", json!({"room":team})).contains("another task"));
+    assert!(room_failure(&mut state, &other_run, "control_room_plan", json!({})).contains("No room attached"));
+}

@@ -21,7 +21,9 @@ impl Scratch {
         published().lock().unwrap().remove(&self.0);
         archives().lock().unwrap().remove(&self.0);
         let data = read_checkpoint(&self.0).unwrap().unwrap();
-        let (state, recovered) = recover(&self.0, data).unwrap();
+        let (mut state, recovered) = recover(&self.0, data).unwrap();
+        // As `load` does before anything reads runs.
+        crate::history::hydrate_text(&mut state).unwrap();
         if !adopt(&self.0, recovered.unwrap()) {
             self.compact(&state);
         }
@@ -454,4 +456,87 @@ fn a_failed_save_undoes_the_archive_step() {
     pending.undo(&state);
     assert!(state.runtime.runs.iter().all(|run| !run.archived()) && blocks(&scratch).is_empty());
     assert!(archived(&scratch.0).is_empty(), "the saved block list is unchanged");
+}
+
+fn referenced_blocks(scratch: &Scratch) -> Vec<String> {
+    let document: serde_json::Value = serde_json::from_slice(&scratch.snapshot()).unwrap();
+    let archive: archive::Archive = serde_json::from_value(document["_archive"].clone()).unwrap_or_default();
+    let mut names: Vec<String> = archive.blocks.iter().map(|span| format!("{:012}-{:02}.jsonl", span.start, span.level)).collect();
+    names.sort();
+    names
+}
+fn ids(state: &State) -> Vec<String> {
+    state.runtime.runs.iter().map(|run| run.id.clone()).collect()
+}
+
+/// A clean stop compacts and a restart loads (hydrating journal text); neither
+/// may bring archived runs back into the snapshot, and the block list survives
+/// any number of restarts with every run still found by id.
+#[test]
+fn archived_runs_stay_out_of_the_snapshot_across_shutdowns_and_restarts() {
+    let scratch = Scratch::new("archive-restart");
+    let state = with_history(archive::RECENT + 200);
+    scratch.save(&state);
+    scratch.save(&state);
+    let archived = state.runtime.runs.iter().filter(|run| run.archived()).count();
+    assert_eq!(archived, 192);
+    let all = ids(&state);
+    let every = runs_json(&state);
+    scratch.compact(&state); // clean shutdown
+    let hot_bytes = scratch.snapshot().len();
+    let mut last = state;
+    for restart in 0..2 {
+        let mut restored = scratch.restart();
+        assert_eq!(ids(&restored), all, "restart {restart}: every run once, in creation order");
+        assert_eq!(runs_json(&restored), every);
+        assert_eq!(restored.runtime.runs.iter().filter(|run| run.archived()).count(), archived, "restart {restart}");
+        assert_eq!(saved_runs(&scratch), all.len() - archived, "restart {restart}: only hot runs saved");
+        assert_eq!(referenced_blocks(&scratch), blocks(&scratch), "restart {restart}: every block referenced");
+        assert!(scratch.snapshot().len() <= hot_bytes + 64, "restart {restart}: the snapshot stays small");
+        // Work after the restart, then another clean stop.
+        restored.runtime.notice = format!("restart {restart}");
+        scratch.save(&restored);
+        scratch.compact(&restored);
+        assert_eq!(saved_runs(&scratch), all.len() - archived);
+        assert_eq!(referenced_blocks(&scratch), blocks(&scratch));
+        last = restored;
+    }
+    let found = last.runtime.runs.iter().find(|run| run.id == all[10]).unwrap();
+    assert!(found.archived() && *found.result == "result 10");
+}
+
+/// The state a build that un-archived every run at load left behind: every run
+/// in the snapshot and its blocks still referenced. Loading keeps the blocks,
+/// the next saves archive the runs again (into new blocks while the old ones
+/// still hold copies) and later restarts load each run once.
+#[test]
+fn a_snapshot_holding_archived_runs_recovers_without_losing_or_duplicating_runs() {
+    let scratch = Scratch::new("archive-repair");
+    let mut state = with_history(archive::RECENT + 200);
+    scratch.save(&state);
+    scratch.save(&state);
+    let old_blocks = blocks(&scratch);
+    let every = runs_json(&state);
+    let all = ids(&state);
+    for run in &mut state.runtime.runs {
+        let _ = &mut **run; // what the old load did to every run
+    }
+    scratch.compact(&state);
+    assert_eq!(saved_runs(&scratch), all.len(), "every run in the snapshot");
+    assert_eq!(referenced_blocks(&scratch), old_blocks);
+    let restored = scratch.restart();
+    assert_eq!(blocks(&scratch), old_blocks, "referenced blocks are kept");
+    assert_eq!(ids(&restored), all);
+    scratch.save(&restored);
+    scratch.save(&restored);
+    assert_eq!(restored.runtime.runs.iter().filter(|run| run.archived()).count(), 192);
+    scratch.compact(&restored);
+    assert_eq!(saved_runs(&scratch), all.len() - 192);
+    assert_eq!(referenced_blocks(&scratch), blocks(&scratch));
+    for _ in 0..2 {
+        let restored = scratch.restart();
+        assert_eq!(ids(&restored), all, "each run once, in creation order");
+        assert_eq!(runs_json(&restored), every);
+        assert_eq!(saved_runs(&scratch), all.len() - 192);
+    }
 }
