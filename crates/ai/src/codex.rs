@@ -1,4 +1,4 @@
-use crate::{Activity, Decoder, Event, Output, Tokens};
+use crate::{Activity, Decoder, Event, Output, Tokens, Usage};
 use serde_json::Value;
 use std::io;
 pub fn activity(value: &serde_json::Value) -> Option<Activity> {
@@ -97,6 +97,11 @@ impl Decoder for Codex {
     fn malformed(&mut self) {}
     fn accepts_partial_record(&self) -> bool {
         true
+    }
+    /// Codex reports usage only in `turn.completed`, the whole turn's total.
+    /// A turn stopped or failed before it reports nothing: unknown.
+    fn usage(&self) -> Usage {
+        Usage { tokens: self.tokens, complete: self.tokens.is_some(), model: None }
     }
     fn finish(self) -> io::Result<Output> {
         Ok(Output {

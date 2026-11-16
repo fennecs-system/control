@@ -17,7 +17,18 @@ use std::{
     marker::PhantomData,
     os::unix::fs::{FileExt, OpenOptionsExt},
     path::Path,
+    time::{Duration, Instant},
 };
+
+/// How long [`FileJournal::open`] waits for a lock held elsewhere. The lock is
+/// an `flock` on the open file description, and a process spawned by any
+/// thread shares every descriptor between its fork and exec (close-on-exec
+/// closes them only at exec). Dropping a handle while another thread spawns a
+/// child therefore leaves the lock held by that child for the few
+/// milliseconds until it execs, and an immediate reopen of the same journal
+/// would see it as "open elsewhere". A real second owner still fails after
+/// the wait.
+pub const LOCK_WAIT: Duration = Duration::from_secs(5);
 
 /// Ordered, append-only entries. An entry is one JSON value without newlines.
 pub trait Journal {
@@ -80,8 +91,26 @@ pub struct FileJournal {
 }
 impl FileJournal {
     pub fn open(path: &Path) -> io::Result<Self> {
+        Self::open_within(path, LOCK_WAIT)
+    }
+    /// [`open`](Self::open), waiting at most `wait` for the exclusive lock.
+    pub fn open_within(path: &Path, wait: Duration) -> io::Result<Self> {
         let mut file = OpenOptions::new().read(true).append(true).create(true).mode(0o600).open(path)?;
-        file.try_lock().map_err(|_| io::Error::new(io::ErrorKind::WouldBlock, "Journal is open elsewhere"))?;
+        let started = Instant::now();
+        let mut pause = Duration::from_millis(1);
+        loop {
+            match file.try_lock() {
+                Ok(()) => break,
+                Err(std::fs::TryLockError::WouldBlock) if started.elapsed() < wait => {
+                    std::thread::sleep(pause.min(wait.saturating_sub(started.elapsed())));
+                    pause = (pause * 2).min(Duration::from_millis(50));
+                }
+                Err(std::fs::TryLockError::WouldBlock) => {
+                    return Err(io::Error::new(io::ErrorKind::WouldBlock, "Journal is open elsewhere"));
+                }
+                Err(std::fs::TryLockError::Error(error)) => return Err(error),
+            }
+        }
         // The directory entry must be durable before any append is acknowledged,
         // including after a crash between creating the file and syncing it.
         File::open(path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new(".")))?.sync_all()?;

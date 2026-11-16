@@ -2,6 +2,7 @@
 use super::*;
 use control_comonad::{Store, cut};
 use serde::Deserialize;
+use std::time::Duration;
 
 fn scratch(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("control-journal-{}-{name}", std::process::id()));
@@ -61,7 +62,7 @@ fn one_handle_owns_a_journal_at_a_time() {
     let path = scratch("lock");
     let journal = FileJournal::open(&path).unwrap();
     assert_eq!(
-        FileJournal::open(&path).err().map(|e| e.kind()),
+        FileJournal::open_within(&path, Duration::from_millis(20)).err().map(|e| e.kind()),
         Some(io::ErrorKind::WouldBlock)
     );
     drop(journal);
@@ -69,6 +70,31 @@ fn one_handle_owns_a_journal_at_a_time() {
         FileJournal::open(&path).is_ok(),
         "the lock ends with the handle"
     );
+}
+
+/// A child spawned between fork and exec shares the handle's open file
+/// description, and with it the lock, after the handle is dropped. Reopening
+/// waits for that brief holder instead of failing. A duplicated descriptor
+/// stands in for the child's inherited one, deterministically.
+#[test]
+fn reopening_waits_for_a_descriptor_inherited_by_a_spawning_child() {
+    use std::os::fd::{AsFd, OwnedFd};
+    let path = scratch("inherited");
+    let journal = FileJournal::open(&path).unwrap();
+    let inherited: OwnedFd = journal.file.as_fd().try_clone_to_owned().unwrap();
+    drop(journal);
+    assert_eq!(
+        FileJournal::open_within(&path, Duration::ZERO).err().map(|e| e.kind()),
+        Some(io::ErrorKind::WouldBlock),
+        "the inherited descriptor still holds the lock"
+    );
+    let child = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(30));
+        drop(inherited); // the child execs: close-on-exec releases it
+    });
+    let mut reopened = FileJournal::open(&path).expect("waits for the inherited descriptor");
+    child.join().unwrap();
+    assert_eq!(reopened.append(br#"{"after":"reopen"}"#).unwrap(), 0);
 }
 
 #[test]

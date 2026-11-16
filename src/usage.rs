@@ -51,11 +51,51 @@ pub struct Attempt {
     pub model: String,
     pub status: String,
     pub tokens: Option<Tokens>,
+    /// How far `tokens` can be trusted. Absent on records from before it was kept.
+    #[serde(skip_serializing_if = "Accounting::is_unrecorded")]
+    pub accounting: Accounting,
+    /// The model the provider says served the attempt, when it says
+    /// (`model` is the requested one).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reported_model: Option<String>,
     /// Advisory notes already appended to this attempt's tool results.
     #[serde(skip_serializing_if = "crate::worker_tools::nudges::Nudges::is_clear")]
     pub nudges: crate::worker_tools::nudges::Nudges,
 }
+/// The provenance of an attempt's token counts. Missing usage is never zero.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Accounting {
+    /// Recorded before accounting provenance was kept: unknown.
+    #[default]
+    Unrecorded,
+    /// The provider never started, so no model call was made.
+    NotLaunched,
+    /// The provider's own end-of-turn totals.
+    Reported,
+    /// The per-call usage reported before the turn stopped: a lower bound.
+    Partial,
+    /// The provider ran but reported no usage.
+    Unknown,
+}
+impl Accounting {
+    pub fn is_unrecorded(&self) -> bool {
+        *self == Self::Unrecorded
+    }
+}
 impl Attempt {
+    /// Records what the provider reported, whatever the attempt's outcome.
+    pub fn record_usage(&mut self, usage: control_ai::Usage) {
+        self.accounting = match (usage.tokens, usage.complete) {
+            (None, _) => Accounting::Unknown,
+            (Some(_), true) => Accounting::Reported,
+            (Some(_), false) => Accounting::Partial,
+        };
+        self.tokens = usage.tokens;
+        if usage.model.is_some() {
+            self.reported_model = usage.model;
+        }
+    }
     /// Callers expose this only for successfully completed runs. The accepted
     /// handoff is the single retained source, not a duplicated summary field.
     pub(crate) fn task_progress(&self)->Option<&str> {
@@ -92,12 +132,12 @@ pub fn default_model() -> String {
 /// Keep numeric accounting and a bounded selection of command/activity fields.
 #[cfg(test)]
 pub fn capture(reader: impl Read) -> Option<Tokens> {
-    capture_with(reader, |_| {})
+    capture_with(reader, |_| {}).tokens
 }
-pub fn capture_with(reader: impl Read, mut update: impl FnMut(Activity)) -> Option<Tokens> {
-    control_ai::json_lines(reader, control_ai::codex::Codex::default(), |event| {
+pub fn capture_with(reader: impl Read, mut update: impl FnMut(Activity)) -> control_ai::Usage {
+    control_ai::json_lines_usage(reader, control_ai::codex::Codex::default(), |event| {
         if let control_ai::Event::Activity(activity) = event { update(activity); }
-    }).ok().and_then(|output| output.tokens)
+    }).1
 }
 
 #[derive(Default)]
@@ -108,10 +148,21 @@ struct Summary {
     completed: u64,
     failed: u64,
     interrupted: u64,
+    partial: u64,
+    no_call: u64,
 }
 impl Summary {
     fn add(&mut self, attempt: &Attempt) {
         self.attempts += 1;
+        match attempt.accounting {
+            Accounting::Partial => self.partial += 1,
+            // No model call: counted as measured with nothing to add.
+            Accounting::NotLaunched if attempt.tokens.is_none() => self.measured += 1,
+            _ => {}
+        }
+        if attempt.accounting == Accounting::NotLaunched {
+            self.no_call += 1;
+        }
         match attempt.status.as_str() {
             "completed" => self.completed += 1,
             "failed" => self.failed += 1,
@@ -218,7 +269,7 @@ pub fn render(runtime: &Runtime) -> String {
     let today = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() / 86400);
     html.push_str(&heatmap(&daily, today));
     html.push_str(&outcomes(&models));
-    html.push_str(&format!("<details class='record'><summary>Token accounting</summary><div class='metrics'><div><b>{}</b><span>INPUT</span></div><div><b>{}</b><span>OUTPUT</span></div><div><b>{}/{}</b><span>MEASURED ATTEMPTS</span></div></div><p class='muted'>Cached input: {} · unknown attempts: {} · older runs without tracking: {legacy}</p><p class='muted'>Cached tokens are part of input. Counts are provider-reported; subscription billing is not estimated.</p></details>", overall.tokens.input_tokens, overall.tokens.output_tokens, overall.measured, overall.attempts, overall.tokens.cached_input_tokens, overall.attempts - overall.measured));
+    html.push_str(&format!("<details class='record'><summary>Token accounting</summary><div class='metrics'><div><b>{}</b><span>INPUT</span></div><div><b>{}</b><span>OUTPUT</span></div><div><b>{}/{}</b><span>MEASURED ATTEMPTS</span></div></div><p class='muted'>Cached input: {} · unknown attempts: {} · partial (stopped mid-turn, lower bound): {} · no model call: {} · older runs without tracking: {legacy}</p><p class='muted'>Cached tokens are part of input. Counts are provider-reported; subscription billing is not estimated.</p></details>", overall.tokens.input_tokens, overall.tokens.output_tokens, overall.measured, overall.attempts, overall.tokens.cached_input_tokens, overall.attempts - overall.measured, overall.partial, overall.no_call));
     html.push_str(&table("By person", &people));
     html.push_str(&table("By provider / requested model", &models));
     html.push_str(&table("By day (UTC)", &days));

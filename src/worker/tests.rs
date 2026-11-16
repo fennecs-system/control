@@ -1954,6 +1954,16 @@ fn mounts_reject_csv_injection_and_reports_reject_symlinks() {
     assert!(read_report(&link).is_err());
     fs::remove_dir_all(root).unwrap();
 }
+/// After an accepted handoff the provider keeps running only long enough to
+/// end its turn and report usage; the bound is short against a turn deadline.
+#[test]
+fn handoff_grace_is_bounded() {
+    let accepted = Instant::now();
+    assert!(!handoff_grace_over(accepted, accepted));
+    assert!(!handoff_grace_over(accepted, accepted + HANDOFF_GRACE / 2));
+    assert!(handoff_grace_over(accepted, accepted + HANDOFF_GRACE));
+    assert!(!handoff_grace_over(accepted + HANDOFF_GRACE, accepted), "a clock that runs backwards is not over");
+}
 #[path = "tests/cancel_profile.rs"]
 mod cancel_profile;
 

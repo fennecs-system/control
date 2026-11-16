@@ -322,10 +322,11 @@ impl Runtime {
 /// Attempts and provider-reported tokens for one run, when any were measured.
 fn usage(run: &Run) -> String {
     let (input, output, measured) = run.attempts.iter().filter_map(|attempt| attempt.tokens).fold((0, 0, 0), |(i, o, n), t| (i + t.input_tokens, o + t.output_tokens, n + 1));
+    let partial = run.attempts.iter().any(|attempt| attempt.accounting == crate::usage::Accounting::Partial);
     match (run.attempts.len(), measured) {
         (0, _) => String::new(),
-        (attempts, 0) => format!(" · {attempts} attempt(s)"),
-        (attempts, _) => format!(" · {attempts} attempt(s) · {input} input · {output} output tokens"),
+        (attempts, 0) => format!(" · {attempts} attempt(s) · tokens unknown"),
+        (attempts, _) => format!(" · {attempts} attempt(s) · {input} input · {output} output tokens{} ({measured}/{attempts} measured)", if partial { " at least" } else { "" }),
     }
 }
 fn run_record(run: &Run) -> String {

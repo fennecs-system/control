@@ -21,7 +21,8 @@ pub trait AttemptTools: Sync {
     fn known(&self, name: &str) -> bool;
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value>;
 }
-static ATTEMPT_TOOLS: [&dyn AttemptTools; 13] = [
+static ATTEMPT_TOOLS: [&dyn AttemptTools; 14] = [
+    &crate::scores::Tools,
     &crate::github::inspection::Tools,
     &crate::compaction::Tools,
     &crate::recovery::Tools,
@@ -78,6 +79,7 @@ fn session_definitions() -> Vec<Value> {
             {"name":"control.room.read","description":"Read recent room posts and linked chats.","inputSchema":{"type":"object","properties":{"room":{"type":"string"}},"required":["room"]}},
             {"name":"control.room.post","description":"Post a concise shared update. This does not send a chat prompt or grant authority.","inputSchema":{"type":"object","properties":{"room":{"type":"string"},"message":{"type":"string","minLength":1,"maxLength":2000}},"required":["room","message"]}},
             {"name":"control.chat.read","description":"Read a chat and its run status.","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}},
+            {"name":"control.run.scores","description":"Read the workload score series of a run: the score probes declared anywhere in the chat's team (root chat and descendants), each with its samples (time, trigger, values), plus the team's milestone count. Values are the workload's own claims, not verified by Control.","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}},
             {"name":"control.requests.list","description":"List pending operator decisions across all chats: design questions, bot requests and port approvals, grouped by top-level chat in the same shape as control.chat.read. Decide them in that chat.","inputSchema":{"type":"object","properties":{}}},
             {"name":"control.chat.send","description":"Send as the chat's original actor. Optional mode changes persist; improve requires architect access.","inputSchema":{"type":"object","properties":{"mode":{"type":"string","enum":["chat","improve"]},"id":{"type":"string"},"message":{"type":"string","minLength":1,"maxLength":control_context::limits::CHAT_MESSAGE_CHARS}},"required":["id","message"]}}
         ]})["tools"].as_array().unwrap().clone()

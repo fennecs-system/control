@@ -244,19 +244,21 @@ fn probe_named(image: &str, node: &str, root: &Path, name: &str) -> io::Result<(
 
 #[cfg(test)]
 fn capture(reader: impl Read, update: impl FnMut(Activity)) -> io::Result<(String, Option<Tokens>)> {
-    capture_with(reader, update, &std::sync::atomic::AtomicBool::new(false))
+    capture_with(reader, update, &std::sync::atomic::AtomicBool::new(false)).0
 }
+/// The final reply, and the usage reported whether or not there was one.
 fn capture_with(
     reader: impl Read,
     mut update: impl FnMut(Activity),
     bad_tools: &std::sync::atomic::AtomicBool,
-) -> io::Result<(String, Option<Tokens>)> {
+) -> (io::Result<(String, Option<Tokens>)>, control_ai::Usage) {
     let allowed = control_context::worker_mcp_names();
-    let output = control_ai::json_lines(reader, control_ai::claude::Claude::new(&allowed), |event| match event {
+    let (output, usage) = control_ai::json_lines_usage(reader, control_ai::claude::Claude::new(&allowed), |event| match event {
         control_ai::Event::Activity(activity) => update(activity),
         control_ai::Event::RejectedTools => bad_tools.store(true, std::sync::atomic::Ordering::Relaxed),
-    })?;
-    Ok((output.text.ok_or_else(|| fail("Claude did not return a final result"))?, output.tokens))
+    });
+    let reply = output.and_then(|output| Ok((output.text.ok_or_else(|| fail("Claude did not return a final result"))?, output.tokens)));
+    (reply, usage)
 }
 
 pub fn execute(
@@ -299,6 +301,7 @@ pub fn execute(
     let mut child = command
         .spawn()
         .map_err(|_| failed("Cannot start the Claude Nix container"))?;
+    attempt.accounting = crate::usage::Accounting::Unknown;
     let diagnostics = drain(child.stderr.take().unwrap(), 64000);
     let bad_tools = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let flag = Arc::clone(&bad_tools);
@@ -324,6 +327,7 @@ pub fn execute(
     let mailbox_wake = crate::mailbox_wake::MailboxWake::new(&mailbox);
     let mut timed_out = None;
     let mut handoff = None;
+    let mut accepted = None;
     let success = loop {
         if crate::design::requested(bridge) { break false; }
         if crate::lifecycle::cancelled(bridge) {
@@ -341,9 +345,13 @@ pub fn execute(
         }
         if crate::design::requested(bridge) { break false; }
         match crate::attempt_control::poll(bridge, attempt, start.elapsed() + Duration::from_secs(admitted)) {
+            // Let the turn end itself and report its totals (tools are fenced
+            // after a handoff), within the grace.
             crate::attempt_control::Decision::Finish(summary) => {
                 handoff = Some(summary);
-                break false;
+                if crate::worker::handoff_grace_over(*accepted.get_or_insert_with(Instant::now), Instant::now()) {
+                    break false;
+                }
             }
             crate::attempt_control::Decision::TimedOut(seconds) => {
                 attempt.termination = Some(crate::attempt_control::Termination::TimedOut);
@@ -353,6 +361,8 @@ pub fn execute(
             crate::attempt_control::Decision::Continue => {}
         }
         match child.try_wait() {
+            // Stops the attempt's resources below; the handoff is the result.
+            Ok(Some(_)) if handoff.is_some() => break false,
             Ok(Some(status)) => break status.success(),
             Err(_) => break false,
             _ => {}
@@ -364,12 +374,12 @@ pub fn execute(
         let _ = child.wait();
         crate::attempt_control::stop(bridge, attempt).map_err(|m| ("interrupted", m.to_owned()))?;
     }
-    let result = output
+    let (result, usage) = output
         .join()
         .map_err(|_| failed("Claude stream reader stopped"))?;
+    attempt.record_usage(usage);
     let stderr = diagnostics.join().unwrap_or_default();
     if let Some(summary) = handoff {
-        if let Ok((_, tokens)) = result { attempt.tokens = tokens; }
         return Ok(summary);
     }
     if !success {
@@ -391,8 +401,7 @@ pub fn execute(
             }
         return Err(failed(&diagnose(&stderr)));
     }
-    let (text, tokens) = result.map_err(|e| failed(&format!("{e} The previous workspace checkpoint is unchanged.")))?;
-    attempt.tokens = tokens;
+    let (text, _) = result.map_err(|e| failed(&format!("{e} The previous workspace checkpoint is unchanged.")))?;
     Ok(text)
 }
 

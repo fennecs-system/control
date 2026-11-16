@@ -574,6 +574,10 @@ fn run_task(state: Arc<Mutex<State>>, task: Task) {
         &mut attempt,
         Some((&state, &task.0)),
     );
+    // Backends mark accounting unknown when they start the provider.
+    if attempt.accounting.is_unrecorded() {
+        attempt.accounting = crate::usage::Accounting::NotLaunched;
+    }
     if outcome.is_err() && attempt.termination.is_none() {
         attempt.termination = Some(if crate::shutdown::requested() {
             crate::attempt_control::Termination::Restarted
@@ -1234,10 +1238,10 @@ fn project_operation<T>(bridge: Option<(&Arc<Mutex<State>>, &str)>, generation: 
 fn capture_codex(
     reader: impl std::io::Read,
     mut update: impl FnMut(crate::usage::Activity),
-) -> (Option<crate::usage::Tokens>, bool) {
+) -> (control_ai::Usage, bool) {
     // Completion is adapter state, independent of the bounded UI activity tail.
     let mut pending = std::collections::HashSet::new();
-    let tokens = crate::usage::capture_with(reader, |event| {
+    let usage = crate::usage::capture_with(reader, |event| {
         if event.kind == "mcp_tool_call" {
             if matches!(event.status.as_str(), "in_progress" | "running") {
                 pending.insert(event.id.clone());
@@ -1247,7 +1251,17 @@ fn capture_codex(
         }
         update(event);
     });
-    (tokens, !pending.is_empty())
+    (usage, !pending.is_empty())
+}
+/// How long a provider may keep running after its handoff was accepted, so it
+/// can end the turn itself and report the turn's usage (Codex reports usage
+/// only when a turn completes; stopping it at once lost it for nearly every
+/// persistent-agent turn). Tools are fenced after the handoff, so the turn can
+/// only finish its reply; it is stopped at this bound otherwise.
+pub(crate) const HANDOFF_GRACE: Duration = Duration::from_secs(20);
+/// Whether a turn whose handoff was accepted at `accepted` should be stopped.
+pub(crate) fn handoff_grace_over(accepted: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(accepted) >= HANDOFF_GRACE
 }
 fn finish_codex_tools(
     attempt: &mut crate::usage::Attempt,
@@ -1451,8 +1465,14 @@ fn execute(
     let generation = id.to_owned();
     let diff_workspace = absolute.clone();
     let review_only=attempt.review_only;
+    let acted = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let acting = Arc::clone(&acted);
+    attempt.accounting = crate::usage::Accounting::Unknown;
     let accounting = std::thread::spawn(move || {
         capture_codex(stdout, |event| {
+            if matches!(event.kind.as_str(), "command_execution" | "file_change") {
+                acting.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
             let Some((state, id)) = &live else {
                 return;
             };
@@ -1491,6 +1511,8 @@ fn execute(
     let mailbox_wake = crate::mailbox_wake::MailboxWake::new(&absolute);
     let mut timed_out = None;
     let mut handoff = None;
+    // When the handoff was first seen accepted, and the shell/file actions started by then.
+    let mut accepted: Option<(Instant, u64)> = None;
     let result = loop {
         if crate::design::requested(bridge) {
             break Err(std::io::Error::other("Design decision requested"));
@@ -1510,11 +1532,18 @@ fn execute(
         if crate::lifecycle::cancelled(bridge) { break Err(std::io::Error::other("Cancellation requested")); }
         match crate::attempt_control::poll(bridge, attempt, started.elapsed() + Duration::from_secs(admitted)) {
             crate::attempt_control::Decision::Finish(summary) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                crate::attempt_control::stop(bridge, attempt).map_err(|m| ("interrupted", m.to_owned()))?;
+                // Let the turn end itself and report its usage, unless it
+                // keeps working (shell or file changes after its handoff) or
+                // outlasts the grace.
+                let acted_now = acted.load(std::sync::atomic::Ordering::Relaxed);
+                let (at, before) = *accepted.get_or_insert((Instant::now(), acted_now));
                 handoff = Some(summary);
-                break Ok(true);
+                if acted_now > before || handoff_grace_over(at, Instant::now()) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    crate::attempt_control::stop(bridge, attempt).map_err(|m| ("interrupted", m.to_owned()))?;
+                    break Ok(true);
+                }
             }
             crate::attempt_control::Decision::TimedOut(seconds) => {
                 attempt.termination = Some(crate::attempt_control::Termination::TimedOut);
@@ -1524,6 +1553,11 @@ fn execute(
             crate::attempt_control::Decision::Continue => {}
         }
         match child.try_wait() {
+            // An accepted handoff is the result however the turn then ended.
+            Ok(Some(_)) if handoff.is_some() => {
+                crate::attempt_control::stop(bridge, attempt).map_err(|m| ("interrupted", m.to_owned()))?;
+                break Ok(true);
+            }
             Ok(Some(status)) => break Ok(status.success()),
             Err(e) => break Err(e),
             _ => {}
@@ -1537,7 +1571,9 @@ fn execute(
         if let Err(message) = crate::attempt_control::stop(bridge, attempt) {
             return Err(("interrupted", message.into()));
         }
-        attempt.tokens = accounting.join().unwrap_or_default().0;
+        if let Ok((usage, _)) = accounting.join() {
+            attempt.record_usage(usage);
+        }
         return Err(if crate::lifecycle::cancelled(bridge) {
             (
                 "cancelled",
@@ -1551,8 +1587,8 @@ fn execute(
             failed("Worker stopped after its deadline or a process error.")
         });
     }
-    let (tokens, unfinished) = accounting.join().map_err(|_| failed("Could not read the provider's final tool results."))?;
-    attempt.tokens = tokens;
+    let (usage, unfinished) = accounting.join().map_err(|_| failed("Could not read the provider's final tool results."))?;
+    attempt.record_usage(usage);
     if !result.unwrap_or(false) {
         let stderr = diagnostics.join().unwrap_or(UNKNOWN_FAILURE);
         return Err(failed(stderr));

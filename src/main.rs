@@ -64,6 +64,7 @@ mod runtime;
 mod rust_bench;
 mod solver;
 mod scheduler;
+mod scores;
 mod services;
 mod spawning;
 mod session_http;
@@ -103,6 +104,8 @@ struct State {
     collective: collective::Collective,
     bots: bots::Bots,
     watches: Vec<watches::Watch>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    scores: Vec<scores::Probe>,
     observations: observe::Observations,
     agent_messages: Vec<application::messages::Sent>,
     documents: Vec<knowledge::Document>,
@@ -682,6 +685,7 @@ fn main() -> std::io::Result<()> {
     let workers = worker::start(state.clone());
     let services = services::supervise(state.clone());
     let ports = ports::supervise(state.clone());
+    let scores = scores::supervise(state.clone());
     println!("control · {} · run ./target/release/control open in another terminal to sign in", config::server_url());
     let mut listener_error = None;
     let mut requests = http_admission::Requests::new();
@@ -709,6 +713,7 @@ fn main() -> std::io::Result<()> {
     let stopped = workers.join();
     let service_failed = services.join().is_err();
     let port_failed = ports.join().is_err();
+    let _ = scores.join();
     let _=preview_restore.join();
     // Already-admitted HTTP tool calls have their own bounded waits. Let those
     // handlers finish too before the final state save and process exit.

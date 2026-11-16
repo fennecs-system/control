@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"0199a1b2-7c3d-7e10-9f00-1a2b3c4d5e6f"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_2","type":"mcp_tool_call","server":"control_rooms","tool":"control_turn_handoff","arguments":{"outcome":"wait"},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"mcp_tool_call","server":"control_rooms","tool":"control_turn_handoff","arguments":{"outcome":"wait"},"result":{"content":[{"type":"text","text":"{\"accepted\":true}"}]},"error":null,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"Handed off; waiting for the build watch."}}
+{"type":"turn.completed","usage":{"input_tokens":184233,"cached_input_tokens":160128,"output_tokens":2210}}

@@ -881,6 +881,20 @@ fn reap(service: &Service, execution: &str) -> bool {
     let command = crate::engine::exec(id.as_str(), &format!("{}:{}", service.uid, service.gid), None, &[], &["bash", "-c", &reap_script(execution)]);
     capture(command, Duration::from_secs(10), || false, |_| {}).is_ok_and(|r| r.exit_code == Some(0) && !r.timed_out)
 }
+/// Runs a short command for the host (a score probe) in a running service as
+/// its user, outside any attempt and without a record: bounded in time and
+/// output, reaped inside the service if it outlives the bound. Call without
+/// the state lock. Returns the output and exit code. Shares `probe`, under a
+/// marker unique to this sample.
+pub(crate) fn host_probe(service: &Service, command: &str, timeout: Duration) -> io::Result<(String, Option<i32>)> {
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
+    let owner = format!("score\u{0}{}\u{0}{nonce}", service.resource.id.as_str());
+    let result = probe(service, command, &owner, timeout)?;
+    if result.timed_out || result.exit_code.is_none() {
+        return Err(fail("The probe did not finish within its time bound"));
+    }
+    Ok((result.text, result.exit_code))
+}
 fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
     // A copy reads its requesting attempt's live workspace. A source that is
     // gone, unsafe or over its bounds fails before anything enters the service.

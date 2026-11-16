@@ -232,6 +232,14 @@ fn source_git(root: &Path, args: &[&str]) -> io::Result<Vec<u8>> {
     if let Some(path) = std::env::var_os("PATH") {
         command.env("PATH", path);
     }
+    bounded_output(command, LIMIT, SOURCE_GIT_TIMEOUT)
+}
+/// Guards against a hung Git (a stuck lock or filesystem), not a slow one.
+/// It was 5 s, which a loaded machine exceeds: the Nix package build runs the
+/// whole test suite on every core while these tests spawn several Git
+/// processes each, and process start alone can take seconds there.
+const SOURCE_GIT_TIMEOUT: Duration = Duration::from_secs(60);
+fn bounded_output(mut command: std::process::Command, limit: u64, timeout: Duration) -> io::Result<Vec<u8>> {
     let mut child = command
         .spawn()
         .map_err(|_| fail("Cannot capture the source Git revision"))?;
@@ -242,7 +250,7 @@ fn source_git(root: &Path, args: &[&str]) -> io::Result<Vec<u8>> {
     let output = std::thread::spawn(move || {
         let mut bytes = Vec::new();
         reader
-            .take(LIMIT + 1)
+            .take(limit + 1)
             .read_to_end(&mut bytes)
             .map(|_| bytes)
     });
@@ -250,7 +258,7 @@ fn source_git(root: &Path, args: &[&str]) -> io::Result<Vec<u8>> {
     let status = loop {
         match child.try_wait()? {
             Some(s) => break s,
-            None if started.elapsed() < Duration::from_secs(5) => {
+            None if started.elapsed() < timeout => {
                 std::thread::sleep(Duration::from_millis(10))
             }
             _ => {
@@ -264,7 +272,7 @@ fn source_git(root: &Path, args: &[&str]) -> io::Result<Vec<u8>> {
     let bytes = output
         .join()
         .map_err(|_| fail("Git output reader stopped"))??;
-    if !status.success() || bytes.len() as u64 > LIMIT {
+    if !status.success() || bytes.len() as u64 > limit {
         return Err(fail("Source Git inspection failed or exceeded its bound"));
     }
     Ok(bytes)

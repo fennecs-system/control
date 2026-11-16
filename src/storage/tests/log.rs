@@ -540,3 +540,24 @@ fn a_snapshot_holding_archived_runs_recovers_without_losing_or_duplicating_runs(
         assert_eq!(saved_runs(&scratch), all.len() - 192);
     }
 }
+
+/// Stress reproduction of the former intermittent failure: other threads
+/// spawning processes while recovery reopens the log. Before the journal waited
+/// for its lock, `recover` failed with "Journal is open elsewhere" (a child
+/// between fork and exec held the dropped handle's lock), typically within a
+/// few iterations; recovered states were never mixed. The deterministic check
+/// is `control_journal`'s
+/// `reopening_waits_for_a_descriptor_inherited_by_a_spawning_child`.
+#[test]
+#[ignore = "stress: about 10 s per iteration in a debug build"]
+fn crash_recovery_survives_concurrent_process_spawns() {
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let spawners: Vec<_> = (0..6).map(|_| { let stop = stop.clone(); std::thread::spawn(move || {
+        while !stop.load(std::sync::atomic::Ordering::Relaxed) { let _ = std::process::Command::new("true").status(); }
+    })}).collect();
+    let rounds = std::env::var("CONTROL_STRESS_ROUNDS").ok().and_then(|n| n.parse().ok()).unwrap_or(5);
+    let result = std::panic::catch_unwind(|| for _ in 0..rounds { a_crash_at_every_byte_of_a_multi_entity_save_recovers_before_or_after_it(); });
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    for s in spawners { s.join().unwrap(); }
+    result.unwrap();
+}

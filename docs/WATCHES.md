@@ -256,6 +256,43 @@ line-driven wakes. Synthetic tests cover noisy lines, selected events, exits,
 save failure/restart and missing evidence. Diamond-run improvement still requires
 a controlled baseline comparison after deployment.
 
+## Score probes
+
+Claims and messages are weak progress measures: their count depends on how
+work is split. A chat can instead declare how its workload scores itself with
+`control_score_probe`: a quick, read-only command in one of its services that
+prints a JSON object of up to 8 numbers on its last line, such as
+`{"blocks_placed":75,"beds":2}` for a game, `{"items":120}` for a scraper or
+`{"alerts":3}` for monitoring. Earlier output lines are ignored diagnostics.
+
+```json
+{"name": "score", "service_id": "svc-example", "command": "cat /workspace/score.json", "interval_seconds": 300}
+```
+
+Control runs the command once when it is declared (10 s bound) and rejects a
+probe that does not produce a score. It then samples it every
+`interval_seconds` (60 s to 1 day, default 300) and when the team reaches a
+milestone: a turn completes or a claim is done anywhere in the chat's team, at
+most every 30 s. Samples run in the service as its user, in `/workspace`, with
+a 20 s bound; a command still running then is stopped inside the service.
+A failed sample records its error and no value. Up to 4 probes per chat and 32
+per node; redeclaring a name replaces the probe and `clear=true` removes it.
+Probes of deleted chats are dropped; a probe whose service stopped or was
+replaced reports that until it is declared again.
+
+Each probe keeps at most 240 samples (`time`, `trigger`, `values`). When full,
+the older half is thinned to every second sample, so a series covers its whole
+run at falling resolution while recent samples stay complete. At the caps a
+probe is about 60 KB of state.
+
+The operator reads a run's series with `control.run.scores` (any chat id in the
+team; returns every probe in the root chat and its descendants and the team's
+milestone count). The chat view shows each probe's latest values in one line.
+Control does not interpret names or values: they are the workload's own
+claims, kept for operators and offline scorecards that relate them to model
+turns, tokens and time. Probes are the generic capability; nothing in Control
+knows any particular workload.
+
 ## Fresh observations
 
 A chat can declare one observation source with `control_observe_set`: the

@@ -20,7 +20,12 @@ pub struct Tool {
     pub aliases: &'static str,
     pub mcp_names: &'static [&'static str],
 }
-pub const TOOLS: [Tool; 29] = [
+pub const TOOLS: [Tool; 30] = [
+    Tool {
+        name: "service.score", title: "Score probes", description: "Workload-defined progress numbers sampled over time",
+        href: None, aliases: "score progress metric probe measure outcome cost",
+        mcp_names: &["control_score_probe"], execution: "Rust supervisor / bounded service command", surface: "chat / worker MCP", available: true,
+    },
     Tool {
         name: "service.watch", title: "Watches", description: "Routines and program output that wake agents",
         href: None, aliases: "watch routine reflex monitor stream stdout events wake tail websocket ssh",
@@ -284,6 +289,7 @@ pub const TOOLS: [Tool; 29] = [
             "control.chats.list",
             "control.chat.create",
             "control.chat.read",
+            "control.run.scores",
             "control.chat.send",
             "control.chat.lenses",
             "control.chat.rename",
