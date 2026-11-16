@@ -50,7 +50,7 @@ Private `~/.config/control/execution.json` (mode 0600) configures these separate
 limits; omitted fields retain their defaults:
 
 ```json
-{"max_parallel_runs":3,"max_agents_per_root":64,"max_pending_agent_intents":256,"max_advisors_per_root":1,"advisor_failure_streak":3,"advisor_stall_turns":24}
+{"max_parallel_runs":3,"max_agents_per_root":64,"max_pending_agent_intents":256,"max_advisors_per_root":1,"advisor_failure_streak":3,"advisor_stall_turns":24,"bot_record_digest":128}
 ```
 
 `max_advisors_per_root` (0–8; 0 disables advisors) caps the
@@ -59,6 +59,10 @@ its one blocking judge review. `advisor_failure_streak` (2–64) is how many
 consecutive failed or blocked turns of one member make a fact for its advisor.
 `advisor_stall_turns` (4–4096) is how many settled team turns, while claims stay
 open and none becomes done or resumes from blocked, make a busy-but-stalled fact.
+`bot_record_digest` (0 or 16–4096) is how many record-delivery room posts a sleeping
+persistent bot accumulates, with nothing else waking it, before they wake it once
+(see [what wakes a persistent bot](ROOM-NOTIFICATIONS.md#what-wakes-a-persistent-bot));
+0 disables that digest.
 Agent budgets must be positive integers up to 65,536. The MCP transport's
 input-size limit also applies. Node pending-intent capacity is
 shared across roots; root reservations include spawned and delegated descendants,

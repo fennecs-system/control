@@ -616,6 +616,13 @@ fn recorded_room_updates_do_not_wake_or_acknowledge_and_notifications_still_wake
     );
     reconcile_at(&mut state, 3_000, |_| Ok(())).unwrap();
     assert_eq!(bot_runs(&state).len(), 1);
+    // The held records arrive batched as context of the turn the notification woke.
+    let turn = bot_runs(&state)[0].bot_turn.as_ref().unwrap();
+    assert!(matches!(turn.reasons.as_slice(), [
+        Reason::Info { info: Message::Records { count: 100, digest: 128 }, through: 100, .. },
+        Reason::Info { info: Message::Post, through: 101, .. },
+    ]), "{:?}", turn.reasons);
+    assert!(bot_runs(&state)[0].objective.contains("context: 100 record updates in room #general"));
     let first = state
         .runtime
         .runs
@@ -638,6 +645,65 @@ fn recorded_room_updates_do_not_wake_or_acknowledge_and_notifications_still_wake
     post(&mut state, None, "Human steering remains actionable");
     reconcile_at(&mut state, 80_000, |_| Ok(())).unwrap();
     assert_eq!(bot_runs(&state).len(), 2);
+}
+
+fn records(state: &mut State, chat: &str, count: usize) {
+    for _ in 0..count {
+        post(state, Some(chat), "P5 verified routine progress");
+        state.collective.posts.last_mut().unwrap().delivery = crate::rooms::Delivery::Record;
+    }
+}
+#[test]
+fn records_wake_a_sleeping_bot_once_per_digest_bound_and_never_through_a_selective_wait() {
+    let (mut state, chat) = fixture();
+    state.runtime.execution.bot_record_digest = 16;
+    command(&mut state, &chat, "on").unwrap();
+    records(&mut state, "peer", 15);
+    reconcile_at(&mut state, 1_000, |_| Ok(())).unwrap();
+    assert!(bot_runs(&state).is_empty(), "below the bound records stay context");
+    records(&mut state, "peer", 1);
+    reconcile_at(&mut state, 2_000, |_| Ok(())).unwrap();
+    assert_eq!(bot_runs(&state).len(), 1, "the bound admits one digest turn");
+    let run = bot_runs(&state)[0];
+    assert!(matches!(run.bot_turn.as_ref().unwrap().reasons.as_slice(), [Reason::Info { info: Message::Records { count: 16, .. }, .. }]));
+    assert!(run.objective.contains("digest: 16 record updates accumulated in room #general"));
+    // The count restarts with the turn; records during and after it wait again.
+    let id = run.id.clone();
+    records(&mut state, "peer", 15);
+    state.runtime.runs.iter_mut().find(|run| run.id == id).unwrap().status = "completed".into();
+    reconcile_at(&mut state, 40_000, |_| Ok(())).unwrap();
+    assert_eq!(bot_runs(&state).len(), 1);
+
+    // 0 disables the digest: records alone never wake.
+    let (mut state, chat) = fixture();
+    state.runtime.execution.bot_record_digest = 0;
+    command(&mut state, &chat, "on").unwrap();
+    records(&mut state, "peer", 1_000);
+    for pass in 0..4 {
+        reconcile_at(&mut state, 1_000 + pass, |_| Ok(())).unwrap();
+    }
+    assert!(bot_runs(&state).is_empty());
+
+    // A bot waiting on a claim keeps waiting through any number of records,
+    // and the resolution delivers them as context.
+    let (mut state, chat) = fixture();
+    state.runtime.execution.bot_record_digest = 16;
+    let peer = crate::chat::create(&mut state);
+    crate::chat::send(&mut state, &peer, "Gather wood", "test").unwrap();
+    command_at(&mut state, &chat, "on", Now(0)).unwrap();
+    let revision = claim_wood(&mut state, &peer, json!({"key":"wood","action":"acquire"}));
+    let topic = crate::rooms::claims::wait_topic(&state, &chat, "general/wood").unwrap();
+    waiting_on(&mut state, vec![topic]);
+    reconcile_at(&mut state, 1_000, |_| Ok(())).unwrap();
+    records(&mut state, &peer, 40);
+    reconcile_at(&mut state, 2_000, |_| Ok(())).unwrap();
+    assert!(bot_runs(&state).is_empty(), "a selective wait is not released by a digest");
+    claim_wood(&mut state, &peer, json!({"key":"wood","action":"update","status":"done","revision":revision}));
+    reconcile_at(&mut state, 6_000, |_| Ok(())).unwrap();
+    assert_eq!(bot_runs(&state).len(), 1, "a claim resolution still wakes");
+    let reasons = &bot_runs(&state)[0].bot_turn.as_ref().unwrap().reasons;
+    assert!(reasons.iter().any(|reason| matches!(reason, Reason::Info { info: Message::Records { count: 40, .. }, .. })));
+    assert!(reasons.iter().any(|reason| matches!(reason, Reason::Info { info: Message::Resolved(crate::rooms::claims::Outcome::Done), .. })));
 }
 
 #[test]

@@ -58,6 +58,10 @@ pub trait Info: Clone + Debug + PartialEq {
     /// Input addressed to this bot releases a wait that selected no topics. A
     /// wait that selected topics keeps it pending for the next turn instead.
     fn direct(&self) -> bool { false }
+    /// Context-only messages (false) are admitted, coalesced and delivered with
+    /// the bot's next turn, but never start one or release a wait themselves.
+    /// A merged message may become waking, for example at a digest bound.
+    fn wakes(&self) -> bool { true }
 }
 
 /// Bounds automatic turns: a minimum gap between turns and a cap per window.
@@ -207,10 +211,22 @@ struct Bot<I> {
 struct Wait { topics: Vec<Topic>, until: Option<u64> }
 impl Wait {
     fn releases<I: Info>(&self, topic: &Topic, info: &I) -> bool {
-        info.urgent() || self.topics.contains(topic) || (info.direct() && self.topics.is_empty())
+        info.urgent() || (info.wakes() && (self.topics.contains(topic) || (info.direct() && self.topics.is_empty())))
+    }
+}
+impl<I: Info> Reason<I> {
+    fn wakes(&self) -> bool {
+        match self {
+            Reason::Info { info, .. } => info.wakes(),
+            Reason::Timer | Reason::Continue | Reason::Overflow { .. } => true,
+        }
     }
 }
 impl<I: Info> Bot<I> {
+    /// Whether pending input may start a turn; context-only reasons wait for one.
+    fn runnable(&self) -> bool {
+        self.dropped > 0 || self.pending.iter().any(Reason::wakes)
+    }
     /// Admits a reason. Replays at or below the topic cursor are ignored. When
     /// the pending set is full a new distinct reason is counted as dropped and
     /// its topic is reported for resynchronisation in the next turn.
@@ -266,7 +282,7 @@ impl<I: Info> Bot<I> {
     /// When pending reasons could next become a turn, if blocked only by time.
     /// `None` also covers deadlines beyond the representable range.
     fn ready_at(&self, now: u64) -> Option<u64> {
-        if self.pending.is_empty() || self.turn.is_some() || self.paused || self.stopping || self.wait.is_some() || self.definition.validate().is_err() {
+        if !self.runnable() || self.turn.is_some() || self.paused || self.stopping || self.wait.is_some() || self.definition.validate().is_err() {
             return None;
         }
         let budget = self.definition.budget;
@@ -471,12 +487,15 @@ impl<I: Info> Supervisor<I> {
                 let key = topic.key();
                 for bot in self.bots.values_mut().filter(|bot| !bot.stopping) {
                     if bot.definition.subscribes(&topic) && !bot.own(from.as_ref()) {
-                        if bot.cursors.get(&key).is_none_or(|seen| cursor > *seen)
-                            && bot.processed.get(&key).is_none_or(|seen| cursor > *seen)
-                            && bot.wait.as_ref().is_some_and(|wait| wait.releases(&topic, &info)) {
+                        let fresh = bot.cursors.get(&key).is_none_or(|seen| cursor > *seen)
+                            && bot.processed.get(&key).is_none_or(|seen| cursor > *seen);
+                        bot.accept(Some((key.clone(), cursor)), Reason::Info { topic: topic.clone(), through: cursor, info: info.clone() });
+                        // A context-only message folded into a pending one may
+                        // have made it waking, so check the merged reason too.
+                        if fresh && bot.wait.as_ref().is_some_and(|wait| wait.releases(&topic, &info)
+                            || bot.pending.iter().any(|reason| matches!(reason, Reason::Info { topic: t, info: held, .. } if *t == topic && wait.releases(t, held)))) {
                             bot.wait = None;
                         }
-                        bot.accept(Some((key.clone(), cursor)), Reason::Info { topic: topic.clone(), through: cursor, info: info.clone() });
                     }
                 }
             }
@@ -515,7 +534,7 @@ impl<I: Info> Supervisor<I> {
         let mut planned = Vec::new();
         for (id, bot) in &mut self.bots {
             let Some(ready) = bot.ready_at(now) else {
-                if !bot.pending.is_empty() && bot.turn.is_none() && bot.wait.is_none() && !bot.paused && !bot.stopping && !bot.exhausted {
+                if bot.runnable() && bot.turn.is_none() && bot.wait.is_none() && !bot.paused && !bot.stopping && !bot.exhausted {
                     bot.exhausted = true;
                     self.revision += 1;
                     planned.push(Planned {

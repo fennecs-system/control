@@ -10,6 +10,8 @@ enum Msg {
     Exit(Option<i32>),
     Kind(String),
     Direct,
+    /// Context-only records that fold into a count and wake at three.
+    Record(u64),
 }
 impl Info for Msg {
     fn urgent(&self) -> bool {
@@ -17,6 +19,9 @@ impl Info for Msg {
     }
     fn direct(&self) -> bool {
         matches!(self, Self::Direct)
+    }
+    fn wakes(&self) -> bool {
+        !matches!(self, Self::Record(count) if *count < 3)
     }
     fn merge(&mut self, newer: &Self) -> bool {
         match (self, newer) {
@@ -31,6 +36,10 @@ impl Info for Msg {
             }
             (Msg::Kind(held), Msg::Kind(kind)) => held == kind,
             (Msg::Direct, Msg::Direct) => true,
+            (Msg::Record(held), Msg::Record(more)) => {
+                *held += more;
+                true
+            }
             _ => false,
         }
     }
@@ -1071,4 +1080,37 @@ fn selective_waits_retain_direct_input_while_open_waits_and_early_input_release(
     s.step(direct(4), Now(9));
     s.step(wait(vec![]), Now(10));
     assert_eq!(turns(&s.step(done("agent", active), Now(11))).len(), 1);
+}
+
+#[test]
+fn context_only_messages_ride_along_and_wake_only_at_their_digest_bound() {
+    let record = |cursor| Event::Info { topic: topic("room", "general"), cursor, from: Some(ChatId("chat-peer".into())), info: Msg::Record(1) };
+    let mut s = S::default();
+    define(&mut s, "lead", vec![room("general"), room("dependency")], budget(0, 60_000, 10), 0);
+    assert!(s.step(record(1), Now(1)).is_empty(), "a record alone never starts a turn");
+    assert!(s.step(record(2), Now(2)).is_empty());
+    assert!(s.next_deadline(Now(2)).is_none(), "nor schedules a deadline or exhausts a budget");
+    // A waking post carries the folded records as context.
+    let woken = s.step(message(Some("peer"), 3), Now(3));
+    let (_, turn, reasons) = turns(&woken)[0];
+    assert_eq!(reasons, [Reason::Info { topic: topic("room", "general"), through: 2, info: Msg::Record(2) }, posted(3)]);
+    s.step(done("lead", turn), Now(4));
+    // Processing retires pending records without a turn.
+    s.step(record(4), Now(5));
+    s.step(Event::Processed { bot: bot("lead"), topic: topic("room", "general"), through: 4 }, Now(6));
+    assert!(s.step(message(Some("peer"), 4), Now(7)).is_empty(), "replays stay ignored");
+    // At the digest bound the folded records wake once, but never release a
+    // wait that selected other topics.
+    s.step(Event::Wait { bot: bot("lead"), topics: vec![topic("room", "dependency")], until: None }, Now(8));
+    for cursor in 5..12 {
+        assert!(s.step(record(cursor), Now(cursor)).is_empty(), "a selective wait holds the digest");
+    }
+    let released = s.step(Event::Wait { bot: bot("lead"), topics: vec![topic("room", "general")], until: None }, Now(12));
+    assert_eq!(turns(&released)[0].2, [Reason::Info { topic: topic("room", "general"), through: 11, info: Msg::Record(7) }], "a wait on the room releases at once");
+    let mut s = S::default();
+    define(&mut s, "lead", vec![room("general")], budget(0, 60_000, 10), 0);
+    s.step(record(1), Now(1));
+    s.step(record(2), Now(2));
+    let digest = s.step(record(3), Now(3));
+    assert_eq!(turns(&digest)[0].2, [Reason::Info { topic: topic("room", "general"), through: 3, info: Msg::Record(3) }]);
 }

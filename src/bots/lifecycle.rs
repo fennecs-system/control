@@ -360,9 +360,10 @@ pub(super) fn team(definition: &control_bot::Definition) -> Option<&str> {
 }
 
 /// A turn woken only by advisor notes is the advisor's echo, not new activity.
+/// Record updates riding along as context did not wake it.
 fn echo(run: &crate::runtime::Run) -> bool {
-    run.bot_turn.as_ref().is_some_and(|turn| !turn.reasons.is_empty()
-        && turn.reasons.iter().all(|reason| matches!(reason, Reason::Info { info: Message::Note, .. })))
+    run.bot_turn.as_ref().is_some_and(|turn| turn.reasons.iter().any(|reason| matches!(reason, Reason::Info { info: Message::Note, .. }))
+        && turn.reasons.iter().all(|reason| matches!(reason, Reason::Info { info: Message::Note | Message::Records { .. }, .. })))
 }
 
 /// Edge-triggered quiescence, repeated-failure and blocked-claim facts per

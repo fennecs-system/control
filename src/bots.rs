@@ -26,6 +26,10 @@ const POSTS_PER_PASS: usize = 256;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Message {
     Post,
+    /// Record-delivery room posts: retained evidence whose authors requested no
+    /// action. Context only, delivered with the next turn something else wakes;
+    /// once `count` reaches a nonzero `digest` bound they wake the bot once.
+    Records { count: u64, digest: u64 },
     /// Targeted peer evidence. It releases an open wait; a wait that selected
     /// topics retains it unless it selected this conversation.
     Peer,
@@ -49,8 +53,19 @@ pub enum Message {
 impl control_bot::Info for Message {
     fn urgent(&self) -> bool { matches!(self, Self::Exit{..} | Self::Gap{..}) }
     fn direct(&self) -> bool { matches!(self, Self::Peer | Self::Note) }
+    fn wakes(&self) -> bool {
+        match self {
+            Self::Records { count, digest } => *digest > 0 && count >= digest,
+            _ => true,
+        }
+    }
     fn merge(&mut self, newer: &Self) -> bool {
         match (self, newer) {
+            (Message::Records { count, digest }, Message::Records { count: more, digest: bound }) => {
+                *count = count.saturating_add(*more);
+                *digest = *bound;
+                true
+            }
             (Message::Post, Message::Post) | (Message::Peer, Message::Peer) | (Message::Note, Message::Note) | (Message::Claim, Message::Claim) => true,
             (Message::Lifecycle(held), Message::Lifecycle(newer)) => {
                 held.merge(newer);
@@ -618,6 +633,9 @@ fn describe(state: &State, reasons: &[Reason]) -> String {
     let name = |id: &str| state.watches.iter().find(|w| w.id == id).map_or(id.to_owned(), |w| format!("{} ({id})", w.name));
     reasons.iter().map(|reason| match reason {
         Reason::Info { topic, info: Message::Post, .. } => format!("new messages in room #{}", topic.name),
+        Reason::Info { topic, info: info @ Message::Records { count, .. }, .. } if control_bot::Info::wakes(info) =>
+            format!("digest: {count} record updates accumulated in room #{} with nothing else waking you; authors requested no action, so read them with control_room_notifications and act only on a real gap", topic.name),
+        Reason::Info { topic, info: Message::Records { count, .. }, .. } => format!("context: {count} record updates in room #{} since your last turn (no action requested; read with control_room_notifications)", topic.name),
         Reason::Info { info: Message::Peer, .. } => "targeted peer coordination; read conversation callbacks".into(),
         Reason::Info { info: Message::Note, .. } => "an advisor note (read-only evidence, not steering); read conversation callbacks".into(),
         Reason::Info { topic, info: Message::Lifecycle(facts), .. } => facts.describe(&topic.name),
@@ -866,9 +884,15 @@ fn reconcile_with_wake_at(state: &mut State, now: u64, mut save: impl FnMut(&Sta
     }
     let start = state.bots.room_cursor.min(state.collective.posts.len());
     let end = start.saturating_add(POSTS_PER_PASS).min(state.collective.posts.len());
+    // Records are offered as context only: they ride along with the next turn
+    // something else wakes, or wake once at the configured digest bound.
+    let digest = u64::from(state.runtime.execution.bot_record_digest);
     for (index, post) in state.collective.posts.iter().enumerate().take(end).skip(start) {
-        if post.delivery == crate::rooms::Delivery::Record { continue; }
-        let event = Event::Info { topic: room(&post.room), cursor: index as u64 + 1, from: post.chat.clone().map(ChatId), info: Message::Post };
+        let info = match post.delivery {
+            crate::rooms::Delivery::Record => Message::Records { count: 1, digest },
+            crate::rooms::Delivery::Notify => Message::Post,
+        };
+        let event = Event::Info { topic: room(&post.room), cursor: index as u64 + 1, from: post.chat.clone().map(ChatId), info };
         effects.extend(state.bots.supervisor.step(event, Now(now)));
     }
     let offered = state.bots.room_cursor != end;

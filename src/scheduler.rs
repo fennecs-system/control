@@ -22,6 +22,10 @@ pub struct Limits {
     /// done, or resumes working after being blocked) before the advisor hears
     /// the team is busy but stalled. Counted in turns, not elapsed time.
     pub advisor_stall_turns: usize,
+    /// Record-delivery room posts a sleeping persistent bot accumulates, with
+    /// nothing else waking it, before they wake it once as a digest. Records
+    /// otherwise ride along with its next turn. 0 disables the digest.
+    pub bot_record_digest: u32,
 }
 impl Default for Limits {
     fn default() -> Self {
@@ -32,6 +36,7 @@ impl Default for Limits {
             max_advisors_per_root: 1,
             advisor_failure_streak: 3,
             advisor_stall_turns: 24,
+            bot_record_digest: 128,
         }
     }
 }
@@ -48,6 +53,9 @@ impl Limits {
         }
         if self.max_advisors_per_root > 8 || !(2..=64).contains(&self.advisor_failure_streak) || !(4..=4096).contains(&self.advisor_stall_turns) {
             return Err(io::Error::other("max_advisors_per_root must be 0–8, advisor_failure_streak 2–64 and advisor_stall_turns 4–4096"));
+        }
+        if self.bot_record_digest != 0 && !(16..=4096).contains(&self.bot_record_digest) {
+            return Err(io::Error::other("bot_record_digest must be 0 (off) or 16–4096"));
         }
         Ok(self)
     }

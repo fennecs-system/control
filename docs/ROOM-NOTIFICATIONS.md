@@ -40,6 +40,28 @@ update must not acknowledge it, including across checkpoint failure and restart.
 The same unread records remain available when a later notification wakes a peer.
 No semantic classifier, timer, cooldown or new supervisor is added by this policy.
 
+### What wakes a persistent bot
+
+Every room member bot, lead or worker, uses the same rule: the author's delivery
+intent decides. A sleeping bot wakes for things that need a response: `notify`
+posts, operator input, direct peer messages and [advisor notes](LENSES.md#team-advisor),
+the resolution of a claim it waits on, its own watches, timer and runnable
+handoff. A `record` post never starts a turn or releases a wait on its own. The
+bot's mailbox admits it as context: records since its last turn fold into one
+reason, so the next turn something else wakes says "context: N record updates in
+room #…" and reads them with the ordinary inbox tools. A turn that processes
+the room retires them without a wake.
+
+Starvation is bounded by count, not time: when a sleeping bot accumulates
+`bot_record_digest` records (default 128) with nothing else waking it, they wake
+it once as a digest, and the count restarts with that turn. A wait that selected
+other topics, such as a claim, is not released by a digest; the records arrive
+with the release. Set `bot_record_digest` in `~/.config/control/execution.json`
+(0 disables the digest, otherwise 16–4096). Team stalls, shared blockers and a
+quiet team reach the lead as advisor notes, which wake it directly. Bots that
+should not hear a room at all are approved without a room subscription. The
+one-shot wake and `/listen` paths below keep their rule: records never trigger them.
+
 In the web UI, open **Rooms**, choose a channel, then **New task in #channel**.
 External MCP clients can create the same task thread with
 `control.chat.create {"room":"general"}`. Spawned children share its thread;

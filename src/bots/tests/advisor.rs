@@ -138,7 +138,11 @@ fn notes_and_lead_turns_woken_only_by_notes_do_not_re_trigger_the_advisor() {
     assert_eq!(advisor_runs(&state, &advisor).len(), 1);
     assert!(advisor_runs(&state, &advisor)[0].objective.contains(&format!("steering chat {root}")), "the advisor advises the lead");
     finish(&mut state, &advisor);
+    // A member's routine record does not wake the lead; it rides along.
+    post(&mut state, Some(&worker), "Verified routine progress");
+    state.collective.posts.last_mut().unwrap().delivery = crate::rooms::Delivery::Record;
     reconcile_at(&mut state, 3, ok).unwrap();
+    assert!(bot_runs(&state).iter().all(|run| run.chat_id.as_deref() != Some(&root)));
     let settled = state.bots.teams[&root].settled;
 
     // The advisor's note is retained evidence (a run without an attempt)...
@@ -154,7 +158,8 @@ fn notes_and_lead_turns_woken_only_by_notes_do_not_re_trigger_the_advisor() {
     reconcile_at(&mut state, 40_000, ok).unwrap();
     let woken = bot_runs(&state).into_iter().filter(|run| run.chat_id.as_deref() == Some(&root)).collect::<Vec<_>>();
     assert_eq!(woken.len(), 1);
-    assert!(matches!(woken[0].bot_turn.as_ref().unwrap().reasons.as_slice(), [Reason::Info { info: Message::Note, .. }]));
+    assert!(matches!(woken[0].bot_turn.as_ref().unwrap().reasons.as_slice(),
+        [Reason::Info { info: Message::Records { count: 1, .. }, .. }, Reason::Info { info: Message::Note, .. }]));
     assert!(woken[0].objective.contains("advisor note"));
     let id = woken[0].id.clone();
     let woken = state.runtime.runs.iter_mut().find(|run| run.id == id).unwrap();

@@ -85,6 +85,11 @@ fn private_limits_are_validated_and_do_not_come_from_saved_runtime_state() {
     assert!(load_limits_in(&file, None).is_err(), "a stall window below four turns fails closed");
     std::fs::write(&file, b"{\"advisor_stall_turns\":40}").unwrap();
     assert_eq!(load_limits_in(&file, None).unwrap().advisor_stall_turns, 40);
+    assert_eq!(load_limits_in(&file, None).unwrap().bot_record_digest, 128);
+    for (digest, valid) in [(0, true), (8, false), (16, true), (4096, true), (4097, false)] {
+        std::fs::write(&file, format!("{{\"bot_record_digest\":{digest}}}")).unwrap();
+        assert_eq!(load_limits_in(&file, None).map(|limits| limits.bot_record_digest).ok(), valid.then_some(digest));
+    }
     std::fs::write(&file, b"{\"max_parallel_runs\":4}").unwrap();
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
     assert_eq!(load_limits_in(&file, None).unwrap().max_parallel_runs, 4);

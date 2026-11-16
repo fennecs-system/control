@@ -42,14 +42,22 @@ pub(super) fn large(chats: usize, runs: usize) -> (State, String, Vec<String>) {
     (state, root, helpers)
 }
 
+/// `offered` passes post as the bot itself, admitting nothing. `records` passes
+/// post a peer's record-delivery update: routine team traffic that must not wake it.
 pub(super) fn measure(label: &str, chats: usize, state: &mut State, bot: &str, offered: bool) {
     let rounds = std::env::var("CONTROL_PROFILE_ROUNDS").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(200).clamp(1, 1_000_000);
     let mut now = 1_000;
     let mut samples = Vec::new();
+    // Thousands of records would reach the digest bound and admit a turn; this
+    // measures their admission as context. (Omit this line on a baseline.)
+    state.runtime.execution.bot_record_digest = 0;
     for batch in 0..11 {
         let start = Instant::now();
         for _ in 0..rounds {
-            if offered {
+            if label == "records" {
+                post(state, Some("peer"), "routine verified progress");
+                state.collective.posts.last_mut().unwrap().delivery = crate::rooms::Delivery::Record;
+            } else if offered {
                 // An own-chat post passes the idle guard without admitting a turn.
                 post(state, Some(bot), "status");
             }
@@ -75,7 +83,8 @@ fn reconcile_profile() {
     let mode = std::env::var("CONTROL_PROFILE_ADVISOR").unwrap_or_default();
     let (advised, lens_off) = (matches!(mode.as_str(), "1" | "off" | "blocked"), mode == "off");
     for (chats, runs) in [(64, 16), (512, 16)] {
-        for offered in [false, true] {
+        for (offered, records) in [(false, false), (true, false), (true, true)] {
+            if records && advised { continue; }
             let (mut state, root, helpers) = large(chats, runs);
             if mode == "blocked" {
                 for (index, claim) in state.collective.claims.iter_mut().enumerate().filter(|(index, _)| index % 4 == 1) {
@@ -92,11 +101,11 @@ fn reconcile_profile() {
                     super::advisor::opt_in(&mut state, &root, false);
                 }
             }
-            let label = match (offered, advised, lens_off) {
+            let label = if records { "records" } else { match (offered, advised, lens_off) {
                 (false, false, _) => "idle", (true, false, _) => "offered",
                 (false, true, false) => "idle_advised", (true, true, false) => "offered_advised",
                 (false, true, true) => "idle_lens_off", (true, true, true) => "offered_lens_off",
-            };
+            } };
             measure(label, chats, &mut state, &helpers[0], offered);
         }
     }

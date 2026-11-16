@@ -1,5 +1,29 @@
 # Performance checks
 
+## Record posts as bot context (2026-11-16)
+
+Persistent bots now admit `record` room posts as context-only supervisor
+reasons instead of skipping them (see [what wakes a persistent
+bot](ROOM-NOTIFICATIONS.md#what-wakes-a-persistent-bot)). Each record is one
+supervisor step, as a `notify` post already was; a record never queues a turn
+below the digest bound. `bots::tests::reconcile_profile` gained a `records` case:
+every pass appends a peer's record post to a room the bot hears (digest
+disabled so passes admit no turn). Before is `18c6fa9` with the identical
+fixture. Release builds on one Apple Silicon laptop, five alternating rounds of
+ten 1,000-pass batches; the table shows the median of the round medians.
+
+| Case | Before | After |
+| --- | ---: | ---: |
+| idle, 64 / 512 chats | 28.5 / 213.9 µs | 28.5 / 210.6 µs |
+| offered (own post), 64 / 512 chats | 36.6 / 222.6 µs | 35.9 / 220.6 µs |
+| records (peer record), 64 / 512 chats | 36.4 / 222.2 µs | 36.1 / 223.0 µs |
+
+All differences are within run-to-run noise (round medians spread by 3–8%), so
+no flamegraph was taken: the pass is dominated by the existing per-chat and
+per-run scans, and the extra step costs one pending-list merge per record.
+Reproduce with
+`cargo test --release --locked --bin control bots::tests::reconcile_profile -- --ignored --nocapture`.
+
 ## Cancel-all and container ownership reconciliation (2026-11-16)
 
 Investigated a reported CPU spike after `/cancel all` on a swarm root (lead,
