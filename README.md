@@ -63,9 +63,11 @@ another model; clicking its row selects it for new runs.
 
 [Local text models and compaction](docs/LOCAL-MODELS.md) describes independent
 local summarizers for Codex/Claude chats, configurable history windows and the
-web/TUI summary-tree inspector, plus bounded local text generation for agents
-(`control_model_generate`) and a Qwen 27B setup/benchmark guide. Inference stays
-in an external service/container.
+web/TUI summary-tree inspector. It also covers bounded local text generation for
+agents (`control_model_generate`) and local-model agent turns (`/model
+local:NAME`, driven by Control's native tool loop). `nix run .#inference` starts
+llama.cpp with Metal on Apple Silicon or in the Nix container elsewhere. A Qwen
+27B setup and benchmark guide is included.
 
 You can also use Control's tools from your existing Claude Code or Codex CLI.
 With Control running, register its MCP server from the checkout:

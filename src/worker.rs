@@ -1288,11 +1288,8 @@ fn execute(
     let blocked = |m: &str| ("blocked", m.to_owned());
     let failed = |m: &str| ("failed", m.to_owned());
     let scope = identity::authorize(actor, action).map_err(blocked)?;
-    // Selection refuses this first; a run captured before that check still fails before effects.
-    if !attempt.backend.runs_agents() {
-        return Err(blocked(crate::backend::LOCAL_AGENT_PENDING));
-    }
-    let captured = if attempt.backend == crate::backend::Backend::Codex {crate::turn_context::input(attempt).map_err(|e|failed(&e.to_string()))?}else{None};
+    let local = attempt.backend == crate::backend::Backend::Local;
+    let captured = if attempt.backend == crate::backend::Backend::Codex || local {crate::turn_context::input(attempt).map_err(|e|failed(&e.to_string()))?}else{None};
     if crate::lifecycle::cancelled(bridge) {
         return Err(("cancelled", "Cancelled before launch.".into()));
     }
@@ -1307,7 +1304,8 @@ fn execute(
         return Err(blocked("Linux container engine unavailable. Start Docker on this laptop; Control will not fall back to host execution."));
     }
     // Check Codex sign-in before any restore, so a missing login fails fast and leaves nothing behind.
-    let auth = if attempt.backend == crate::backend::Backend::Claude { None } else { Some(Credentials::locate().map_err(blocked)?) };
+    // Local endpoints use no provider login; no account file is located or mounted.
+    let auth = if attempt.backend != crate::backend::Backend::Codex { None } else { Some(Credentials::locate().map_err(blocked)?) };
     let workspace = runtime::workspace(id).map_err(blocked)?;
     let baseline = workspace.parent().unwrap().join("baseline");
     if baseline.exists() || workspace.exists() {
@@ -1336,6 +1334,20 @@ fn execute(
     }
     let absolute =
         fs::canonicalize(&workspace).map_err(|_| failed("Could not resolve worker workspace."))?;
+    if local {
+        let room = bridge.and_then(|(state, run_id)| {
+            let s = state.lock().ok()?;
+            let run = s.runtime.runs.iter().find(|r| r.id == run_id)?;
+            s.chats.iter().find(|c| Some(&c.id) == run.chat_id.as_ref())?.room.clone().filter(|r| crate::rooms::valid(r))
+        });
+        let prompt = captured.unwrap_or_else(|| render_prompt(objective, scope, room.as_deref(), bridge.is_some()));
+        let output = crate::local_agent::execute(attempt, bridge, &absolute, &prompt)?;
+        if let Some((state,run))=bridge {crate::command_jobs::quiesce(state,run,id).map_err(|e|failed(&e.to_string()))?;}
+        if !attempt.review_only { publish_workspace(attempt,&workspace, id, bridge)
+            .map_err(|e| failed(&format!("Local agent outputs could not be published: {e} The previous checkpoint is unchanged.")))?;
+        }
+        return Ok(output);
+    }
     if attempt.backend == crate::backend::Backend::Claude {
         let output =
             crate::claude::execute(id, objective, attempt, bridge, &absolute, &image, &node)?;

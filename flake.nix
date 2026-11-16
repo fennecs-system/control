@@ -6,7 +6,13 @@
       systems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
       eachSystem = f: nixpkgs.lib.genAttrs systems (system: f (import nixpkgs {
         inherit system;
-        config.allowUnfreePredicate = pkg: nixpkgs.lib.getName pkg == "claude-code";
+        # CUDA libraries are only evaluated for the optional inference-image-cuda output.
+        config.allowUnfreePredicate = pkg:
+          let
+            lib = nixpkgs.lib;
+            nvidia = license: lib.hasInfix "CUDA" (license.fullName or "") || lib.hasInfix "NVIDIA" (license.fullName or "");
+          in
+          lib.getName pkg == "claude-code" || lib.any nvidia (lib.toList (pkg.meta.license or [ ]));
       }));
     in {
       devShells = eachSystem (pkgs: {
@@ -25,8 +31,19 @@
               ${builtins.readFile ./hosting/setup.sh}
             '';
           };
+          # Platform-selected local llama.cpp service; see docs/LOCAL-MODELS.md.
+          inference = pkgs.writeShellApplication {
+            name = "control-inference";
+            runtimeInputs = [ pkgs.nix pkgs.coreutils pkgs.gnused pkgs.gnugrep pkgs.curl ];
+            text = ''
+              export CONTROL_INFERENCE_LINUX_SYSTEM=${linuxSystem}
+              export CONTROL_LLAMA_SERVER=${if pkgs.stdenv.hostPlatform.isDarwin then "${pkgs.llama-cpp}" else ""}
+              ${builtins.readFile ./hosting/inference.sh}
+            '';
+          };
         in {
           setup = { type = "app"; program = "${setup}/bin/control-setup"; };
+          inference = { type = "app"; program = "${inference}/bin/control-inference"; };
           codex = { type = "app"; program = "${pkgs.codex}/bin/codex"; };
         } // nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
           builder = { type = "app"; program = "${pkgs.darwin.linux-builder}/bin/create-builder"; };
@@ -48,6 +65,8 @@
           browser-image = import ./tools/browser/image.nix { inherit pkgs; };
           build-image = import ./tools/build/image.nix { inherit pkgs; };
           inference-image = import ./tools/inference/image.nix { inherit pkgs; };
+          inference-image-vulkan = import ./tools/inference/image.nix { inherit pkgs; acceleration = "vulkan"; };
+          inference-image-cuda = import ./tools/inference/image.nix { inherit pkgs; acceleration = "cuda"; };
         });
     };
 }

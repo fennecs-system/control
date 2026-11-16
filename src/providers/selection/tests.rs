@@ -73,7 +73,7 @@ fn local_endpoint_models_are_listed_as_text_only_and_refused_for_agent_turns() {
     for selector in ["local:local-qwen", "local-qwen"] {
         assert_eq!(
             resolve(&state.runtime, Backend::Codex, "old", Some(selector)),
-            Err(crate::backend::LOCAL_AGENT_PENDING),
+            Err(crate::backend::LOCAL_TEXT_ONLY),
             "{selector}"
         );
     }
@@ -86,4 +86,26 @@ fn local_endpoint_models_are_listed_as_text_only_and_refused_for_agent_turns() {
     // A local selection can never become the persisted node default.
     let local = Model::captured(Backend::Local, "local-qwen".into());
     assert!(super::super::validate_models(std::slice::from_ref(&local), &local).is_err());
+
+    // Declaring tool calls makes the same endpoint selectable for agent turns,
+    // captured with the run, and its chat compacts on that endpoint by default.
+    state.runtime.compaction.models[0].tools = true;
+    assert_eq!(resolve(&state.runtime, Backend::Codex, "old", Some("local:local-qwen")), Ok(local.clone()));
+    assert!(crate::compaction::compactor_for(&state, &state.chats[0]).is_none());
+    crate::chat::send(&mut state, &chat, "/model local:local-qwen", "test").unwrap();
+    assert_eq!(state.chats[0].model, Some(local));
+    assert_eq!(crate::compaction::compactor_for(&state, &state.chats[0]).unwrap().id, "local-qwen");
+    crate::chat::send(&mut state, &chat, "Inspect this fixture", "test").unwrap();
+    assert_eq!(state.runtime.runs[0].backend, Backend::Local);
+    assert_eq!(state.runtime.runs[0].model.as_deref(), Some("local-qwen"));
+    let capacity = crate::providers::capacity(&state.runtime, Backend::Local, "local-qwen").unwrap();
+    assert_eq!((capacity.context_tokens, capacity.output_tokens), (32768, 1024));
+    // An explicit operator compaction choice for this chat still wins.
+    let mut hosted = crate::model_calls::tests::endpoint();
+    hosted.id = "operator-choice".into();
+    state.runtime.compaction.models.push(hosted);
+    state.runtime.compaction.settings.enabled = true;
+    state.runtime.compaction.settings.model = Some("operator-choice".into());
+    state.runtime.compaction.settings.chats = vec![chat.clone()];
+    assert_eq!(crate::compaction::compactor_for(&state, &state.chats[0]).unwrap().id, "operator-choice");
 }

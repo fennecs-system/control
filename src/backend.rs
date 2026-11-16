@@ -33,23 +33,25 @@ impl Backend {
             Self::Local => String::new(),
         }
     }
-    /// Whether Control can run an agent attempt (tool loop, recovery, cancellation)
-    /// on this backend. Selection refuses others before any effect.
-    pub fn runs_agents(self) -> bool {
+    /// Local endpoints are chosen per chat or spawn from the endpoint registry;
+    /// they are never the saved node default.
+    pub fn default_capable(self) -> bool {
         !matches!(self, Self::Local)
     }
+    /// The pinned image for the attempt's own offline tools. Local models run
+    /// their loop in Control and use the Codex worker image only for
+    /// credential-free workspace commands.
     pub fn image(self) -> Option<String> {
         match self {
-            Self::Codex => crate::runtime::worker_image(),
+            Self::Codex | Self::Local => crate::runtime::worker_image(),
             Self::Claude => {
                 std::fs::read_to_string(crate::config::directory().ok()?.join("claude-image-id"))
                     .ok()
                     .map(|s| s.trim().to_owned())
                     .filter(|s| crate::runtime::pinned_image(s))
             }
-            Self::Local => None,
         }
     }
 }
-/// Refusal shared by selection and launch until the local tool loop lands.
-pub const LOCAL_AGENT_PENDING: &str = "Local endpoint models are text-only in Control today: use control_model_generate for inference. Local agent turns (tool calls, cancellation, recovery) are not implemented yet, so no run was started and no hosted model was substituted.";
+/// Refusal shared by selection and launch for endpoints without declared tool calls.
+pub const LOCAL_TEXT_ONLY: &str = "This local endpoint is declared text-only: use control_model_generate for inference, or enable \"Serves tool calls\" for a tool-capable server (llama.cpp --jinja) to run agent turns. No run was started and no hosted model was substituted.";

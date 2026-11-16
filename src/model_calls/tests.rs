@@ -21,6 +21,7 @@ pub(crate) fn endpoint() -> Endpoint {
         },
         timeout_seconds: 30,
         cli: None,
+        tools: false,
     }
 }
 /// A one-request mock endpoint. The handler receives the parsed body.

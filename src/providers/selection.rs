@@ -3,7 +3,7 @@ use super::Model;
 use crate::{backend::Backend, runtime::Runtime};
 
 pub(crate) fn schema() -> serde_json::Value {
-    serde_json::json!({"type":"string","maxLength":128,"description":"Optional configured model ID, e.g. claude:opus or codex:MODEL_ID. Omit to inherit the parent's captured model. Unknown/unavailable models never silently fall back to another provider. local:NAME endpoint models are text-only (control_model_generate) and are refused for agent turns."})
+    serde_json::json!({"type":"string","maxLength":128,"description":"Optional configured model ID, e.g. claude:opus or codex:MODEL_ID. Omit to inherit the parent's captured model. Unknown/unavailable models never silently fall back to another provider. local:NAME selects a private endpoint model declared tool-capable; text-only endpoints are refused for agent turns."})
 }
 
 /// Omission preserves a parent's captured choice even after configuration changes.
@@ -42,8 +42,8 @@ pub(crate) fn resolve(
         .cloned()
         .ok_or("Model is not configured or is ambiguous. Use /model to list choices.")?;
     // Capability, not a listing, decides whether an agent turn can run.
-    if !selected.backend.runs_agents() {
-        return Err(crate::backend::LOCAL_AGENT_PENDING);
+    if !super::agent_capable(runtime, &selected) {
+        return Err(crate::backend::LOCAL_TEXT_ONLY);
     }
     Ok(selected)
 }
@@ -72,7 +72,7 @@ pub(crate) fn command(
                     "{}:{}{}",
                     m.backend.id(),
                     m.model,
-                    if m.backend.runs_agents() { "" } else { " (text-only)" }
+                    if super::agent_capable(&state.runtime, m) { "" } else { " (text-only)" }
                 )
             })
             .collect::<Vec<_>>()

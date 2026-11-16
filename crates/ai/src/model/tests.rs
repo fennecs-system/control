@@ -88,3 +88,27 @@ fn served_identity_is_bounded_untrusted_metadata() {
     let hostile = json!({"model":"x".repeat(300),"system_fingerprint":"a\nb"});
     assert_eq!(served(&hostile), Served::default());
 }
+#[test]
+fn tool_steps_decode_calls_and_keep_malformed_arguments_as_errors() {
+    let value = json!({"choices":[{"finish_reason":"tool_calls","message":{"content":null,"tool_calls":[
+        {"id":"a","type":"function","function":{"name":"control_room_post","arguments":"{\"message\":\"hi\"}"}},
+        {"type":"function","function":{"name":"control_turn_handoff","arguments":""}},
+        {"id":"c","type":"function","function":{"name":"x","arguments":"{oops"}},
+        {"id":"d","type":"function","function":{"name":"y","arguments":"[1]"}}]}}],
+        "usage":{"prompt_tokens":10,"completion_tokens":3}});
+    let step = decode_step(&value, &limits()).unwrap();
+    assert_eq!(step.text, None);
+    assert!(!step.truncated);
+    assert_eq!(step.calls[0].arguments, Ok(json!({"message":"hi"})));
+    assert_eq!((step.calls[1].id.clone(), step.calls[1].arguments.clone()), (None, Ok(json!({}))));
+    assert!(step.calls[2].arguments.as_ref().unwrap_err().contains("not valid JSON"));
+    assert!(step.calls[3].arguments.as_ref().unwrap_err().contains("JSON object"));
+    assert_eq!(step.tokens.unwrap().output_tokens, 3);
+    let cut = json!({"choices":[{"finish_reason":"length","message":{"content":"partial"}}]});
+    assert!(decode_step(&cut, &limits()).unwrap().truncated);
+    for bad in [json!({}), json!({"choices":[{"message":7}]}), json!({"choices":[{"message":{"content":5}}]})] {
+        assert!(decode_step(&bad, &limits()).is_err(), "{bad}");
+    }
+    let request = tool_request("qwen", &[json!({"role":"user","content":"hi"})], &[json!({"type":"function"})], &limits()).unwrap();
+    assert_eq!((request["tool_choice"].clone(), request["max_tokens"].clone()), (json!("auto"), json!(512)));
+}

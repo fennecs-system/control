@@ -81,7 +81,8 @@ fn dispatch_at(
             return error("Mailbox belongs to an inactive attempt");
         }
     }
-    let claude = run.backend == crate::backend::Backend::Claude;
+    // Backends without their own sandbox shell get Control's offline workspace tool.
+    let claude = matches!(run.backend, crate::backend::Backend::Claude | crate::backend::Backend::Local);
     let judge = crate::delegation::is_judge(run);
     // An approved advisor is a judge whose one extra effect is evidence notes.
     let advisor = judge && run.chat_id.as_deref().is_some_and(|chat| state.bots.advises(chat));
@@ -377,6 +378,11 @@ fn dispatch_at(
         _ => return crate::toolbox::protocol_error(id, -32601, "Unsupported worker method"),
     };
     json!({"jsonrpc":"2.0","id":id,"result":result})
+}
+/// The in-process equivalent of one mailbox request, for Control's own tool
+/// loop: identical fencing, policy, nudges and idempotency nonces.
+pub(crate) fn local_rpc(state: &Arc<Mutex<State>>, run: &str, envelope: &Value, workspace: &Path, managed: bool) -> Value {
+    if managed { rpc_at(state, run, envelope, Some(workspace)) } else { dispatch_at(state, run, envelope, Some(workspace)) }
 }
 pub fn pump(state: &Arc<Mutex<State>>, run: &str, workspace: &Path, managed:bool) {
     pump_at(state, run, workspace, workspace,managed);

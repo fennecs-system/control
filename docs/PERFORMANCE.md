@@ -17,6 +17,13 @@ and the CPU-container comparison are in
 [LOCAL-MODELS.md](LOCAL-MODELS.md#measurement-on-an-m3-max-2026-11-16). These are
 single runs, not a controlled benchmark.
 
+Local agent turns add no work to Codex/Claude paths. Each local step re-sends about
+10.6 k tokens of system text and tool schemas. The first step of a cold slot cost
+71 s of prompt processing on Metal; later steps and later turns reuse llama.cpp's
+prefix cache (0.5–4 s of new prompt per step). An end-to-end four-tool turn took
+49 s. Model requests run without the state lock; tool calls take the same locks as the CLI mailboxes. See
+[LOCAL-MODELS.md](LOCAL-MODELS.md#end-to-end-run-on-metal-2026-11-16).
+
 ## Timed-out turns and steering notes (2026-11-16)
 
 The advisor's `timed_out` fact adds one per-chat slot and one attempt check per

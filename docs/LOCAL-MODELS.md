@@ -6,9 +6,10 @@ summarizer tools. The same derived history view feeds Codex and Claude chats.
 This does not replace either CLI's private context handling. The same summary
 worker also accepts explicitly selected Claude/Codex CLI text adapters. Agents and
 the operator can also call a configured endpoint directly for bounded text
-generation (`control_model_generate`, below). Local tool-using agent turns are
-not implemented yet; [Local agent turns](#local-agent-turns-status-and-follow-up)
-records what is missing and what was verified.
+generation (`control_model_generate`, below). A tool-capable local endpoint can
+also drive agent turns through Control's native tool loop; see
+[Local agent turns](#local-agent-turns). `nix run .#inference` starts the node's
+llama.cpp service with the platform's accelerated backend.
 
 Chat and TUI accept `/model` to list configured agent models, `/model PROVIDER:ID`
 to select future turns and `/model default` to select the current node default.
@@ -22,8 +23,8 @@ with the child/batch and preserves its existing tool permissions and role.
 Invalid selections are rejected before effects, and changing a retried request's
 selection is a conflict. There is no silent cross-provider fallback.
 
-For a future local agent adapter, Control owns input assembly, tree compaction
-and context-fit admission; the inference server supplies generation. Server KV
+For local agent turns, Control owns input assembly, tree compaction and
+context-fit admission; the inference server supplies generation. Server KV
 caches may accelerate an active attempt, but never replace the journal or become
 the authority for continuity. Even with bounded starting history, a long active
 Claude/Codex attempt can still trigger that CLI's own private compaction.
@@ -169,8 +170,9 @@ docker run --rm --name control-compactor --read-only \
 
 Build the Linux package with a Linux builder on macOS; an existing private
 OpenAI-compatible `/v1/chat/completions` service works too. The example's RAM/CPU
-limits are operator choices, not a guarantee a particular model fits. CPU-only
-inference is intentional in this image; GPU runtimes/resources remain external.
+limits are operator choices, not a guarantee a particular model fits. This is the
+manual form of the `cpu` backend; [Local inference service](#local-inference-service)
+automates it, adds CUDA/Vulkan image variants, and uses Metal on Apple Silicon.
 On Apple Silicon, select the Linux output explicitly:
 `nix build .#packages.aarch64-linux.inference-image -o /tmp/control-inference-image`.
 Choose hardware and quantization before downloading weights, verify their hash,
@@ -236,39 +238,60 @@ which lets llama.cpp stop generating that request. HTTPS endpoints and requests
 that have not yet produced a response are bounded by the declared timeout;
 cancellation for HTTPS is only checked before sending.
 
+## Local inference service
+
+`nix run .#inference -- --model /absolute/model.gguf` starts the node's llama.cpp
+server with the backend this platform needs. The binary always comes from the
+pinned nixpkgs, weights are never downloaded, and the server binds loopback only.
+
+| Backend | Selected when | What runs |
+| --- | --- | --- |
+| `metal` | auto on aarch64-darwin | the pinned darwin `llama-server` (built with `libggml-metal`) as the launchd agent `dev.control.inference`, `-ngl 999`, logs in `~/.local/share/control/inference/server.log` |
+| `container` | auto elsewhere | the pinned Linux image `control-inference` (read-only, no capabilities, model directory mounted read-only); CUDA (`--gpus all`) when `nvidia-smi` works and Docker has the NVIDIA runtime, otherwise CPU |
+| `cpu` | explicit | the CPU container on any platform |
+
+Override with `--backend metal|container|cpu` (or `CONTROL_INFERENCE_BACKEND`);
+`--acceleration cpu|vulkan|cuda` picks the container build explicitly (`vulkan`
+passes `/dev/dri` and ships Mesa's ICDs; CUDA is unfree and needs the NVIDIA
+container toolkit). The CUDA and Vulkan images evaluate but were not built or run
+on this Mac. Other flags: `--alias` (default `qwen-local`), `--ctx-size` (32768),
+`--port` (8081), `--parallel` (1 slot), `--sha256` (skip hashing) and extra
+`llama-server` flags after `--`. `--dry-run` prints the launchd plist or the
+container command and changes nothing; `--status` and `--stop` manage the service.
+
+Every start uses `--jinja` (tool calls through the model's chat template) and
+`--reasoning-budget 0`. The script hashes the GGUF once and writes the backend,
+model path, SHA256, alias, port and a ready-to-paste revision string to
+`inference.json` in the Control configuration directory; the saved backend is reused
+when `--backend` is omitted. It prints the values for **Manage → Models &
+providers → + New summary model**: adapter *Local endpoint*, the alias as name and
+model ID, `http://127.0.0.1:PORT/v1`, the revision, the context size, and
+**Serves tool calls** ticked. Control does not edit `model.json` from the script.
+
+The maintainer approved running llama.cpp natively on Apple Silicon because the
+container cannot reach the GPU there. It is the only host-native third-party
+service, it is pinned by `flake.lock`, and it involves no Python or Node. Unified
+memory is shared with Control, Docker's VM and other services: keep weights plus
+KV cache well below physical RAM. `-np 1` serializes agent steps and background
+summaries on one slot; more slots split `--ctx-size` between them.
+
 ## Run a Qwen 27B-class GGUF
 
 1. Choose weights before downloading: Q4_K_M of a 27B model is about 19.4 GB of
    weights (above); Q5_K_M/Q6_K need roughly 23/26 GB (scaled from that size).
-   Add KV cache: at 32 768
-   context the measured run below needed about 5.4 GB more. Verify the published
-   SHA256 and keep weights outside the checkout (for example
-   `~/.local/share/control/models/`).
-2. Start llama.cpp. The Nix-declared container in
-   [External llama.cpp service](#external-llamacpp-service) is the supported,
-   isolated service. Mount the weights read-only and set `--ctx-size`, `--alias`
-   and `--reasoning-budget 0` (Qwen3 thinking otherwise spends the output allowance
-   on hidden reasoning; generation then fails visibly as truncated or empty).
-3. In **Manage → Models & providers → + New summary model**, choose *Local endpoint*,
-   enter a name, the server alias, `http://127.0.0.1:8081/v1`, a revision such as
-   `Qwen3.8-27B-Q4_K_M sha256:… llama.cpp b11669 620d222`, the server's context
-   size, an output reserve, byte ceilings and a timeout. Generation at
-   2 tokens/s needs a generous timeout (512 output tokens ≈ 4–5 minutes).
-4. Check it: `control models test NAME`, then `control models bench NAME 5`.
+   Add KV cache: at 32 768 context the measured run below needed about 5.4 GB
+   more. Verify the published SHA256 and keep weights outside the checkout (for
+   example `~/.local/share/control/models/`).
+2. `nix run .#inference -- --model ~/.local/share/control/models/Qwen3.8-27B-Q4_K_M.gguf`
+3. Add the endpoint in Manage with the printed values and **Serves tool calls**.
+   Agent steps re-send about 10 k tokens of tool schemas, so keep a generous
+   timeout (the default 1800 s is fine on Metal; CPU needs far more).
+4. Check it: `control models test qwen-local`, then `control models bench qwen-local 5`.
+5. In a chat, `/model local:qwen-local`. Future turns run on the local model;
+   `/model default` returns to the node default.
 
-The model then appears under **Agent models** as *text generation only*, and in
-`/model` listings as `local:NAME (text-only)`.
-
-**Apple Silicon.** Docker on macOS runs a Linux VM without Metal, so the container
-image is CPU-only (about 2.1 tokens/s for this 27B model; see the 2026-11-13 test).
-The darwin `llama-cpp` package from the same pinned nixpkgs is built with Metal
-(`libggml-metal`), and the measurement below used it as a host process. This
-repository does not start, supervise or declare a host inference service: Control's
-own maintained services stay in containers. Running a host Metal server is an
-operator decision outside Control; Control treats it like any other private
-endpoint. With unified memory, keep weights plus KV cache well below physical RAM
-and leave room for Control, Docker's VM and other services. `-ngl 999` offloads
-all layers to Metal; flash attention is automatic in this llama.cpp build.
+Without **Serves tool calls** the endpoint stays *text generation only*:
+`control_model_generate` works, and `local:NAME` is refused for agent turns.
 
 ### Measurement on an M3 Max (2026-11-16)
 
@@ -293,43 +316,97 @@ usage and provenance. It cannot see server memory: use `footprint PID` (macOS),
 Control, run `llama-bench -m MODEL.gguf -p 512 -n 128` from the same package with
 the server stopped.
 
-## Local agent turns: status and follow-up
+## Local agent turns
 
-Local endpoint models are listed as agent choices with their capability. Selecting
-one for agent turns (`/model local:NAME`, or the `model` argument of the spawn
-tools) is refused before any effect with an explanation, and a local model can
-never become the saved node default. A run captured with the `local` backend by
-any other path is blocked before workspace preparation. No hosted model is ever
-substituted. The backend, `local:` selector and capability check are the plumbing a
-local agent adapter will use.
+A local endpoint declared with **Serves tool calls** can drive chat turns, spawned
+agents and bot callbacks: `/model local:NAME` in a chat, or `model: "local:NAME"`
+in `control_agent_spawn`/`control_agent_spawn_blocking`. A text-only endpoint is
+refused before any effect. A local model is never the saved node default, and no
+hosted model is ever substituted when the endpoint fails.
 
-What a local agent adapter still needs, per the M1 rules:
+**Loop.** Control runs the loop itself (`src/local_agent.rs`); the endpoint only
+generates. Each step is one bounded `/v1/chat/completions` request with a system
+note, the same Control-assembled turn input Codex receives, and the attempt's
+worker MCP tools as OpenAI function tools: the list `tools/list` returns for that
+attempt (room, continuity, services, spawn, workspace, knowledge, …) plus
+`control_workspace_run`, the same credential-free offline shell Claude Code uses.
+Names and parameter schemas are unchanged; long descriptions keep their first
+sentences. Every call goes through the worker tool dispatch the CLI mailboxes use,
+so authorization, attempt fencing, the staged-handoff fence, judge policy, room
+idempotency and nudges are identical. Calls run one at a time in the order the
+model emits them (at most eight per step). A text reply without tool calls is the
+final report; a committed `control_turn_handoff` finishes the attempt immediately.
+Workspace changes are then checkpointed and published exactly as for Codex.
 
-- **Tool-call format.** llama.cpp 0.7.0 accepts OpenAI tools on
-  `/v1/chat/completions` and function tools on `/v1/responses` (`--jinja`). In this
-  test Qwen3.8-27B emitted a correct function call for a simple tool through
-  `/v1/responses`.
-- **Choice of loop.** Two candidates were tried on 2026-11-16:
-  - *Pinned Codex CLI (0.164.0) against the endpoint* (custom provider,
-    `wire_api = "responses"`, no OpenAI login): it completed a shell-tool turn
-    end-to-end on the Metal server, but only after replacing Qwen's chat template
-    to accept Codex's second system/developer message. More importantly, Codex
-    sends MCP tools as a Responses `namespace` tool, which llama.cpp skips, so
-    Control's own MCP tools (handoff, rooms, services, spawn) were invisible to the
-    model. That would silently change the tool surface, which M1 forbids.
-  - *A native Rust loop in Control* over `/v1/chat/completions` with Control's
-    worker tool schemas as function tools, executing calls through the existing
-    worker tool dispatch. Control already owns input assembly and context fit;
-    this avoids CLI/server format drift but needs a workspace command tool in
-    place of the CLI's shell.
-- **Malformed output.** Invalid JSON arguments, unknown tool names and text-only
-  replies when a handoff is required need bounded repair/retry policy and visible
-  failure, tested with a mock endpoint.
-- **Cancellation.** Attempt cancellation must close the in-flight request (the
-  transport here already does this for plain HTTP) and stop the loop between
-  tool calls.
-- **Authority and recovery contract tests.** Same permissions, staged handoff
-  fencing, checkpoint/publication and fresh-attempt recovery as Codex/Claude,
-  run against a deterministic mock endpoint before any live model.
-- **Capacity.** Context-fit admission must use the endpoint's declared limits,
-  including tool schemas, which are large relative to a 32k context.
+**Malformed output.** Arguments that are not a JSON object, unknown tool names,
+more than eight calls, an empty reply or a reply cut at the output limit never
+execute. The model receives a corrective tool result or note and may retry; four
+malformed steps in a row fail the attempt visibly. A valid step resets the count.
+A response without exactly one choice is an immediate failure. The loop also stops
+after 64 model steps.
+
+**Cancellation and deadlines.** The loop checks cancellation, design questions,
+blocking delegation and the attempt deadline before every step and after every
+tool call. A cancelled run closes the in-flight HTTP connection, so llama.cpp
+stops generating. Attempt-owned tool containers are stopped when the loop ends;
+persistent services are separate resources. Recovery starts a fresh attempt from
+Control's journal; server KV caches only speed up repeated prefixes.
+
+**Context fit.** The endpoint's declared limits are the budget. Turn-input
+planning reserves `OVERHEAD_TOKENS` (12 288) for tool schemas and the first
+exchange, so history is selected newest-first within what remains and omissions
+are recorded. Before each request the loop estimates tokens conservatively
+(3 bytes per token) for messages plus schemas. Input that cannot fit at admission
+blocks the run before any model call. When a long turn outgrows the context, whole
+earlier steps of that turn (never the request, and never a call separated from its
+results) are summarized by the chat's compactor and replaced with one labelled,
+untrusted summary. If nothing more can be compacted, the attempt fails visibly.
+The originals stay in the attempt's activity.
+
+**Compaction stays local.** A chat whose selected model is a local endpoint is
+compacted by that same endpoint by default, through the existing binary summary
+tree, without listing the chat under automatic summaries. The in-turn summaries
+use it too. An explicit operator choice still wins: listing the chat under
+**Automatic summaries** with another model uses that model. `/chat/ID/compaction`
+reports the policy (`local chat model default`, `operator opt-in` or `off`).
+
+**Usage and provenance.** Per-step usage is summed into the attempt's token
+counts. A `local_model` activity records the configured name, alias, declared
+revision, the server-reported model and build fingerprint, the number of steps and
+compactions, elapsed time and token totals.
+
+What is not covered: tool calls run sequentially even when the model emits several
+in parallel. Token estimates are conservative byte counts, not a tokenizer. Image
+inputs are not sent. A 32k context holds roughly 10 k tokens of tool schemas, so
+long single turns rely on in-turn compaction.
+
+### End-to-end run on Metal (2026-11-16)
+
+An isolated Control node (scratch configuration and state, port 18095, the live
+node untouched) used Qwen3.8-27B Q4_K_M on the pinned llama.cpp Metal server with
+the flags `nix run .#inference` installs (ctx 32768, one slot). A chat selected
+`/model local:qwen-local` and asked the agent to call `control_turn_context`, run a
+shell command through `control_workspace_run`, post to the chat's room with
+`control_room_post`, and hand off with `control_turn_handoff`.
+
+| | Run 1 (before the nonce fix) | Run 2 (same chat, after the fix) |
+| --- | ---: | ---: |
+| Outcome | completed with handoff; room post refused (below) | completed with handoff; every step succeeded |
+| Tools called | turn_context, workspace_run, 6× room_post (refused), room_read, turn_handoff | turn_context, workspace_run (wrote `note.txt`), room_post, turn_handoff |
+| Model steps | 10 | 4 |
+| Turn latency, send → completed | 128 s | 49 s |
+| Input / cached / output tokens | 110 914 / 99 465 / 688 | 45 791 / 43 427 / 391 |
+| First-step prompt | 10 638 tokens, 71 s at 150 tokens/s (cold) | 1 681 new tokens, 11.6 s (prefix reused) |
+| Later steps | 57–208 new tokens each, 0.5–1.5 s prompt + 1–4 s decode | 91–500 new tokens, 0.7–3.8 s prompt |
+| Decode | 14.1–15.2 tokens/s | 12.9–14.1 tokens/s |
+
+Run 2 posted `qwen-room-ok: second smoke test in progress — workspace step passed`
+to the room, and its workspace change was checkpointed and published as an
+artifact. Server memory was a 4.3 GB process footprint (peak 4.5 GB) plus about
+18 GB of memory-mapped weights. Most of the cold latency is the first ~10.6 k-token
+prompt, which is mostly tool schemas. llama.cpp's prefix cache makes later steps
+and later turns cheap while the slot keeps that prefix.
+
+The first run exposed a real defect: room posts require a numeric nonce, and the
+loop's nonces were rejected. The model saw the errors, retried, then handed off
+and reported the failure honestly; the fix and the second run are above.

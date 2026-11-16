@@ -782,13 +782,26 @@ now scores that ID and the concurrency limit, with identifier boundaries.
 The local-inference slice reuses that registry for direct bounded generation:
 `control_model_generate` (operator: `control.model.generate`, `control models
 generate|bench`) with declared limits, honest usage, provenance (declared revision
-plus server-reported identity) and connection-closing cancellation. A `local`
-backend and `local:NAME` selector list endpoint models with a text-only capability;
-selecting one for agent turns is refused before effects until a local agent
-adapter passes the tool-call, malformed-output, cancellation, authority and
-recovery contract tests. [LOCAL-MODELS.md](LOCAL-MODELS.md#local-agent-turns-status-and-follow-up)
-records the Codex-over-llama.cpp finding (MCP tools sent as an unsupported
-Responses `namespace`) and the native Rust loop alternative.
+plus server-reported identity) and connection-closing cancellation.
+
+Local agent turns are delivered by a native Rust tool loop (`local` backend,
+`local:NAME` for chats, spawns and bots, enabled per endpoint by a declared
+tool-call capability). Control sends the same turn input and the attempt's worker
+MCP tools as function tools to `/v1/chat/completions`. It executes calls through
+the existing worker dispatch, so authority, handoff fencing, publication and
+fresh-attempt recovery are unchanged. Malformed calls get bounded corrective
+feedback, cancellation closes the request, and admission counts tool schemas. A
+turn that outgrows the context compacts its earlier steps. A local-model chat's
+history compaction defaults to the same endpoint's summary tree; an explicit
+operator choice can override it. `nix run .#inference` selects Metal on Apple
+Silicon (approved host-native llama.cpp from the pinned nixpkgs, as a launchd
+agent) and the Nix container elsewhere (CUDA if available, else CPU). Qwen3.8-27B
+Q4_K_M completed real Control-tool turns on Metal at 13–15 decode tokens/s
+([LOCAL-MODELS.md](LOCAL-MODELS.md#local-agent-turns)).
+Plain Codex-over-llama.cpp was rejected because Codex sends MCP tools as a
+Responses `namespace` tool, which llama.cpp skips. Remaining work: parallel tool
+execution, tokenizer-exact budgets, and a quality comparison of local and hosted
+models on the same gameplay tasks.
 
 M1 defines separate captured selections for worker, lead, reviewer and compactor.
 S1 can independently expose an agent-started model service through tools/MCP;

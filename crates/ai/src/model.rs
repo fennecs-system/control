@@ -112,6 +112,79 @@ pub fn decode(value: Value, limits: &Limits) -> io::Result<Response> {
     Ok(Response { text, tokens })
 }
 
+/// One tool-loop request in the OpenAI-compatible chat format. Messages and tool
+/// schemas are supplied by the host loop, which owns context-fit admission.
+pub fn tool_request(model: &str, messages: &[Value], tools: &[Value], limits: &Limits) -> io::Result<Value> {
+    limits.validate()?;
+    Ok(json!({"model":model,"stream":false,"max_tokens":limits.output_tokens,
+        "messages":messages,"tools":tools,"tool_choice":"auto"}))
+}
+/// A requested tool call. Arguments that are not a JSON object stay an error
+/// for the loop to report back to the model; they are never executed.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Call {
+    pub id: Option<String>,
+    pub name: String,
+    pub arguments: Result<Value, String>,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct Step {
+    pub text: Option<String>,
+    pub calls: Vec<Call>,
+    /// The reply hit the output limit; its text and calls are not trustworthy.
+    pub truncated: bool,
+    pub tokens: Option<Tokens>,
+}
+/// Decodes one assistant step. Only an unusable envelope is an error here;
+/// malformed calls are returned for the loop's bounded repair policy.
+pub fn decode_step(value: &Value, limits: &Limits) -> io::Result<Step> {
+    let choices = value["choices"]
+        .as_array()
+        .filter(|v| v.len() == 1)
+        .ok_or_else(|| io::Error::other("Expected one completion choice"))?;
+    let message = &choices[0]["message"];
+    if !message.is_object() {
+        return Err(io::Error::other("Completion has no message"));
+    }
+    let text = match &message["content"] {
+        Value::Null => None,
+        Value::String(text) if text.len() > limits.output_bytes => {
+            return Err(io::Error::other("Oversized completion text"));
+        }
+        Value::String(text) => Some(text.trim().to_owned()).filter(|t| !t.is_empty()),
+        _ => return Err(io::Error::other("Completion content must be text")),
+    };
+    let mut calls = Vec::new();
+    for call in message["tool_calls"].as_array().into_iter().flatten().take(64) {
+        let function = &call["function"];
+        let name = function["name"].as_str().unwrap_or("").chars().take(128).collect();
+        let arguments = match &function["arguments"] {
+            Value::String(raw) if raw.trim().is_empty() => Ok(json!({})),
+            Value::String(raw) => match serde_json::from_str::<Value>(raw) {
+                Ok(value @ Value::Object(_)) => Ok(value),
+                Ok(_) => Err("arguments must be a JSON object".to_owned()),
+                Err(error) => Err(format!("arguments are not valid JSON ({error})")),
+            },
+            value @ Value::Object(_) => Ok(value.clone()),
+            Value::Null => Ok(json!({})),
+            _ => Err("arguments must be a JSON object".to_owned()),
+        };
+        calls.push(Call {
+            id: call["id"].as_str().filter(|id| !id.is_empty() && id.len() <= 128).map(str::to_owned),
+            name,
+            arguments,
+        });
+    }
+    let tokens = value.get("usage").and_then(|u| {
+        Some(Tokens {
+            input_tokens: u["prompt_tokens"].as_u64()?,
+            cached_input_tokens: u["prompt_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0),
+            output_tokens: u["completion_tokens"].as_u64()?,
+        })
+    });
+    Ok(Step { text, calls, truncated: choices[0]["finish_reason"] == "length", tokens })
+}
+
 /// Runtime identity the server reports about itself. It is untrusted metadata
 /// recorded beside the operator-declared revision, never a substitute for it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

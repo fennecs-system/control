@@ -15,7 +15,21 @@ impl Model {
 }
 pub(crate) mod selection;
 pub fn capacity(runtime:&crate::runtime::Runtime,backend:crate::backend::Backend,model:&str)->Option<control_context::turn_context::Capacity> {
+    if backend==crate::backend::Backend::Local {
+        // Declared endpoint limits, reserving the tool loop's schemas and repair budget.
+        return endpoint(runtime,model).map(|e|control_context::turn_context::Capacity{
+            context_tokens:e.limits.context_tokens,output_tokens:e.limits.output_tokens,
+            overhead_tokens:crate::local_agent::OVERHEAD_TOKENS});
+    }
     runtime.models.iter().find(|m|m.backend==backend && m.model==model).and_then(|m|m.capacity)
+}
+/// The private endpoint a `local:NAME` selection refers to.
+pub(crate) fn endpoint<'a>(runtime:&'a crate::runtime::Runtime,name:&str)->Option<&'a crate::model_calls::Endpoint> {
+    local(runtime).find(|m|m.id==name)
+}
+/// Capability, not a listing, decides whether an agent turn can run.
+pub(crate) fn agent_capable(runtime:&crate::runtime::Runtime,model:&Model)->bool {
+    model.backend!=crate::backend::Backend::Local || endpoint(runtime,&model.model).is_some_and(|e|e.tools)
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -209,8 +223,8 @@ fn migrate(
 
 fn validate_models(models: &[Model], selected: &Model) -> std::io::Result<()> {
     if models.len() > 64
-        || !selected.backend.runs_agents()
-        || models.iter().any(|m|!m.backend.runs_agents())
+        || !selected.backend.default_capable()
+        || models.iter().any(|m|!m.backend.default_capable())
         || !models.iter().any(|m|m.same(selected))
         || models
             .iter()
@@ -265,7 +279,12 @@ pub fn render(runtime: &crate::runtime::Runtime) -> String {
     }
     for endpoint in local(runtime) {
         let id = crate::escape(&endpoint.id);
-        html.push_str(&format!("<section class='model-row'><div class='model-choice' aria-disabled='true'><span class='model-dot' aria-hidden='true'></span><span class='model-name'><span class='model-id' title='{id}'>{id}</span><span class='model-provider'>Local endpoint · {} · text generation only</span></span></div><p class='provider-description'>Use <code>control_model_generate</code> with model <code>{id}</code>. Local agent turns are not available yet; selecting <code>local:{id}</code> for a chat is refused.</p></section>", crate::escape(&endpoint.model)));
+        let (capability,usage)=if endpoint.tools {
+            ("agent turns · text generation",format!("Select <code>/model local:{id}</code> in a chat, or pass <code>local:{id}</code> to spawn tools. Turns run Control's native tool loop and compact history on this endpoint."))
+        } else {
+            ("text generation only",format!("Use <code>control_model_generate</code> with model <code>{id}</code>. Re-add it with <em>Serves tool calls</em> to run agent turns."))
+        };
+        html.push_str(&format!("<section class='model-row'><div class='model-choice' aria-disabled='true'><span class='model-dot' aria-hidden='true'></span><span class='model-name'><span class='model-id' title='{id}'>{id}</span><span class='model-provider'>Local endpoint · {} · {capability}</span></span></div><p class='provider-description'>{usage}</p></section>", crate::escape(&endpoint.model)));
     }
     html.push_str("</div><details class='model-add'><summary>+ New model</summary>");
     for backend in [
@@ -310,7 +329,9 @@ fn render_text(runtime: &crate::runtime::Runtime) -> String {
         "<label>Private endpoint (leave empty for CLI)<input name='url' placeholder='http://127.0.0.1:8081/v1'></label><label>Weights/runtime revision<input name='revision' required maxlength='256'></label>",
         "<label>Declared context tokens<input name='context_tokens' type='number' min='1024' value='32768'></label><label>Output token reserve<input name='output_tokens' type='number' min='1' value='1024'></label>",
         "<label>Input byte ceiling<input name='input_bytes' type='number' min='1' max='1048576' value='28000'></label><label>Output byte ceiling<input name='output_bytes' type='number' min='1' max='65536' value='8192'></label>",
-        "<label>Request timeout seconds<input name='timeout_seconds' type='number' min='1' max='86400' value='1800'></label></div><button class='primary'>Add summary model</button></form></details></section>"));
+        "<label>Request timeout seconds<input name='timeout_seconds' type='number' min='1' max='86400' value='1800'></label></div>",
+        "<label class='summary-toggle'><input name='tools' type='checkbox'><span><strong>Serves tool calls</strong><small>Local endpoint only. Declares OpenAI-style tool calls (llama.cpp <code>--jinja</code>) so chats and agents may select <code>local:NAME</code> for agent turns.</small></span></label>",
+        "<button class='primary'>Add summary model</button></form></details></section>"));
     html.push_str("<section class='provider-section' aria-labelledby='compaction-heading'><h3 id='compaction-heading'>History compaction</h3><p class='provider-description'>Opt in per chat. Original messages remain available in the history tree.</p><form class='compaction-settings' method='post' action='/providers'><input type='hidden' name='action' value='compaction'>");
     html.push_str(&format!("<label class='summary-toggle'><input name='enabled' type='checkbox'{}><span><strong>Automatic summaries</strong><small>Use Control compaction for the chats listed below.</small></span></label><div class='provider-fields'><label>Summary model<select name='model'><option value=''>Select a summary model</option>",if memory.settings.enabled {" checked"}else{""}));
     for model in &memory.models { html.push_str(&format!("<option value='{}'{}>{}</option>",crate::escape(&model.id),if Some(&model.id)==memory.settings.model.as_ref(){" selected"}else{""},crate::escape(&model.id))); }
@@ -329,7 +350,8 @@ fn save_text(state: &mut crate::State, fields: &HashMap<String,String>, save: im
             models.push(crate::model_calls::Endpoint { id:get("id").into(),model:get("model").into(),url:get("url").into(),revision:get("revision").into(),
                 cli:match get("adapter") {""|"endpoint"=>None,"codex"=>Some(crate::backend::Backend::Codex),"claude"=>Some(crate::backend::Backend::Claude),_=>return Err("Unknown text adapter")},
                 limits:control_ai::model::Limits{context_tokens,output_tokens,input_bytes:get("input_bytes").parse().map_err(|_|"Invalid input byte ceiling")?,output_bytes:get("output_bytes").parse().map_err(|_|"Invalid output byte ceiling")?},
-                timeout_seconds:get("timeout_seconds").parse().map_err(|_|"Invalid request timeout")? });
+                timeout_seconds:get("timeout_seconds").parse().map_err(|_|"Invalid request timeout")?,
+                tools:fields.contains_key("tools") });
         }
         "text-remove" => { models.retain(|m|m.id!=get("id")); }
         "compaction" => {

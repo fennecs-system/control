@@ -18,6 +18,11 @@ pub struct Endpoint {
     pub timeout_seconds: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cli: Option<crate::backend::Backend>,
+    /// Operator declaration that the endpoint serves OpenAI-style tool calls
+    /// (llama.cpp `--jinja` with a tool-capable template). It enables agent turns.
+    /// Omitted when false, so existing summary cache identities are unchanged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tools: bool,
 }
 impl Endpoint {
     pub fn validate(&self) -> io::Result<Target> {
@@ -37,9 +42,9 @@ impl Endpoint {
                     "Local text models use an endpoint URL, not a CLI adapter",
                 ));
             }
-            if !self.url.is_empty() {
+            if !self.url.is_empty() || self.tools {
                 return Err(io::Error::other(
-                    "CLI text models do not accept an endpoint URL",
+                    "CLI text models do not accept an endpoint URL or tool-call declaration",
                 ));
             }
             return Ok(Target::Cli(backend));
@@ -129,6 +134,27 @@ pub fn generate(
     let served = control_ai::model::served(&value);
     let response = control_ai::model::decode(value, &limits)?;
     Ok(Generation { response, served, limits, elapsed: started.elapsed() })
+}
+/// One prepared chat-completions request to a private endpoint (agent tool loop).
+/// Same transport, size ceiling, timeout and cancellation as `generate`.
+pub fn post_json(
+    endpoint: &Endpoint,
+    body: &serde_json::Value,
+    cancel: &dyn Fn() -> bool,
+) -> io::Result<(serde_json::Value, Served)> {
+    let Target::Endpoint(mut url) = endpoint.validate()? else {
+        return Err(io::Error::other("Agent tool loops need a private endpoint"));
+    };
+    if cancel() {
+        return Err(cancelled());
+    }
+    url.set_path("/v1/chat/completions");
+    let body = serde_json::to_vec(body).map_err(io::Error::other)?;
+    let bytes = transport::post(&url, &body, Duration::from_secs(endpoint.timeout_seconds), cancel)?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|_| io::Error::other("Malformed model response"))?;
+    let served = control_ai::model::served(&value);
+    Ok((value, served))
 }
 fn cancelled() -> io::Error {
     io::Error::new(io::ErrorKind::Interrupted, "Model call cancelled; no fallback was used")
