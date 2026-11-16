@@ -27,3 +27,13 @@ fn completion_and_highlighting_keep_arguments_and_regular_chat_distinct() {
     assert_eq!(completions("/ans"), vec![6]);
     assert_eq!(command_length("/answer q-123 2"), 7);
 }
+#[test]
+fn folder_approval_uses_the_in_chat_decision_path_but_folder_changes_navigate() {
+    assert!(decision_action("/tools/ports", None));
+    assert!(decision_action("/tools/bots", Some("deny")));
+    assert!(decision_action("/chat/c-18e8804178ab23f0-135/project", Some("approve")));
+    assert!(!decision_action("/chat/c-18e8804178ab23f0-135/project", None), "Change folder stays a page submission");
+    assert!(!decision_action("/chat//project", Some("approve")));
+    assert!(!decision_action("/chat/a/b/project", Some("approve")));
+    assert!(!decision_action("/chat/c-1/preview/stop", Some("approve")));
+}

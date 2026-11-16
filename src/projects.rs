@@ -9,7 +9,7 @@ use std::{
     io::{self, Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{atomic::{AtomicUsize, Ordering}, Arc, Mutex},
 };
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -57,14 +57,22 @@ fn fail(message: impl Into<String>) -> io::Error {
 fn root() -> io::Result<PathBuf> {
     crate::config::state("projects").map_err(fail)
 }
+/// Time-ordered and unique within this process, even when concurrent imports
+/// read the same clock tick (macOS reports microseconds).
 fn nonce() -> String {
-    format!(
-        "p-{:x}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    )
+    static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64;
+    let mut last = LAST.load(Ordering::Relaxed);
+    loop {
+        let next = now.max(last + 1);
+        match LAST.compare_exchange_weak(last, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return format!("p-{next:x}"),
+            Err(current) => last = current,
+        }
+    }
 }
 pub fn request(state: &mut State, id: &str, path: &str) -> Result<Value, &'static str> {
     request_named(state,id,path,None)
@@ -122,28 +130,28 @@ pub fn panel(state: &State, id: &str) -> String {
         return String::new();
     };
     let path = chat.project.as_ref().map(|p| p.path.as_str()).unwrap_or("");
+    let approved = chat.project.as_ref().is_some_and(|p| !p.needs_approval());
+    let running = chat.project.as_ref().filter(|p| p.needs_approval())
+        .and_then(|p| importing(id).filter(|import| import.request == p.request));
     let mut html = format!(
         "<details class='project-picker' data-transcript-key='project-{}-{}'{}><summary>{}</summary>",
         chat.project.as_ref().map(|p|p.request.as_str()).unwrap_or("new"),
-        if chat.project.as_ref().is_some_and(|p|!p.needs_approval()) {"approved"}else{"pending"},
-        if chat.project.as_ref().is_some_and(|p| p.needs_approval()) {
-            " open"
-        } else {
-            ""
-        },
-        if chat.project.as_ref().is_some_and(|p| !p.needs_approval()) {
-            "Folder opened"
-        } else {
-            "Open folder"
-        }
+        if approved {"approved"} else if running.is_some() {"importing"} else {"pending"},
+        if chat.project.as_ref().is_some_and(|p| p.needs_approval()) {" open"} else {""},
+        if approved {"Folder opened"} else if running.is_some() {"Importing folder…"} else {"Open folder"}
     );
     if let Some(project) = &chat.project {
         html.push_str(&format!(
             "<p><code>{}</code></p>",
             crate::escape(&project.path)
         ));
-        if let Some(error)=&project.error {html.push_str(&format!("<p role='alert'>{}</p>",crate::escape(error)));}
-        if !project.needs_approval() {
+        if let Some(import) = &running {
+            // An earlier attempt's error gives way to this attempt's outcome.
+            html.push_str(&format!("<p role='status'>Approved · copying into <code>/workspace/{}</code> · {} {} copied · {} s</p><p class='muted'>The folder opens in this chat when the copy finishes. You can return to the chat; the import continues.</p>",
+                crate::escape(&project.name), import.entries, if import.entries == 1 {"entry"} else {"entries"}, import.elapsed.as_secs()));
+        } else if let Some(error)=&project.error {html.push_str(&format!("<p role='alert'>{}</p>",crate::escape(error)));}
+        if running.is_some() {
+        } else if !project.needs_approval() {
             html.push_str("<p class='muted'>Changes stay in this chat’s worktree. The original folder is unchanged.</p>");
             if let Some(workspace) = project
                 .head
@@ -156,7 +164,7 @@ pub fn panel(state: &State, id: &str) -> String {
                 ));
             }
         } else {
-            html.push_str(&format!("<p>Open as <code>/workspace/{}</code></p><form method='post' action='/chat/{id}/project' target='_top'><input type='hidden' name='request' value='{}'><p>Trust this folder’s code for this chat and allow local previews? Control will copy its files into an isolated worktree. Credentials, generated directories and symlinks are excluded. The original folder stays unchanged.</p><button name='approve' value='yes'>Trust folder and open</button></form><form method='post' action='/chat/{id}/project' target='_top'><label>Folder on this node<input name='path' value='{}' required></label><label>Workspace name<input name='name' value='{}' required></label><button>Change folder</button></form>",crate::escape(&project.name),crate::escape(&project.request),crate::escape(&project.path),crate::escape(&project.name)));
+            html.push_str(&format!("<p>Open as <code>/workspace/{}</code></p><form class='decision-form' method='post' action='/chat/{id}/project' target='_top'><input type='hidden' name='request' value='{}'><p>Trust this folder’s code for this chat and allow local previews? Control will copy its files into an isolated worktree. Credentials, generated directories and symlinks are excluded. The original folder stays unchanged.</p><button name='approve' value='yes'>Trust folder and open</button><p role='alert' hidden></p></form><form method='post' action='/chat/{id}/project' target='_top'><label>Folder on this node<input name='path' value='{}' required></label><label>Workspace name<input name='name' value='{}' required></label><button>Change folder</button></form>",crate::escape(&project.name),crate::escape(&project.request),crate::escape(&project.path),crate::escape(&project.name)));
         }
     } else {
         html.push_str(&format!("<form method='post' action='/chat/{id}/project' target='_top'><label>Folder on this node<input name='path' value='{}' placeholder='/absolute/path' required></label><button>Continue</button></form>",crate::escape(path)));
@@ -283,6 +291,7 @@ fn copy_tree_with(source: &Path, destination: &Path, metadata: bool, durability:
             if !git_metadata && skip(label, metadata) {
                 continue;
             }
+            copied_entry()?;
             let mut input=match crate::artifacts::diff_open_child(source,&name) {
                 Ok(input)=>input,
                 // openat is relative to the pinned parent and never follows links.
@@ -573,6 +582,58 @@ fn publish_with(
     Ok(())
 }
 
+/// Durable checkpoint of approval outcomes (`storage::save` outside tests).
+type Save = fn(&State) -> io::Result<()>;
+/// A folder import running in the background after the operator's approval.
+/// Held in memory only: a restart interrupts it, grants nothing, and the
+/// approval form reappears for the unchanged request.
+struct Import {
+    chat: String,
+    request: String,
+    started: std::time::Instant,
+    entries: Arc<AtomicUsize>,
+}
+static IMPORTS: Mutex<Vec<Import>> = Mutex::new(Vec::new());
+static IMPORT_THREADS: Mutex<Vec<std::thread::JoinHandle<()>>> = Mutex::new(Vec::new());
+thread_local! {
+    static IMPORT_PROGRESS: std::cell::RefCell<Option<Arc<AtomicUsize>>> = const { std::cell::RefCell::new(None) };
+}
+/// Counts entries copied by this thread's import; stopping Control abandons it.
+fn copied_entry() -> io::Result<()> {
+    IMPORT_PROGRESS.with(|progress| match progress.borrow().as_ref() {
+        Some(_) if crate::shutdown::requested() => Err(fail("Control is stopping; folder access was not granted")),
+        Some(entries) => { entries.fetch_add(1, Ordering::Relaxed); Ok(()) }
+        None => Ok(()),
+    })
+}
+/// The visible state of an import that has been approved but not yet attached.
+pub struct Importing {
+    pub request: String,
+    pub elapsed: std::time::Duration,
+    pub entries: usize,
+}
+pub fn importing(id: &str) -> Option<Importing> {
+    IMPORTS.lock().ok()?.iter().find(|import| import.chat == id).map(|import| Importing {
+        request: import.request.clone(),
+        elapsed: import.started.elapsed(),
+        entries: import.entries.load(Ordering::Relaxed),
+    })
+}
+/// Wait for approved imports during shutdown; each stops at its next entry.
+pub fn join_imports() {
+    let threads = IMPORT_THREADS.lock().map(|mut threads| std::mem::take(&mut *threads)).unwrap_or_default();
+    for thread in threads { let _ = thread.join(); }
+}
+/// Removes the registry entry once the outcome is recorded, including on unwind.
+struct Registered { chat: String, request: String }
+impl Drop for Registered {
+    fn drop(&mut self) {
+        if let Ok(mut imports) = IMPORTS.lock() {
+            imports.retain(|import| !(import.chat == self.chat && import.request == self.request));
+        }
+    }
+}
+
 // Retain a candidate on unwind: a checkpoint may already reference its files.
 // Ordinary rejected/failed approvals still remove their unpublished directory.
 struct PendingGrant(Option<PathBuf>);
@@ -584,35 +645,95 @@ impl Drop for PendingGrant {
     }
 }
 /// Called only after HTTP operator authentication, never from model tools.
-/// Slow copies/Git run without holding the shared state lock; the approval is
-/// rechecked before its durable attachment to the chat.
-pub fn approve(shared: &Arc<Mutex<State>>, id: &str, request: &str) -> io::Result<()> {
+/// Validates the displayed request and returns immediately; the copy runs on
+/// its own thread. Failures are recorded beside the request (`Project::error`).
+/// `Ok` means the approval was accepted or its outcome recorded; `Err` only
+/// when even the error could not be saved.
+fn start(shared: &Arc<Mutex<State>>, id: &str, request: &str, save: Save) -> io::Result<()> {
+    let (project, entries) = match accept(shared, id, request) {
+        Ok(Some(accepted)) => accepted,
+        Ok(None) => return Ok(()),
+        Err(error) => return record(shared, id, request, error, save),
+    };
+    let registered = Registered { chat: id.into(), request: request.into() };
+    let (thread_state, chat, approved) = (shared.clone(), id.to_owned(), request.to_owned());
+    let spawned = std::thread::Builder::new().name("control-import".into()).spawn(move || {
+        let _registered = registered;
+        IMPORT_PROGRESS.with(|progress| *progress.borrow_mut() = Some(entries));
+        let result = import(&thread_state, &chat, &approved, project, save);
+        IMPORT_PROGRESS.with(|progress| *progress.borrow_mut() = None);
+        if let Err(error) = result {
+            let _ = record(&thread_state, &chat, &approved, error, save);
+        }
+    });
+    match spawned {
+        Ok(thread) => {
+            if let Ok(mut threads) = IMPORT_THREADS.lock() {
+                threads.retain(|thread| !thread.is_finished());
+                threads.push(thread);
+            }
+            Ok(())
+        }
+        // The closure, and with it the registry entry, was dropped unrun.
+        Err(_) => record(shared, id, request, fail("Could not start the folder import; try again"), save),
+    }
+}
+/// Show an import failure beside the request it belongs to. A request that has
+/// since been replaced or approved keeps its own state.
+fn record(shared: &Arc<Mutex<State>>, id: &str, request: &str, error: io::Error, save: Save) -> io::Result<()> {
+    let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
+    let chat = state.chats.iter_mut().find(|c| c.id == id).ok_or_else(|| fail("Chat not found"))?;
+    if !chat.project.as_ref().is_some_and(|p| p.request == request && p.needs_approval()) {
+        return Err(error);
+    }
+    let previous = chat.clone();
+    chat.project.as_mut().unwrap().error = Some(error.to_string());
+    chat.revision = chat.revision.saturating_add(1);
+    if save(&state).is_err() {
+        *state.chats.iter_mut().find(|c| c.id == id).unwrap() = previous;
+        return Err(fail("Could not save folder error; access was not granted"));
+    }
+    Ok(())
+}
+/// Check the displayed request and register its import. `None`: this request
+/// is already importing (a repeated click), so nothing new starts.
+fn accept(shared: &Arc<Mutex<State>>, id: &str, request: &str) -> io::Result<Option<(Project, Arc<AtomicUsize>)>> {
     if crate::shutdown::requested() {
         return Err(fail("Control is stopping; folder access was not granted"));
     }
-    let project = {
-        let state = shared.lock().map_err(|_| fail("State unavailable"))?;
-        let chat = state
-            .chats
-            .iter()
-            .find(|c| c.id == id)
-            .ok_or_else(|| fail("Chat not found"))?;
-        let project = chat
-            .project
-            .clone()
-            .filter(|p| p.request == request && p.needs_approval())
-            .ok_or_else(|| fail("Project request changed; review the current request"))?;
-        if state.runtime.runs.iter().any(|r| {
-            r.chat_id.as_deref() == Some(id)
-                && ["queued", "running", "waiting", "cancelling"].contains(&r.status.as_str())
-        }) {
-            return Err(fail(
-                "Cancel or finish pending work before granting project access",
-            ));
-        }
-        crate::identity::authorize(&chat.actor, Action::Task).map_err(fail)?;
-        project
-    };
+    let state = shared.lock().map_err(|_| fail("State unavailable"))?;
+    let chat = state
+        .chats
+        .iter()
+        .find(|c| c.id == id)
+        .ok_or_else(|| fail("Chat not found"))?;
+    let mut imports = IMPORTS.lock().map_err(|_| fail("Import state unavailable"))?;
+    if let Some(running) = imports.iter().find(|import| import.chat == id) {
+        return if running.request == request { Ok(None) } else {
+            Err(fail("Another folder is still importing into this chat; wait for it to finish"))
+        };
+    }
+    let project = chat
+        .project
+        .clone()
+        .filter(|p| p.request == request && p.needs_approval())
+        .ok_or_else(|| fail("Project request changed; review the current request"))?;
+    if state.runtime.runs.iter().any(|r| {
+        r.chat_id.as_deref() == Some(id)
+            && ["queued", "running", "waiting", "cancelling"].contains(&r.status.as_str())
+    }) {
+        return Err(fail(
+            "Cancel or finish pending work before granting project access",
+        ));
+    }
+    crate::identity::authorize(&chat.actor, Action::Task).map_err(fail)?;
+    let entries = Arc::new(AtomicUsize::new(0));
+    imports.push(Import { chat: id.into(), request: request.into(), started: std::time::Instant::now(), entries: entries.clone() });
+    Ok(Some((project, entries)))
+}
+/// Slow copies/Git run without holding the shared state lock; the approval is
+/// rechecked before its durable attachment to the chat.
+fn import(shared: &Arc<Mutex<State>>, id: &str, request: &str, project: Project, save: Save) -> io::Result<()> {
     let grant = nonce();
     let directory = root()?.join("grants").join(&grant);
     fs::create_dir_all(directory.parent().unwrap())?;
@@ -653,7 +774,7 @@ pub fn approve(shared: &Arc<Mutex<State>>, id: &str, request: &str) -> io::Resul
     chat.workspace = None;
     chat.improve_mode = false;
     chat.revision = chat.revision.saturating_add(1);
-    if crate::storage::save(&state).is_err() {
+    if save(&state).is_err() {
         *state.chats.iter_mut().find(|c| c.id == id).unwrap() = previous;
         return Err(fail("Could not save project approval"));
     }
@@ -666,7 +787,19 @@ pub fn http(
     shared: &Arc<Mutex<State>>,
     method: &str,
     path: &str,
+    query: &str,
     body: &[u8],
+) -> bool {
+    http_in(stream, shared, method, path, query, body, crate::storage::save)
+}
+fn http_in(
+    stream: &mut impl Write,
+    shared: &Arc<Mutex<State>>,
+    method: &str,
+    path: &str,
+    query: &str,
+    body: &[u8],
+    save: Save,
 ) -> bool {
     if let Some(id) = path
         .strip_prefix("/chat/")
@@ -697,37 +830,49 @@ pub fn http(
     else {
         return false;
     };
-    let result: io::Result<String> = (|| {
+    // The approval page polls an import by its request nonce (`p-<hex>`).
+    let watched = query.split('&').find_map(|pair| pair.strip_prefix("importing="))
+        .filter(|request| request.len() <= 64 && request.strip_prefix("p-").is_some_and(|hex| !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit())));
+    enum Reply { Page(String), Redirect(String), Accepted }
+    // The chat client posts decisions with `response=json`, like port requests.
+    let asynchronous = method == "POST" && crate::fields(&String::from_utf8_lossy(body)).get("response").is_some_and(|value| value == "json");
+    let result: io::Result<Reply> = (|| {
         if method == "GET" {
             let state = shared.lock().map_err(|_| fail("State unavailable"))?;
-            if !state.chats.iter().any(|c| c.id == id) {
-                return Err(fail("Chat not found"));
+            let chat = state.chats.iter().find(|c| c.id == id).ok_or_else(|| fail("Chat not found"))?;
+            let running = chat.project.as_ref().filter(|p| importing(id).is_some_and(|import| import.request == p.request));
+            if let Some(project) = running {
+                // Meta refresh needs no script; it returns to the chat once attached.
+                return Ok(Reply::Page(format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta http-equiv='refresh' content='1;url=/chat/{id}/project?importing={}'><title>Importing folder</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/workspace.css'></head><body><main>{}<a href='/chat/{id}'>Back to chat</a></main></body></html>", crate::escape(&project.request), panel(&state, id))));
             }
-            return Ok(format!("<!doctype html><html lang='en'><head><title>Open project</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/workspace.css'></head><body><main>{}<a href='/chat/{id}'>Back to chat</a></main></body></html>",panel(&state,id)));
+            if let Some(request) = watched && chat.project.as_ref().is_some_and(|p| p.request == request && !p.needs_approval()) {
+                return Ok(Reply::Redirect(format!("/chat/{id}")));
+            }
+            return Ok(Reply::Page(format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><title>Open project</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/workspace.css'></head><body><main>{}<a href='/chat/{id}'>Back to chat</a></main></body></html>",panel(&state,id))));
         }
         if method != "POST" {
             return Err(fail("Use GET or POST"));
         }
         let fields = crate::fields(&String::from_utf8_lossy(body));
         if fields.get("approve").is_some_and(|v| v == "yes") {
-            let request=fields.get("request").map(String::as_str).unwrap_or("");
-            if let Err(error)=approve(
-                shared,
-                id,
-                request,
-            ) {
-                let mut state=shared.lock().map_err(|_|fail("State unavailable"))?;
-                let chat=state.chats.iter_mut().find(|c|c.id==id).ok_or_else(||fail("Chat not found"))?;
-                if chat.project.as_ref().is_some_and(|p|p.request==request&&p.needs_approval()) {
-                    let previous=chat.clone();
-                    chat.project.as_mut().unwrap().error=Some(error.to_string());
-                    chat.revision=chat.revision.saturating_add(1);
-                    if crate::storage::save(&state).is_err() {
-                        *state.chats.iter_mut().find(|c|c.id==id).unwrap()=previous;
-                        return Err(fail("Could not save folder error; access was not granted"));
-                    }
-                } else {return Err(error);}
+            // Respond at once; the approval page shows the import's progress,
+            // returns to the chat when it opens, or shows its error inline.
+            let request = fields.get("request").map(String::as_str).unwrap_or("");
+            start(shared, id, request, save)?;
+            let state = shared.lock().map_err(|_| fail("State unavailable"))?;
+            let current = state.chats.iter().find(|c| c.id == id).and_then(|c| c.project.as_ref());
+            if asynchronous {
+                // Same contract as port and bot decisions: accepted, or the
+                // reason shown in the form. Completion arrives as a live update.
+                let running = importing(id).is_some_and(|import| import.request == request);
+                return match current.filter(|p| p.request == request) {
+                    Some(p) if running || !p.needs_approval() => Ok(Reply::Accepted),
+                    Some(p) => Err(fail(p.error.clone().unwrap_or_else(|| "Folder was not opened; review the request".into()))),
+                    None => Err(fail("Project request changed; review the current request")),
+                };
             }
+            let current = current.map(|p| p.request.clone()).unwrap_or_default();
+            return Ok(Reply::Redirect(format!("/chat/{id}/project?importing={}", crate::escape(&current))));
         } else {
             let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
             let index = state.chats.iter().position(|c| c.id == id).ok_or_else(|| fail("Chat not found"))?;
@@ -744,19 +889,27 @@ pub fn http(
                 "website",
             )
             .map_err(fail)?;
-            if crate::storage::save(&state).is_err() {
+            if save(&state).is_err() {
                 state.chats[index] = previous;
                 return Err(fail("Could not save project request"));
             }
         }
-        Ok(String::new())
+        Ok(Reply::Redirect(format!("/chat/{id}")))
     })();
+    if asynchronous && method == "POST" {
+        let (status, value) = match result {
+            Ok(_) => ("200 OK", json!({"ok":true})),
+            Err(error) => ("400 Bad Request", json!({"error":error.to_string()})),
+        };
+        let _ = control_http::respond(stream, status, "application/json", value.to_string().as_bytes(), "", control_http::Policy::Page);
+        return true;
+    }
     match result {
-        Ok(body) if method == "GET" => {
+        Ok(Reply::Accepted) => {}
+        Ok(Reply::Page(body)) => {
             let _ = control_http::respond(stream, "200 OK", "text/html; charset=utf-8", body.as_bytes(), "", control_http::Policy::RestrictedEmbedded);
         }
-        Ok(_) => {
-            let location = format!("/chat/{id}");
+        Ok(Reply::Redirect(location)) => {
             let _ = control_http::respond(stream, "303 See Other", "text/plain", b"", &format!("Location: {location}\r\n"), control_http::Policy::Restricted);
         }
         Err(error) => {

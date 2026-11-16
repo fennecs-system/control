@@ -386,6 +386,10 @@ pub fn send(state: &mut State, id: &str, text: &str, source: &str) -> Result<(),
     if control_context::limits::message_too_long(text) {
         return Err(control_context::limits::CHAT_MESSAGE_ERROR);
     }
+    // A turn started now would run without the approved folder and cancel its import.
+    if !text.trim().starts_with('/') && crate::projects::importing(id).is_some() {
+        return Err("A folder is still importing into this chat. Send again once it opens.");
+    }
     send_command(state,id,text,source)?;
     touch(state,id);
     Ok(())
@@ -770,7 +774,7 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
     let runs=crate::conversation::Conversation::of(state,session);
     let pending_questions = crate::design::pending_json(state, id);
     Ok(
-        json!({"id":session.id,"title":crate::callsigns::name_or_id(&state.chats,&session.id),"previews":state.previews.iter().filter(|p|p.chat==id && p.status!="stopped").map(|p|json!({"id":p.id,"url":p.url,"status":p.status})).collect::<Vec<_>>(),"project":session.project,"project_worktree":session.project.as_ref().and_then(|p|p.head.as_deref()).and_then(|id|crate::runtime::workspace(id).ok()),"parent_chat":session.parent_chat,"mode":if session.improve_mode {"improve"} else {"chat"},"room":session.room,"lens":session.lens,"lenses":selected_lenses(session),"design_context":session.design_context,"revision":session.revision,"messages": session.messages.iter().map(|m| {
+        json!({"id":session.id,"title":crate::callsigns::name_or_id(&state.chats,&session.id),"previews":state.previews.iter().filter(|p|p.chat==id && p.status!="stopped").map(|p|json!({"id":p.id,"url":p.url,"status":p.status})).collect::<Vec<_>>(),"project":session.project,"project_importing":crate::projects::importing(&session.id).is_some(),"project_worktree":session.project.as_ref().and_then(|p|p.head.as_deref()).and_then(|id|crate::runtime::workspace(id).ok()),"parent_chat":session.parent_chat,"mode":if session.improve_mode {"improve"} else {"chat"},"room":session.room,"lens":session.lens,"lenses":selected_lenses(session),"design_context":session.design_context,"revision":session.revision,"messages": session.messages.iter().map(|m| {
         let run = m.run_id.as_deref().and_then(|id|runs.run(id));
         let (status, reply) = response_from_run(m,run);
         let mut message = json!({"text":m.text,"reply":reply,"status":status,"run_id":m.run_id,"kind":run.map(|r| &r.kind),"persona":run.and_then(|r|r.persona.as_ref()),"delegation":run.and_then(|r|r.delegation.as_ref()),"question":run.and_then(|r|r.question.as_ref()),"attempts":run.map(|r| crate::history::hydrated(r.chat_id.as_deref(),&r.attempts))});
@@ -906,7 +910,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
             .and_then(|r|r.question.as_ref().filter(|q|r.attempts.last().is_some_and(|a|a.workspace_id.as_deref() == Some(&q.generation))));
         let body = question.map(|q|if run_status=="waiting" {"<p class='message-status'>Decision requested · see Requests</p>".to_owned()}else{crate::design::render(q,id,false)})
             .unwrap_or_else(||format!("<p class='preserve'>{reply}</p>"));
-        let body = if project_message==Some(position) {format!("{}{}",if folder_request {String::new()}else{body},if session.project.as_ref().is_some_and(|p|p.pending || p.grant.is_none()) {"<p class='message-status'>Folder request · see Requests</p>".to_owned()}else{crate::projects::panel(state,id)})}else{body};
+        let body = if project_message==Some(position) {format!("{}{}",if folder_request {String::new()}else{body},if session.project.as_ref().is_some_and(|p|p.pending || p.grant.is_none()) {if crate::projects::importing(id).is_some() {"<p class='message-status' role='status'>Importing folder… · see Requests</p>"} else {"<p class='message-status'>Folder request · see Requests</p>"}.to_owned()}else{crate::projects::panel(state,id)})}else{body};
         // An advisor's note is retained evidence with no reply: one distinct box.
         if run.is_some_and(|r| r.source.as_str() == "advisor-note") {
             let (label, note) = message.text.split_once('\n').unwrap_or((message.text.as_str(), ""));

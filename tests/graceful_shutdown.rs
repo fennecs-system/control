@@ -312,7 +312,19 @@ fn project_access_requires_operator_confirmation_and_survives_restart() {
     };
     assert_eq!(approve("stale-request").status(), 400);
     assert!(!fixture.0.join("state/projects").exists());
-    assert_eq!(approve(nonce).status(), 303);
+    let accepted = approve(nonce);
+    assert_eq!(accepted.status(), 303);
+    let progress = format!("{project_url}?importing={nonce}");
+    assert_eq!(accepted.headers()["location"].to_str().unwrap(), progress.split_once("/chat/").map(|(_, path)| format!("/chat/{path}")).unwrap());
+    // Approval answers before the import; its page returns to the chat once attached.
+    let started = std::time::Instant::now();
+    loop {
+        let page = client.get(&progress).header("Cookie", &cookie).send().unwrap();
+        if page.status() == 303 { break; }
+        assert_eq!(page.status(), 200);
+        assert!(started.elapsed() < Duration::from_secs(60), "import did not finish");
+        std::thread::sleep(Duration::from_millis(20));
+    }
     assert_eq!(approve(nonce).status(), 400, "Approval cannot be replayed");
     // The server is running: its latest saves are in the patch log after the snapshot.
     let state = fixture.0.join("state");
