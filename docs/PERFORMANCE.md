@@ -1,5 +1,24 @@
 # Performance checks
 
+## Timed-out turns and steering notes (2026-11-16)
+
+The advisor's `timed_out` fact adds one per-chat slot and one attempt check per
+settled run to `bots::lifecycle::observe`; recovery admission adds one status
+check. `bots::tests::reconcile_profile` (release, Apple Silicon), two alternating
+base (`0e52376`) / head pairs, median ns per pass:
+
+| Case | Base | Head |
+| --- | --- | --- |
+| 64 chats idle | 28,729–30,363 | 29,087–31,700 |
+| 64 chats offered | 36,344–36,940 | 35,905–37,103 |
+| 512 chats idle | 222,101–233,708 | 223,092–238,898 |
+| 512 chats offered | 228,422–247,185 | 224,968–241,946 |
+
+The ranges overlap; no regression is measurable. The tool-result notes run on
+the broker path under the state lock already taken for callback notices: a few
+field reads per call, plus one pass over chats and active runs only once a
+steering threshold is reached and the note has not yet been sent.
+
 ## State saves as a patch journal (2026-11-16)
 
 macOS disk-write diagnostics showed 8–34 GB/hour written by Control during
