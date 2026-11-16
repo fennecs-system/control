@@ -74,6 +74,11 @@ pub struct Session {
     pub revision: u64,
     pub id: String,
     pub actor: Actor,
+    /// Legacy free text (first message or objective); clients show a
+    /// callsign or `name` instead (`crate::callsigns`). Kept for older builds.
     pub title: String,
+    /// The operator's `/rename`. Absent: the chat's derived callsign.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub messages: Vec<Message>,
 }

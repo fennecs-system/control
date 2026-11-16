@@ -5,8 +5,8 @@
 //! failing, a restart loop was retired, a claim lost its owner, members became
 //! blocked on a claim, members report a similar blocker, turns keep settling
 //! while open claims do not advance, one claim holds up several members, a
-//! member's turns keep ending without an accepted handoff), never
-//! single failures. Judge turns, retained peer
+//! member's turns keep ending without an accepted handoff, a turn reached
+//! its time limit), never other single failures. Judge turns, retained peer
 //! evidence (runs without an attempt) and turns woken only by advisor notes,
 //! including the lead's, are not team activity, so an advisor cannot wake
 //! itself through the team it advises. The model interprets; the host only
@@ -55,7 +55,8 @@ const CHATS: usize = 8;
 
 /// One coalescing, non-urgent, non-direct reason for an advisor turn. Facts are
 /// gaps a lead could miss, not churn: a single failed, interrupted or cancelled
-/// turn (provider errors included) or a single failed exit is never one.
+/// turn (provider errors included) or a single failed exit is never one; a
+/// turn stopped at its time limit is (`timed_out`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Facts {
     /// Members whose latest turns failed or were blocked the configured number
@@ -87,6 +88,12 @@ pub struct Facts {
     /// recovery allowance; they now wait with a backoff recheck.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub uncheckpointed: Vec<Uncheckpointed>,
+    /// Members, the lead included, whose latest turn reached its attempt time
+    /// limit and was stopped. Unlike other single failures this is a fact: the
+    /// turn's scope did not fit, and its unpublished work is only a recovery
+    /// candidate.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub timed_out: Vec<String>,
     /// Chats the facts concern, newest first and bounded.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub chats: Vec<String>,
@@ -352,6 +359,9 @@ impl Facts {
         for stuck in &newer.uncheckpointed {
             self.uncheckpointed(stuck.clone());
         }
+        for chat in &newer.timed_out {
+            self.timed_out(chat);
+        }
         for chat in &newer.chats {
             self.concern(chat);
         }
@@ -387,6 +397,11 @@ impl Facts {
             self.bottlenecks.push(newer.clone());
         }
     }
+    fn timed_out(&mut self, chat: &str) {
+        if self.timed_out.len() < CHATS && !self.timed_out.iter().any(|known| known == chat) {
+            self.timed_out.push(chat.to_owned());
+        }
+    }
     fn concern(&mut self, chat: &str) {
         if self.chats.len() < CHATS && !self.chats.iter().any(|known| known == chat) {
             self.chats.push(chat.to_owned());
@@ -407,6 +422,7 @@ impl Facts {
     fn is_empty(&self) -> bool {
         self.repeated == 0 && self.retired == 0 && self.abandoned == 0 && self.blocked.is_empty() && !self.quiescent
             && self.stalled.is_none() && self.shared.is_empty() && self.bottlenecks.is_empty() && self.uncheckpointed.is_empty()
+            && self.timed_out.is_empty()
     }
     pub(super) fn describe(&self, root: &str) -> String {
         let mut parts = Vec::new();
@@ -438,6 +454,10 @@ impl Facts {
                 Some(rejection) => format!("member {} cannot checkpoint: {} turn(s) ended without an accepted handoff; last rejection: \"{rejection}\"", stuck.chat, stuck.turns),
                 None => format!("member {} cannot checkpoint: {} turn(s) ended without calling control_turn_handoff", stuck.chat, stuck.turns),
             });
+        }
+        for chat in &self.timed_out {
+            let role = if chat == root { "the lead" } else { "member" };
+            parts.push(format!("{role} {chat}'s turn reached its time limit and was stopped before it checkpointed"));
         }
         if self.quiescent { parts.push("the team went quiet: no member turn is running or queued".into()); }
         let chats = if self.chats.is_empty() { String::new() } else { format!(" (chats: {})", self.chats.join(", ")) };
@@ -488,6 +508,11 @@ pub(super) struct Team {
     /// set), sorted; one is reported again only after its dependents change.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) necks: Vec<u64>,
+    /// Members whose latest settled turn timed out, in chat order and
+    /// bounded; a member is reported again only after a later turn settles
+    /// otherwise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) timed: Vec<String>,
 }
 fn is_zero_count(value: &usize) -> bool {
     *value == 0
@@ -566,6 +591,8 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
     let mut streak = vec![(0usize, true); state.chats.len()];
     // Per member, its newest failed or blocked turn: the reason a streak reports.
     let mut latest = vec![None; state.chats.len()];
+    // Per member, whether its newest settled turn reached its time limit.
+    let mut timed = vec![None; state.chats.len()];
     struct Scan { active: bool, settled: usize }
     let mut scans = roots.iter().map(|_| Scan { active: false, settled: 0 }).collect::<Vec<_>>();
     for (index, run) in state.runtime.runs.iter().enumerate().rev() {
@@ -579,6 +606,8 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
             // A continued turn's outcome belongs to its continuation.
             status if !run.attempts.is_empty() && crate::application::runs::status::finished(status) && !crate::application::runs::status::superseded(status) => {
                 if !echo(run) { scan.settled += 1; }
+                timed[position].get_or_insert(status == "failed" && run.attempts.last()
+                    .is_some_and(|attempt| attempt.termination == Some(crate::attempt_control::Termination::TimedOut)));
                 let (count, open) = &mut streak[position];
                 match status {
                     "failed" | "blocked" if *open => {
@@ -628,9 +657,15 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
             }
         }
     }
+    let mut timing = roots.iter().map(|_| Vec::new()).collect::<Vec<Vec<&str>>>();
+    for (position, timed) in timed.iter().enumerate() {
+        if *timed == Some(true) && timing[team_at[position]].len() < FAILING {
+            timing[team_at[position]].push(state.chats[position].id.as_str());
+        }
+    }
     let window = state.runtime.execution.advisor_stall_turns.max(4);
     let crowd = state.runtime.execution.advisor_bottleneck_members.max(2);
-    roots.into_iter().zip(scans).zip(failing).zip(held).enumerate().filter_map(|(slot, (((root, scan), failing), held))| {
+    roots.into_iter().zip(scans).zip(failing).zip(held).zip(timing).enumerate().filter_map(|(slot, ((((root, scan), failing), held), timing))| {
         let Claims { blocked, open, progress, reasons, revisions } = held;
         let newest = blocked.iter().map(|claim| claim.blocked_at).max().unwrap_or(0);
         // Reasons are compared only when two members could share one and the
@@ -661,7 +696,8 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
             let failing = failing.into_iter().map(str::to_owned).collect();
             let sharing = sharing.into_iter().map(str::to_owned).collect();
             let necks = identities(necks.as_deref().unwrap_or_default());
-            return Some((root.to_owned(), Team { cursor: 0, failing, settled: scan.settled, blocked: newest, progress, since: scan.settled, open: open > 0, stalled: false, sharing, reasons: fingerprint, claims: revisions, necks }, Facts::default()));
+            let timed = timing.into_iter().map(str::to_owned).collect();
+            return Some((root.to_owned(), Team { cursor: 0, failing, settled: scan.settled, blocked: newest, progress, since: scan.settled, open: open > 0, stalled: false, sharing, reasons: fingerprint, claims: revisions, necks, timed }, Facts::default()));
         };
         let mut team = known.clone();
         let mut facts = Facts::default();
@@ -671,6 +707,14 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
         }
         if team.failing.len() != failing.len() || team.failing.iter().zip(&failing).any(|(known, now)| known != now) {
             team.failing = failing.into_iter().map(str::to_owned).collect();
+        }
+        // A timed-out turn is reported once, until the member settles otherwise.
+        for chat in timing.iter().filter(|chat| !known.timed.iter().any(|known| known == *chat)) {
+            facts.timed_out(chat);
+            facts.concern(chat);
+        }
+        if team.timed.len() != timing.len() || team.timed.iter().zip(&timing).any(|(known, now)| known != now) {
+            team.timed = timing.into_iter().map(str::to_owned).collect();
         }
         for claim in blocked.iter().filter(|claim| claim.blocked_at > known.blocked) {
             let mut entry = Blocked::of(state, claim);

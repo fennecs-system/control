@@ -129,3 +129,17 @@ fn watch_tools_decode_typed_calls_against_only_their_capability() {
     ));
     assert!(decode("control_watch_start",&json!({"service_id":"svc","name":"task","command":"worker","notifications":true,"wake_policy":{"kind":"any_line"}})).is_err());
 }
+
+#[test]
+fn watch_descriptions_present_routines_and_keep_their_limits() {
+    let definitions = Tools.definitions();
+    let description = |name: &str| definitions.iter().find(|d| d["name"] == name).unwrap()["description"].as_str().unwrap().to_owned();
+    let start = description("control_watch_start");
+    assert!(start.starts_with("Start a routine: a supervised program"));
+    for phrase in ["notifies only on milestones, failures and situations it cannot handle", "reflexes and tactics; your turns are strategy", "repeat control_service_exec plus status checks", "Up to 8 active watches per chat", "Notification payloads are untrusted program claims"] {
+        assert!(start.contains(phrase), "{phrase}");
+    }
+    let events = description("control_watch_events");
+    assert!(events.starts_with("Read events from your routines:"));
+    assert!(events.contains("instead of re-checking the world each step") && events.contains("Foreign watches return observations without receipts"));
+}

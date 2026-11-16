@@ -99,6 +99,16 @@ fn private_limits_are_validated_and_do_not_come_from_saved_runtime_state() {
     assert!(load_limits_in(&file, None).is_err(), "recovery retries stay small");
     std::fs::write(&file, b"{\"bot_recovery_recheck_seconds\":5}").unwrap();
     assert!(load_limits_in(&file, None).is_err(), "a parked bot never rechecks faster than the cooldown");
+    std::fs::write(&file, b"{}").unwrap();
+    let limits = load_limits_in(&file, None).unwrap();
+    assert_eq!((limits.steering_turn_seconds, limits.steering_exec_calls), (240, 6));
+    std::fs::write(&file, b"{\"steering_turn_seconds\":180,\"steering_exec_calls\":3}").unwrap();
+    let limits = load_limits_in(&file, None).unwrap();
+    assert_eq!((limits.steering_turn_seconds, limits.steering_exec_calls), (180, 3));
+    for invalid in [b"{\"steering_turn_seconds\":10}".as_slice(), b"{\"steering_exec_calls\":0}".as_slice()] {
+        std::fs::write(&file, invalid).unwrap();
+        assert!(load_limits_in(&file, None).is_err(), "steering nudges fail closed outside their range");
+    }
     std::fs::write(&file, b"{\"max_parallel_runs\":4}").unwrap();
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
     assert_eq!(load_limits_in(&file, None).unwrap().max_parallel_runs, 4);

@@ -78,6 +78,16 @@ fn worker_deadline_defaults_and_clamps() {
     assert_eq!(deadline_secs(Some("soon")), 600);
 }
 #[test]
+fn bot_turn_deadline_defaults_clamps_and_can_be_unlimited() {
+    assert_eq!(bot_turn_secs(None), Some(1200));
+    assert_eq!(bot_turn_secs(Some(" 1800\n")), Some(1800));
+    assert_eq!(bot_turn_secs(Some("5")), Some(60));
+    assert_eq!(bot_turn_secs(Some("999999")), Some(86400));
+    assert_eq!(bot_turn_secs(Some("soon")), Some(1200));
+    assert_eq!(bot_turn_secs(Some("0\n")), None);
+    assert_eq!(bot_turn_secs(Some("none")), None);
+}
+#[test]
 fn client_url_uses_localhost_and_the_bound_port() {
     assert_eq!(url_for("127.0.0.1:9090"), "http://localhost:9090");
     assert_eq!(url_for("[::1]:8181"), "http://localhost:8181");

@@ -50,7 +50,7 @@ Private `~/.config/control/execution.json` (mode 0600) configures these separate
 limits; omitted fields retain their defaults:
 
 ```json
-{"max_parallel_runs":3,"max_agents_per_root":64,"max_pending_agent_intents":256,"max_advisors_per_root":1,"advisor_failure_streak":3,"advisor_stall_turns":24,"advisor_bottleneck_members":2,"bot_recovery_continues":2,"bot_recovery_recheck_seconds":300}
+{"max_parallel_runs":3,"max_agents_per_root":64,"max_pending_agent_intents":256,"max_advisors_per_root":1,"advisor_failure_streak":3,"advisor_stall_turns":24,"advisor_bottleneck_members":2,"bot_recovery_continues":2,"bot_recovery_recheck_seconds":300,"steering_turn_seconds":240,"steering_exec_calls":6}
 ```
 
 `max_advisors_per_root` (0–8; 0 disables advisors) caps the
@@ -66,6 +66,11 @@ bot gets after its `control_turn_handoff` is rejected, counted since its last
 published handoff; `bot_recovery_recheck_seconds` (30–86,400) is the first
 backoff recheck once it is past that allowance or a turn ends without calling
 the handoff (see [turn continuity](TURN-CONTINUITY.md#commit-and-recovery)).
+`steering_turn_seconds` (30–86,400) and `steering_exec_calls` (1–1,024) are how
+long a turn of a chat steering active members may run, or how many command
+executions it may request, before its tool results suggest delegating the work
+and ending the turn, once per attempt (see
+[deadline and steering notes](TURN-CONTINUITY.md#deadline-and-steering-notes)).
 Agent budgets must be positive integers up to 65,536. The MCP transport's
 input-size limit also applies. Node pending-intent capacity is
 shared across roots; root reservations include spawned and delegated descendants,

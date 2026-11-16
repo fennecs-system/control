@@ -1067,7 +1067,7 @@ fn an_agent_requests_bots_for_its_children_and_resumes_with_the_operators_decisi
         ("bot-decision", Some(parent.as_str()))
     );
     assert!(
-        resumed.objective.contains("Farm agent")
+        resumed.objective.contains(crate::callsigns::name(&state.chats, &child).unwrap().as_ref())
             && resumed.objective.contains("approved")
             && resumed.objective.contains("denied")
     );
@@ -2294,3 +2294,5 @@ mod reconcile_profile;
 mod advisor;
 #[path = "tests/recovery.rs"]
 mod recovery;
+#[path = "tests/timeout.rs"]
+mod timeout;

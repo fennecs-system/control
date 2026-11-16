@@ -41,6 +41,19 @@ and keep routine diagnostics out of notifications. Use the workload's existing
 interface to assign work without restarting a healthy persistent process for
 every action.
 
+Autonomy revision 7 moves repeated actions on an external system into such a
+workload: a bounded routine that works toward a target on its own (for example,
+process N items, deliver them and notify). The routine reacts: it sequences
+steps, retries and handles events itself, escalating only milestones, failures
+and situations it cannot handle. The model decides what to do, when and by whom,
+and changes plans from those escalations. A run that issued one
+small job per tool call and then polled its status managed about one action per
+minute, each costing two or three model round trips.
+
+Autonomy revision 8 also asks for only the tooling the current goal needs: tools
+serve milestones, so when tooling work stops advancing the goal, stop and use what
+exists.
+
 Weigh risk by reversibility: a recoverable failure usually costs less than idle
 time, though recoverable does not mean harmless, especially for shared assets.
 Guards bound damage (stop, back off or roll back at a stated limit) rather than
@@ -147,7 +160,19 @@ made members spend turns proving rather than doing; and jobs aborted on
 self-imposed guards before starting. Control services also accept many
 concurrent commands, so non-exclusive work need not take turns.
 
-Coordination revision 12 and autonomy revision 7 make verification proportional.
+Coordination revision 12 keeps the steering chat responsive: whoever steers a
+team assigns goals, resolves consequential choices and unblocks, keeping its
+turns short, and delegates implementation, long work and ongoing infrastructure
+to members, spawned or assigned. It merges the earlier steering-chat and
+infrastructure sentences and shortens others to stay within the 4,000-character
+lens limit. In
+one run a lead bot spent a whole turn writing and testing a library itself, hit
+its 600-second attempt limit, lost the unpublished work and left its team
+without steering for ten minutes. The host backs this with advisory notes on
+tool results (see [turn continuity](TURN-CONTINUITY.md#deadline-and-steering-notes))
+and a `timed_out` advisor fact.
+
+Coordination revision 13 and autonomy revision 8 make verification proportional.
 Agents check an outcome once, by the cheapest direct observation, at milestones
 or for risky, irreversible or disputed steps; routine steps need no evidence
 files, read-backs or proof records, and room posts state the outcome without
@@ -158,8 +183,8 @@ per step proving rather than doing. The bot wake text and room post and claim
 tool descriptions were softened to match.
 
 Inspect existing task tools and peer findings before implementing common
-capabilities again. Share a verified reusable implementation with its invocation,
-version and evidence through existing artifacts or an explicitly shared service.
+capabilities again. Share a working reusable implementation with its invocation
+and version through existing artifacts or an explicitly shared service.
 Reusing code does not require sharing one process or every worker's mutable
 state. Existing access controls still apply; this creates no shared-storage or
 service-grant mechanism.
@@ -286,10 +311,15 @@ comes from the judge role and the operator's bot approval.
    - a member cannot checkpoint: more than `bot_recovery_continues` (default 2)
      of its turns ended without an accepted handoff since its last published
      one. The fact names the member, the count and the host's last handoff
-     rejection, if any; it is reported once per streak.
+     rejection, if any; it is reported once per streak;
+   - a turn timed out: a member's latest turn, or the lead's, reached its
+     attempt time limit and was stopped before it checkpointed (`timed_out`,
+     naming the lead as the lead). It is reported once until that chat's
+     next turn settles otherwise. The advisor suggests splitting the work, or
+     for the lead, delegating it to a member.
 
-   A single failed, interrupted or cancelled turn (provider errors included)
-   and a single failed watch exit are never facts. Facts coalesce into one
+   Apart from a timeout, a single failed, interrupted or cancelled turn
+   (provider errors included) and a single failed watch exit are never facts. Facts coalesce into one
    reason under the bot's existing 30-second cooldown and 60 turns per hour.
    There is no clock rule: a quiet team is reported once per settled change,
    and elapsed time is never a fact.
@@ -326,6 +356,38 @@ team activity, so the advisor cannot re-trigger itself through the team it
 advises. Stopping the advisor (`/bot off`) drops its team snapshot; a later
 advisor reports only facts after its own subscription. Nodes without an
 opted-in advisor do no lifecycle work.
+
+## Ganglia
+
+**Ganglia** (`/use ganglia`): reflexes and routines run locally; turns are
+strategy. An octopus's arms act through local ganglia while its brain decides
+where to go. Use it for long-running work on systems that act faster than a
+turn (games, robots, live services, monitoring), not one-off tasks such as
+scraping or ordinary coding, which the autonomy routine rule covers.
+
+The lens is a build procedure: one shared always-on reflex layer first, built
+early and reused by every member; then skills as bounded routines, including
+timed manoeuvres the model parameterises; routines escalate only salient
+changes; turns set goals and re-plan; everything lives in a folder ready to save
+as a [tool package](TOOL-PACKAGES.md). It turns the operator's repeated steering
+in runs -121 and -128, which drove a system one tool call per action, into
+standing procedure, and adds no tool or authority.
+
+**Pitfall: jitter.** In run -128 the shared reflex layer thrashed: a player
+surrounded by hostiles walked a few metres, stopped, swung once and re-planned.
+Every 500 ms tick re-decided on the nearest threat alone, any threat in a wide
+radius cancelled the routine (forcing a fresh path search), each reaction acted
+once, and the mode flipped at a health threshold. Reflexes must commit: hold
+until the trigger stays clear, act continuously, weigh every threat, preempt
+only for imminent ones, and pause rather than cancel routines.
+
+**Pitfall: patching layers.** In the same run a member spent a 45-minute turn
+repeatedly patching movement code entangled with reflex leases instead of
+placing blocks. Keep each layer minimal; a layer that blocks the task is
+bypassed or removed, not patched again and again.
+
+Opt-in: `swarm` does not include it, so the scorecard can compare runs with and
+without it.
 
 ## Tool packages
 

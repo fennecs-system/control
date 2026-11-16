@@ -1,5 +1,24 @@
 # Watch notifications and diagnostic output
 
+## Routines
+
+Agent-facing tools call a watch's program a *routine*: a program an agent
+writes and starts that works toward a target on its own, handles its own steps,
+retries and events, and escalates only milestones, failures and situations it
+cannot handle. Routines are the swarm's reflexes and tactics; model turns are
+its strategy and planning. Like a hive's drones keeping the nest in order, or
+sentinel machinery that notices a ship long before the swarm is roused, they run
+without attention so that the collective's attention is spent on decisions.
+
+`control_watch_start` starts a routine; `control_watch_events` reads the outcomes
+it reports; `control_service_exec` is for one-off setup, inspection and
+installing or editing a routine. There is no separate routine tool: one schema
+and one implementation keep the tool list short and its policy in one place.
+When an attempt has issued five commands to the same service and no routine
+(active watch) runs there, the fifth exec result carries a one-line `hint`
+suggesting one. It appears once per attempt and service, changes nothing else,
+and is computed from that service's retained command records.
+
 Use separate channels for control events and stdout/stderr. A watch started with
 `notifications=true` supplies an inherited descriptor, `CONTROL_NOTIFY_FD=3`.
 The program writes explicit newline-delimited notification payloads there; normal
