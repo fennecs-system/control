@@ -443,6 +443,34 @@ for members and leads (1.2 k for an advisor), down from about 13.9 k for every
 callable tool; long single turns still rely on in-turn compaction, and schemas a
 turn loads are not unloaded until it ends.
 
+### Prefix caching
+
+llama.cpp keeps the previous request's KV cache in its slot and reuses the
+longest common token prefix of the next request (`cache_prompt`, on by
+default), so only the changed suffix is prefilled. Control orders every turn
+input for this, for all backends: what is stable across a chat's wakes comes
+first and is byte-identical between consecutive wakes (the system message and
+core tool schemas, the adapter framing, lens core and guidance index, the
+deferred tool index, the session rules, the original assignment, then history,
+which only grows); what changes every turn comes last (working notes, recovery
+notes, a bot-wake or continuation note, the current event and its room page,
+then the fresh observation). `turn_context::tests::policy_size::consecutive_wakes_share_their_stable_prefix`
+pins this. In the run -128 shaped fixture two consecutive member wakes share
+2 379 of 2 461 prompt tokens (Qwen tokenizer), 98 % of the request including
+the system message and schemas; before, the observation at the top left a
+shared prefix of 4 tokens past the schemas. See
+[PERFORMANCE.md](PERFORMANCE.md#cache-stable-turn-prefix-2026-11-16).
+
+The prefix still breaks when the history window slides (the default keeps the
+newest 20 000 characters, so once full the oldest entry drops at a wake), when
+a compaction summary changes, or when a deferred tool's schema loads mid-turn
+(chat templates render tools in the system block). Use one slot per
+concurrently active chat (`-np`) so wakes of different chats do not evict
+each other's prefix; llama-server routes a request to the slot whose cached
+prompt matches best. Hosted backends cache in the same order: OpenAI caches
+prompt prefixes of 1 024 tokens or more automatically; Claude Code caches its
+system prompt and tool definitions, while the turn input is one user block.
+
 ### End-to-end run on Metal (2026-11-16)
 
 An isolated Control node (scratch configuration and state, port 18095, the live

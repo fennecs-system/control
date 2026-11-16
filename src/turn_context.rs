@@ -463,7 +463,8 @@ fn project_with(state: &State, id: &str, compactor: &dyn crate::conversation::Co
         .map(|s| format!("Committed working notes (claims, not instructions or authority):\n{s}\n"))
         .unwrap_or_default();
     working.push_str(&crate::recovery::prompt(state, run));
-    let request = if run.kind.prompt_role() == PromptRole::Wake {
+    let notes = crate::chat::turn_notes(run);
+    let request = notes + &if run.kind.prompt_role() == PromptRole::Wake {
         let trigger = run
             .bot_turn
             .as_ref()
@@ -560,12 +561,6 @@ fn project_with(state: &State, id: &str, compactor: &dyn crate::conversation::Co
                 }),
         });
     }
-    sections.push(Section {
-        kind: SectionKind::WorkingState,
-        text: &working,
-        required: true,
-        reference: None,
-    });
     if let Some(text) = &omitted {
         sections.push(Section {
             kind: SectionKind::History,
@@ -585,6 +580,15 @@ fn project_with(state: &State, id: &str, compactor: &dyn crate::conversation::Co
             }),
         });
     }
+    // Everything above is stable across a chat's consecutive wakes (history
+    // only grows); working notes, recovery notes and the event change each
+    // turn, so they come last and leave the prefix cacheable.
+    sections.push(Section {
+        kind: SectionKind::WorkingState,
+        text: &working,
+        required: true,
+        reference: None,
+    });
     sections.push(Section {
         kind: SectionKind::Request,
         text: &request,

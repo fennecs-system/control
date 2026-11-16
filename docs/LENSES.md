@@ -64,7 +64,8 @@ Everything else is on demand: the planning procedure, coordination detail
 (backlog, waiting on claims, escalation), autonomy detail (routines, guard
 revision), bounded investigation, the advisor procedure (except for the
 advisor), Ganglia, and the longer session and room conventions
-(`control_guidance` topics `session` and `rooms`).
+(`control_guidance` topics `session` and `rooms`), and the worker environment
+(images, profiles, Nix builds and network scope; topic `environment`).
 
 Per-wake text no longer restates lenses. The bot wake objective is one line
 naming its trigger; the advisor wake names its facts and points at its

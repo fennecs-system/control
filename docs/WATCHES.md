@@ -298,7 +298,8 @@ knows any particular workload.
 A chat can declare one observation source with `control_observe_set`: the
 latest output of a short command in one of its running services, or a watch's
 newest notification (else its latest lines). Control places that output,
-capped, at the top of every turn's input, and of `control_service_exec` results
+capped, at the end of every turn's input (after the cache-stable prefix; see
+[prefix caching](LOCAL-MODELS.md#prefix-caching)), and of `control_service_exec` results
 when declared with `exec_results=true`. The agent sees current state without a
 status tool call; the evidence motivating it was a run where members called
 `control_service_exec_status` 969 times and `control_turn_context` 501 times.

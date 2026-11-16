@@ -1,5 +1,51 @@
 # Performance checks
 
+## Cache-stable turn prefix (2026-11-16)
+
+Every turn re-sent about 3 KB of fixed adapter framing (environment profiles,
+room protocol, language and reporting rules), much of it repeated by the
+always-on policy, tool descriptions or `control_guidance` topics. The framing
+now keeps the safety and authority essentials and points at the new
+`environment` guidance topic for image, profile, Nix and network detail.
+Turn input is also ordered for provider prefix caches: the declared
+observation moved from the top of the input to the end, working and recovery
+notes moved after history, and the per-run bot-wake and continuation notes
+moved from the lens policy to the request. The history window no longer counts
+wake entries that render nothing as omitted, which had added a changing note
+before history at every bot wake.
+
+Measured with `turn_context::tests::policy_size::dump_prompt_sections` (the run
+-128 shaped team: a managed Codex member with the swarm and advisor lenses,
+linked room, 12 earlier callbacks) and the Qwen3.8-27B GGUF's own tokenizer
+(`llama-tokenize` from the Nix-pinned llama.cpp). Claude and Codex figures are
+approximate (bytes ÷ 4); no tokenizer for them is available offline.
+
+| Section | Before bytes | Before Qwen tokens | After bytes | After Qwen tokens | ≈ Claude/Codex tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Codex framing, managed room chat | 3,194 | 590 | 1,186 | 232 | 800 → 300 |
+| Codex framing, unmanaged room chat | 3,243 | 597 | 1,332 | 259 | 810 → 330 |
+| Claude framing | 2,296 | 412 | 996 | 189 | 575 → 250 |
+| Lens policy and guidance index (`prompt_prefix`) | 2,188 | 440 | 2,297 | 457 | 550 → 575 |
+| Deferred tool index | 1,815 | 430 | 1,813 | 430 | 455 |
+| Session rules | 732 | 137 | 732 | 137 | 185 |
+| Core tool schemas, Codex listing | 8,918 | 1,926 | 8,918 | 1,926 | 2,230 |
+| Core tool schemas, local functions + system message | 10,074 | 2,158 | 10,074 | 2,158 | n/a |
+| Whole wake input (member, second wake) | 14,848 | 2,847 | 12,684 | 2,461 | 3,710 → 3,170 |
+| Shared with the previous wake | 13 | 4 | 12,395 | 2,379 | 3 → 3,100 |
+| Per-wake dynamic suffix | 14,835 | 2,843 | 289 | 82 | 3,710 → 72 |
+
+The lens policy grows by 17 tokens because the bot-wake persona line now comes
+in the request and the chat's own persona line stays put. For the local
+backend the cached share of a whole request (system message, core schemas and
+turn input) rises from 43 % (2,162 of 5,005 tokens) to 98 % (4,537 of 4,619),
+so a wake prefills about 82 new tokens instead of about 2,850. The history
+window still slides once its 20,000 characters are full, which moves the
+divergence back to the start of history; that and compaction summaries are the
+next limits. The local planning reserve (`OVERHEAD_TOKENS`, 7,168) is
+unchanged: the loop admits a step by its own estimate (3 bytes per token, 3,409
+for a lead's core schemas), so the reserve must cover that estimate even though
+the Qwen count for the same schemas is about 2,200.
+
 ## Usage after handoffs and score probes (2026-11-16)
 
 After an accepted handoff the provider now has up to 20 s (`HANDOFF_GRACE`)

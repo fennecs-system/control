@@ -1,6 +1,6 @@
 //! Shared prompt policy and attribution for harness-generated conversation events.
 
-pub const CODE_LANGUAGE_GUIDANCE: &str = "Control's maintained source and integrations use Rust/WASM, Haskell, Lean and Nix. Task-specific programs outside Control's repository may use other languages inside explicitly granted tool containers, including Node or Python. Keep those programs and their dependencies inside their private containers; do not create host services or modify shared base images. This restriction on Control's source does not prohibit third-party tools or task-specific container code.";
+pub const CODE_LANGUAGE_GUIDANCE: &str = "Control's own source stays Rust/WASM, Haskell, Lean and Nix; other languages (Node, Python) are fine inside granted tool containers, never as host services or in shared images.";
 
 /// Always-on team essentials for a room-linked chat: direct requests, claims,
 /// what to post, and authority. The detail is read on demand (topic `rooms`).
