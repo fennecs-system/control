@@ -54,4 +54,4 @@ impl Backend {
     }
 }
 /// Refusal shared by selection and launch for endpoints without declared tool calls.
-pub const LOCAL_TEXT_ONLY: &str = "This local endpoint is declared text-only: use control_model_generate for inference, or enable \"Serves tool calls\" for a tool-capable server (llama.cpp --jinja) to run agent turns. No run was started and no hosted model was substituted.";
+pub const LOCAL_TEXT_ONLY: &str = "This local endpoint is declared text-only: use control_model_generate for inference, or edit the entry in Manage → Models and enable \"Serves tool calls\" for a tool-capable server (llama.cpp --jinja) to run agent turns. No run was started and no hosted model was substituted.";

@@ -8,10 +8,11 @@ worker also accepts explicitly selected Claude/Codex CLI text adapters. Agents a
 the operator can also call a configured endpoint directly for bounded text
 generation (`control_model_generate`, below). A tool-capable local endpoint can
 also drive agent turns through Control's native tool loop; see
-[Local agent turns](#local-agent-turns). `nix run .#inference` starts the node's
-llama.cpp service with the platform's accelerated backend.
+[Local agent turns](#local-agent-turns). `nix run .#inference` starts one llama.cpp
+service per model with the platform's accelerated backend.
 
-Chat and TUI accept `/model` to list configured agent models, `/model PROVIDER:ID`
+Chat and TUI accept `/model` to list configured agent models (text-only local
+models are named separately, with how to enable them), `/model PROVIDER:ID`
 to select future turns and `/model default` to select the current node default.
 This is chat metadata, excluded from model history; it starts no model traffic
 and does not interrupt an active attempt. Completion and `/help` share the same
@@ -31,13 +32,28 @@ Claude/Codex attempt can still trigger that CLI's own private compaction.
 
 ## Configure and inspect
 
-In **Manage → Models & providers**, add a local text model with:
+In **Manage → Models & providers → Text models**, add one entry per model with:
 
-- a unique name and the model alias served by the endpoint;
+- a unique name and the model alias served by the endpoint (one entry per
+  endpoint and model ID; a second entry for the same pair is refused);
 - a loopback/private literal address ending in `/v1` (or `localhost`);
 - a weights/runtime revision, ideally the GGUF SHA256 plus runtime revision;
 - declared context/output token limits, input/output byte ceilings and an
   explicit per-request timeout. There is no retry or cloud fallback.
+- **Serves tool calls** when the server runs it with tool calls (`--jinja`), so the
+  same entry can also run agent turns.
+
+Each entry is listed once with its capabilities (summaries · text generation,
+plus agent turns when it serves tool calls). Roles point at entries: the
+compactor under **History compaction**, `control_model_generate` by name and agent
+turns by `/model local:NAME`. **Edit** on an entry changes its model ID, endpoint,
+revision, limits, timeout and **Serves tool calls** in place, validated exactly
+as when adding it; the name and adapter stay fixed because chats and the
+compactor refer to the name. Settings saved by older releases with separate
+entries for the same endpoint and model (for example a text-only compactor and a
+tool-capable agent entry) are merged on start: the tool-capable entry's name and
+settings are kept, and the compactor and chat selections that named the other
+entry follow it. `control_model_generate` callers must use the kept name.
 
 For CLI summarizers, choose the Codex/Claude adapter and leave the URL empty.
 They reuse the pinned worker image and existing login isolation, with no project
@@ -201,7 +217,7 @@ inspection/recall path and authoritative originals remain essential.
 
 ## Local text generation tool
 
-Every **local endpoint** summary model (adapter *Local endpoint*, not the Codex or
+Every **local endpoint** text model (adapter *Local endpoint*, not the Codex or
 Claude CLI adapters) is also available for direct, bounded text inference. There is
 one registry: the same `model.json` entry, URL validation, declared limits and
 revision serve compaction and generation. No second inference stack is configured.
@@ -240,14 +256,15 @@ cancellation for HTTPS is only checked before sending.
 
 ## Local inference service
 
-`nix run .#inference -- --model /absolute/model.gguf` starts the node's llama.cpp
-server with the backend this platform needs. The binary always comes from the
-pinned nixpkgs, weights are never downloaded, and the server binds loopback only.
+`nix run .#inference -- --model /absolute/model.gguf` starts a llama.cpp server for
+one model with the backend this platform needs. Each `--alias` is its own service,
+so several models can run side by side on separate ports. The binary always comes
+from the pinned nixpkgs, weights are never downloaded, and the server binds loopback only.
 
 | Backend | Selected when | What runs |
 | --- | --- | --- |
-| `metal` | auto on aarch64-darwin | the pinned darwin `llama-server` (built with `libggml-metal`) as the launchd agent `dev.control.inference`, `-ngl 999`, logs in `~/.local/share/control/inference/server.log` |
-| `container` | auto elsewhere | the pinned Linux image `control-inference` (read-only, no capabilities, model directory mounted read-only); CUDA (`--gpus all`) when `nvidia-smi` works and Docker has the NVIDIA runtime, otherwise CPU |
+| `metal` | auto on aarch64-darwin | the pinned darwin `llama-server` (built with `libggml-metal`) as the launchd agent `dev.control.inference.ALIAS`, `-ngl 999`, logs in `~/.local/share/control/inference/ALIAS.log` |
+| `container` | auto elsewhere | the pinned Linux image `control-inference` as container `control-inference-ALIAS` (read-only, no capabilities, model directory mounted read-only); CUDA (`--gpus all`) when `nvidia-smi` works and Docker has the NVIDIA runtime, otherwise CPU |
 | `cpu` | explicit | the CPU container on any platform |
 
 Override with `--backend metal|container|cpu` (or `CONTROL_INFERENCE_BACKEND`);
@@ -257,16 +274,21 @@ container toolkit). The CUDA and Vulkan images evaluate but were not built or ru
 on this Mac. Other flags: `--alias` (default `qwen-local`), `--ctx-size` (32768),
 `--port` (8081), `--parallel` (1 slot), `--sha256` (skip hashing) and extra
 `llama-server` flags after `--`. `--dry-run` prints the launchd plist or the
-container command and changes nothing; `--status` and `--stop` manage the service.
+container command and changes nothing. `--status` and `--stop` cover every model,
+or one with `--alias NAME`. A start refuses a port another model's record holds.
 
 Every start uses `--jinja` (tool calls through the model's chat template) and
 `--reasoning-budget 0`. The script hashes the GGUF once and writes the backend,
 model path, SHA256, alias, port and a ready-to-paste revision string to
-`inference.json` in the Control configuration directory; the saved backend is reused
-when `--backend` is omitted. It prints the values for **Manage → Models &
-providers → + New summary model**: adapter *Local endpoint*, the alias as name and
-model ID, `http://127.0.0.1:PORT/v1`, the revision, the context size, and
-**Serves tool calls** ticked. Control does not edit `model.json` from the script.
+`inference/ALIAS.json` in the Control configuration directory; that model's saved
+backend is reused when `--backend` is omitted. A service started by an earlier
+release (`dev.control.inference` or container `control-inference`, record
+`inference.json`) is stopped when a start reuses its alias or port, and by
+`--stop`. The script prints the values for **Manage → Models & providers → + New
+text model**: adapter *Local endpoint*, the alias as name and model ID,
+`http://127.0.0.1:PORT/v1`, the revision, the context size, and whether to tick
+**Serves tool calls** (for a model that runs agent turns). Control does not edit
+`model.json` from the script.
 
 The maintainer approved running llama.cpp natively on Apple Silicon because the
 container cannot reach the GPU there. It is the only host-native third-party
@@ -274,6 +296,33 @@ service, it is pinned by `flake.lock`, and it involves no Python or Node. Unifie
 memory is shared with Control, Docker's VM and other services: keep weights plus
 KV cache well below physical RAM. `-np 1` serializes agent steps and background
 summaries on one slot; more slots split `--ctx-size` between them.
+
+### Two models: a 27B for agents, a 7B for summaries
+
+Run one service per model on its own port, add one text-model entry for each,
+then point each role at an entry:
+
+```sh
+nix run .#inference -- --model ~/.local/share/control/models/Qwen3.8-27B-Q4_K_M.gguf \
+  --alias qwen-27b --port 8081
+nix run .#inference -- --model ~/.local/share/control/models/your-7b-Q4_K_M.gguf \
+  --alias qwen-7b --port 8082 --ctx-size 16384
+nix run .#inference -- --status
+```
+
+1. **+ New text model** for `qwen-27b` (`http://127.0.0.1:8081/v1`) with **Serves
+   tool calls**, and for `qwen-7b` (`http://127.0.0.1:8082/v1`) without it.
+2. **History compaction → Summary model**: `qwen-7b`.
+3. Agent turns: `/model local:qwen-27b` in a chat, or `model: "local:qwen-27b"` when
+   spawning. Ad hoc generation names either: `control_model_generate` with
+   `model: "qwen-7b"`.
+
+A chat on `local:qwen-27b` compacts on `qwen-27b` unless the operator lists it
+under History compaction, which then uses `qwen-7b`. Both servers share memory
+(and, on Metal, the GPU): budget both weights and both KV caches. The pinned
+llama.cpp also has a router mode (`--models-dir`) that loads models on demand in
+one server; the script does not use it, so each model keeps its own context size,
+slots, log and lifecycle.
 
 ## Run a Qwen 27B-class GGUF
 
@@ -283,7 +332,8 @@ summaries on one slot; more slots split `--ctx-size` between them.
    more. Verify the published SHA256 and keep weights outside the checkout (for
    example `~/.local/share/control/models/`).
 2. `nix run .#inference -- --model ~/.local/share/control/models/Qwen3.8-27B-Q4_K_M.gguf`
-3. Add the endpoint in Manage with the printed values and **Serves tool calls**.
+3. Add the endpoint in Manage (**+ New text model**) with the printed values and
+   **Serves tool calls**.
    Agent steps re-send about 3.4 k tokens of core tool schemas (more once a turn
    loads deferred tools), so keep a generous timeout (the default 1800 s is fine
    on Metal; CPU needs far more).
@@ -292,7 +342,8 @@ summaries on one slot; more slots split `--ctx-size` between them.
    `/model default` returns to the node default.
 
 Without **Serves tool calls** the endpoint stays *text generation only*:
-`control_model_generate` works, and `local:NAME` is refused for agent turns.
+`control_model_generate` and summaries work, and `local:NAME` is refused for agent
+turns. Tick it later with **Edit** on the entry; no re-add is needed.
 
 ### Measurement on an M3 Max (2026-11-16)
 

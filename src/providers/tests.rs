@@ -276,3 +276,115 @@ fn model_settings_persist_atomically_and_runs_keep_their_selected_model() {
         .is_err()
     );
 }
+fn form(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+    pairs.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect()
+}
+fn edit_fields<'a>(id: &'a str, url: &'a str) -> Vec<(&'a str, &'a str)> {
+    vec![("action","text-edit"),("id",id),("model","qwen-compactor"),("url",url),("revision","weights-sha-and-runtime"),
+        ("context_tokens","32768"),("output_tokens","1024"),("input_bytes","28000"),("output_bytes","8192"),("timeout_seconds","600")]
+}
+#[test]
+fn text_models_are_edited_in_place_and_validated_like_new_entries() {
+    let mut state = crate::State::default();
+    state.runtime.compaction.models.push(crate::model_calls::tests::endpoint());
+    state.runtime.compaction.settings = crate::compaction::Settings { enabled:true, model:Some("local-qwen".into()), ..Default::default() };
+    let mut fields = edit_fields("local-qwen", "http://127.0.0.1:8081/v1");
+    fields.push(("tools", "on"));
+    // A failed save leaves the entry as it was.
+    assert!(save_with(&mut state, &form(&fields), |_| Err(std::io::Error::other("disk full"))).is_err());
+    assert!(!state.runtime.compaction.models[0].tools);
+    save_with(&mut state, &form(&fields), |_| Ok(())).unwrap();
+    let edited = &state.runtime.compaction.models[0];
+    assert_eq!((edited.id.as_str(), edited.tools, edited.timeout_seconds), ("local-qwen", true, 600));
+    assert_eq!(state.runtime.compaction.models.len(), 1);
+    // The compactor still points at the same entry, which now also runs agent turns.
+    assert_eq!(state.runtime.compaction.settings.model.as_deref(), Some("local-qwen"));
+    let local = Model::captured(crate::backend::Backend::Local, "local-qwen".into());
+    assert!(agent_capable(&state.runtime, &local));
+    // Unticking the box makes it text-only again, without a re-add.
+    save_with(&mut state, &form(&edit_fields("local-qwen", "http://127.0.0.1:8081/v1")), |_| Ok(())).unwrap();
+    assert!(!agent_capable(&state.runtime, &local));
+    // Create-time validation applies: no cloud endpoints, no unknown entries.
+    let before = state.runtime.compaction.models.clone();
+    for (id, url) in [("local-qwen", "https://example.com/v1"), ("missing", "http://127.0.0.1:8081/v1")] {
+        assert!(save_with(&mut state, &form(&edit_fields(id, url)), |_| panic!("invalid edit must not persist")).is_err(), "{id} {url}");
+    }
+    let mut bad = edit_fields("local-qwen", "http://127.0.0.1:8081/v1");
+    bad[5] = ("context_tokens", "12");
+    assert!(save_with(&mut state, &form(&bad), |_| panic!("invalid limits must not persist")).is_err());
+    assert_eq!(state.runtime.compaction.models, before);
+    // A CLI entry keeps its adapter and cannot declare tool calls.
+    let mut cli = crate::model_calls::tests::endpoint();
+    (cli.id, cli.url, cli.cli) = ("cli-summary".into(), String::new(), Some(crate::backend::Backend::Codex));
+    state.runtime.compaction.models.push(cli);
+    let mut fields = edit_fields("cli-summary", "");
+    fields.push(("tools", "on"));
+    assert!(save_with(&mut state, &form(&fields), |_| panic!("CLI tool declaration must not persist")).is_err());
+    fields.pop();
+    save_with(&mut state, &form(&fields), |_| Ok(())).unwrap();
+    assert_eq!(state.runtime.compaction.models[1].cli, Some(crate::backend::Backend::Codex));
+}
+#[test]
+fn one_entry_per_endpoint_model_and_roles_point_at_entries() {
+    let mut state = crate::State::default();
+    state.runtime.compaction.models.push(crate::model_calls::tests::endpoint());
+    // A second entry for the same endpoint and model is refused; edit the first.
+    let mut add = edit_fields("qwen-agent", "http://127.0.0.1:8081/v1/");
+    add[0] = ("action", "text-add");
+    add.extend([("adapter", "endpoint"), ("tools", "on")]);
+    assert!(save_with(&mut state, &form(&add), |_| panic!("duplicate must not persist")).is_err());
+    // A different model on another port is its own entry: a 7B compactor next to a 27B agent.
+    let mut small = add.clone();
+    small[1] = ("id", "qwen-small");
+    small[2] = ("model", "qwen-7b");
+    small[3] = ("url", "http://127.0.0.1:8082/v1");
+    small.pop();
+    save_with(&mut state, &form(&small), |_| Ok(())).unwrap();
+    assert_eq!(state.runtime.compaction.models.len(), 2);
+}
+#[test]
+fn duplicate_role_entries_merge_on_load_keeping_settings_and_references() {
+    use crate::model_calls::tests::endpoint;
+    let summary = crate::model_calls::Endpoint { id: "qwen-summary".into(), ..endpoint() };
+    let agent = crate::model_calls::Endpoint { id: "qwen-local".into(), url: "http://127.0.0.1:8081/v1/".into(), tools: true, timeout_seconds: 1800, ..endpoint() };
+    let small = crate::model_calls::Endpoint { id: "qwen-small".into(), model: "qwen-7b".into(), url: "http://127.0.0.1:8082/v1".into(), ..endpoint() };
+    let mut models = vec![summary, small.clone(), agent.clone()];
+    let mut settings = crate::compaction::Settings { enabled: true, model: Some("qwen-summary".into()), ..Default::default() };
+    let renamed = merge_duplicates(&mut models, &mut settings);
+    assert_eq!(renamed, vec![("qwen-summary".to_owned(), "qwen-local".to_owned())]);
+    // The tool-capable entry survives in the first entry's place; distinct models stay.
+    assert_eq!(models, vec![agent, small]);
+    assert_eq!(settings.model.as_deref(), Some("qwen-local"));
+    validate_text(&models, &settings).unwrap();
+    let mut state = crate::State::default();
+    crate::chat::create(&mut state);
+    state.chats[0].model = Some(Model::captured(crate::backend::Backend::Local, "qwen-summary".into()));
+    assert!(repoint(&mut state.chats, &renamed));
+    assert_eq!(state.chats[0].model.as_ref().unwrap().model, "qwen-local");
+    // Two text-only duplicates keep the first name; nothing to merge is a no-op.
+    let mut models = vec![endpoint(), crate::model_calls::Endpoint { id: "copy".into(), ..endpoint() }];
+    let mut settings = crate::compaction::Settings { model: Some("copy".into()), ..Default::default() };
+    assert_eq!(merge_duplicates(&mut models, &mut settings), vec![("copy".to_owned(), "local-qwen".to_owned())]);
+    assert_eq!((models.len(), settings.model.as_deref()), (1, Some("local-qwen")));
+    assert!(merge_duplicates(&mut models, &mut settings).is_empty());
+}
+#[test]
+fn each_text_model_is_shown_once_with_its_capabilities_and_an_edit_form() {
+    let mut runtime = crate::runtime::Runtime::default();
+    runtime.compaction.models.push(crate::model_calls::tests::endpoint());
+    let agent = crate::model_calls::Endpoint { id: "qwen-agent".into(), model: "qwen-27b".into(), tools: true, ..crate::model_calls::tests::endpoint() };
+    runtime.compaction.models.push(agent);
+    let html = render(&runtime);
+    let (agents, text) = html.split_once("id='summary-models-heading'").unwrap();
+    // Agent models lists only selectable defaults; local entries are not repeated there.
+    assert!(!agents.contains("local-qwen") && !agents.contains("qwen-agent") && !agents.contains("Re-add"));
+    assert_eq!(html.matches("<h4>local-qwen</h4>").count(), 1);
+    let card = |id: &str| text.split(&format!("<h4>{id}</h4>")).nth(1).unwrap().split("</article>").next().unwrap().to_owned();
+    let text_only = card("local-qwen");
+    assert!(text_only.contains("summaries · text generation</span>"));
+    assert!(text_only.contains("value='text-edit'") && text_only.contains("name='tools' type='checkbox'>"));
+    assert!(text_only.contains("value='http://127.0.0.1:8081/v1'"));
+    let tools = card("qwen-agent");
+    assert!(tools.contains("summaries · text generation · agent turns"));
+    assert!(tools.contains("name='tools' type='checkbox' checked"));
+}
