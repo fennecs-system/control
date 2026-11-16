@@ -65,22 +65,27 @@ pub(crate) fn command(
     });
     if option.is_empty() {
         let selected = current;
-        let choices = super::choices(&state.runtime)
-            .iter()
-            .map(|m| {
-                format!(
-                    "{}:{}{}",
-                    m.backend.id(),
-                    m.model,
-                    if super::agent_capable(&state.runtime, m) { "" } else { " (text-only)" }
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
+        // Only selectable models are listed; text-only local models are named once,
+        // apart, with the way to enable them.
+        let (agents, text): (Vec<_>, Vec<_>) = super::choices(&state.runtime)
+            .into_iter()
+            .partition(|m| super::agent_capable(&state.runtime, m));
+        let names = |models: &[Model]| {
+            models.iter().map(|m| format!("{}:{}", m.backend.id(), m.model)).collect::<Vec<_>>().join(", ")
+        };
+        let text = if text.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " Text-only (control_model_generate and summaries; edit in Manage → Models and enable Serves tool calls to run turns): {}.",
+                names(&text)
+            )
+        };
         return Ok(format!(
-            "Selected {}:{}. Configured: {choices}. Use /model PROVIDER:MODEL or /model default. Changes apply to future turns; active attempts keep their captured model. Listing does not establish account access. Text-only local models are available to agents through control_model_generate.",
+            "Selected {}:{}. Configured: {}. Use /model PROVIDER:MODEL or /model default. Changes apply to future turns; active attempts keep their captured model. Listing does not establish account access.{text}",
             selected.backend.id(),
-            selected.model
+            selected.model,
+            names(&agents)
         ));
     }
     let selected = if option == "default" {

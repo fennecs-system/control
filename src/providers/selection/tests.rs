@@ -109,3 +109,16 @@ fn local_endpoint_models_are_listed_as_text_only_and_refused_for_agent_turns() {
     state.runtime.compaction.settings.chats = vec![chat.clone()];
     assert_eq!(crate::compaction::compactor_for(&state, &state.chats[0]).unwrap().id, "operator-choice");
 }
+#[test]
+fn model_listing_separates_text_only_local_models_from_selectable_ones() {
+    let mut state = crate::State::default();
+    state.runtime.compaction.models.push(crate::model_calls::tests::endpoint());
+    let chat = crate::chat::create(&mut state);
+    let listing = command(&mut state, &chat, "").unwrap();
+    let (configured, text) = listing.split_once("Text-only").unwrap();
+    assert!(!configured.contains("local-qwen"), "{listing}");
+    assert!(text.contains("local:local-qwen") && text.contains("Serves tool calls"), "{listing}");
+    state.runtime.compaction.models[0].tools = true;
+    let listing = command(&mut state, &chat, "").unwrap();
+    assert!(listing.contains("local:local-qwen") && !listing.contains("Text-only"), "{listing}");
+}

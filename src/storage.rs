@@ -81,14 +81,19 @@ pub fn load() -> io::Result<State> {
         Some(data) => recover(&directory, data)?,
         None => (State::initial(), None),
     };
-    crate::providers::load_settings(&mut state.runtime)?;
+    let renamed = crate::providers::load_settings(&mut state.runtime)?;
+    let mut changed = crate::providers::repoint(&mut state.chats, &renamed);
+    if !renamed.is_empty() {
+        // Persist the merged library so model.json shows one entry per model.
+        crate::providers::save_settings(&state)?;
+    }
     state.runtime.execution = crate::scheduler::load_limits()?;
     // Journal lines from a save that never happened are dropped, then
     // journal-backed run text is read back before anything uses it.
     crate::history::recover(&state)?;
     crate::history::hydrate_text(&mut state)?;
     crate::turn_context::recover(&state)?;
-    let mut changed = crate::knowledge::migrate(&mut state);
+    changed |= crate::knowledge::migrate(&mut state);
     changed |= state.lens_library.merge_defaults();
     changed |= interrupt_active(&mut state);
     // Without a current snapshot to adopt as the diff base, the first save
