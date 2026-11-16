@@ -286,6 +286,12 @@ impl App {
                     self.set_detail(hive.tool("control.chat.lenses",json!({"id":self.active,"lenses":lenses}))?);
                     self.inspector=None;self.status=format!("Future messages: {}",lens_label(&self.detail));self.follow=true;
                 }
+                Navigation::Rename(name) => {
+                    if self.active.is_empty() {return Err(failure("Start or resume a chat before renaming it."));}
+                    self.set_detail(chats::rename(hive,&self.active,&name)?);
+                    self.refresh(hive)?;
+                    self.status=format!("Renamed to {}",self.detail["title"].as_str().unwrap_or(&name));
+                }
                 Navigation::List => {
                     self.refresh(hive)?;
                     let entries=chats::entries(&self.chats);

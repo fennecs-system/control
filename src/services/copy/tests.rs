@@ -192,7 +192,7 @@ fn at<'a>(run: &'a str, generation: &'a str, nonce: &'a str) -> AttemptRef<'a> {
     AttemptRef { run, generation, nonce }
 }
 fn input(service: &str, from: &str, to: &str) -> Input {
-    Input { service_id: service.into(), from: from.into(), to: to.into(), timeout_seconds: 60 }
+    Input { service_id: service.into(), from: from.into(), to: to.into(), timeout_seconds: 60, wait_seconds: 0 }
 }
 
 #[test]

@@ -231,6 +231,7 @@ pub fn create(state: &mut State) -> String {
         id: id.clone(),
         actor: Actor::LocalOperator,
         title: "New chat".into(),
+        name: None,
         messages: Vec::new(),
     });
     id
@@ -261,6 +262,7 @@ pub fn receive(state: &mut State, incoming: &discord::Incoming) -> Result<(), &'
             id: id.clone(),
             actor,
             title: "Discord chat".into(),
+            name: None,
             messages: Vec::new(),
         });
     }
@@ -370,6 +372,16 @@ fn attach_room(state: &mut State, id: &str, option: &str) -> Result<String, &'st
     crate::rooms::start_at_edge(state, id)?;
     Ok(reply)
 }
+/// The operator's name for a chat (`/rename`, `control.chat.rename`), shown in
+/// place of its callsign by every client. Returns the stored name.
+pub fn rename(state: &mut State, id: &str, name: &str) -> Result<String, &'static str> {
+    let name = crate::callsigns::validate(name)?;
+    let session = state.chats.iter_mut().find(|session| session.id == id).ok_or("Chat not found.")?;
+    identity::authorize(&session.actor, Action::Task)?;
+    session.name = Some(name.clone());
+    session.revision = session.revision.saturating_add(1);
+    Ok(name)
+}
 fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result<(), &'static str> {
     if crate::shutdown::requested() {
         return Err("Control is stopping; try again after restart.");
@@ -395,6 +407,12 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
         let session=state.chats.iter_mut().find(|session|session.id==id).unwrap();
         session.messages.push(Message { speaker: Default::default(), text:text.trim().into(),run_id:None,reply:reply.into()});
         session.revision=session.revision.saturating_add(1);
+        return Ok(());
+    }
+    if let Some(name)=commands::tail(text.trim(),Kind::Rename) {
+        let name=rename(state,id,name)?;
+        let session=state.chats.iter_mut().find(|session|session.id==id).unwrap();
+        session.messages.push(Message { speaker: Default::default(), text:text.trim().into(),run_id:None,reply:format!("Renamed this chat to {name}.")});
         return Ok(());
     }
     if let Some(option)=commands::tail(text.trim(),Kind::Room) {
@@ -691,7 +709,7 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
     let runs=crate::conversation::Conversation::of(state,session);
     let pending_questions = crate::design::pending_json(state, id);
     Ok(
-        json!({"id":session.id,"title":session.title,"previews":state.previews.iter().filter(|p|p.chat==id && p.status!="stopped").map(|p|json!({"id":p.id,"url":p.url,"status":p.status})).collect::<Vec<_>>(),"project":session.project,"project_worktree":session.project.as_ref().and_then(|p|p.head.as_deref()).and_then(|id|crate::runtime::workspace(id).ok()),"parent_chat":session.parent_chat,"mode":if session.improve_mode {"improve"} else {"chat"},"room":session.room,"lens":session.lens,"lenses":selected_lenses(session),"design_context":session.design_context,"revision":session.revision,"messages": session.messages.iter().map(|m| {
+        json!({"id":session.id,"title":crate::callsigns::name_or_id(&state.chats,&session.id),"previews":state.previews.iter().filter(|p|p.chat==id && p.status!="stopped").map(|p|json!({"id":p.id,"url":p.url,"status":p.status})).collect::<Vec<_>>(),"project":session.project,"project_worktree":session.project.as_ref().and_then(|p|p.head.as_deref()).and_then(|id|crate::runtime::workspace(id).ok()),"parent_chat":session.parent_chat,"mode":if session.improve_mode {"improve"} else {"chat"},"room":session.room,"lens":session.lens,"lenses":selected_lenses(session),"design_context":session.design_context,"revision":session.revision,"messages": session.messages.iter().map(|m| {
         let run = m.run_id.as_deref().and_then(|id|runs.run(id));
         let (status, reply) = response_from_run(m,run);
         let mut message = json!({"text":m.text,"reply":reply,"status":status,"run_id":m.run_id,"kind":run.map(|r| &r.kind),"persona":run.and_then(|r|r.persona.as_ref()),"delegation":run.and_then(|r|r.delegation.as_ref()),"question":run.and_then(|r|r.question.as_ref()),"attempts":run.map(|r| crate::history::hydrated(r.chat_id.as_deref(),&r.attempts))});
@@ -723,9 +741,10 @@ pub fn list(state: &State) -> Value {
     let decision_revision = crate::design::decision_revision(state);
     let port_revision=crate::ports::decision_revision(state);
     let bot_revision=crate::bots::decision_revision(state);
+    let callsigns=crate::callsigns::all(&state.chats);
     json!(crate::conversations::ordered(state).into_iter().map(|entry| {
         let s=entry.session;
-        json!({"id":s.id,"title":s.title,"lens":s.lens,"lenses":selected_lenses(s),"revision":s.revision,"messages":s.messages.len(),"parent_chat":entry.parent,"depth":entry.depth,"activity_order":s.activity_order,"decision_revision":decision_revision,"port_revision":port_revision,"bot_revision":bot_revision})
+        json!({"id":s.id,"title":crate::callsigns::label(s,callsigns[entry.position]),"lens":s.lens,"lenses":selected_lenses(s),"revision":s.revision,"messages":s.messages.len(),"parent_chat":entry.parent,"depth":entry.depth,"activity_order":s.activity_order,"decision_revision":decision_revision,"port_revision":port_revision,"bot_revision":bot_revision})
     }).collect::<Vec<_>>())
 }
 /// Pending operator decisions across the node, grouped by top-level chat in
@@ -745,7 +764,7 @@ pub fn pending_requests(state: &State) -> Value {
     json!(roots.into_iter().filter_map(|id| {
         let session = state.chats.iter().find(|s| s.id == id && valid_id(&s.id))?;
         authorize(&session.actor, Action::Task).ok()?;
-        let entry = json!({"chat_id":id,"title":session.title,"pending_questions":crate::design::pending_json(state,id),"pending_bots":crate::bots::pending_json(state,id),"pending_ports":crate::ports::pending_json(state,id)});
+        let entry = json!({"chat_id":id,"title":crate::callsigns::name_or_id(&state.chats,id),"pending_questions":crate::design::pending_json(state,id),"pending_bots":crate::bots::pending_json(state,id),"pending_ports":crate::ports::pending_json(state,id)});
         ["pending_questions","pending_bots","pending_ports"].iter().any(|k| entry[k].as_array().is_some_and(|a| !a.is_empty())).then_some(entry)
     }).collect::<Vec<_>>())
 }
@@ -764,7 +783,7 @@ pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
     } else {
         ""
     };
-    Ok(format!("<section class='conversation'><div class='conversation-heading'>{}<h2>{}</h2>{mode}<span class='conversation-links'>{room}<a href='/chat/{id}/artifacts'>Artifacts ↗</a></span><details class='chat-requests'><summary>Requests <span class='request-count' aria-live='polite'></span></summary><aside class='request-drawer' aria-label='Pending requests'><iframe class='chat-requests-frame' data-live-chat src='/chat/{id}/requests' title='Pending requests'></iframe></aside></details></div><div class='conversation-main'><iframe class='chat-transcript' data-live-chat src='/chat/{id}/transcript#latest' title='Conversation'></iframe><form class='conversation-composer' id='session-message' method='post' action='/chat/{id}/messages'><textarea name='message' required rows='3' aria-label='Message' placeholder='Message Control…'></textarea>{}<div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></div></section>",crate::navigation::conversation_button(state,id),escape(&session.title),command_menu(&session.actor),crate::lens_library::choices(state,&lenses,"session-message")))
+    Ok(format!("<section class='conversation'><div class='conversation-heading'>{}<h2>{}</h2>{mode}<span class='conversation-links'>{room}<a href='/chat/{id}/artifacts'>Artifacts ↗</a></span><details class='chat-requests'><summary>Requests <span class='request-count' aria-live='polite'></span></summary><aside class='request-drawer' aria-label='Pending requests'><iframe class='chat-requests-frame' data-live-chat src='/chat/{id}/requests' title='Pending requests'></iframe></aside></details></div><div class='conversation-main'><iframe class='chat-transcript' data-live-chat src='/chat/{id}/transcript#latest' title='Conversation'></iframe><form class='conversation-composer' id='session-message' method='post' action='/chat/{id}/messages'><textarea name='message' required rows='3' aria-label='Message' placeholder='Message Control…'></textarea>{}<div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></div></section>",crate::navigation::conversation_button(state,id),escape(&crate::callsigns::name_or_id(&state.chats,id)),command_menu(&session.actor),crate::lens_library::choices(state,&lenses,"session-message")))
 }
 fn command_text(text: &str) -> String {
     if let Some(command) = commands::parse(text) {
@@ -938,6 +957,11 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
         "control.chats.list" => Ok(list(state)),
         "control.requests.list" => Ok(pending_requests(state)),
         "control.chat.read" => detail(state, id()?),
+        "control.chat.rename" => {
+            let id = id()?;
+            rename(state, id, arguments["name"].as_str().unwrap_or(""))?;
+            detail(state, id)
+        }
         "control.chat.lenses" => {
             let id = id()?;
             if arguments.get("lenses").is_none() {

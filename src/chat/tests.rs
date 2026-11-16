@@ -764,7 +764,7 @@ fn optional_guidance_survives_child_wake_and_library_edits_without_retroactive_c
     for run in [&parent, &child, &wake] {
         let text = prompt(&restored, run).unwrap();
         assert!(text.contains("investigation@2") && text.contains("three distinct probes"));
-        assert!(text.contains("coordination@11") && text.contains("autonomy@6"));
+        assert!(text.contains("coordination@11") && text.contains("autonomy@7"));
         assert!(text.contains("planning@4"));
         assert_eq!(text.matches("three distinct probes").count(), 1);
         assert!(!text.contains("Future investigation guidance only"));
@@ -1037,4 +1037,34 @@ fn cancel_all_rolls_back_descendants_when_the_save_fails() {
     send(&mut state, &lead, "/cancel all", "test").unwrap();
     checkpoint.restore(&mut state);
     assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+}
+
+#[test]
+fn chats_show_callsigns_and_every_client_sees_the_same_rename() {
+    let mut state = State::default();
+    let chat = create(&mut state);
+    // A long first message does not name the chat; its callsign does.
+    send(&mut state, &chat, "Own player1 in private Minecraft26.3 civilisation. Read /world first", "test").unwrap();
+    let callsign = crate::callsigns::name(&state.chats, &chat).unwrap().into_owned();
+    assert!(crate::callsigns::WORDS.contains(&callsign.as_str()));
+    assert_eq!(list(&state)[0]["title"], callsign.as_str());
+    assert_eq!(detail(&state, &chat).unwrap()["title"], callsign.as_str());
+    // The typed client tool (TUI, Discord) and the composer command (web) rename alike.
+    let renamed = tool(&mut state, "control.chat.rename", &serde_json::json!({"id":chat,"name":" Farm  lead "})).unwrap();
+    assert_eq!(renamed["title"], "Farm lead");
+    let runs = state.runtime.runs.len();
+    send(&mut state, &chat, "/rename player1", "test").unwrap();
+    assert_eq!(state.runtime.runs.len(), runs, "renaming starts no run");
+    assert_eq!(state.chats[0].messages.last().unwrap().reply, "Renamed this chat to player1.");
+    let rows = list(&state);
+    let rows = control::client::chats::entries(rows.as_array().unwrap());
+    assert_eq!(rows[0].title, "player1");
+    assert_eq!(detail(&state, &chat).unwrap()["title"], "player1");
+    assert!(render(&state, &chat).unwrap().contains("<h2>player1</h2>"));
+    assert!(crate::navigation::conversations(&state, &chat).contains("<span class='conversation-title'>player1</span>"));
+    // Invalid names change nothing.
+    assert_eq!(send(&mut state, &chat, "/rename", "test"), Err("Usage: /rename NAME"));
+    assert!(tool(&mut state, "control.chat.rename", &serde_json::json!({"id":chat,"name":"x".repeat(40)})).is_err());
+    assert!(tool(&mut state, "control.chat.rename", &serde_json::json!({"id":chat,"name":"a\u{7}b"})).is_err());
+    assert_eq!(state.chats[0].name.as_deref(), Some("player1"));
 }

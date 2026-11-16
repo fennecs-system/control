@@ -114,6 +114,7 @@ These chat commands work on the web, in the TUI and in authorized Discord DMs:
 | `/listen` / `/listen off` | Enable or stop room-triggered turns in a linked chat. |
 | `/open /absolute/path` | Add an approved folder at `/workspace/<name>`; use `--as NAME` for duplicate names. [Workspaces →](docs/WORKSPACES.md) |
 | `/cancel` | Stop the active or oldest queued task in this chat. |
+| `/rename NAME` | Name this chat (up to 32 characters). Chats are otherwise shown by a callsign such as Bravo or Indigo. |
 | `/answer QUESTION_ID answer` | Answer an agent's pending design question. |
 | `/port allow ID` / `/port deny ID` | TUI port approval; add `--loopback` to allow an exact loopback target. Web requests appear inline. |
 | `/improve` / `/improve off` | Enter or leave architect-only Control improvement mode. |

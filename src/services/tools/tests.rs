@@ -75,11 +75,11 @@ fn service_tools_decode_typed_calls_and_keep_lenient_service_ids() {
     );
     assert_eq!(
         error("control_service_exec", json!({"command":"true"})),
-        "Expected service_id, command and optional timeout_seconds"
+        "Expected service_id, command and optional timeout_seconds and wait_seconds"
     );
     assert_eq!(
         error("control_service_exec_status", json!({"service_id":"svc-a"})),
-        "Expected service_id and execution_id"
+        "Expected service_id, execution_id and optional wait_seconds"
     );
     assert_eq!(
         error("control_service_restart", json!({})),
@@ -92,8 +92,8 @@ fn service_tools_decode_typed_calls_and_keep_lenient_service_ids() {
 fn exec_description_reserves_repetition_for_routines() {
     let definitions = Tools.definitions();
     let exec = definitions.iter().find(|d| d["name"] == "control_service_exec").unwrap()["description"].as_str().unwrap();
-    assert!(exec.starts_with("Run a one-off command asynchronously"));
-    for phrase in ["setup, inspection, or installing and editing a routine", "For anything repeated or polled, write a routine (control_watch_start) instead", "Uncertain commands are never replayed"] {
+    assert!(exec.starts_with("Run a one-off command inside"));
+    for phrase in ["setup, inspection, or installing and editing a routine", "For anything repeated or polled, write a routine (control_watch_start) instead", "Uncertain commands are never replayed", "Waits up to wait_seconds"] {
         assert!(exec.contains(phrase), "{phrase}");
     }
 }

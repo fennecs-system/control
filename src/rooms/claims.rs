@@ -440,7 +440,7 @@ pub(crate) fn render(state: &State, room: &str) -> String {
     for claim in &claims {
         let text = |name: &str| crate::escape(claim[name].as_str().unwrap_or_default());
         let owner = state.chats.iter().find(|chat| Some(chat.id.as_str()) == claim["owner"].as_str())
-            .map_or_else(|| text("owner"), |chat| crate::escape(&chat.title));
+            .map_or_else(|| text("owner"), |chat| crate::escape(&crate::callsigns::name_or_id(&state.chats, &chat.id)));
         let blocked = claim["blocked_on"].as_str().map_or(String::new(), |key| format!(" on {}", crate::escape(key)));
         html.push_str(&format!("<li><strong>{}</strong> <small>{}{blocked} · {owner} · r{}</small>", text("key"), text("status"), claim["revision"]));
         if !claim["note"].as_str().unwrap_or_default().is_empty() {

@@ -198,7 +198,7 @@ fn room_sidebar_scopes_activity_and_keeps_message_chat_links() {
     let active = crate::chat::create(&mut state);
     state.chats[0].room = Some("research".into());
     crate::chat::send(&mut state, &active, "Investigate", "test").unwrap();
-    state.chats[0].title = "Investigate <sources>".into();
+    state.chats[0].name = Some("Investigate <sources>".into());
     state.runtime.runs[0].status = "running".into();
     let idle = crate::chat::create(&mut state);
     state.chats[1].room = Some("research".into());

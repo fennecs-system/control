@@ -13,6 +13,7 @@ pub enum Kind {
     Bot,
     Room,
     Model,
+    Rename,
 }
 
 pub struct Definition {
@@ -78,6 +79,7 @@ pub const DEFINITIONS: &[Definition] = &[
     Definition { id:"room-off", text:"/room off", description:"Detach this chat from its room", architect:false },
     Definition { id:"cancel-all", text:"/cancel all", description:"Stop runs and bots in this chat and every chat it spawned", architect:false },
     Definition {id:"model",text:"/model",description:"List or select this chat's model",architect:false},
+    Definition { id:"rename", text:"/rename", description:"Rename this chat", architect:false },
 ];
 
 #[derive(Debug, PartialEq, Eq)]
@@ -102,6 +104,7 @@ pub fn parse(text: &str) -> Option<Parsed<'_>> {
         "/bot" => Kind::Bot,
         "/room" => Kind::Room,
         "/model" => Kind::Model,
+        "/rename" => Kind::Rename,
         _ => return None,
     };
     let tail = &trimmed[end..];

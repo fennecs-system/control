@@ -230,7 +230,7 @@ pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
     let (stop, list, id) = match call {
         ServiceCall::Start(input) => return start(shared, run, generation, nonce, node, input),
         ServiceCall::Exec(input) => return commands::exec(shared, run, generation, nonce, &node, input),
-        ServiceCall::ExecStatus(handle) => return commands::status(shared, run, generation, &node, handle),
+        ServiceCall::ExecStatus(handle) => return commands::status_wait(shared, run, generation, &node, handle),
         ServiceCall::Copy(input) => return copy::request(shared, attempt, &node, input),
         ServiceCall::Status(id) => (false, true, id),
         ServiceCall::Attach(id) => (false, false, id),
@@ -984,17 +984,45 @@ pub fn supervise(shared: Arc<Mutex<State>>) -> std::thread::JoinHandle<()> {
             if crate::shutdown::pause(Duration::from_secs(2)) {return;}
         }
         let mut executions = Vec::new();
-        while !crate::shutdown::requested() {
+        serve(commands::changes(), TICK, &crate::shutdown::token(), || {
             if let Err(error) = drive(&shared, &mut Docker, &node, now(), crate::storage::save) {
                 let _ = diagnose(&shared, None, &error, &crate::storage::save);
             }
-            if let Err(error)=commands::dispatch(&shared, &mut executions) {
+        }, |executions: &mut Vec<_>| {
+            if let Err(error)=commands::dispatch(&shared, executions) {
                 let _=diagnose(&shared,None,&error,&crate::storage::save);
             }
-            crate::shutdown::pause(Duration::from_secs(2));
-        }
+        }, &mut executions);
         for execution in executions { let _=execution.join(); }
     })
+}
+/// Engine reconciliation period; also the dispatch fallback if a wake is lost.
+const TICK: Duration = Duration::from_secs(2);
+/// Reconciles on every tick and dispatches commands both on the tick and as
+/// soon as `signal` reports an admitted or finished request, so a command
+/// launches without waiting for the next engine inventory. The generation is
+/// read before each pass, so a request admitted during one is never missed;
+/// the pass's own launches cost at most one extra, empty pass.
+fn serve<T>(
+    signal: &Arc<control_effect::sync::Changes>,
+    tick: Duration,
+    token: &control_effect::sync::CancelToken,
+    mut reconcile: impl FnMut(),
+    mut dispatch: impl FnMut(&mut T),
+    work: &mut T,
+) {
+    let mut next = std::time::Instant::now();
+    while !token.is_cancelled() {
+        let seen = signal.generation();
+        if std::time::Instant::now() >= next {
+            reconcile();
+            next = std::time::Instant::now() + tick;
+        }
+        dispatch(work);
+        if signal.wait_newer(seen, Some(next), token) == control_effect::sync::Newer::Cancelled {
+            break;
+        }
+    }
 }
 /// Other resource reconciliation may skip only fully verified registered service
 /// identities, never every container bearing a service label.
