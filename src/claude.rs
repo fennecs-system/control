@@ -321,9 +321,8 @@ pub fn execute(
     let start = Instant::now();
     let admitted = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default().as_secs().saturating_sub(attempt.started_unix);
-    let deadline = Duration::from_secs(attempt.explicit_timeout_seconds.unwrap_or(600));
     let mailbox_wake = crate::mailbox_wake::MailboxWake::new(&mailbox);
-    let mut timed_out = false;
+    let mut timed_out = None;
     let mut handoff = None;
     let success = loop {
         if crate::design::requested(bridge) { break false; }
@@ -346,9 +345,9 @@ pub fn execute(
                 handoff = Some(summary);
                 break false;
             }
-            crate::attempt_control::Decision::TimedOut => {
+            crate::attempt_control::Decision::TimedOut(seconds) => {
                 attempt.termination = Some(crate::attempt_control::Termination::TimedOut);
-                timed_out = true;
+                timed_out = Some(Duration::from_secs(seconds));
                 break false;
             }
             crate::attempt_control::Decision::Continue => {}
@@ -383,8 +382,8 @@ pub fn execute(
         if crate::design::requested(bridge) {
             return Err(("waiting", "Waiting for a design decision.".into()));
         }
-        if timed_out {
-            return Err(("failed", crate::worker::timeout_message(deadline)));
+        if let Some(limit) = timed_out {
+            return Err(("failed", crate::worker::timeout_message(limit)));
         }
         if let Err(e) = &result
             && (e.to_string().starts_with("Claude ended with") || bad_tools.load(std::sync::atomic::Ordering::Relaxed)) {

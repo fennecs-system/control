@@ -98,7 +98,8 @@ These options preserve existing source and model choices.
 | `build-image-id` / `CONTROL_BUILD_IMAGE` | Optional immutable offline build-tool image. |
 | `model.json` | Saved models and default; managed by the web UI. |
 | `source-root` / `CONTROL_SOURCE_ROOT` | Absolute source path for explicit improvements. |
-| `worker-timeout-secs` / `CONTROL_WORKER_TIMEOUT_SECS` | Explicit attempt deadline, captured at admission and clamped to 60 s–24 h. When unset, ordinary attempts default to 600 s; approved persistent bots have no wall-clock deadline. Approval during an active attempt removes only its implicit default, never an explicit limit. |
+| `worker-timeout-secs` / `CONTROL_WORKER_TIMEOUT_SECS` | Explicit attempt deadline, captured at admission and clamped to 60 s–24 h. Takes priority for every attempt. When unset, ordinary attempts default to 600 s and approved persistent bots use `bot-turn-timeout-secs`. Approval during an active attempt switches only its implicit default, never an explicit limit. |
+| `bot-turn-timeout-secs` / `CONTROL_BOT_TURN_TIMEOUT_SECS` | Turn limit for approved persistent bots when no explicit worker limit is set, captured at admission; default 1200, clamped to 60 s–24 h; `0` or `none` means unlimited. Bots continue across turns through handoffs, and the deadline warning asks them to checkpoint first. |
 | `service-memory-gib` | Service pool memory budget, a strict sum of service limits; default 20, 1–4096. |
 | `service-cpus` | Service pool CPUs; default 8, 1–1024. |
 | `service-cpu-oversubscription` | Factor applied to `service-cpus` when admitting CPU limits; default 2, 1–8. Containers keep their hard CPU caps. |

@@ -144,6 +144,23 @@ pub fn configured_worker_deadline() -> Option<std::time::Duration> {
         .or_else(|| fs::read_to_string(directory().ok()?.join("worker-timeout-secs")).ok());
     configured.map(|value| std::time::Duration::from_secs(deadline_secs(Some(&value))))
 }
+/// Turn time limit for approved persistent bots, captured at admission:
+/// `CONTROL_BOT_TURN_TIMEOUT_SECS` or `bot-turn-timeout-secs` in the node
+/// configuration directory. Default 1200 s, clamped to 60 s – 24 h; `0` or
+/// `none` means unlimited. An explicit worker limit still takes priority.
+pub fn bot_turn_deadline() -> Option<u64> {
+    let configured = std::env::var("CONTROL_BOT_TURN_TIMEOUT_SECS")
+        .ok()
+        .or_else(|| fs::read_to_string(directory().ok()?.join("bot-turn-timeout-secs")).ok());
+    bot_turn_secs(configured.as_deref())
+}
+fn bot_turn_secs(configured: Option<&str>) -> Option<u64> {
+    match configured.map(str::trim) {
+        Some("0" | "none") => None,
+        Some(value) => Some(value.parse::<u64>().map_or(1200, |s| s.clamp(60, 86400))),
+        None => Some(1200),
+    }
+}
 fn deadline_secs(configured: Option<&str>) -> u64 {
     configured
         .and_then(|s| s.trim().parse::<u64>().ok())

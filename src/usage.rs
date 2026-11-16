@@ -14,6 +14,10 @@ pub struct Attempt {
     /// None means the default policy: bounded ordinary attempts, unlimited
     /// approved persistent agents. Explicit operator limits always take priority.
     pub explicit_timeout_seconds: Option<u64>,
+    /// The bot turn limit captured at admission, applied while the chat is an
+    /// approved persistent bot and no explicit limit is set. None: unlimited.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bot_timeout_seconds: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub termination: Option<crate::attempt_control::Termination>,
     #[serde(skip_serializing_if = "Option::is_none")]

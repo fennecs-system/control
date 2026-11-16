@@ -63,6 +63,24 @@ fn explicit_limits_replace_the_default_and_finished_runs_are_not_nudged() {
 }
 
 #[test]
+fn approved_bots_are_warned_before_their_captured_turn_limit() {
+    let (mut state, chat, run) = running(None);
+    state.chats[0].room = Some("general".into());
+    crate::bots::command(&mut state, &chat, "on").unwrap();
+    assert!(crate::bots::continuation_enabled(&state, &chat));
+    // Captured at admission: the default 1200 s bot limit, threshold 180 s.
+    state.runtime.runs[0].attempts.last_mut().unwrap().bot_timeout_seconds = Some(1200);
+    assert!(notes(&mut state, &run, "control_room_read", 1000 + 600).is_empty(), "the ordinary 600 s limit does not apply");
+    assert_eq!(notes(&mut state, &run, "control_room_read", 1000 + 1100), [deadline_text(100)]);
+    // A bot limit configured as unlimited gives no warning.
+    let (mut state, chat, run) = running(None);
+    state.chats[0].room = Some("general".into());
+    crate::bots::command(&mut state, &chat, "on").unwrap();
+    state.runtime.runs[0].attempts.last_mut().unwrap().bot_timeout_seconds = None;
+    assert!(notes(&mut state, &run, "control_room_read", 1000 + 86_000).is_empty());
+}
+
+#[test]
 fn steering_detection_counts_only_active_descendants() {
     let (mut state, lead, _) = running(None);
     assert_eq!(steered(&state, &lead), 0, "no members");

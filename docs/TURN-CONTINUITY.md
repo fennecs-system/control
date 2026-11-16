@@ -6,11 +6,18 @@ Provider-session contract clarified 2026-11-06.
 
 ## Persistent attempts and R1 (2026-11-07)
 
-Approved persistent bots have no implicit attempt deadline. An explicit operator
-`worker-timeout-secs` / `CONTROL_WORKER_TIMEOUT_SECS` limit is captured at admission
-and remains authoritative. Ordinary attempts retain the 600-second default.
-Approval during an active attempt removes only the implicit limit. Context budget
-responses return `null` for unlimited remaining time. Quiet output is not a health
+Approved persistent bots get their own default turn limit, 1,200 seconds
+(`bot-turn-timeout-secs` / `CONTROL_BOT_TURN_TIMEOUT_SECS`, 60 s–24 h; `0` or
+`none` for unlimited), captured at admission. Bots continue across turns through
+handoffs, routines and bounded recovery, so the limit loses nothing a handoff
+keeps, and with a limit the deadline warning tells the bot to checkpoint first.
+(Until 2026-11-16 bots had no implicit limit; a lead then lost a whole turn of
+work at another limit, and member bots ran single turns for 45 minutes while
+messages queued behind them.) An explicit operator `worker-timeout-secs` /
+`CONTROL_WORKER_TIMEOUT_SECS` limit is captured at admission and takes priority
+for every attempt. Ordinary attempts retain the 600-second default. Approval
+during an active attempt switches only the implicit default to the captured bot
+limit. Context budget responses return `null` for unlimited remaining time. Quiet output is not a health
 failure, and no periodic finish window or automatic progress extension is used.
 
 `control_turn_handoff` is an explicit yield: once its validated draft is durable,
@@ -446,10 +453,9 @@ at most once per attempt and never after a handoff is staged:
   continue in a routine or the next turn.` Attempts without a limit get none.
   The limit is decided by the chat, not the run kind: every run in a chat
   that is an approved permanent bot (its wakes and any queued message turns)
-  has no implicit limit unless `worker-timeout-secs` is configured, while a
-  chat that is not (including a temporary or stopped bot) keeps the
-  600-second default. A member bot can therefore run for an hour while an
-  unapproved lead is stopped at ten minutes; this is the intended contract.
+  uses the bot turn limit (default 1,200 s), while a chat that is not
+  (including a temporary or stopped bot) keeps the 600-second default; an
+  explicit `worker-timeout-secs` overrides both.
 - When the acting chat steers active members (chats spawned from it, directly or
   through members, with a turn queued, running or waiting, or approved as
   persistent bots) and its turn has run `steering_turn_seconds` (default 240) or
