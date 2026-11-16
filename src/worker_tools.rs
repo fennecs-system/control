@@ -81,7 +81,8 @@ fn dispatch_at(
             return error("Mailbox belongs to an inactive attempt");
         }
     }
-    let claude = run.backend == crate::backend::Backend::Claude;
+    // Backends without their own sandbox shell get Control's offline workspace tool.
+    let claude = matches!(run.backend, crate::backend::Backend::Claude | crate::backend::Backend::Local);
     let judge = crate::delegation::is_judge(run);
     // An approved advisor is a judge whose one extra effect is evidence notes.
     let advisor = judge && run.chat_id.as_deref().is_some_and(|chat| state.bots.advises(chat));
@@ -114,6 +115,7 @@ fn dispatch_at(
                     "control.web.search" => "control_web_search",
                     "control.rust.run" => "control_rust_run",
                     "control.rust.bench" => "control_rust_bench",
+                    "control.model.generate" => "control_model_generate",
                     "control.search.path" => "control_search_path",
                     other => other,
                 });
@@ -348,10 +350,18 @@ fn dispatch_at(
                 "control_web_search" => "control.web.search",
                 "control_rust_run" => "control.rust.run",
                 "control_rust_bench" => "control.rust.bench",
+                "control_model_generate" => crate::model_calls::tool::NAME,
                 "control_search_path" => "control.search.path",
                 other => other,
             };
-            if crate::toolbox::known(name) {
+            if name == crate::model_calls::tool::NAME {
+                drop(state);
+                // Inference runs on the host, outside the state lock; cancelling the
+                // attempt closes the endpoint connection so the server stops generating.
+                crate::toolbox::result(crate::model_calls::tool::call(&request["params"]["arguments"], &|| {
+                    crate::lifecycle::cancelled(Some((shared, run_id)))
+                }))
+            } else if crate::toolbox::known(name) {
                 drop(state);
                 // Network requests and compilation must not hold the control-plane state lock.
                 crate::toolbox::result(crate::toolbox::call(name, &request["params"]["arguments"]))
@@ -370,6 +380,11 @@ fn dispatch_at(
         _ => return crate::toolbox::protocol_error(id, -32601, "Unsupported worker method"),
     };
     json!({"jsonrpc":"2.0","id":id,"result":result})
+}
+/// The in-process equivalent of one mailbox request, for Control's own tool
+/// loop: identical fencing, policy, nudges and idempotency nonces.
+pub(crate) fn local_rpc(state: &Arc<Mutex<State>>, run: &str, envelope: &Value, workspace: &Path, managed: bool) -> Value {
+    if managed { rpc_at(state, run, envelope, Some(workspace)) } else { dispatch_at(state, run, envelope, Some(workspace)) }
 }
 pub fn pump(state: &Arc<Mutex<State>>, run: &str, workspace: &Path, managed:bool) {
     pump_at(state, run, workspace, workspace,managed);

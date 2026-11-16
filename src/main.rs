@@ -50,6 +50,7 @@ mod navigation;
 mod performance;
 mod providers;
 mod model_calls;
+mod local_agent;
 mod compaction;
 mod packages;
 mod projects;
