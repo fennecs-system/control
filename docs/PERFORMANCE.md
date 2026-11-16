@@ -38,6 +38,21 @@ measurement does not cover APFS metadata writes, which `F_FULLFSYNC` still
 incurs once per save, or concurrent saves (each still syncs under the state
 mutex; group commit is not implemented).
 
+**Cached run encodings.** `Run` is now `history::Cached<Record>`. A save serializes a run once and then copies its saved bytes until the run is next borrowed mutably; any `&mut` access forgets them, so there is no dirty flag to forget. When a changed run, or one written from saved bytes, has to be diffed, diffing indexes just that run's bytes to find the member that changed. Debug builds and tests check every save against a fresh, uncached serialization.
+
+A clean start now adopts the snapshot by indexing the file's bytes (`snapshot::base`) instead of re-encoding the state.
+
+Same fixture and mutation sequence:
+
+| | Patch journal (#224) | With cached runs |
+| --- | --- | --- |
+| Encode (unchanged state, p50) | 18.0 ms | 5.6 ms |
+| Save p50 / p99 | 25.2 / 29.3 ms | 12.1 / 15.9 ms |
+| Bytes per save | 690 B | 690 B |
+| Clean start (parse + base) | 64 ms | 52.6 ms (42 parse + 10 index) |
+
+In the `sample` profile of the save loop, 62% of the time is now the sync, 22% encoding and 10% diffing.
+
 ```sh
 CONTROL_PROFILE_STATE=/scratch/state.json CONTROL_PROFILE_DIR=/scratch/bench \
   cargo test --release --locked --bin control \

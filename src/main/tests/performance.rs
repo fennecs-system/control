@@ -161,6 +161,7 @@ fn history_reads() {
 fn ownership_snapshots() {
     let mut state = fixture(500, 0);
     for run in &mut state.runtime.runs {
+        let run = &mut **run;
         run.attempts[0].command_jobs.push(crate::command_jobs::Job {
             id: run.id.clone(),
             generation: format!("{}-attempt-1", run.id),

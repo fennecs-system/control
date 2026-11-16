@@ -31,7 +31,7 @@ use std::{cell::Cell, io, path::Path, rc::Rc};
 /// ones are diffed member by member.
 pub const SEGMENT: usize = 256;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Node {
     start: u32,
     end: u32,
@@ -43,7 +43,7 @@ struct Node {
 }
 
 /// A document's compact JSON and the ranges of its larger parts.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Encoded {
     bytes: Vec<u8>,
     nodes: Vec<Node>,
@@ -167,8 +167,84 @@ pub fn encode<T: Serialize + ?Sized>(value: &T) -> serde_json::Result<Encoded> {
     Ok(Encoded { bytes: writer.out, nodes: ranges.nodes })
 }
 
-enum Seg<'a> {
-    Key(&'a [u8]),
+/// The ranges of a compact JSON document already in hand, such as a snapshot
+/// just read: the same [`Encoded`] that [`encode`] would build from the value
+/// those bytes serialize, without serializing it. `bytes` must be one valid
+/// JSON value (callers have parsed it); anything else is an error, not a panic.
+pub fn index(bytes: Vec<u8>) -> io::Result<Encoded> {
+    if u32::try_from(bytes.len()).is_err() {
+        return Err(invalid("documents are limited to 4 GiB"));
+    }
+    let mut ranges = Ranges { at: Rc::new(Cell::new(0)), nodes: Vec::new(), open: Vec::new(), key: (0, 0) };
+    ranges.open((0, 0));
+    let end = scan(&bytes, 0, &mut ranges, 0)?;
+    if end != bytes.len() {
+        return Err(invalid("Trailing bytes after the document"));
+    }
+    ranges.at.set(end);
+    ranges.close();
+    Ok(Encoded { bytes, nodes: ranges.nodes })
+}
+/// Scans the value at `i`, recording members and elements like the encoder,
+/// and returns where it ends.
+fn scan(bytes: &[u8], mut i: usize, ranges: &mut Ranges, depth: usize) -> io::Result<usize> {
+    let truncated = || invalid("Truncated JSON");
+    let byte = |i: usize| bytes.get(i).copied().ok_or_else(truncated);
+    if depth > 512 {
+        return Err(invalid("JSON nested too deeply"));
+    }
+    let string = |mut i: usize| -> io::Result<usize> {
+        i += 1;
+        loop {
+            match byte(i)? {
+                b'\\' => i += 2,
+                b'"' => return Ok(i + 1),
+                _ => i += 1,
+            }
+        }
+    };
+    match byte(i)? {
+        open @ (b'{' | b'[') => {
+            let close = if open == b'{' { b'}' } else { b']' };
+            i += 1;
+            if byte(i)? == close {
+                return Ok(i + 1);
+            }
+            loop {
+                let key = if open == b'{' {
+                    let start = i;
+                    i = string(i)?;
+                    let key = (start, i);
+                    if byte(i)? != b':' {
+                        return Err(invalid("Expected a colon"));
+                    }
+                    i += 1;
+                    key
+                } else {
+                    (0, 0)
+                };
+                ranges.at.set(i);
+                ranges.open(key);
+                i = scan(bytes, i, ranges, depth + 1)?;
+                ranges.at.set(i);
+                ranges.close();
+                match byte(i)? {
+                    b',' => i += 1,
+                    b if b == close => return Ok(i + 1),
+                    _ => return Err(invalid("Expected a comma or a closing bracket")),
+                }
+            }
+        }
+        b'"' => string(i),
+        _ => {
+            // A number or literal: up to the next separator or the end.
+            Ok(bytes[i..].iter().position(|b| matches!(b, b',' | b']' | b'}')).map_or(bytes.len(), |n| i + n))
+        }
+    }
+}
+
+enum Seg {
+    Key(Vec<u8>),
     Index(usize),
 }
 fn path(out: &mut Vec<u8>, path: &[Seg]) {
@@ -205,9 +281,21 @@ pub fn diff(old: &Encoded, new: &Encoded) -> Option<Vec<u8>> {
     out.push(b']');
     Some(out)
 }
-fn node<'a>(old: &'a Encoded, o: usize, new: &'a Encoded, n: usize, at: &mut Vec<Seg<'a>>, out: &mut Vec<u8>) {
+fn node(old: &Encoded, o: usize, new: &Encoded, n: usize, at: &mut Vec<Seg>, out: &mut Vec<u8>) {
     if old.range(o) == new.range(n) {
         return;
+    }
+    // A value encoded from saved bytes has no recorded members: index those
+    // bytes to diff inside it rather than rewrite it whole.
+    let opening = |e: &Encoded, i: usize| e.range(i).first().copied().filter(|b| matches!(b, b'{' | b'['));
+    if opening(old, o).is_some() && opening(old, o) == opening(new, n) {
+        let inside = |e: &Encoded, i: usize| index(e.range(i).to_vec()).ok().filter(|local| local.container(0).is_some());
+        match (old.container(o), new.container(n)) {
+            (None, Some(_)) => if let Some(local) = inside(old, o) { return node(&local, 0, new, n, at, out) },
+            (Some(_), None) => if let Some(local) = inside(new, n) { return node(old, o, &local, 0, at, out) },
+            (None, None) => if let (Some(before), Some(after)) = (inside(old, o), inside(new, n)) { return node(&before, 0, &after, 0, at, out) },
+            _ => {}
+        }
     }
     match (old.container(o), new.container(n)) {
         (Some(b'{'), Some(b'{')) => {
@@ -218,7 +306,7 @@ fn node<'a>(old: &'a Encoded, o: usize, new: &'a Encoded, n: usize, at: &mut Vec
                 let key = new.key(child);
                 // Members usually keep their order; scan from the last match.
                 let found = (cursor..previous.len()).chain(0..cursor).find(|&i| old.key(previous[i]) == key);
-                at.push(Seg::Key(key));
+                at.push(Seg::Key(key.to_vec()));
                 match found {
                     Some(i) => {
                         seen[i] = true;
@@ -230,7 +318,7 @@ fn node<'a>(old: &'a Encoded, o: usize, new: &'a Encoded, n: usize, at: &mut Vec
                 at.pop();
             }
             for (&child, _) in previous.iter().zip(&seen).filter(|(_, seen)| !**seen) {
-                at.push(Seg::Key(old.key(child)));
+                at.push(Seg::Key(old.key(child).to_vec()));
                 op(out, b"\"r\",", at);
                 out.push(b']');
                 at.pop();
@@ -399,13 +487,17 @@ fn prefix(nonce: &str, schema: &Value) -> Vec<u8> {
     serde_json::to_writer(&mut out, schema).expect("JSON values serialize");
     out
 }
-/// Whether `snapshot` is exactly what [`snapshot`] writes for `encoded`, so
-/// `encoded` can serve as the base of the next diff without rewriting it.
-pub fn matches(snapshot_bytes: &[u8], encoded: &Encoded, nonce: &str, schema: &Value) -> bool {
-    let prefix = prefix(nonce, schema);
-    let Some(rest) = snapshot_bytes.strip_prefix(prefix.as_slice()) else { return false };
-    let body = &encoded.bytes[1..];
-    if body == b"}" { rest == b"}" } else { rest.first() == Some(&b',') && &rest[1..] == body }
+/// The diff base a snapshot file already is: its document without the nonce
+/// and schema members, indexed from the bytes rather than re-encoded. `None`
+/// when the file is not a snapshot named `nonce` in `schema`.
+pub fn base(snapshot_bytes: &[u8], nonce: &str, schema: &Value) -> Option<Encoded> {
+    let rest = snapshot_bytes.strip_prefix(prefix(nonce, schema).as_slice())?;
+    let body = match rest {
+        b"}" => b"{}".to_vec(),
+        [b',', member @ ..] => [b"{", member].concat(),
+        _ => return None,
+    };
+    index(body).ok()
 }
 /// Splits the nonce and schema members off a parsed snapshot.
 pub fn identify(document: &mut Value) -> (Option<String>, Option<Value>) {

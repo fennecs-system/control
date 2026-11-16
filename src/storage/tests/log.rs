@@ -11,17 +11,17 @@ impl Scratch {
         Self(directory)
     }
     fn save(&self, state: &State) {
-        persist(&self.0, crate::history::persisting(|| snapshot::encode(state)).unwrap(), false).unwrap();
+        persist(&self.0, encode(state).unwrap(), false).unwrap();
     }
     fn compact(&self, state: &State) {
-        persist(&self.0, crate::history::persisting(|| snapshot::encode(state)).unwrap(), true).unwrap();
+        persist(&self.0, encode(state).unwrap(), true).unwrap();
     }
     /// A restart: this process forgets its handle, then recovers from disk.
     fn restart(&self) -> State {
         published().lock().unwrap().remove(&self.0);
         let data = read_checkpoint(&self.0).unwrap().unwrap();
         let (state, recovered) = recover(&self.0, data).unwrap();
-        if !adopt(&self.0, &state, recovered.unwrap()) {
+        if !adopt(&self.0, recovered.unwrap()) {
             self.compact(&state);
         }
         state
@@ -128,7 +128,7 @@ fn a_crash_between_snapshot_and_log_reset_ignores_the_old_log() {
     // Compaction published a new snapshot, then the process died before the
     // log was reset: the log's header names the previous snapshot.
     crate::chat::send(&mut state, &chat, "in the new snapshot", "test").unwrap();
-    let encoded = crate::history::persisting(|| snapshot::encode(&state)).unwrap();
+    let encoded = encode(&state).unwrap();
     let schema = serde_json::to_value(schema()).unwrap();
     write_checkpoint(&scratch.0, &snapshot::snapshot(&encoded, &snapshot::nonce(), &schema)).unwrap();
     assert_eq!(scratch.lines(), 2);
@@ -246,7 +246,7 @@ fn a_crash_at_every_step_of_compaction_recovers_the_committed_state() {
     let committed = crate::history::persisting(|| serde_json::to_value(&state).unwrap());
     let (snapshot_before, log_before) = (scratch.snapshot(), scratch.log());
     let schema = serde_json::to_value(schema()).unwrap();
-    let encoded = crate::history::persisting(|| snapshot::encode(&state)).unwrap();
+    let encoded = encode(&state).unwrap();
     let nonce = snapshot::nonce();
     let next = snapshot::snapshot(&encoded, &nonce, &schema);
     let header = snapshot::header(&nonce, &schema);
@@ -303,7 +303,7 @@ fn a_full_disk_fails_saves_cleanly_without_corrupting_state() {
     unsafe { libc::signal(libc::SIGXFSZ, libc::SIG_IGN) };
     limit(log_before.len() as u64 + 16);
     crate::chat::send(&mut state, &chat, &"does not fit ".repeat(100), "test").unwrap();
-    let encode = |state: &State| crate::history::persisting(|| snapshot::encode(state)).unwrap();
+    let encode = |state: &State| super::encode(state).unwrap();
     assert!(matches!(persist(&scratch.0, encode(&state), false), Err(CheckpointError::NotReplaced(_))), "append fails cleanly");
     assert!(matches!(persist(&scratch.0, encode(&state), true), Err(CheckpointError::NotReplaced(_))), "compaction fails cleanly");
     assert_eq!((scratch.snapshot(), scratch.log()), (snapshot_before, log_before), "no partial line or snapshot");
@@ -311,4 +311,28 @@ fn a_full_disk_fails_saves_cleanly_without_corrupting_state() {
     limit(libc::RLIM_INFINITY);
     scratch.save(&state);
     assert!(same(&scratch.restart(), &state), "saves resume once space returns");
+}
+
+/// Runs remember their saved bytes; every way of changing a run forgets them.
+/// `encode` itself asserts the cached encoding equals a fresh one.
+#[test]
+fn cached_runs_are_reencoded_after_any_mutable_access() {
+    let (mut state, chat) = with_chat();
+    let fresh = |state: &State| crate::history::uncached(|| crate::history::persisting(|| serde_json::to_vec(state).unwrap()));
+    let mut previous = encode(&state).unwrap().bytes().to_vec();
+    let changes: [&dyn Fn(&mut State); 5] = [
+        &|s| s.runtime.runs[0].status = "completed".into(),
+        &|s| s.runtime.runs.iter_mut().for_each(|run| run.attempts.push(Default::default())),
+        &|s| *s.runtime.runs[1].result = "spilled text".into(),
+        &|s| drop(crate::history::archive_run(&mut s.runtime.runs[1]).unwrap()),
+        &|s| s.runtime.runs.retain(|run| run.status != "completed"),
+    ];
+    for change in changes {
+        change(&mut state);
+        let next = encode(&state).unwrap().bytes().to_vec();
+        assert!(next != previous && next == fresh(&state));
+        previous = next;
+    }
+    crate::chat::send(&mut state, &chat, "new run", "test").unwrap();
+    assert_eq!(encode(&state).unwrap().bytes(), fresh(&state));
 }

@@ -4,7 +4,7 @@ fn active(state: &mut State, parent: Option<&str>) -> (String, String) {
     let chat = crate::chat::create(state);
     state.chats.last_mut().unwrap().parent_chat = parent.map(str::to_owned);
     crate::chat::send(state, &chat, "Work", "test").unwrap();
-    let run = state.runtime.runs.last_mut().unwrap();
+    let run = &mut **state.runtime.runs.last_mut().unwrap();
     run.status = "running".into();
     run.attempts.push(crate::usage::Attempt {
         workspace_id: Some(format!("attempt-{}", run.id)),

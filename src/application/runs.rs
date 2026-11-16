@@ -3,8 +3,12 @@
 use crate::identity::{Action, Actor};
 use control_context::agent_policy::RunKind;
 use serde::{Deserialize, Serialize};
+/// A run as saved. Code uses [`Run`], which remembers its saved form between
+/// saves (see `history::Cached`); finished runs then cost a copy, not a
+/// re-serialization.
+pub type Run = crate::history::Cached<Record>;
 #[derive(Clone, Serialize, Deserialize)]
-pub struct Run {
+pub struct Record {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bot_turn: Option<Box<crate::bots::Turn>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -86,7 +90,7 @@ impl Submission {
         backend: crate::backend::Backend,
         model: Option<String>,
     ) -> Run {
-        Run {
+        Record {
             bot_turn: None,
             resource_grants: Vec::new(),
             spawns: Vec::new(),
@@ -112,12 +116,13 @@ impl Submission {
             status: "queued".into(),
             result: String::new().into(),
         }
+        .into()
     }
 }
 
 #[cfg(test)]
 mod tests;
-impl Run {
+impl Record {
     /// Milliseconds since the epoch when the run was queued, from its identifier.
     pub(crate) fn created_ms(&self) -> Option<u64> {
         let nanos = u128::from_str_radix(self.id.split('-').next()?, 16).ok()?;
