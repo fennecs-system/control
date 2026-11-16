@@ -490,7 +490,7 @@ chat default and the 1,200-second bot default for that attempt; an explicit
 `worker-timeout-secs` still wins. The deadline warning arrives at 15 % of the
 limit (540 s before 3,600 s), and a turn stopped at the limit leaves the host
 checkpoint (`continuity.interrupted`) described in
-[TURN-CONTINUITY.md](TURN-CONTINUITY.md#cheap-handoffs-and-host-checkpoints-2026-11-16).
+[TURN-CONTINUITY.md](TURN-CONTINUITY.md#host-checkpoint).
 The per-request timeout on the model entry (default 1,800 s) bounds one step
 and is separate.
 
@@ -570,7 +570,7 @@ pins this. In the run -128 shaped fixture two consecutive member wakes share
 2 379 of 2 461 prompt tokens (Qwen tokenizer), 98 % of the request including
 the system message and schemas; before, the observation at the top left a
 shared prefix of 4 tokens past the schemas. See
-[PERFORMANCE.md](PERFORMANCE.md#cache-stable-turn-prefix-2026-11-16).
+[PERFORMANCE.md](PERFORMANCE.md#prompt-and-tool-schema-size).
 Within a local turn the observation is refreshed before every model step and
 sent as the request's last message, outside the step transcript, so each
 request up to it is a prefix of the next

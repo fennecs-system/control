@@ -1,36 +1,41 @@
 # HTTP admission
 
-The main HTTP listener admits at most **32 handler threads** at once, including
-long-lived routes. This is a transport bound, separate from model-worker slots
-and agent scheduling. The existing **16 live-update stream** limit leaves half
-the handler capacity available to other requests when only streams are open.
+The main HTTP listener runs at most **32 handler threads** at once
+(`MAX_HANDLERS` in `src/http_admission.rs`), including long-lived routes. This is
+a transport bound, separate from model slots and agent scheduling. Live-update
+streams have their own limit of **16**, so streams alone never use more than half
+the handlers.
 
-Admission happens before thread creation. There is no application request queue.
-At capacity the listener makes one nonblocking write of a `503` response with
-`Retry-After: 1`, then closes the socket. A nonreading peer, partial write or
-socket error can prevent delivery of the complete response; the guarantee is
-bounded rejection, not guaranteed error delivery. Clients should back off on
-overload or a closed connection. Do not automatically replay mutations whose
-outcome is uncertain.
+Admission happens before a thread is created; there is no request queue. At
+capacity the listener makes one nonblocking write of a `503` with
+`Retry-After: 1` and closes the socket. A peer that is not reading, a partial
+write or a socket error can prevent the full response from arriving: the
+guarantee is bounded rejection, not error delivery. Clients should back off on a
+`503` or a closed connection, and must not automatically replay mutations whose
+outcome is unknown.
 
-Accepted requests retain the existing 10-second overall header/body read deadline,
-3-second maximum individual read/write waits, 64 KiB header limit and route body
-limits (at most 512 KiB). Reads also check shutdown between chunks, so trickling
-bytes cannot defer cancellation until the full read deadline. Live updates use
-the existing cancellation token and 15-second transport heartbeat. Completed
-handlers release their slots; observed handler panics remain reportable during
-shutdown. Already admitted tool operations keep their own operation-specific
-waits and cleanup rules.
+Admitted requests have:
 
-The cap bounds these handlers, not total process memory or every thread. Port
-relays, preview transports, service supervision, response allocations and loaded
-application state have separate resource costs. Saturating all 32 slots can
-temporarily reject health checks and MCP requests too; there is no privileged
-request lane. The limit is deliberately local to the HTTP adapter and adds no
-persisted state, core effect, provider policy or agent wake.
+- a 10-second overall deadline for reading the header and body;
+- 3-second limits on each individual read and write;
+- a 64 KiB header limit;
+- per-route body limits: 512 KiB for `/save`, `/lenses/save` and
+  `/knowledge/save`; 256 KiB for `/chats`, `/mcp` and chat messages; 32 KiB
+  otherwise.
 
-Socket regressions live in `src/http_admission/tests.rs`. The isolated process
-test in `tests/graceful_shutdown/http_admission.rs` covers authenticated live
-streams alongside slow requests, H+1 overload, recovery, cancellation while
-bytes continue arriving, a clean state save and zero model work. See
-[performance evidence](PERFORMANCE.md) for release measurements and their scope.
+Reads check for shutdown between chunks, so a client trickling bytes cannot delay
+cancellation. Live updates send a heartbeat every 15 seconds and stop on
+shutdown. A finished handler frees its slot; a handler panic is reported when the
+node shuts down.
+
+The cap bounds HTTP handlers only, not total memory or every thread. Port relays,
+preview transports, service supervision and application state cost resources
+separately. Filling all 32 slots also rejects health checks and MCP requests;
+there is no priority lane. The limit lives entirely in the HTTP adapter and adds
+no persisted state.
+
+Tests: `src/http_admission/tests.rs` covers the socket behaviour.
+`tests/graceful_shutdown/http_admission.rs` runs an isolated process with live
+streams and slow requests, overload, recovery, cancellation while bytes are still
+arriving, a clean state save and no model work. Measurements are in
+[performance](PERFORMANCE.md#web-http-and-chat-delivery).

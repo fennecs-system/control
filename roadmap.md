@@ -74,7 +74,7 @@ not a required device target. Reliability fixes come first, followed by typed
 state/effect boundaries before further capability growth. Those boundaries must
 support alternative execution backends without assuming Docker in the core.
 Measure CPU, memory and latency while extracting them; see the
-[small-machine efficiency goal](docs/PERFORMANCE.md#small-machine-efficiency-goal).
+[small-machine efficiency goal](docs/PERFORMANCE.md#goals).
 
 For one owner, sustained high fan-out may hit subscription limits; prefer API keys
 for 50-agent runs. Control roles do not change credential ownership. Operators
@@ -284,8 +284,8 @@ continuity implementation's path.
 **Core composition merged through #134; comparative retest remains open.** The earlier Cass playtest
 shows 17 consecutive monitoring turns in ten minutes, repeating 68 tool calls
 without a gameplay action. Their exchanges occupy about 52% of the reconstructed
-next recent-history window. See the scoped measurements, concrete contracts,
-code map and acceptance tests in [Turn continuity implementation handoff](docs/TURN-CONTINUITY.md).
+next recent-history window. See the contracts and
+code map in [Turn continuity](docs/TURN-CONTINUITY.md).
 Keep the current playtest unchanged as baseline evidence.
 
 Bot = agent + supervisor + callbacks. Keep a progressing session active; resume
