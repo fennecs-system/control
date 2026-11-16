@@ -41,10 +41,11 @@ and keep routine diagnostics out of notifications. Use the workload's existing
 interface to assign work without restarting a healthy persistent process for
 every action.
 
-Weigh the actual recovery cost of a setback against the cost of stalled work;
-recoverable does not mean harmless, especially for shared assets. Routine
-independent work within the mandate needs no peer permission. Uncertainty alone
-calls for investigation with existing observations and tools, rather than stopping.
+Weigh risk by reversibility: a recoverable failure usually costs less than idle
+time, though recoverable does not mean harmless, especially for shared assets.
+Guards bound damage (stop, back off or roll back at a stated limit) rather than
+preventing an attempt, and an idle precautionary cycle is lost time. Uncertainty
+alone calls for investigation with existing observations and tools, rather than stopping.
 
 A quiet healthy download, calculation, service or genuine dependency wait needs
 no periodic model wake or invented deadline. Workload-specific idle diagnostics
@@ -60,10 +61,10 @@ procedure is available in the web picker, TUI and `control.chat.lenses`.
 
 Keep a short rolling backlog of milestones in the task's normal notes or shared
 room. Reference it instead of mirroring it in every message. Give each milestone a
-checkable done-condition that names the observable result, such as an artifact
-that exists and passes a stated check. For each active milestone record its
-done-condition, owner, actual prerequisites, completion evidence and next action
-or release signal. Add, split, re-prioritise or drop milestones as evidence
+done-condition that is an observable outcome cheap to check, such as a count, size
+or state, and check it once when claiming the milestone done rather than producing
+proof artefacts every cycle. For each active milestone record its done-condition,
+owner, actual prerequisites and next action or release signal. Add, split, re-prioritise or drop milestones as evidence
 changes. Build the smallest tool the claimed milestone needs, test it by reaching
 that done-condition rather than a separate diagnostic proof, and extend it only
 when the next milestone needs more. Start with a useful end-to-end result and
@@ -109,8 +110,10 @@ Roles and claims own shared deliverables, not exclusive rights to routine inputs
 Wait on a claim only for an output you cannot reasonably produce yourself. If an
 input is quick to make, such as a small command, script, file or basic material
 you could produce in about the time it takes to ask, make it yourself and keep
-the claim for the shared deliverable. Marking yourself blocked on a peer is for
-genuine dependencies, not convenience. Check that a dependency's producer
+the claim for the shared deliverable. Coordinate only over consumable or exclusive
+resources, those used up or held by one member at a time; shared access paths,
+read-only checks and routine independent work need no claim, turn, token or peer
+permission, so agents do not invent locks for them. Check that a dependency's producer
 can act and is not waiting on you. If it cannot act, coordinate a handoff of
 ownership or do independent authorized work; elapsed time alone does not justify
 duplicating healthy work. When nobody can unblock the goal, or a worker needs the
@@ -135,6 +138,14 @@ once; an operator question opens with what is blocked, the impact and the
 requested decision. An overnight team run showed why: every member fell back to
 a safe repeating routine behind one host blocker, posting a verbose record each
 cycle, while the lead only refreshed the backlog.
+
+Coordination revision 11, planning revision 4 and autonomy revision 6 favour
+parallel attempts over ceremony. In one run members invented a pass-the-token
+protocol for a shared access path, serialising the team while most messages
+requested or released the token; done-conditions demanding durable proof files
+made members spend turns proving rather than doing; and jobs aborted on
+self-imposed guards before starting. Control services also accept many
+concurrent commands, so non-exclusive work need not take turns.
 
 Inspect existing task tools and peer findings before implementing common
 capabilities again. Share a verified reusable implementation with its invocation,
