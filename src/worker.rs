@@ -1284,6 +1284,8 @@ pub(crate) fn record_activity_for(
         return false;
     }
     if run.status == "cancelling" && !attempt.activity.iter().any(|old|old.id == event.id && old.kind == "workspace" && old.status == "in_progress") { return false; }
+    // Observation values attached to tool results stay out of persisted activity.
+    if event.kind == "mcp_tool_call" { crate::observe::scrub(&mut event.output); }
     if let Some(old) = attempt.activity.iter_mut().find(|a| a.id == event.id) {
         *old = event;
     } else {
@@ -1484,8 +1486,9 @@ fn execute(
             let run = s.runtime.runs.iter().find(|r| r.id == run_id)?;
             s.chats.iter().find(|c| Some(&c.id) == run.chat_id.as_ref())?.room.clone().filter(|r| crate::rooms::valid(r))
         });
-        // Like the CLI backends: the declared observation ends the turn input, outside the transcript.
-        let prompt = crate::observe::append(bridge, captured.unwrap_or_else(|| render_prompt(objective, scope, room.as_deref(), bridge.is_some())));
+        // The loop ends every model request with the declared observation,
+        // after the cache-stable prefix and outside the step transcript.
+        let prompt = captured.unwrap_or_else(|| render_prompt(objective, scope, room.as_deref(), bridge.is_some()));
         let output = crate::local_agent::execute(attempt, bridge, &absolute, &prompt)?;
         if let Some((state,run))=bridge {crate::command_jobs::quiesce(state,run,id).map_err(|e|failed(&e.to_string()))?;}
         if !attempt.review_only { publish_workspace(attempt,&workspace, id, bridge)

@@ -92,6 +92,11 @@ pub(crate) trait Host {
     fn step_limit(&mut self) {}
     /// The turn's usage so far, after every model call (answered or not).
     fn metered(&mut self, meter: &Meter);
+    /// The chat's declared observation for the next request, refreshed when
+    /// stale without blocking on a slow probe; `first` is the turn's first step.
+    fn observation(&mut self, _first: bool) -> Option<String> {
+        None
+    }
 }
 
 /// Per-call usage summed over the turn. Every call counts, including one that
@@ -251,11 +256,16 @@ pub(crate) fn run(
             host.step_limit();
             return Err(failed(format!("Local agent reached its {steps}-step limit without a final report or handoff. The published checkpoint is unchanged; Control recorded this turn's last tool calls and workspace as a host checkpoint for the next turn to resume from (local_agent_steps in execution.json sets the limit).")));
         }
+        // The declared observation, refreshed for this step. It ends the
+        // request only: never stored in the steps, so it is never part of the
+        // stable prefix, never shrunk and never folded.
+        let observation = host.observation(steps == 0).map(|text| json!({"role":"user","content":text}));
+        let fixed = tool_tokens.saturating_add(observation.as_ref().map_or(0, |o| tokens(size(std::slice::from_ref(o)))));
         // Context fit, re-checked every step: the request is the lens view of
         // the turn's original steps. Past the threshold, the oldest blocks are
         // folded on the local compactor (never dropped silently) before the
         // context is full; folds persist, so later prefixes stay stable.
-        let used = |view: &[Value]| tool_tokens.saturating_add(tokens(size(view)));
+        let used = |view: &[Value]| fixed.saturating_add(tokens(size(view)));
         let percent = |view: &[Value]| u32::try_from(u64::from(used(view)) * 100 / u64::from(budget.max(1))).unwrap_or(u32::MAX);
         let count = context::steps(&messages).len();
         let mut verbatim = policy.verbatim_steps.min(count);
@@ -316,6 +326,7 @@ pub(crate) fn run(
             append_note(&mut messages, &note);
             view = lens.view(&messages, verbatim, shrink_all);
         }
+        view.extend(observation);
         let body = tool_request(model, &view, &tools, limits).map_err(|e| failed(e.to_string()))?;
         meter.calls += 1;
         let value = match host.model(&body) {
@@ -505,6 +516,9 @@ impl Host for Live<'_> {
     }
     fn step_limit(&mut self) {
         self.attempt.termination = Some(crate::attempt_control::Termination::StepLimit);
+    }
+    fn observation(&mut self, first: bool) -> Option<String> {
+        crate::observe::step(self.shared, self.run, first)
     }
     fn metered(&mut self, meter: &Meter) {
         self.meter = *meter;

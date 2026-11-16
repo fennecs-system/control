@@ -1035,3 +1035,61 @@ fn image_results_leave_without_structured_content() {
     media_visible(&mut kept);
     assert_eq!(kept, text_only, "text results keep structured data for programs");
 }
+
+/// Every Control tool result a CLI agent receives carries the chat's
+/// observation, in text (Claude Code with content) and beside the structured
+/// data (Codex, Claude Code without it); unchanged, it is a short marker. The
+/// local loop's results carry none: its requests end with it instead.
+#[test]
+fn tool_results_carry_the_observation_for_text_and_structured_clients() {
+    let mut state = State::default();
+    let chat = crate::chat::create(&mut state);
+    crate::chat::send(&mut state, &chat, "Play", "test").unwrap();
+    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].attempts.push(crate::usage::Attempt { workspace_id: Some("attempt-a".into()), ..Default::default() });
+    let run = state.runtime.runs[0].id.clone();
+    state.watches.push(serde_json::from_value(json!({
+        "id":"w-1","name":"game","chat":chat,"service":"svc-game","generation":1,"permanent":true,"command":"run","stopped":false,
+        "recent":[],"notifications":{"pending":0,"through":1,"recent":["hp=20"]}
+    })).unwrap());
+    crate::observe::declare_watch(&mut state, &chat, "w-1");
+    let shared = Arc::new(Mutex::new(state));
+    let call = |name: &str| json!({"nonce":"1","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":{}}}});
+    let codex = || json!({"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"posted\":true}"}],"structuredContent":{"data":{"posted":true}},"isError":false}});
+    let claude = || json!({"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"posted"}],"isError":false}});
+
+    let mut first = codex();
+    observed(&shared, &run, &call("control_room_read"), &mut first, true);
+    let block = first["result"]["structuredContent"]["observation"].as_str().unwrap().to_owned();
+    assert!(block.starts_with("[Observation: latest output of watch game (w-1)") && block.contains("\nhp=20\n"), "{block}");
+    assert_eq!(first["result"]["content"][1]["text"], block, "the last text item");
+    assert_eq!(first["result"]["structuredContent"]["data"], json!({"posted":true}));
+
+    let mut second = claude();
+    observed(&shared, &run, &call("control_service_exec_status"), &mut second, true);
+    let marker = second["result"]["content"][1]["text"].as_str().unwrap();
+    assert!(marker.starts_with("[Observation unchanged (age "), "{marker}");
+    assert!(second["result"].get("structuredContent").is_none(), "text-only results stay text-only");
+
+    shared.lock().unwrap().watches[0].notifications.as_mut().unwrap().recent.push("hp=3".into());
+    let mut changed = codex();
+    observed(&shared, &run, &call("control_room_read"), &mut changed, true);
+    assert!(changed["result"]["structuredContent"]["observation"].as_str().unwrap().contains("\nhp=3\n"));
+    // Neither on a handoff, nor on the local loop's results, nor on other methods.
+    for (name, attach) in [("control_turn_handoff", true), ("control_room_read", false)] {
+        let mut result = codex();
+        observed(&shared, &run, &call(name), &mut result, attach);
+        assert_eq!(result, codex(), "{name}");
+    }
+    let mut listed = json!({"jsonrpc":"2.0","id":1,"result":{"tools":[]}});
+    observed(&shared, &run, &json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/list"}}), &mut listed, true);
+    assert_eq!(listed["result"], json!({"tools":[]}));
+
+    // Stored activity never keeps the value.
+    let mut state = shared.lock().unwrap();
+    let output = format!("posted\n{block}");
+    crate::worker::record_activity_for(&mut state, &run, "attempt-a", crate::usage::Activity {
+        id: "call-1".into(), kind: "mcp_tool_call".into(), text: "control_room_read".into(), output, status: "completed".into(),
+    });
+    assert_eq!(state.runtime.runs[0].attempts[0].activity.last().unwrap().output, "posted");
+}

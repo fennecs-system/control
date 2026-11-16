@@ -441,7 +441,41 @@ pub(crate) fn prompt_index(state: &State, run: &crate::runtime::Run) -> String {
 /// The in-process equivalent of one mailbox request, for Control's own tool
 /// loop: identical fencing, policy, nudges and idempotency nonces.
 pub(crate) fn local_rpc(state: &Arc<Mutex<State>>, run: &str, envelope: &Value, workspace: &Path, managed: bool) -> Value {
-    if managed { rpc_at(state, run, envelope, Some(workspace)) } else { dispatch_at(state, run, envelope, Some(workspace)) }
+    let mut response = if managed { rpc_at(state, run, envelope, Some(workspace)) } else { dispatch_at(state, run, envelope, Some(workspace)) };
+    // The loop itself ends each request with the observation, so results do not repeat it.
+    observed(state, run, envelope, &mut response, false);
+    response
+}
+/// The chat's fresh observation (when `attach`) and the once-per-attempt
+/// polling nudge on a tool result. Both come after the result's own notes, so
+/// the observation is always the last text item.
+fn observed(shared: &Arc<Mutex<State>>, run_id: &str, envelope: &Value, response: &mut Value, attach: bool) {
+    let Ok(envelope) = direct(envelope) else { return };
+    let request = &envelope["request"];
+    if request["method"] != "tools/call" {
+        return;
+    }
+    let name = request["params"]["name"].as_str().unwrap_or("");
+    let Some(result) = response.get_mut("result").filter(|result| result["content"].is_array()) else { return };
+    if result["isError"] != true && let Some(note) = crate::observe::polling_note(shared, run_id, name, &request["params"]["arguments"]) {
+        attach_notes(result, &[note]);
+    }
+    // A handoff ends the turn, and a declaration shows its own preview.
+    if attach && !matches!(name, "control_turn_handoff" | "control_observe_set")
+        && let Some(block) = crate::observe::for_result(shared, run_id)
+    {
+        attach_observation(result, block);
+    }
+}
+/// Adds the observation as the result's last text item and, as with notes,
+/// beside the structured data for clients that show only that.
+fn attach_observation(result: &mut Value, block: String) {
+    if let Some(structured) = result.get_mut("structuredContent").and_then(Value::as_object_mut) {
+        structured.insert("observation".into(), Value::String(block.clone()));
+    }
+    if let Some(content) = result.get_mut("content").and_then(Value::as_array_mut) {
+        content.push(json!({"type":"text","text":block}));
+    }
 }
 pub fn pump(state: &Arc<Mutex<State>>, run: &str, workspace: &Path, managed:bool) {
     pump_at(state, run, workspace, workspace,managed);
@@ -450,7 +484,11 @@ pub fn pump_at(state: &Arc<Mutex<State>>, run: &str, mailbox: &Path, workspace: 
     let Ok(envelope) = rooms::take_request(mailbox) else {
         return;
     };
-    let response = answer(&envelope, |envelope| if managed {rpc_at(state, run, envelope, Some(workspace))}else{dispatch_at(state,run,envelope,Some(workspace))});
+    let response = answer(&envelope, |envelope| {
+        let mut response = if managed {rpc_at(state, run, envelope, Some(workspace))}else{dispatch_at(state,run,envelope,Some(workspace))};
+        observed(state, run, envelope, &mut response, true);
+        response
+    });
     // Versioned only at this transport boundary: old pinned bridges still receive
     // raw JSON-RPC, while new bridges correlate every reply by delivery nonce.
     let response = if envelope["version"] == 1 {
