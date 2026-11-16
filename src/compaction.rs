@@ -196,12 +196,7 @@ fn prepare(state: &State) -> Option<Job> {
                 .and_then(|id| runs.get(id).copied());
             let entry =
                 crate::conversation::Entry::source(message, index.map(|i| &state.runtime.runs[i]));
-            if entry.run.is_some_and(|r| {
-                !matches!(
-                    r.status.as_str(),
-                    "completed" | "failed" | "cancelled" | "interrupted" | "blocked" | "continued"
-                )
-            }) {
+            if entry.run.is_some_and(|r| !crate::application::runs::status::finished(&r.status)) {
                 break;
             }
             indices.push(index);
@@ -532,7 +527,7 @@ fn source_page(state: &State, job: &Job, start: usize, count: usize) -> io::Resu
             .flatten()
             .and_then(|at| state.runtime.runs.get(at));
         if run.map(|r| r.id.as_str()) != message.run_id.as_deref()
-            || run.is_some_and(|r| !crate::history::finished(&r.status))
+            || run.is_some_and(|r| !crate::application::runs::status::finished(&r.status))
         {
             return Err(io::Error::other("Source generation changed"));
         }

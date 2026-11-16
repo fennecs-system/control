@@ -53,6 +53,18 @@ Same fixture and mutation sequence:
 
 In the `sample` profile of the save loop, 62% of the time is now the sync, 22% encoding and 10% diffing.
 
+**Finished runs in archive blocks.** On the same state, the first two saves move 6,144 of the 6,881 runs into two blocks (10.3 MB, 73 ms, once). That leaves 743 hot runs: the newest 512 plus older resumable or still-referenced ones. Over the simulated hour:
+
+| | Cached runs | Archived runs |
+| --- | --- | --- |
+| State encoded per save (hot) | 18.1 MB | 8.5 MB |
+| Save p50 / p99 | 12.1 / 15.9 ms | 9.8 / 12.9 ms |
+| Bytes written per save | 690 B | 1,171 B (log 690 B, plus new and merged blocks) |
+| Replay of a 2,001-line log | 106 ms | 72 ms |
+| Clean start | 52.6 ms | 60 ms (snapshot plus blocks, read eagerly) |
+
+Array diffs anchor on byte-identical elements, so moving 64 runs from the middle of `runtime.runs` costs one 30-byte splice rather than a rewrite of everything after them.
+
 ```sh
 CONTROL_PROFILE_STATE=/scratch/state.json CONTROL_PROFILE_DIR=/scratch/bench \
   cargo test --release --locked --bin control \

@@ -71,3 +71,15 @@ fn every_lens_reverses_to_itself() {
     let stored = serde_json::to_value(&v1).unwrap();
     assert_eq!(serde_json::from_value::<Schema>(stored).unwrap(), v1, "lenses are data");
 }
+
+/// Moving data out of the document reads forward unchanged and refuses to be
+/// read back by a schema that would silently miss it.
+#[test]
+fn an_external_step_reads_forward_and_refuses_backwards() {
+    let v1 = Schema { version: 1, lenses: vec![vec![]] };
+    let v2 = Schema { version: 2, lenses: vec![vec![], vec![Lens::External { name: "runs".into() }]] };
+    let mut doc = old();
+    document(&route(&v1, &v2).unwrap(), &mut doc);
+    assert_eq!(doc, old());
+    assert!(route(&v2, &v1).is_err());
+}

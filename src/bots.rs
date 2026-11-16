@@ -610,9 +610,6 @@ fn pending_watch_events(state: &State) -> bool {
     state.watches.iter().any(|w| w.lines > 0 || w.pending_notifications() > 0 || !w.exits.is_empty() || w.gap.is_some())
 }
 
-fn terminal(status: &str) -> bool {
-    matches!(status, "completed" | "failed" | "cancelled" | "interrupted" | "blocked")
-}
 
 fn describe(state: &State, reasons: &[Reason]) -> String {
     let name = |id: &str| state.watches.iter().find(|w| w.id == id).map_or(id.to_owned(), |w| format!("{} ({id})", w.name));
@@ -804,7 +801,7 @@ fn reconcile_with_wake_at(state: &mut State, now: u64, mut save: impl FnMut(&Sta
         // it finishes when that chain's leaf does. A broken chain releases the bot.
         state.bots.supervisor.outstanding()
             .filter(|(bot, _, turn)| match tagged.get(&(bot.0.as_str(), turn.0)) {
-                Some(&run) => crate::rooms::continuation_leaf(state, run, &index).is_none_or(|leaf| terminal(&state.runtime.runs[leaf].status)),
+                Some(&run) => crate::rooms::continuation_leaf(state, run, &index).is_none_or(|leaf| crate::application::runs::status::finished(&state.runtime.runs[leaf].status)),
                 None => !state.bots.requests.iter().any(|request| &request.bot == *bot && &request.turn == *turn),
             })
             .map(|(bot, _, turn)| (bot.clone(), *turn))

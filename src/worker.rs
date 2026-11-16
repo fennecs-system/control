@@ -782,7 +782,7 @@ fn commit(
     // journal as one line before the save, so the save carries only live work.
     // Text positions stay valid (edits clear them); a failed save restores the
     // activity below.
-    let archived = crate::history::finished(status).then(|| crate::history::archive_run(r).ok()).flatten();
+    let archived = crate::application::runs::status::finished(status).then(|| crate::history::archive_run(r).ok()).flatten();
     let previous_chat = chat_index.map(|index| {
         let chat = &s.chats[index];
         (

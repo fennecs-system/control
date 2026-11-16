@@ -38,6 +38,10 @@ pub enum Lens {
     In { name: String, lens: Vec<Lens> },
     /// Applies lenses to every element of an array.
     Map { lens: Vec<Lens> },
+    /// Part of `name` moved out of the document (for example into archive
+    /// files). Reading forward needs nothing; there is no way back, so an
+    /// older reader refuses rather than silently missing that part.
+    External { name: String },
 }
 
 /// The schema a document was written with: its version and, for each step
@@ -59,6 +63,7 @@ impl Lens {
             Self::Head { name } => Self::Wrap { name: name.clone() },
             Self::In { name, lens } => Self::In { name: name.clone(), lens: reverse(lens) },
             Self::Map { lens } => Self::Map { lens: reverse(lens) },
+            Self::External { name } => Self::External { name: name.clone() },
         }
     }
 
@@ -99,6 +104,7 @@ impl Lens {
                 }
             }
             Self::Map { .. } => unreachable!("handled above"),
+            Self::External { .. } => {}
         }
     }
 
@@ -202,6 +208,11 @@ pub fn route(from: &Schema, to: &Schema) -> io::Result<Vec<Lens>> {
     let (low, high) = (from.version.min(to.version) as usize, from.version.max(to.version) as usize);
     let steps = if from.version <= to.version { &to.lenses } else { &from.lenses };
     let lenses: Vec<Lens> = steps.get(low..high).ok_or_else(missing)?.concat();
+    if from.version > to.version
+        && let Some(Lens::External { name }) = lenses.iter().find(|lens| matches!(lens, Lens::External { .. }))
+    {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("State schema {} keeps part of {name} outside the state; schema {} cannot read it", from.version, to.version)));
+    }
     Ok(if from.version <= to.version { lenses } else { reverse(&lenses) })
 }
 

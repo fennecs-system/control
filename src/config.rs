@@ -62,9 +62,12 @@ pub const STATE_LOG: &str = "state.log";
 /// `_snapshot`/`_schema` members without changing the state's shape, so its
 /// step has no lenses. A shape change appends a step of
 /// [`control_journal::lens`] lenses, which are also recorded in every snapshot
-/// so older builds can translate back.
+/// so older builds can translate back. Version 2 keeps finished runs far from
+/// the focus in archive blocks outside the state; builds before it cannot see
+/// them, so the step is `External` and they refuse to read it.
 pub fn state_schema() -> control_journal::lens::Schema {
-    control_journal::lens::Schema { version: 1, lenses: vec![vec![]] }
+    use control_journal::lens::{Lens, Schema};
+    Schema { version: 2, lenses: vec![vec![], vec![Lens::External { name: "runtime.runs".into() }]] }
 }
 
 /// The one loader for state outside the server: the snapshot plus its log's

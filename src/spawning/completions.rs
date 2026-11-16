@@ -48,10 +48,7 @@ fn ready<'a>(
         {
             return Err("Spawned completion scope changed.");
         }
-        if matches!(
-            leaf.status.as_str(),
-            "completed" | "failed" | "interrupted" | "blocked" | "cancelled"
-        ) {
+        if crate::application::runs::status::finished(&leaf.status) {
             ready.push(child);
             if ready.len() == WINDOW {
                 break;
