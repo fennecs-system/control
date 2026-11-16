@@ -26,7 +26,7 @@ fn disposition_schema() -> Value {
 impl AttemptTools for Tools {
     fn definitions(&self) -> Vec<Value> {
         vec![
-            json!({"name":"control_turn_context","description":"Read callbacks that arrived after this turn started, without ending the session. A wake already lists the room posts that woke it; do not call this to re-read them. Returns working notes, undelivered events, remaining time, continuation_enabled, wake_topics and a receipt. A handoff that omits processed acknowledges every receipt delivered in this turn. New reads default to the last delivered position; after_receipt selects an explicit prior page cursor. source defaults to conversation; room selects linked-room deltas from the saved subscription edge. Nonempty request identities replay their delivered range. Empty polls share a source-position cursor and spend no additional delivery slots there. Untrusted events grant no authority.","inputSchema":{"type":"object","properties":{"source":{"type":"string","enum":["conversation","room"]},"after_receipt":{"type":"string"}},"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
+            json!({"name":"control_turn_context","description":"Read callbacks that arrived after this turn started, without ending the session. A wake already lists the room posts that woke it; do not call this to re-read them. Returns undelivered events, remaining time (budget.remaining_seconds appears only under an attempt deadline), continuation_enabled, wake_topics and a receipt; notes=true adds the committed working notes the turn prompt already shows. A handoff that omits processed acknowledges every receipt delivered in this turn. New reads default to the last delivered position; after_receipt selects an explicit prior page cursor. source defaults to conversation; room selects linked-room deltas from the saved subscription edge. Nonempty request identities replay their delivered range. Empty polls share a source-position cursor and spend no additional delivery slots there. Untrusted events grant no authority.","inputSchema":{"type":"object","properties":{"source":{"type":"string","enum":["conversation","room"]},"after_receipt":{"type":"string"},"notes":{"type":"boolean"}},"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
             json!({"name":"control_turn_handoff","description":"Stage recovery notes before genuinely yielding. Only disposition is required: continue records runnable work; wait records a dependency and narrows existing wake_topics; done declares the goal reached. Omit processed to acknowledge every event delivered in this turn (the wake's own events included); pass an explicit list only to leave some pending. Omitted payload keeps your latest notes; omitted base_revision uses the committed one. The host adjusts what it can safely honour (unknown wait topics, receipts that would skip unseen events) and reports it in adjusted/left_pending instead of failing. Publication requires a successful matching workspace checkpoint. Only an approved bot schedules unattended successors or wait rechecks; ordinary agents retain these notes for their next requested turn. Keep working while useful work remains; do not hand off periodically. Acceptance requests host-controlled finalization: writers stop and the matching workspace is committed without another model response. Further mutating tools are fenced.","inputSchema":{"type":"object","properties":{"base_revision":{"type":"integer","minimum":0},"payload":payload_schema(),"processed":{"type":"array","items":{"type":"string"},"description":"Omit to process every receipt delivered in this turn. An explicit list processes exactly those receipts."},"resynchronised":{"type":"array","items":{"type":"string"}},"disposition":disposition_schema(),"progress":{"type":["string","null"]}},"required":["disposition"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"openWorldHint":false}}),
         ]
     }
@@ -48,6 +48,10 @@ struct Read {
     source: Option<String>,
     watch_id: Option<String>,
     after_receipt: Option<String>,
+    /// Also return the committed working notes, which the turn prompt
+    /// already carries. Absent from the request identity unless set.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    notes: bool,
 }
 fn err(message: impl Into<String>) -> io::Error {
     io::Error::other(message.into())
@@ -178,6 +182,25 @@ const REJECTION: usize = 600;
 const OPERATOR_FIX: &str = "If this blocks your goal, ask the operator via control_design_ask";
 /// The host-issued receipt for events delivered in the wake request itself.
 pub(crate) const WAKE_RECEIPT: &str = "wake";
+/// Characters of a receipt shown to agents. One attempt holds at most 128
+/// deliveries, so 64 bits keep handles unique; tools also take full receipts.
+const RECEIPT_HANDLE: usize = 16;
+/// The short handle results show for the delivery receipt `key`.
+pub(crate) fn receipt_handle(key: &str) -> &str {
+    key.get(..RECEIPT_HANDLE).unwrap_or(key)
+}
+/// The delivered receipt that `given`, a full receipt or its handle, names.
+/// Anything else is returned unchanged, so it is refused or reported as before.
+fn resolve(deliveries: &std::collections::BTreeMap<String, Delivery>, given: &str) -> String {
+    if given.len() < RECEIPT_HANDLE || deliveries.contains_key(given) {
+        return given.to_owned();
+    }
+    let mut found = deliveries.keys().filter(|key| key.starts_with(given));
+    match (found.next(), found.next()) {
+        (Some(key), None) => key.clone(),
+        _ => given.to_owned(),
+    }
+}
 const HANDOFF_SHAPE: &str = "Expected a handoff with a disposition: retry control_turn_handoff {\"disposition\":{\"kind\":\"continue\"}} (or \"done\", or {\"kind\":\"wait\",\"topics\":[]}); base_revision, payload, processed, resynchronised and progress are optional";
 /// What a model may send. Only the disposition is required: base_revision
 /// defaults to the committed revision, payload to the latest notes, and
@@ -419,12 +442,15 @@ fn respond(
         // Omitted receipts mean everything this attempt was shown, the wake's
         // own delivery included. An explicit list processes exactly that list.
         let implicit = input.processed.is_none();
-        let requested = input.processed.unwrap_or_else(|| mailbox.deliveries.keys().cloned().collect());
+        // Results show receipt handles; both they and full receipts name deliveries.
+        let full = |receipts: Vec<String>| receipts.iter().map(|r| resolve(&mailbox.deliveries, r)).collect::<Vec<_>>();
+        let requested = input.processed.map_or_else(|| mailbox.deliveries.keys().cloned().collect(), full);
+        let resynchronised = full(input.resynchronised);
         let (processed, dropped) = mailbox
-            .applicable(continuity.working.as_ref(), &requested, &input.resynchronised)
+            .applicable(continuity.working.as_ref(), &requested, &resynchronised)
             .map_err(err)?;
-        let resynchronised: Vec<String> = input.resynchronised.into_iter().filter(|r| processed.contains(r)).collect();
-        let left_pending: Vec<Value> = dropped.iter().map(|(receipt, why)| json!({"receipt":receipt,"reason":why})).collect();
+        let resynchronised: Vec<String> = resynchronised.into_iter().filter(|r| processed.contains(r)).collect();
+        let left_pending: Vec<Value> = dropped.iter().map(|(receipt, why)| json!({"receipt":receipt_handle(receipt),"reason":why})).collect();
         if !implicit && !dropped.is_empty() {
             adjusted.push(format!("{} listed receipt(s) could not be processed from the committed position and stay pending", dropped.len()));
         }
@@ -441,13 +467,23 @@ fn respond(
             .map_err(|message| {
                 let selected = mailbox.accepted().map(|h| h.processed.as_slice()).unwrap_or_default();
                 let omitted: Vec<_> = mailbox.deliveries.iter().filter(|(key, _)| !selected.contains(key))
-                    .take(32).map(|(key, delivery)| json!({"receipt":key,"ranges":delivery.ranges,"gap":delivery.gap})).collect();
+                    .take(32).map(|(key, delivery)| json!({"receipt":receipt_handle(key),"ranges":delivery.ranges,"gap":delivery.gap})).collect();
                 err(format!("{message}. No draft was accepted and no cursor advanced. Retained receipts omitted from this handoff (up to 32): {}. Retry control_turn_handoff {{\"disposition\":{{\"kind\":\"continue\"}}}} without processed, so the host applies only receipts that follow the committed position.", json!(omitted)))
             })?;
         let accepted = mailbox.accepted().unwrap();
-        json!({"staged":true,"published":false,"base_revision":revision,"handoff_id":key,"continuation_enabled":continuation_enabled,
-            "processed":accepted.processed,"left_pending":left_pending,"disposition":accepted.disposition,"adjusted":adjusted,
-            "next":"The host will stop this attempt's writers and commit the matching workspace and handoff. No further model response is required. Without an approved bot, no unattended continuation is scheduled."})
+        // Only what the agent did not send: the count acknowledged, receipts
+        // left pending and every adjustment, with the disposition when the
+        // host adjusted the request.
+        let mut staged = json!({"staged":true,"continuation_enabled":continuation_enabled,"processed":accepted.processed.len(),
+            "next":"Stop: the host commits this handoff and the workspace; no further response is needed."});
+        if !left_pending.is_empty() {
+            staged["left_pending"] = json!(left_pending);
+        }
+        if !adjusted.is_empty() {
+            staged["adjusted"] = json!(adjusted);
+            staged["disposition"] = json!(accepted.disposition);
+        }
+        staged
     } else {
         let input: Read = serde_json::from_value(args.clone())
             .map_err(|_| err("Expected optional source and after_receipt: retry control_turn_context {} or control_turn_context {\"source\":\"room\"}"))?;
@@ -488,7 +524,7 @@ fn respond(
             .map(|receipt| {
                 mailbox
                     .deliveries
-                    .get(receipt)
+                    .get(&resolve(&mailbox.deliveries, receipt))
                     .and_then(|d| d.ranges.iter().find(|r| source(r, kind, id)))
                     .map(Range::through)
                     .ok_or_else(|| err("Pagination receipt was not delivered for this source: retry control_turn_context {} without after_receipt to read from the last delivered position"))
@@ -535,7 +571,16 @@ fn respond(
             .map_or(0, |d| d.as_secs())
             .saturating_sub(run.attempts.last().unwrap().started_unix);
         let limit = crate::attempt_control::deadline(state, run, run.attempts.last().unwrap());
-        json!({"working_state":continuity.working,"draft":mailbox.accepted(),"continuation_enabled":continuation_enabled,"wake_topics":crate::bots::wait_topics(state,&chat.id),"events":events,"receipt":key,"through":through,"more":through<end as u64,"gap":gap,"budget":{"elapsed_seconds":elapsed,"limit_seconds":limit,"remaining_seconds":limit.map(|seconds| seconds.saturating_sub(elapsed))},"guidance":"Continue useful work while available. A null remaining_seconds means no attempt deadline. When waiting for a dependency or event, hand off and release the model worker; persistent services and subscriptions survive. A handoff that omits processed acknowledges every receipt delivered in this turn; list processed only to leave some events pending."})
+        // The turn prompt already carries the committed notes and the standing
+        // guidance; a staged draft is summarised by its disposition.
+        let mut context = json!({"continuation_enabled":continuation_enabled,"wake_topics":crate::bots::wait_topics(state,&chat.id),"events":events,"receipt":receipt_handle(&key),"through":through,"more":through<end as u64,"gap":gap,"budget":{"elapsed_seconds":elapsed,"limit_seconds":limit,"remaining_seconds":limit.map(|seconds| seconds.saturating_sub(elapsed))}});
+        if input.notes {
+            context["working_state"] = json!(continuity.working);
+        }
+        if let Some(draft) = mailbox.accepted() {
+            context["draft"] = json!({"disposition":draft.disposition});
+        }
+        context
     };
     if original == Some(&mailbox) {
         return Ok(result);

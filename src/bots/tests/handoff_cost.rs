@@ -107,5 +107,6 @@ fn a_room_wake_needs_one_handoff_and_no_context_read() {
     // The bare room name was read as its subscription, and the result says so.
     assert_eq!(last["disposition"]["topics"], json!(["room:general"]), "{last}");
     assert!(last["adjusted"].to_string().contains("read general as room:general"), "{last}");
-    assert_eq!(last["processed"], json!([crate::turn_context::WAKE_RECEIPT]), "{last}");
+    // One receipt was acknowledged: the wake's own delivery.
+    assert_eq!(last["processed"], 1, "{last}");
 }

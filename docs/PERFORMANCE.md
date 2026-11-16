@@ -46,6 +46,47 @@ unchanged: the loop admits a step by its own estimate (3 bytes per token, 3,409
 for a lead's core schemas), so the reserve must cover that estimate even though
 the Qwen count for the same schemas is about 2,200.
 
+## Compact tool results (2026-11-16)
+
+Every successful worker tool result now leaves the worker boundary in one
+compact shape (`worker_tools::compact`): null, empty and default-false fields
+are omitted, top-level fields equal to the request's own arguments are not
+echoed, and the structured data and model-visible text stay identical. Errors
+and schema/guidance results are untouched. Per tool: service command results
+show a 12-character `execution_id` handle (the full ID is still accepted, and
+an ambiguous handle is refused) and drop the constant `output_limit_bytes`;
+long output keeps its first and last bytes around one omission marker instead
+of only the first 16,000. `control_turn_context` no longer repeats the working
+notes and standing guidance the turn prompt already carries (`notes=true`
+returns the notes) and shows 16-character receipt handles; handoff results
+report a processed count, receipts left pending and adjustments instead of
+echoing the request; `control_watch_events` drops its constant note; watch
+start/stop and applied claims return only what the host assigned.
+
+Measured on the recorded tool outputs of run -128's six member chats (3,386
+calls over 174 member turns with tool calls; `history/*.jsonl` records each
+output up to 1,000 characters, so capped outputs count only their visible part
+and the totals are lower bounds):
+
+| Tool | Calls | Bytes/call before | After | Saved |
+| --- | ---: | ---: | ---: | ---: |
+| `control_turn_context` | 501 | ≥990 (capped) | 447 | ≥544 |
+| `control_service_exec` | 936 | 216 | 68 | 147 |
+| `control_watch_events` | 255 | 855 | 468 | 387 |
+| `control_service_exec_status` | 969 | 694 | 634 | 60 |
+| `control_watch_start` | 145 | 562 | 243 | 319 |
+| `control_room_claim` | 31 | 550 | 217 | 333 |
+| `control_watch_status` | 61 | 524 | 391 | 132 |
+| `control_agent_message` | 161 | 126 | 78 | 48 |
+| `control_turn_handoff` | 208 | 58 | 45 | 13 |
+
+Visible bytes fell from 1.80 MB to 1.16 MB (644 KB, about 3.7 KB per member
+turn). `control_turn_context` output was capped in 490 of 501 records: the
+omitted working notes were a further ~1.4–1.6 KB per call (median staged
+payload 1,416 bytes), about 4.5 KB more per member turn. Together roughly
+8 KB, or about 2,000 tokens, of fresh tool output per member turn; each result
+is also re-read from context by every later call of the same turn.
+
 ## Usage after handoffs and score probes (2026-11-16)
 
 After an accepted handoff the provider now has up to 20 s (`HANDOFF_GRACE`)

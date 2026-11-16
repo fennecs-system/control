@@ -122,8 +122,18 @@ impl Watch {
     pub(crate) fn active(&self) -> bool {
         !self.stopped && !self.last_exit.as_ref().is_some_and(|exit| exit.gave_up || (!self.permanent && exit.seq >= self.line_seq))
     }
+    /// What a start or stop returns: the summary without the provenance and
+    /// service generation the caller already holds (status still shows them).
+    pub(crate) fn brief(&self) -> serde_json::Value {
+        let mut value = self.summary();
+        if let Some(fields) = value.as_object_mut() {
+            fields.remove("created_by");
+            fields.remove("service_generation");
+        }
+        value
+    }
     pub(crate) fn summary(&self) -> serde_json::Value {
-        serde_json::json!({"watch_id":self.id,"name":self.name,"service_id":self.service,"service_generation":self.generation,"created_by":self.created_by,"wake_policy":self.wake_policy,"salience":self.salience.as_ref().map(|s| s.summary()),"notification_channel":self.notification_channel.then(|| serde_json::json!({"fd":3,"environment":"CONTROL_NOTIFY_FD","format":"newline-delimited bytes","max_bytes":crate::watch_frame::MAX_LINE})),"restart":if self.permanent {"permanent"} else {"transient"},"active":self.active(),"stopped":self.stopped,"cursor":self.seen,"last_exit":self.last_exit,"pending_source_gap":self.gap})
+        serde_json::json!({"watch_id":self.id,"name":self.name,"service_id":self.service,"service_generation":self.generation,"created_by":self.created_by,"wake_policy":self.wake_policy,"salience":self.salience.as_ref().map(|s| s.summary()),"notification_channel":self.notification_channel.then(|| serde_json::json!({"fd":3,"max_bytes":crate::watch_frame::MAX_LINE})),"restart":if self.permanent {"permanent"} else {"transient"},"active":self.active(),"stopped":self.stopped,"cursor":self.seen,"last_exit":self.last_exit,"pending_source_gap":self.gap})
     }
     #[cfg(test)]
     pub(crate) fn observe_for_test(&mut self, seq: u64, exit: Option<i32>) {

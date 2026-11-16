@@ -716,6 +716,39 @@ fn tool_failures_are_results_and_protocol_faults_stay_errors() {
     let unsupported = crate::rooms::worker_rpc(&mut shared.lock().unwrap(), &run, &json!({"request":{"jsonrpc":"2.0","id":9,"method":"prompts/list"}}));
     assert_eq!(unsupported["error"]["code"], -32601);
 }
+/// Every successful result leaves the worker boundary compact, in both the
+/// structured data and the text a model reads, whichever tool produced it.
+#[test]
+fn successful_results_leave_the_boundary_compact_and_identical_in_both_forms() {
+    let mut state = State::default();
+    let chat = crate::chat::create(&mut state);
+    crate::chat::send(&mut state, &chat, "Compact results", "test").unwrap();
+    state.runtime.runs[0].status = "running".into();
+    let run = state.runtime.runs[0].id.clone();
+    let shared = Arc::new(Mutex::new(state));
+    let call = |nonce: &str, name: &str, arguments: Value| {
+        let response = rpc(&shared, &run, &json!({"nonce":nonce,"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":arguments}}}));
+        let text = serde_json::from_str::<Value>(response["result"]["content"][0]["text"].as_str().unwrap())
+            .unwrap_or_else(|_| panic!("{name}: {response}"));
+        // Room tools reply in text only; others also carry structured data.
+        if let Some(data) = response["result"].get("structuredContent") {
+            assert_eq!(data["data"], text, "{response}");
+        }
+        text
+    };
+    let claim = call("31-1", "control_room_claim", json!({"room":"general","key":"k","action":"acquire","note":"mine"}));
+    // No empty related list, no echo of the caller's own note, room or key.
+    assert_eq!(claim["applied"], true, "{claim}");
+    assert!(claim.get("related").is_none() && claim["claim"].get("note").is_none(), "{claim}");
+    assert!(claim["claim"]["revision"].is_u64(), "{claim}");
+    let posted = call("31-2", "control_room_post", json!({"room":"general","message":"hello","delivery":"record"}));
+    assert_eq!(posted["posted"], true, "{posted}");
+    assert!(posted.get("delivery").is_none(), "the request's own delivery is not echoed: {posted}");
+    // Refusals keep their exact text and callable fix.
+    let refused = rpc(&shared, &run, &json!({"nonce":"31-3","request":{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"control_room_claim","arguments":{"room":"general","key":"k","action":"update","revision":999,"note":""}}}}));
+    let refusal = serde_json::from_str::<Value>(refused["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!((refusal["applied"].as_bool(), refusal["claim"]["note"].as_str()), (Some(false), Some("mine")), "{refused}");
+}
 #[test]
 fn stale_workspace_is_rejected_for_room_posts_before_dispatch() {
     let mut state = State::default();

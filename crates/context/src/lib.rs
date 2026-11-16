@@ -126,7 +126,7 @@ pub const TOOLS: [Tool; 31] = [
         href: None, aliases: "session context handoff callbacks delta continuity recovery",
         mcp_names: &[
             w("control_turn_context", "read callbacks that arrived this turn").core(WORKERS)
-                .brief("Read callbacks since this turn started (source=room for room deltas): notes, events, time left, wake_topics, receipt. A wake already lists its cause."),
+                .brief("Read callbacks since this turn started (source=room for room deltas): events, time left, wake_topics, receipt; notes=true adds working notes. A wake already lists its cause."),
             w("control_turn_handoff", "stage notes and yield the turn").core(WORKERS)
                 .brief("Stage notes and yield. disposition: continue, wait (topics from wake_topics or claim:<room>/<key>) or done. Omit processed to acknowledge all delivered events. payload {subgoal, findings[{claim,confidence}], tried[{approach,outcome}], pending[{action,expected}], next[{condition,action}]}; omit to keep notes. Mutating tools are fenced after acceptance."),
             w("control_recovery", "restore unpublished work"),
