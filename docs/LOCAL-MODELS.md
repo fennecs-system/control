@@ -277,8 +277,9 @@ on this Mac. Other flags: `--alias` (default `qwen-local`), `--ctx-size` (32768)
 container command and changes nothing. `--status` and `--stop` cover every model,
 or one with `--alias NAME`. A start refuses a port another model's record holds.
 
-Every start uses `--jinja` (tool calls through the model's chat template) and
-`--reasoning-budget 0`. The script hashes the GGUF once and writes the backend,
+Every start uses `--jinja` (tool calls through the model's chat template),
+`--reasoning-budget 0`, and `--metrics --slots` for the read-only statistics
+below. The script hashes the GGUF once and writes the backend,
 model path, SHA256, alias, port and a ready-to-paste revision string to
 `inference/ALIAS.json` in the Control configuration directory; that model's saved
 backend is reused when `--backend` is omitted. A service started by an earlier
@@ -296,6 +297,58 @@ service, it is pinned by `flake.lock`, and it involves no Python or Node. Unifie
 memory is shared with Control, Docker's VM and other services: keep weights plus
 KV cache well below physical RAM. `-np 1` serializes agent steps and background
 summaries on one slot; more slots split `--ctx-size` between them.
+
+### Live server statistics
+
+`control models stats NAME` reads one configured local endpoint's server once
+and prints a compact line; `--json` prints the parsed values instead:
+
+```text
+qwen-local: prompt 162.4 tok/s · generation 15.1 tok/s (avg since start) · 1 processing, 0 queued · prefix cache 91% of prompt tokens · slots 1/1 busy · KV 26.9k/32.8k tokens (82%)
+```
+
+The same line appears on each local endpoint's card in **Manage → Models &
+providers**. The page's Rust/WASM client reads `/providers/live` when the page
+opens and every 5 seconds while it stays open and visible, one request at a
+time; nothing polls when the page is closed or hidden, and nothing is stored.
+
+Values come from llama-server's Prometheus `/metrics` (needs `--metrics`) and
+`/slots` (on by default), each read with a 2-second timeout and the model
+transport's 128 KiB response ceiling. Control parses at most 1,024 lines and
+only the unlabelled `llamacpp:` samples it uses, skipping malformed,
+non-finite or negative values:
+
+- prompt and generation tokens/s: `prompt_tokens_total / prompt_seconds_total`
+  and `tokens_predicted_total / tokens_predicted_seconds_total`, averages since
+  the server started (the server's own gauges reset at every scrape);
+- processing and queued requests: `requests_processing`, `requests_deferred`;
+- prefix cache: `prompt_tokens_cached_total` as a share of all prompt tokens;
+- slots busy and KV: each slot's `n_prompt_tokens` plus generated tokens
+  against its `n_ctx`. llama.cpp keeps a slot's last sequence for prefix reuse,
+  so this approximates KV cache use; this llama.cpp build exposes no KV usage
+  metric.
+
+A server without `--metrics` answers `/metrics` with HTTP 501, shown as
+`metrics off (restart the server with --metrics; nix run .#inference adds it)`
+next to the slot figures. **To pick up `--metrics` on a service started by an
+earlier release**, run the same start command again: it stops that model's
+launchd agent or container and starts it with the current flags. Pass the same
+`--alias`, `--port`, `--ctx-size` and `--parallel` as before (the defaults are
+`qwen-local`, 8081, 32768 and 1); the saved hash is reused, so the GGUF is not
+re-hashed. For example:
+
+```sh
+nix run .#inference -- --status
+nix run .#inference -- --model ~/.local/share/control/models/Qwen3.8-27B-Q4_K_M.gguf \
+  --alias qwen-local --port 8081 --dry-run   # check the flags, changes nothing
+nix run .#inference -- --model ~/.local/share/control/models/Qwen3.8-27B-Q4_K_M.gguf \
+  --alias qwen-local --port 8081
+control models stats qwen-local
+```
+
+The restart drops the server's KV cache and interrupts any request in flight,
+so do it when no local turn is running. A turn interrupted anyway fails with a
+provider error and its host checkpoint, like any other.
 
 ### Two models: a 27B for agents, a 7B for summaries
 
@@ -337,7 +390,8 @@ slots, log and lifecycle.
    Agent steps re-send about 3.4 k tokens of core tool schemas (more once a turn
    loads deferred tools), so keep a generous timeout (the default 1800 s is fine
    on Metal; CPU needs far more).
-4. Check it: `control models test qwen-local`, then `control models bench qwen-local 5`.
+4. Check it: `control models test qwen-local`, then `control models bench qwen-local 5`;
+   `control models stats qwen-local` shows live server throughput and slots.
 5. In a chat, `/model local:qwen-local`. Future turns run on the local model;
    `/model default` returns to the node default.
 
@@ -410,6 +464,20 @@ tool call. A cancelled run closes the in-flight HTTP connection, so llama.cpp
 stops generating. Attempt-owned tool containers are stopped when the loop ends;
 persistent services are separate resources. Recovery starts a fresh attempt from
 Control's journal; server KV caches only speed up repeated prefixes.
+
+**Turn limit.** A local step is roughly ten times slower than a hosted one (on
+the M3 Max below, about 150–200 prompt tokens/s and 15 output tokens/s), so
+every local attempt, whether a chat, a spawn or a bot, gets its own default
+turn limit: 3,600 seconds, set with `local-turn-timeout-secs` in the node
+configuration directory or `CONTROL_LOCAL_TURN_TIMEOUT_SECS` (60 s–24 h; `0` or
+`none` for unlimited). It is captured at admission and replaces the 600-second
+chat default and the 1,200-second bot default for that attempt; an explicit
+`worker-timeout-secs` still wins. The deadline warning arrives at 15 % of the
+limit (540 s before 3,600 s), and a turn stopped at the limit leaves the host
+checkpoint (`continuity.interrupted`) described in
+[TURN-CONTINUITY.md](TURN-CONTINUITY.md#cheap-handoffs-and-host-checkpoints-2026-11-16).
+The per-request timeout on the model entry (default 1,800 s) bounds one step
+and is separate.
 
 **Context fit.** The endpoint's declared limits are the budget. Turn-input
 planning reserves `OVERHEAD_TOKENS` (7 168: 4 096 for the role's core schemas,

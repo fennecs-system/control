@@ -298,6 +298,28 @@ pub fn render(runtime: &crate::runtime::Runtime) -> String {
     html
 }
 
+/// The Manage → Models page polls this while open: one live server-statistics
+/// line per local endpoint, read outside the state lock. Nothing polls when no
+/// page is open.
+pub fn live_http(stream: &mut impl std::io::Write, state: &std::sync::Mutex<crate::State>, method: &str, path: &str) -> bool {
+    if path != "/providers/live" {
+        return false;
+    }
+    let endpoints = match (method, state.lock()) {
+        ("GET", Ok(state)) => Ok(local(&state.runtime).cloned().collect::<Vec<_>>()),
+        ("GET", Err(_)) => Err("State unavailable"),
+        _ => Err("Use GET"),
+    };
+    let _ = match endpoints {
+        Ok(endpoints) => {
+            let body = serde_json::Value::Object(crate::model_calls::stats::live(&endpoints)).to_string();
+            control_http::respond(stream, "200 OK", "application/json", body.as_bytes(), "", control_http::Policy::Page)
+        }
+        Err(message) => control_http::respond(stream, "400 Bad Request", "text/plain", message.as_bytes(), "", control_http::Policy::Page),
+    };
+    true
+}
+
 /// Entries naming the same adapter, endpoint and model ID are one model.
 fn same_target(a: &crate::model_calls::Endpoint, b: &crate::model_calls::Endpoint) -> bool {
     a.cli == b.cli && a.model == b.model && a.url.trim_end_matches('/') == b.url.trim_end_matches('/')
@@ -355,6 +377,14 @@ fn validate_text(models: &[crate::model_calls::Endpoint], settings: &crate::comp
     }
     Ok(())
 }
+/// The live server-statistics line on a local endpoint's card, filled by the
+/// page client from `/providers/live`. CLI adapters have no server to read.
+fn live_slot(model: &crate::model_calls::Endpoint) -> String {
+    if model.cli.is_some() {
+        return String::new();
+    }
+    format!("<p class='model-stats provider-description' data-live='{}' data-live-fallback='Live statistics unavailable.' aria-live='polite'>Reading live statistics…</p>", crate::escape(&model.id))
+}
 /// What one entry can do; roles (compactor, generation, agent turns) point at entries.
 fn capabilities(model: &crate::model_calls::Endpoint) -> &'static str {
     if model.tools { "summaries · text generation · agent turns" } else { "summaries · text generation" }
@@ -385,7 +415,13 @@ fn text_fields(model: Option<&crate::model_calls::Endpoint>) -> String {
 }
 fn render_text(runtime: &crate::runtime::Runtime) -> String {
     let memory = &runtime.compaction;
-    let mut html = "<section class='provider-section' aria-labelledby='summary-models-heading'><h3 id='summary-models-heading'>Text models</h3><p class='provider-description'>One entry per endpoint and model. Each can summarize history and answer <code>control_model_generate</code>; a local endpoint that serves tool calls also runs agent turns. The compactor and per-chat agent choices point at these entries.</p><div class='model-list' aria-label='Text models'>".to_owned();
+    let mut html = "<section class='provider-section' aria-labelledby='summary-models-heading'><h3 id='summary-models-heading'>Text models</h3><p class='provider-description'>One entry per endpoint and model. Each can summarize history and answer <code>control_model_generate</code>; a local endpoint that serves tool calls also runs agent turns. The compactor and per-chat agent choices point at these entries.</p><div class='model-list' aria-label='Text models'".to_owned();
+    // While this page is open its client reads each local server's statistics
+    // every few seconds; a closed or hidden page reads nothing.
+    if local(runtime).next().is_some() {
+        html.push_str(" data-live-src='/providers/live' data-live-every='5'");
+    }
+    html.push('>');
     if memory.models.is_empty() {
         html.push_str("<p class='provider-empty'>No text models configured. Add one to enable Control compaction or local generation.</p>");
     }
@@ -393,7 +429,7 @@ fn render_text(runtime: &crate::runtime::Runtime) -> String {
         let adapter = model.cli.map_or("Local endpoint", |backend| backend.label());
         let id = crate::escape(&model.id);
         let compactor = if memory.settings.enabled && memory.settings.model.as_deref() == Some(model.id.as_str()) { "<span class='model-default'>Compactor</span>" } else { "" };
-        html.push_str(&format!("<article class='model-row summary-model'><div class='model-card-heading'><div class='model-name'><h4>{id}</h4><span class='model-provider'>{} · {adapter} · {}</span></div>{compactor}<form method='post' action='/providers'><input type='hidden' name='action' value='text-remove'><input type='hidden' name='id' value='{id}'><button class='provider-secondary' aria-label='Remove text model {id}'>Remove</button></form></div><dl class='model-metadata'><div><dt>Context tokens</dt><dd>{}</dd></div><div><dt>Output reserve</dt><dd>{} tokens</dd></div></dl><details class='model-revision'><summary>Weights / runtime revision</summary><code>{}</code></details><details class='model-revision text-edit'><summary aria-label='Edit text model {id}'>Edit</summary><form method='post' action='/providers'><input type='hidden' name='action' value='text-edit'><input type='hidden' name='id' value='{id}'>{}<button class='primary'>Save text model</button></form></details></article>", crate::escape(&model.model), capabilities(model), model.limits.context_tokens, model.limits.output_tokens, crate::escape(&model.revision), text_fields(Some(model))));
+        html.push_str(&format!("<article class='model-row summary-model'><div class='model-card-heading'><div class='model-name'><h4>{id}</h4><span class='model-provider'>{} · {adapter} · {}</span></div>{compactor}<form method='post' action='/providers'><input type='hidden' name='action' value='text-remove'><input type='hidden' name='id' value='{id}'><button class='provider-secondary' aria-label='Remove text model {id}'>Remove</button></form></div><dl class='model-metadata'><div><dt>Context tokens</dt><dd>{}</dd></div><div><dt>Output reserve</dt><dd>{} tokens</dd></div></dl>{}<details class='model-revision'><summary>Weights / runtime revision</summary><code>{}</code></details><details class='model-revision text-edit'><summary aria-label='Edit text model {id}'>Edit</summary><form method='post' action='/providers'><input type='hidden' name='action' value='text-edit'><input type='hidden' name='id' value='{id}'>{}<button class='primary'>Save text model</button></form></details></article>", crate::escape(&model.model), capabilities(model), model.limits.context_tokens, model.limits.output_tokens, live_slot(model), crate::escape(&model.revision), text_fields(Some(model))));
     }
     html.push_str(&format!("</div><details class='model-add'><summary>+ New text model</summary><form method='post' action='/providers'><input type='hidden' name='action' value='text-add'>{}<button class='primary'>Add text model</button></form></details></section>", text_fields(None)));
     html.push_str("<section class='provider-section' aria-labelledby='compaction-heading'><h3 id='compaction-heading'>History compaction</h3><p class='provider-description'>Opt in per chat. Original messages remain available in the history tree.</p><form class='compaction-settings' method='post' action='/providers'><input type='hidden' name='action' value='compaction'>");

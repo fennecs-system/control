@@ -163,6 +163,7 @@ fn cancelled() -> io::Error {
 mod cli;
 #[path = "../tools/compaction-eval/mod.rs"]
 mod evaluation;
+pub mod stats;
 pub mod tool;
 mod transport;
 pub enum Target {
@@ -173,7 +174,7 @@ pub fn recover() -> io::Result<()> {
     cli::recover()
 }
 
-const USAGE: &str = "Use control models test MODEL_ID, control models generate MODEL_ID [--max-output-tokens N] < prompt, control models bench MODEL_ID [RUNS] or control models compare MODEL_ID...";
+const USAGE: &str = "Use control models test MODEL_ID, control models generate MODEL_ID [--max-output-tokens N] < prompt, control models bench MODEL_ID [RUNS], control models stats MODEL_ID [--json] or control models compare MODEL_ID...";
 pub fn command(args: &[String]) -> io::Result<()> {
     crate::shutdown::install()?;
     if args.first().is_some_and(|s| s == "compare") {
@@ -225,6 +226,19 @@ pub fn command(args: &[String]) -> io::Result<()> {
                 _ => return Err(io::Error::other(USAGE)),
             };
             println!("{}", tool::bench(endpoint, runs, &stop)?);
+        }
+        ("stats", rest) => {
+            let json = match rest {
+                [] => false,
+                [flag] if flag == "--json" => true,
+                _ => return Err(io::Error::other(USAGE)),
+            };
+            let stats = stats::read(endpoint)?;
+            if json {
+                println!("{}", serde_json::to_string(&stats).map_err(io::Error::other)?);
+            } else {
+                println!("{}: {}", endpoint.id, stats::line(&stats));
+            }
         }
         _ => return Err(io::Error::other(USAGE)),
     }

@@ -81,6 +81,29 @@ fn approved_bots_are_warned_before_their_captured_turn_limit() {
 }
 
 #[test]
+fn local_model_attempts_are_warned_before_their_captured_local_limit() {
+    // A local chat and a local bot both use the captured local limit (default
+    // 3600 s, threshold 540 s), not the 600 s or bot defaults.
+    for bot in [false, true] {
+        let (mut state, chat, run) = running(None);
+        if bot {
+            state.chats[0].room = Some("general".into());
+            crate::bots::command(&mut state, &chat, "on").unwrap();
+        }
+        let attempt = state.runtime.runs[0].attempts.last_mut().unwrap();
+        (attempt.backend, attempt.bot_timeout_seconds, attempt.local_timeout_seconds) = (crate::backend::Backend::Local, Some(1200), Some(3600));
+        assert!(notes(&mut state, &run, "control_room_read", 1000 + 1100).is_empty(), "neither 600 s nor the bot limit applies");
+        assert!(notes(&mut state, &run, "control_room_read", 1000 + 3000).is_empty(), "600 s left is above the threshold");
+        assert_eq!(notes(&mut state, &run, "control_room_read", 1000 + 3100), [deadline_text(500)]);
+    }
+    // A local limit configured as unlimited gives no warning.
+    let (mut state, _, run) = running(None);
+    let attempt = state.runtime.runs[0].attempts.last_mut().unwrap();
+    (attempt.backend, attempt.local_timeout_seconds) = (crate::backend::Backend::Local, None);
+    assert!(notes(&mut state, &run, "control_room_read", 1000 + 86_000).is_empty());
+}
+
+#[test]
 fn steering_detection_counts_only_active_descendants() {
     let (mut state, lead, _) = running(None);
     assert_eq!(steered(&state, &lead), 0, "no members");

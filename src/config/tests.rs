@@ -78,14 +78,18 @@ fn worker_deadline_defaults_and_clamps() {
     assert_eq!(deadline_secs(Some("soon")), 600);
 }
 #[test]
-fn bot_turn_deadline_defaults_clamps_and_can_be_unlimited() {
-    assert_eq!(bot_turn_secs(None), Some(1200));
-    assert_eq!(bot_turn_secs(Some(" 1800\n")), Some(1800));
-    assert_eq!(bot_turn_secs(Some("5")), Some(60));
-    assert_eq!(bot_turn_secs(Some("999999")), Some(86400));
-    assert_eq!(bot_turn_secs(Some("soon")), Some(1200));
-    assert_eq!(bot_turn_secs(Some("0\n")), None);
-    assert_eq!(bot_turn_secs(Some("none")), None);
+fn bot_and_local_turn_deadlines_default_clamp_and_can_be_unlimited() {
+    // Bot turns default to 1200 s and local-model turns to 3600 s; both clamp
+    // to 60 s – 24 h, fall back to their default on junk, and accept 0/none.
+    for default in [1200, 3600] {
+        assert_eq!(turn_secs(None, default), Some(default));
+        assert_eq!(turn_secs(Some(" 1800\n"), default), Some(1800));
+        assert_eq!(turn_secs(Some("5"), default), Some(60));
+        assert_eq!(turn_secs(Some("999999"), default), Some(86400));
+        assert_eq!(turn_secs(Some("soon"), default), Some(default));
+        assert_eq!(turn_secs(Some("0\n"), default), None);
+        assert_eq!(turn_secs(Some("none"), default), None);
+    }
 }
 #[test]
 fn client_url_uses_localhost_and_the_bound_port() {

@@ -11,15 +11,18 @@ pub enum Termination { TimedOut, Cancelled, Restarted, ProviderError, Publicatio
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Decision { Continue, Finish(String), TimedOut(u64) }
 
-/// The attempt time limit: an explicit operator limit, else the bot turn limit
-/// captured at admission for an approved persistent bot (None: unlimited),
-/// else the 600-second default.
-pub fn limit(explicit: Option<u64>, persistent: bool, bot: Option<u64>) -> Option<u64> {
-    explicit.or(if persistent { bot } else { Some(600) })
+/// The attempt time limit. An explicit operator limit wins for every attempt.
+/// Otherwise an attempt on the local-model backend uses the local turn limit
+/// captured at admission (chats and bots alike; local steps are ~10× slower),
+/// an approved persistent bot uses the bot turn limit captured at admission,
+/// and every other attempt has the 600-second default. None: unlimited.
+pub fn limit(attempt: &Attempt, persistent: bool) -> Option<u64> {
+    if let Some(explicit) = attempt.explicit_timeout_seconds { return Some(explicit); }
+    if attempt.backend == crate::backend::Backend::Local { return attempt.local_timeout_seconds; }
+    if persistent { attempt.bot_timeout_seconds } else { Some(600) }
 }
 pub fn deadline(state: &State, run: &crate::runtime::Run, attempt: &Attempt) -> Option<u64> {
-    limit(attempt.explicit_timeout_seconds, run.chat_id.as_ref()
-        .is_some_and(|chat| crate::bots::continuation_enabled(state, chat)), attempt.bot_timeout_seconds)
+    limit(attempt, run.chat_id.as_ref().is_some_and(|chat| crate::bots::continuation_enabled(state, chat)))
 }
 fn decide(limit: Option<u64>, elapsed: Duration, handoff: Option<String>) -> Decision {
     // An already accepted handoff is a host finish request, even at the deadline.
@@ -30,7 +33,7 @@ fn decide(limit: Option<u64>, elapsed: Duration, handoff: Option<String>) -> Dec
 }
 pub fn poll(bridge: Option<(&Arc<Mutex<State>>, &str)>, attempt: &Attempt, elapsed: Duration) -> Decision {
     let Some((shared, id)) = bridge else {
-        return decide(limit(attempt.explicit_timeout_seconds, false, None), elapsed, None);
+        return decide(limit(attempt, false), elapsed, None);
     };
     let Ok(state) = shared.lock() else { return Decision::Continue; };
     let Some(run) = state.runtime.runs.iter().find(|r| r.id == id) else { return Decision::Continue; };

@@ -218,16 +218,28 @@ pub fn configured_worker_deadline() -> Option<std::time::Duration> {
 /// configuration directory. Default 1200 s, clamped to 60 s – 24 h; `0` or
 /// `none` means unlimited. An explicit worker limit still takes priority.
 pub fn bot_turn_deadline() -> Option<u64> {
-    let configured = std::env::var("CONTROL_BOT_TURN_TIMEOUT_SECS")
-        .ok()
-        .or_else(|| fs::read_to_string(directory().ok()?.join("bot-turn-timeout-secs")).ok());
-    bot_turn_secs(configured.as_deref())
+    turn_limit("CONTROL_BOT_TURN_TIMEOUT_SECS", "bot-turn-timeout-secs", 1200)
 }
-fn bot_turn_secs(configured: Option<&str>) -> Option<u64> {
+/// Turn time limit for attempts on the local-model backend (chats and bots
+/// alike), captured at admission: `CONTROL_LOCAL_TURN_TIMEOUT_SECS` or
+/// `local-turn-timeout-secs` in the node configuration directory. Local models
+/// take roughly ten times longer per step than hosted ones, so the default is
+/// 3600 s, clamped to 60 s – 24 h; `0` or `none` means unlimited. An explicit
+/// worker limit still takes priority.
+pub fn local_turn_deadline() -> Option<u64> {
+    turn_limit("CONTROL_LOCAL_TURN_TIMEOUT_SECS", "local-turn-timeout-secs", 3600)
+}
+fn turn_limit(variable: &str, file: &str, default: u64) -> Option<u64> {
+    let configured = std::env::var(variable)
+        .ok()
+        .or_else(|| fs::read_to_string(directory().ok()?.join(file)).ok());
+    turn_secs(configured.as_deref(), default)
+}
+fn turn_secs(configured: Option<&str>, default: u64) -> Option<u64> {
     match configured.map(str::trim) {
         Some("0" | "none") => None,
-        Some(value) => Some(value.parse::<u64>().map_or(1200, |s| s.clamp(60, 86400))),
-        None => Some(1200),
+        Some(value) => Some(value.parse::<u64>().map_or(default, |s| s.clamp(60, 86400))),
+        None => Some(default),
     }
 }
 fn deadline_secs(configured: Option<&str>) -> u64 {

@@ -209,10 +209,11 @@ fn public_render(state: &State, query: &HashMap<String, String>, lens: &str) -> 
     render(state, view, lens, channel)
 }
 /// `GET /` with its response policy. The Bots page's process tree is a
-/// pan/zoom canvas run by the Rust/WASM client; other views run no script.
+/// pan/zoom canvas run by the Rust/WASM client, which also refreshes the
+/// Models page's live server statistics; other views run no script.
 fn public_page(state: &State, query: &HashMap<String, String>, lens: &str) -> (String, control_http::Policy) {
     let page = public_render(state, query, lens);
-    if query.get("view").map(String::as_str) == Some("agents") {
+    if matches!(query.get("view").map(String::as_str), Some("agents" | "providers")) {
         (web_assets::with_client(&page), control_http::Policy::Client)
     } else {
         (page, control_http::Policy::Page)
@@ -335,6 +336,7 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
     }
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     if compaction::http(&mut stream,&state,method,path,query){return;}
+    if providers::live_http(&mut stream, &state, method, path) { return; }
     if ports::http(&mut stream, &state, method, path, &data[header_end..header_end + length]) { return; }
     if bots::http(&mut stream, &state, method, path, &data[header_end..header_end + length]) { return; }
     if channel_settings::http(&mut stream, method, path, &data[header_end..header_end + length]) { return; }

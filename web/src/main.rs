@@ -651,31 +651,53 @@ fn attach_updates(document: &web_sys::Document) -> Result<(), JsValue> {
 
 /// Pages that render from state first mark a `data-live-src` region; slow
 /// engine reads arrive afterwards as HTML fragments keyed by `data-live`.
+/// With `data-live-every` (seconds) the region is read again on that interval
+/// while the page is visible, one request at a time; a hidden or closed page
+/// reads nothing. A slot's `data-live-fallback` replaces the default text
+/// shown when its fragment is missing.
 fn attach_live(document: &web_sys::Document) -> Result<bool, JsValue> {
     let Some(root) = document.query_selector("[data-live-src]")? else { return Ok(false); };
     let Some(url) = root.get_attribute("data-live-src") else { return Ok(false); };
-    let request = web_sys::XmlHttpRequest::new()?;
-    request.open("GET", &url)?;
-    request.set_timeout(15_000);
-    let response = request.clone();
-    let finished = Closure::<dyn FnMut(web_sys::Event)>::once(move |_| {
-        let fragments = (response.status().ok() == Some(200))
-            .then(|| response.response_text().ok().flatten())
-            .flatten()
-            .and_then(|text| serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&text).ok())
-            .unwrap_or_default();
-        let Ok(slots) = root.query_selector_all("[data-live]") else { return; };
-        for index in 0..slots.length() {
-            let Some(slot) = slots.item(index).map(|node| node.unchecked_into::<web_sys::Element>()) else { continue; };
-            match slot.get_attribute("data-live").and_then(|id| fragments.get(&id)?.as_str().map(str::to_owned)) {
-                Some(html) => slot.set_inner_html(&html),
-                None => slot.set_inner_html("<p class='muted'>Usage unavailable.</p>"),
+    let every = root.get_attribute("data-live-every").and_then(|s| s.parse::<i32>().ok()).filter(|s| (1..=3600).contains(s));
+    let busy = Rc::new(Cell::new(false));
+    let target = document.clone();
+    let read = Rc::new(move || {
+        if busy.get() || target.hidden() { return; }
+        let Ok(request) = web_sys::XmlHttpRequest::new() else { return; };
+        if request.open("GET", &url).is_err() { return; }
+        request.set_timeout(15_000);
+        busy.set(true);
+        let (response, root, done) = (request.clone(), root.clone(), busy.clone());
+        let finished = Closure::once_into_js(move |_: web_sys::Event| {
+            done.set(false);
+            let fragments = (response.status().ok() == Some(200))
+                .then(|| response.response_text().ok().flatten())
+                .flatten()
+                .and_then(|text| serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&text).ok())
+                .unwrap_or_default();
+            let Ok(slots) = root.query_selector_all("[data-live]") else { return; };
+            for index in 0..slots.length() {
+                let Some(slot) = slots.item(index).map(|node| node.unchecked_into::<web_sys::Element>()) else { continue; };
+                match slot.get_attribute("data-live").and_then(|id| fragments.get(&id)?.as_str().map(str::to_owned)) {
+                    Some(html) => slot.set_inner_html(&html),
+                    None => match slot.get_attribute("data-live-fallback") {
+                        Some(text) => slot.set_text_content(Some(&text)),
+                        None => slot.set_inner_html("<p class='muted'>Usage unavailable.</p>"),
+                    },
+                }
             }
-        }
+        });
+        // Freed by the browser after its single call, so polling does not leak.
+        request.set_onloadend(Some(finished.unchecked_ref()));
+        if request.send().is_err() { busy.set(false); }
     });
-    request.set_onloadend(Some(finished.as_ref().unchecked_ref()));
-    request.send()?;
-    finished.forget();
+    read();
+    if let Some(seconds) = every {
+        let tick = Closure::<dyn FnMut()>::new(move || read());
+        web_sys::window().ok_or_else(|| JsValue::from_str("No window"))?
+            .set_interval_with_callback_and_timeout_and_arguments_0(tick.as_ref().unchecked_ref(), seconds * 1000)?;
+        tick.forget();
+    }
     Ok(true)
 }
 

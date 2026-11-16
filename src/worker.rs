@@ -327,7 +327,7 @@ fn sandbox_verdict(outcome: Recv<std::io::Result<std::process::ExitStatus>>, ver
 }
 
 pub(crate) fn timeout_message(limit: Duration) -> String {
-    format!("Worker reached its {} s time limit and was stopped. Files are retained in the run directory; the previous published checkpoint is unchanged. Hand off before the limit and continue in the next turn; operators can raise it with worker-timeout-secs (all turns) or bot-turn-timeout-secs (approved persistent bots) in the node configuration.", limit.as_secs())
+    format!("Worker reached its {} s time limit and was stopped. Files are retained in the run directory; the previous published checkpoint is unchanged. Hand off before the limit and continue in the next turn; operators can raise it with worker-timeout-secs (all turns), local-turn-timeout-secs (local-model turns) or bot-turn-timeout-secs (approved persistent bots) in the node configuration.", limit.as_secs())
 }
 pub(crate) const UNKNOWN_FAILURE: &str = "Codex container exited unsuccessfully. Check host account authentication and the pinned worker configuration. No host fallback was attempted.";
 
@@ -1071,6 +1071,9 @@ fn checkpoint_prepared(
     let mut attempt = crate::usage::Attempt::new();
     attempt.explicit_timeout_seconds = crate::config::configured_worker_deadline().map(|d| d.as_secs());
     attempt.bot_timeout_seconds = crate::config::bot_turn_deadline();
+    if run.backend == crate::backend::Backend::Local {
+        attempt.local_timeout_seconds = crate::config::local_turn_deadline();
+    }
     attempt.context_trace=captured.map(Box::new);
     attempt.turn_mailbox=turn_mailbox.into();
     attempt.github_source = github_source;
