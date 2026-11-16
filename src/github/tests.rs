@@ -437,3 +437,19 @@ fn only_completed_same_chat_improvements_can_be_published() {
     state.chats[0].actor = Actor::Unknown;
     assert!(selected(&state, &chat, &input).is_err());
 }
+
+/// The source Git bound fails only a process that outlives it; a slow one under
+/// load (the Nix build's parallel test run) finishes inside the 60 s guard.
+#[test]
+fn source_git_output_is_bounded_by_time_and_size() {
+    let shell = |script: &str| {
+        let mut command = std::process::Command::new("sh");
+        command.args(["-c", script]).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null());
+        command
+    };
+    assert_eq!(bounded_output(shell("sleep 0.2; printf ok"), 16, Duration::from_secs(30)).unwrap(), b"ok");
+    let started = std::time::Instant::now();
+    assert_eq!(bounded_output(shell("exec sleep 30"), 16, Duration::from_millis(50)).unwrap_err().to_string(), "Source revision lookup timed out");
+    assert!(started.elapsed() < Duration::from_secs(20), "a hung process is killed at the bound");
+    assert!(bounded_output(shell("printf 0123456789abcdefXYZ"), 16, Duration::from_secs(30)).is_err(), "output over the size bound fails");
+}
