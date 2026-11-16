@@ -240,9 +240,12 @@ The tool accepts no host paths and results never contain them.
   write with a command. Existing files at the same paths are replaced and other
   files are kept. A file that shrinks while streaming fails the copy; growth
   after it was opened is not copied.
-- **One lane.** A copy is an entry in the service's single command lane, not a
-  separate one. It waits for, and blocks, other commands on that service, so a
-  copy cannot race a build reading the same files. It reuses the command
+- **Exclusive.** A copy takes the service exclusively. Admitted while commands
+  run, it stays `requested` (its diagnostic says how many it waits for) and
+  launches alone once they finish; from admission until it ends, new commands
+  and copies are refused with the copy's `execution_id`. No command observes a
+  partial copy and a copy cannot race a build reading the same files. Waiting
+  is bounded by the running commands' timeouts. It reuses the command
   machinery: durable intent before launch, request-identity receipts (a retried
   nonce returns the recorded outcome without rescanning or recopying, and a
   reused nonce with different arguments is refused), the timeout
@@ -264,8 +267,14 @@ separately reviewed, small results can be read back through bounded command
 output.
 
 Commands survive model turns and have a 1–1800 second timeout (default 120), capped
-by the service lease. Poll `control_service_exec_status` until complete. One active
-command per service and 16 retained full command outputs bound work and memory.
+by the service lease. Poll `control_service_exec_status` until complete.
+Agents sharing a service run commands concurrently, each with its own
+`execution_id`, request identity, timeout, output and outcome. The node setting
+`service-commands-max` (default 8, 1–16) bounds active commands per service; at
+the limit a new command is refused before submission with the active
+`execution_id`s, their owning chats and commands, rather than queued. The
+service's process limit still bounds their combined load. Up to 16 finished
+full outputs are retained beside the active commands to bound memory.
 Evicted output leaves a lightweight retry receipt while its attempt can still
 submit tools (at most 1,024 per service). Status reports `output_evicted=true`
 when only that receipt remains. Retries return the recorded outcome rather than

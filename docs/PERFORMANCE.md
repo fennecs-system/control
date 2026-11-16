@@ -1146,3 +1146,32 @@ ones. A first version re-tokenised every blocked note on every pass and cost
 fingerprint of the reasons (claim revisions and run positions), so unchanged
 reasons are not compared again. Tokenising and grouping run only when a
 blocked note or a failing member's latest result changes.
+
+## Concurrent service commands (2026-11-16)
+
+The service supervisor calls `commands::dispatch` every 2 s. It now launches
+every admitted command on a running service instead of at most one, and holds
+a requested copy until nothing runs. The ignored fixture
+`services::commands::tests::dispatch_profile` measures one pass with nothing to
+launch: 8 or 128 running services, 16 retained executions each, 0, 1 or 8 of
+them running. Before is `0d07ff9` with the identical fixture. Release builds on
+one Apple Silicon laptop, alternating before/after binaries, three rounds of
+ten 20,000-pass batches; the table shows the median of the round medians.
+
+| Case | Before | After |
+| --- | ---: | ---: |
+| 8 services, idle | 205 ns | 206 ns |
+| 8 services, 1 running each | 183 ns | 207 ns |
+| 8 services, 8 running each | 183 ns | 212 ns |
+| 128 services, idle | 3.11 µs | 3.39 µs |
+| 128 services, 1 running each | 2.78 µs | 3.26 µs |
+| 128 services, 8 running each | 2.77 µs | 3.36 µs |
+
+The old pass stopped at a service's first running command; the new one reads
+each retained record once to find launchable requests. At most eight services
+run at once, so the realistic cost is about 25 ns more per 2 s pass, far below
+the engine calls of a launch; no CPU profile was taken. A first version scanned
+twice (running, then requested) and was no faster. No state, lock or persisted
+field was added. Reproduce with
+`cargo test --release --locked --bin control services::commands::tests::dispatch_profile -- --ignored --nocapture`
+(`CONTROL_PROFILE_ROUNDS` sets passes per batch).

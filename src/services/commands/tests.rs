@@ -280,7 +280,7 @@ fn input(service: &str, command: &str) -> Input {
     }
 }
 #[test]
-fn admission_is_durable_scoped_idempotent_and_single_writer() {
+fn admission_is_durable_scoped_and_idempotent() {
     let (mut state, run, node, id) = fixture();
     assert!(
         admit(
@@ -321,7 +321,6 @@ fn admission_is_durable_scoped_idempotent_and_single_writer() {
     for (generation, nonce, command) in [
         ("attempt-old", "nonce-a", "printf hello"),
         ("attempt-a", "nonce-a", "printf different"),
-        ("attempt-a", "nonce-b", "printf hello"),
     ] {
         assert!(
             admit(
@@ -554,3 +553,7 @@ fn capture_publishes_output_before_command_exit() {
     assert!(result.output.text().contains("final output"));
     assert_eq!(result.exit_code, Some(0));
 }
+#[path = "tests/dispatch_profile.rs"]
+mod dispatch_profile;
+#[path = "tests/concurrency.rs"]
+mod concurrency;

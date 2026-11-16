@@ -9,8 +9,35 @@ use std::{
     time::Instant,
 };
 
+/// Finished command outputs retained per service. Active commands are bounded
+/// separately by [`Concurrency`], so they never evict each other.
 const MAX_EXECUTIONS: usize = 16;
 const MAX_RECEIPTS: usize = 1024;
+
+/// How many commands one service runs at once. Node setting
+/// `service-commands-max` (1–16); invalid or absent values keep the default.
+/// The service's process (pids) limit still bounds their combined load.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Concurrency(pub usize);
+impl Concurrency {
+    pub(super) const DEFAULT: Self = Self(8);
+    pub(super) fn from_settings(setting: impl Fn(&str) -> Option<String>) -> Self {
+        setting("service-commands-max")
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .filter(|value| (1..=16).contains(value))
+            .map_or(Self::DEFAULT, Self)
+    }
+}
+#[cfg(not(test))]
+fn concurrency() -> Concurrency {
+    let directory = crate::config::directory().ok();
+    Concurrency::from_settings(|name| std::fs::read_to_string(directory.as_ref()?.join(name)).ok())
+}
+/// Unit tests never read the operator's node configuration.
+#[cfg(test)]
+fn concurrency() -> Concurrency {
+    Concurrency::DEFAULT
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -42,9 +69,10 @@ pub(super) struct Execution {
     truncated: bool,
     exit_code: Option<i32>,
     diagnostic: String,
-    /// A file copy from the requesting attempt's workspace. It shares the
-    /// command lane, receipts and recovery; `command` stays empty, so an older
-    /// Control that ignores this field would launch nothing.
+    /// A file copy from the requesting attempt's workspace. It takes the
+    /// service exclusively and shares receipts and recovery with commands;
+    /// `command` stays empty, so an older Control that ignores this field
+    /// would launch nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     copy: Option<copy::Transfer>,
 }
@@ -58,6 +86,14 @@ impl Execution {
     pub(super) fn running_label(&self) -> Option<String> {
         let command = if self.display_command.is_empty() { &self.command } else { &self.display_command };
         matches!(self.status, Status::Running).then(|| command.lines().next().unwrap_or_default().chars().take(80).collect())
+    }
+    /// One line naming an active request for a refusal: its handle, status,
+    /// owning chat (or run) and command.
+    fn holder(&self, state: &State) -> String {
+        let owner = state.runtime.runs.iter().find(|r| r.id == self.run).and_then(|r| r.chat_id.as_deref()).map_or_else(|| format!("run {}", self.run), |chat| format!("chat {chat}"));
+        let command = if self.display_command.is_empty() { &self.command } else { &self.display_command };
+        let label: String = command.lines().next().unwrap_or_default().chars().take(60).collect();
+        format!("{} ({}, {owner}: {label})", self.id, if self.status == Status::Running { "running" } else { "waiting" })
     }
     pub(super) fn brief(&self) -> Value {
         json!({"execution_id":self.id,"status":self.status,"exit_code":self.exit_code,"diagnostic":self.diagnostic})
@@ -201,7 +237,7 @@ pub(crate) fn enqueue_test(
 }
 pub(super) fn definitions() -> Vec<Value> {
     vec![
-        json!({"name":"control_service_exec","description":"Run a command asynchronously inside an exact chat-owned running service, using its private files and approved loopback relays. Use shell commands/heredocs to create small task files, configure clients or install dependencies; bring files or trees from your task workspace with control_service_copy instead. No host paths, mounts or engine options. Returns an execution_id; inspect control_service_exec_status. One active command per service. Commands are bounded by timeout_seconds; they survive model turns only until then. Use control_watch_start for long-running work: restart=transient runs finite work such as large downloads once; restart=permanent restarts persistent clients, servers or daemons after exit. Both survive model turns without a task deadline. Use exec for bounded commands: a timed-out or interrupted command is stopped inside the service with every process it started, detached ones included. The service keeps running; it is stopped only if that cannot be verified. Background programs must redirect their output to private files; the service foreground process must remain alive. Uncertain commands are never replayed.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"command":{"type":"string","minLength":1,"maxLength":16000},"timeout_seconds":{"type":"integer","minimum":1,"maximum":1800,"default":120}},"required":["service_id","command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":true}}),
+        json!({"name":"control_service_exec","description":"Run a command asynchronously inside an exact chat-owned running service, using its private files and approved loopback relays. Use shell commands/heredocs to create small task files, configure clients or install dependencies; bring files or trees from your task workspace with control_service_copy instead. No host paths, mounts or engine options. Returns an execution_id; inspect control_service_exec_status. Commands from every agent sharing the service run concurrently, each with its own execution_id, output and timeout, up to a node limit (default 8); at the limit, or while a control_service_copy holds the service, the request is refused with the active execution_ids and nothing is submitted. Commands are bounded by timeout_seconds; they survive model turns only until then. Use control_watch_start for long-running work: restart=transient runs finite work such as large downloads once; restart=permanent restarts persistent clients, servers or daemons after exit. Both survive model turns without a task deadline. Use exec for bounded commands: a timed-out or interrupted command is stopped inside the service with every process it started, detached ones included. The service keeps running; it is stopped only if that cannot be verified. Background programs must redirect their output to private files; the service foreground process must remain alive. Uncertain commands are never replayed.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"command":{"type":"string","minLength":1,"maxLength":16000},"timeout_seconds":{"type":"integer","minimum":1,"maximum":1800,"default":120}},"required":["service_id","command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":true}}),
         json!({"name":"control_service_exec_status","description":"Read a chat-owned service command's bounded live output, exit code and durable outcome. Use a fresh execution_id only for a deliberate new command; retries with the same request identity never replay effects.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"execution_id":{"type":"string"}},"required":["service_id","execution_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
     ]
 }
@@ -253,7 +289,7 @@ pub(super) fn status(shared: &Arc<Mutex<State>>, run: &str, generation: &str, no
         })
         .ok_or_else(|| fail("Service command not found"))
 }
-/// One request in a service's single command lane: a shell command or a copy.
+/// One request on a service: a shell command or an exclusive copy.
 pub(super) struct Work {
     pub(super) service_id: String,
     /// Argument digest; a nonce reused with different arguments is refused.
@@ -344,22 +380,29 @@ pub(super) fn admit_work(
     {
         return Err(fail("Wait for a running service with a live lease"));
     }
-    if service.executions.iter().any(|e| e.status.active()) {
-        return Err(fail(
-            "Service already has an active command; inspect its execution status",
-        ));
+    // Commands run concurrently up to the node limit. A copy takes the service
+    // exclusively: it waits for running commands, and nothing new is admitted
+    // until it finishes, so no command observes a partial copy.
+    let active = service.executions.iter().filter(|e| e.status.active()).collect::<Vec<_>>();
+    let service_id = service.resource.id.as_str();
+    if let Some(copy) = active.iter().find(|e| e.copy.is_some()) {
+        return Err(fail(format!(
+            "Service {service_id} is reserved for copy {}; nothing was submitted. Poll control_service_exec_status for it and retry after it finishes.",
+            copy.holder(state)
+        )));
     }
-    let evict = if service.executions.len() >= MAX_EXECUTIONS {
-        Some(
-            service
-                .executions
-                .iter()
-                .position(|e| !e.status.active())
-                .ok_or_else(|| fail("Service already has an active command"))?,
-        )
-    } else {
-        None
-    };
+    let limit = concurrency().0;
+    if work.copy.is_none() && active.len() >= limit {
+        let holders = active.iter().map(|e| e.holder(state)).collect::<Vec<_>>().join("; ");
+        return Err(fail(format!(
+            "Service {service_id} is running {} of {limit} concurrent commands (node setting service-commands-max); nothing was submitted. Active: {holders}. Poll control_service_exec_status until one finishes, then retry; run long-lived programs as watches (control_watch_start).",
+            active.len()
+        )));
+    }
+    let waiting = if work.copy.is_some() { active.len() } else { 0 };
+    let evict = (service.executions.len() - active.len() >= MAX_EXECUTIONS)
+        .then(|| service.executions.iter().position(|e| !e.status.active()))
+        .flatten();
     let receipt = evict.and_then(|i| {
         let e = &state.services[index].executions[i];
         live_attempt(state, &e.run, &e.attempt).then(|| Receipt::from_execution(e))
@@ -402,7 +445,11 @@ pub(super) fn admit_work(
         output: String::new(),
         truncated: false,
         exit_code: None,
-        diagnostic: String::new(),
+        diagnostic: if waiting > 0 {
+            format!("Waiting for {waiting} running command(s) to finish; new commands are refused until this copy completes.")
+        } else {
+            String::new()
+        },
         copy: work.copy,
     };
     let value = execution.summary();
@@ -842,6 +889,28 @@ pub(super) fn recover(
     }
     Ok(())
 }
+/// Requests a running service can launch now, in admission order, in one
+/// pass. Admission bounds how many commands are active and admits nothing
+/// after an active copy, so every request a copy waits for precedes it. A
+/// copy launches alone once nothing runs, and nothing launches beside it.
+fn launchable(executions: &[Execution]) -> Vec<&Execution> {
+    let (mut running, mut ready) = (0, Vec::new());
+    for e in executions {
+        match (e.status, e.copy.is_some()) {
+            (Status::Running, true) => return Vec::new(),
+            (Status::Running, false) => running += 1,
+            (Status::Requested, true) => {
+                if running == 0 && ready.is_empty() {
+                    ready.push(e);
+                }
+                break;
+            }
+            (Status::Requested, false) => ready.push(e),
+            _ => {}
+        }
+    }
+    ready
+}
 pub(super) fn dispatch(
     shared: &Arc<Mutex<State>>,
     threads: &mut Vec<JoinHandle<()>>,
@@ -888,15 +957,12 @@ pub(super) fn dispatch(
             .services
             .iter()
             .filter(|s| {
-                matches!(s.resource.phase, Phase::Running(_))
-                    && !s.resource.lease.expired(now())
-                    && !s.executions.iter().any(|e| e.status == Status::Running)
+                matches!(s.resource.phase, Phase::Running(_)) && !s.resource.lease.expired(now())
             })
-            .filter_map(|s| {
-                s.executions
-                    .iter()
-                    .find(|e| e.status == Status::Requested)
-                    .map(|e| (s.binding_snapshot(), e.clone()))
+            .flat_map(|s| {
+                launchable(&s.executions)
+                    .into_iter()
+                    .map(move |e| (s.binding_snapshot(), e.clone()))
             })
             .collect::<Vec<_>>()
     };
@@ -905,7 +971,10 @@ pub(super) fn dispatch(
             shared,
             &service,
             &execution.id,
-            |e| e.status = Status::Running,
+            |e| {
+                e.status = Status::Running;
+                e.diagnostic.clear();
+            },
             true,
         )?;
         let worker = shared.clone();
