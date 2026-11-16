@@ -341,6 +341,11 @@ once, and the mode flipped at a health threshold. Reflexes must commit: hold
 until the trigger stays clear, act continuously, weigh every threat, preempt
 only for imminent ones, and pause rather than cancel routines.
 
+**Pitfall: patching layers.** In the same run a member spent a 45-minute turn
+repeatedly patching movement code entangled with reflex leases instead of
+placing blocks. Keep each layer minimal; a layer that blocks the task is
+bypassed or removed, not patched again and again.
+
 Opt-in: `swarm` does not include it, so the scorecard can compare runs with and
 without it.
 

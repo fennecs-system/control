@@ -270,6 +270,7 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert!(ganglia.instructions.contains("weigh every threat, preempt only for imminent ones"));
     assert!(ganglia.instructions.contains("pause routines rather than cancel them"));
     assert!(ganglia.instructions.contains("escalate only milestones, failures and threats they cannot handle"));
+    assert!(ganglia.instructions.contains("a layer that blocks the task is bypassed or removed, not patched again and again"));
     assert!(ganglia.instructions.contains("save as a tool package"));
     assert!(ganglia.instructions.chars().count() <= 900);
     let previous: Vec<Definition> = serde_json::from_str(include_str!("../builtin-lens-history.json")).unwrap();
