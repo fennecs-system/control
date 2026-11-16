@@ -60,6 +60,7 @@ fn concurrent_commands_launch_together_and_report_independently() {
 #[test]
 fn the_limit_refuses_with_active_handles_and_frees_on_completion() {
     let (mut state, run, node, service) = fixture();
+    state.services[0].pids_limit = Some(4096);
     let limit = Concurrency::DEFAULT.0;
     let ids = (0..limit)
         .map(|n| submit(&mut state, &run, &node, &service, &format!("c-{n}"), &format!("job {n}")).unwrap())
@@ -79,12 +80,51 @@ fn the_limit_refuses_with_active_handles_and_frees_on_completion() {
 }
 
 #[test]
+fn a_small_service_admits_no_more_commands_than_its_process_limit() {
+    let (mut state, run, node, service) = fixture();
+    state.services[0].pids_limit = Some(3);
+    for n in 0..3 {
+        submit(&mut state, &run, &node, &service, &format!("p-{n}"), "true").unwrap();
+    }
+    let refused = submit(&mut state, &run, &node, &service, "p-3", "true").unwrap_err().to_string();
+    assert!(refused.contains("running 3 of 3") && refused.contains("process limit of 3") && refused.contains("larger shape"), "{refused}");
+    // Every admitted service shape allows far more than the old fixed eight.
+    let (state, ..) = fixture();
+    assert_eq!(Concurrency::DEFAULT.for_service(&state.services[0]), 64);
+}
+
+#[test]
+fn persisted_command_records_stay_bounded() {
+    // The largest admissible command: 16,000-byte text, 2,000-character label
+    // and full 16,000-byte output. Launch clears the command text.
+    let (mut state, run, node, service) = fixture();
+    let text = "x".repeat(16_000);
+    let id = submit(&mut state, &run, &node, &service, "big", &text).unwrap();
+    let size = |state: &State| serde_json::to_vec(state.services[0].executions.iter().find(|e| e.id == id).unwrap()).unwrap().len();
+    // A request holds its text only until dispatch launches it (normally < 2 s).
+    let requested = size(&state);
+    let snapshot = state.services[0].clone();
+    let shared = Arc::new(Mutex::new(state));
+    // What dispatch records at launch; the launched snapshot keeps the text.
+    update(&shared, &snapshot, &id, |e| {
+        e.status = Status::Running;
+        e.command.clear();
+        e.output = "y".repeat(OUTPUT);
+    }, false).unwrap();
+    let running = size(&shared.lock().unwrap());
+    update(&shared, &snapshot, &id, |e| e.status = Status::Completed, false).unwrap();
+    let finished = size(&shared.lock().unwrap());
+    println!("requested {requested} B, running {running} B, finished {finished} B");
+    assert!(requested < 19_000 && running < 19_000 && finished < 19_000, "{requested} {running} {finished}");
+}
+
+#[test]
 fn settings_bound_concurrency() {
     let read = |value: Option<&str>| Concurrency::from_settings(|name| value.filter(|_| name == "service-commands-max").map(str::to_owned));
-    assert_eq!(read(None), Concurrency(8));
+    assert_eq!(read(None), Concurrency(64));
     assert_eq!(read(Some("3\n")), Concurrency(3));
-    assert_eq!(read(Some("16")), Concurrency(16));
-    for invalid in ["0", "17", "many", "-1"] {
+    assert_eq!(read(Some("1024")), Concurrency(1024));
+    for invalid in ["0", "1025", "many", "-1"] {
         assert_eq!(read(Some(invalid)), Concurrency::DEFAULT);
     }
 }

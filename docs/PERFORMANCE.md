@@ -1153,25 +1153,35 @@ The service supervisor calls `commands::dispatch` every 2 s. It now launches
 every admitted command on a running service instead of at most one, and holds
 a requested copy until nothing runs. The ignored fixture
 `services::commands::tests::dispatch_profile` measures one pass with nothing to
-launch: 8 or 128 running services, 16 retained executions each, 0, 1 or 8 of
-them running. Before is `0d07ff9` with the identical fixture. Release builds on
-one Apple Silicon laptop, alternating before/after binaries, three rounds of
-ten 20,000-pass batches; the table shows the median of the round medians.
+launch: 8 or 128 running services, each with 0, 1, 8 or 64 running commands
+plus 16 retained finished ones. Before is `0d07ff9` with the identical fixture
+(it could not admit more than one, but the pass reads such records). Release
+builds on one Apple Silicon laptop, alternating before/after binaries, three
+rounds of ten 20,000-pass batches; the table shows the median of the round
+medians.
 
 | Case | Before | After |
 | --- | ---: | ---: |
-| 8 services, idle | 205 ns | 206 ns |
-| 8 services, 1 running each | 183 ns | 207 ns |
-| 8 services, 8 running each | 183 ns | 212 ns |
-| 128 services, idle | 3.11 µs | 3.39 µs |
-| 128 services, 1 running each | 2.78 µs | 3.26 µs |
-| 128 services, 8 running each | 2.77 µs | 3.36 µs |
+| 8 services, idle | 200 ns | 212 ns |
+| 8 services, 1 running each | 184 ns | 208 ns |
+| 8 services, 8 running each | 185 ns | 226 ns |
+| 8 services, 64 running each | 183 ns | 562 ns |
+| 128 services, idle | 3.11 µs | 3.31 µs |
+| 128 services, 1 running each | 2.78 µs | 3.29 µs |
+| 128 services, 8 running each | 2.78 µs | 4.42 µs |
+| 128 services, 64 running each | 2.78 µs | 14.7 µs |
 
 The old pass stopped at a service's first running command; the new one reads
-each retained record once to find launchable requests. At most eight services
-run at once, so the realistic cost is about 25 ns more per 2 s pass, far below
-the engine calls of a launch; no CPU profile was taken. A first version scanned
-twice (running, then requested) and was no faster. No state, lock or persisted
-field was added. Reproduce with
+each retained record once (about 6 ns each) to find launchable requests. Records
+are bounded per service by the command ceiling plus 16 finished ones, so the
+pass is linear in commands actually running: 8,192 concurrent commands cost
+15 µs per 2 s pass, against milliseconds for the same pass's engine inventory.
+No CPU profile was taken. Requests always form a suffix of the record list, so
+a reverse scan could make the pass O(1) per service; that invariant was not
+worth relying on at this cost. A first version scanned twice (running, then
+requested) and was no faster. No lock or persisted field was added; launch now
+drops the command text from state, so a running record is at most about 18 KB
+(2,000-character label plus 16,000 bytes of output), measured by
+`persisted_command_records_stay_bounded`. Reproduce with
 `cargo test --release --locked --bin control services::commands::tests::dispatch_profile -- --ignored --nocapture`
 (`CONTROL_PROFILE_ROUNDS` sets passes per batch).

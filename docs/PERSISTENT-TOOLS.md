@@ -127,7 +127,11 @@ The initial scope is deliberately small:
   The engine's available disk and any daemon-wide limits still apply.
   New service storage records require this version of Control; older
   binaries cannot read those records when rolling back node state.
-- Eight reserved service slots per node. Omit `shape` to keep the image default:
+- The node service budget below, not a fixed count, bounds how many services
+  run (16 default-shape services with the default budget). A ceiling of 128
+  live service records keeps state and engine inventory bounded. Services are
+  not tied to agents or bots: many agents can share one service, whose commands
+  run concurrently, or spread across several. Omit `shape` to keep the image default:
   one CPU, 512 MiB RAM and 64 processes (Full: 2 GiB and 128 processes).
   Optional compute presets are independent of Lite/Full image capabilities:
 
@@ -269,12 +273,19 @@ output.
 Commands survive model turns and have a 1–1800 second timeout (default 120), capped
 by the service lease. Poll `control_service_exec_status` until complete.
 Agents sharing a service run commands concurrently, each with its own
-`execution_id`, request identity, timeout, output and outcome. The node setting
-`service-commands-max` (default 8, 1–16) bounds active commands per service; at
-the limit a new command is refused before submission with the active
-`execution_id`s, their owning chats and commands, rather than queued. The
-service's process limit still bounds their combined load. Up to 16 finished
-full outputs are retained beside the active commands to bound memory.
+`execution_id`, request identity, timeout, output and outcome. The service's
+resources are the bound: every command is at least one process under its
+`pids_limit` (which grows with RAM) and shares its memory limit, so a service
+admits at most `pids_limit` active commands; use a larger shape for more. The
+node setting `service-commands-max` (default 64, 1–1024) is only a safety
+ceiling on Control's side: each running command holds a supervisor thread and
+an engine client, and its persisted record is at most about 18 KB (a 2,000
+character label plus 16,000 bytes of output; the command text is dropped from
+state at launch). At the limit a new command is refused before submission with
+the active `execution_id`s, their owning chats and commands, rather than
+queued. Up to 16 finished outputs (about 18 KB each at most) are retained beside
+the active commands, so a service's command records stay below
+`(ceiling + 16) x 18 KB` (about 1.4 MB by default) however many commands ran.
 Evicted output leaves a lightweight retry receipt while its attempt can still
 submit tools (at most 1,024 per service). Status reports `output_evicted=true`
 when only that receipt remains. Retries return the recorded outcome rather than

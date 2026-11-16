@@ -29,7 +29,8 @@ fn state(services: usize, running: usize) -> State {
     for s in 0..services {
         let mut service = template.clone();
         service.resource.id = format!("svc-{s:032x}").try_into().unwrap();
-        service.executions = (0..MAX_EXECUTIONS)
+        // `running` active records plus a full retention of finished ones.
+        service.executions = (0..running + MAX_EXECUTIONS)
             .map(|n| execution(s, n, if n < running { Status::Running } else { Status::Completed }))
             .collect();
         state.services.push(service);
@@ -42,7 +43,7 @@ fn state(services: usize, running: usize) -> State {
 fn dispatch_profile() {
     let rounds = std::env::var("CONTROL_PROFILE_ROUNDS").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(2000).clamp(1, 1_000_000);
     for services in [8, 128] {
-        for running in [0, 1, 8] {
+        for running in [0, 1, 8, 64] {
             let shared = Arc::new(Mutex::new(state(services, running)));
             let mut threads = Vec::new();
             let mut samples = Vec::new();
@@ -59,7 +60,7 @@ fn dispatch_profile() {
             samples.sort_unstable();
             println!(
                 "{}",
-                json!({"workload":"services_dispatch","services":services,"executions_per_service":MAX_EXECUTIONS,"running_per_service":running,"rounds_per_batch":rounds,"median_ns":samples[5],"min_ns":samples[0],"max_ns":samples[9]})
+                json!({"workload":"services_dispatch","services":services,"executions_per_service":running + MAX_EXECUTIONS,"running_per_service":running,"rounds_per_batch":rounds,"median_ns":samples[5],"min_ns":samples[0],"max_ns":samples[9]})
             );
         }
     }

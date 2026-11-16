@@ -14,18 +14,26 @@ use std::{
 const MAX_EXECUTIONS: usize = 16;
 const MAX_RECEIPTS: usize = 1024;
 
-/// How many commands one service runs at once. Node setting
-/// `service-commands-max` (1–16); invalid or absent values keep the default.
-/// The service's process (pids) limit still bounds their combined load.
+/// Safety ceiling on commands one service runs at once. The service's own
+/// resources are the real bound: every command is at least one process in its
+/// pids cgroup (which scales with RAM) and shares its memory cgroup, so a
+/// service never admits more commands than its process limit. The ceiling only
+/// bounds Control's side: per running command one supervisor thread, one engine
+/// client and up to ~42 KB of persisted record. Node setting
+/// `service-commands-max` (1–1024); invalid or absent values keep the default.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Concurrency(pub usize);
 impl Concurrency {
-    pub(super) const DEFAULT: Self = Self(8);
+    pub(super) const DEFAULT: Self = Self(64);
     pub(super) fn from_settings(setting: impl Fn(&str) -> Option<String>) -> Self {
         setting("service-commands-max")
             .and_then(|value| value.trim().parse::<usize>().ok())
-            .filter(|value| (1..=16).contains(value))
+            .filter(|value| (1..=1024).contains(value))
             .map_or(Self::DEFAULT, Self)
+    }
+    /// The bound for one service: the ceiling or its process limit, if lower.
+    pub(super) fn for_service(self, service: &Service) -> usize {
+        self.0.min(usize::try_from(service.pids_limit()).unwrap_or(usize::MAX))
     }
 }
 #[cfg(not(test))]
@@ -237,7 +245,7 @@ pub(crate) fn enqueue_test(
 }
 pub(super) fn definitions() -> Vec<Value> {
     vec![
-        json!({"name":"control_service_exec","description":"Run a command asynchronously inside an exact chat-owned running service, using its private files and approved loopback relays. Use shell commands/heredocs to create small task files, configure clients or install dependencies; bring files or trees from your task workspace with control_service_copy instead. No host paths, mounts or engine options. Returns an execution_id; inspect control_service_exec_status. Commands from every agent sharing the service run concurrently, each with its own execution_id, output and timeout, up to a node limit (default 8); at the limit, or while a control_service_copy holds the service, the request is refused with the active execution_ids and nothing is submitted. Commands are bounded by timeout_seconds; they survive model turns only until then. Use control_watch_start for long-running work: restart=transient runs finite work such as large downloads once; restart=permanent restarts persistent clients, servers or daemons after exit. Both survive model turns without a task deadline. Use exec for bounded commands: a timed-out or interrupted command is stopped inside the service with every process it started, detached ones included. The service keeps running; it is stopped only if that cannot be verified. Background programs must redirect their output to private files; the service foreground process must remain alive. Uncertain commands are never replayed.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"command":{"type":"string","minLength":1,"maxLength":16000},"timeout_seconds":{"type":"integer","minimum":1,"maximum":1800,"default":120}},"required":["service_id","command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":true}}),
+        json!({"name":"control_service_exec","description":"Run a command asynchronously inside an exact chat-owned running service, using its private files and approved loopback relays. Use shell commands/heredocs to create small task files, configure clients or install dependencies; bring files or trees from your task workspace with control_service_copy instead. No host paths, mounts or engine options. Returns an execution_id; inspect control_service_exec_status. Commands from every agent sharing the service run concurrently, each with its own execution_id, output and timeout, up to the service process limit (a larger shape allows more), capped by a node ceiling (default 64); at the limit, or while a control_service_copy holds the service, the request is refused with the active execution_ids and nothing is submitted. Commands are bounded by timeout_seconds; they survive model turns only until then. Use control_watch_start for long-running work: restart=transient runs finite work such as large downloads once; restart=permanent restarts persistent clients, servers or daemons after exit. Both survive model turns without a task deadline. Use exec for bounded commands: a timed-out or interrupted command is stopped inside the service with every process it started, detached ones included. The service keeps running; it is stopped only if that cannot be verified. Background programs must redirect their output to private files; the service foreground process must remain alive. Uncertain commands are never replayed.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"command":{"type":"string","minLength":1,"maxLength":16000},"timeout_seconds":{"type":"integer","minimum":1,"maximum":1800,"default":120}},"required":["service_id","command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":true}}),
         json!({"name":"control_service_exec_status","description":"Read a chat-owned service command's bounded live output, exit code and durable outcome. Use a fresh execution_id only for a deliberate new command; retries with the same request identity never replay effects.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"execution_id":{"type":"string"}},"required":["service_id","execution_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
     ]
 }
@@ -391,11 +399,17 @@ pub(super) fn admit_work(
             copy.holder(state)
         )));
     }
-    let limit = concurrency().0;
+    let ceiling = concurrency();
+    let limit = ceiling.for_service(service);
     if work.copy.is_none() && active.len() >= limit {
         let holders = active.iter().map(|e| e.holder(state)).collect::<Vec<_>>().join("; ");
+        let bound = if limit < ceiling.0 {
+            format!("the service's process limit of {}; replace it with a larger shape for more", service.pids_limit())
+        } else {
+            format!("node setting service-commands-max={limit}")
+        };
         return Err(fail(format!(
-            "Service {service_id} is running {} of {limit} concurrent commands (node setting service-commands-max); nothing was submitted. Active: {holders}. Poll control_service_exec_status until one finishes, then retry; run long-lived programs as watches (control_watch_start).",
+            "Service {service_id} is running {} of {limit} concurrent commands ({bound}); nothing was submitted. Active: {holders}. Poll control_service_exec_status until one finishes, then retry; run long-lived programs as watches (control_watch_start), or use another service.",
             active.len()
         )));
     }
@@ -974,6 +988,9 @@ pub(super) fn dispatch(
             |e| {
                 e.status = Status::Running;
                 e.diagnostic.clear();
+                // The launched snapshot carries the text; a restart never
+                // replays a running command, so state keeps only its label.
+                e.command.clear();
             },
             true,
         )?;

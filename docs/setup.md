@@ -103,7 +103,7 @@ These options preserve existing source and model choices.
 | `service-cpu-oversubscription` | Factor applied to `service-cpus` when admitting CPU limits; default 2, 1–8. Containers keep their hard CPU caps. |
 | `service-pids-per-gib` | Service process (pids) limit per GiB of a service's RAM limit, captured at admission and never below the image default (Lite 64, Full 128); default 64, 1–4096. |
 | `service-pids-max` | Ceiling on that per-service process limit; default 1024, 128–65536. |
-| `service-commands-max` | Concurrent `control_service_exec` commands per service; read at each admission; default 8, 1–16. A copy still takes the service exclusively. |
+| `service-commands-max` | Safety ceiling on concurrent `control_service_exec` commands per service; a service also never admits more than its process limit. Read at each admission; default 64, 1–1024. A copy still takes the service exclusively. |
 | `CONTROL_ADDR` | Loopback bind address; default `127.0.0.1:8080`. |
 
 Without explicit directory overrides, `XDG_CONFIG_HOME/control` and

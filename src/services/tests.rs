@@ -138,7 +138,7 @@ impl Engine for Fake {
 #[test]
 fn fenced_missing_services_release_capacity_only_after_persisted_stop_and_observation() {
     let (mut state, run, _, time) = fixture();
-    for slot in 0..MAX_ACTIVE {
+    for slot in 0..default_slots() {
         admit(
             &mut state,
             Request {
@@ -378,7 +378,7 @@ fn admission_is_bounded_deduplicated_and_rolls_back_before_any_effect() {
         )
         .is_err()
     );
-    for n in 1..MAX_ACTIVE {
+    for n in 1..default_slots() {
         admit(
             &mut s,
             Request {
@@ -1208,4 +1208,15 @@ fn live_service_survives_server_restart_and_expires_without_control() {
         log.contains("ready"),
         "Supervisor memory isolation failed or command did not run"
     );
+}
+/// Default Lite services the default node compute budget admits (CPU bound:
+/// 8 CPUs x2 oversubscription at one CPU each). No fixed service count applies.
+fn default_slots() -> usize {
+    let capacity = compute::Capacity::DEFAULT;
+    let each = compute::limits(None, crate::worker_profile::Profile::Lite);
+    usize::try_from((capacity.admitted_cpus() / each.cpus).min(capacity.memory_bytes / each.memory_bytes)).unwrap()
+}
+#[test]
+fn live_services_are_bounded_by_the_compute_budget_not_a_fixed_count() {
+    assert_eq!(default_slots(), 16, "more than the former fixed eight");
 }

@@ -28,7 +28,6 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-const MAX_ACTIVE: usize = 8;
 const MAX_RECORDS: usize = 128;
 const OUTPUT: usize = 16000;
 fn fail(s: impl ToString) -> io::Error {
@@ -389,15 +388,10 @@ fn admit_profile(
         }
         return Ok(existing.summary());
     }
-    if s.services
-        .iter()
-        .filter(|service| service.resource.phase.reserves_capacity())
-        .count()
-        >= MAX_ACTIVE
-    {
-        return Err(fail(
-            "Service capacity reached; stop an owned service before starting more",
-        ));
+    // The node compute budget below bounds live services. The record ceiling
+    // only keeps state and engine inventory bounded; it is not a resource cap.
+    if s.services.iter().filter(|service| service.resource.phase.reserves_capacity()).count() >= MAX_RECORDS {
+        return Err(fail(format!("Service capacity reached: {MAX_RECORDS} live service records per node; stop an owned service before starting more")));
     }
     let (limits, capacity) = (compute::limits(input.shape, profile), compute::capacity());
     compute::admit_within(&s.services, limits, capacity)?;
