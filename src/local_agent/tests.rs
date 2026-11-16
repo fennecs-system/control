@@ -200,16 +200,74 @@ fn context_that_cannot_be_compacted_further_fails_visibly() {
 }
 #[test]
 fn worker_tool_schemas_fit_the_declared_overhead_reserve() {
-    for improve in [false, true] {
-        let mut definitions = crate::tool_registry::worker_definitions(improve);
-        definitions.push(crate::claude::definition());
-        let tools = functions(&definitions);
-        let estimate = tokens(size(&tools));
-        assert!(estimate + 1024 < OVERHEAD_TOKENS, "tool schemas need {estimate} tokens; raise OVERHEAD_TOKENS");
-        // Names and parameter schemas are passed through unchanged.
-        for (tool, definition) in tools.iter().zip(&definitions) {
-            assert_eq!(tool["function"]["name"], definition["name"]);
-            assert_eq!(tool["function"]["parameters"], definition["inputSchema"]);
+    use crate::worker_tools::deferred::{listed, offered, Facts};
+    use control_context::Audience;
+    for role in Audience::ALL {
+        for improve in [false, true] {
+            let facts = Facts { role, improve, managed: true, judge: role == Audience::Advisor, advisor: role == Audience::Advisor,
+                shell: true, local: true, rooms: true };
+            let definitions = listed(&facts);
+            let tools = functions(&definitions);
+            let estimate = tokens(size(&tools));
+            let all = tokens(size(&functions(&offered(&facts))));
+            println!("{role:?} improve={improve}: core {estimate} tokens, every callable tool {all} tokens");
+            // The reserve covers the role core, schemas loaded during the turn and one exchange.
+            assert!(estimate <= CORE_TOKENS, "core schemas need {estimate} tokens; raise CORE_TOKENS");
+            // Names and parameter schemas are passed through unchanged.
+            for (tool, definition) in tools.iter().zip(&definitions) {
+                assert_eq!(tool["function"]["name"], definition["name"]);
+                assert_eq!(tool["function"]["parameters"], definition["inputSchema"]);
+            }
         }
     }
+}
+/// Deferred tools load as native functions for the rest of the turn: through
+/// the search the model may call, or on first use of a name from the index.
+#[test]
+fn deferred_tools_load_natively_on_search_or_first_use() {
+    struct Deferred(Mock);
+    impl Host for Deferred {
+        fn tools(&mut self) -> io::Result<Vec<Value>> {
+            let mut tools = self.0.tools()?;
+            tools.push(json!({"name":SEARCH,"description":"Search","inputSchema":{"type":"object"}}));
+            Ok(tools)
+        }
+        fn call(&mut self, name: &str, arguments: &Value, nonce: &str) -> Value {
+            if name != SEARCH {
+                return self.0.call(name, arguments, nonce);
+            }
+            self.0.calls.push((name.into(), arguments.clone(), nonce.into()));
+            let known = ["control_watch_stop", "control_port_status"];
+            let tools = arguments["names"].as_array().unwrap().iter().filter_map(Value::as_str).filter(|n| known.contains(n))
+                .map(|n| json!({"name":n,"description":format!("{n} schema"),"inputSchema":{"type":"object","properties":{"id":{"type":"string"}}}}))
+                .collect::<Vec<_>>();
+            crate::toolbox::result(Ok(json!({"tools":tools})))
+        }
+        fn poll(&mut self) -> Poll { self.0.poll() }
+        fn model(&mut self, body: &Value) -> io::Result<Value> { self.0.model(body) }
+        fn summarize(&mut self, evidence: &str) -> io::Result<String> { self.0.summarize(evidence) }
+        fn record(&mut self, kind: &str, id: &str, text: &str, output: &str, status: &str) { self.0.record(kind, id, text, output, status) }
+    }
+    let mut host = Deferred(mock(vec![
+        reply(None, call("control_watch_stop", r#"{"id":"w1"}"#), "tool_calls"),
+        reply(None, call(SEARCH, r#"{"names":["control_port_status"]}"#), "tool_calls"),
+        reply(None, call("control_nope", "{}"), "tool_calls"),
+        reply(Some("Stopped."), json!(null), "stop"),
+    ]));
+    let outcome = run(&mut host, "qwen-local", &limits(), 20000, "Stop the watch", &Policy::default()).unwrap();
+    assert_eq!(outcome.text, "Stopped.");
+    let calls = host.0.calls.iter().map(|(n, a, nonce)| format!("{n} {a} {nonce}")).collect::<Vec<_>>();
+    assert_eq!(calls, [
+        r#"control_tool_search {"names":["control_watch_stop"]} 1-0-1"#,
+        r#"control_watch_stop {"id":"w1"} 1-0"#,
+        r#"control_tool_search {"names":["control_port_status"]} 2-0"#,
+        r#"control_tool_search {"names":["control_nope"]} 3-0-1"#,
+    ], "an unknown name loads nothing and never runs");
+    let offered = |step: usize| host.0.requests[step]["tools"].as_array().unwrap().iter()
+        .map(|t| t["function"]["name"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+    assert!(!offered(0).contains(&"control_watch_stop".to_owned()));
+    assert!(offered(1).contains(&"control_watch_stop".to_owned()) && !offered(1).contains(&"control_port_status".to_owned()));
+    assert!(offered(2).contains(&"control_port_status".to_owned()));
+    let last = serde_json::to_string(&host.0.requests[3]["messages"]).unwrap();
+    assert!(last.contains("unknown tool"), "{last}");
 }

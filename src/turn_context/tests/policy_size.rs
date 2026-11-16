@@ -83,20 +83,50 @@ fn sizes(team: &Team) -> [(&'static str, usize, usize); 3] {
     [("lead", lead_policy, lead_total), ("member", member_policy, member_total), ("advisor", advisor_policy, advisor_total)]
 }
 
+/// Tool schemas a session lists before (every callable tool) and after
+/// deferred loading (role core + loaders), for a backend with or without
+/// Control's workspace shell; and the prompt's deferred index.
+fn tool_bytes(team: &Team, id: &str, shell: bool) -> (usize, usize, usize) {
+    use crate::worker_tools::deferred;
+    let run = team.state.runtime.runs.iter().find(|r| r.id == id).unwrap();
+    let facts = deferred::Facts { shell, ..deferred::Facts::of(&team.state, run, crate::turn_context::managed(&team.state, run)) };
+    let size = |tools: Vec<serde_json::Value>| serde_json::to_string(&tools).unwrap().len();
+    (size(deferred::offered(&facts)), size(deferred::listed(&facts)), deferred::index(&facts).len())
+}
+
 #[test]
 fn wake_policy_is_a_short_core_with_guidance_on_demand() {
     let team = team();
     let sizes = sizes(&team);
-    let tools = crate::tool_registry::worker_definitions(false);
-    println!("{}", serde_json::json!({"roles":sizes.iter().map(|(role, policy, total)| serde_json::json!({"role":role,"policy_bytes":policy,"wake_bytes":total})).collect::<Vec<_>>(),
-        "worker_tools":tools.len(),"worker_tool_schema_bytes":serde_json::to_string(&tools).unwrap().len()}));
+    let ids = [&team.lead, &team.member, &team.advisor];
+    let report = sizes.iter().zip(ids).map(|((role, policy, total), id)| {
+        let (before, after, index) = tool_bytes(&team, id, false);
+        let (shell_before, shell_after, _) = tool_bytes(&team, id, true);
+        serde_json::json!({"role":role,"policy_bytes":policy,"index_bytes":index,"wake_bytes":total,
+            "tool_bytes_before":before,"tool_bytes_after":after,
+            "tool_tokens_before":crate::local_agent::tokens(before),"tool_tokens_after":crate::local_agent::tokens(after),
+            "shell_tool_bytes_before":shell_before,"shell_tool_bytes_after":shell_after,
+            "wake_plus_tools_before":total - index + before,"wake_plus_tools_after":total + after})
+    }).collect::<Vec<_>>();
+    println!("{}", serde_json::json!({"roles":report}));
     if std::env::var_os("CONTROL_PRINT_POLICY").is_some() {
         println!("{}", project(&team.state, &team.member).unwrap().text);
     }
-    // Before guidance on demand every role carried about 16-17 KB of policy.
+    // Before guidance on demand every role carried about 16-17 KB of policy;
+    // the deferred tool index is bounded separately.
+    let index = |id: &str| tool_bytes(&team, id, false).2;
     let [(_, lead, _), (_, member, _), (_, advisor, _)] = sizes;
+    let (lead, member) = (lead - index(&team.lead), member - index(&team.member));
     assert!(member <= 3_072 && lead <= 3_328, "member {member}, lead {lead}");
     assert!(advisor <= 5_632, "advisor {advisor}: its own procedure is inline");
+    for id in ids {
+        assert!(index(id) <= 2_048, "index {}", index(id));
+        for shell in [false, true] {
+            let (before, after, _) = tool_bytes(&team, id, shell);
+            // Every role's always-loaded schemas stay below 10 KB.
+            assert!(after < 10_000 && after * 3 < before, "{after} of {before}");
+        }
+    }
     let text = |id: &str| project(&team.state, id).unwrap().text;
     let (lead, member) = (text(&team.lead), text(&team.member));
     let advisor = crate::chat::prompt(&team.state, &team.advisor).unwrap();
@@ -106,5 +136,9 @@ fn wake_policy_is_a_short_core_with_guidance_on_demand() {
     assert!(advisor.contains(procedure));
     for text in [&lead, &member, &advisor] {
         assert!(text.contains("control_guidance") && !text.contains("Whoever steers a team posts the milestone backlog"));
+        assert!(text.contains("More tools (names omit control_;"));
     }
+    // Members find room_plan in the index; the lead has it loaded.
+    assert!(member.contains("room_plan (") && !lead.contains("room_plan ("));
 }
+

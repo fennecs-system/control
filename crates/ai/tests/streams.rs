@@ -71,6 +71,25 @@ fn claude_tool_calls_become_bounded_activity() {
     assert_eq!(activity[6].output.chars().count(), 1000);
 }
 
+/// A deferred tool called through `control_call` is recorded under its own name.
+#[test]
+fn control_call_activity_names_the_called_tool() {
+    let records = [
+        json!({"type":"assistant","message":{"id":"claude-1","content":[{"type":"tool_use","id":"toolu_1","name":"mcp__control__control_call","input":{"tool":"control_watch_stop","arguments":{"watch_id":"w"}}}]}}),
+        json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"stopped"}]}}),
+    ].iter().map(ToString::to_string).collect::<Vec<_>>().join("\n");
+    let mut activity = Vec::new();
+    json_lines(format!("{INIT}{records}\n{FINAL}").as_bytes(), Claude::new(ALLOWED), |event| {
+        if let Event::Activity(a) = event { activity.push((a.text, a.status)) }
+    })
+    .unwrap();
+    assert_eq!(activity, [("control_watch_stop".to_owned(), "in_progress".to_owned()), ("control_watch_stop".to_owned(), "completed".to_owned())]);
+    let codex = json!({"type":"item.completed","item":{"type":"mcp_tool_call","id":"item-1","tool":"control_call","arguments":{"tool":"control_watch_stop"},"status":"completed"}});
+    let plain = json!({"type":"item.completed","item":{"type":"mcp_tool_call","id":"item-2","tool":"control_call","status":"completed"}});
+    assert_eq!(control_ai::codex::activity(&codex).unwrap().text, "control_watch_stop");
+    assert_eq!(control_ai::codex::activity(&plain).unwrap().text, "control_call");
+}
+
 #[test]
 fn adapters_share_events_and_usage_without_application_state() {
     let output = json_lines(

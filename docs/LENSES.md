@@ -472,18 +472,45 @@ Host operations enforce actual execution authority independently. Captured
 documents are attributed evidence/context, not instructions or automatically
 accepted facts. Inspect the captured context when checking what a worker received.
 
-**Tool exposure by role (scoped, not implemented).** Prompts are now role
-scoped; tool lists are not. Every managed worker session still receives the
-full worker tool list: 47 core schemas, about 46.6 KB of JSON, before room
-tools, which is more than the whole on-demand prompt. The run -128 review found
-members used about 15 of 66 `control_*` tools. Native CLIs only call tools
-listed at session start, so hiding a tool means a call-through: a small default
-set per role (turn context and handoff, workspace and service commands, room
-read/post/claim, agent message, watches, guidance, recovery) plus a catalogue
-search returning schemas and one dispatcher that calls a listed-elsewhere tool
-by name, under the same host checks. That changes the broker, both adapters and
-their tests, so it is a separate change; the wake-size fixture in
-[PERFORMANCE.md](PERFORMANCE.md) reports the schema bytes to measure it against.
+**Tool exposure by role (deferred loading).** Tool lists are role scoped the
+same way prompts are. A worker session's `tools/list` holds only its role's core
+schemas; every other tool it may call is named in the prompt's deferred index,
+one terse line per tool family (name and a phrase of at most eight words, e.g.
+`- Watches: watch_status (inspect watches); watch_stop (stop one)`).
+
+- Core sets are catalogue metadata: each protocol name in `control_context::TOOLS`
+  carries its core roles, its index phrase, its judge permission and an optional
+  tight description (`Mcp { core, phrase, judge, brief }`), so a new tool is
+  registered once. The dotted↔underscore name maps and both judge allow-lists
+  in the worker broker derive from the same entries.
+- Members and leads load turn context and handoff, service start/status/exec/
+  exec status/copy, watch start and events, room read/post/claim, agent message,
+  spawn, bot request and status, guidance, and `control_workspace_run` where the
+  backend has Control's shell. Leads add `control_room_plan` and
+  `control_design_ask`. A judge loads guidance, room read, workspace start and
+  status, child results and the shell; an approved advisor adds agent message.
+- Always-loaded schemas use the catalogue's tight description, drop nested
+  property descriptions, string bounds and annotations, and reduce a large
+  optional property (the handoff payload, watch salience) to its type with a
+  pointer to the search. The host validates every argument either way. Every role
+  lists less than 10 KB of schemas.
+- `control_tool_search {names | query}` returns full schemas (at most 16 named or
+  5 ranked, 32 KB) of tools this session may call; without arguments it lists the
+  deferred tools. It is a read for every role, including after a staged handoff.
+- Codex and Claude call a deferred tool with `control_call {tool, arguments}`.
+  The broker rewrites it into the direct call before any check, so authority,
+  judge policy, the staged-handoff fence, design and delegation pauses, nudges,
+  callable fixes and idempotency nonces are identical, and activity records the
+  called tool's name. An unknown or operator-only name is refused with a search
+  to run instead. Local turns load schemas natively
+  ([LOCAL-MODELS.md](LOCAL-MODELS.md)).
+- MCP `notifications/tools/list_changed` is not used: the room-mcp bridge only
+  answers requests and cannot deliver server-initiated messages, and Codex's
+  `enabled_tools` and Claude's `--allowedTools` are fixed at launch (both list
+  every catalogued worker name, so deferred tools stay callable).
+
+Hiding a schema grants or revokes nothing: a deferred tool called directly by
+name is dispatched exactly as before.
 
 New built-ins are added to older libraries at startup when library capacity
 permits, without replacing a local definition of the same ID or selecting a lens

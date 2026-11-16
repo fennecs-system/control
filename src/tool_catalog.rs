@@ -47,7 +47,7 @@ pub fn render(state: &State, query: &str) -> String {
             entry.title,
             entry.description,
             entry.aliases,
-            entry.mcp_names.join(" ")
+            entry.mcp_names.iter().map(|m| m.name).collect::<Vec<_>>().join(" ")
         )
         .to_lowercase();
         if !words.iter().all(|word| haystack.contains(word))

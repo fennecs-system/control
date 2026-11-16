@@ -448,8 +448,9 @@ fn project_with(state: &State, id: &str, compactor: &dyn crate::conversation::Co
         }
     };
     let policy = format!(
-        "{}\n{}\n",
+        "{}{}\n{}\n",
         crate::chat::prompt_prefix(run, session),
+        crate::worker_tools::prompt_index(state, run),
         control_context::agent_policy::ACTIVE_SESSION_GUIDANCE
     );
     let mut working = session

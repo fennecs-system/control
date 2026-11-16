@@ -161,14 +161,58 @@ branch's policy for its role and keeping everything else:
 The remainder is task-specific: the original assignment, working notes,
 recovery evidence and history. The adapter framing before the policy (about
 3 KB: environment, room protocol, language and reporting rules) is unchanged
-and is the next candidate. Tool schemas are sent separately at session start:
-47 core worker tools, 46,645 bytes of JSON before room tools, so per-role tool
-exposure (scoped in [LENSES.md](LENSES.md#current-boundaries)) is the larger
-remaining saving. Rendering adds one pass over at most 128 captured lenses per
+and is the next candidate. Tool schemas are sent separately at session start;
+deferred tool loading (below) cut them to each role's core set. Rendering adds one pass over at most 128 captured lenses per
 prompt; `control_guidance` is a read of the captured context under the state
 lock already taken for tool calls. Reproduce with
 `cargo test --locked --bin control policy_size -- --nocapture`
 (`CONTROL_PRINT_POLICY=1` prints the member's wake text).
+
+## Deferred tool loading: schema bytes per role (2026-11-16)
+
+Every worker session listed every tool it could call: for a lead or member 57
+schemas, 62 KB of JSON, more than the whole wake prompt. Now `tools/list` holds
+the role's core set and the prompt carries a terse index of the rest
+([LENSES.md](LENSES.md#current-boundaries)). The same run -128-shaped fixture as
+above (`turn_context::tests::policy_size`, Codex backend; "shell" adds
+`control_workspace_run` for Claude and local turns) measures UTF-8 bytes. Tokens
+are the local loop's conservative estimate (3 bytes per token). "Before" is every
+tool the session may call with unchanged schemas, which was the previous listing
+for leads and members (the advisor's was a slightly smaller judge list).
+
+| Role | Schemas before | Schemas after | Shell before / after | Tokens before / after | Index | Wake + schemas before / after |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Lead | 62,348 | 9,604 | 62,963 / 9,930 | 20,783 / 3,202 | 1,718 | 74,857 / 23,831 |
+| Member | 62,348 | 8,918 | 62,963 / 9,244 | 20,783 / 2,973 | 1,815 | 74,758 / 23,143 |
+| Advisor | 13,933 | 3,664 | 14,394 / 4,010 | 4,645 / 1,222 | 680 | 21,588 / 11,999 |
+
+The wake prompt grows by the index (12.5 → 14.2 KB for a lead); the session's
+whole input shrinks by about 51 KB. The fixture fails if any role lists 10,000
+bytes or more, keeps more than a third of its callable bytes, or carries an index
+over 2,048 bytes. Most of the cut comes from tight catalogue descriptions and
+compacted schemas for the always-loaded tools (members' core was 33 KB with the
+original text), not from deferring tools: spawn, bot and service tools stay core.
+
+Local turns: `OVERHEAD_TOKENS` falls from 15,360 to 7,168 (core schemas at most
+4,096, 2,048 for schemas loaded during the turn, 1,024 for the first exchange),
+leaving 8,192 more tokens of a 32k context for turn input. As function tools the
+core is 3,409 tokens for a lead, 3,161 for a member and 1,240 for an advisor,
+against 13,876 for every callable tool (14,775 in improve mode)
+(`local_agent::tests::worker_tool_schemas_fit_the_declared_overhead_reserve`).
+
+Lookups: `deferred::tests::a_member_turn_needs_few_lookups` scripts a run
+-128-style member turn of 16 tool calls (turn context, room read/claim/post,
+service status/start/copy/exec/exec status, watch start/events/status, agent
+message, guidance, score probe, handoff). Fourteen are core; two
+(`control_watch_status`, `control_score_probe`) are deferred: one
+`control_tool_search` by names covers both, or two lookups one at a time. A
+lookup is one extra tool round trip for Codex and Claude; a local turn loads an
+indexed tool on first use without a model step. Search and the index are pure
+reads of the catalogue and the run's facts under the lock tool calls already take;
+`control_call` adds one JSON rewrite before the unchanged dispatch.
+
+Reproduce with `cargo test --locked --bin control policy_size -- --nocapture`
+and `cargo test --locked --bin control deferred -- --nocapture`.
 
 ## Chat callsigns (2026-11-16)
 

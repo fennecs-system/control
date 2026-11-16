@@ -181,7 +181,10 @@ impl Claude<'_> {
             let (id, name, output, status) = match (user, block["type"].as_str()) {
                 (false, Some("tool_use")) => {
                     let (Some(id), Some(name)) = (block["id"].as_str(), block["name"].as_str()) else { continue };
-                    let name = clean(std::iter::once(name.strip_prefix("mcp__control__").unwrap_or(name)), 2000);
+                    let name = name.strip_prefix("mcp__control__").unwrap_or(name);
+                    // A deferred tool's activity is recorded under the tool it called.
+                    let name = if name == "control_call" { block["input"]["tool"].as_str().unwrap_or(name) } else { name };
+                    let name = clean(std::iter::once(name), 2000);
                     if self.tools.len() >= 64 { self.tools.remove(0); }
                     self.tools.push((id.to_owned(), name.clone()));
                     (id, name, String::new(), "in_progress")

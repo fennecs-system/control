@@ -10,7 +10,11 @@ pub fn activity(value: &serde_json::Value) -> Option<Activity> {
     let kind = item["type"].as_str()?;
     let text = match kind {
         "command_execution" => item["command"].as_str()?,
-        "mcp_tool_call" => item["tool"].as_str()?,
+        // A deferred tool's activity is recorded under the tool it called.
+        "mcp_tool_call" => match item["tool"].as_str()? {
+            "control_call" => item["arguments"]["tool"].as_str().unwrap_or("control_call"),
+            tool => tool,
+        },
         "file_change" => "File changes",
         "agent_message" => item["text"].as_str()?,
         _ => return None,

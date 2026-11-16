@@ -23,10 +23,15 @@ pub(crate) type Failure = (&'static str, String);
 pub(crate) fn tokens(bytes: usize) -> u32 {
     u32::try_from(bytes.div_ceil(3)).unwrap_or(u32::MAX)
 }
-/// Context reserved outside the planned turn input: tool schemas and the room
-/// the loop needs for at least one tool exchange before it compacts.
-pub(crate) const OVERHEAD_TOKENS: u32 = 15360;
-const SYSTEM: &str = "You are an agent running inside Control on a local model. Act only through the provided tools; there is no other way to read files, run commands or reach rooms. Use control_workspace_run for short shell commands in /workspace. Call tools with arguments that are a JSON object matching the schema. When the request is complete or you are waiting on someone, call control_turn_handoff if it is offered; otherwise reply with a brief plain-text final report and no tool call.";
+/// Context reserved outside the planned turn input: the role's always-loaded
+/// tool schemas (under 10 KB; the rest load on demand), schemas loaded during
+/// the turn, and the room the loop needs for one tool exchange before it compacts.
+pub(crate) const OVERHEAD_TOKENS: u32 = CORE_TOKENS + LOADED_TOKENS + 1024;
+/// Always-loaded schemas: under 10 KB for every role, about 3.4 k tokens.
+const CORE_TOKENS: u32 = 4096;
+/// Schemas a turn loads on demand; the loop still re-checks the actual size every step.
+const LOADED_TOKENS: u32 = 2048;
+const SYSTEM: &str = "You are an agent running inside Control on a local model. Act only through the provided tools; there is no other way to read files, run commands or reach rooms. Use control_workspace_run for short shell commands in /workspace. Call tools with arguments that are a JSON object matching the schema. Tools in the prompt's \"More tools\" index are callable by their full control_ name; Control loads the schema on first use. When the request is complete or you are waiting on someone, call control_turn_handoff if it is offered; otherwise reply with a brief plain-text final report and no tool call.";
 const RESULT_BYTES: usize = 12000;
 const CALLS_PER_STEP: usize = 8;
 
@@ -100,6 +105,21 @@ pub(crate) fn functions(definitions: &[Value]) -> Vec<Value> {
         })
         .collect()
 }
+const SEARCH: &str = crate::worker_tools::deferred::SEARCH;
+/// Schemas a successful `control_tool_search` returned become native
+/// function tools for the rest of this turn. Calls still go through the
+/// worker dispatch, which alone decides whether they may run.
+fn load(result: &Value, tools: &mut Vec<Value>, names: &mut BTreeSet<String>) {
+    if result["isError"] == true {
+        return;
+    }
+    let found = result["structuredContent"]["data"]["tools"].as_array().cloned().unwrap_or_default();
+    for tool in functions(&found) {
+        if let Some(name) = tool["function"]["name"].as_str() && names.insert(name.to_owned()) {
+            tools.push(tool);
+        }
+    }
+}
 fn result_text(result: &Value) -> (String, bool) {
     let failed = result["isError"] == true || result.is_null();
     let mut text: String = result["content"]
@@ -137,12 +157,12 @@ pub(crate) fn run(
     let started = Instant::now();
     let failed = |m: String| ("failed", m);
     let definitions = host.tools().map_err(|e| failed(format!("Could not list worker tools: {e}")))?;
-    let tools = functions(&definitions);
-    let names: BTreeSet<String> = tools
+    let mut tools = functions(&definitions);
+    let mut names: BTreeSet<String> = tools
         .iter()
         .filter_map(|t| t["function"]["name"].as_str().map(str::to_owned))
         .collect();
-    let tool_tokens = tokens(size(&tools));
+    let mut tool_tokens = tokens(size(&tools));
     let budget = limits.context_tokens.saturating_sub(limits.output_tokens);
     let mut messages = vec![
         json!({"role":"system","content":SYSTEM}),
@@ -226,6 +246,12 @@ pub(crate) fn run(
                 "arguments":c.arguments.as_ref().map_or_else(|_|"{}".to_owned(),|a|a.to_string())}})).collect::<Vec<_>>()}));
         let mut malformed = None;
         for (index, (id, call)) in calls.iter().enumerate() {
+            // A deferred tool called by name loads its schema first, through
+            // the same search the model could call; nothing else is admitted.
+            if index < CALLS_PER_STEP && !names.contains(&call.name) && call.arguments.is_ok() && names.contains(SEARCH) {
+                let found = host.call(SEARCH, &json!({"names":[call.name]}), &format!("{steps}-{index}-1"));
+                load(&found, &mut tools, &mut names);
+            }
             let content = if index >= CALLS_PER_STEP {
                 malformed = Some(format!("more than {CALLS_PER_STEP} tool calls in one step."));
                 format!("ERROR: not executed; at most {CALLS_PER_STEP} tool calls run per step.")
@@ -242,7 +268,11 @@ pub(crate) fn run(
                         // Digits and dashes: room posts key idempotency on the run and this nonce.
                         let nonce = format!("{steps}-{index}");
                         host.record("mcp_tool_call", &format!("local-{nonce}"), &call.name, "", "in_progress");
-                        let (text, error) = result_text(&host.call(&call.name, arguments, &nonce));
+                        let result = host.call(&call.name, arguments, &nonce);
+                        if call.name == SEARCH {
+                            load(&result, &mut tools, &mut names);
+                        }
+                        let (text, error) = result_text(&result);
                         host.record("mcp_tool_call", &format!("local-{nonce}"), &call.name, &text, if error { "failed" } else { "completed" });
                         text
                     }
@@ -250,6 +280,8 @@ pub(crate) fn run(
             };
             messages.push(json!({"role":"tool","tool_call_id":id,"content":content}));
         }
+        // Loaded schemas stay offered for the rest of the turn and count against its context.
+        tool_tokens = tokens(size(&tools));
         match malformed {
             Some(note) => repair(&mut repairs, &mut messages, note)?,
             None => repairs = 0,

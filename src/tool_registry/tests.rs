@@ -16,7 +16,7 @@ fn schemas_and_transport_policy_share_one_registration() {
         assert!(
             control_context::TOOLS
                 .iter()
-                .any(|t| t.mcp_names.contains(&entry.name())),
+                .any(|t| t.mcp_names.iter().any(|m| m.name == entry.name())),
             "Missing UI registration: {}",
             entry.name()
         );

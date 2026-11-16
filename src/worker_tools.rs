@@ -6,12 +6,24 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+pub(crate) mod deferred;
 pub(crate) mod fixes;
 pub(crate) mod nudges;
 
+/// `control_call` becomes the direct call it names before any policy runs,
+/// so both spellings share one authorization and dispatch path.
+fn direct(envelope: &Value) -> Result<std::borrow::Cow<'_, Value>, Value> {
+    match deferred::unwrap(envelope) {
+        Ok(Some(rewritten)) => Ok(std::borrow::Cow::Owned(rewritten)),
+        Ok(None) => Ok(std::borrow::Cow::Borrowed(envelope)),
+        Err(message) => Err(crate::toolbox::tool_error(&envelope["request"]["id"], &message)),
+    }
+}
 fn rpc_at(
     shared:&Arc<Mutex<State>>,run_id:&str,envelope:&Value,workspace:Option<&Path>,
 )->Value {
+    let envelope = match direct(envelope) { Ok(envelope) => envelope, Err(refused) => return refused };
+    let envelope = envelope.as_ref();
     let mut response=dispatch_at(shared,run_id,envelope,workspace);
     let name=envelope["request"]["params"]["name"].as_str().unwrap_or("");
     // A refused call changes no state, so it neither counts nor carries notes.
@@ -48,6 +60,8 @@ fn dispatch_at(
     envelope: &Value,
     workspace: Option<&Path>,
 ) -> Value {
+    let envelope = match direct(envelope) { Ok(envelope) => envelope, Err(refused) => return refused };
+    let envelope = envelope.as_ref();
     let request = &envelope["request"];
     let Some(id) = request.get("id") else {
         return Value::Null;
@@ -90,57 +104,20 @@ fn dispatch_at(
             return error("Mailbox belongs to an inactive attempt");
         }
     }
-    // Backends without their own sandbox shell get Control's offline workspace tool.
-    let claude = matches!(run.backend, crate::backend::Backend::Claude | crate::backend::Backend::Local);
-    let judge = crate::delegation::is_judge(run);
-    // An approved advisor is a judge whose one extra effect is evidence notes.
-    let advisor = judge && run.chat_id.as_deref().is_some_and(|chat| state.bots.advises(chat));
     // Enabling a bot affects the next admission, not the protocol of an
     // already-running provider session whose input was captured earlier.
     let managed=crate::turn_context::managed(&state,run)
         && run.attempts.last().is_some_and(|attempt|attempt.turn_mailbox.is_some());
+    let facts = deferred::Facts::of(&state, run, managed);
+    // Backends without their own sandbox shell get Control's offline workspace tool.
+    let (claude, judge, advisor) = (facts.shell, facts.judge, facts.advisor);
     let result = match request["method"].as_str().unwrap_or("") {
         "initialize" => {
             json!({"protocolVersion":control_context::tool_policy::MCP_LATEST,"capabilities":{"tools":{}},"serverInfo":{"name":"control-worker","version":"0.1"}})
         }
         "ping" => json!({}),
-        "tools/list" => {
-            let mut tools = crate::tool_registry::worker_definitions(run.action == identity::Action::Improve);
-            if !managed {
-                tools.retain(|tool|!matches!(tool["name"].as_str(),Some("control_turn_context"|"control_turn_handoff")));
-            }
-            if judge {
-                tools.retain(|tool|(advisor && tool["name"]=="control_agent_message") || matches!(tool["name"].as_str(),Some("control.web.search"|"control.rust.run"|"control.rust.bench"|"control.solve"|"control.search.path"|"control_agent_result"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_knowledge_read"|"control_knowledge_search")));
-            }
-            if judge {
-                // Read-only captured guidance; advisors read their own procedure.
-                tools.extend(crate::tool_registry::AttemptTools::definitions(&crate::guidance::Tools));
-            }
-            if claude {
-                tools.push(crate::claude::definition());
-                if judge { let tool=tools.last_mut().unwrap();
-                    tool["description"]=json!("Inspect source and run verification in a credential-free offline container. /workspace is read-only; use /tmp for scratch outputs. Bounded output and 25-second deadline.");
-                    tool["annotations"]["destructiveHint"]=json!(false);
-                }
-            }
-            for tool in &mut tools {
-                tool["name"] = json!(match tool["name"].as_str().unwrap() {
-                    "control.web.search" => "control_web_search",
-                    "control.rust.run" => "control_rust_run",
-                    "control.rust.bench" => "control_rust_bench",
-                    "control.solve" => "control_solve",
-                    "control.model.generate" => "control_model_generate",
-                    "control.search.path" => "control_search_path",
-                    other => other,
-                });
-            }
-            let response = rooms::worker_rpc(&mut state, run_id, envelope);
-            if let Some(room_tools) = response["result"]["tools"].as_array() {
-                tools.extend(room_tools.clone());
-            }
-            if managed {tools.retain(|tool|!matches!(tool["name"].as_str(),Some("control_room_ack"|"control_room_notifications")));}
-            json!({"tools":tools})
-        }
+        // The role's core schemas; the rest are in the prompt's deferred index.
+        "tools/list" => json!({"tools":deferred::listed(&facts)}),
         "tools/call" => {
             if run.attempts.last().and_then(|a|a.turn_mailbox.as_ref()).and_then(|m|m.accepted()).is_some()
                 && !control_context::tool_policy::after_handoff(request["params"]["name"].as_str().unwrap_or("")) {
@@ -153,8 +130,12 @@ fn dispatch_at(
             if request["params"]["name"]=="control_guidance" {
                 return json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(crate::guidance::answer(run,&request["params"]["arguments"]))});
             }
-            if judge && !(advisor && request["params"]["name"]=="control_agent_message") && !matches!(request["params"]["name"].as_str(),Some("control_workspace_run"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_web_search"|"control_rust_run"|"control_rust_bench"|"control_solve"|"control_search_path"|"control_room_list"|"control_room_read"|"control_room_plan"|"control_room_post"|"control_agent_result"|"control_knowledge_read"|"control_knowledge_search"|"control_packages_search"|"control_package_read")) {
-                return error("Judge policy permits read-only source inspection, isolated verification and room collaboration only.");
+            // Schemas of the tools this session may call; a pure read for every role.
+            if request["params"]["name"]==deferred::SEARCH {
+                return json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(deferred::search(&facts,&request["params"]["arguments"]))});
+            }
+            if judge && !control_context::judge_may_call(request["params"]["name"].as_str().unwrap_or(""), advisor) {
+                return error("Judge policy permits read-only source inspection, isolated verification and room collaboration only. Next: call control_tool_search {} to list the tools you may call.");
             }
             let blocking_spawn=request["params"]["name"]=="control_agent_spawn_blocking";
             if crate::delegation::pausing(run) && !blocking_spawn {
@@ -364,15 +345,11 @@ fn dispatch_at(
                 }
                 return json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(result)});
             }
-            let name = match request["params"]["name"].as_str().unwrap_or("") {
-                "control_web_search" => "control.web.search",
-                "control_rust_run" => "control.rust.run",
-                "control_rust_bench" => "control.rust.bench",
-                "control_solve" => "control.solve",
-                "control_model_generate" => crate::model_calls::tool::NAME,
-                "control_search_path" => "control.search.path",
-                other => other,
-            };
+            // Worker spellings of toolbox tools resolve to their registered names.
+            let name = request["params"]["name"].as_str().unwrap_or("");
+            let name = control_context::dotted_name(name)
+                .filter(|dotted| crate::tool_registry::lookup(dotted).is_some_and(|e| e.route == crate::tool_registry::Route::Toolbox))
+                .unwrap_or(name);
             if name == crate::model_calls::tool::NAME {
                 drop(state);
                 // Inference runs on the host, outside the state lock; cancelling the
@@ -393,12 +370,17 @@ fn dispatch_at(
             } else if ["control_room_list", "control_room_read", "control_room_post", "control_room_watch", "control_room_notifications", "control_room_ack", "control_room_claim", "control_room_plan"].contains(&name) {
                 return rooms::checkpoint(&mut state, run_id, envelope, crate::storage::save);
             } else {
-                return error("Tool is not allowed for this worker");
+                return error("Tool is not allowed for this worker. Next: call control_tool_search {} to list the tools this session may call.");
             }
         }
         _ => return crate::toolbox::protocol_error(id, -32601, "Unsupported worker method"),
     };
     json!({"jsonrpc":"2.0","id":id,"result":result})
+}
+/// The prompt's deferred tool index for `run`: the tools its session may
+/// call beyond the listed core, one terse line per family.
+pub(crate) fn prompt_index(state: &State, run: &crate::runtime::Run) -> String {
+    deferred::index(&deferred::Facts::of(state, run, crate::turn_context::managed(state, run)))
 }
 /// The in-process equivalent of one mailbox request, for Control's own tool
 /// loop: identical fencing, policy, nudges and idempotency nonces.
