@@ -326,6 +326,38 @@ advises. Stopping the advisor (`/bot off`) drops its team snapshot; a later
 advisor reports only facts after its own subscription. Nodes without an
 opted-in advisor do no lifecycle work.
 
+## Ganglia
+
+**Ganglia** (`/use ganglia`): reflexes and routines run locally; turns are
+strategy. An octopus's arms act through local ganglia while its brain decides
+where to go. Use it for long-running work on systems that act faster than a
+turn (games, robots, live services, monitoring), not one-off tasks such as
+scraping or ordinary coding, which the autonomy routine rule covers.
+
+The lens is a build procedure: one shared always-on reflex layer first, built
+early and reused by every member; then skills as bounded routines, including
+timed manoeuvres the model parameterises; routines escalate only salient
+changes; turns set goals and re-plan; everything lives in a folder ready to save
+as a [tool package](TOOL-PACKAGES.md). It turns the operator's repeated steering
+in runs -121 and -128, which drove a system one tool call per action, into
+standing procedure, and adds no tool or authority.
+
+**Pitfall: jitter.** In run -128 the shared reflex layer thrashed: a player
+surrounded by hostiles walked a few metres, stopped, swung once and re-planned.
+Every 500 ms tick re-decided on the nearest threat alone, any threat in a wide
+radius cancelled the routine (forcing a fresh path search), each reaction acted
+once, and the mode flipped at a health threshold. Reflexes must commit: hold
+until the trigger stays clear, act continuously, weigh every threat, preempt
+only for imminent ones, and pause rather than cancel routines.
+
+**Pitfall: patching layers.** In the same run a member spent a 45-minute turn
+repeatedly patching movement code entangled with reflex leases instead of
+placing blocks. Keep each layer minimal; a layer that blocks the task is
+bypassed or removed, not patched again and again.
+
+Opt-in: `swarm` does not include it, so the scorecard can compare runs with and
+without it.
+
 ## Tool packages
 
 A lens can also name operator-admitted [tool packages](TOOL-PACKAGES.md), such as
