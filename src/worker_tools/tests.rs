@@ -990,3 +990,48 @@ fn json_rpc_batches_are_answered_per_element_with_distinct_nonces() {
     assert_eq!(malformed[1]["error"]["code"], -32600);
     assert_eq!(malformed[2]["id"], 8);
 }
+
+/// Codex 0.164 shows its model only `structuredContent` when a result has
+/// one, and Claude Code 2.1 does the same unless a flag opts into content, so
+/// host notes must be in both places.
+#[test]
+fn host_notes_reach_text_and_structured_clients() {
+    let mut result = json!({"content":[{"type":"text","text":"{\"posted\":true}"}],"structuredContent":{"data":{"posted":true}},"isError":false});
+    attach_notes(&mut result, &["first".to_owned(), "second".to_owned()]);
+    assert_eq!(result, json!({
+        "content":[{"type":"text","text":"{\"posted\":true}"},{"type":"text","text":"first"},{"type":"text","text":"second"}],
+        "structuredContent":{"data":{"posted":true},"notes":["first","second"]},
+        "isError":false,
+    }));
+    attach_notes(&mut result, &["third".to_owned()]);
+    assert_eq!(result["structuredContent"]["notes"], json!(["first", "second", "third"]));
+
+    let mut unchanged = result.clone();
+    attach_notes(&mut unchanged, &[]);
+    assert_eq!(unchanged, result, "no notes adds nothing");
+
+    let mut refusal = json!({"content":[{"type":"text","text":"Run is not active"}],"isError":true});
+    attach_notes(&mut refusal, &["note".to_owned()]);
+    assert_eq!(
+        refusal,
+        json!({"content":[{"type":"text","text":"Run is not active"},{"type":"text","text":"note"}],"isError":true}),
+        "text-only results stay text-only"
+    );
+}
+
+#[test]
+fn image_results_leave_without_structured_content() {
+    let image = json!({"type":"image","mimeType":"image/png","data":"AAAA"});
+    let mut capture = json!({"content":[{"type":"text","text":"{\"bytes\":4}"},image],"structuredContent":{"bytes":4,"width":390},"isError":false});
+    media_visible(&mut capture);
+    assert_eq!(capture, json!({"content":[{"type":"text","text":"{\"bytes\":4}"},image],"isError":false}));
+
+    let mut untexted = json!({"content":[image],"structuredContent":{"bytes":4},"isError":false});
+    media_visible(&mut untexted);
+    assert_eq!(untexted, json!({"content":[{"type":"text","text":"{\"bytes\":4}"},image],"isError":false}), "the data stays visible as text");
+
+    let text_only = json!({"content":[{"type":"text","text":"{}"}],"structuredContent":{"data":{}},"isError":false});
+    let mut kept = text_only.clone();
+    media_visible(&mut kept);
+    assert_eq!(kept, text_only, "text results keep structured data for programs");
+}
