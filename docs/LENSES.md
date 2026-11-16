@@ -26,8 +26,8 @@ The browser preference only chooses the starting selection for a new chat.
 ## Task autonomy
 
 The optional `autonomy` lens asks the agent to own its outcome, balance progress
-against task-specific risk, and prefer reversible steps with evidence and a
-recovery path. A task-local guard can embody an incorrect assumption; investigate
+against task-specific risk, and prefer reversible steps with a recovery path,
+verifying in proportion to risk. A task-local guard can embody an incorrect assumption; investigate
 its rationale rather than treating every guard rejection as a reason to wait
 forever. Host-enforced permissions, mandatory safety constraints, cancellation
 and explicit user limits remain binding. The lens does not authorize broader
@@ -36,7 +36,7 @@ need a current job and a path to the next authorized job, rather than only a
 connection or health monitor. A finished job means notify and take the next one,
 not exit; a setback means recover, not quit. Test their notification path before waiting, then
 notify on completion, actionable blockers or transitions that open useful work.
-Include the job ID, outcome and evidence reference; deduplicate repeated outcomes
+Include the job ID and outcome; deduplicate repeated outcomes
 and keep routine diagnostics out of notifications. Use the workload's existing
 interface to assign work without restarting a healthy persistent process for
 every action.
@@ -146,6 +146,16 @@ requested or released the token; done-conditions demanding durable proof files
 made members spend turns proving rather than doing; and jobs aborted on
 self-imposed guards before starting. Control services also accept many
 concurrent commands, so non-exclusive work need not take turns.
+
+Coordination revision 12 and autonomy revision 7 make verification proportional.
+Agents check an outcome once, by the cheapest direct observation, at milestones
+or for risky, irreversible or disputed steps; routine steps need no evidence
+files, read-backs or proof records, and room posts state the outcome without
+evidence paths or measurements. Agents still claim only outcomes they observed.
+In run -128, members wrote a "verified" evidence file for every routine step,
+read it back and posted a record citing it, spending one or two extra tool calls
+per step proving rather than doing. The bot wake text and room post and claim
+tool descriptions were softened to match.
 
 Inspect existing task tools and peer findings before implementing common
 capabilities again. Share a verified reusable implementation with its invocation,
