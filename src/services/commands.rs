@@ -372,9 +372,7 @@ pub(super) fn exec(shared: &Arc<Mutex<State>>, run: &str, generation: &str, nonc
     };
     let execution_id = admitted["execution_id"].as_str().unwrap_or_default().to_owned();
     // settle keeps admitted fields, so inline results also carry the hint.
-    let mut value = settle(shared, Waiter { run, generation, node, service_id: &service_id }, &execution_id, admitted, wait, &crate::shutdown::token());
-    crate::observe::attach(shared, run, &mut value);
-    Ok(value)
+    Ok(settle(shared, Waiter { run, generation, node, service_id: &service_id }, &execution_id, admitted, wait, &crate::shutdown::token()))
 }
 /// The caller whose access is rechecked on every wake while waiting.
 #[derive(Clone, Copy)]

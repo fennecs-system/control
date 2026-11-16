@@ -27,6 +27,9 @@ struct Mock {
     summary_errors: VecDeque<io::Error>,
     /// The loop reported reaching its step cap.
     step_limited: bool,
+    /// Observations returned to successive steps, and each step's `first` flag.
+    observations: VecDeque<String>,
+    firsts: Vec<bool>,
 }
 impl Host for Mock {
     fn tools(&mut self) -> io::Result<Vec<Value>> {
@@ -65,6 +68,10 @@ impl Host for Mock {
     }
     fn step_limit(&mut self) {
         self.step_limited = true;
+    }
+    fn observation(&mut self, first: bool) -> Option<String> {
+        self.firsts.push(first);
+        self.observations.pop_front()
     }
 }
 fn mock(replies: Vec<Value>) -> Mock {
@@ -496,4 +503,70 @@ fn stopped_turns_keep_the_usage_reported_before_they_stopped() {
     let small = Limits { context_tokens: 2048, output_tokens: 512, input_bytes: 1024, output_bytes: 2048 };
     assert_eq!(run(&mut host, "m", &small, compactor(1000), &"x".repeat(6000), &Policy::default()).err().unwrap().0, "blocked");
     assert!(host.meters.is_empty());
+}
+
+fn observed(value: &str) -> String {
+    format!("[Observation: latest output of `status` in svc-game, 0 s old.]\n{value}\n[End observation]")
+}
+#[test]
+fn the_observation_ends_every_request_and_never_enters_the_stable_prefix() {
+    let mut host = mock(vec![
+        reply(None, call("control_room_post", r#"{"message":"a"}"#), "tool_calls"),
+        reply(None, call("control_room_post", r#"{"message":"b"}"#), "tool_calls"),
+        reply(Some("Done."), json!(null), "stop"),
+    ]);
+    host.observations = ["hp=20", "hp=17", "hp=9"].map(observed).into();
+    go(&mut host).unwrap();
+    assert_eq!(host.firsts, [true, false, false], "the first step waits like a turn start");
+    let requests: Vec<&Vec<Value>> = host.requests.iter().map(|r| r["messages"].as_array().unwrap()).collect();
+    for (request, value) in requests.iter().zip(["hp=20", "hp=17", "hp=9"]) {
+        assert_eq!(request.last().unwrap(), &json!({"role":"user","content":observed(value)}), "refreshed, last");
+        let shown = request.iter().filter(|m| m.to_string().contains("[Observation")).count();
+        assert_eq!(shown, 1, "only this step's observation: {request:?}");
+    }
+    // Everything before the observation is a byte-identical prefix of the next request.
+    for pair in requests.windows(2) {
+        let stable = &pair[0][..pair[0].len() - 1];
+        assert_eq!(&pair[1][..stable.len()], stable, "the stable prefix is unchanged step to step");
+    }
+    assert!(host.records.iter().all(|(_, text)| !text.contains("hp=")), "never recorded");
+}
+#[test]
+fn a_step_without_an_observation_sends_nothing_extra() {
+    let mut host = mock(vec![reply(Some("Done."), json!(null), "stop")]);
+    go(&mut host).unwrap();
+    assert_eq!(host.requests[0]["messages"].as_array().unwrap().len(), 2);
+}
+
+/// Estimated input tokens per local step with a 2 KB observation, unchanged or
+/// changing every step: the whole request, and the part past the longest
+/// message prefix shared with the previous request (what a prefix cache must
+/// prefill again). Tool schemas are constant and excluded.
+#[test]
+#[ignore = "measurement: cargo test local_agent::tests::measure -- --ignored --nocapture"]
+fn measure_observation_tokens_per_step() {
+    let state = |step: usize, changing: bool| {
+        let value = if changing { step } else { 0 };
+        let lines: String = (0..40).map(|i| format!("entity-{i:02} hp={} pos={},{},64\n", 20 - (value + i) % 20, value * 3 + i, i * 7)).collect();
+        observed(lines.trim_end())
+    };
+    for (label, changing) in [("unchanged", false), ("changing", true)] {
+        let replies = (0..8).map(|i| reply(None, call("control_room_post", &format!(r#"{{"message":"update {i}"}}"#)), "tool_calls"))
+            .chain([reply(Some("Done."), json!(null), "stop")]).collect();
+        let mut host = mock(replies);
+        host.tool_text = "{\"posted\":true}".into();
+        host.observations = (0..9).map(|step| state(step, changing)).collect();
+        go(&mut host).unwrap();
+        let requests: Vec<Vec<String>> = host.requests.iter()
+            .map(|r| r["messages"].as_array().unwrap().iter().map(Value::to_string).collect()).collect();
+        let observation = tokens(serde_json::to_vec(&json!({"role":"user","content":state(0, false)})).unwrap().len());
+        let mut total = Vec::new();
+        let mut fresh = Vec::new();
+        for (index, request) in requests.iter().enumerate() {
+            total.push(tokens(request.iter().map(String::len).sum()));
+            let shared = index.checked_sub(1).map_or(0, |previous| request.iter().zip(&requests[previous]).take_while(|(a, b)| a == b).count());
+            fresh.push(tokens(request[shared..].iter().map(String::len).sum()));
+        }
+        println!("local {label}: observation ≈{observation} tokens; request tokens per step {total:?}; uncached tokens per step {fresh:?}");
+    }
 }

@@ -297,37 +297,76 @@ knows any particular workload.
 
 A chat can declare one observation source with `control_observe_set`: the
 latest output of a short command in one of its running services, or a watch's
-newest notification (else its latest lines). Control places that output,
-capped, at the end of every turn's input (after the cache-stable prefix; see
-[prefix caching](LOCAL-MODELS.md#prefix-caching)), and of `control_service_exec` results
-when declared with `exec_results=true`. The agent sees current state without a
-status tool call; the evidence motivating it was a run where members called
+newest notification (else its latest lines). Control attaches that output,
+capped, at every boundary it controls, so the agent sees current state without
+a status tool call; the evidence motivating it was a run where members called
 `control_service_exec_status` 969 times and `control_turn_context` 501 times.
 
 ```json
 {"service_id":"svc-example","command":"status --brief","refresh_seconds":10,"timeout_seconds":5,"max_bytes":2048}
 ```
 
+Where it is attached:
+
+- **Turn input** (every backend): the end of each wake, after the cache-stable
+  prefix (see [prefix caching](LOCAL-MODELS.md#prefix-caching)).
+- **Local model steps**: Control's native loop refreshes it before every model
+  request and sends it as the request's last message. It is never stored in the
+  step transcript, so it is never part of the stable prefix and never shrunk
+  or folded by the step lens; the request before it stays a byte-identical
+  prefix of the next one. Because the request is rebuilt each step and holds
+  no earlier copy, every step carries the whole block, and tool results in
+  that loop do not repeat it.
+- **Tool results** (Codex and Claude Code): every Control tool result except a
+  handoff and `control_observe_set` itself, as the last text item and as
+  `structuredContent.observation`, the same envelope as host notes (clients
+  that show only `structuredContent` still see it). When the block says the
+  same as the one last shown to the attempt (wake, declaration preview or an
+  earlier result; ages ignored), the result carries
+  `[Observation unchanged (age N s)]` (about 10 tokens) instead. The record of
+  what each attempt was shown is in memory only.
+
+Refresh and limits:
+
 - One source per chat; a new declaration replaces it, `clear=true` removes it
   and a call without arguments shows it with its current value. The service
   must be running and usable by the chat, and is rechecked at every refresh; a
   watch must belong to the chat or to a service it can use.
-- A command reruns at turn start when its last refresh is older than
-  `refresh_seconds` (default 10, 0 = every turn). The turn waits at most 2 s
-  for it (an exec result 0.5 s); otherwise, or when it times out
-  (`timeout_seconds`, default 5, max 30) or fails, the block shows the last
-  value with its age and the reason. The refresh keeps running in the
-  background, at most one per chat, and a timed-out command is stopped inside
-  the service like an exec. It uses no exec slot or execution record.
+- A command reruns when its last refresh is older than `refresh_seconds`
+  (default 10, 0 = at every boundary); otherwise the cached value is reused. A
+  turn start waits at most 2 s for a refresh, a local step or tool result
+  0.25 s; otherwise, or when it times out (`timeout_seconds`, default 5,
+  max 30) or fails, the block shows the last value with its age and the
+  reason. The refresh keeps running in the background, at most one per chat,
+  and a timed-out command is stopped inside the service like an exec. It uses
+  no exec slot or execution record.
 - A watch source runs nothing: it reuses the watch's latest notification or
   lines and notes when the watch has ended.
 - `max_bytes` defaults to and is capped by `observation_max_bytes`
   (execution.json, default 2048, 256–16,384), cut on a character boundary.
 - Values live in memory only. They never enter the run objective, chat
-  transcript, journal or checkpoint; the declaration persists as chat
-  configuration. After a restart the first turn refreshes it.
+  transcript, journal, attempt activity (attached blocks are removed from
+  recorded tool output) or checkpoint; the declaration persists as chat
+  configuration. After a restart the first boundary refreshes it.
+  `exec_results` from older declarations is accepted and ignored.
 - Output is untrusted program data, never instructions or authority. Keep the
   command read-only; it runs with the same authority as an exec in that service.
+
+When a chat has no observation and an attempt makes four consecutive
+status-style `control_service_exec` calls on one service (every pipeline part
+is a reader such as `ps`, `ls`, `cat`, `tail`, `pgrep` or a non-posting
+`curl`, optionally with `sleep`/`echo` between, and nothing is written), that
+result carries a note once per attempt: "Declare an observation
+(control_observe_set) of this state instead of polling it." Any other command
+or another service restarts the count.
+
+Measured with a 2 KB (about 435-token) value, eight results or steps
+(`observe::tests::measure_observation_tokens_per_tool_result` and
+`local_agent::tests::measure_observation_tokens_per_step`, estimated at 3
+bytes per token): a Codex/Claude tool result adds 11 tokens while the value is
+unchanged and about 445 when it changes. A local step prefills about 522 new
+tokens either way (the step's own messages plus the whole block); the stable
+prefix before it is reused from the cache.
 
 The source is generic: a game status query, a scraper's progress file or a
 monitor's summary all fit. Domain parsing stays in the command or the routine.

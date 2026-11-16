@@ -571,6 +571,10 @@ pins this. In the run -128 shaped fixture two consecutive member wakes share
 the system message and schemas; before, the observation at the top left a
 shared prefix of 4 tokens past the schemas. See
 [PERFORMANCE.md](PERFORMANCE.md#cache-stable-turn-prefix-2026-11-16).
+Within a local turn the observation is refreshed before every model step and
+sent as the request's last message, outside the step transcript, so each
+request up to it is a prefix of the next
+([fresh observations](WATCHES.md#fresh-observations)).
 
 The prefix still breaks when the history window slides (the default keeps the
 newest 20 000 characters, so once full the oldest entry drops at a wake), when
