@@ -198,7 +198,7 @@ impl Bots {
     }
 }
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_millis().min(u64::MAX as u128) as u64)
@@ -596,7 +596,7 @@ fn watch_sources(state: &State, chat: &str) -> Vec<Source> {
     watch_topics(state, chat, false)
 }
 fn watch_topics(state: &State, chat: &str, pending: bool) -> Vec<Source> {
-    state.watches.iter().filter(|w| w.chat == chat && (w.active() || (pending && (w.lines > 0 || w.pending_notifications() > 0 || !w.exits.is_empty() || w.gap.is_some())))).map(|w| Source::Topic(watch(&w.id))).collect()
+    state.watches.iter().filter(|w| w.chat == chat && (w.active() || (pending && (w.lines > 0 || w.pending_notifications() > 0 || w.held_notifications() > 0 || !w.exits.is_empty() || w.gap.is_some())))).map(|w| Source::Topic(watch(&w.id))).collect()
 }
 /// Redefinitions that keep each bot subscribed to exactly its chat's watches.
 fn drifted(state: &State, pending: bool) -> Vec<Definition> {
@@ -879,6 +879,9 @@ fn reconcile_at(state: &mut State, now: u64, save: impl FnMut(&State) -> std::io
 }
 
 fn reconcile_with_wake_at(state: &mut State, now: u64, mut save: impl FnMut(&State) -> std::io::Result<()>, wake: impl FnOnce()) -> Result<(), &'static str> {
+    // Salience debounces end on this pass (at least every two seconds) even
+    // when their routine has gone quiet.
+    for w in &mut state.watches { w.release(now); }
     crate::agent_message::digest::reconcile(state, now, &mut save)?;
     let peers = peer_events(state).into_iter().map(|(chat, cursor, info)| (chat.to_owned(), cursor, info)).collect::<Vec<_>>();
     let teams = lifecycle::observe(state);

@@ -48,7 +48,7 @@ pub(crate) fn drained(state: &State, chat: &str, retains: impl Fn(&str) -> bool)
         .and_then(|c| c.continuity.as_ref()).and_then(|c| c.working.as_ref()) else { return Vec::new() };
     let candidates = state.watches.iter().filter(|w| w.chat == chat && !w.active()
         && (w.stopped || w.last_exit.as_ref().is_some_and(|exit| exit.seq == w.seen && (exit.gave_up || !w.permanent)))
-        && w.lines == 0 && w.pending_notifications() == 0 && w.exits.is_empty() && w.gap.is_none()
+        && w.lines == 0 && w.pending_notifications() == 0 && w.held_notifications() == 0 && w.exits.is_empty() && w.gap.is_none()
         && working.processed.iter().filter_map(|r| position(r, &w.id)).max().unwrap_or(0) >= w.seen
         && !retains(&w.id)).map(|w| w.id.clone()).collect::<Vec<_>>();
     if candidates.is_empty() || state.runtime.runs.iter().any(|r| r.chat_id.as_deref() == Some(chat)

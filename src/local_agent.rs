@@ -25,7 +25,7 @@ pub(crate) fn tokens(bytes: usize) -> u32 {
 }
 /// Context reserved outside the planned turn input: tool schemas and the room
 /// the loop needs for at least one tool exchange before it compacts.
-pub(crate) const OVERHEAD_TOKENS: u32 = 14336;
+pub(crate) const OVERHEAD_TOKENS: u32 = 15360;
 const SYSTEM: &str = "You are an agent running inside Control on a local model. Act only through the provided tools; there is no other way to read files, run commands or reach rooms. Use control_workspace_run for short shell commands in /workspace. Call tools with arguments that are a JSON object matching the schema. When the request is complete or you are waiting on someone, call control_turn_handoff if it is offered; otherwise reply with a brief plain-text final report and no tool call.";
 const RESULT_BYTES: usize = 12000;
 const CALLS_PER_STEP: usize = 8;
