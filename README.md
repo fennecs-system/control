@@ -35,7 +35,7 @@ follow-up about the same files. Open **Artifacts** to inspect the result.
 Configuration lives in `~/.config/control/`; chats and outputs live in
 `~/.local/state/control/`. Setup preserves both. Repeat `nix run .#setup` to
 rebuild after pulling updates. [Configuration and background services →](docs/setup.md)
-To start with fresh history, stop Control and delete `state.json`, `history/`,
+To start with fresh history, stop Control and delete `state.json`, `state.log`, `history/`,
 `runs/` and `artifacts/` from `~/.local/state/control/`; configuration, node
 identity and pinned images stay.
 

@@ -1,5 +1,6 @@
 use super::*;
 use crate::runtime::RunKind;
+mod log;
 mod profiling;
 
 #[test]

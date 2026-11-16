@@ -90,6 +90,7 @@ These options preserve existing source and model choices.
 | --- | --- |
 | `~/.config/control/` | Default private configuration directory. |
 | `~/.local/state/control/` | Default chats, notes, run ledger and outputs. |
+| `state.json` + `state.log` | The node state: a snapshot plus one JSON line per save since it ([inspect with jq](HISTORY.md#inspecting-the-state)). Back up or copy both, or stop Control first (a clean stop folds the log into `state.json`). |
 | `CONTROL_CONFIG_DIR` | Absolute configuration-directory override. |
 | `CONTROL_STATE_DIR` | Absolute state-directory override. |
 | `worker-image-id` | Immutable Codex worker image ID. |

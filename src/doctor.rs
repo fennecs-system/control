@@ -29,6 +29,18 @@ pub fn run() -> io::Result<()> {
         private(&state, true),
         "run ./target/release/control config init; state directory mode must be 0700",
     );
+    // Read the way offline readers see it: snapshot plus patch log, no lock,
+    // nothing repaired. Errors name no contents.
+    let kib = |name: &str| fs::metadata(state.join(name)).map_or(0, |m| m.len().div_ceil(1024));
+    let checkpoint = crate::config::read_state::<crate::State>(isize::MAX as usize);
+    check(
+        &format!("state checkpoint (state.json {} KiB, {} {} KiB)", kib("state.json"), crate::config::STATE_LOG, kib(crate::config::STATE_LOG)),
+        checkpoint.is_ok(),
+        &format!(
+            "state.json and state.log must parse ({:?}); stop Control, keep both files and inspect them with jq (docs/HISTORY.md)",
+            checkpoint.as_ref().err().map_or(io::ErrorKind::Other, io::Error::kind)
+        ),
+    );
     check(
         "execution limits",
         crate::scheduler::load_limits().is_ok(),

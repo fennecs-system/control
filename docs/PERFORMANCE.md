@@ -1,5 +1,49 @@
 # Performance checks
 
+## State saves as a patch journal (2026-11-16)
+
+macOS disk-write diagnostics showed 8–34 GB/hour written by Control during
+swarm runs: nearly every tool call rewrote and synced the whole 18 MB
+`state.json`. Saves now append one transaction line of changed paths to
+`state.log` and compact into the snapshot only when the log outgrows it
+([design](HISTORY.md#state-checkpoints-a-snapshot-plus-a-patch-journal)).
+
+`storage::tests::profiling::profile_swarm_hour` replays a simulated swarm hour
+of 2,000 saves (the rate that reproduces the diagnostic: 37 GB/hour before) on a
+copy of the maintainer's 18.1 MB state (6,881 runs, 128 chats): room posts and
+agent messages across the six largest chats, watch deliveries, tool receipts on
+running turns, new turns and finished turns, in a fixed 7:5:4:2:2 mix. Same
+mutation sequence for both paths, release build, APFS on the internal SSD,
+`F_FULLFSYNC` durability as before.
+
+| 2,000 saves | Before (atomic rewrite) | After (patch journal) |
+| --- | --- | --- |
+| Bytes written | 37.4 GB (18.7 MB/save) | 1.38 MB (690 B/save) |
+| Save p50 / p99 / max | 30.9 / 38.0 / 47.1 ms | 25.2 / 29.3 / 39.4 ms |
+| Compactions | — | 0 (log 1.4 MB < snapshot) |
+
+Encoding with ranges costs 18.0 ms against 12.7 ms for `serde_json::to_vec`
+(p50, 21 samples); diffing an unchanged 18 MB state costs 1.3 ms. Cold load:
+41.6 ms to parse the monolithic file; 64 ms to load and adopt a clean snapshot
+(parse plus one encoding to confirm it is the diff base, no write); 102 ms to
+replay a 2,001-line, 1.4 MB log (then one compaction); 92 ms to recover from a
+torn final line, which is dropped with earlier saves intact.
+
+`sample` profiles of the save loop (700 saves each, 12 s at 1 ms) put the
+before path at 44% sync, 34% serialization and 17% writing 18 MB; after, 29%
+sync, 58% encoding, 10% diffing and about 1% writing. Bytes are no longer the
+cost; encoding all 6,881 runs on every save is. Moving finished runs out of the
+hot state is the next step and should cut encoding by about two thirds. The
+measurement does not cover APFS metadata writes, which `F_FULLFSYNC` still
+incurs once per save, or concurrent saves (each still syncs under the state
+mutex; group commit is not implemented).
+
+```sh
+CONTROL_PROFILE_STATE=/scratch/state.json CONTROL_PROFILE_DIR=/scratch/bench \
+  cargo test --release --locked --bin control \
+  storage::tests::profiling::profile_swarm_hour -- --ignored --exact --nocapture
+```
+
 ## Cancel-all and container ownership reconciliation (2026-11-16)
 
 Investigated a reported CPU spike after `/cancel all` on a swarm root (lead,
