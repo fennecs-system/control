@@ -65,8 +65,14 @@ fn nonce() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos() as u64;
-    let previous = LAST.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |last| Some(now.max(last + 1))).unwrap_or(0);
-    format!("p-{:x}", now.max(previous + 1))
+    let mut last = LAST.load(Ordering::Relaxed);
+    loop {
+        let next = now.max(last + 1);
+        match LAST.compare_exchange_weak(last, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return format!("p-{next:x}"),
+            Err(current) => last = current,
+        }
+    }
 }
 pub fn request(state: &mut State, id: &str, path: &str) -> Result<Value, &'static str> {
     request_named(state,id,path,None)
