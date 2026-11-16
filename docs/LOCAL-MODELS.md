@@ -486,11 +486,39 @@ planning reserves `OVERHEAD_TOKENS` (7 168: 4 096 for the role's core schemas,
 what remains and omissions are recorded. Before each request the loop estimates
 tokens conservatively (3 bytes per token) for messages plus the schemas offered
 at that step, including any loaded. Input that cannot fit at admission
-blocks the run before any model call. When a long turn outgrows the context, whole
-earlier steps of that turn (never the request, and never a call separated from its
-results) are summarized by the chat's compactor and replaced with one labelled,
-untrusted summary. If nothing more can be compacted, the attempt fails visibly.
-The originals stay in the attempt's activity.
+blocks the run before any model call.
+
+**In-turn context.** Control owns a local turn's transcript, so each request is
+rendered from the turn's original steps through the same lens as a chat's history
+(`control_comonad::cut`, at step granularity): the newest four steps verbatim,
+older steps in aligned power-of-two blocks that never change once complete. Steps
+outside the verbatim window are shrunk deterministically, with no model call:
+tool results keep a 600-byte head and a size marker, and long string values in
+call arguments (scripts, payloads) keep a 160-byte head while staying valid JSON.
+A result that repeats a long argument of its own call cites it instead of carrying
+it twice. In a mock long setup turn this cut growth per step past the window from
+about 2 390 to 380 tokens.
+
+Only when a request reaches 75% of the input budget is the oldest block folded
+into a summary on the chat's compactor (never the request, never a call separated
+from its results). A block whose steps do not fit the compactor is built from its
+children's summaries, as in the chat summary tree, and a folded block stays folded,
+so the rendered prefix stays stable for prefix caching. Each summary is requested
+under an explicit length (about a quarter of the compactor's output limit); one
+that fails, for example by reaching the output limit, is retried with a target a
+third as long and then replaced by a deterministic digest of call names and result
+heads, labelled as such, so an output limit no longer fails the turn. When every
+older block is folded and the request is still over the threshold, the verbatim
+window narrows; as a last resort the newest results are shrunk too. Only if the
+request still exceeds the budget does the attempt fail visibly. The originals stay
+in the attempt's activity, and only the turn's final report enters the chat
+history, where the cross-turn summary tree covers it.
+
+Once per turn, when a request reaches 80% of the budget or the turn first folds a
+block, Control appends a note to the newest tool result: `Context N% full: publish
+your checkpoint (control_turn_handoff) and continue in the next turn.` Codex and
+Claude manage their own in-session context and are unchanged; Control shapes only
+what enters each of their fresh turns.
 
 **Compaction stays local.** A chat whose selected model is a local endpoint is
 compacted by that same endpoint by default, through the existing binary summary

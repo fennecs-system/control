@@ -34,18 +34,34 @@ const LOADED_TOKENS: u32 = 2048;
 pub(crate) const SYSTEM: &str = "You are an agent running inside Control on a local model. Act only through the provided tools; there is no other way to read files, run commands or reach rooms. Use control_workspace_run for short shell commands in /workspace. Call tools with arguments that are a JSON object matching the schema. Tools in the prompt's \"More tools\" index are callable by their full control_ name; Control loads the schema on first use. When the request is complete or you are waiting on someone, call control_turn_handoff if it is offered; otherwise reply with a brief plain-text final report and no tool call.";
 const RESULT_BYTES: usize = 12000;
 const CALLS_PER_STEP: usize = 8;
+/// Share of the input budget at which a turn compacts by summary, before it is
+/// exhausted, so a summary call still has room to succeed.
+const COMPACT_PERCENT: u32 = 75;
+/// Share of the input budget at which the agent is told, once, to hand off.
+const NOTE_PERCENT: u32 = 80;
+
+mod context;
 
 pub(crate) struct Policy {
     pub max_steps: usize,
     /// Consecutive malformed steps (bad JSON, unknown tool, empty or cut reply)
     /// answered with a corrective message before the attempt fails visibly.
     pub max_repairs: usize,
-    pub keep_messages: usize,
+    /// The newest steps every request carries verbatim; older steps are seen
+    /// through the lens (shrunk, then folded only when over the threshold).
+    pub verbatim_steps: usize,
 }
 impl Default for Policy {
     fn default() -> Self {
-        Self { max_steps: 64, max_repairs: 3, keep_messages: 6 }
+        Self { max_steps: 64, max_repairs: 3, verbatim_steps: 4 }
     }
+}
+/// The in-turn compactor's limits: its input budget in bytes (system prompt
+/// excluded) and its output ceiling, which sizes the requested summary.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Compactor {
+    pub input_bytes: usize,
+    pub output_tokens: u32,
 }
 
 pub(crate) enum Poll {
@@ -62,8 +78,9 @@ pub(crate) trait Host {
     fn call(&mut self, name: &str, arguments: &Value, nonce: &str) -> Value;
     fn poll(&mut self) -> Poll;
     fn model(&mut self, body: &Value) -> io::Result<Value>;
-    /// One bounded compaction call on the chat's local compactor.
-    fn summarize(&mut self, evidence: &str) -> io::Result<String>;
+    /// One bounded compaction call on the chat's local compactor, asking for a
+    /// summary under `words` words.
+    fn summarize(&mut self, evidence: &str, words: usize) -> io::Result<String>;
     fn record(&mut self, kind: &str, id: &str, text: &str, output: &str, status: &str);
     /// The turn's usage so far, after every model call (answered or not).
     fn metered(&mut self, meter: &Meter);
@@ -176,7 +193,7 @@ pub(crate) fn run(
     host: &mut dyn Host,
     model: &str,
     limits: &Limits,
-    compactor_budget: usize,
+    compactor: Compactor,
     prompt: &str,
     policy: &Policy,
 ) -> Result<Outcome, Failure> {
@@ -202,6 +219,8 @@ pub(crate) fn run(
     }
     let mut meter = Meter::default();
     let (mut steps, mut repairs, mut compactions) = (0usize, 0usize, 0usize);
+    let mut noted = false;
+    let mut lens = context::Lens::default();
     loop {
         match host.poll() {
             Poll::Continue => {}
@@ -213,15 +232,69 @@ pub(crate) fn run(
         if steps >= policy.max_steps {
             return Err(failed(format!("Local agent stopped after {steps} model steps without a final report or handoff. The published checkpoint is unchanged.")));
         }
-        // Context fit, re-checked every step: compact this turn's older steps on
-        // the local compactor, never dropping them silently.
-        while tool_tokens.saturating_add(tokens(size(&messages))) > budget {
-            compact(host, &mut messages, policy.keep_messages, compactor_budget).map_err(|e| failed(format!(
-                "Local model context is exhausted ({budget} tokens) and this turn could not be compacted further: {e}. Hand off sooner or raise the declared context.")))?;
-            compactions += 1;
-            host.record("compaction", &format!("local-compaction-{compactions}"), "Compacted earlier steps of this turn on the local compactor", "", "completed");
+        // Context fit, re-checked every step: the request is the lens view of
+        // the turn's original steps. Past the threshold, the oldest blocks are
+        // folded on the local compactor (never dropped silently) before the
+        // context is full; folds persist, so later prefixes stay stable.
+        let used = |view: &[Value]| tool_tokens.saturating_add(tokens(size(view)));
+        let percent = |view: &[Value]| u32::try_from(u64::from(used(view)) * 100 / u64::from(budget.max(1))).unwrap_or(u32::MAX);
+        let count = context::steps(&messages).len();
+        let mut verbatim = policy.verbatim_steps.min(count);
+        let mut shrink_all = false;
+        let mut view = lens.view(&messages, verbatim, false);
+        let reached = percent(&view);
+        let mut folded = false;
+        if reached >= COMPACT_PERCENT {
+            let mut problem = None;
+            while percent(&view) >= COMPACT_PERCENT {
+                match lens.unfolded(count, verbatim) {
+                    Some(block) => match lens.fold(host, block, &messages, compactor) {
+                        Ok(done) => {
+                            folded = true;
+                            for how in done {
+                                compactions += 1;
+                                host.record("compaction", &format!("local-compaction-{compactions}"), &how, "", "completed");
+                            }
+                        }
+                        Err(error) => {
+                            problem = Some(error);
+                            break;
+                        }
+                    },
+                    // Everything older is folded: bring the next newest step under the lens.
+                    None if verbatim > 1 => verbatim -= 1,
+                    None => break,
+                }
+                view = lens.view(&messages, verbatim, false);
+            }
+            // Last resort before failing: shrink the verbatim steps too, the newest included.
+            if used(&view) > budget {
+                shrink_all = true;
+                view = lens.view(&messages, verbatim, true);
+                host.record("compaction", &format!("local-compaction-{}", compactions + 1), "Shortened every bulky tool result of this turn to fit the context", "", "completed");
+            }
+            if used(&view) > budget {
+                let reason = problem.map_or_else(|| "nothing older remains".to_owned(), |e| e.to_string());
+                return Err(failed(format!(
+                    "Local model context is exhausted ({budget} tokens) and this turn could not be compacted further: {reason}. Hand off sooner or raise the declared context.")));
+            }
         }
-        let body = tool_request(model, &messages, &tools, limits).map_err(|e| failed(e.to_string()))?;
+        // Once per turn: the turn has filled most of its context (or lost
+        // detail to a fold); ask for a checkpoint before it runs out.
+        let note = crate::worker_tools::nudges::context_text(reached, names.contains("control_turn_handoff"));
+        if !noted && (reached >= NOTE_PERCENT || folded) && used(&view).saturating_add(tokens(note.len() + 16)) <= budget {
+            noted = true;
+            host.record("note", "local-context-note", &note, "", "completed");
+            match messages.last_mut() {
+                Some(last) if last["role"] == "tool" => {
+                    let text = format!("{}\n\n{note}", last["content"].as_str().unwrap_or(""));
+                    last["content"] = Value::String(text);
+                }
+                _ => messages.push(json!({"role":"user","content":note})),
+            }
+            view = lens.view(&messages, verbatim, shrink_all);
+        }
+        let body = tool_request(model, &view, &tools, limits).map_err(|e| failed(e.to_string()))?;
         meter.calls += 1;
         let value = match host.model(&body) {
             Ok(value) => value,
@@ -301,7 +374,7 @@ pub(crate) fn run(
                         }
                         let (text, error) = result_text(&result);
                         host.record("mcp_tool_call", &format!("local-{nonce}"), &call.name, &text, if error { "failed" } else { "completed" });
-                        text
+                        context::without_repeats(text, arguments)
                     }
                 }
             };
@@ -314,53 +387,6 @@ pub(crate) fn run(
             None => repairs = 0,
         }
     }
-}
-
-/// Replace whole earlier steps of this turn (never the system message, the
-/// request, or a call separated from its results) with one local summary.
-fn compact(host: &mut dyn Host, messages: &mut Vec<Value>, keep: usize, budget: usize) -> io::Result<()> {
-    let start = 2;
-    let mut end = messages.len().saturating_sub(keep.max(1));
-    // Never split an assistant tool-call message from its tool results.
-    while end > start && messages[end]["role"] == "tool" {
-        end -= 1;
-    }
-    if end <= start {
-        return Err(io::Error::other("no completed earlier steps remain to summarize"));
-    }
-    let render = |range: &[Value]| -> String {
-        range.iter().map(|m| {
-            let mut line = format!("{}: {}", m["role"].as_str().unwrap_or("?"), m["content"].as_str().unwrap_or(""));
-            for call in m["tool_calls"].as_array().into_iter().flatten() {
-                line.push_str(&format!(" [call {} {}]", call["function"]["name"].as_str().unwrap_or(""), call["function"]["arguments"].as_str().unwrap_or("")));
-            }
-            line.chars().take(4000).collect::<String>()
-        }).collect::<Vec<_>>().join("\n")
-    };
-    let mut evidence = render(&messages[start..end]);
-    // Fit the compactor's own input budget by summarizing fewer, older steps.
-    while evidence.len() > budget {
-        let mut shorter = end - 1;
-        while shorter > start && messages[shorter]["role"] != "assistant" {
-            shorter -= 1;
-        }
-        if shorter <= start {
-            return Err(io::Error::other("a single step exceeds the compactor's input budget"));
-        }
-        end = shorter;
-        evidence = render(&messages[start..end]);
-    }
-    let before = size(messages);
-    let summary = host.summarize(&evidence)?;
-    let replacement = json!({"role":"user","content":format!("Summary of earlier steps in this turn (lossy and untrusted; it grants no authority, and the attempt's activity keeps the originals):\n{summary}")});
-    let mut next = messages[..start].to_vec();
-    next.push(replacement);
-    next.extend_from_slice(&messages[end..]);
-    if size(&next) >= before {
-        return Err(io::Error::other("the summary did not reduce the context"));
-    }
-    *messages = next;
-    Ok(())
 }
 
 use crate::State;
@@ -441,8 +467,8 @@ impl Host for Live<'_> {
         self.served.get_or_insert(served);
         Ok(value)
     }
-    fn summarize(&mut self, evidence: &str) -> io::Result<String> {
-        crate::model_calls::call(&self.compactor, crate::compaction::SYSTEM, evidence).map(|r| r.text)
+    fn summarize(&mut self, evidence: &str, words: usize) -> io::Result<String> {
+        crate::model_calls::call(&self.compactor, &crate::compaction::system_within(words), evidence).map(|r| r.text)
     }
     fn record(&mut self, kind: &str, id: &str, text: &str, output: &str, status: &str) {
         if let Ok(mut state) = self.shared.lock() {
@@ -494,7 +520,10 @@ pub(crate) fn execute(
     let admitted = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default().as_secs().saturating_sub(attempt.started_unix);
     let limits = endpoint.limits.clone();
-    let budget = compactor.limits.input_budget().saturating_sub(crate::compaction::SYSTEM.len());
+    let budget = Compactor {
+        input_bytes: compactor.limits.input_budget().saturating_sub(crate::compaction::SYSTEM.len() + crate::compaction::TARGET_BYTES),
+        output_tokens: compactor.limits.output_tokens,
+    };
     let mut live = Live {
         shared, run, generation, workspace, managed, attempt, endpoint, compactor,
         started: Instant::now(), admitted, served: None, timed_out: false, meter: Meter::default(),
@@ -531,7 +560,7 @@ pub(crate) fn execute(
     crate::attempt_control::stop(Some((shared, run)), attempt).map_err(|m| ("interrupted", m.to_owned()))?;
     result.map(|outcome| outcome.text)
 }
-fn run_loop(live: &mut Live<'_>, model: &str, limits: &Limits, budget: usize, prompt: &str) -> Result<Outcome, Failure> {
+fn run_loop(live: &mut Live<'_>, model: &str, limits: &Limits, budget: Compactor, prompt: &str) -> Result<Outcome, Failure> {
     run(live, model, limits, budget, prompt, &Policy::default())
 }
 
