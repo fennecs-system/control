@@ -41,6 +41,15 @@ and keep routine diagnostics out of notifications. Use the workload's existing
 interface to assign work without restarting a healthy persistent process for
 every action.
 
+Autonomy revision 7 moves repeated actions on an external system into such a
+workload: a bounded routine that works toward a target on its own (for example,
+process N items, deliver them and notify). The routine reacts: it sequences
+steps, retries and handles events itself, escalating only milestones, failures
+and situations it cannot handle. The model decides what to do, when and by whom,
+and changes plans from those escalations. A run that issued one
+small job per tool call and then polled its status managed about one action per
+minute, each costing two or three model round trips.
+
 Weigh risk by reversibility: a recoverable failure usually costs less than idle
 time, though recoverable does not mean harmless, especially for shared assets.
 Guards bound damage (stop, back off or roll back at a stated limit) rather than
