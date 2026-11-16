@@ -215,7 +215,8 @@ pub fn request(settings: &Settings, title: &str, link: &str, pending: &Pending<'
         }
         Kind::Bot => {
             if let Some(chat) = item["chat_id"].as_str() {
-                fields.push(("Bot chat", clean(chat, 100, false)));
+                let shown = item["name"].as_str().map_or_else(|| chat.to_owned(), |name| format!("{name} ({chat})"));
+                fields.push(("Bot chat", clean(&shown, 140, false)));
             }
             if let Some(minutes) = item["every_minutes"].as_u64() {
                 fields.push(("Wakes", format!("every {minutes} min")));

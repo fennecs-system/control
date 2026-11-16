@@ -9,16 +9,19 @@ use std::collections::HashMap;
 
 pub struct Entry<'a> {
     pub session: &'a Session,
+    /// Index of `session` in `state.chats`, e.g. into `callsigns::all`.
+    pub position: usize,
     pub parent: Option<&'a str>,
     pub depth: usize,
 }
 pub fn ordered(state: &State) -> Vec<Entry<'_>> {
     let mut authorize = identity::authorizer();
-    let visible: Vec<_> = state
+    let (positions, visible): (Vec<_>, Vec<_>) = state
         .chats
         .iter()
-        .filter(|chat| valid_id(&chat.id) && authorize(&chat.actor, Action::Task).is_ok())
-        .collect();
+        .enumerate()
+        .filter(|(_, chat)| valid_id(&chat.id) && authorize(&chat.actor, Action::Task).is_ok())
+        .unzip();
     let by_id: HashMap<_, _> = visible
         .iter()
         .enumerate()
@@ -77,6 +80,7 @@ pub fn ordered(state: &State) -> Vec<Entry<'_>> {
     while let Some((index, depth)) = stack.pop() {
         entries.push(Entry {
             session: visible[index],
+            position: positions[index],
             parent: parents[index].map(|p| visible[p].id.as_str()),
             depth,
         });

@@ -89,7 +89,10 @@ pub fn pending(view: &Value) -> Vec<Pending<'_>> {
         let id = text(&bot["request_id"]);
         items.push(Pending {
             kind: Kind::Bot,
-            heading: Cow::Owned(format!("Bot request · {}", Clean(text(&bot["chat_id"])))),
+            heading: Cow::Owned(match bot["name"].as_str() {
+                Some(name) => format!("Bot request · {} ({})", Clean(name), Clean(text(&bot["chat_id"]))),
+                None => format!("Bot request · {}", Clean(text(&bot["chat_id"]))),
+            }),
             body: "",
             usage: Some(format!("/bot allow {0} · /bot deny {0}", Clean(id))),
             id,

@@ -84,7 +84,7 @@ fn send_message(
         let (status,value)=match result {
             Ok(_) => {
                 let session=state.chats.iter().find(|chat|chat.id==id).unwrap();
-                ("200 OK",json!({"title":session.title,"improve":session.improve_mode}))
+                ("200 OK",json!({"title":crate::callsigns::name_or_id(&state.chats,id),"improve":session.improve_mode}))
             },
             Err(message) => ("400 Bad Request",json!({"error":message})),
         };
