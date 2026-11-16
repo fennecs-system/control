@@ -102,38 +102,38 @@ fn oversized_and_attachment_only_dms_get_a_reason() {
 }
 #[test]
 fn state_cache_reparses_only_after_the_file_changes() {
-    let path =
-        std::env::temp_dir().join(format!("control-bridge-cache-{}.json", std::process::id()));
-    let log = path.with_extension("log");
+    let root = std::env::temp_dir().join(format!("control-bridge-cache-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let (path, log) = (root.join("state.json"), root.join("state.log"));
     fs::write(&path, br#"{"discord_seen":["1"]}"#).unwrap();
     let mut cache = StateCache::default();
-    let first = cache.load([&path, &log]);
+    let first = cache.load(&root);
     assert!(first.discord_seen.contains("1"));
-    assert!(std::rc::Rc::ptr_eq(&first, &cache.load([&path, &log])));
+    assert!(std::rc::Rc::ptr_eq(&first, &cache.load(&root)));
     fs::write(&path, br#"{"discord_seen":["22"]}"#).unwrap();
-    assert!(cache.load([&path, &log]).discord_seen.contains("22"));
+    assert!(cache.load(&root).discord_seen.contains("22"));
     // A save that only appends to the patch log is seen too.
     fs::write(&path, br#"{"_snapshot":"n","discord_seen":["22"]}"#).unwrap();
     let mut text = b"{\"snapshot\":\"n\"}\n".to_vec();
     text.extend(control_journal::snapshot::commit(br#"[["a",["discord_seen"],1,0,["33"]]]"#));
     text.push(b'\n');
     fs::write(&log, text).unwrap();
-    assert!(cache.load([&path, &log]).discord_seen.contains("33"));
+    assert!(cache.load(&root).discord_seen.contains("33"));
     fs::remove_file(&log).unwrap();
     fs::remove_file(&path).unwrap();
-    assert!(cache.load([&path, &log]).discord_seen.is_empty());
+    assert!(cache.load(&root).discord_seen.is_empty());
+    fs::remove_dir_all(&root).unwrap();
 }
 #[test]
 fn state_cache_detects_atomic_replacement_and_refuses_symlinks() {
     let root = std::env::temp_dir().join(format!("control-bridge-replace-{}", std::process::id()));
     fs::create_dir_all(&root).unwrap();
     let path = root.join("state.json");
-    let log = root.join("state.log");
     let replacement = root.join("replacement.json");
     fs::write(&path, br#"{"discord_seen":["1"]}"#).unwrap();
     let stamp = fs::metadata(&path).unwrap().modified().unwrap();
     let mut cache = StateCache::default();
-    assert!(cache.load([&path, &log]).discord_seen.contains("1"));
+    assert!(cache.load(&root).discord_seen.contains("1"));
     fs::write(&replacement, br#"{"discord_seen":["2"]}"#).unwrap();
     fs::File::options()
         .write(true)
@@ -142,10 +142,10 @@ fn state_cache_detects_atomic_replacement_and_refuses_symlinks() {
         .set_times(fs::FileTimes::new().set_modified(stamp))
         .unwrap();
     fs::rename(&replacement, &path).unwrap();
-    assert!(cache.load([&path, &log]).discord_seen.contains("2"));
+    assert!(cache.load(&root).discord_seen.contains("2"));
     fs::rename(&path, &replacement).unwrap();
     std::os::unix::fs::symlink(&replacement, &path).unwrap();
-    assert!(cache.load([&path, &log]).discord_seen.is_empty());
+    assert!(cache.load(&root).discord_seen.is_empty());
     fs::remove_dir_all(root).unwrap();
 }
 #[test]

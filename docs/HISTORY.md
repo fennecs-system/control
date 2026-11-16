@@ -102,7 +102,8 @@ A checkpoint no longer rewrites `state.json`. It writes what changed:
   exactly what this build would save; after a crash it replays the log and
   compacts once.
 - **Readers** that do not own the state (the Discord bridge, federation export)
-  read snapshot plus log with `control::config::read_state`, without a lock and
+  read snapshot plus log through one loader, `control::config::read_state` (or
+  `read_state_in` for a given directory), typed as any partial view of the state, without a lock and
   without repairing anything.
 
 ### Inspecting the state

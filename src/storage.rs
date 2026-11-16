@@ -196,13 +196,6 @@ pub fn compact(state: &State) -> io::Result<()> {
     Ok(())
 }
 
-/// The state as currently published (snapshot plus log), for readers that do
-/// not own it and must not run `load`'s recovery. Files over `limit` are refused.
-pub(crate) fn read_published(limit: usize) -> io::Result<Option<State>> {
-    crate::config::read_state(limit)?
-        .map(|document| serde_json::from_value(document).map_err(io::Error::other))
-        .transpose()
-}
 fn interrupt_active(state: &mut State) -> bool {
     let mut changed = false;
     for run in &mut state.runtime.runs {

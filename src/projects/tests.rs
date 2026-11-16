@@ -657,7 +657,7 @@ fn live_folder_approval_errors_and_multiple_named_worktrees() {
     assert!(transcript.contains("Opened /workspace/api"));
     assert!(!transcript.contains("Trust folder and open"));
     let saved: State =
-        control_journal::snapshot::read(&state_dir.join("state.json"), &state_dir.join(crate::config::STATE_LOG), &crate::config::state_schema(), |path| fs::read(path)).unwrap().map(serde_json::from_value).unwrap().unwrap();
+        crate::config::read_state_in(&state_dir, isize::MAX as usize).unwrap().unwrap();
     assert_eq!(saved.chats[0].project.as_ref().unwrap().mounts.len(), 2);
 }
 #[test]

@@ -67,13 +67,20 @@ pub fn state_schema() -> control_journal::lens::Schema {
     control_journal::lens::Schema { version: 1, lenses: vec![vec![]] }
 }
 
-/// The current state document (snapshot plus the log's valid lines) for a
-/// process that does not own the state; it takes no lock and repairs nothing.
-pub fn read_state(limit: usize) -> io::Result<Option<serde_json::Value>> {
-    let directory = state_directory().map_err(io::Error::other)?;
+/// The one loader for state outside the server: the snapshot plus its log's
+/// valid lines, translated to this build's schema, deserialized as `T` (any
+/// partial view of the state). It takes no lock and repairs nothing; files
+/// over `limit` bytes are refused. `None` when there is no state yet.
+pub fn read_state<T: serde::de::DeserializeOwned>(limit: usize) -> io::Result<Option<T>> {
+    read_state_in(&state_directory().map_err(io::Error::other)?, limit)
+}
+/// [`read_state`] for an explicit state directory.
+pub fn read_state_in<T: serde::de::DeserializeOwned>(directory: &Path, limit: usize) -> io::Result<Option<T>> {
     control_journal::snapshot::read(&directory.join("state.json"), &directory.join(STATE_LOG), &state_schema(), |path| {
         read_regular(path, limit, false)
-    })
+    })?
+    .map(|document| serde_json::from_value(document).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "State does not match its schema")))
+    .transpose()
 }
 
 pub fn state(name: &str) -> Result<PathBuf, &'static str> {

@@ -32,7 +32,7 @@ pub fn run() -> io::Result<()> {
     // Read the way offline readers see it: snapshot plus patch log, no lock,
     // nothing repaired. Errors name no contents.
     let kib = |name: &str| fs::metadata(state.join(name)).map_or(0, |m| m.len().div_ceil(1024));
-    let checkpoint = crate::storage::read_published(isize::MAX as usize);
+    let checkpoint = crate::config::read_state::<crate::State>(isize::MAX as usize);
     check(
         &format!("state checkpoint (state.json {} KiB, {} {} KiB)", kib("state.json"), crate::config::STATE_LOG, kib(crate::config::STATE_LOG)),
         checkpoint.is_ok(),

@@ -467,7 +467,7 @@ fn value<'a>(opts: &'a [(String, String)], name: &str) -> Result<&'a str> {
 }
 fn selected(root: &str, include: bool) -> Result<Bundle> {
     // Read a snapshot only; storage::load mutates run status on startup and must not be used here.
-    let state = crate::storage::read_published(STORE_BYTES)?.unwrap_or_else(crate::State::initial);
+    let state = crate::config::read_state::<crate::State>(STORE_BYTES)?.unwrap_or_else(crate::State::initial);
     let docs: Vec<_> = state
         .documents
         .iter()

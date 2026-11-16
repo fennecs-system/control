@@ -51,14 +51,13 @@ struct StateCache {
     value: std::rc::Rc<Snapshot>,
 }
 impl StateCache {
-    fn load(&mut self, paths: [&Path; 2]) -> std::rc::Rc<Snapshot> {
+    fn load(&mut self, directory: &Path) -> std::rc::Rc<Snapshot> {
         use std::os::unix::fs::MetadataExt;
-        let stamp = paths.map(|path| fs::symlink_metadata(path).ok().filter(|m| m.is_file()).map(|m| (m.modified().unwrap_or(UNIX_EPOCH), m.len(), m.ino())));
+        let stamp = [directory.join("state.json"), directory.join(config::STATE_LOG)].map(|path| fs::symlink_metadata(path).ok().filter(|m| m.is_file()).map(|m| (m.modified().unwrap_or(UNIX_EPOCH), m.len(), m.ino())));
         let stamp = stamp[0].is_some().then_some(stamp);
         if stamp.is_none() || stamp != self.stamp {
             self.value = std::rc::Rc::new(
-                control_journal::snapshot::read(paths[0], paths[1], &config::state_schema(), |path| config::read_regular(path, isize::MAX as usize, false)).ok().flatten()
-                    .and_then(|document| serde_json::from_value(document).ok())
+                config::read_state_in(directory, isize::MAX as usize).ok().flatten()
                     .unwrap_or_default()
             );
             self.stamp = stamp;
@@ -539,7 +538,7 @@ impl Bridge {
         self.send(channel, content, None).is_ok()
     }
     fn snapshot(&self) -> Result<std::rc::Rc<Snapshot>, &'static str> {
-        Ok(self.state.borrow_mut().load([&config::state("state.json")?, &config::state(config::STATE_LOG)?]))
+        Ok(self.state.borrow_mut().load(&config::state_directory()?))
     }
     /// Posts a message. A `nonce` makes Discord drop a repeat of the same send
     /// (a retry after a crash or a lost response) instead of posting it twice.
