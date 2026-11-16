@@ -35,6 +35,7 @@ mod doctor;
 mod engine;
 mod federation;
 mod github;
+mod graph_search;
 mod knowledge;
 mod knowledge_tools;
 mod lens_library;

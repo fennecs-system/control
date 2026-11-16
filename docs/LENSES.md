@@ -26,8 +26,8 @@ The browser preference only chooses the starting selection for a new chat.
 ## Task autonomy
 
 The optional `autonomy` lens asks the agent to own its outcome, balance progress
-against task-specific risk, and prefer reversible steps with evidence and a
-recovery path. A task-local guard can embody an incorrect assumption; investigate
+against task-specific risk, and prefer reversible steps with a recovery path,
+verifying in proportion to risk. A task-local guard can embody an incorrect assumption; investigate
 its rationale rather than treating every guard rejection as a reason to wait
 forever. Host-enforced permissions, mandatory safety constraints, cancellation
 and explicit user limits remain binding. The lens does not authorize broader
@@ -36,7 +36,7 @@ need a current job and a path to the next authorized job, rather than only a
 connection or health monitor. A finished job means notify and take the next one,
 not exit; a setback means recover, not quit. Test their notification path before waiting, then
 notify on completion, actionable blockers or transitions that open useful work.
-Include the job ID, outcome and evidence reference; deduplicate repeated outcomes
+Include the job ID and outcome; deduplicate repeated outcomes
 and keep routine diagnostics out of notifications. Use the workload's existing
 interface to assign work without restarting a healthy persistent process for
 every action.
@@ -49,6 +49,10 @@ and situations it cannot handle. The model decides what to do, when and by whom,
 and changes plans from those escalations. A run that issued one
 small job per tool call and then polled its status managed about one action per
 minute, each costing two or three model round trips.
+
+Autonomy revision 8 also asks for only the tooling the current goal needs: tools
+serve milestones, so when tooling work stops advancing the goal, stop and use what
+exists.
 
 Weigh risk by reversibility: a recoverable failure usually costs less than idle
 time, though recoverable does not mean harmless, especially for shared assets.
@@ -168,9 +172,19 @@ without steering for ten minutes. The host backs this with advisory notes on
 tool results (see [turn continuity](TURN-CONTINUITY.md#deadline-and-steering-notes))
 and a `timed_out` advisor fact.
 
+Coordination revision 13 and autonomy revision 8 make verification proportional.
+Agents check an outcome once, by the cheapest direct observation, at milestones
+or for risky, irreversible or disputed steps; routine steps need no evidence
+files, read-backs or proof records, and room posts state the outcome without
+evidence paths or measurements. Agents still claim only outcomes they observed.
+In run -128, members wrote a "verified" evidence file for every routine step,
+read it back and posted a record citing it, spending one or two extra tool calls
+per step proving rather than doing. The bot wake text and room post and claim
+tool descriptions were softened to match.
+
 Inspect existing task tools and peer findings before implementing common
-capabilities again. Share a verified reusable implementation with its invocation,
-version and evidence through existing artifacts or an explicitly shared service.
+capabilities again. Share a working reusable implementation with its invocation
+and version through existing artifacts or an explicitly shared service.
 Reusing code does not require sharing one process or every worker's mutable
 state. Existing access controls still apply; this creates no shared-storage or
 service-grant mechanism.

@@ -353,7 +353,7 @@ persistent services are separate resources. Recovery starts a fresh attempt from
 Control's journal; server KV caches only speed up repeated prefixes.
 
 **Context fit.** The endpoint's declared limits are the budget. Turn-input
-planning reserves `OVERHEAD_TOKENS` (12 288) for tool schemas and the first
+planning reserves `OVERHEAD_TOKENS` (14 336) for tool schemas and the first
 exchange, so history is selected newest-first within what remains and omissions
 are recorded. Before each request the loop estimates tokens conservatively
 (3 bytes per token) for messages plus schemas. Input that cannot fit at admission

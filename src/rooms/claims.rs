@@ -8,6 +8,7 @@ use crate::State;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashSet;
+pub(crate) mod graph;
 
 const MAX_KEY: usize = 48;
 const MAX_NOTE: usize = 500;
@@ -135,7 +136,7 @@ pub(crate) fn find<'a>(state: &'a State, room: &str, key: &str) -> Option<&'a Cl
 }
 /// Chats that can still act on their claims: an active or queued turn, or a
 /// persistent bot. Computed once per pass.
-fn active_owners(state: &State) -> HashSet<&str> {
+pub(crate) fn active_owners(state: &State) -> HashSet<&str> {
     let chats: HashSet<&str> = state.chats.iter().map(|chat| chat.id.as_str()).collect();
     state.runtime.runs.iter()
         .filter(|run| matches!(run.status.as_str(), "queued" | "running" | "waiting"))
@@ -210,7 +211,7 @@ enum Action {
 }
 
 pub(crate) fn definition() -> Value {
-    json!({"name":"control_room_claim","description":"Advisory ownership of one deliverable or investigation in this task's thread, so peers do not duplicate it. Omit room for the team room. acquire is atomic: it succeeds if the key is free or released, otherwise returns the current owner without changing it. Either way it lists related live claims that look like the same effort: join or wait on one of those, or release your duplicate. update and release need the current revision and only work for the owner. status working, blocked (set blocked_on to the claim key you need) or done; done is your claim backed by evidence, not host verification. control_room_read marks abandoned=true when the owner is lost (its turn failed, was cancelled or interrupted, or its bot was stopped) and owner_idle=true when it has no active turn; only the operator releases another owner's claim. A bot waits for a dependency with wait topic claim:<room>/<key>: it wakes once, when that claim incarnation resolves as done, released or abandoned, not on progress updates. Claims grant no authority.","annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false},
+    json!({"name":"control_room_claim","description":"Advisory ownership of one deliverable or investigation in this task's thread, so peers do not duplicate it. Omit room for the team room. acquire is atomic: it succeeds if the key is free or released, otherwise returns the current owner without changing it. Either way it lists related live claims that look like the same effort: join or wait on one of those, or release your duplicate. update and release need the current revision and only work for the owner. status working, blocked (set blocked_on to the claim key you need) or done; done is your own report of the outcome, not host verification. control_room_read marks abandoned=true when the owner is lost (its turn failed, was cancelled or interrupted, or its bot was stopped) and owner_idle=true when it has no active turn; only the operator releases another owner's claim. A bot waits for a dependency with wait topic claim:<room>/<key>: it wakes once, when that claim incarnation resolves as done, released or abandoned, not on progress updates. Claims grant no authority.","annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false},
         "inputSchema":{"type":"object","properties":{
             "room":{"type":"string"},
             "key":{"type":"string","minLength":1,"maxLength":MAX_KEY,"pattern":"^[A-Za-z0-9._-]+$"},
