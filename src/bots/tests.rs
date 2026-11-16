@@ -40,6 +40,14 @@ fn fixture() -> (State, String) {
     state.runtime.runs[0].status = "completed".into();
     (state, chat)
 }
+/// Records the host's refusal of the handoff of `runs[index]`'s last attempt.
+fn reject_handoff(state: &mut State, index: usize, error: &str) {
+    let run = &state.runtime.runs[index];
+    let generation = run.attempts.last().unwrap().workspace_id.clone().unwrap();
+    let chat = run.chat_id.clone().unwrap();
+    state.chats.iter_mut().find(|c| c.id == chat).unwrap().continuity.as_mut().unwrap().checkpointing.rejected =
+        Some(crate::turn_context::Rejection { generation, error: error.into() });
+}
 fn post(state: &mut State, chat: Option<&str>, text: &str) {
     state.collective.posts.push(crate::rooms::Post {
         room: "general".into(),
@@ -380,6 +388,9 @@ fn missing_handoff_recovery_is_durable_once_and_never_replays_failed_effects() {
         "asynchronous child completion already supplies a callback"
     );
     state.runtime.runs[index].spawns.clear();
+    // A rejected handoff earns an immediate recovery turn; see
+    // `a_turn_without_any_handoff_waits_instead_of_continuing` for the other case.
+    reject_handoff(&mut state, index, "Processed source budget exceeded");
     let before = serde_json::to_vec(&state).unwrap();
     assert!(reconcile_at(&mut state, 40_000, |_| Err(io::Error::other("disk full"))).is_err());
     assert_eq!(serde_json::to_vec(&state).unwrap(), before);
@@ -2281,3 +2292,5 @@ fn node_wide_requests_route_a_descendant_bot_request_to_its_top_level_chat() {
 mod reconcile_profile;
 #[path = "tests/advisor.rs"]
 mod advisor;
+#[path = "tests/recovery.rs"]
+mod recovery;

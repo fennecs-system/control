@@ -26,6 +26,13 @@ pub struct Limits {
     /// claim directly or transitively (through `blocked_on`) before the
     /// advisor hears that claim is a bottleneck.
     pub advisor_bottleneck_members: usize,
+    /// Immediate recovery turns a persistent bot gets after its handoff is
+    /// rejected, counted since its last accepted handoff. Beyond it the bot
+    /// waits on its subscriptions with a backoff recheck. 0 never retries.
+    pub bot_recovery_continues: usize,
+    /// First recheck of a bot that could not checkpoint, in seconds; it
+    /// doubles with each further failed turn, up to 64 times or one day.
+    pub bot_recovery_recheck_seconds: u64,
 }
 impl Default for Limits {
     fn default() -> Self {
@@ -37,6 +44,8 @@ impl Default for Limits {
             advisor_failure_streak: 3,
             advisor_stall_turns: 24,
             advisor_bottleneck_members: 2,
+            bot_recovery_continues: 2,
+            bot_recovery_recheck_seconds: 300,
         }
     }
 }
@@ -54,6 +63,9 @@ impl Limits {
         if self.max_advisors_per_root > 8 || !(2..=64).contains(&self.advisor_failure_streak) || !(4..=4096).contains(&self.advisor_stall_turns)
             || !(2..=64).contains(&self.advisor_bottleneck_members) {
             return Err(io::Error::other("max_advisors_per_root must be 0–8, advisor_failure_streak 2–64, advisor_stall_turns 4–4096 and advisor_bottleneck_members 2–64"));
+        }
+        if self.bot_recovery_continues > 16 || !(30..=86_400).contains(&self.bot_recovery_recheck_seconds) {
+            return Err(io::Error::other("bot_recovery_continues must be 0–16 and bot_recovery_recheck_seconds 30–86400"));
         }
         Ok(self)
     }

@@ -71,6 +71,39 @@ CONTROL_PROFILE_STATE=/scratch/state.json CONTROL_PROFILE_DIR=/scratch/bench \
   storage::tests::profiling::profile_swarm_hour -- --ignored --exact --nocapture
 ```
 
+## Bounded checkpoint recovery (2026-11-16)
+
+A swarm run's persistent bots took 269 `continue` wakes; about 90% followed a
+rejected `control_turn_handoff` and most of those turns did no new work. Each
+failed attempt re-armed recovery because its generation was new. Recovery is
+now bounded per streak (see [turn continuity](TURN-CONTINUITY.md#commit-and-recovery)).
+The `bots::tests::recovery` replay drives one bot whose every handoff is
+rejected, finishing each turn at once, and the same loop was run on `d4a1924`:
+
+| Replay | Before: turns / continue wakes | After |
+| --- | ---: | ---: |
+| Every handoff rejected, 3 h | 181 / 180 | 8 / 2 |
+| No handoff called, 30 min | 60 / 59 | 5 / 0 |
+
+Before, only the 60-turns-per-hour budget bounded the loop. Model time and
+tokens scale with turns; the replay makes no model calls.
+
+`bots::tests::reconcile_profile` (release, Apple Silicon) ran six alternating
+before/after pairs twice, under a load average of about 40 from other work. The
+recovery and watch-collection paths run only on recoveries and publications,
+which this fixture does not exercise; the idle and offered passes are unchanged
+within noise. Fastest of six (second round), µs:
+
+| Case | Before | After |
+| --- | ---: | ---: |
+| idle, 64 chats / 1,153 runs | 28.5 | 28.2 |
+| offered, 64 chats / 1,153 runs | 36.4 | 35.7 |
+| idle, 512 chats / 9,217 runs | 209.7 | 207.8 |
+| offered, 512 chats / 9,217 runs | 221.4 | 215.2 |
+
+Medians of the 512-chat cases varied by up to 20% between rounds in both
+directions under that load, so no change is claimed.
+
 ## Cancel-all and container ownership reconciliation (2026-11-16)
 
 Investigated a reported CPU spike after `/cancel all` on a swarm root (lead,

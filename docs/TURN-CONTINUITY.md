@@ -390,8 +390,42 @@ A provider ending successfully without a handoff keeps its result/evidence and
 workspace under existing rules, marks continuity incomplete and retains the last
 committed working state. It does not acknowledge delivered events or invent a
 `continue` disposition from prose. Tag the retained state's older checkpoint and
-require reconciliation before actions depending on it. Existing event budgets
-bound repeated fallback turns; expose the missing handoff for diagnosis.
+require reconciliation before actions depending on it.
+
+Each attempt has a new generation, so the per-generation recovery stamp alone
+would re-arm a recovery after every failed turn. The chat's continuity therefore
+counts turns that end without an accepted handoff since the last published one,
+and keeps the host's last handoff rejection with its attempt generation (a
+storage failure is not a rejection). For a persistent bot:
+
+- A rejected handoff gets an immediate recovery turn, at most
+  `bot_recovery_continues` times per streak (default 2). Its wake text quotes
+  the rejection and asks the agent to repair the receipt rather than re-verify
+  the world or start new watches.
+- A turn that never called the handoff is waiting, not runnable work: it is
+  never answered with `continue`.
+- Otherwise the bot waits on all its current subscriptions (own conversation
+  first; a wait names at most 16 topics, and urgent watch exits and gaps release
+  any wait) with a recheck after `bot_recovery_recheck_seconds` (default 300),
+  doubling per further failed turn up to 64 times or one day.
+- Past the allowance, once per streak, the node notice, the bot's status
+  (`cannot checkpoint`) and the team advisor's lifecycle facts report that the
+  member cannot checkpoint, with the last rejection.
+- A published handoff ends the streak.
+
+In a replay of one run's loop shape (every turn's handoff rejected, the worker
+finishing turns at once), three simulated hours gave 181 turns, 180 of them
+continue wakes, before; and 8 turns, 2 continue wakes, after. Thirty minutes of
+turns without a handoff gave 60 turns (59 continues) before and 5 (none) after.
+See `bots::tests::recovery`.
+
+A watch's processed watermark is retired only when its record is deleted, since
+reads and receipts need the record and watch ids are never reused. After a
+publication, a bot chat's watch records are deleted once terminal (last frame a
+final exit, given up or transient, or stopped), fully offered, processed through
+their last observed sequence, and no turn of that chat is queued or active; the
+next publication then drops their watermarks. Retiring a watermark while
+keeping the record would let a later read restart from zero, so that is not done.
 
 ## Context projection and inspection
 

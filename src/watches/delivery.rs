@@ -29,6 +29,34 @@ pub(crate) fn live(state: &State) -> impl Fn(&Range) -> bool + '_ {
         Range::Room { .. } | Range::Conversation { .. } => true,
     }
 }
+/// Watch records of `chat` that may be deleted, retiring their watermark at the
+/// next publication. Retiring a watermark while its record remains would let a
+/// later read restart from zero, so the record goes instead: reads and receipts
+/// need it and ids are never reused, so nothing is ever redelivered. Only:
+/// - terminal watches: whose last observed frame is a final exit (given up, or
+///   a transient run), after which the runner appends nothing; or stopped
+///   ones, which are no longer followed (a frame racing the stop is dropped
+///   with the record, never redelivered). A transient exit that a later line
+///   superseded is not final, so a follower still writing frames is safe;
+/// - fully offered: no unoffered lines, notifications, exits or gap, and no
+///   pending, held or overflowed bot reason (`retains`);
+/// - fully processed: the chat's committed watermark is at or past the last
+///   observed sequence;
+/// - no queued, running or waiting turn of the chat could hold a receipt.
+pub(crate) fn drained(state: &State, chat: &str, retains: impl Fn(&str) -> bool) -> Vec<String> {
+    let Some(working) = state.chats.iter().find(|c| c.id == chat)
+        .and_then(|c| c.continuity.as_ref()).and_then(|c| c.working.as_ref()) else { return Vec::new() };
+    let candidates = state.watches.iter().filter(|w| w.chat == chat && !w.active()
+        && (w.stopped || w.last_exit.as_ref().is_some_and(|exit| exit.seq == w.seen && (exit.gave_up || !w.permanent)))
+        && w.lines == 0 && w.pending_notifications() == 0 && w.exits.is_empty() && w.gap.is_none()
+        && working.processed.iter().filter_map(|r| position(r, &w.id)).max().unwrap_or(0) >= w.seen
+        && !retains(&w.id)).map(|w| w.id.clone()).collect::<Vec<_>>();
+    if candidates.is_empty() || state.runtime.runs.iter().any(|r| r.chat_id.as_deref() == Some(chat)
+        && crate::application::runs::status::active(&r.status)) {
+        return Vec::new();
+    }
+    candidates
+}
 fn position(range: &Range, watch: &str) -> Option<u64> {
     match range { Range::Watch { watch: id, through, .. } if id == watch => Some(*through), _ => None }
 }
