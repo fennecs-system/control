@@ -606,11 +606,12 @@ pub fn http(
         let chats = state
             .chats
             .iter()
-            .map(|c| {
+            .zip(crate::callsigns::all(&state.chats))
+            .map(|(c, callsign)| {
                 format!(
                     "<option value='{}'>{}</option>",
                     crate::escape(&c.id),
-                    crate::escape(&c.title)
+                    crate::escape(&crate::callsigns::label(c, callsign))
                 )
             })
             .collect::<String>();

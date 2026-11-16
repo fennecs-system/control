@@ -42,6 +42,7 @@ fn entries() -> impl Iterator<Item = Entry> {
             "open" => "/open [--as NAME] /absolute/path",
             "bot" => "/bot on [every N]",
             "model" => "/model [PROVIDER:MODEL | default]",
+            "rename" => "/rename NAME",
             _ => entry.text,
         }, description: entry.description,
     }))

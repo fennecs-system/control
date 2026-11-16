@@ -82,7 +82,7 @@ pub(super) fn label(state: &State, room: &str) -> String {
     let Some(address) = Address::parse(room) else { return room.to_owned(); };
     match address.thread {
         Some(thread) => {
-            let title = state.chats.iter().find(|chat| chat.id == thread).map_or(thread, |chat| chat.title.as_str());
+            let title = crate::callsigns::name_or_id(&state.chats, thread);
             format!("#{} · {title}", address.channel)
         }
         None => format!("#{}", address.channel),

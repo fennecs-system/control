@@ -252,6 +252,7 @@ pub const TOOLS: [Tool; 26] = [
             "control.chat.read",
             "control.chat.send",
             "control.chat.lenses",
+            "control.chat.rename",
         ],
         execution: "local Rust / chat service",
         surface: "chat / operator MCP",

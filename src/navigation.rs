@@ -82,6 +82,7 @@ pub fn history_tabs(runs: bool) -> String {
 fn conversation_window(state:&crate::State,active:&str,older:Option<&str>,newer:Option<&str>,picker:bool)->String {
     use std::collections::{HashMap,HashSet};
     let entries=crate::conversations::ordered(state);
+    let callsigns=crate::callsigns::all(&state.chats);
     let roots=entries.iter().enumerate().filter(|(_,entry)|entry.depth==0).map(|(index,_)|index).collect::<Vec<_>>();
     let find=|id:Option<&str>|id.and_then(|id|roots.iter().position(|index|entries[*index].session.id==id));
     let range=crate::pagination::window(roots.len(),find(older),find(newer));
@@ -123,7 +124,7 @@ fn conversation_window(state:&crate::State,active:&str,older:Option<&str>,newer:
         let chat=entry.session;
         // Keep very deep threads readable without narrowing their row backgrounds.
         let depth=entry.depth.min(8);
-        let title=crate::escape(&chat.title);
+        let title=crate::escape(&crate::callsigns::label(chat,callsigns[entry.position]));
         let current=if chat.id==active {" aria-current='page'"}else{""};
         let metadata=latest.get(chat.id.as_str()).map(|run| {
             let model=run.model.as_deref().map(|model|format!(" · {}",crate::escape(model))).unwrap_or_default();

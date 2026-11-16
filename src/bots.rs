@@ -1233,7 +1233,7 @@ fn advance(state: &mut State) -> (bool, bool) {
         }
         let decided = state.bots.approvals.iter().filter(mine).filter(|a| !a.acknowledged).cloned().collect::<Vec<_>>();
         let lines = decided.iter().map(|a| {
-            let title = state.chats.iter().find(|session| session.id == a.chat).map_or(a.chat.as_str(), |session| session.title.as_str());
+            let title = crate::callsigns::name_or_id(&state.chats, &a.chat);
             format!("{title} ({}): {}", a.chat, if a.decision == Decision::Approved { "approved, now a persistent bot" } else { "denied" })
         }).collect::<Vec<_>>().join("\n");
         let origins = decided.iter().map(|a| a.origin.as_str()).collect::<Vec<_>>();
@@ -1277,17 +1277,17 @@ pub(crate) fn decision_revision(state: &State) -> u64 {
 /// Pending requests from this chat and its same-actor descendants.
 pub(crate) fn pending_panel(state: &State, chat: &str) -> String {
     pending(state, chat).map(|a| {
-        let title = state.chats.iter().find(|session| session.id == a.chat).map_or(a.chat.as_str(), |session| session.title.as_str());
+        let title = crate::callsigns::name_or_id(&state.chats, &a.chat);
         let mut sources = Vec::new();
         if a.room { sources.push("room messages".to_owned()); }
         if judge_chat(state, &a.chat) { sources.push("team facts (read-only advisor)".to_owned()); }
         if let Some(minutes) = a.every_minutes { sources.push(format!("every {minutes} min")); }
         format!("<article class='assistant-message port-request' data-transcript-key='bot-{}'><h3>Bot request · {}</h3><p>{} · up to {TURNS_PER_WINDOW} turns/hour</p><form class='decision-form' method='post' action='/tools/bots' target='_top'><input type='hidden' name='id' value='{}'><input type='hidden' name='return_chat' value='{}'><button class='primary' name='allow' value='yes'>Allow bot</button><button name='deny' value='yes' formnovalidate>Deny</button><p role='alert' hidden></p></form></article>",
-            crate::escape(&a.id), crate::escape(title), crate::escape(&sources.join(" and ")), crate::escape(&a.id), crate::escape(chat))
+            crate::escape(&a.id), crate::escape(&title), crate::escape(&sources.join(" and ")), crate::escape(&a.id), crate::escape(chat))
     }).collect()
 }
 pub(crate) fn pending_json(state: &State, chat: &str) -> Value {
-    Value::from(pending(state, chat).map(Approval::summary).collect::<Vec<_>>())
+    Value::from(pending(state, chat).map(|a| { let mut summary = a.summary(); summary["name"] = json!(crate::callsigns::name_or_id(&state.chats, &a.chat)); summary }).collect::<Vec<_>>())
 }
 
 /// `POST /tools/bots` from the chat panel: allow or deny, then return to the chat.

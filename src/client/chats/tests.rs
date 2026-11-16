@@ -10,6 +10,9 @@ fn navigation_is_the_same_vocabulary_as_the_tui() {
     assert_eq!(navigation("/resume a b"), None);
     assert_eq!(navigation("/steer go left"), None);
     assert_eq!(navigation("resume c-1"), None);
+    assert_eq!(navigation("/rename  Farm lead "), Some(Navigation::Rename("Farm lead".into())));
+    assert_eq!(navigation("/rename"), Some(Navigation::Rename(String::new())), "the server answers with usage");
+    assert_eq!(navigation("/renamed x"), None);
 }
 
 #[test]
