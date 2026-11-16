@@ -103,7 +103,14 @@ pub fn operator_directories() -> Vec<PathBuf> {
 /// temporary root. XDG and HOME defaults are never used.
 #[cfg(any(test, feature = "test-isolation"))]
 fn isolated(explicit: Option<OsString>, kind: &str, operator: &[PathBuf]) -> Result<PathBuf, &'static str> {
+    let default = explicit.is_none();
     let path = explicit.map(PathBuf::from).unwrap_or_else(|| test_root().join(kind));
+    if default {
+        // A real node's directories exist before Control runs; the per-process
+        // test root must too, or saves below it fail with ENOENT.
+        use std::os::unix::fs::DirBuilderExt;
+        let _ = std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&path);
+    }
     if !path.is_absolute() {
         return Err("Control test node paths must be absolute");
     }
