@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::{fs, io, path::PathBuf};
 pub use tools::Tools;
 pub(crate) use tools::WAKE_RECEIPT;
+pub(crate) use tools::receipt_handle;
 /// Calls a continuity tool for an active attempt without persisting state.
 #[cfg(test)]
 pub(crate) fn tool_call(state: &mut State, run: &str, generation: &str, nonce: &str, name: &str, args: &serde_json::Value) -> io::Result<serde_json::Value> {

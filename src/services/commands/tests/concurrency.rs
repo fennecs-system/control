@@ -16,10 +16,10 @@ fn copy_work(id: &str) -> Work {
     }
 }
 fn launchable_ids(state: &State) -> Vec<String> {
-    launchable(&state.services[0].executions).into_iter().map(|e| e.id.clone()).collect()
+    launchable(&state.services[0].executions).into_iter().map(|e| handle(&e.id).to_owned()).collect()
 }
 fn set(state: &mut State, id: &str, status: Status) {
-    state.services[0].executions.iter_mut().find(|e| e.id == id).unwrap().status = status;
+    state.services[0].executions.iter_mut().find(|e| names(&e.id, id)).unwrap().status = status;
 }
 
 #[test]
@@ -46,7 +46,7 @@ fn concurrent_commands_launch_together_and_report_independently() {
     let read = |id: &str| status(&shared, &run, "attempt-a", &node, Handle { service_id: service.clone(), execution_id: id.into(), wait_seconds: 0 }).unwrap();
     let (a, b) = (read(&first), read(&second));
     assert_eq!((a["status"].as_str(), b["status"].as_str()), (Some("running"), Some("completed")));
-    assert_eq!((a["output"].as_str(), b["output"].as_str()), (Some(""), Some("ok\n")));
+    assert_eq!((a["output"].as_str(), b["output"].as_str()), (None, Some("ok\n")));
     finish(&first, "lost\n", 2);
     let a = read(&first);
     assert_eq!((a["status"].as_str(), a["exit_code"].as_i64(), a["output"].as_str()), (Some("failed"), Some(2), Some("lost\n")));
@@ -100,7 +100,7 @@ fn persisted_command_records_stay_bounded() {
     let (mut state, run, node, service) = fixture();
     let text = "x".repeat(16_000);
     let id = submit(&mut state, &run, &node, &service, "big", &text).unwrap();
-    let size = |state: &State| serde_json::to_vec(state.services[0].executions.iter().find(|e| e.id == id).unwrap()).unwrap().len();
+    let size = |state: &State| serde_json::to_vec(state.services[0].executions.iter().find(|e| names(&e.id, &id)).unwrap()).unwrap().len();
     // A request holds its text only until dispatch launches it (normally < 2 s).
     let requested = size(&state);
     let snapshot = state.services[0].clone();
@@ -159,7 +159,7 @@ fn a_copy_waits_for_running_commands_and_holds_the_service() {
     // A copy into an idle service launches at once, alone.
     let (mut state, run, node, service) = fixture();
     let copy = admit_work(&mut state, &run, "attempt-a", "copy", &node, copy_work(&service), |_| Ok(())).unwrap();
-    assert_eq!(copy["diagnostic"], "");
+    assert!(copy.get("diagnostic").is_none(), "an unset diagnostic is omitted");
     assert_eq!(launchable_ids(&state), [copy["execution_id"].as_str().unwrap().to_owned()]);
 }
 
@@ -181,7 +181,7 @@ fn finished_outputs_are_retained_beside_active_commands() {
     let active = (0..4).map(|n| submit(&mut state, &run, &node, &service, &format!("live-{n}"), "sleep 1").unwrap()).collect::<Vec<_>>();
     let executions = &state.services[0].executions;
     assert_eq!(executions.iter().filter(|e| !e.status.active()).count(), MAX_EXECUTIONS - 1, "one finished output made room; the rest stay");
-    assert!(active.iter().all(|id| executions.iter().any(|e| &e.id == id)), "active commands are never evicted");
+    assert!(active.iter().all(|id| executions.iter().any(|e| names(&e.id, id))), "active commands are never evicted");
     assert_eq!(state.services[0].command_receipts.len(), 1, "the evicted output keeps a retry receipt");
 }
 
@@ -204,7 +204,7 @@ fn restart_interrupts_every_running_command_once_and_reads_legacy_records() {
     assert_eq!(saves.get(), 1, "one durable stop decision per service");
     let state = shared.lock().unwrap();
     assert!(matches!(state.services[0].resource.phase, Phase::Stopping { .. }));
-    let by_id = |id: &str| state.services[0].executions.iter().find(|e| e.id == id).unwrap();
+    let by_id = |id: &str| state.services[0].executions.iter().find(|e| names(&e.id, id)).unwrap();
     for id in &ids[..2] {
         assert_eq!(by_id(id).status, Status::Interrupted);
         assert!(by_id(id).command.is_empty() && by_id(id).diagnostic.contains("no replay"));
@@ -223,4 +223,36 @@ fn restart_interrupts_every_running_command_once_and_reads_legacy_records() {
     let shared = Arc::new(Mutex::new(serde_json::from_value::<State>(json).unwrap()));
     recover(&shared, |_| Ok(())).unwrap();
     assert_eq!(shared.lock().unwrap().services[0].executions[0].status, Status::Interrupted);
+}
+
+#[test]
+fn results_show_short_handles_and_every_lookup_takes_handle_or_full_id() {
+    let (mut state, run, node, service) = fixture();
+    let shown = submit(&mut state, &run, &node, &service, "short", "true").unwrap();
+    let full = state.services[0].executions[0].id.clone();
+    assert_eq!((shown.len(), full.len()), (HANDLE, 64));
+    assert!(full.starts_with(&shown));
+    // A retry returns the same handle: request identity is unchanged.
+    assert_eq!(submit(&mut state, &run, &node, &service, "short", "true").unwrap(), shown);
+    let shared = Arc::new(Mutex::new(state));
+    let read = |id: &str| status(&shared, &run, "attempt-a", &node, Handle { service_id: service.clone(), execution_id: id.into(), wait_seconds: 0 });
+    let (by_handle, by_full) = (read(&shown).unwrap(), read(&full).unwrap());
+    assert_eq!(by_handle, by_full);
+    // Only fields that are set: no output, exit code, diagnostic or constants yet.
+    assert_eq!(by_handle, json!({"execution_id": shown, "status": "requested"}));
+    assert!(read(&shown[..HANDLE - 1]).unwrap_err().to_string().contains("not found"), "shorter prefixes name nothing");
+    // A handle that matches two records is refused rather than guessed.
+    {
+        let mut state = shared.lock().unwrap();
+        let mut twin = state.services[0].executions[0].clone();
+        twin.id = format!("{shown}{}", "f".repeat(64 - HANDLE));
+        assert_ne!(twin.id, full);
+        state.services[0].executions.push(twin);
+    }
+    assert!(read(&shown).unwrap_err().to_string().contains("pass the full execution_id"));
+    assert_eq!(read(&full).unwrap()["status"], "requested", "the full ID stays exact");
+    // An evicted record's receipt answers its handle with the outcome, minus constants.
+    let receipt = Receipt { id: format!("{}{}", "e".repeat(HANDLE), "0".repeat(64 - HANDLE)), digest: String::new(), run: run.clone(), attempt: "attempt-a".into(), status: Status::Failed, exit_code: Some(3), diagnostic: String::new() };
+    shared.lock().unwrap().services[0].command_receipts.push(receipt);
+    assert_eq!(read(&"e".repeat(HANDLE)).unwrap(), json!({"execution_id": "e".repeat(HANDLE), "status": "failed", "exit_code": 3, "output_evicted": true}));
 }

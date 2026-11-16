@@ -282,4 +282,15 @@ fn filtered_notifications_stay_readable_without_waking_and_survive_restart() {
     assert!(serde_json::to_value(&plain).unwrap().get("salience").is_none());
 }
 
+#[test]
+fn start_and_stop_return_a_brief_while_status_keeps_provenance() {
+    let watch = Watch { notification_channel: true, created_by: Some(Creator { run: "r".into(), attempt: "a".into() }), ..self::watch() };
+    let (summary, brief) = (watch.summary(), watch.brief());
+    assert_eq!((summary["created_by"]["run"].as_str(), summary["service_generation"].as_u64()), (Some("r"), Some(1)));
+    assert!(brief.get("created_by").is_none() && brief.get("service_generation").is_none(), "{brief}");
+    // The channel's fixed environment and format live in the tool description.
+    assert_eq!(brief["notification_channel"], serde_json::json!({"fd":3,"max_bytes":crate::watch_frame::MAX_LINE}));
+    assert_eq!((brief["watch_id"].as_str(), brief["active"].as_bool()), (Some("w-1"), Some(true)));
+}
+
 mod profile;

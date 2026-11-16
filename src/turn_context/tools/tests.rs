@@ -438,8 +438,8 @@ fn unicode_pages_stay_within_the_byte_budget_and_oversize_data_requires_resynchr
         .turn_mailbox
         .as_ref()
         .unwrap();
-    let receipt = second["receipt"].as_str().unwrap();
-    assert!(mailbox.deliveries[receipt].gap);
+    let receipt = resolve(&mailbox.deliveries, second["receipt"].as_str().unwrap());
+    assert!(mailbox.deliveries[&receipt].gap);
     assert!(second["events"][0]["unavailable"].is_string());
 }
 #[test]
@@ -678,11 +678,13 @@ fn only_a_disposition_is_required_and_wait_topics_are_normalised_not_refused() {
     }
     // An explicit empty selection keeps its meaning: urgent failures and direct messages only.
     let quiet = hand_off(&mut state, &id, &generation, "quiet", json!({"disposition":{"kind":"wait","topics":[]}})).unwrap();
-    assert_eq!(quiet["disposition"]["topics"], json!([]));
+    // Nothing was adjusted, so the result does not echo the request back.
+    assert!(quiet.get("disposition").is_none() && quiet.get("adjusted").is_none(), "{quiet}");
+    let staged = &state.runtime.runs[0].attempts[0].turn_mailbox.as_ref().unwrap().accepted().unwrap().disposition;
+    assert_eq!(json!(staged)["topics"], json!([]));
     // A stale base revision cannot race this attempt: used and reported.
     let stale = hand_off(&mut state, &id, &generation, "stale", json!({"base_revision":7,"disposition":{"kind":"continue"}})).unwrap();
-    assert_eq!(stale["base_revision"], 0);
-    assert!(stale["adjusted"].to_string().contains("base_revision 7"), "{stale}");
+    assert!(stale["adjusted"].to_string().contains("base_revision 7 is not the committed revision; used 0"), "{stale}");
     // What cannot be honoured is refused with a callable fix.
     let error = hand_off(&mut state, &id, &generation, "sleep", json!({"disposition":{"kind":"sleep"}})).unwrap_err().to_string();
     assert!(crate::worker_tools::fixes::names_fix(&error), "{error}");
@@ -708,16 +710,44 @@ fn omitted_receipts_process_what_was_delivered_and_explicit_ones_exactly_those()
     };
     let room = |processed: Vec<Range>| processed.iter().find_map(|r| match r { Range::Room { through, .. } => Some(*through), _ => None });
     // Partial: exactly the listed receipt.
+    // Results show receipt handles; the handle names the delivery.
+    assert_eq!(first["receipt"].as_str().unwrap().len(), RECEIPT_HANDLE);
     let partial = hand_off(&mut state, &id, &generation, "partial", json!({"processed":[first["receipt"]],"disposition":"continue"})).unwrap();
-    assert_eq!(partial["processed"], json!([first["receipt"]]));
+    assert_eq!(partial["processed"], 1);
+    assert_eq!(room(publish(&state)), Some(2));
+    // The full receipt is accepted too and processes the same delivery.
+    let full = state.runtime.runs[0].attempts[0].turn_mailbox.as_ref().unwrap().deliveries.keys()
+        .find(|key| key.starts_with(first["receipt"].as_str().unwrap())).unwrap().clone();
+    assert_eq!(full.len(), 64);
+    let by_full = hand_off(&mut state, &id, &generation, "partial-full", json!({"processed":[full],"disposition":"continue"})).unwrap();
+    assert_eq!((by_full["processed"].as_u64(), by_full.get("left_pending")), (Some(1), None), "{by_full}");
     assert_eq!(room(publish(&state)), Some(2));
     // A receipt that would skip unseen events stays pending instead of failing the handoff.
     let skip = hand_off(&mut state, &id, &generation, "skip", json!({"processed":[second["receipt"]],"disposition":"continue"})).unwrap();
-    assert_eq!(skip["processed"], json!([]), "{skip}");
+    assert_eq!(skip["processed"], 0, "{skip}");
     assert_eq!(skip["left_pending"][0]["receipt"], second["receipt"]);
+    assert!(skip["left_pending"][0]["reason"].is_string() && skip["adjusted"].is_array(), "{skip}");
     assert_eq!(room(publish(&state)), None);
     // Omitted: everything delivered in this attempt, in order.
     let all = hand_off(&mut state, &id, &generation, "all", json!({"disposition":"continue"})).unwrap();
-    assert_eq!(all["left_pending"], json!([]), "{all}");
+    assert!(all.get("left_pending").is_none(), "{all}");
+    assert_eq!((all["staged"].as_bool(), all["processed"].as_u64()), (Some(true), Some(2)), "{all}");
     assert_eq!(room(publish(&state)), Some(3));
+}
+
+#[test]
+fn context_reads_carry_events_and_position_not_the_notes_the_prompt_already_shows() {
+    let (mut state, id, generation) = fixture();
+    hand_off(&mut state, &id, &generation, "notes", json!({"disposition":"continue","payload":{"subgoal":"ship it","findings":[],"tried":[],"pending":[],"next":[]}})).unwrap();
+    post(&mut state, "first");
+    let read = read_room(&mut state, &id, &generation, "plain");
+    for absent in ["working_state", "guidance"] {
+        assert!(read.get(absent).is_none(), "{absent}: {read}");
+    }
+    assert_eq!(read["draft"], json!({"disposition":{"kind":"continue"}}), "a staged draft is summarised");
+    assert_eq!(read["events"][0]["text"], "first");
+    assert!(read["receipt"].is_string() && read["through"].is_u64() && read["budget"]["elapsed_seconds"].is_u64(), "{read}");
+    let cx = AttemptRef { run: &id, generation: &generation, nonce: "with-notes" };
+    let notes = handle(&mut state, &cx, "control_turn_context", &json!({"source":"room","notes":true}), |_| Ok(())).unwrap();
+    assert!(notes.get("working_state").is_some_and(Value::is_null) || notes["working_state"].is_object(), "{notes}");
 }
