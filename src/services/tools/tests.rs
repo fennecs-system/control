@@ -87,3 +87,13 @@ fn service_tools_decode_typed_calls_and_keep_lenient_service_ids() {
     );
     assert_eq!(host.0.lock().unwrap().len(), 7);
 }
+
+#[test]
+fn exec_description_reserves_repetition_for_routines() {
+    let definitions = Tools.definitions();
+    let exec = definitions.iter().find(|d| d["name"] == "control_service_exec").unwrap()["description"].as_str().unwrap();
+    assert!(exec.starts_with("Run a one-off command inside"));
+    for phrase in ["setup, inspection, or installing and editing a routine", "For anything repeated or polled, write a routine (control_watch_start) instead", "Uncertain commands are never replayed", "Waits up to wait_seconds"] {
+        assert!(exec.contains(phrase), "{phrase}");
+    }
+}
