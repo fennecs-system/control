@@ -1,5 +1,5 @@
 use crate::{escape, State};
-use control_context::{Definition, DocumentInput, Resolved};
+use control_context::{Audience, Definition, DocumentInput, Resolved};
 use std::{
     collections::HashMap,
     io::{self, Write},
@@ -36,19 +36,37 @@ pub(crate) fn offers(state: &State, roots: &[String], tool: &str) -> bool {
     }
     false
 }
-/// Render the captured context, never the current editable library. Instructions
-/// appear once as guidance, separately from documents and descriptive tool hints.
-pub fn prompt(context: &Resolved) -> String {
+/// The run's place in its task tree, from delegation records only.
+pub fn audience(run: &crate::runtime::Run) -> Audience {
+    match &run.persona {
+        Some(persona) if persona.role == crate::delegation::Role::Judge => Audience::Advisor,
+        Some(persona) if persona.depth > 0 => Audience::Member,
+        _ => Audience::Lead,
+    }
+}
+/// Render the captured context, never the current editable library, for one
+/// role. Inline instructions appear once; on-demand lenses appear as one index
+/// line each, read in full with `control_guidance`. Role-scoped lenses are
+/// left out for other roles. Documents and tool hints follow.
+pub fn prompt(context: &Resolved, role: Audience) -> String {
     if context.roots.is_empty() { return String::new(); }
     let names = context.roots.iter().map(|id| context.lenses.iter()
         .find(|lens| &lens.id == id).map_or(id.as_str(), |lens| lens.name.as_str()))
         .collect::<Vec<_>>().join(" + ");
     let mut text = format!("Selected context lenses: {names}. Tool descriptors are a preview, not additional capabilities.\nResolved lens snapshot: {}\n",
         context.lenses.iter().map(|lens| format!("{}@{}", lens.id, lens.revision)).collect::<Vec<_>>().join(", "));
-    if !context.instructions.is_empty() {
+    let inline = context.inline(role).collect::<Vec<_>>();
+    if !inline.is_empty() {
         text.push_str("Captured lens guidance (task-scoped preferences; current user direction and enforced policy take precedence):\n");
-        text.push_str(&context.instructions.join("\n\n"));
+        text.push_str(&inline.join("\n\n"));
         text.push('\n');
+    }
+    let mut index = context.on_demand(role).peekable();
+    if index.peek().is_some() {
+        text.push_str("Guidance on demand: when a situation below arises, read the captured text once with control_guidance(topic); do not re-read it every turn.\n");
+        for guidance in index {
+            text.push_str(&format!("- {}: {}\n", guidance.id, guidance.summary));
+        }
     }
     if !context.tools.is_empty() {
         text.push_str(&format!("Tool context (descriptive hints, not an allowlist): {}\n", context.tools.join(", ")));
@@ -110,6 +128,9 @@ pub fn draft(fields: &HashMap<String, String>) -> Definition {
             .filter_map(|k| k.strip_prefix("package_").map(str::to_owned))
             .collect(),
         instructions: value("instructions"),
+        summary: value("summary").trim().to_owned(),
+        roles: Audience::ALL.into_iter().filter(|role| fields.contains_key(&format!("role_{}", role.as_str()))).collect(),
+        inline: Audience::ALL.into_iter().filter(|role| fields.contains_key(&format!("inline_{}", role.as_str()))).collect(),
     }
 }
 pub(crate) fn save_with(
@@ -251,7 +272,15 @@ pub fn render(
     if state.packages.is_empty() && definition.packages.is_empty() {
         html.push_str("<p class='muted'>No packages admitted. Use control package import.</p>");
     }
-    html.push_str(&format!("</div></fieldset><label>Instructions<textarea name='instructions' rows='4' maxlength='4000' placeholder='Guidance to include in this context…'>{}</textarea></label><button class='primary'>Save lens ↗</button></form>",escape(&definition.instructions)));
+    html.push_str("</div></fieldset><fieldset><legend>Roles</legend><p class='muted'>Who sees this lens; none checked means every role. With a summary, prompts carry only that line and agents read the instructions on demand, except for roles marked inline.</p><div class='library-choices'>");
+    for role in Audience::ALL {
+        html.push_str(&checkbox("role", role.as_str(), role.as_str(), definition.roles.contains(&role)));
+    }
+    for role in Audience::ALL {
+        html.push_str(&checkbox("inline", role.as_str(), &format!("{} inline", role.as_str()), definition.inline.contains(&role)));
+    }
+    html.push_str(&format!("</div></fieldset><label>On-demand summary<input name='summary' maxlength='240' value='{}' placeholder='One line; empty includes the instructions in every prompt'></label>", escape(&definition.summary)));
+    html.push_str(&format!("<label>Instructions<textarea name='instructions' rows='4' maxlength='4000' placeholder='Guidance to include in this context…'>{}</textarea></label><button class='primary'>Save lens ↗</button></form>",escape(&definition.instructions)));
     if !definition.id.is_empty() && submitted.is_none() {
         html.push_str("<details class='resolved-context' open><summary>Resolved context</summary>");
         match resolve(state, std::slice::from_ref(&definition.id)) {
@@ -266,11 +295,16 @@ pub fn render(
                     ));
                 }
                 html.push_str("</div><h3>Effective instructions</h3>");
-                if resolved.instructions.is_empty() {
+                if resolved.instructions.is_empty() && resolved.guidance.is_empty() {
                     html.push_str("<p class='muted'>No lens instructions.</p>");
                 }
                 for instruction in &resolved.instructions {
                     html.push_str(&format!("<pre class='manifest'>{}</pre>", escape(instruction)));
+                }
+                for guidance in &resolved.guidance {
+                    let roles = if guidance.roles.is_empty() { "every role".to_owned() } else { guidance.roles.iter().map(|r| r.as_str()).collect::<Vec<_>>().join(", ") };
+                    let summary = if guidance.summary.is_empty() { String::new() } else { format!(" · on demand: {}", escape(&guidance.summary)) };
+                    html.push_str(&format!("<p class='muted'>{} ({roles}){summary}</p><pre class='manifest'>{}</pre>", escape(&guidance.name), escape(&guidance.text)));
                 }
                 html.push_str("<h3>Tool context</h3><ul class='knowledge'>");
                 for tool in &resolved.tools {

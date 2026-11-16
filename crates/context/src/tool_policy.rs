@@ -15,7 +15,7 @@ pub fn supported(version: &str) -> bool {
 /// closed. Isolated execution still starts work, so it is fenced after yield.
 pub fn after_handoff(name:&str)->bool {
     matches!(name,
-        "control_turn_context"|"control_turn_handoff"|"control_history_read"|
+        "control_turn_context"|"control_turn_handoff"|"control_history_read"|"control_guidance"|
         "control_service_status"|"control_service_exec_status"|
         "control_port_status"|"control_bot_status"|
         "control_workspace_status"|"control_watch_status"|"control_watch_events"|

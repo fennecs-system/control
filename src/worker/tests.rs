@@ -386,7 +386,7 @@ fn bot_activation_keeps_the_live_protocol_and_captures_only_the_next_admission()
     let input = crate::turn_context::input(attempt).unwrap().unwrap();
     assert!(!input.contains("Old room history"));
     assert!(input.contains("Created /workspace/tool.rs"));
-    assert!(input.contains("no periodic handoff target"));
+    assert!(input.contains(control_context::agent_policy::ACTIVE_SESSION_GUIDANCE));
 }
 #[test]
 fn project_io_activity_is_live_without_holding_state_lock_and_retains_failures() {

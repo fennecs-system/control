@@ -37,6 +37,7 @@ mod federation;
 mod github;
 mod knowledge;
 mod knowledge_tools;
+mod guidance;
 mod lens_library;
 mod lens_ui;
 mod lifecycle;

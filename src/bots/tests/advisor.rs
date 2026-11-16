@@ -335,7 +335,7 @@ fn a_member_becoming_blocked_is_one_fact_per_transition() {
     let runs = advisor_runs(&state, &advisor);
     assert_eq!(runs.len(), 1);
     assert_eq!(facts(runs[0]), [Facts { blocked: vec![blocked("wood-tools", &producer, "working", &[("mine", &miner)])], chats: vec![miner.clone()], ..Facts::default() }]);
-    assert!(runs[0].objective.contains("1 claim(s) newly blocked on general/wood-tools") && runs[0].objective.contains("produce the input themselves"));
+    assert!(runs[0].objective.contains("1 claim(s) newly blocked on general/wood-tools") && runs[0].objective.contains("following the Team advisor guidance"));
     finish(&mut state, &advisor);
     // Staying blocked, even with a new note and revision, is the same state.
     let since = crate::rooms::claims::find(&state, "general", "mine").unwrap().blocked_at;

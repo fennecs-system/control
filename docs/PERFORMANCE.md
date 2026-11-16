@@ -19,6 +19,51 @@ the broker path under the state lock already taken for callback notices: a few
 field reads per call, plus one pass over chats and active runs only once a
 steering threshold is reached and the note has not yet been sent.
 
+## Guidance on demand: wake-context bytes (2026-11-16)
+
+Every wake starts a fresh provider session, so its whole context is resent.
+Before this change about 17 KB of each wake was generic policy: every captured
+lens's full text plus long room and session guidance, the same for lead,
+members and advisor. Now prompts carry a short core and one index line per
+on-demand lens ([LENSES.md](LENSES.md#guidance-on-demand-and-role-scoping)),
+and role-scoped lenses are left out for other roles.
+
+`turn_context::tests::policy_size` builds a run -128-shaped team (lead with
+`swarm` + `advisor`, a persistent member and the advisor, each woken by a room
+post after a dozen earlier callbacks) and measures the policy section and the
+whole wake text. Same fixture on `96cef20` (before) and this branch (after),
+UTF-8 bytes:
+
+| Role | Policy before | Policy after | Wake before | Wake after |
+| --- | ---: | ---: | ---: | ---: |
+| Lead | 17,209 | 2,958 | 26,447 | 12,196 |
+| Member | 17,209 | 2,768 | 26,538 | 12,097 |
+| Advisor | 15,875 | 5,122 | 19,255 | 7,633 |
+
+The advisor keeps its own 2.8 KB procedure inline. The fixture fails if a
+member's policy exceeds 3,072 bytes, a lead's 3,328 or the advisor's 5,632.
+
+Replay of the 182 captured run -128 contexts (read-only from
+`context-traces/contexts.jsonl`), replacing each policy section with this
+branch's policy for its role and keeping everything else:
+
+| Role | Contexts | Wake median before | Wake median after | Wake max after |
+| --- | ---: | ---: | ---: | ---: |
+| Lead and other root chats | 17 | 27,517 | 13,730 | 17,141 |
+| Member | 165 | 35,251 | 21,363 | 31,386 |
+
+The remainder is task-specific: the original assignment, working notes,
+recovery evidence and history. The adapter framing before the policy (about
+3 KB: environment, room protocol, language and reporting rules) is unchanged
+and is the next candidate. Tool schemas are sent separately at session start:
+46 core worker tools, 44,587 bytes of JSON before room tools, so per-role tool
+exposure (scoped in [LENSES.md](LENSES.md#current-boundaries)) is the larger
+remaining saving. Rendering adds one pass over at most 128 captured lenses per
+prompt; `control_guidance` is a read of the captured context under the state
+lock already taken for tool calls. Reproduce with
+`cargo test --locked --bin control policy_size -- --nocapture`
+(`CONTROL_PRINT_POLICY=1` prints the member's wake text).
+
 ## Chat callsigns (2026-11-16)
 
 Chats are shown by callsigns derived on read (`callsigns::all`: one pass over
