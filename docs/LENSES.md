@@ -332,8 +332,9 @@ already covers those. The procedure:
 1. Build layers bottom-up. First one shared always-on reflex layer for
    reactions faster than a turn (protect, recover, maintain), built early by one
    member while others keep working and reused by every member instead of each
-   embedding its own guards. Then skills: bounded routines on top of it that work
-   toward a target. Supervise from their events.
+   embedding its own guards. Reflexes commit (see the jitter pitfall below).
+   Then skills: bounded routines on top of it that work toward a target.
+   Supervise from their events.
 2. Routines observe and filter, escalating only salient changes (milestones,
    failures, threats they cannot handle), never raw streams.
 3. Composite manoeuvres (sequenced, timed behaviours) are skills too: the model
@@ -342,6 +343,19 @@ already covers those. The procedure:
    escalations, without re-checking the world each step.
 5. Reflexes and skills live in one self-contained folder with a README and
    notification contract, ready to save as a [tool package](TOOL-PACKAGES.md).
+
+**Pitfall: jitter.** In run -128 the swarm's shared reflex layer thrashed: a
+player surrounded by hostiles walked a few metres, stopped, swung once,
+re-planned, and repeated. The cause was preemption without hysteresis. Each
+500 ms tick re-decided from scratch on the single nearest threat; any threat
+within a wide radius cancelled the running routine, clearing its goal and
+controls, so resuming meant a fresh path search; a reaction did one action and
+then returned control; and the mode flipped whenever health crossed a
+threshold. Reflexes should commit instead: an engaged reaction acts
+continuously and holds until its trigger has stayed clear for a while, weighs
+all threats and conditions rather than the nearest, preempts a routine only for
+imminent triggers while watching distant ones, and pauses a routine's goal to
+resume it rather than cancelling and recomputing it.
 
 Runs -121 and -128 drove an external system one small job per tool call, and
 the operator repeatedly steered them towards exactly this: a shared safety and
