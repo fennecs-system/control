@@ -1,5 +1,29 @@
 # Performance checks
 
+## Planning tools (2026-11-16)
+
+`control_search_path` timings from the ignored `graph_search::tests::profile`
+fixture: release build, one Apple Silicon laptop, median of five calls each,
+including JSON deserialisation and graph construction. The graph is a random
+geometric graph (20,000 points in a 1000×1000 square, five random neighbours
+each, undirected, cost = length × [1, 2)); the grids have 100,000 random
+blocked cells (about 10%), corner to corner.
+
+| Case | A* | Dijkstra | Expanded (A* / Dijkstra) |
+| --- | ---: | ---: | ---: |
+| graph, 20k nodes / 100k edges | 27.0 ms | 25.9 ms | 2,448 / 10,489 |
+| grid 1000×1000, 4-connected | 9.3 ms | 78.8 ms | 53,270 / 904,797 |
+| grid 1000×1000, 8-connected | 40.0 ms | 79.6 ms | 162,274 / 904,797 |
+| grid 100³ open, 26-connected | 2.0 ms | — | 99 / — |
+
+Deserialising the maximum graph alone takes 17.3 ms, so graph calls are bounded
+by input handling rather than search; A* still expands a quarter of the nodes.
+On grids, which are generated from a small description, the search dominates
+and A* is up to 8× faster. All cases are far inside the 2-second limit.
+`control_room_plan` walks at most one room's 128 claims linearly and needs no
+benchmark. Reproduce with
+`cargo test --release --locked --bin control graph_search::tests::profile -- --ignored --nocapture`.
+
 ## Timed-out turns and steering notes (2026-11-16)
 
 The advisor's `timed_out` fact adds one per-chat slot and one attempt check per

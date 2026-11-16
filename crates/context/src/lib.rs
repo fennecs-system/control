@@ -20,7 +20,7 @@ pub struct Tool {
     pub aliases: &'static str,
     pub mcp_names: &'static [&'static str],
 }
-pub const TOOLS: [Tool; 26] = [
+pub const TOOLS: [Tool; 27] = [
     Tool {
         name: "service.watch", title: "Watches", description: "Routines and program output that wake agents",
         href: None, aliases: "watch routine reflex monitor stream stdout events wake tail websocket ssh",
@@ -186,6 +186,17 @@ pub const TOOLS: [Tool; 26] = [
         available: true,
     },
     Tool {
+        name: "search.path",
+        title: "Path search",
+        description: "A* / Dijkstra over an inline graph or grid",
+        href: None,
+        aliases: "route routing shortest path planning graph grid astar dijkstra navigation",
+        mcp_names: &["control.search.path", "control_search_path"],
+        execution: "pure Rust",
+        surface: "MCP",
+        available: true,
+    },
+    Tool {
         name: "browser.capture",
         title: "Browser",
         description: "Scoped web pages · offline Firefox capture",
@@ -224,6 +235,7 @@ pub const TOOLS: [Tool; 26] = [
             "control_room_notifications",
             "control_room_ack",
             "control_room_claim",
+            "control_room_plan",
         ],
         execution: "local Rust / scoped room broker",
         surface: "rooms / MCP / room-linked agents",

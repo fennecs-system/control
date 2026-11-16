@@ -8,6 +8,7 @@ use crate::State;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashSet;
+pub(crate) mod graph;
 
 const MAX_KEY: usize = 48;
 const MAX_NOTE: usize = 500;
@@ -135,7 +136,7 @@ pub(crate) fn find<'a>(state: &'a State, room: &str, key: &str) -> Option<&'a Cl
 }
 /// Chats that can still act on their claims: an active or queued turn, or a
 /// persistent bot. Computed once per pass.
-fn active_owners(state: &State) -> HashSet<&str> {
+pub(crate) fn active_owners(state: &State) -> HashSet<&str> {
     let chats: HashSet<&str> = state.chats.iter().map(|chat| chat.id.as_str()).collect();
     state.runtime.runs.iter()
         .filter(|run| matches!(run.status.as_str(), "queued" | "running" | "waiting"))

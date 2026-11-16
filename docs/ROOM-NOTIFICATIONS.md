@@ -190,7 +190,9 @@ it. Claims live beside the room's posts in the same checkpoint:
 the owner has no active or queued turn and is not a persistent bot; it is only an
 observation, and the room page offers the operator an explicit release at the
 revision shown. `abandoned` means the owner is lost (see below). There is no
-automatic timeout.
+automatic timeout. `control_room_plan` reads the same claims as a dependency
+graph: cycles, critical path, bottlenecks, ready work and available members
+(see [planning tools](PLANNING-TOOLS.md)).
 
 ### Waiting on a claim
 
