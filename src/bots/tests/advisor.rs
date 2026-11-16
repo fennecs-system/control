@@ -649,3 +649,28 @@ fn the_bottleneck_threshold_counts_distinct_members_other_than_the_owner() {
     assert_eq!(observed.len(), 1);
     assert_eq!((observed[0].members.len(), observed[0].dependents), (3, 5));
 }
+
+#[test]
+fn the_room_plan_reports_the_advisor_bottlenecks() {
+    let mut state = State::default();
+    let spec = [("hub", None), ("a", Some("hub")), ("b", Some("a")), ("c", Some("hub")), ("d", Some("b")), ("x", Some("y")), ("y", Some("x")), ("z", Some("x"))];
+    for (key, on) in spec {
+        let chat = crate::chat::create(&mut state);
+        let mut args = json!({"key":key,"action":"acquire"});
+        if let Some(on) = on { args["status"] = json!("blocked"); args["blocked_on"] = json!(on); }
+        crate::rooms::claims::call(&mut state, &chat, "general", &args).unwrap();
+    }
+    let all = state.collective.claims.iter().collect::<Vec<_>>();
+    let plan = crate::rooms::plan::plan(&state, "general");
+    for threshold in 1..=4 {
+        let advisor = lifecycle::bottlenecks(&state, &all, threshold).into_iter()
+            .map(|(_, neck)| (neck.key, u64::from(neck.dependents), neck.members, neck.cycle)).collect::<Vec<_>>();
+        let planned = plan["bottlenecks"].as_array().unwrap().iter()
+            .filter(|neck| !neck["owner"].is_null() && neck["members"].as_array().unwrap().len() >= threshold)
+            .map(|neck| (neck["key"].as_str().unwrap().to_owned(), neck["dependents"].as_u64().unwrap(),
+                serde_json::from_value::<Vec<String>>(neck["members"].clone()).unwrap(), neck["cycle"] == true))
+            .collect::<Vec<_>>();
+        assert!(!advisor.is_empty() || threshold == 4, "threshold {threshold}");
+        assert_eq!(advisor, planned, "threshold {threshold}");
+    }
+}

@@ -689,7 +689,7 @@ pub(crate) const UNSEEN_RANGE:&str=" That error means a listed receipt starts af
 /// only effect.
 pub(crate) fn advice(woke: &str, lead: &str) -> String {
     let woke = woke.chars().take(1000).collect::<String>();
-    format!("You are this task tree's read-only advisor, woken by host facts: {woke}. Inspect the team with control_room_read and, following the Team advisor guidance, send the lead's steering chat {lead} at most one concise note with control_agent_message; send nothing when evidence is unchanged. End the turn when done.")
+    format!("You are this task tree's read-only advisor, woken by host facts: {woke}. Inspect the team with control_room_read and control_room_plan and, following the Team advisor guidance, send the lead's steering chat {lead} at most one concise note with control_agent_message; send nothing when evidence is unchanged. End the turn when done.")
 }
 fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
     let chat = request.chat.0.as_str();

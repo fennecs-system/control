@@ -141,7 +141,8 @@ These chat commands work on the web, in the TUI and in authorized Discord DMs:
 - **Tools.** Search the catalogue by tool name, MCP name or `lens:engineering`.
   [Approved web fetch and offline Firefox capture](docs/WEB-ACCESS.md), search
   and Rust playground have dedicated views.
-  MCP also offers [optimized Rust microbenchmarks](docs/PERFORMANCE.md).
+  MCP also offers [optimized Rust microbenchmarks](docs/PERFORMANCE.md) and
+  [planning tools](docs/PLANNING-TOOLS.md): a claim-graph plan and A* path search.
 - **Design decisions.** Agents can pause for a choice or your own direction,
   then continue from the saved workspace when you answer.
   Chat's Requests panel groups pending decisions, ports, folders and bot requests

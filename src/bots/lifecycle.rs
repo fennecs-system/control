@@ -17,37 +17,9 @@ use crate::rooms::claims::{self, Claim, Status};
 use control_effect::machine::Machine;
 use control_bot::{Source, Topic};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
-use std::hash::{BuildHasherDefault, Hasher};
-
-/// Word-at-a-time multiplicative hash (rustc's Fx) for the per-pass maps over
-/// local chat IDs. SipHash lookups dominated the measured scan; these maps live
-/// for one pass and never key on remote input.
-#[derive(Default)]
-struct Fx(u64);
-impl Fx {
-    fn add(&mut self, word: u64) {
-        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
-    }
-}
-impl Hasher for Fx {
-    fn write(&mut self, bytes: &[u8]) {
-        let (words, rest) = bytes.as_chunks::<8>();
-        for word in words {
-            self.add(u64::from_le_bytes(*word));
-        }
-        let mut tail = [0; 8];
-        tail[..rest.len()].copy_from_slice(rest);
-        self.add(u64::from_le_bytes(tail));
-    }
-    fn write_u8(&mut self, byte: u8) {
-        self.add(u64::from(byte));
-    }
-    fn finish(&self) -> u64 {
-        self.0
-    }
-}
-type Fast<K, V> = HashMap<K, V, BuildHasherDefault<Fx>>;
+use crate::rooms::claims::graph::{Fast, Fx, Waits};
+use std::collections::BTreeMap;
+use std::hash::Hasher;
 
 pub(super) const KIND: &str = "task";
 /// Chats named in one coalesced fact; the advisor reads the rest itself.
@@ -200,42 +172,19 @@ const BOTTLENECKS: usize = 64;
 
 /// Live claims that `threshold` or more members wait on, each with an identity
 /// of (claim incarnation, dependent claim set). `claims` are the team members'
-/// claims; dependents are their live blocked claims. Visited sets make cycles
-/// in `blocked_on` terminate.
-fn bottlenecks(state: &State, claims: &[&Claim], threshold: usize) -> Vec<(u64, Bottleneck)> {
-    // Live members' claims waiting on each (room, key).
-    let mut waiting: Fast<(&str, &str), Vec<&Claim>> = Fast::default();
-    for claim in claims.iter().filter(|claim| claim.status == Status::Blocked && !claim.abandoned) {
-        if let Some(on) = claim.blocked_on.as_deref() {
-            waiting.entry((claim.room.as_str(), on)).or_default().push(claim);
-        }
-    }
-    if waiting.values().map(Vec::len).sum::<usize>() < threshold {
+/// claims; dependents are their live blocked claims. The walk is the claim
+/// graph's (`rooms::claims::graph`), shared with `control_room_plan`.
+pub(super) fn bottlenecks(state: &State, claims: &[&Claim], threshold: usize) -> Vec<(u64, Bottleneck)> {
+    let waiting = Waits::of(claims.iter().copied());
+    if waiting.edges() < threshold {
         return Vec::new();
     }
     let live = state.collective.claims.iter()
-        .filter(|claim| matches!(claim.status, Status::Working | Status::Blocked) && waiting.contains_key(&(claim.room.as_str(), claim.key.as_str())));
+        .filter(|claim| matches!(claim.status, Status::Working | Status::Blocked) && waiting.waited(&claim.room, &claim.key));
     let mut found = Vec::new();
     for held in live {
-        let mut visited: Fast<&str, ()> = Fast::default();
-        let (mut cycle, mut next) = (false, 0);
-        let mut frontier = vec![held];
-        // Breadth first, so the nearest dependents are listed first.
-        while next < frontier.len() {
-            let at = frontier[next];
-            next += 1;
-            for &claim in waiting.get(&(at.room.as_str(), at.key.as_str())).into_iter().flatten() {
-                if claim.key == held.key {
-                    cycle = true;
-                } else if visited.insert(claim.key.as_str(), ()).is_none() {
-                    frontier.push(claim);
-                }
-            }
-        }
-        let seen = &frontier[1..];
-        let mut members = seen.iter().map(|claim| claim.owner.as_str()).filter(|owner| *owner != held.owner).collect::<Vec<_>>();
-        members.sort_unstable();
-        members.dedup();
+        let reach = waiting.reach(&held.room, &held.key, Some(&held.owner));
+        let (seen, members, cycle) = (&reach.dependents, &reach.members, reach.cycle);
         if members.len() < threshold {
             continue;
         }

@@ -100,7 +100,7 @@ fn dispatch_at(
                 tools.retain(|tool|!matches!(tool["name"].as_str(),Some("control_turn_context"|"control_turn_handoff")));
             }
             if judge {
-                tools.retain(|tool|(advisor && tool["name"]=="control_agent_message") || matches!(tool["name"].as_str(),Some("control.web.search"|"control.rust.run"|"control.rust.bench"|"control_agent_result"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_knowledge_read"|"control_knowledge_search")));
+                tools.retain(|tool|(advisor && tool["name"]=="control_agent_message") || matches!(tool["name"].as_str(),Some("control.web.search"|"control.rust.run"|"control.rust.bench"|"control.search.path"|"control_agent_result"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_knowledge_read"|"control_knowledge_search")));
             }
             if judge {
                 // Read-only captured guidance; advisors read their own procedure.
@@ -118,6 +118,7 @@ fn dispatch_at(
                     "control.web.search" => "control_web_search",
                     "control.rust.run" => "control_rust_run",
                     "control.rust.bench" => "control_rust_bench",
+                    "control.search.path" => "control_search_path",
                     other => other,
                 });
             }
@@ -140,7 +141,7 @@ fn dispatch_at(
             if request["params"]["name"]=="control_guidance" {
                 return json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(crate::guidance::answer(run,&request["params"]["arguments"]))});
             }
-            if judge && !(advisor && request["params"]["name"]=="control_agent_message") && !matches!(request["params"]["name"].as_str(),Some("control_workspace_run"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_web_search"|"control_rust_run"|"control_rust_bench"|"control_room_list"|"control_room_read"|"control_room_post"|"control_agent_result"|"control_knowledge_read"|"control_knowledge_search"|"control_packages_search"|"control_package_read")) {
+            if judge && !(advisor && request["params"]["name"]=="control_agent_message") && !matches!(request["params"]["name"].as_str(),Some("control_workspace_run"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_web_search"|"control_rust_run"|"control_rust_bench"|"control_search_path"|"control_room_list"|"control_room_read"|"control_room_plan"|"control_room_post"|"control_agent_result"|"control_knowledge_read"|"control_knowledge_search"|"control_packages_search"|"control_package_read")) {
                 return error("Judge policy permits read-only source inspection, isolated verification and room collaboration only.");
             }
             let blocking_spawn=request["params"]["name"]=="control_agent_spawn_blocking";
@@ -355,6 +356,7 @@ fn dispatch_at(
                 "control_web_search" => "control.web.search",
                 "control_rust_run" => "control.rust.run",
                 "control_rust_bench" => "control.rust.bench",
+                "control_search_path" => "control.search.path",
                 other => other,
             };
             if crate::toolbox::known(name) {
@@ -367,7 +369,7 @@ fn dispatch_at(
             } else if name == "control_browser_capture" {
                 drop(state);
                 crate::web_access::capture_tool(&request["params"]["arguments"]).unwrap_or_else(|error|crate::toolbox::result(Err(error)))
-            } else if ["control_room_list", "control_room_read", "control_room_post", "control_room_watch", "control_room_notifications", "control_room_ack", "control_room_claim"].contains(&name) {
+            } else if ["control_room_list", "control_room_read", "control_room_post", "control_room_watch", "control_room_notifications", "control_room_ack", "control_room_claim", "control_room_plan"].contains(&name) {
                 return rooms::checkpoint(&mut state, run_id, envelope, crate::storage::save);
             } else {
                 return error("Tool is not allowed for this worker");

@@ -474,7 +474,7 @@ accepted facts. Inspect the captured context when checking what a worker receive
 
 **Tool exposure by role (scoped, not implemented).** Prompts are now role
 scoped; tool lists are not. Every managed worker session still receives the
-full worker tool list: 46 core schemas, about 44.6 KB of JSON, before room
+full worker tool list: 47 core schemas, about 46.6 KB of JSON, before room
 tools, which is more than the whole on-demand prompt. The run -128 review found
 members used about 15 of 66 `control_*` tools. Native CLIs only call tools
 listed at session start, so hiding a tool means a call-through: a small default
