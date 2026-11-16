@@ -69,6 +69,12 @@ fn optional_procedures_compose_without_adding_tools_or_authority() {
     assert_eq!(swarm.instructions.iter().filter(|text| planning.instructions.contains(text)).count(), 1);
     let swarm_only = library.resolve(&["swarm".into()], &[]).unwrap();
     assert!(swarm_only.lenses.iter().any(|lens| lens.id == "planning"));
+    // Ganglia is opt-in so runs with and without it can be compared.
+    assert!(!swarm_only.lenses.iter().any(|lens| lens.id == "ganglia"));
+    let ganglia = library.resolve(&["swarm".into(), "ganglia".into()], &[]).unwrap();
+    assert_eq!(ganglia.tools, swarm_only.tools);
+    assert!(ganglia.documents.is_empty() && ganglia.packages.is_empty());
+    assert_eq!(ganglia.lenses.len(), swarm_only.lenses.len() + 1);
     assert!(swarm_only.instructions.contains(&planning.instructions[0]));
     assert_eq!(selected.lenses.iter().filter(|lens| lens.id == "planning").count(), 1);
     assert!(!ordinary.lenses.iter().any(|lens| lens.id == "coordination"));
@@ -254,6 +260,13 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     let swarm = Library::default().get("swarm").unwrap().clone();
     assert_eq!(swarm.revision, 2);
     assert!(swarm.includes.contains(&"planning".to_string()));
+    let ganglia = Library::default().get("ganglia").unwrap().clone();
+    assert_eq!((ganglia.name.as_str(), ganglia.revision), ("Ganglia", 1));
+    assert!(ganglia.instructions.starts_with("Reflexes and routines run locally; turns are strategy."));
+    assert!(ganglia.instructions.contains("shared always-on reflex layer"));
+    assert!(ganglia.instructions.contains("never raw streams"));
+    assert!(ganglia.instructions.contains("saved as a tool package"));
+    assert!(ganglia.instructions.chars().count() <= 1200);
     let previous: Vec<Definition> = serde_json::from_str(include_str!("../builtin-lens-history.json")).unwrap();
     assert!(previous.iter().any(|d| d.id == "investigation" && d.revision == 1));
     for revision in 1..=5 {

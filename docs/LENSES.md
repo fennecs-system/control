@@ -317,6 +317,38 @@ advises. Stopping the advisor (`/bot off`) drops its team snapshot; a later
 advisor reports only facts after its own subscription. Nodes without an
 opted-in advisor do no lifecycle work.
 
+## Ganglia
+
+**Ganglia** (`/use ganglia`): reflexes and routines run locally; turns are
+strategy. An octopus's arms act on their own through local ganglia while its
+central brain decides where to go. The lens is the build procedure for that
+split when a team drives an external system repeatedly:
+
+1. Build layers bottom-up. First one shared always-on reflex layer for
+   reactions faster than a turn (protect, recover, maintain), built early by one
+   member while others keep working and reused by every member instead of each
+   embedding its own guards. Then skills: bounded routines on top of it that work
+   toward a target. Supervise from their events.
+2. Routines observe and filter, escalating only salient changes (milestones,
+   failures, threats they cannot handle), never raw streams.
+3. Composite manoeuvres (sequenced, timed behaviours) are skills too: the model
+   selects and parameterises them rather than issuing their steps.
+4. Turns are strategy: choose goals, assign skills and change plans from
+   escalations, without re-checking the world each step.
+5. Reflexes and skills live in one self-contained folder with a README and
+   notification contract, ready to save as a [tool package](TOOL-PACKAGES.md).
+
+Runs -121 and -128 drove an external system one small job per tool call, and
+the operator repeatedly steered them towards exactly this: a shared safety and
+upkeep loop, skills that run to a target, and escalation only of what matters.
+The lens turns that steering into standing procedure. It applies the task
+autonomy rule that a routine reacts and the model decides; it does not restate
+it, and adds no tool, scheduler or authority.
+
+Ganglia is opt-in: the `swarm` preset does not include it, so the scorecard can
+compare otherwise identical runs with and without it before any claim that it
+helps. Select it alongside `swarm` before launching a team.
+
 ## Tool packages
 
 A lens can also name operator-admitted [tool packages](TOOL-PACKAGES.md), such as
