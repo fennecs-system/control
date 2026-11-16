@@ -55,7 +55,7 @@ impl Job {
         ["preparing", "running", "stopping"].contains(&self.status.as_str())
     }
     fn summary(&self) -> Value {
-        json!({"job_id":self.id,"status":self.status,"output":self.output,"exit_code":self.exit_code,"deadline_unix":self.deadline_unix,"output_limit_bytes":OUTPUT_BYTES})
+        json!({"job_id":self.id,"status":self.status,"output":self.output,"exit_code":self.exit_code,"deadline_unix":self.deadline_unix})
     }
 }
 #[derive(Deserialize)]

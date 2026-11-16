@@ -6,6 +6,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+mod compact;
 pub(crate) mod deferred;
 pub(crate) mod fixes;
 pub(crate) mod nudges;
@@ -54,7 +55,17 @@ fn rpc_at(
     }
     response
 }
-fn dispatch_at(
+/// Dispatches one request; a successful tool result leaves in the shared
+/// compact shape ([`compact`]), whichever tool family produced it.
+fn dispatch_at(shared: &Arc<Mutex<State>>, run_id: &str, envelope: &Value, workspace: Option<&Path>) -> Value {
+    let mut response = dispatch_raw(shared, run_id, envelope, workspace);
+    if let Ok(envelope) = direct(envelope) && envelope["request"]["method"] == "tools/call" {
+        let params = &envelope["request"]["params"];
+        compact::reply(params["name"].as_str().unwrap_or(""), &params["arguments"], &mut response);
+    }
+    response
+}
+fn dispatch_raw(
     shared: &Arc<Mutex<State>>,
     run_id: &str,
     envelope: &Value,

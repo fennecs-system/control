@@ -133,17 +133,63 @@ impl Execution {
         let owner = state.runtime.runs.iter().find(|r| r.id == self.run).and_then(|r| r.chat_id.as_deref()).map_or_else(|| format!("run {}", self.run), |chat| format!("chat {chat}"));
         let command = if self.display_command.is_empty() { &self.command } else { &self.display_command };
         let label: String = command.lines().next().unwrap_or_default().chars().take(60).collect();
-        format!("{} ({}, {owner}: {label})", self.id, if self.status == Status::Running { "running" } else { "waiting" })
+        format!("{} ({}, {owner}: {label})", handle(&self.id), if self.status == Status::Running { "running" } else { "waiting" })
     }
+    /// Status fields that are set, under the short execution handle.
     pub(super) fn brief(&self) -> Value {
-        json!({"execution_id":self.id,"status":self.status,"exit_code":self.exit_code,"diagnostic":self.diagnostic})
+        let mut value = json!({"execution_id":handle(&self.id),"status":self.status});
+        if let Some(code) = self.exit_code {
+            value["exit_code"] = json!(code);
+        }
+        if !self.diagnostic.is_empty() {
+            value["diagnostic"] = json!(self.diagnostic);
+        }
+        value
     }
     fn summary(&self) -> Value {
         let mut value = self.brief();
-        value["output"] = json!(self.output);
-        value["output_truncated"] = json!(self.truncated);
-        value["output_limit_bytes"] = json!(OUTPUT);
+        if !self.output.is_empty() {
+            value["output"] = json!(self.output);
+        }
+        if self.truncated {
+            value["output_truncated"] = json!(true);
+        }
         value
+    }
+}
+
+/// Characters of an execution ID shown to agents. Within one service's
+/// retained executions and receipts, 48 bits keep handles unique; a handle
+/// that ever matched two of them is refused, never guessed.
+pub(super) const HANDLE: usize = 12;
+/// The short handle tools show for the durable execution ID `id`.
+pub(super) fn handle(id: &str) -> &str {
+    id.get(..HANDLE).unwrap_or(id)
+}
+/// Whether `given`, a full execution ID or its handle, names `id`.
+fn names(id: &str, given: &str) -> bool {
+    id == given || (given.len() >= HANDLE && id.starts_with(given))
+}
+/// The one retained execution or receipt `given` names on `service`.
+fn lookup<'a>(service: &'a Service, given: &str) -> io::Result<Option<Recorded<'a>>> {
+    let mut found = service.executions.iter().filter(|e| names(&e.id, given)).map(Recorded::Execution)
+        .chain(service.command_receipts.iter().filter(|r| names(&r.id, given)).map(Recorded::Receipt));
+    let first = found.next();
+    if found.next().is_some() {
+        return Err(fail("Execution handle is ambiguous; pass the full execution_id"));
+    }
+    Ok(first)
+}
+enum Recorded<'a> {
+    Execution(&'a Execution),
+    Receipt(&'a Receipt),
+}
+impl Recorded<'_> {
+    fn summary(&self) -> Value {
+        match self {
+            Self::Execution(execution) => execution.summary(),
+            Self::Receipt(receipt) => receipt.summary(),
+        }
     }
 }
 
@@ -171,8 +217,16 @@ impl Receipt {
             diagnostic: execution.diagnostic.clone(),
         }
     }
+    /// The retained outcome; its output was evicted.
     fn summary(&self) -> Value {
-        json!({"execution_id":self.id,"status":self.status,"exit_code":self.exit_code,"diagnostic":self.diagnostic,"output":"","output_evicted":true,"output_truncated":true,"output_limit_bytes":OUTPUT})
+        let mut value = json!({"execution_id":handle(&self.id),"status":self.status,"output_evicted":true});
+        if let Some(code) = self.exit_code {
+            value["exit_code"] = json!(code);
+        }
+        if !self.diagnostic.is_empty() {
+            value["diagnostic"] = json!(self.diagnostic);
+        }
+        value
     }
 }
 pub(super) fn live_attempt(state: &State, run: &str, attempt: &str) -> bool {
@@ -282,7 +336,7 @@ pub(crate) fn enqueue_test(
 pub(super) fn definitions() -> Vec<Value> {
     vec![
         json!({"name":"control_service_exec","description":"Run a one-off command inside an exact chat-owned running service, using its private files and approved loopback relays: setup, inspection, or installing and editing a routine. For anything repeated or polled, write a routine (control_watch_start) instead. Use shell commands/heredocs to create small task files, configure clients or install dependencies; bring files or trees from your task workspace with control_service_copy instead. No host paths, mounts or engine options. Results return inline when the command finishes within wait_seconds (default 15, max 30): final status, exit code and output, marked final=true. Call control_service_exec_status only when the result says running and gives an execution_id. Use wait_seconds=0 to return at once. Commands from every agent sharing the service run concurrently, each with its own execution_id, output and timeout, up to the service process limit (a larger shape allows more), capped by a node ceiling (default 64); at the limit, or while a control_service_copy holds the service, the request is refused with the active execution_ids and nothing is submitted. Commands are bounded by timeout_seconds; they survive model turns only until then. Run routines and other long-running work with control_watch_start: restart=transient runs finite work such as large downloads once; restart=permanent restarts persistent clients, servers or daemons after exit. Both survive model turns without a task deadline. Use exec for bounded commands: a timed-out or interrupted command is stopped inside the service with every process it started, detached ones included. The service keeps running; it is stopped only if that cannot be verified. Background programs must redirect their output to private files; the service foreground process must remain alive. Uncertain commands are never replayed.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"command":{"type":"string","minLength":1,"maxLength":16000},"timeout_seconds":{"type":"integer","minimum":1,"maximum":1800,"default":120},"wait_seconds":{"type":"integer","minimum":0,"maximum":MAX_WAIT_SECONDS,"default":DEFAULT_WAIT_SECONDS}},"required":["service_id","command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":true}}),
-        json!({"name":"control_service_exec_status","description":"Read a chat-owned service command's bounded live output, exit code and durable outcome. Only needed when control_service_exec or control_service_copy said running and gave an execution_id; a result marked final=true is already complete. Optional wait_seconds (max 30, default 0) waits for an active command to finish and returns as soon as it does. Use a fresh execution_id only for a deliberate new command; retries with the same request identity never replay effects.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"execution_id":{"type":"string"},"wait_seconds":{"type":"integer","minimum":0,"maximum":MAX_WAIT_SECONDS,"default":0}},"required":["service_id","execution_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
+        json!({"name":"control_service_exec_status","description":"Read a chat-owned service command's bounded live output, exit code and durable outcome. Only needed when control_service_exec or control_service_copy said running and gave an execution_id; a result marked final=true is already complete. Optional wait_seconds (max 30, default 0) waits for an active command to finish and returns as soon as it does. execution_id is the short handle results show (the full ID also works). Long output keeps its first and last bytes around one omission marker; unset fields (exit code, diagnostic, output) are omitted. Use a fresh execution_id only for a deliberate new command; retries with the same request identity never replay effects.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"execution_id":{"type":"string"},"wait_seconds":{"type":"integer","minimum":0,"maximum":MAX_WAIT_SECONDS,"default":0}},"required":["service_id","execution_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
     ]
 }
 pub(super) fn hash(value: &[u8]) -> String {
@@ -355,10 +409,14 @@ pub(super) fn settle(shared: &Arc<Mutex<State>>, waiter: Waiter<'_>, execution_i
         if finished {
             object.insert("final".into(), json!(true));
         } else {
-            object.entry("wait").or_insert_with(|| json!(format!("Still running: call control_service_exec_status {{\"service_id\":\"{service_id}\",\"execution_id\":\"{execution_id}\",\"wait_seconds\":30}} for its result.")));
+            object.entry("wait").or_insert_with(|| json!(still_running(service_id, execution_id)));
         }
     }
     value
+}
+/// The callable next step for a request still running after its wait.
+fn still_running(service_id: &str, execution_id: &str) -> String {
+    format!("Still running: call control_service_exec_status {{\"service_id\":\"{service_id}\",\"execution_id\":\"{}\",\"wait_seconds\":30}} for its result.", handle(execution_id))
 }
 /// When the caller's attempt must have its reply, as a local instant.
 fn turn_end(state: &State, run: &str) -> Option<Instant> {
@@ -378,20 +436,21 @@ fn wait_until(shared: &Arc<Mutex<State>>, waiter: Waiter<'_>, execution_id: &str
             // An ended run or replaced attempt stops waiting with what it saw.
             let Ok(index) = owned(&state, waiter.run, waiter.generation, waiter.node, waiter.service_id) else { return last };
             let service = &state.services[index];
-            match service.executions.iter().find(|e| e.id == execution_id) {
-                Some(execution) => {
+            match lookup(service, execution_id) {
+                Ok(Some(Recorded::Execution(execution))) => {
                     last = execution.summary();
                     if !execution.status.active() {
                         return last;
                     }
                 }
-                None => return service.command_receipts.iter().find(|r| r.id == execution_id).map_or(last, Receipt::summary),
+                Ok(Some(receipt)) => return receipt.summary(),
+                Ok(None) | Err(_) => return last,
             }
             turn_end(&state, waiter.run).map_or(until, |end| end.min(until))
         };
         let now = Instant::now();
         if now >= limit || token.is_cancelled() {
-            last["wait"] = json!(format!("Still running: call control_service_exec_status {{\"service_id\":\"{}\",\"execution_id\":\"{execution_id}\",\"wait_seconds\":30}} for its result.", waiter.service_id));
+            last["wait"] = json!(still_running(waiter.service_id, execution_id));
             return last;
         }
         signal.wait_newer(seen, Some(limit.min(now + RECHECK)), token);
@@ -416,18 +475,8 @@ pub(super) fn status_wait(shared: &Arc<Mutex<State>>, run: &str, generation: &st
 pub(super) fn status(shared: &Arc<Mutex<State>>, run: &str, generation: &str, node: &NodeId, input: Handle) -> io::Result<Value> {
     let state = shared.lock().map_err(|_| fail("State unavailable"))?;
     let index = owned(&state, run, generation, node, &input.service_id)?;
-    state.services[index]
-        .executions
-        .iter()
-        .find(|e| e.id == input.execution_id)
-        .map(Execution::summary)
-        .or_else(|| {
-            state.services[index]
-                .command_receipts
-                .iter()
-                .find(|r| r.id == input.execution_id)
-                .map(Receipt::summary)
-        })
+    lookup(&state.services[index], &input.execution_id)?
+        .map(|recorded| recorded.summary())
         .ok_or_else(|| fail("Service command not found"))
 }
 /// One request on a service: a shell command or an exclusive copy.
@@ -529,7 +578,7 @@ pub(super) fn admit_work(
     if let Some(copy) = active.iter().find(|e| e.copy.is_some()) {
         return Err(fail(format!(
             "Service {service_id} is reserved for copy {}; nothing was submitted. Call control_service_exec_status {{\"service_id\":\"{service_id}\",\"execution_id\":\"{}\",\"wait_seconds\":30}} and retry after it finishes.",
-            copy.holder(state), copy.id
+            copy.holder(state), handle(&copy.id)
         )));
     }
     let ceiling = concurrency();
@@ -543,7 +592,7 @@ pub(super) fn admit_work(
         };
         return Err(fail(format!(
             "Service {service_id} is running {} of {limit} concurrent commands ({bound}); nothing was submitted. Active: {holders}. Call control_service_exec_status {{\"service_id\":\"{service_id}\",\"execution_id\":\"{}\",\"wait_seconds\":30}} until one finishes, then retry; run long-lived programs as watches (control_watch_start), or use another service.",
-            active.len(), active.first().map_or("", |e| e.id.as_str())
+            active.len(), active.first().map_or("", |e| handle(&e.id))
         )));
     }
     let waiting = if work.copy.is_some() { active.len() } else { 0 };
@@ -617,19 +666,44 @@ pub(super) fn admit_work(
     Ok(value)
 }
 
+/// Bounded command output: the first and the latest bytes, so both how a
+/// command started and how it ended survive a long run. Between them, one
+/// marker counts the bytes left out.
 #[derive(Default)]
 struct Output {
     bytes: Vec<u8>,
+    /// The latest bytes once the head is full, at most `TAIL` of them.
+    tail: std::collections::VecDeque<u8>,
+    /// Bytes dropped between the head and the tail.
+    omitted: u64,
     truncated: bool,
 }
+/// Head and tail each keep half the budget, less room for the marker.
+const HEAD: usize = OUTPUT / 2;
+const TAIL: usize = OUTPUT / 2 - 64;
 impl Output {
     fn append(&mut self, bytes: &[u8]) {
-        let count = bytes.len().min(OUTPUT.saturating_sub(self.bytes.len()));
+        let count = bytes.len().min(HEAD.saturating_sub(self.bytes.len()));
         self.bytes.extend_from_slice(&bytes[..count]);
-        self.truncated |= count < bytes.len();
+        let rest = &bytes[count..];
+        if rest.is_empty() {
+            return;
+        }
+        self.tail.extend(rest);
+        let excess = self.tail.len().saturating_sub(TAIL);
+        if excess > 0 {
+            self.tail.drain(..excess);
+            self.omitted += excess as u64;
+            self.truncated = true;
+        }
     }
     fn text(&self) -> String {
         let mut text = String::from_utf8_lossy(&self.bytes).into_owned();
+        if self.omitted > 0 {
+            text.push_str(&format!("\n[… {} bytes omitted …]\n", self.omitted));
+        }
+        let (front, back) = self.tail.as_slices();
+        text.push_str(&String::from_utf8_lossy(&[front, back].concat()));
         text.truncate(text.floor_char_boundary(OUTPUT));
         text
     }
@@ -809,7 +883,7 @@ fn update(
     let execution = state.services[index]
         .executions
         .iter_mut()
-        .find(|e| e.id == id)
+        .find(|e| names(&e.id, id))
         .ok_or_else(|| fail("Service command missing"))?;
     let previous = persist.then(|| execution.clone());
     let previous_status = execution.status;

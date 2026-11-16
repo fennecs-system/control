@@ -211,7 +211,7 @@ enum Action {
 }
 
 pub(crate) fn definition() -> Value {
-    json!({"name":"control_room_claim","description":"Advisory ownership of one deliverable or investigation in this task's thread, so peers do not duplicate it. Omit room for the team room. acquire is atomic: it succeeds if the key is free or released, otherwise returns the current owner without changing it. Either way it lists related live claims that look like the same effort: join or wait on one of those, or release your duplicate. update and release need the current revision and only work for the owner. status working, blocked (set blocked_on to the claim key you need) or done; done is your own report of the outcome, not host verification. control_room_read marks abandoned=true when the owner is lost (its turn failed, was cancelled or interrupted, or its bot was stopped) and owner_idle=true when it has no active turn; only the operator releases another owner's claim. A bot waits for a dependency with wait topic claim:<room>/<key>: it wakes once, when that claim incarnation resolves as done, released or abandoned, not on progress updates. Claims grant no authority.","annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false},
+    json!({"name":"control_room_claim","description":"Advisory ownership of one deliverable or investigation in this task's thread, so peers do not duplicate it. Omit room for the team room. acquire is atomic: it succeeds if the key is free or released, otherwise returns the current owner without changing it. An applied change returns your claim's key, status, revision and incarnation. Either way it lists related live claims that look like the same effort: join or wait on one of those, or release your duplicate. update and release need the current revision and only work for the owner. status working, blocked (set blocked_on to the claim key you need) or done; done is your own report of the outcome, not host verification. control_room_read marks abandoned=true when the owner is lost (its turn failed, was cancelled or interrupted, or its bot was stopped) and owner_idle=true when it has no active turn; only the operator releases another owner's claim. A bot waits for a dependency with wait topic claim:<room>/<key>: it wakes once, when that claim incarnation resolves as done, released or abandoned, not on progress updates. Claims grant no authority.","annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false},
         "inputSchema":{"type":"object","properties":{
             "room":{"type":"string"},
             "key":{"type":"string","minLength":1,"maxLength":MAX_KEY,"pattern":"^[A-Za-z0-9._-]+$"},
@@ -321,7 +321,13 @@ pub(crate) fn call(state: &mut State, chat: &str, room: &str, args: &Value) -> R
     // Resolution is a transition: re-reporting done is progress, not a new outcome.
     let resolved = claim.outcome().filter(|_| current.as_ref().is_none_or(|c| c.incarnation != claim.incarnation || c.outcome().is_none_or(|o| o == Outcome::Abandoned)))
         .map(|outcome| Resolved { room: room.to_owned(), key: claim.key.clone(), incarnation: claim.incarnation, revision, outcome, by: Some(chat.to_owned()) });
-    let value = json!({"applied":true,"claim":claim,"related":related});
+    // The caller owns an applied claim and just sent its room, key and note:
+    // return only what the host assigned and the next update needs.
+    let mut applied = json!({"key":claim.key,"status":claim.status,"revision":claim.revision,"incarnation":claim.incarnation});
+    if let Some(blocked_on) = &claim.blocked_on {
+        applied["blocked_on"] = json!(blocked_on);
+    }
+    let value = json!({"applied":true,"claim":applied,"related":related});
     match index {
         Some(i) => state.collective.claims[i] = claim,
         None => state.collective.claims.push(claim),

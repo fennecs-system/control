@@ -401,12 +401,18 @@ fn restart_never_replays_uncertain_execution_and_save_failure_rolls_back() {
 #[test]
 fn capture_drains_large_output_without_unbounded_retention() {
     let mut command = Command::new("sh");
-    command.args(["-c", "printf 'early\\n'; head -c 100000 /dev/zero; exit 7"]);
+    command.args(["-c", "printf 'early\\n'; head -c 100000 /dev/zero | tr '\\0' x; printf '\\nlate\\n'; exit 7"]);
     let result = capture(command, Duration::from_secs(5), || false, |_| {}).unwrap();
     assert_eq!(result.exit_code, Some(7));
     assert!(result.output.truncated);
-    assert_eq!(result.output.bytes.len(), OUTPUT);
-    assert!(result.output.text().starts_with("early\n"));
+    // Head and tail are each bounded; together with the marker they fit the budget.
+    assert_eq!((result.output.bytes.len(), result.output.tail.len()), (HEAD, TAIL));
+    let text = result.output.text();
+    assert!(text.len() <= OUTPUT, "{}", text.len());
+    assert!(text.starts_with("early\n") && text.ends_with("\nlate\n"), "both ends survive");
+    let omitted = 100_000 + "early\n\nlate\n".len() - HEAD - TAIL;
+    assert_eq!(text.matches("bytes omitted").count(), 1);
+    assert!(text.contains(&format!("\n[… {omitted} bytes omitted …]\n")), "one marker counts the gap");
     let mut command = Command::new("sh");
     command.args(["-c", "exec sleep 10"]);
     let start = Instant::now();

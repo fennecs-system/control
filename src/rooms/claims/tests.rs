@@ -17,10 +17,13 @@ fn acquisition_is_exclusive_and_changes_need_owner_and_current_revision() {
     assert_eq!(won["applied"], true);
     assert_eq!(won["claim"]["status"], "working");
     let revision = won["claim"]["revision"].as_u64().unwrap();
+    // An applied change returns what the host assigned, not the caller's own note, room or name.
+    assert_eq!(won["claim"], json!({"key":"tick-end","status":"working","revision":revision,"incarnation":revision}));
 
     let lost = claim(&mut state, &b, json!({"key":"tick-end","action":"acquire"}));
     assert_eq!(lost["applied"], false, "a second acquire reports the owner without taking it");
     assert_eq!(lost["claim"]["owner"], a.as_str());
+    assert_eq!(lost["claim"]["note"], "debugging the kick", "a refusal shows the full live claim");
     let foreign = claim(&mut state, &b, json!({"key":"tick-end","action":"release","revision":revision}));
     assert_eq!(foreign["applied"], false);
     let stale = claim(&mut state, &a, json!({"key":"tick-end","action":"update","status":"done","revision":revision + 7}));
