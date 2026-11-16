@@ -252,7 +252,16 @@ comes from the judge role and the operator's bot approval.
      re-reporting or posting is not progress. A stall is reported once; an
      advance, or open claims appearing or clearing, restarts the window. The
      window counts turns, not elapsed time. Teams that do not use claims never
-     stall.
+     stall;
+   - a bottleneck: one live (working or blocked) claim that the claims of
+     `advisor_bottleneck_members` (default 2) or more members other than its
+     owner wait on, directly or transitively through `blocked_on`. The fact
+     names the claim, its owner and status, what it is itself blocked on, a
+     circular wait if its dependents lead back to it, its age in claim updates
+     since it was acquired and since it last advanced, and the waiting members
+     and claims. It is derived from claim state alone and reported once per
+     claim incarnation and dependent set; it is reported again when that set
+     changes. The dependency graph is walked only when a member claim changes.
 
    A single failed, interrupted or cancelled turn (provider errors included)
    and a single failed watch exit are never facts. Facts coalesce into one
@@ -265,7 +274,9 @@ comes from the judge role and the operator's bot approval.
    the evidence and a suggested steering step. For blocked members it checks
    whether the input is one they could quickly make themselves, or several wait
    on one producer, and suggests an unblocking step: produce the input
-   themselves, reassign the blocking claim, or an alternative. It sends nothing
+   themselves, reassign the blocking claim, or an alternative. For a bottleneck
+   it suggests putting more members on it, splitting it, or re-routing
+   dependents around it. It sends nothing
    when evidence is unchanged.
 
 The advisor only steers. A note goes only to the lead's steering chat, as

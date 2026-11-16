@@ -22,6 +22,10 @@ pub struct Limits {
     /// done, or resumes working after being blocked) before the advisor hears
     /// the team is busy but stalled. Counted in turns, not elapsed time.
     pub advisor_stall_turns: usize,
+    /// Distinct members, other than the owner, whose claims wait on one live
+    /// claim directly or transitively (through `blocked_on`) before the
+    /// advisor hears that claim is a bottleneck.
+    pub advisor_bottleneck_members: usize,
 }
 impl Default for Limits {
     fn default() -> Self {
@@ -32,6 +36,7 @@ impl Default for Limits {
             max_advisors_per_root: 1,
             advisor_failure_streak: 3,
             advisor_stall_turns: 24,
+            advisor_bottleneck_members: 2,
         }
     }
 }
@@ -46,8 +51,9 @@ impl Limits {
             || !(1..=65536).contains(&self.max_pending_agent_intents) {
             return Err(io::Error::other("Agent root and pending-intent budgets must be positive integers up to 65536"));
         }
-        if self.max_advisors_per_root > 8 || !(2..=64).contains(&self.advisor_failure_streak) || !(4..=4096).contains(&self.advisor_stall_turns) {
-            return Err(io::Error::other("max_advisors_per_root must be 0–8, advisor_failure_streak 2–64 and advisor_stall_turns 4–4096"));
+        if self.max_advisors_per_root > 8 || !(2..=64).contains(&self.advisor_failure_streak) || !(4..=4096).contains(&self.advisor_stall_turns)
+            || !(2..=64).contains(&self.advisor_bottleneck_members) {
+            return Err(io::Error::other("max_advisors_per_root must be 0–8, advisor_failure_streak 2–64, advisor_stall_turns 4–4096 and advisor_bottleneck_members 2–64"));
         }
         Ok(self)
     }

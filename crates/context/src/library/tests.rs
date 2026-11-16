@@ -241,10 +241,11 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert!(planning.instructions.contains("checkable done-condition"));
     assert!(planning.instructions.contains("treat reaching its done-condition as the tool's test"));
     let advisor = Library::default().get("advisor").unwrap().clone();
-    assert_eq!(advisor.revision, 3);
+    assert_eq!(advisor.revision, 4);
     assert!(advisor.instructions.contains("members marked claims blocked"));
     assert!(advisor.instructions.contains("several members report a similar blocker"));
     assert!(advisor.instructions.contains("(busy but stalled)"));
+    assert!(advisor.instructions.contains("putting more members on the bottleneck, splitting it, or re-routing dependents around it"));
     let swarm = Library::default().get("swarm").unwrap().clone();
     assert_eq!(swarm.revision, 2);
     assert!(swarm.includes.contains(&"planning".to_string()));

@@ -542,3 +542,110 @@ fn members_failing_with_the_same_error_share_a_blocker() {
     assert_eq!(observed[0].repeated, 2);
     assert_eq!(observed[0].shared, [lifecycle::Shared { reason: "Could not reach the build host (attempt 2): connection reset".into(), members: vec![miner.clone(), smith.clone()] }]);
 }
+
+/// The bottlenecks of an advisor run's single fact.
+fn necks(run: &crate::runtime::Run) -> Vec<lifecycle::Bottleneck> {
+    facts(run).into_iter().flat_map(|facts| facts.bottlenecks).collect()
+}
+
+#[test]
+fn a_claim_several_members_wait_on_transitively_is_one_bottleneck_fact() {
+    let (mut state, root) = fixture();
+    let [owner, recovery, stone, builder] = ["Player1", "Player5", "Stone", "Builder"].map(|name| spawned(&mut state, &root, name));
+    for (member, key) in [(&owner, "covered-chest-access"), (&recovery, "player5-drop-recovery"), (&stone, "stone-stock"), (&builder, "m3")] {
+        claim(&mut state, member, key, "working", None);
+    }
+    let advisor = advisor(&mut state, &root);
+    turn(&mut state, &owner, "running");
+    reconcile_at(&mut state, 1, ok).unwrap();
+    // One member waits directly: a dependency, not yet a bottleneck.
+    claim(&mut state, &recovery, "player5-drop-recovery", "blocked", Some("covered-chest-access"));
+    reconcile_at(&mut state, 2, ok).unwrap();
+    assert!(necks(advisor_runs(&state, &advisor)[0]).is_empty());
+    finish(&mut state, &advisor);
+    // A second member waits through the first: transitive dependents count.
+    claim(&mut state, &stone, "stone-stock", "blocked", Some("player5-drop-recovery"));
+    claim(&mut state, &builder, "m3", "blocked", Some("covered-chest-access"));
+    reconcile_at(&mut state, 40_000, ok).unwrap();
+    let runs = advisor_runs(&state, &advisor);
+    assert_eq!(runs.len(), 2);
+    let observed = necks(runs[1]);
+    assert_eq!(observed.len(), 1, "player5-drop-recovery holds up only one member");
+    let neck = &observed[0];
+    assert_eq!((neck.key.as_str(), neck.owner.as_str(), neck.status.as_str(), neck.dependents, neck.cycle), ("covered-chest-access", owner.as_str(), "working", 3, false));
+    let mut members = vec![recovery.clone(), stone.clone(), builder.clone()];
+    members.sort();
+    assert_eq!(neck.members, members);
+    assert_eq!(neck.waiting.iter().map(|waiter| waiter.key.as_str()).collect::<Vec<_>>(), ["player5-drop-recovery", "m3", "stone-stock"], "nearest first");
+    let incarnation = crate::rooms::claims::find(&state, "general", "covered-chest-access").unwrap().incarnation;
+    assert_eq!((neck.open, neck.idle), (state.collective.claim_seq - incarnation, neck.open), "claim updates since it was acquired; it never advanced");
+    assert_eq!(neck.open, 6);
+    assert!(runs[1].objective.contains("bottleneck general/covered-chest-access (owner") && runs[1].objective.contains("holds up 3 claim(s) of 3 member(s)"));
+    finish(&mut state, &advisor);
+    // Unchanged dependents are not repeated, even across claim updates.
+    claim(&mut state, &builder, "m3", "blocked", Some("covered-chest-access"));
+    claim(&mut state, &owner, "covered-chest-access", "working", None);
+    reconcile_at(&mut state, 80_000, ok).unwrap();
+    assert_eq!(advisor_runs(&state, &advisor).len(), 2);
+    // A new dependent, even a transitive one, re-reports it with the whole set.
+    let scout = spawned(&mut state, &root, "Scout");
+    claim(&mut state, &scout, "scout", "working", None);
+    claim(&mut state, &scout, "scout", "blocked", Some("stone-stock"));
+    reconcile_at(&mut state, 120_000, ok).unwrap();
+    let runs = advisor_runs(&state, &advisor);
+    assert_eq!(runs.len(), 3);
+    let observed = necks(runs[2]);
+    assert_eq!(observed.iter().map(|neck| (neck.key.as_str(), neck.dependents)).collect::<Vec<_>>(), [("covered-chest-access", 4), ("player5-drop-recovery", 2)]);
+    finish(&mut state, &advisor);
+    // The owner finishing it clears that bottleneck alone.
+    claim(&mut state, &owner, "covered-chest-access", "done", None);
+    reconcile_at(&mut state, 160_000, ok).unwrap();
+    assert!(state.bots.teams[&root].necks.len() == 1, "only player5-drop-recovery still holds up two members");
+}
+
+#[test]
+fn a_circular_wait_is_reported_without_looping() {
+    let (mut state, root) = fixture();
+    let members = ["Miner", "Smith", "Builder"].map(|name| spawned(&mut state, &root, name));
+    let keys = ["ore", "ingots", "tools"];
+    for (member, key) in members.iter().zip(keys) {
+        claim(&mut state, member, key, "working", None);
+    }
+    let advisor = advisor(&mut state, &root);
+    turn(&mut state, &members[0], "running");
+    reconcile_at(&mut state, 1, ok).unwrap();
+    // ore ← ingots ← tools ← ore.
+    claim(&mut state, &members[0], "ore", "blocked", Some("tools"));
+    claim(&mut state, &members[1], "ingots", "blocked", Some("ore"));
+    claim(&mut state, &members[2], "tools", "blocked", Some("ingots"));
+    reconcile_at(&mut state, 2, ok).unwrap();
+    let observed = necks(advisor_runs(&state, &advisor)[0]);
+    assert_eq!(observed.len(), 3, "every claim in the cycle holds up the other two members");
+    assert!(observed.iter().all(|neck| neck.cycle && neck.dependents == 2 && neck.status == "blocked" && !neck.members.contains(&neck.owner)));
+    assert!(advisor_runs(&state, &advisor)[0].objective.contains("in a circular wait"));
+}
+
+#[test]
+fn the_bottleneck_threshold_counts_distinct_members_other_than_the_owner() {
+    let (mut state, root) = fixture();
+    state.runtime.execution.advisor_bottleneck_members = 3;
+    let [owner, miner, smith, scout] = ["Producer", "Miner", "Smith", "Scout"].map(|name| spawned(&mut state, &root, name));
+    for (member, key) in [(&owner, "wood-tools"), (&owner, "own-follow-up"), (&miner, "mine"), (&miner, "mine-2"), (&smith, "smelt"), (&scout, "scout")] {
+        claim(&mut state, member, key, "working", None);
+    }
+    let advisor = advisor(&mut state, &root);
+    turn(&mut state, &owner, "running");
+    reconcile_at(&mut state, 1, ok).unwrap();
+    // Four dependent claims, but only two members besides the owner.
+    for (member, key) in [(&owner, "own-follow-up"), (&miner, "mine"), (&miner, "mine-2"), (&smith, "smelt")] {
+        claim(&mut state, member, key, "blocked", Some("wood-tools"));
+    }
+    reconcile_at(&mut state, 2, ok).unwrap();
+    assert!(necks(advisor_runs(&state, &advisor)[0]).is_empty());
+    finish(&mut state, &advisor);
+    claim(&mut state, &scout, "scout", "blocked", Some("wood-tools"));
+    reconcile_at(&mut state, 40_000, ok).unwrap();
+    let observed = necks(advisor_runs(&state, &advisor)[1]);
+    assert_eq!(observed.len(), 1);
+    assert_eq!((observed[0].members.len(), observed[0].dependents), (3, 5));
+}
