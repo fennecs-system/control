@@ -783,7 +783,7 @@ pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
     } else {
         ""
     };
-    Ok(format!("<section class='conversation'><div class='conversation-heading'>{}<h2>{}</h2>{mode}<span class='conversation-links'>{room}<a href='/chat/{id}/artifacts'>Artifacts ↗</a></span><details class='chat-requests'><summary>Requests <span class='request-count' aria-live='polite'></span></summary><aside class='request-drawer' aria-label='Pending requests'><iframe class='chat-requests-frame' data-live-chat src='/chat/{id}/requests' title='Pending requests'></iframe></aside></details></div><div class='conversation-main'><iframe class='chat-transcript' data-live-chat src='/chat/{id}/transcript#latest' title='Conversation'></iframe><form class='conversation-composer' id='session-message' method='post' action='/chat/{id}/messages'><textarea name='message' required rows='3' aria-label='Message' placeholder='Message Control…'></textarea>{}<div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></div></section>",crate::navigation::conversation_button(state,id),escape(&crate::callsigns::name_or_id(&state.chats,id)),command_menu(&session.actor),crate::lens_library::choices(state,&lenses,"session-message")))
+    Ok(format!("<section class='conversation'><div class='conversation-heading'>{}<h2>{}</h2>{mode}<span class='conversation-links'>{room}<a href='/chat/{id}/artifacts'>Artifacts ↗</a></span>{}<details class='chat-requests'><summary>Requests <span class='request-count' aria-live='polite'></span></summary><aside class='request-drawer' aria-label='Pending requests'><iframe class='chat-requests-frame' data-live-chat src='/chat/{id}/requests' title='Pending requests'></iframe></aside></details></div><div class='conversation-main'><iframe class='chat-transcript' data-live-chat src='/chat/{id}/transcript#latest' title='Conversation'></iframe><form class='conversation-composer' id='session-message' method='post' action='/chat/{id}/messages'><textarea name='message' required rows='3' aria-label='Message' placeholder='Message Control…'></textarea>{}<div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></div></section>",crate::navigation::conversation_button(state,id),escape(&crate::callsigns::name_or_id(&state.chats,id)),crate::scores::line(state,id),command_menu(&session.actor),crate::lens_library::choices(state,&lenses,"session-message")))
 }
 fn command_text(text: &str) -> String {
     if let Some(command) = commands::parse(text) {
@@ -957,6 +957,7 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
         "control.chats.list" => Ok(list(state)),
         "control.requests.list" => Ok(pending_requests(state)),
         "control.chat.read" => detail(state, id()?),
+        "control.run.scores" => crate::scores::read(state, id()?),
         "control.chat.rename" => {
             let id = id()?;
             rename(state, id, arguments["name"].as_str().unwrap_or(""))?;

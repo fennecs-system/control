@@ -67,7 +67,11 @@ Search, Rust snippets and linked-room tools retain their existing broker policy.
 
 The adapter translates bounded JSON stream events, final replies and token
 usage into Control's run records. Cache reads are counted within total input;
-missing telemetry stays unknown. Provider-reported costs are not presented as
+missing telemetry stays unknown. An error result keeps its reported totals; a
+turn stopped before its result records the per-call usage seen so far, marked
+`partial` (a lower bound). Each attempt records its accounting (`reported`,
+`partial`, `unknown`, or `not_launched` when no model call was made) and the
+model the provider reports. Provider-reported costs are not presented as
 subscription billing. Published artifacts and chat workspace checkpoints use
 the same service as Codex.
 

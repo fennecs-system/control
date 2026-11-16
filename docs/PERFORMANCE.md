@@ -1,5 +1,38 @@
 # Performance checks
 
+## Usage after handoffs and score probes (2026-11-16)
+
+After an accepted handoff the provider now has up to 20 s (`HANDOFF_GRACE`)
+to end its turn, so Codex emits `turn.completed` with the turn's usage. Before,
+the host stopped it at once and 207 of 229 completed Codex attempts in the
+local state had no tokens. A turn that ends normally replies in a few seconds;
+the model slot is held that long and the attempt finalizes that much later.
+Codex is stopped at once if it starts shell or file work after the handoff,
+and every other tool is already fenced. Decoding adds one per-call usage
+record per Claude API call (a fixed-size struct); Codex is unchanged.
+
+The score supervisor wakes every 5 s and, only when probes exist, does one
+walk over chats, runs and claims under the state lock to count team
+milestones. Probe commands run without the lock. `scores::tests::due_profile`,
+debug build (a release build of the worktree was not possible: `build.rs`
+needs the web bundle, which Trunk could not build inside the nested
+worktree), Apple Silicon, mean of 200 passes:
+
+| Probes | Chats | Runs | First version | Final |
+| ---: | ---: | ---: | ---: | ---: |
+| 4 | 36 | 640 | 668 µs | 345 µs |
+| 32 | 288 | 5,120 | 37.6 ms | 2.35 ms |
+| 32 | 288 | 25,600 | 168 ms | 11.0 ms |
+
+The first version built a team set per probe (`chat::tree`) and scanned all
+runs for each; the final one finds every chat's root once and counts runs and
+claims in one pass, so a pass is linear in runs whatever the probe count.
+Release code is typically 10–30 times faster than these debug figures. With
+no probes the pass returns at once. Stored series are capped at 240 samples
+of up to 8 numbers per probe and 32 probes per node (about 60 KB per full
+probe). Samples append to the patch log; thinning a full series rewrites it
+once every 120 samples.
+
 ## Timed-out turns and steering notes (2026-11-16)
 
 The advisor's `timed_out` fact adds one per-chat slot and one attempt check per
