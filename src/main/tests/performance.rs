@@ -73,17 +73,17 @@ fn transcript_fixtures_keep_activity_collapsed_without_a_folder_picker() {
         (
             10,
             0,
-            "554970efa3a2565da043c6f012c7976a5011470e2f9c36d2d927daeb91692b39",
+            "2a41112b65a8c61f1ae67d7ba66d1ef5af4f436484bc1ab489522c095f045abd",
         ),
         (
             100,
             1000,
-            "af34f02d5139219fd19d702527d9bfeaf07e828474d586cd7268b9aaae9d67a8",
+            "3af77b3feb616eff37a9743332f885977c9fb9e292869f17a421c1293f3dc082",
         ),
         (
             500,
             5000,
-            "822798200d64f130c74ce9c2e01f480d606a1abb37dbb81ee8791135e6e5780a",
+            "5b9061f4a2982c20188df7403c40d98875c385d4511220e3a16bf1080bb496a9",
         ),
     ] {
         let state = fixture(messages, unrelated);

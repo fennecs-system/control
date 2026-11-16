@@ -6,7 +6,7 @@ pub mod model;
 mod types;
 use serde_json::Value;
 use std::io::{self, Read};
-pub use types::{tokens_label, Accounting, Activity, Tokens, Usage};
+pub use types::{attempt_status, status_text, Accounting, Activity, StatusPart, Tokens, Usage};
 
 /// Provider-reported results. Missing usage is unknown, never an estimate of zero.
 #[derive(Debug, Default)]

@@ -6,7 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-pub use control_ai::{tokens_label, Accounting, Activity, Tokens};
+pub use control_ai::{attempt_status, Accounting, Activity, StatusPart, Tokens};
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
@@ -84,8 +84,9 @@ impl Attempt {
     pub fn running(&self) -> bool {
         self.status == "running"
     }
-    pub fn tokens_label(&self) -> Option<String> {
-        tokens_label(self.tokens, self.accounting, self.running())
+    /// The attempt's compact status line; see [`attempt_status`].
+    pub fn status(&self, index: usize) -> Vec<StatusPart> {
+        attempt_status(index, self.tokens, self.accounting, self.running(), self.omitted_history)
     }
     /// Callers expose this only for successfully completed runs. The accepted
     /// handoff is the single retained source, not a duplicated summary field.

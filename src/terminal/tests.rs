@@ -1481,16 +1481,16 @@ fn attempt_tokens_render_live_and_after_the_attempt_ends() {
         app.transcript().to_string()
     };
     let tokens = json!({"input_tokens":12000,"cached_input_tokens":11000,"output_tokens":300});
-    let live = attempt(json!({"status":"running","tokens":tokens,"accounting":"partial"}));
-    assert!(live.contains("Tokens · attempt 1 · 12000 input (11000 cached) · 300 output tokens so far"), "{live}");
+    let live = attempt(json!({"status":"running","tokens":tokens,"accounting":"partial","omitted_history":2}));
+    assert!(live.contains("attempt 1 · ↑ 12,000 in (11,000 cached) · ↓ 300 out… · 2 earlier exchanges excluded"), "{live}");
     let done = attempt(json!({"status":"completed","tokens":tokens,"accounting":"reported"}));
-    assert!(done.contains("300 output tokens") && !done.contains("so far"), "{done}");
+    assert!(done.contains("↓ 300 out") && !done.contains('…') && !done.contains('≥'), "{done}");
     let stopped = attempt(json!({"status":"cancelled","tokens":tokens,"accounting":"partial"}));
-    assert!(stopped.contains("300 output tokens, at least"), "{stopped}");
-    assert!(attempt(json!({"status":"running","accounting":"unknown"})).contains("tokens not reported yet"));
+    assert!(stopped.contains("↓ ≥300 out"), "{stopped}");
+    assert!(attempt(json!({"status":"running","accounting":"unknown"})).contains("attempt 1 · tokens pending…"));
     // Nothing before a model call, and nothing for records without accounting.
-    assert!(!attempt(json!({"status":"running"})).contains("Tokens ·"));
-    assert!(!attempt(json!({"status":"blocked","accounting":"not_launched"})).contains("Tokens ·"));
+    assert!(!attempt(json!({"status":"running"})).contains("attempt 1"));
+    assert!(!attempt(json!({"status":"blocked","accounting":"not_launched"})).contains("attempt 1"));
 }
 #[test]
 fn service_commands_and_child_stdout_render_in_terminal() {

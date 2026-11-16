@@ -261,7 +261,7 @@ fn running_usage_is_live_in_state_and_rendered_until_the_attempt_finishes() {
     assert!(monitor.contains("running (totals so far): 1 · unknown attempts: 0 · partial (stopped mid-turn, lower bound): 0"), "{monitor}");
     assert!(state.runtime.runs_page(None, None).contains("12000 input (11000 cached) · 300 output tokens so far"));
     let transcript = crate::chat::transcript(&state, &chat).unwrap();
-    assert!(transcript.contains("Tokens · attempt 1 · 12000 input (11000 cached) · 300 output tokens so far"), "{transcript}");
+    assert!(transcript.contains(">↑ 12,000 in (11,000 cached)</span> · <span title='300 output tokens so far; the attempt is still running'>↓ 300 out…</span>"), "{transcript}");
 
     // Finished: the attempt's own record replaces the live one.
     let attempt = &mut state.runtime.runs[0].attempts[0];
@@ -272,7 +272,8 @@ fn running_usage_is_live_in_state_and_rendered_until_the_attempt_finishes() {
     let monitor = crate::usage::render(&state.runtime);
     assert!(!monitor.contains("Running now"));
     assert!(monitor.contains("running (totals so far): 0"));
-    assert!(crate::chat::transcript(&state, &chat).unwrap().contains("Tokens · attempt 1 · 12000 input (11000 cached) · 300 output tokens</p>"));
+    let transcript = crate::chat::transcript(&state, &chat).unwrap();
+    assert!(transcript.contains("<span title='300 output tokens'>↓ 300 out</span>"), "{transcript}");
 }
 
 #[test]
