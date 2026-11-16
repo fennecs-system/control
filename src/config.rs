@@ -54,6 +54,28 @@ pub fn state_directory() -> Result<PathBuf, &'static str> {
     Ok(path)
 }
 
+/// The patch log that extends `state.json` (see the server's `storage`).
+pub const STATE_LOG: &str = "state.log";
+
+/// The persisted state's schema in this build. Version 0 is the monolithic
+/// `state.json` from before the patch log; version 1 adds the log and the
+/// `_snapshot`/`_schema` members without changing the state's shape, so its
+/// step has no lenses. A shape change appends a step of
+/// [`control_journal::lens`] lenses, which are also recorded in every snapshot
+/// so older builds can translate back.
+pub fn state_schema() -> control_journal::lens::Schema {
+    control_journal::lens::Schema { version: 1, lenses: vec![vec![]] }
+}
+
+/// The current state document (snapshot plus the log's valid lines) for a
+/// process that does not own the state; it takes no lock and repairs nothing.
+pub fn read_state(limit: usize) -> io::Result<Option<serde_json::Value>> {
+    let directory = state_directory().map_err(io::Error::other)?;
+    control_journal::snapshot::read(&directory.join("state.json"), &directory.join(STATE_LOG), &state_schema(), |path| {
+        read_regular(path, limit, false)
+    })
+}
+
 pub fn state(name: &str) -> Result<PathBuf, &'static str> {
     if Path::new(name)
         .components()

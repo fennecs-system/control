@@ -1,9 +1,17 @@
 use crate::State;
+use crate::config::{STATE_LOG as LOG, state_schema as schema};
 use control_effect::sync::Changes;
+use control_journal::{
+    FileJournal, Journal,
+    lens::{self, Schema},
+    snapshot::{self, Encoded},
+};
 use std::{
+    collections::HashMap,
     fs,
     io::{self, Read, Write},
-    sync::{Arc, OnceLock},
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, OnceLock, PoisonError},
 };
 
 /// Bumped after every durable checkpoint so supervisors can wait for state
@@ -67,9 +75,9 @@ pub fn load() -> io::Result<State> {
     let directory = crate::config::state_directory().map_err(io::Error::other)?;
     // A previous process may have stopped with an unconfirmed rename. Confirm
     // the file and directory before recovering journals or dispatching anything.
-    let mut state: State = match read_checkpoint(&directory)? {
-        Some(data) => serde_json::from_slice(&data).map_err(io::Error::other)?,
-        None => State::initial(),
+    let (mut state, published) = match read_checkpoint(&directory)? {
+        Some(data) => recover(&directory, data)?,
+        None => (State::initial(), None),
     };
     crate::providers::load_settings(&mut state.runtime)?;
     state.runtime.execution = crate::scheduler::load_limits()?;
@@ -81,10 +89,114 @@ pub fn load() -> io::Result<State> {
     let mut changed = crate::knowledge::migrate(&mut state);
     changed |= state.lens_library.merge_defaults();
     changed |= interrupt_active(&mut state);
-    if changed {
+    // Without an exact, current snapshot to diff against, the first save
+    // compacts: replayed logs, older schemas and migrations all end here.
+    if changed || !published.is_some_and(|published| adopt(&directory, &state, published)) {
         save(&state)?;
     }
     Ok(state)
+}
+
+/// A log may grow to the snapshot's size (at least this) before compaction:
+/// replay stays bounded by twice the snapshot, and compaction at most doubles
+/// the bytes the log itself wrote.
+const LOG_MINIMUM: usize = 4 << 20;
+
+/// The published state this process extends: the snapshot's name, the log
+/// handle (exclusively locked) and the encoding the next diff starts from.
+struct Published {
+    log: FileJournal,
+    log_bytes: usize,
+    base: Option<Encoded>,
+}
+/// Keyed by state directory: one in a server, several in tests.
+fn published() -> &'static Mutex<HashMap<PathBuf, Published>> {
+    static PUBLISHED: OnceLock<Mutex<HashMap<PathBuf, Published>>> = OnceLock::new();
+    PUBLISHED.get_or_init(Mutex::default)
+}
+
+/// What `recover` read, kept until `load` decides whether the snapshot can be
+/// adopted as the diff base without rewriting it.
+struct Recovered {
+    data: Vec<u8>,
+    nonce: Option<String>,
+    log: FileJournal,
+    /// Whether the log was this snapshot's, with nothing to replay, and the
+    /// snapshot is in this build's schema.
+    clean: bool,
+}
+
+/// The snapshot with its log's valid prefix replayed (translated through
+/// lenses when an older or newer build wrote it). A torn or corrupt tail is
+/// truncated away: those saves never returned success.
+fn recover(directory: &Path, data: Vec<u8>) -> io::Result<(State, Option<Recovered>)> {
+    #[derive(serde::Deserialize)]
+    struct Identity {
+        #[serde(rename = "_snapshot")]
+        nonce: Option<String>,
+        #[serde(rename = "_schema", default)]
+        schema: Schema,
+    }
+    let identity: Identity = serde_json::from_slice(&data).map_err(io::Error::other)?;
+    let mut log = FileJournal::open(&directory.join(LOG))?;
+    let lines = (0..log.len()).map(|i| log.read(i)).collect::<io::Result<Option<Vec<_>>>>()?.unwrap_or_default();
+    let found = identity.nonce.as_deref().and_then(|nonce| snapshot::patches(lines, nonce));
+    let ours = schema();
+    if let Some((_, patches)) = &found
+        && (patches.len() as u64) + 1 < log.len()
+    {
+        log.truncate(patches.len() as u64 + 1)?;
+    }
+    let clean = identity.schema == ours && found.as_ref().is_some_and(|(_, patches)| patches.is_empty());
+    let state = if clean || (found.is_none() && identity.schema == ours) {
+        serde_json::from_slice(&data).map_err(io::Error::other)?
+    } else {
+        let mut document: serde_json::Value = serde_json::from_slice(&data).map_err(io::Error::other)?;
+        snapshot::identify(&mut document);
+        lens::document(&lens::route(&identity.schema, &ours)?, &mut document);
+        if let Some((written, patches)) = found {
+            let route = lens::route(&written, &ours)?;
+            for patch in patches {
+                snapshot::apply(&mut document, patch.into_iter().filter_map(|edit| lens::edit(&route, edit)).collect())?;
+            }
+        }
+        serde_json::from_value(document).map_err(io::Error::other)?
+    };
+    Ok((state, Some(Recovered { data, nonce: identity.nonce, log, clean })))
+}
+
+/// Adopts the published snapshot as the diff base when it is exactly what this
+/// build would write for `state`, so a clean restart writes nothing.
+fn adopt(directory: &Path, state: &State, recovered: Recovered) -> bool {
+    let Recovered { data, nonce: Some(nonce), log, clean: true } = recovered else { return false };
+    let Ok(encoded) = crate::history::persisting(|| snapshot::encode(state)) else { return false };
+    let schema = serde_json::to_value(schema()).expect("schemas serialize");
+    if !snapshot::matches(&data, &encoded, &nonce, &schema) {
+        return false;
+    }
+    let log_bytes = (0..log.len()).filter_map(|i| log.read(i).ok().flatten()).map(|line| line.len() + 1).sum();
+    published().lock().unwrap_or_else(PoisonError::into_inner).insert(directory.to_owned(), Published { log, log_bytes, base: Some(encoded) });
+    true
+}
+
+/// Writes the whole state as a fresh snapshot and starts an empty log, so
+/// `state.json` alone is complete. Used on shutdown: a stopped node can be
+/// read (or rolled back to an older build) from the snapshot by itself.
+pub fn compact(state: &State) -> io::Result<()> {
+    let encoded = crate::history::persisting(|| snapshot::encode(state)).map_err(io::Error::other)?;
+    let directory = crate::config::state_directory().map_err(io::Error::other)?;
+    legacy_result(persist(&directory, encoded, true))?;
+    changes().bump();
+    crate::live_updates::notify();
+    Ok(())
+}
+
+/// The state as currently published (snapshot plus log), for readers that do
+/// not own it and must not run `load`'s recovery. Files over `limit` are refused.
+pub(crate) fn read_published(limit: usize) -> io::Result<Option<State>> {
+    crate::config::read_state(limit)?
+        .map(|document| serde_json::from_value(document).map_err(io::Error::other))
+        .transpose()
 }
 fn interrupt_active(state: &mut State) -> bool {
     let mut changed = false;
@@ -175,15 +287,73 @@ impl std::error::Error for CheckpointError {
 /// Synchronous, phase-aware checkpoint boundary. Success includes file and
 /// directory sync; only success wakes state-change subscribers. This API does
 /// not permit releasing the application's write lock during persistence.
+///
+/// A checkpoint persists only what changed since the last one: one line of
+/// `state.log`, appended and synced, holding the patch from the previous
+/// encoding to this one (nothing at all when they are equal). When the log
+/// outgrows the snapshot, or no base is known yet, it compacts instead: a full
+/// atomic `state.json` replacement followed by a fresh log. Either way the
+/// change is durable before this returns, so receipts and idempotency records
+/// keep their guarantees.
 pub fn checkpoint(state: &State) -> Result<(), CheckpointError> {
-    let data = crate::history::persisting(|| serde_json::to_vec(state))
+    let encoded = crate::history::persisting(|| snapshot::encode(state))
         .map_err(|error| CheckpointError::NotReplaced(io::Error::other(error)))?;
     let directory = crate::config::state_directory()
         .map_err(|error| CheckpointError::NotReplaced(io::Error::other(error)))?;
-    write_checkpoint(&directory, &data)?;
+    persist(&directory, encoded, false)?;
     changes().bump();
     crate::live_updates::notify();
     Ok(())
+}
+
+/// Persists `encoded` in `directory`: nothing when unchanged, else one patch
+/// line, else (when `compact`, with no base yet, or once the log outgrows the
+/// snapshot) a compaction.
+fn persist(directory: &Path, encoded: Encoded, compact: bool) -> Result<(), CheckpointError> {
+    let mut all = published().lock().unwrap_or_else(PoisonError::into_inner);
+    // `None`: compact; `Some(None)`: nothing changed; `Some(Some(patch))`: append.
+    let step = all.get(directory).filter(|_| !compact).and_then(|current| {
+        let base = current.base.as_ref()?;
+        match snapshot::diff(base, &encoded) {
+            Some(patch) if current.log_bytes + patch.len() >= base.bytes().len().max(LOG_MINIMUM) => None,
+            patch => Some(patch),
+        }
+    });
+    match step {
+        Some(None) => Ok(()),
+        Some(Some(patch)) => {
+            let current = all.get_mut(directory).expect("a base was found");
+            let line = snapshot::commit(&patch);
+            if let Err(error) = current.log.append(&line) {
+                let poisoned = current.log.poisoned();
+                // The next save starts over from a compaction.
+                all.remove(directory);
+                return Err(if poisoned { CheckpointError::Unconfirmed(error) } else { CheckpointError::NotReplaced(error) });
+            }
+            current.log_bytes += line.len() + 1;
+            current.base = Some(encoded);
+            Ok(())
+        }
+        None => {
+            // Compaction: the full snapshot, then an empty log naming it. A
+            // crash between the two leaves the old log, whose header names the
+            // old snapshot, so it is ignored: the new snapshot contains it.
+            let previous = all.remove(directory);
+            let nonce = snapshot::nonce();
+            let schema = serde_json::to_value(schema()).expect("schemas serialize");
+            write_checkpoint(directory, &snapshot::snapshot(&encoded, &nonce, &schema))?;
+            // The snapshot is durable; failing to start its log only costs the
+            // next save another compaction.
+            let log = previous.map_or_else(|| FileJournal::open(&directory.join(LOG)), |p| Ok(p.log));
+            let header = snapshot::header(&nonce, &schema);
+            if let Ok(mut log) = log
+                && log.truncate(0).and_then(|()| log.append(&header)).is_ok()
+            {
+                all.insert(directory.to_owned(), Published { log, log_bytes: header.len() + 1, base: Some(encoded) });
+            }
+            Ok(())
+        }
+    }
 }
 fn write_checkpoint(directory: &std::path::Path, data: &[u8]) -> Result<(), CheckpointError> {
     commit_checkpoint(directory, data, sync_directory)

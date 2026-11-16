@@ -314,8 +314,11 @@ fn project_access_requires_operator_confirmation_and_survives_restart() {
     assert!(!fixture.0.join("state/projects").exists());
     assert_eq!(approve(nonce).status(), 303);
     assert_eq!(approve(nonce).status(), 400, "Approval cannot be replayed");
-    let saved: serde_json::Value =
-        serde_json::from_slice(&fs::read(fixture.0.join("state/state.json")).unwrap()).unwrap();
+    // The server is running: its latest saves are in the patch log after the snapshot.
+    let state = fixture.0.join("state");
+    let saved = control_journal::snapshot::read(&state.join("state.json"), &state.join(control::config::STATE_LOG), &control::config::state_schema(), |path| fs::read(path))
+        .unwrap()
+        .unwrap();
     let grant = saved["chats"][0]["project"]["grant"].as_str().unwrap();
     let seed = fixture
         .0

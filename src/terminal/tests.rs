@@ -680,7 +680,7 @@ fn live_improve_build_and_independent_judge_roundtrip() {
         std::thread::sleep(Duration::from_millis(500));
     }
     let saved: Value =
-        serde_json::from_slice(&fs::read(state_dir.join("state.json")).unwrap()).unwrap();
+        control_journal::snapshot::read(&state_dir.join("state.json"), &state_dir.join(crate::config::STATE_LOG), &crate::config::state_schema(), |path| fs::read(path)).unwrap().map(serde_json::from_value).unwrap().unwrap();
     let runs = saved["runtime"]["runs"].as_array().unwrap();
     let parent = runs.iter().find(|r| r["id"] == root).unwrap();
     assert_eq!(

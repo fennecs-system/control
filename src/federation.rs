@@ -467,15 +467,7 @@ fn value<'a>(opts: &'a [(String, String)], name: &str) -> Result<&'a str> {
 }
 fn selected(root: &str, include: bool) -> Result<Bundle> {
     // Read a snapshot only; storage::load mutates run status on startup and must not be used here.
-    let state: crate::State = match read(
-        &crate::config::state("state.json").map_err(io::Error::other)?,
-        STORE_BYTES,
-        false,
-    ) {
-        Ok(b) => serde_json::from_slice(&b).map_err(io::Error::other)?,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => crate::State::initial(),
-        Err(e) => return Err(e),
-    };
+    let state = crate::storage::read_published(STORE_BYTES)?.unwrap_or_else(crate::State::initial);
     let docs: Vec<_> = state
         .documents
         .iter()

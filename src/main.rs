@@ -707,7 +707,9 @@ fn main() -> std::io::Result<()> {
     // handlers finish too before the final state save and process exit.
     let requests_result = requests.join();
     let state = state.lock().map_err(|_| std::io::Error::other("State unavailable during shutdown; retained attempts require inspection on restart."))?;
-    storage::save(&state)?;
+    // A stopped node leaves a self-contained `state.json` (empty patch log), so
+    // older builds and offline readers need nothing else.
+    storage::compact(&state)?;
     stopped?;
     if service_failed { return Err(std::io::Error::other("Service supervisor stopped unexpectedly; inspect retained service identities.")); }
     if port_failed { return Err(std::io::Error::other("Port supervisor stopped unexpectedly; inspect retained port approvals.")); }
