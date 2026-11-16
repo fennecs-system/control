@@ -27,12 +27,25 @@ struct Credentials {
 }
 impl Credentials {
     fn locate() -> Result<Self, &'static str> {
-        let path = std::env::var_os("CONTROL_CODEX_AUTH_FILE")
+        Self::validate(&Self::path()?)
+    }
+
+    /// Tests resolve only an explicit credential path or one under the test
+    /// node directory, never the operator's `CODEX_HOME`/`~/.codex`.
+    #[cfg(test)]
+    fn path() -> Result<PathBuf, &'static str> {
+        Ok(std::env::var_os("CONTROL_CODEX_AUTH_FILE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| crate::config::test_root().join("codex/auth.json")))
+    }
+
+    #[cfg(not(test))]
+    fn path() -> Result<PathBuf, &'static str> {
+        std::env::var_os("CONTROL_CODEX_AUTH_FILE")
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("CODEX_HOME").map(|p| PathBuf::from(p).join("auth.json")))
             .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".codex/auth.json")))
-            .ok_or("Cannot locate Codex auth.json. Sign in with codex login on the host.")?;
-        Self::validate(&path)
+            .ok_or("Cannot locate Codex auth.json. Sign in with codex login on the host.")
     }
 
     // Inspect metadata only. Only Codex inside the worker consumes credential contents.
