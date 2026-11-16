@@ -28,6 +28,11 @@ the relevant peer a targeted callback, and that peer sends back the answer only
 when it releases a dependency. Shared room membership alone does not authorize
 messaging across unrelated task trees.
 Peer messages are retained conversation evidence, not executable continuations.
+A parent's message to a descendant normally queues that descendant's next turn;
+when the descendant is an approved persistent bot, it is retained like a peer
+message instead. A running session sees it through its callbacks, and the bot's
+supervisor coalesces whatever remains into one wake, so a busy member does not
+accumulate one queued turn per message.
 Active workers consume them at ordinary action boundaries; unattended wakeups use
 only the recipient's approved persistent bot and existing turn budget. Paused/off
 bots do not dispatch queued wakes, and idle approval never comes from a message.

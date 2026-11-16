@@ -420,7 +420,12 @@ pub(crate) fn plan(
         .filter(|service| crate::services::accessible(service, &service.resource.owner.node, from))
         .map(Service::grant)
         .collect::<Vec<Grant>>();
-    if !descendant {
+    // Peer messages, and any message to an approved persistent bot, are
+    // retained conversation evidence: a running session reads it through its
+    // callbacks and the bot's supervisor coalesces the rest into one wake,
+    // instead of one queued turn per message piling up behind it.
+    let retained_only = !descendant || state.bots.persists(&call.chat_id);
+    if retained_only {
         queued.status = "completed".into();
         queued.emitted = Some("completed".into());
     }
@@ -440,7 +445,7 @@ pub(crate) fn plan(
         chat: call.chat_id,
         run: id,
         services: call.services,
-        peer_cursor: (!descendant).then_some((session.messages.len() + 1) as u64),
+        peer_cursor: retained_only.then_some((session.messages.len() + 1) as u64),
         note: advisor,
     };
     let result = MessageResult::from(&receipt);

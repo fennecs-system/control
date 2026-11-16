@@ -443,8 +443,13 @@ at most once per attempt and never after a handoff is staged:
 - When an attempt with a time limit has at most 90 seconds, or 15% of its limit
   if larger, left (half the limit for limits under 180 seconds):
   `N s left in this turn: publish your checkpoint (control_turn_handoff) now and
-  continue in a routine or the next turn.` Attempts without a limit, such as
-  approved persistent bots by default, get none.
+  continue in a routine or the next turn.` Attempts without a limit get none.
+  The limit is decided by the chat, not the run kind: every run in a chat
+  that is an approved permanent bot (its wakes and any queued message turns)
+  has no implicit limit unless `worker-timeout-secs` is configured, while a
+  chat that is not (including a temporary or stopped bot) keeps the
+  600-second default. A member bot can therefore run for an hour while an
+  unapproved lead is stopped at ten minutes; this is the intended contract.
 - When the acting chat steers active members (chats spawned from it, directly or
   through members, with a turn queued, running or waiting, or approved as
   persistent bots) and its turn has run `steering_turn_seconds` (default 240) or
