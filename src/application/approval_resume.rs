@@ -54,9 +54,12 @@ pub(crate) enum Eligibility {
 
 /// Request IDs name the originating turns. Later design answers continue their
 /// task; later human turns steer it. Any live turn in this chat defers decisions.
+/// `cancelled_through` is the chat's operator-cancellation mark (the highest run
+/// `queue_order` at its latest cancellation): a request made by a run queued
+/// before it belongs to cancelled work and is only noted.
 /// Candidate indices are valid only under the caller's existing exclusive state
 /// ownership; they are not plans to retain across another writer or an await.
-pub(crate) fn decide(runs: &[Run], chat: &str, origins: &[&str]) -> Eligibility {
+pub(crate) fn decide(runs: &[Run], chat: &str, origins: &[&str], cancelled_through: Option<u64>) -> Eligibility {
     let in_chat = |run: &&Run| run.chat_id.as_deref() == Some(chat);
     if runs.iter().filter(in_chat).any(|run| {
         matches!(
@@ -75,9 +78,10 @@ pub(crate) fn decide(runs: &[Run], chat: &str, origins: &[&str]) -> Eligibility 
             run.kind.speaker() == MessageSpeaker::User && run.kind != RunKind::DesignAnswer
         })
     });
+    let cancelled = requested.zip(cancelled_through).is_some_and(|(at, through)| runs[at].queue_order <= through);
     match (requested, latest) {
         // A turn cut off before its handoff resumes from its host checkpoint.
-        (Some(_), Some(at)) if !steered && (runs[at].status == "completed" || crate::attempt_control::cut_off(&runs[at])) => {
+        (Some(_), Some(at)) if !steered && !cancelled && (runs[at].status == "completed" || crate::attempt_control::cut_off(&runs[at])) => {
             Eligibility::Candidate(at)
         }
         _ => Eligibility::Note,

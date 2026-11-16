@@ -27,7 +27,8 @@ pub(crate) struct Decisions<'a> {
 /// same turn rather than steering it.
 pub(crate) fn resume(state: &mut State, decisions: Decisions<'_>) -> Outcome {
     let chat = decisions.chat;
-    let latest = match approval_resume::decide(&state.runtime.runs, chat, decisions.origins) {
+    let cancelled_through = state.chats.iter().find(|session| session.id == chat).and_then(|session| session.cancelled_through);
+    let latest = match approval_resume::decide(&state.runtime.runs, chat, decisions.origins, cancelled_through) {
         Eligibility::Wait => return Outcome::Wait,
         Eligibility::Note => None,
         Eligibility::Candidate(at) => Some(at),

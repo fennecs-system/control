@@ -80,5 +80,10 @@ pub struct Session {
     /// The operator's `/rename`. Absent: the chat's derived callsign.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The highest run `queue_order` when the operator last cancelled work in
+    /// this chat (`/cancel` here, or `/cancel all` here or in an ancestor).
+    /// Operator decisions on requests made by those runs never resume it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancelled_through: Option<u64>,
     pub messages: Vec<Message>,
 }

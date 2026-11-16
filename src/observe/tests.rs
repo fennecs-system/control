@@ -34,9 +34,42 @@ fn ticking(_: &Service, command: &str, _: &str, _: Duration) -> io::Result<Probe
     let tick = TICKS.fetch_add(1, Ordering::SeqCst);
     Ok(ProbeOutput { text: format!("{command} -> hp=20 tick={tick}"), exit_code: Some(0), timed_out: false })
 }
-fn slow(_: &Service, _: &str, _: &str, _: Duration) -> io::Result<ProbeOutput> {
-    std::thread::sleep(Duration::from_millis(300));
-    Ok(ProbeOutput { text: "slow fresh value".into(), exit_code: Some(0), timed_out: false })
+/// A probe that cannot finish until its test releases it, so "the caller did
+/// not wait for it" is shown by the caller returning at all, not by timing.
+struct Latch { open: std::sync::Mutex<u32>, opened: std::sync::Condvar }
+impl Latch {
+    const fn new() -> Self { Self { open: std::sync::Mutex::new(0), opened: std::sync::Condvar::new() } }
+    /// Lets one blocked (or the next) probe finish.
+    fn release(&self) {
+        *self.open.lock().unwrap() += 1;
+        self.opened.notify_all();
+    }
+    fn probe(&self) -> io::Result<ProbeOutput> {
+        let guard = self.open.lock().unwrap();
+        let mut open = self.opened.wait_while(guard, |open| *open == 0).unwrap();
+        *open -= 1;
+        Ok(ProbeOutput { text: "slow fresh value".into(), exit_code: Some(0), timed_out: false })
+    }
+}
+/// Each test has its own latch; tests run in parallel.
+static TURN_LATCH: Latch = Latch::new();
+fn slow_turn(_: &Service, _: &str, _: &str, _: Duration) -> io::Result<ProbeOutput> { TURN_LATCH.probe() }
+static STEP_LATCH: Latch = Latch::new();
+fn slow_step(_: &Service, _: &str, _: &str, _: Duration) -> io::Result<ProbeOutput> { STEP_LATCH.probe() }
+/// Runs `call` on another thread; a call that waited for a latched probe would
+/// never return, so this fails instead of hanging.
+fn returns<T: Send + 'static>(call: impl FnOnce() -> T + Send + 'static) -> T {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || sender.send(call()));
+    receiver.recv_timeout(Duration::from_secs(60)).expect("returned without waiting for the probe")
+}
+/// Waits until the chat's background refresh has recorded its result.
+fn refreshed(shared: &Arc<Mutex<State>>) {
+    for _ in 0..60_000 {
+        if shared.lock().unwrap().observations.refreshing.is_empty() { return; }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    panic!("the background refresh never finished");
 }
 fn timing_out(_: &Service, _: &str, _: &str, timeout: Duration) -> io::Result<ProbeOutput> {
     Ok(ProbeOutput { text: "partial".into(), exit_code: None, timed_out: !timeout.is_zero() })
@@ -87,9 +120,8 @@ fn refresh_seconds_reuses_a_recent_value_and_zero_refreshes_every_turn() {
 fn a_slow_refresh_never_blocks_a_turn_and_falls_back_to_the_last_value_with_its_age() {
     let (shared, _, run) = fixture();
     declare(&shared, &run, json!({"service_id":"svc-game","command":"look","refresh_seconds":0}), ticking);
-    let started = std::time::Instant::now();
-    let fallback = text(&shared, &run, Duration::from_millis(50), slow);
-    assert!(started.elapsed() < Duration::from_millis(250), "the wait is bounded, not the command");
+    // The probe is held until released: returning shows the wait is bounded.
+    let fallback = returns({ let (shared, run) = (Arc::clone(&shared), run.clone()); move || text(&shared, &run, Duration::from_millis(50), slow_turn) });
     assert!(fallback.contains("look -> hp=20") && fallback.contains(" s old"), "{fallback}");
     // The refresh finishes in the background and the next turn sees it; a
     // refresh already in flight is not started twice.
@@ -98,8 +130,12 @@ fn a_slow_refresh_never_blocks_a_turn_and_falls_back_to_the_last_value_with_its_
         let chat = state.runtime.runs[0].chat_id.clone().unwrap();
         assert!(state.observations.refreshing.contains(&chat), "the refresh continues in the background");
     }
-    std::thread::sleep(Duration::from_millis(400));
-    let next = text(&shared, &run, Duration::from_millis(50), slow);
+    let again = text(&shared, &run, Duration::ZERO, |_, _, _, _| panic!("a refresh in flight is not started twice"));
+    assert!(again.contains("look -> hp=20"), "{again}");
+    TURN_LATCH.release();
+    refreshed(&shared);
+    // Its own refresh is held again, so this shows the value that landed.
+    let next = text(&shared, &run, Duration::ZERO, slow_turn);
     assert!(next.contains("slow fresh value"), "{next}");
 
     // A timed-out refresh keeps the last value and says so.
@@ -161,7 +197,8 @@ fn tool_results_carry_the_whole_observation_only_when_it_changed_for_this_attemp
     // is a short marker, never the whole block again.
     declare(&shared, &run, json!({"service_id":"svc-game","command":"cached","refresh_seconds":3600}), ticking);
     let marker = for_result_with(&shared, &run, ticking).unwrap();
-    assert_eq!(marker, "[Observation unchanged (age 0 s)]");
+    // The age is wall-clock seconds; a loaded machine may take one to get here.
+    assert!(marker.starts_with("[Observation unchanged (age ") && marker.ends_with(" s)]"), "{marker}");
     assert!(crate::local_agent::tokens(marker.len()) <= 12, "about ten tokens");
     // A changed value is shown whole, once.
     declare(&shared, &run, json!({"service_id":"svc-game","command":"fresh","refresh_seconds":0}), ticking);
@@ -205,15 +242,14 @@ fn the_wake_counts_as_shown_and_local_steps_always_get_the_whole_refreshed_block
 fn a_slow_probe_never_blocks_a_step_or_result() {
     let (shared, _, run) = fixture();
     declare(&shared, &run, json!({"service_id":"svc-game","command":"look","refresh_seconds":0}), ticking);
-    let started = std::time::Instant::now();
-    let step = step_with(&shared, &run, false, slow).unwrap();
-    assert!(started.elapsed() < Duration::from_millis(300), "bounded by the step wait, not the probe");
+    // The probe is held until released: returning shows the step did not await it.
+    let step = returns({ let (shared, run) = (Arc::clone(&shared), run.clone()); move || block_with(&shared, &run, Duration::from_millis(50), slow_step).unwrap().0.text });
     assert!(step.contains("look -> hp=20") && step.contains(" s old"), "the last value with its age: {step}");
-    std::thread::sleep(Duration::from_millis(400));
-    // The background refresh landed; a result sees the new value at once.
-    let started = std::time::Instant::now();
-    let result = for_result_with(&shared, &run, slow).unwrap();
-    assert!(started.elapsed() < Duration::from_millis(300), "the next slow refresh is not awaited either");
+    STEP_LATCH.release();
+    refreshed(&shared);
+    // The background refresh landed; a result sees the new value, and the next
+    // slow refresh, held again, is not awaited either.
+    let result = returns({ let (shared, run) = (Arc::clone(&shared), run.clone()); move || result_within(&shared, &run, Duration::from_millis(50), slow_step).unwrap() });
     assert!(result.contains("slow fresh value"), "{result}");
 }
 

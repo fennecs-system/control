@@ -25,9 +25,9 @@ fn live_turns_defer_even_with_a_newer_completed_turn_or_missing_request() {
             run("origin", "chat", status, RunKind::Task),
             run("later", "chat", "completed", RunKind::BotWake),
         ];
-        assert_eq!(decide(&runs, "chat", &["origin"]), Eligibility::Wait);
-        assert_eq!(decide(&runs, "chat", &[]), Eligibility::Wait);
-        assert_eq!(decide(&runs, "other", &["origin"]), Eligibility::Note);
+        assert_eq!(decide(&runs, "chat", &["origin"], None), Eligibility::Wait);
+        assert_eq!(decide(&runs, "chat", &[], None), Eligibility::Wait);
+        assert_eq!(decide(&runs, "other", &["origin"], None), Eligibility::Note);
     }
 }
 
@@ -38,18 +38,18 @@ fn later_human_steering_is_relative_to_the_latest_matching_request() {
         run("steering", "chat", "completed", RunKind::Task),
         run("answer", "chat", "completed", RunKind::DesignAnswer),
     ];
-    assert_eq!(decide(&runs, "chat", &["origin"]), Eligibility::Note);
+    assert_eq!(decide(&runs, "chat", &["origin"], None), Eligibility::Note);
     assert_eq!(
-        decide(&runs, "chat", &["origin", "steering"]),
+        decide(&runs, "chat", &["origin", "steering"], None),
         Eligibility::Candidate(2)
     );
     runs.push(run("unrelated", "other", "running", RunKind::Task));
     assert_eq!(
-        decide(&runs, "chat", &["steering"]),
+        decide(&runs, "chat", &["steering"], None),
         Eligibility::Candidate(2)
     );
     runs.push(run("new-steering", "chat", "completed", RunKind::Task));
-    assert_eq!(decide(&runs, "chat", &["steering"]), Eligibility::Note);
+    assert_eq!(decide(&runs, "chat", &["steering"], None), Eligibility::Note);
 }
 
 #[test]
@@ -59,17 +59,23 @@ fn missing_requests_and_unsuccessful_latest_turns_are_not_resumed() {
             run("origin", "chat", "completed", RunKind::Task),
             run("later", "chat", status, RunKind::BotWake),
         ];
-        assert_eq!(decide(&runs, "chat", &["origin"]), Eligibility::Note);
+        assert_eq!(decide(&runs, "chat", &["origin"], None), Eligibility::Note);
     }
     // A turn cut off before its handoff left a host checkpoint and resumes.
     for cause in [crate::attempt_control::Termination::StepLimit, crate::attempt_control::Termination::TimedOut] {
         let mut cut = run("origin", "chat", "failed", RunKind::Task);
         cut.attempts.push(crate::usage::Attempt { termination: Some(cause), ..Default::default() });
-        assert_eq!(decide(&[cut], "chat", &["origin"]), Eligibility::Candidate(0));
+        assert_eq!(decide(&[cut], "chat", &["origin"], None), Eligibility::Candidate(0));
     }
+    // A request made before the operator cancelled the chat is only noted; one
+    // made by a later turn resumes as usual.
+    let mut cut = run("origin", "chat", "failed", RunKind::Task);
+    cut.attempts.push(crate::usage::Attempt { termination: Some(crate::attempt_control::Termination::StepLimit), ..Default::default() });
+    assert_eq!(decide(std::slice::from_ref(&cut), "chat", &["origin"], Some(1)), Eligibility::Note);
+    assert_eq!(decide(&[cut], "chat", &["origin"], Some(0)), Eligibility::Candidate(0));
     let runs = [run("origin", "chat", "completed", RunKind::Task)];
-    assert_eq!(decide(&runs, "chat", &["missing"]), Eligibility::Note);
-    assert_eq!(decide(&[], "chat", &["origin"]), Eligibility::Note);
+    assert_eq!(decide(&runs, "chat", &["missing"], None), Eligibility::Note);
+    assert_eq!(decide(&[], "chat", &["origin"], None), Eligibility::Note);
 }
 
 #[test]

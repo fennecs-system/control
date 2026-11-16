@@ -48,7 +48,7 @@ fn dispatcher_wakes_only_after_acknowledged_checkpoint_and_never_on_replay() {
     advance_with_wake(&mut restored, |_| panic!("no replay checkpoint"), || panic!("no replay wake")).unwrap();
 }
 #[test]
-fn approval_waits_for_turn_and_wakes_once_with_captured_provider_after_reload() {
+fn approval_waits_for_turn_and_wakes_once_with_captured_provider() {
     let (mut state, chat) = approved();
     advance(&mut state, |_| {
         panic!("active turn must not queue another run")
@@ -59,7 +59,6 @@ fn approval_waits_for_turn_and_wakes_once_with_captured_provider_after_reload() 
     let before = serde_json::to_vec(&state).unwrap();
     assert!(advance(&mut state, |_| Err(fail("disk full"))).is_err());
     assert_eq!(serde_json::to_vec(&state).unwrap(), before);
-    let mut state: State = serde_json::from_slice(&before).unwrap();
     advance(&mut state, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.len(), 2);
     assert_eq!(
@@ -241,6 +240,7 @@ fn waiting_chat_does_not_starve_an_independent_ready_callback() {
     state.chats.extend(other.chats);
     state.runtime.runs.extend(other.runtime.runs);
     state.ports.extend(other.ports);
+    state.services.extend(other.services);
     advance(&mut state, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.len(), 3);
     assert_eq!(
@@ -302,4 +302,71 @@ fn approving_egress_wakes_a_chat_whose_turn_was_cut_off_with_the_relay_line() {
     let (mut failed, _) = approved();
     failed.runtime.runs[0].status = "failed".into();
     advance(&mut failed, |_| panic!("a plain failure must not wake")).unwrap();
+    // Nor does it later, whatever the eligibility rules become: it is retired.
+    assert!(failed.ports[0].decision.as_ref().unwrap().acknowledged);
+}
+/// The requester's turn spent its model steps and failed with a host checkpoint.
+fn cut_off(state: &mut State) {
+    state.runtime.runs[0].status = "failed".into();
+    state.runtime.runs[0].attempts[0].termination = Some(crate::attempt_control::Termination::StepLimit);
+}
+#[test]
+fn a_decision_read_back_after_a_restart_never_queues_a_turn() {
+    // Decided before the restart and never delivered: the requester's turn had
+    // been cut off, which earlier releases did not wake.
+    let (mut state, _) = approved();
+    cut_off(&mut state);
+    let mut restarted: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+    advance_with_wake(&mut restarted, |_| panic!("nothing to checkpoint"), || panic!("no wake after a restart")).unwrap();
+    assert_eq!(restarted.runtime.runs.len(), 1);
+    assert!(restarted.ports[0].decision.as_ref().unwrap().acknowledged, "retired once, carried by the next save");
+    // The same decision in the process that made it resumes the requester.
+    advance(&mut state, |_| Ok(())).unwrap();
+    assert_eq!(state.runtime.runs.last().unwrap().kind, RunKind::PortDecision);
+}
+#[test]
+fn a_chat_the_operator_cancelled_is_not_resumed_by_a_decision() {
+    // Delivered after the operator cancelled the team.
+    let (mut state, chat) = approved();
+    cut_off(&mut state);
+    crate::chat::send(&mut state, &chat, "/cancel all", "test").unwrap();
+    advance(&mut state, |_| panic!("cancelled work is not resumed")).unwrap();
+    assert_eq!(state.runtime.runs.len(), 1);
+    assert!(state.ports[0].decision.as_ref().unwrap().acknowledged);
+    // Decided after the cancellation, on a request still pending from before it.
+    let (mut state, run, chat) = super::super::tests::fixture();
+    admit(&mut state, &run, "attempt-a", "notice", Input {
+        service_id: "svc-a".to_owned().try_into().unwrap(),
+        name: "download".to_owned().try_into().unwrap(),
+        direction: Direction::Egress,
+        service_port: std::num::NonZeroU16::new(3128).unwrap(),
+        target: Some(Endpoint { host: "files.example".into(), port: std::num::NonZeroU16::new(443).unwrap() }),
+        peer_port_id: None,
+    }, "node-a".to_owned().try_into().unwrap(), |_| Ok(())).unwrap();
+    cut_off(&mut state);
+    crate::chat::send(&mut state, &chat, "/cancel all", "test").unwrap();
+    state.ports[0].status = Status::Approved;
+    state.ports[0].decision = Some(Receipt::pending(true));
+    advance(&mut state, |_| panic!("cancelled work is not resumed")).unwrap();
+    assert_eq!(state.runtime.runs.len(), 1);
+    // A requester whose own latest turn was cancelled is not resumed either.
+    let (mut state, _) = approved();
+    state.runtime.runs[0].status = "cancelled".into();
+    state.runtime.runs[0].attempts[0].termination = Some(crate::attempt_control::Termination::Cancelled);
+    advance(&mut state, |_| panic!("cancelled turn is not resumed")).unwrap();
+    assert_eq!(state.runtime.runs.len(), 1);
+    assert!(state.ports[0].decision.as_ref().unwrap().acknowledged);
+}
+#[test]
+fn an_approval_for_a_port_stopped_before_delivery_is_retired() {
+    let (mut state, _) = approved(); // the requester's turn is still running
+    advance(&mut state, |_| panic!("the turn is still running")).unwrap();
+    state.ports[0].status = Status::Stopped;
+    cut_off(&mut state);
+    advance(&mut state, |_| panic!("a stopped port does not wake")).unwrap();
+    assert_eq!(state.runtime.runs.len(), 1);
+    assert!(state.ports[0].decision.as_ref().unwrap().acknowledged);
+    // Restarting the port does not bring the old decision back.
+    state.ports[0].status = Status::Approved;
+    advance(&mut state, |_| panic!("retired decisions stay retired")).unwrap();
 }

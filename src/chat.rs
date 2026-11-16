@@ -281,6 +281,7 @@ pub fn create(state: &mut State) -> String {
         actor: Actor::LocalOperator,
         title: "New chat".into(),
         name: None,
+        cancelled_through: None,
         messages: Vec::new(),
     });
     id
@@ -312,6 +313,7 @@ pub fn receive(state: &mut State, incoming: &discord::Incoming) -> Result<(), &'
             actor,
             title: "Discord chat".into(),
             name: None,
+            cancelled_through: None,
             messages: Vec::new(),
         });
     }
@@ -506,6 +508,7 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
             for run in &runs {
                 crate::lifecycle::request_cancel(&mut state.runtime, run, &actor)?;
             }
+            mark_cancelled(state, &chats);
             let bots = crate::bots::stop_all(state, &chats);
             let session = state.chats.iter_mut().find(|s| s.id == id).unwrap();
             session.messages.push(Message { speaker: Default::default(),
@@ -523,6 +526,7 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
             .ok_or("No matching pending run in this chat.")?;
         let run_id = run.id.clone();
         crate::lifecycle::request_cancel(&mut state.runtime, &run_id, &actor)?;
+        mark_cancelled(state, &[id.to_owned()]);
         let stopping = state.runtime.runs.iter().any(|run| run.id == run_id && run.status == "cancelling");
         let session = state.chats.iter_mut().find(|s| s.id == id).unwrap();
         session.messages.push(Message { speaker: Default::default(),
@@ -1135,6 +1139,19 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
 }
 
 /// The given chats and every chat spawned from them, at any depth.
+/// Records an operator cancellation: every run that exists now, and any request
+/// it made, belongs to cancelled work in these chats.
+fn mark_cancelled(state: &mut State, chats: &[String]) {
+    let through = state.runtime.runs.iter().map(|run| run.queue_order).max().unwrap_or(0);
+    for session in state.chats.iter_mut().filter(|session| chats.contains(&session.id)) {
+        session.cancelled_through = Some(through);
+    }
+}
+/// The operator cancelled `run`'s chat after `run` was queued.
+pub(crate) fn cancelled_after(state: &State, run: &crate::runtime::Run) -> bool {
+    run.chat_id.as_deref().and_then(|chat| state.chats.iter().find(|session| session.id == chat))
+        .and_then(|session| session.cancelled_through).is_some_and(|through| run.queue_order <= through)
+}
 pub(crate) fn subtree<'a>(state: &'a State, roots: impl IntoIterator<Item = &'a str>) -> std::collections::HashSet<&'a str> {
     let mut chats = roots.into_iter().collect::<std::collections::HashSet<_>>();
     loop {
@@ -1161,6 +1178,8 @@ pub(crate) struct Checkpoint {
     watches: Vec<crate::rooms::Watch>,
     bots: crate::bots::Bots,
     mailbox_origins: Vec<(usize, Vec<control_context::turn_mailbox::Range>)>,
+    /// Cancellation marks of the targets' descendants (`/cancel all`).
+    cancelled: Vec<(usize, Option<u64>)>,
 }
 impl Checkpoint {
     pub(crate) fn capture(state: &State, targets: &std::collections::HashSet<&str>) -> Self {
@@ -1180,9 +1199,18 @@ impl Checkpoint {
                 .filter(|(_, r)| r.status == "running" && r.chat_id.as_deref().is_some_and(|id| targets.contains(id)))
                 .filter_map(|(i, r)| r.attempts.last()?.turn_mailbox.as_ref().map(|m| (i, m.baseline.clone())))
                 .collect(),
+            cancelled: {
+                let chats = subtree(state, targets.iter().copied());
+                state.chats.iter().enumerate().filter(|(_, s)| chats.contains(s.id.as_str())).map(|(i, s)| (i, s.cancelled_through)).collect()
+            },
         }
     }
     pub(crate) fn restore(self, state: &mut State) {
+        for (index, mark) in self.cancelled {
+            if let Some(session) = state.chats.get_mut(index) {
+                session.cancelled_through = mark;
+            }
+        }
         state.collective.room_watches = self.watches;
         state.bots = self.bots;
         for (i, baseline) in self.mailbox_origins {

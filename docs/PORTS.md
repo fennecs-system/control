@@ -98,7 +98,13 @@ every subscription. When the operator approves or denies, Control queues one
 with each decision and, for an approved egress, its relay `usage`. A requester
 whose turn was cut off before its handoff (time limit, local step cap or provider
 failure, which leave a host checkpoint) is woken the same way; a cancelled or
-otherwise failed requester still is not. While a request is pending, a
+otherwise failed requester still is not. A decision wakes its requester at most
+once, from the Control process that recorded it. One that cannot be delivered is
+retired instead of kept: its requester ended without a checkpoint, the operator
+cancelled that work (`/cancel`, or `/cancel all` here or in a parent chat) after
+the request was made, or an approved port has since stopped. A decision still
+undelivered when Control restarts is retired too, so a redeploy never resumes a
+conversation. While a request is pending, a
 persistent bot gets no automatic recovery turn, so it sleeps until the decision.
 
 **Hints on failed commands.** When a `control_service_exec` or
