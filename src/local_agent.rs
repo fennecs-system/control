@@ -65,6 +65,32 @@ pub(crate) trait Host {
     /// One bounded compaction call on the chat's local compactor.
     fn summarize(&mut self, evidence: &str) -> io::Result<String>;
     fn record(&mut self, kind: &str, id: &str, text: &str, output: &str, status: &str);
+    /// The turn's usage so far, after every model call (answered or not).
+    fn metered(&mut self, meter: &Meter);
+}
+
+/// Per-call usage summed over the turn. Every call counts, including one that
+/// failed or was cancelled in flight, so a missing report is never zero.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Meter {
+    pub tokens: Option<Tokens>,
+    /// Model calls sent.
+    pub calls: usize,
+    /// Calls whose response reported usage.
+    pub reported: usize,
+}
+impl Meter {
+    fn add(&mut self, tokens: Option<Tokens>) {
+        if let Some(t) = tokens {
+            self.tokens.get_or_insert_with(Tokens::default).add(t);
+            self.reported += 1;
+        }
+    }
+    /// Reported once the turn is over if every call reported; while it runs,
+    /// or when some call did not report, the sum is a lower bound.
+    pub fn usage(&self, over: bool, model: Option<String>) -> control_ai::Usage {
+        control_ai::Usage { tokens: self.tokens, complete: over && self.reported == self.calls, model }
+    }
 }
 
 pub(crate) struct Outcome {
@@ -174,13 +200,13 @@ pub(crate) fn run(
             "Turn input does not fit the local model: about {} tokens of instructions and history plus {tool_tokens} of tool schemas exceed {budget} available ({} context − {} output). Increase the declared context or reduce history; nothing was sent.",
             tokens(size(&messages)), limits.context_tokens, limits.output_tokens)));
     }
-    let mut total: Option<Tokens> = None;
+    let mut meter = Meter::default();
     let (mut steps, mut repairs, mut compactions) = (0usize, 0usize, 0usize);
     loop {
         match host.poll() {
             Poll::Continue => {}
             Poll::Finish(summary) => {
-                return Ok(Outcome { text: summary, tokens: total, steps, compactions, elapsed: started.elapsed() });
+                return Ok(Outcome { text: summary, tokens: meter.tokens, steps, compactions, elapsed: started.elapsed() });
             }
             Poll::Stop(failure) => return Err(failure),
         }
@@ -196,20 +222,21 @@ pub(crate) fn run(
             host.record("compaction", &format!("local-compaction-{compactions}"), "Compacted earlier steps of this turn on the local compactor", "", "completed");
         }
         let body = tool_request(model, &messages, &tools, limits).map_err(|e| failed(e.to_string()))?;
+        meter.calls += 1;
         let value = match host.model(&body) {
             Ok(value) => value,
             Err(error) => {
+                host.metered(&meter);
                 if let Poll::Stop(failure) = host.poll() {
                     return Err(failure);
                 }
                 return Err(failed(format!("Local model call failed: {error}. No hosted fallback was used; the published checkpoint is unchanged.")));
             }
         };
+        meter.add(control_ai::model::usage(&value));
+        host.metered(&meter);
         let step = decode_step(&value, limits).map_err(|e| failed(format!("Local model returned an unusable response: {e}")))?;
         steps += 1;
-        if let Some(t) = step.tokens {
-            total.get_or_insert_with(Tokens::default).add(t);
-        }
         let repair = |repairs: &mut usize, messages: &mut Vec<Value>, note: String| -> Result<(), Failure> {
             *repairs += 1;
             if *repairs > policy.max_repairs {
@@ -226,7 +253,7 @@ pub(crate) fn run(
             match step.text {
                 Some(text) => {
                     host.record("message", &format!("local-step-{steps}"), &text, "", "completed");
-                    return Ok(Outcome { text, tokens: total, steps, compactions, elapsed: started.elapsed() });
+                    return Ok(Outcome { text, tokens: meter.tokens, steps, compactions, elapsed: started.elapsed() });
                 }
                 None => {
                     repair(&mut repairs, &mut messages, "it contained neither text nor a tool call. Call a tool or give your final report.".into())?;
@@ -357,6 +384,7 @@ struct Live<'a> {
     admitted: u64,
     served: Option<control_ai::model::Served>,
     timed_out: bool,
+    meter: Meter,
     /// Attempt start in nanoseconds; prefixes request nonces.
     stamp: u128,
 }
@@ -366,6 +394,10 @@ impl Live<'_> {
     }
     fn rpc(&self, request: Value, nonce: &str) -> Value {
         crate::worker_tools::local_rpc(self.shared, self.run, &json!({"nonce":nonce,"request":request}), self.workspace, self.managed)
+    }
+    /// What the server says it is: its `model`, else its runtime fingerprint.
+    fn reported_model(&self) -> Option<String> {
+        self.served.as_ref().and_then(|s| s.model.clone().or_else(|| s.fingerprint.clone()))
     }
 }
 impl Host for Live<'_> {
@@ -423,6 +455,14 @@ impl Host for Live<'_> {
             });
         }
     }
+    fn metered(&mut self, meter: &Meter) {
+        self.meter = *meter;
+        // Live totals: one in-memory update per model call, never a save.
+        let usage = meter.usage(false, self.reported_model());
+        if let Ok(mut state) = self.shared.lock() {
+            crate::worker::record_usage_for(&mut state, self.run, &self.generation, usage);
+        }
+    }
 }
 
 /// Run one attempt on a local endpoint. The caller has prepared and fenced the
@@ -457,20 +497,27 @@ pub(crate) fn execute(
     let budget = compactor.limits.input_budget().saturating_sub(crate::compaction::SYSTEM.len());
     let mut live = Live {
         shared, run, generation, workspace, managed, attempt, endpoint, compactor,
-        started: Instant::now(), admitted, served: None, timed_out: false,
+        started: Instant::now(), admitted, served: None, timed_out: false, meter: Meter::default(),
         stamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos(),
     };
     let model = live.endpoint.model.clone();
     let result = run_loop(&mut live, &model, &limits, budget, prompt);
+    let (meter, reported_model) = (live.meter, live.reported_model());
     let served = live.served.take().unwrap_or_default();
     let provenance = live.endpoint.provenance(&served);
     let attempt = live.attempt;
+    // Whatever the ending, keep what the calls reported: exact when every sent
+    // call reported (also after a failure or a cancel between steps), a lower
+    // bound when one did not (cancelled in flight, no usage). No call sent
+    // (refused admission, cancelled first) stays unrecorded: not launched.
+    if meter.calls > 0 {
+        attempt.record_usage(meter.usage(true, reported_model));
+    }
     if let Ok(outcome) = &result {
         {
-            attempt.tokens = outcome.tokens;
             let seconds = outcome.elapsed.as_secs_f64().max(0.001);
             let summary = format!("{} · {} model steps · {} compactions · {:.1} s{}", provenance, outcome.steps, outcome.compactions, seconds,
-                outcome.tokens.map(|t| format!(" · {} in / {} out tokens · {:.1} output tokens/s end-to-end", t.input_tokens, t.output_tokens, t.output_tokens as f64 / seconds)).unwrap_or_else(|| " · usage not reported".into()));
+                outcome.tokens.map(|t| format!(" · {} in ({} cached) / {} out tokens · {:.1} output tokens/s end-to-end", t.input_tokens, t.cached_input_tokens, t.output_tokens, t.output_tokens as f64 / seconds)).unwrap_or_else(|| " · usage not reported".into()));
             if let Ok(mut state) = shared.lock() {
                 let generation = attempt.workspace_id.clone().unwrap_or_default();
                 crate::worker::record_activity_for(&mut state, run, &generation, crate::usage::Activity {

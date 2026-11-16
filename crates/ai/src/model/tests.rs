@@ -1,4 +1,19 @@
 use super::*;
+#[test]
+fn usage_includes_prefix_cache_hits_from_usage_or_llama_cpp_timings() {
+    let openai = json!({"usage":{"prompt_tokens":900,"completion_tokens":40,"prompt_tokens_details":{"cached_tokens":800}},"timings":{"cache_n":1}});
+    assert_eq!(usage(&openai), Some(Tokens { input_tokens: 900, cached_input_tokens: 800, output_tokens: 40 }));
+    // llama.cpp: prompt_tokens counts the whole prompt; timings.cache_n is the reused prefix.
+    let llama = json!({"usage":{"prompt_tokens":900,"completion_tokens":40},"timings":{"cache_n":850,"prompt_n":50,"predicted_n":40}});
+    assert_eq!(usage(&llama), Some(Tokens { input_tokens: 900, cached_input_tokens: 850, output_tokens: 40 }));
+    let timings_only = json!({"timings":{"cache_n":850,"prompt_n":50,"predicted_n":40}});
+    assert_eq!(usage(&timings_only), Some(Tokens { input_tokens: 900, cached_input_tokens: 850, output_tokens: 40 }));
+    // A cache count is never more than the input it is part of.
+    let odd = json!({"usage":{"prompt_tokens":10,"completion_tokens":1,"prompt_tokens_details":{"cached_tokens":99}}});
+    assert_eq!(usage(&odd).unwrap().cached_input_tokens, 10);
+    assert_eq!(usage(&json!({"usage":{"prompt_tokens":10}})), None);
+    assert_eq!(usage(&json!({})), None);
+}
 fn limits() -> Limits {
     Limits {
         context_tokens: 4096,

@@ -1294,6 +1294,22 @@ pub(crate) fn record_activity_for(
     true
 }
 
+/// Mirrors a running attempt's usage so far into state, so monitors show live
+/// totals. In memory only, like progress activity: lifecycle checkpoints persist
+/// it and the finished attempt replaces it. Fenced like activity.
+pub(crate) fn record_usage_for(state: &mut State, id: &str, generation: &str, usage: control_ai::Usage) -> bool {
+    let Some(run) = state.runtime.runs.iter_mut().find(|r| r.id == id && r.status == "running") else {
+        return false;
+    };
+    let Some(attempt) = run.attempts.last_mut().filter(|attempt| attempt.workspace_id.as_deref() == Some(generation)) else {
+        return false;
+    };
+    attempt.record_usage(usage);
+    // Same refresh as an activity sample: open views re-render, nothing is saved.
+    if let Some(chat) = run.chat_id.clone() { crate::chat::activity_changed(state, &chat); }
+    true
+}
+
 pub(crate) fn observe_workspace_diff(state: &Arc<Mutex<State>>, run: &str, generation: &str, workspace: &Path, status: &str) {
     // Judge /workspace may be scratch transport, not the read-only source.
     // Never present its scratch files as a patch to the reviewed project.

@@ -21,6 +21,7 @@ struct Mock {
     summaries: Vec<String>,
     records: Vec<(String, String)>,
     tool_text: String,
+    meters: Vec<Meter>,
 }
 impl Host for Mock {
     fn tools(&mut self) -> io::Result<Vec<Value>> {
@@ -49,6 +50,9 @@ impl Host for Mock {
     }
     fn record(&mut self, kind: &str, _: &str, text: &str, _: &str, status: &str) {
         self.records.push((kind.into(), format!("{text}:{status}")));
+    }
+    fn metered(&mut self, meter: &Meter) {
+        self.meters.push(*meter);
     }
 }
 fn mock(replies: Vec<Value>) -> Mock {
@@ -247,6 +251,7 @@ fn deferred_tools_load_natively_on_search_or_first_use() {
         fn model(&mut self, body: &Value) -> io::Result<Value> { self.0.model(body) }
         fn summarize(&mut self, evidence: &str) -> io::Result<String> { self.0.summarize(evidence) }
         fn record(&mut self, kind: &str, id: &str, text: &str, output: &str, status: &str) { self.0.record(kind, id, text, output, status) }
+        fn metered(&mut self, meter: &Meter) { self.0.metered(meter) }
     }
     let mut host = Deferred(mock(vec![
         reply(None, call("control_watch_stop", r#"{"id":"w1"}"#), "tool_calls"),
@@ -270,4 +275,77 @@ fn deferred_tools_load_natively_on_search_or_first_use() {
     assert!(offered(2).contains(&"control_port_status".to_owned()));
     let last = serde_json::to_string(&host.0.requests[3]["messages"]).unwrap();
     assert!(last.contains("unknown tool"), "{last}");
+}
+
+fn used(mut value: Value, usage: Value) -> Value {
+    value["usage"] = usage;
+    value
+}
+/// What the attempt would record from the loop's final meter.
+fn accounting(meter: Meter) -> (crate::usage::Accounting, Option<Tokens>) {
+    let mut attempt = crate::usage::Attempt::default();
+    attempt.record_usage(meter.usage(true, Some("qwen3-coder".into())));
+    assert_eq!(attempt.reported_model.as_deref(), Some("qwen3-coder"));
+    (attempt.accounting, attempt.tokens)
+}
+#[test]
+fn usage_is_metered_after_every_model_call_with_cached_prompt_tokens() {
+    use crate::usage::Accounting;
+    let tokens = |i, c, o| Tokens { input_tokens: i, cached_input_tokens: c, output_tokens: o };
+    // llama.cpp reports the reused prefix in timings.cache_n.
+    let mut host = mock(vec![
+        used(reply(None, call("control_room_post", r#"{"message":"a"}"#), "tool_calls"), json!({"prompt_tokens":1000,"completion_tokens":20})),
+        json!({"choices":[{"finish_reason":"stop","message":{"content":"Done."}}],
+            "usage":{"prompt_tokens":1100,"completion_tokens":5},"timings":{"cache_n":990,"prompt_n":110,"predicted_n":5}}),
+    ]);
+    let outcome = go(&mut host).unwrap();
+    assert_eq!(host.meters.len(), 2, "one live update per model call");
+    assert_eq!(host.meters[0], Meter { tokens: Some(tokens(1000, 0, 20)), calls: 1, reported: 1 });
+    assert_eq!(host.meters[1], Meter { tokens: Some(tokens(2100, 990, 25)), calls: 2, reported: 2 });
+    assert_eq!(outcome.tokens, Some(tokens(2100, 990, 25)));
+    // While running the totals are a lower bound; once over, all calls reported.
+    let mut running = crate::usage::Attempt::default();
+    running.record_usage(host.meters[0].usage(false, None));
+    assert_eq!(running.accounting, Accounting::Partial);
+    assert_eq!(accounting(host.meters[1]), (Accounting::Reported, Some(tokens(2100, 990, 25))));
+
+    // A call without usage makes the total a lower bound.
+    let mut host = mock(vec![
+        reply(None, call("control_room_post", r#"{"message":"a"}"#), "tool_calls"),
+        json!({"choices":[{"finish_reason":"stop","message":{"content":"Done."}}]}),
+    ]);
+    go(&mut host).unwrap();
+    assert_eq!(accounting(*host.meters.last().unwrap()), (Accounting::Partial, Some(tokens(100, 0, 10))));
+
+    // No call reported anything: unknown, never zero.
+    let mut host = mock(vec![json!({"choices":[{"finish_reason":"stop","message":{"content":"Done."}}]})]);
+    go(&mut host).unwrap();
+    assert_eq!(accounting(*host.meters.last().unwrap()), (Accounting::Unknown, None));
+}
+#[test]
+fn stopped_turns_keep_the_usage_reported_before_they_stopped() {
+    use crate::usage::Accounting;
+    // Cancelled while the second call was in flight: the first call's usage is
+    // kept and the unanswered call makes it a lower bound.
+    let mut host = mock(vec![reply(None, call("control_room_post", r#"{"message":"a"}"#), "tool_calls")]);
+    host.replies.push_back(Err(io::Error::new(io::ErrorKind::Interrupted, "Model call cancelled")));
+    host.polls = VecDeque::from([Poll::Continue, Poll::Continue, Poll::Stop(("cancelled", "Cancelled.".into()))]);
+    assert_eq!(go(&mut host).err().unwrap().0, "cancelled");
+    let last = *host.meters.last().unwrap();
+    assert_eq!((last.calls, last.reported), (2, 1));
+    assert_eq!(accounting(last), (Accounting::Partial, Some(Tokens { input_tokens: 100, cached_input_tokens: 0, output_tokens: 10 })));
+    // Cancelled between steps: every sent call reported, so the totals are exact.
+    let mut host = mock(vec![reply(None, call("control_room_post", r#"{"message":"a"}"#), "tool_calls")]);
+    host.polls = VecDeque::from([Poll::Continue, Poll::Stop(("cancelled", "Cancelled.".into()))]);
+    assert_eq!(go(&mut host).err().unwrap().0, "cancelled");
+    assert_eq!(accounting(*host.meters.last().unwrap()).0, Accounting::Reported);
+    // A failed turn keeps its totals too.
+    let mut host = mock((0..5).map(|_| reply(None, call("control_room_post", "[1]"), "tool_calls")).collect());
+    assert_eq!(go(&mut host).err().unwrap().0, "failed");
+    assert_eq!(host.meters.last().unwrap().tokens.unwrap().input_tokens, 400);
+    // Refused before any call: nothing is metered (the worker records not launched).
+    let mut host = mock(vec![]);
+    let small = Limits { context_tokens: 2048, output_tokens: 512, input_bytes: 1024, output_bytes: 2048 };
+    assert_eq!(run(&mut host, "m", &small, 1000, &"x".repeat(6000), &Policy::default()).err().unwrap().0, "blocked");
+    assert!(host.meters.is_empty());
 }

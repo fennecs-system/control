@@ -161,6 +161,21 @@ fn recorded_streams_report_usage_for_every_ending() {
     assert_eq!((output.unwrap().tokens, usage.tokens, usage.complete), (tokens(45, 30, 2), tokens(45, 30, 2), true));
 }
 
+/// A running turn sees its usage grow call by call, once per change, and the
+/// last report matches the final usage.
+#[test]
+fn live_usage_reports_each_change_while_the_stream_runs() {
+    let mut seen = Vec::new();
+    let (_, usage) = control_ai::json_lines_live(include_str!("fixtures/claude-stopped-mid-turn.jsonl").as_bytes(), Claude::new(ALLOWED), |_| {}, |u| seen.push(u.clone()));
+    assert!(seen.len() >= 2, "{seen:?}");
+    assert!(seen.windows(2).all(|w| w[0].tokens != w[1].tokens && !w[1].complete));
+    assert!(seen[0].tokens.unwrap().input_tokens < seen.last().unwrap().tokens.unwrap().input_tokens);
+    assert_eq!(seen.last(), Some(&usage));
+    let mut codex = Vec::new();
+    let _ = control_ai::json_lines_live(include_str!("fixtures/codex-handoff-completed.jsonl").as_bytes(), Codex::default(), |_| {}, |u| codex.push(u.clone()));
+    assert_eq!(codex.len(), 1, "Codex reports only its end-of-turn total");
+}
+
 #[test]
 fn strict_final_validation_and_tool_rejection_survive_extraction() {
     for data in [

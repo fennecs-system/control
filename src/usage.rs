@@ -6,7 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-pub use control_ai::{Activity, Tokens};
+pub use control_ai::{tokens_label, Accounting, Activity, Tokens};
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
@@ -62,27 +62,6 @@ pub struct Attempt {
     #[serde(skip_serializing_if = "crate::worker_tools::nudges::Nudges::is_clear")]
     pub nudges: crate::worker_tools::nudges::Nudges,
 }
-/// The provenance of an attempt's token counts. Missing usage is never zero.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Accounting {
-    /// Recorded before accounting provenance was kept: unknown.
-    #[default]
-    Unrecorded,
-    /// The provider never started, so no model call was made.
-    NotLaunched,
-    /// The provider's own end-of-turn totals.
-    Reported,
-    /// The per-call usage reported before the turn stopped: a lower bound.
-    Partial,
-    /// The provider ran but reported no usage.
-    Unknown,
-}
-impl Accounting {
-    pub fn is_unrecorded(&self) -> bool {
-        *self == Self::Unrecorded
-    }
-}
 impl Attempt {
     /// Records what the provider reported, whatever the attempt's outcome.
     pub fn record_usage(&mut self, usage: control_ai::Usage) {
@@ -95,6 +74,13 @@ impl Attempt {
         if usage.model.is_some() {
             self.reported_model = usage.model;
         }
+    }
+    /// Still in progress: its tokens, if any, are the totals reported so far.
+    pub fn running(&self) -> bool {
+        self.status == "running"
+    }
+    pub fn tokens_label(&self) -> Option<String> {
+        tokens_label(self.tokens, self.accounting, self.running())
     }
     /// Callers expose this only for successfully completed runs. The accepted
     /// handoff is the single retained source, not a duplicated summary field.
@@ -150,12 +136,21 @@ struct Summary {
     interrupted: u64,
     partial: u64,
     no_call: u64,
+    /// Attempts still running: their tokens are the totals reported so far.
+    running: u64,
+    /// Running attempts with nothing reported yet: pending, not unknown.
+    pending: u64,
 }
 impl Summary {
     fn add(&mut self, attempt: &Attempt) {
         self.attempts += 1;
+        if attempt.running() {
+            self.running += 1;
+            self.pending += u64::from(attempt.tokens.is_none());
+        }
         match attempt.accounting {
-            Accounting::Partial => self.partial += 1,
+            // A running total is a lower bound until the attempt ends: counted as running.
+            Accounting::Partial if !attempt.running() => self.partial += 1,
             // No model call: counted as measured with nothing to add.
             Accounting::NotLaunched if attempt.tokens.is_none() => self.measured += 1,
             _ => {}
@@ -236,6 +231,26 @@ fn outcomes(models: &BTreeMap<String, Summary>) -> String {
     html
 }
 
+/// Attempts in progress with the usage their providers reported so far
+/// (per model call for local endpoints and Claude; Codex only at turn end).
+fn running(runtime: &Runtime) -> String {
+    use std::fmt::Write;
+    let mut rows = String::new();
+    for run in runtime.runs.iter().rev() {
+        let Some(attempt) = run.attempts.last().filter(|a| a.running()) else { continue };
+        let cell = |n: Option<u64>| n.map_or_else(|| "—".to_owned(), |n| n.to_string());
+        let served = attempt.reported_model.as_deref().filter(|m| *m != attempt.model).map(|m| format!(" (served: {})", escape(m))).unwrap_or_default();
+        let _ = write!(rows, "<tr><td>{}</td><td>{} · {}{served}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+            escape(&run.id), escape(&attempt.provider), escape(&attempt.model),
+            cell(attempt.tokens.map(|t| t.input_tokens)), cell(attempt.tokens.map(|t| t.cached_input_tokens)), cell(attempt.tokens.map(|t| t.output_tokens)),
+            if attempt.tokens.is_some() { "so far" } else if attempt.accounting.is_unrecorded() { "no model call yet" } else { "not reported yet" });
+    }
+    if rows.is_empty() {
+        return rows;
+    }
+    format!("<details class='record' open><summary>Running now</summary><div class='usage-scroll'><table class='usage-table'><thead><tr><th>Run</th><th>Provider / model</th><th>Input</th><th>Cached</th><th>Output</th><th>Usage</th></tr></thead><tbody>{rows}</tbody></table></div><p class='muted'>Live totals reported so far: after every model call on local endpoints and Claude; Codex reports at the end of its turn.</p></details>")
+}
+
 pub fn render(runtime: &Runtime) -> String {
     let mut overall = Summary::default();
     let mut people = BTreeMap::<String, Summary>::new();
@@ -268,8 +283,9 @@ pub fn render(runtime: &Runtime) -> String {
     let mut html = String::from("<h2>Usage</h2>");
     let today = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() / 86400);
     html.push_str(&heatmap(&daily, today));
+    html.push_str(&running(runtime));
     html.push_str(&outcomes(&models));
-    html.push_str(&format!("<details class='record'><summary>Token accounting</summary><div class='metrics'><div><b>{}</b><span>INPUT</span></div><div><b>{}</b><span>OUTPUT</span></div><div><b>{}/{}</b><span>MEASURED ATTEMPTS</span></div></div><p class='muted'>Cached input: {} · unknown attempts: {} · partial (stopped mid-turn, lower bound): {} · no model call: {} · older runs without tracking: {legacy}</p><p class='muted'>Cached tokens are part of input. Counts are provider-reported; subscription billing is not estimated.</p></details>", overall.tokens.input_tokens, overall.tokens.output_tokens, overall.measured, overall.attempts, overall.tokens.cached_input_tokens, overall.attempts - overall.measured, overall.partial, overall.no_call));
+    html.push_str(&format!("<details class='record'><summary>Token accounting</summary><div class='metrics'><div><b>{}</b><span>INPUT</span></div><div><b>{}</b><span>OUTPUT</span></div><div><b>{}/{}</b><span>MEASURED ATTEMPTS</span></div></div><p class='muted'>Cached input: {} · running (totals so far): {} · unknown attempts: {} · partial (stopped mid-turn, lower bound): {} · no model call: {} · older runs without tracking: {legacy}</p><p class='muted'>Cached tokens are part of input. Counts are provider-reported; subscription billing is not estimated.</p></details>", overall.tokens.input_tokens, overall.tokens.output_tokens, overall.measured, overall.attempts, overall.tokens.cached_input_tokens, overall.running, overall.attempts - overall.measured - overall.pending, overall.partial, overall.no_call));
     html.push_str(&table("By person", &people));
     html.push_str(&table("By provider / requested model", &models));
     html.push_str(&table("By day (UTC)", &days));

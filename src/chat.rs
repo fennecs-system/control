@@ -940,6 +940,9 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
                 if let Some(count) = Some(attempt.omitted_history).filter(|n| *n > 0) {
                     html.push_str(&format!("<p class='message-status'>Context window · {count} earlier exchanges excluded from attempt {}. Chat history retained.</p>", index + 1));
                 }
+                if let Some(tokens) = attempt.tokens_label() {
+                    html.push_str(&format!("<p class='message-status'>Tokens · attempt {} · {}</p>", index + 1, escape(&tokens)));
+                }
                 let events=match crate::history::activity(run.and_then(|r|r.chat_id.as_deref()),attempt) {
                     Ok(events)=>events,
                     Err(error)=>{html.push_str(&format!("<p class='message-status' role='alert'>{}</p>",escape(&error.to_string())));continue;},
