@@ -20,7 +20,7 @@ pub struct Tool {
     pub aliases: &'static str,
     pub mcp_names: &'static [&'static str],
 }
-pub const TOOLS: [Tool; 28] = [
+pub const TOOLS: [Tool; 29] = [
     Tool {
         name: "service.watch", title: "Watches", description: "Routines and program output that wake agents",
         href: None, aliases: "watch routine reflex monitor stream stdout events wake tail websocket ssh",
@@ -204,6 +204,17 @@ pub const TOOLS: [Tool; 28] = [
         aliases: "route routing shortest path planning graph grid astar dijkstra navigation",
         mcp_names: &["control.search.path", "control_search_path"],
         execution: "pure Rust",
+        surface: "MCP",
+        available: true,
+    },
+    Tool {
+        name: "solver.solve",
+        title: "Solver",
+        description: "Optimisation and constraints · HiGHS, Z3, CP-SAT",
+        href: None,
+        aliases: "optimization optimisation constraint lp milp mip smt sat cp scheduling assignment packing routing minizinc",
+        mcp_names: &["control.solve", "control_solve"],
+        execution: "offline Nix solver container",
         surface: "MCP",
         available: true,
     },

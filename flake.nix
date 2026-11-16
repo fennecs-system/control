@@ -65,6 +65,7 @@
           browser-image = import ./tools/browser/image.nix { inherit pkgs; };
           build-image = import ./tools/build/image.nix { inherit pkgs; };
           inference-image = import ./tools/inference/image.nix { inherit pkgs; };
+          solver-image = import ./tools/solver/image.nix { inherit pkgs; };
           inference-image-vulkan = import ./tools/inference/image.nix { inherit pkgs; acceleration = "vulkan"; };
           inference-image-cuda = import ./tools/inference/image.nix { inherit pkgs; acceleration = "cuda"; };
         });

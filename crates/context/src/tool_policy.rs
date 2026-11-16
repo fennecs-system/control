@@ -82,6 +82,7 @@ policies! {
     "control.web.search" => (Toolbox,false,Local,true),
     "control.rust.run" => (Toolbox,false,Local,true),
     "control.rust.bench" => (Toolbox,false,Local,true),
+    "control.solve" => (Toolbox,false,Local,true),
     "control.model.generate" => (Toolbox,false,Local,true),
     "control.search.path" => (Toolbox,false,Local,true),
     "control.artifacts.list" => (Artifacts,false,Read,true),

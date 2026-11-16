@@ -110,7 +110,7 @@ fn dispatch_at(
                 tools.retain(|tool|!matches!(tool["name"].as_str(),Some("control_turn_context"|"control_turn_handoff")));
             }
             if judge {
-                tools.retain(|tool|(advisor && tool["name"]=="control_agent_message") || matches!(tool["name"].as_str(),Some("control.web.search"|"control.rust.run"|"control.rust.bench"|"control.search.path"|"control_agent_result"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_knowledge_read"|"control_knowledge_search")));
+                tools.retain(|tool|(advisor && tool["name"]=="control_agent_message") || matches!(tool["name"].as_str(),Some("control.web.search"|"control.rust.run"|"control.rust.bench"|"control.solve"|"control.search.path"|"control_agent_result"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_knowledge_read"|"control_knowledge_search")));
             }
             if claude {
                 tools.push(crate::claude::definition());
@@ -124,6 +124,7 @@ fn dispatch_at(
                     "control.web.search" => "control_web_search",
                     "control.rust.run" => "control_rust_run",
                     "control.rust.bench" => "control_rust_bench",
+                    "control.solve" => "control_solve",
                     "control.model.generate" => "control_model_generate",
                     "control.search.path" => "control_search_path",
                     other => other,
@@ -144,7 +145,7 @@ fn dispatch_at(
             if matches!(request["params"]["name"].as_str(),Some("control_room_ack"|"control_room_notifications")) && managed {
                 return error("Managed sessions read room posts with control_turn_context {\"source\":\"room\"}; control_turn_handoff acknowledges them when you yield.");
             }
-            if judge && !(advisor && request["params"]["name"]=="control_agent_message") && !matches!(request["params"]["name"].as_str(),Some("control_workspace_run"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_web_search"|"control_rust_run"|"control_rust_bench"|"control_search_path"|"control_room_list"|"control_room_read"|"control_room_plan"|"control_room_post"|"control_agent_result"|"control_knowledge_read"|"control_knowledge_search"|"control_packages_search"|"control_package_read")) {
+            if judge && !(advisor && request["params"]["name"]=="control_agent_message") && !matches!(request["params"]["name"].as_str(),Some("control_workspace_run"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_web_search"|"control_rust_run"|"control_rust_bench"|"control_solve"|"control_search_path"|"control_room_list"|"control_room_read"|"control_room_plan"|"control_room_post"|"control_agent_result"|"control_knowledge_read"|"control_knowledge_search"|"control_packages_search"|"control_package_read")) {
                 return error("Judge policy permits read-only source inspection, isolated verification and room collaboration only.");
             }
             let blocking_spawn=request["params"]["name"]=="control_agent_spawn_blocking";
@@ -359,6 +360,7 @@ fn dispatch_at(
                 "control_web_search" => "control.web.search",
                 "control_rust_run" => "control.rust.run",
                 "control_rust_bench" => "control.rust.bench",
+                "control_solve" => "control.solve",
                 "control_model_generate" => crate::model_calls::tool::NAME,
                 "control_search_path" => "control.search.path",
                 other => other,
