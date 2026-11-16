@@ -7,7 +7,7 @@
 //! stable and old state needs no migration. Renames are stored on the chat and
 //! do not move other chats' callsigns.
 use crate::chat::Session;
-use std::{borrow::Cow, collections::HashMap};
+use std::borrow::Cow;
 
 /// The NATO phonetic alphabet, then colours.
 pub const WORDS: &[&str] = &[
@@ -23,7 +23,7 @@ const RECENT: usize = 48;
 pub const MAX_NAME: usize = 32;
 
 /// A word from the list, numbered from 2 only when every word is taken.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Callsign {
     word: u16,
     number: u32,
@@ -44,27 +44,36 @@ fn start(id: &str, words: usize) -> usize {
 /// Callsigns of `ids` in creation order, each distinct from those of the
 /// `recent` chats before it while the list has a free word.
 fn assign<'a>(ids: impl Iterator<Item = &'a str>, words: &[&str], recent: usize, mut visit: impl FnMut(Callsign)) {
-    let mut window = std::collections::VecDeque::with_capacity(recent + 1);
-    let mut taken: HashMap<Callsign, u32> = HashMap::with_capacity(recent + 1);
-    for id in ids {
+    // The window's plain words as counts, its rare numbered callsigns as a
+    // short list, and the window itself as a ring: no hashing or allocation
+    // per chat on this list-rendering path.
+    let mut plain = vec![0u16; words.len()];
+    let mut numbered: Vec<Callsign> = Vec::new();
+    let mut ring = vec![Callsign { word: 0, number: 0 }; recent];
+    for (index, id) in ids.enumerate() {
         let first = start(id, words.len());
-        let free = |callsign: &Callsign| !taken.contains_key(callsign);
-        let word = |offset: usize| Callsign { word: ((first + offset) % words.len()) as u16, number: 0 };
-        let callsign = (0..words.len()).map(word).find(free)
-            .or_else(|| (2..).map(|number| Callsign { word: first as u16, number }).find(free))
-            .expect("numbers are unbounded");
+        let callsign = (first..words.len()).chain(0..first).find(|word| plain[*word] == 0)
+            .map(|word| Callsign { word: word as u16, number: 0 })
+            .unwrap_or_else(|| (2..).map(|number| Callsign { word: first as u16, number }).find(|c| !numbered.contains(c)).expect("numbers are unbounded"));
         visit(callsign);
-        *taken.entry(callsign).or_default() += 1;
-        window.push_back(callsign);
-        if window.len() > recent {
-            let old = window.pop_front().unwrap();
-            if let Some(count) = taken.get_mut(&old) {
-                *count -= 1;
-                if *count == 0 {
-                    taken.remove(&old);
-                }
+        if recent == 0 {
+            continue;
+        }
+        let slot = index % recent;
+        if index >= recent {
+            let old = ring[slot];
+            if old.number == 0 {
+                plain[usize::from(old.word)] -= 1;
+            } else if let Some(at) = numbered.iter().position(|c| *c == old) {
+                numbered.swap_remove(at);
             }
         }
+        if callsign.number == 0 {
+            plain[usize::from(callsign.word)] += 1;
+        } else {
+            numbered.push(callsign);
+        }
+        ring[slot] = callsign;
     }
 }
 
