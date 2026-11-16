@@ -57,6 +57,28 @@ fn a_slow_sandbox_probe_is_reported_apart_from_an_isolation_failure() {
 }
 
 #[test]
+fn a_failed_sandbox_probe_reports_its_exit_result_file_and_stderr_tail() {
+    use std::os::unix::process::ExitStatusExt;
+    let status = |raw| Some(std::process::ExitStatus::from_raw(raw));
+    let stale = b"bash: line 1: /workspace/probe-result: No such file or directory\n";
+    assert_eq!(
+        probe_detail(status(1 << 8), None, stale),
+        "(exit code 1; result file missing; stderr tail: bash: line 1: /workspace/probe-result: No such file or directory)"
+    );
+    assert_eq!(probe_detail(status(9), Some(b"other"), b""), "(killed by signal 9; unexpected result file; stderr tail: (empty))");
+    assert!(probe_detail(None, None, b"").starts_with("(exit not observed;"));
+    // Control characters cannot forge report lines, and only the end of a long stream is kept.
+    let noisy = [b"\x1b[31mstart\r\n".as_slice(), &[b'x'; 2000], b"\nfinal error"].concat();
+    let detail = probe_detail(status(0), Some(b"verified"), &noisy);
+    assert!(!detail.contains(['\n', '\r', '\x1b']) && !detail.contains("start"), "{detail}");
+    assert!(detail.ends_with("x final error)") && detail.contains("stderr tail: …x"), "{detail}");
+    let long = vec![b'y'; 10_000];
+    let kept = tail_reader(Some(std::io::Cursor::new([b"head".as_slice(), &long].concat()))).recv().unwrap();
+    assert_eq!(kept, vec![b'y'; 4096]);
+    assert_ne!(probe_nonce().unwrap(), probe_nonce().unwrap(), "each probe writes a fresh result name");
+}
+
+#[test]
 fn codex_tool_outcome_survives_activity_truncation_and_drains_final_results() {
     for completion in [None, Some("completed"), Some("failed")] {
         let mut lines = String::new();
@@ -1871,6 +1893,17 @@ fn judge_dispatch_captures_readonly_policy_and_cannot_publish_a_development_head
         Some("immutable-source")
     );
     assert!(state.chats[0].improve_workspace.is_none());
+}
+
+#[test]
+#[ignore = "requires a locally pinned worker image and Linux container engine; empty canary, no model calls"]
+fn live_offline_probe_passes_on_consecutive_runs() {
+    // Consecutive doctor probes reuse one directory; Docker Desktop failed every
+    // other one while each probe recreated the same result name.
+    let image = std::env::var("CONTROL_QA_IMAGE").expect("Set CONTROL_QA_IMAGE to a pinned image ID");
+    for run in 0..6 {
+        offline_probe(&image).unwrap_or_else(|reason| panic!("probe {run}: {reason}"));
+    }
 }
 
 #[test]

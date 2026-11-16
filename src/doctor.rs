@@ -114,14 +114,14 @@ pub fn run() -> io::Result<()> {
                         .map_err(io::Error::other)
                         .and_then(|node| crate::claude::probe(image, &node, &crate::config::state("claude-check").map_err(io::Error::other)?))
                         .map_err(|error| match error.kind() {
-                            io::ErrorKind::TimedOut => crate::claude::PROBE_TIMED_OUT,
-                            _ => "the offline Claude tool-isolation probe failed; check the pinned image and container sandbox support",
+                            io::ErrorKind::TimedOut => crate::claude::PROBE_TIMED_OUT.to_owned(),
+                            _ => "the offline Claude tool-isolation probe failed; check the pinned image and container sandbox support".to_owned(),
                         }),
-                    crate::backend::Backend::Local => Err("local endpoints run no worker image"),
+                    crate::backend::Backend::Local => Err("local endpoints run no worker image".to_owned()),
                 };
                 match probe {
                     Ok(()) => check(&format!("{name}: offline sandbox probe"), true, ""),
-                    Err(reason) => check(&format!("{name}: offline sandbox probe"), false, reason),
+                    Err(reason) => check(&format!("{name}: offline sandbox probe"), false, &reason),
                 }
             }
         }

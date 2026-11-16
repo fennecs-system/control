@@ -74,7 +74,7 @@ impl Credentials {
 
 /// The pre-run sandbox probe for `control doctor`: an empty canary stands in for
 /// auth.json, so no account is mounted and no model is called.
-pub fn offline_probe(image: &str) -> Result<(), &'static str> {
+pub fn offline_probe(image: &str) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
     let node = crate::config::node_id()?;
     let root = crate::config::state("codex-check")?;
@@ -185,7 +185,7 @@ fn permissions(command: &mut Command) {
 
 /// A bounded text request reuses the worker's credential isolation, without
 /// workspace tools, MCP, project files or resumable provider state.
-pub(crate) fn text_command(image:&str,name:&str,workspace:&Path,node:&str,model:&str)->Result<Command,&'static str> {
+pub(crate) fn text_command(image:&str,name:&str,workspace:&Path,node:&str,model:&str)->Result<Command,String> {
     let auth=Credentials::locate()?;
     let root=workspace.parent().ok_or("Invalid summary workspace")?;
     let policy=root.join("worker-seccomp.json");
@@ -208,7 +208,7 @@ fn sandbox_probe(
     name: &str,
     policy: &Path,
     node: &str,
-) -> Result<(), &'static str> {
+) -> Result<(), String> {
     let probe = root.join("sandbox-probe");
     let workspace = probe.join("workspace");
     fs::create_dir_all(&workspace).map_err(|_| "Cannot prepare sandbox verification.")?;
@@ -224,11 +224,16 @@ fn sandbox_probe(
     permissions(&mut command);
     // PID 1 must be the inner execution supervisor, not the account-bearing harness.
     // Its memory is naturally readable by its own child; the outer harness is outside this PID namespace.
-    command.args(["--", "bash", "-c", "set -eu; for path in /home/agent/.codex/auth.json /proc/self/root/home/agent/.codex/auth.json /proc/1/root/home/agent/.codex/auth.json; do if cat \"$path\" >/dev/null 2>&1; then exit 41; fi; done; IFS= read -r -d '' supervisor < /proc/1/cmdline; test \"$supervisor\" = codex-linux-sandbox || exit 42; printf verified > /workspace/probe-result"])
-        .stdout(Stdio::null()).stderr(Stdio::null());
-    let child = command
+    // Each probe writes a fresh result name: Docker Desktop's shared-file cache keeps a
+    // stale entry for a name an earlier container created and the host then deleted,
+    // so recreating that name failed with ENOENT on alternate probes.
+    let result = format!("probe-result-{}", probe_nonce()?);
+    command.args(["--", "bash", "-c", "set -eu; for path in /home/agent/.codex/auth.json /proc/self/root/home/agent/.codex/auth.json /proc/1/root/home/agent/.codex/auth.json; do if cat \"$path\" >/dev/null 2>&1; then exit 41; fi; done; IFS= read -r -d '' supervisor < /proc/1/cmdline; test \"$supervisor\" = codex-linux-sandbox || exit 42; printf verified > \"/workspace/$1\"", "probe", &result])
+        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
+    let mut child = command
         .spawn()
         .map_err(|_| "Cannot start sandbox verification.")?;
+    let stderr = tail_reader(child.stderr.take());
     let child = crate::child::watch(child).map_err(|_| "Cannot observe sandbox verification.")?;
     let outcome = child.wait(Some(Instant::now() + SANDBOX_PROBE_WAIT), &crate::shutdown::token());
     if !matches!(outcome, Recv::Item(Ok(_))) {
@@ -237,7 +242,68 @@ fn sandbox_probe(
         }
         crate::lifecycle::stop_resource(name, node, image, &workspace)?;
     }
-    sandbox_verdict(outcome, || fs::read(workspace.join("probe-result")).ok().as_deref() == Some(b"verified"))
+    let status = match &outcome { Recv::Item(Ok(status)) => Some(*status), _ => None };
+    let written = fs::read(workspace.join(&result)).ok();
+    let _ = fs::remove_file(workspace.join(&result));
+    sandbox_verdict(outcome, || written.as_deref() == Some(b"verified")).map_err(|reason| {
+        if reason == SANDBOX_PROBE_TIMED_OUT {
+            return reason.to_owned();
+        }
+        let stderr = stderr.recv_timeout(Duration::from_secs(5)).unwrap_or_default();
+        format!("{reason} {}", probe_detail(status, written.as_deref(), &stderr))
+    })
+}
+fn probe_nonce() -> Result<String, &'static str> {
+    let mut nonce = [0u8; 8];
+    ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut nonce)
+        .map_err(|_| "Cannot prepare sandbox verification.")?;
+    Ok(nonce.iter().map(|b| format!("{b:02x}")).collect())
+}
+/// The last bytes a probe wrote to stderr, delivered once the stream closes.
+fn tail_reader(stream: Option<impl std::io::Read + Send + 'static>) -> std::sync::mpsc::Receiver<Vec<u8>> {
+    const KEEP: usize = 4096;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    if let Some(mut stream) = stream {
+        std::thread::spawn(move || {
+            let (mut kept, mut chunk) = (Vec::new(), [0u8; 4096]);
+            while let Ok(length @ 1..) = stream.read(&mut chunk) {
+                kept.extend_from_slice(&chunk[..length]);
+                if kept.len() > KEEP {
+                    kept.drain(..kept.len() - KEEP);
+                }
+            }
+            let _ = sender.send(kept);
+        });
+    }
+    receiver
+}
+/// Diagnostics for a failed probe: its exit, result file and stderr tail. Only
+/// an empty canary is mounted, so the stream carries no account material.
+fn probe_detail(status: Option<std::process::ExitStatus>, written: Option<&[u8]>, stderr: &[u8]) -> String {
+    use std::os::unix::process::ExitStatusExt;
+    const TAIL: usize = 400;
+    let exit = match status.map(|s| (s.code(), s.signal())) {
+        Some((Some(code), _)) => format!("exit code {code}"),
+        Some((None, Some(signal))) => format!("killed by signal {signal}"),
+        Some(_) => "unknown exit".to_owned(),
+        None => "exit not observed".to_owned(),
+    };
+    let result = match written {
+        None => "result file missing",
+        Some(b"verified") => "result file verified",
+        Some(_) => "unexpected result file",
+    };
+    let text = String::from_utf8_lossy(stderr);
+    let words = text.split(|c: char| c.is_whitespace() || c.is_control()).filter(|w| !w.is_empty());
+    let text = words.collect::<Vec<_>>().join(" ");
+    let skip = text.chars().count().saturating_sub(TAIL);
+    let tail: String = text.chars().skip(skip).collect();
+    let tail = match (tail.is_empty(), skip > 0) {
+        (true, _) => "(empty)".to_owned(),
+        (false, true) => format!("…{tail}"),
+        (false, false) => tail,
+    };
+    format!("({exit}; {result}; stderr tail: {tail})")
 }
 /// How long an offline isolation probe may take. Its container usually exits
 /// within seconds, but a busy engine (just after a build, image load or
@@ -1430,7 +1496,7 @@ fn execute(
         &policy,
         &node,
     )
-    .map_err(blocked)?;
+    .map_err(|reason| blocked(&reason))?;
     let container = format!("control-{id}");
     // Codex transport and final report need writable scratch. Its review source
     // is a distinct immutable mount, never the writable mailbox at /workspace.
