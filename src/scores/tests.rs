@@ -165,3 +165,20 @@ fn declarations_are_validated_before_any_service_runs() {
     assert!(names.iter().all(|name| control_context::worker_mcp_names().contains(&name.as_str())), "advertised to managed providers");
     assert!(!control_context::tool_policy::after_handoff("control_score_probe"), "fenced after a handoff");
 }
+
+#[test]
+fn a_probe_samples_only_the_generation_it_was_declared_with() {
+    let (mut state, root, _) = team();
+    state.scores = vec![probe(&root, "score")];
+    let service = |generation: u64| serde_json::from_value::<crate::services::Service>(json!({
+        "resource":{"id":"svc-gone","owner":{"node":"node-a","chat":root},"generation":generation,
+            "image":format!("sha256:{}", "a".repeat(64)),"scope":{"network":"Offline","storage":"PrivateMemory"},"lease":[1,u64::MAX],"phase":"Requested"},
+        "origin":{"run":"r0","attempt":"a0"},"actor":{"type":"local_operator"},"command":"true","uid":502,"gid":20
+    })).unwrap();
+    state.services.push(service(2));
+    let replaced = due(&state, 1_400).into_iter().next().unwrap();
+    assert!(replaced.target.err().unwrap().contains("stopped or was replaced"));
+    state.services.push(service(1));
+    let Ok((target, command)) = due(&state, 1_400).into_iter().next().unwrap().target else { panic!("the declared generation is sampled") };
+    assert_eq!((target.resource.generation.get(), command.as_str()), (1, "cat score.json"));
+}

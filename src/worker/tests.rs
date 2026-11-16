@@ -40,6 +40,23 @@ fn test_builds_never_resolve_operator_node_directories() {
 }
 
 #[test]
+fn a_slow_sandbox_probe_is_reported_apart_from_an_isolation_failure() {
+    use std::os::unix::process::ExitStatusExt;
+    let exited = |code: i32| Recv::Item(Ok(std::process::ExitStatus::from_raw(code << 8)));
+    assert_eq!(sandbox_verdict(Recv::Elapsed, || true), Err(SANDBOX_PROBE_TIMED_OUT));
+    assert!(SANDBOX_PROBE_TIMED_OUT.contains(&format!("after {} s", SANDBOX_PROBE_WAIT.as_secs())));
+    assert!(crate::claude::PROBE_TIMED_OUT.contains(&format!("after {} s", SANDBOX_PROBE_WAIT.as_secs())));
+    assert_eq!(sandbox_verdict(exited(0), || true), Ok(()));
+    let failed = sandbox_verdict(exited(0), || false).unwrap_err();
+    assert!(failed.starts_with("Credential isolation verification failed"), "{failed}");
+    assert!(sandbox_verdict(exited(41), || true).unwrap_err().contains("canary was readable"));
+    assert!(sandbox_verdict(exited(42), || true).unwrap_err().contains("PID namespace"));
+    for interrupted in [Recv::Cancelled, Recv::Closed, Recv::Item(Err(std::io::Error::other("lost")))] {
+        assert_eq!(sandbox_verdict(interrupted, || true).unwrap_err(), failed, "an interrupted probe is not called a timeout");
+    }
+}
+
+#[test]
 fn codex_tool_outcome_survives_activity_truncation_and_drains_final_results() {
     for completion in [None, Some("completed"), Some("failed")] {
         let mut lines = String::new();

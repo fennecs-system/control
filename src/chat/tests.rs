@@ -24,6 +24,29 @@ fn preparing_a_continuation_does_not_publish_or_change_state() {
 }
 
 #[test]
+fn a_follow_up_turn_carries_the_runs_settings_and_merged_grants() {
+    let mut state = State::default();
+    let chat = create(&mut state);
+    send(&mut state, &chat, "Original task", "test").unwrap();
+    let origin = &mut state.runtime.runs[0];
+    origin.status = "completed".into();
+    origin.model = Some("model-a".into());
+    origin.lenses = Some(vec!["lens-a".into()]);
+    let origin_id = origin.id.clone();
+    let grant = |id: &str| serde_json::from_value::<crate::services::Grant>(json!({"id":id,"owner":{"node":"node-a","chat":chat},"generation":1})).unwrap();
+    let mut follow_up = FollowUp::from(&state, &state.runtime.runs[0]);
+    assert!(follow_up.grants.is_empty(), "no service is accessible to the run");
+    follow_up.grant([grant("svc-a"), grant("svc-b")]);
+    follow_up.grant([grant("svc-b"), grant("svc-c")]);
+    let run = follow_up.enqueue(&mut state, &chat, "Follow up".into(), RunKind::AgentMessage, "test").unwrap();
+    assert_eq!((run.chat_id.as_deref(), run.objective.as_str(), run.status.as_str()), (Some(chat.as_str()), "Follow up", "queued"));
+    assert_eq!((run.model.as_deref(), run.lenses.clone()), (Some("model-a"), Some(vec!["lens-a".to_owned()])));
+    assert_eq!(run.persona.as_ref().map(|persona| persona.root.as_str()), Some(origin_id.as_str()), "the origin's lineage");
+    assert_eq!(run.resource_grants, vec![grant("svc-a"), grant("svc-b"), grant("svc-c")], "deduplicated in order");
+    assert_eq!(state.runtime.runs.len(), 2);
+}
+
+#[test]
 fn invalid_continuation_input_leaves_the_queue_and_notice_unchanged() {
     let mut state = State::default();
     state

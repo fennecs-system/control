@@ -749,25 +749,40 @@ fn capture_fed(
         timed_out,
     })
 }
-/// Output of a declared observation's command.
-pub(crate) struct Probe {
+/// Output of a host probe command.
+pub(crate) struct ProbeOutput {
     pub(crate) text: String,
     pub(crate) exit_code: Option<i32>,
     pub(crate) timed_out: bool,
 }
-/// Runs a declared observation's bounded command in a verified service as the
-/// service user, without an execution record or exec slot. A command still
-/// running at `timeout` is stopped inside the service under its own marker.
+impl ProbeOutput {
+    /// The exit status as shown to operators and agents: the code, or
+    /// "unknown" when the command ended without one.
+    pub(crate) fn status(&self) -> String {
+        self.exit_code.map_or_else(|| "unknown".into(), |code| code.to_string())
+    }
+}
+/// Runs a short host probe command (a chat's fresh observation or a score
+/// sample) in a verified service as the service user, outside any attempt,
+/// without an execution record or exec slot, bounded in time and output. A
+/// command still running at `timeout` is stopped inside the service under a
+/// marker derived from `owner`, which should be unique to concurrent probes.
 /// Queries the engine: call without the state lock.
-pub(crate) fn probe(service: &Service, command: &str, owner: &str, timeout: Duration) -> io::Result<Probe> {
+pub(crate) fn probe(service: &Service, command: &str, owner: &str, timeout: Duration) -> io::Result<ProbeOutput> {
     let (id, user) = super::exec_target(service)?;
-    let marker = format!("observe-{}", &hash(owner.as_bytes())[..32]);
+    let marker = format!("probe-{}", &hash(owner.as_bytes())[..32]);
     let run = crate::engine::exec(&id, &user, Some("/workspace"), &[(MARKER, marker.as_str())], &["bash", "-c", &launch(command)]);
     let result = capture(run, timeout, || false, |_| {})?;
     if result.timed_out || result.interrupted || result.exit_code.is_none() {
         reap(service, &marker);
     }
-    Ok(Probe { text: result.output.text(), exit_code: result.exit_code, timed_out: result.timed_out })
+    Ok(ProbeOutput { text: result.output.text(), exit_code: result.exit_code, timed_out: result.timed_out })
+}
+/// A snapshot of service `id` that `usable` accepts, to probe without the
+/// state lock. Observations and score probes check the service each time
+/// they run, not when they were declared.
+pub(crate) fn probe_target(state: &State, id: &str, usable: impl Fn(&Service) -> bool) -> Option<Service> {
+    state.services.iter().find(|service| service.resource.id.as_str() == id && usable(service)).map(Service::binding_snapshot)
 }
 pub(super) fn logs(id: &str) -> io::Result<String> {
     let mut command = crate::engine::cli();
@@ -880,20 +895,6 @@ fn reap(service: &Service, execution: &str) -> bool {
     let Some(id) = service.resource.phase.container() else { return false };
     let command = crate::engine::exec(id.as_str(), &format!("{}:{}", service.uid, service.gid), None, &[], &["bash", "-c", &reap_script(execution)]);
     capture(command, Duration::from_secs(10), || false, |_| {}).is_ok_and(|r| r.exit_code == Some(0) && !r.timed_out)
-}
-/// Runs a short command for the host (a score probe) in a running service as
-/// its user, outside any attempt and without a record: bounded in time and
-/// output, reaped inside the service if it outlives the bound. Call without
-/// the state lock. Returns the output and exit code. Shares `probe`, under a
-/// marker unique to this sample.
-pub(crate) fn host_probe(service: &Service, command: &str, timeout: Duration) -> io::Result<(String, Option<i32>)> {
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
-    let owner = format!("score\u{0}{}\u{0}{nonce}", service.resource.id.as_str());
-    let result = probe(service, command, &owner, timeout)?;
-    if result.timed_out || result.exit_code.is_none() {
-        return Err(fail("The probe did not finish within its time bound"));
-    }
-    Ok((result.text, result.exit_code))
 }
 fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
     // A copy reads its requesting attempt's live workspace. A source that is

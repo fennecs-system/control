@@ -5,6 +5,7 @@
 #[allow(clippy::duplicate_mod)]
 #[path = "../tools/engine-cli.rs"]
 mod engine_cli;
+pub(crate) mod ephemeral;
 use std::{io, process::Command, time::Duration};
 
 /// The engine CLI with the caller's environment.

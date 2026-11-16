@@ -127,23 +127,17 @@ pub(super) fn reconcile(
                 && run.action == parent.action
         })
         .unwrap_or(parent);
-    let backend = latest.backend;
-    let model = latest.model.clone();
-    let context = latest.context.clone();
-    let lenses = latest.lenses.clone();
-    let actor = parent.actor.clone();
-    let action = parent.action;
-    let persona = delegation::lineage(parent);
-    let mut grants = crate::services::grants(state, parent);
+    // The parent's authority, lineage and grants; the chat's latest model settings.
+    let mut follow_up = chat::FollowUp::from(state, parent);
+    follow_up.backend = latest.backend;
+    follow_up.model = latest.model.clone();
+    follow_up.context = latest.context.clone();
+    follow_up.lenses = latest.lenses.clone();
     let mut summaries = Vec::new();
     let mut ids = Vec::new();
     for child in children {
         let leaf = delegation::leaf(state, &child.id)?;
-        for grant in crate::services::grants(state, leaf) {
-            if !grants.contains(&grant) {
-                grants.push(grant);
-            }
-        }
+        follow_up.grant(crate::services::grants(state, leaf));
         summaries.push(format!(
             "{} · {} · /chat/{}\n{}",
             child.id,
@@ -161,22 +155,7 @@ pub(super) fn reconcile(
     let messages_len = state.chats[chat_index].messages.len();
     let revision = state.chats[chat_index].revision;
     let notice = state.runtime.notice.clone();
-    state.runtime.enqueue_for(
-        objective,
-        RunKind::AgentCompletion,
-        "agent-completion",
-        actor,
-        action,
-    )?;
-    let run = state.runtime.runs.last_mut().unwrap();
-    run.chat_id = Some(chat);
-    run.backend = backend;
-    run.model = model;
-    run.context = context;
-    run.lenses = lenses;
-    run.persona = Some(persona);
-    run.resource_grants = grants;
-    let response = run.id.clone();
+    let response = follow_up.enqueue(state, &chat, objective, RunKind::AgentCompletion, "agent-completion")?.id.clone();
     let batch = &mut state.runtime.runs[index].spawns[batch_index];
     let receipts_len = batch.completions.len();
     batch

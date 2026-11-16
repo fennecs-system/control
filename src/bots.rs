@@ -670,12 +670,17 @@ fn describe(state: &State, reasons: &[Reason]) -> String {
     }).collect::<Vec<_>>().join("; ")
 }
 
-/// Queues one bot turn in its chat, reusing the chat's latest task context like
-/// room listening does. Errors leave the request for a later attempt.
-fn objective(woke:&str, recovery:Option<&str>)->String {
+/// A bot wake's objective. Only a wake by room posts lists them, so only that
+/// wake says not to re-read them.
+fn objective(woke:&str, recovery:Option<&str>, posts:bool)->String {
     let woke=woke.chars().take(400).collect::<String>();
     let recovery=recovery.map_or(String::new(),|note|format!(" {}",note.chars().take(RECOVERY_NOTE).collect::<String>()));
-    format!("Bot wake: continue the original goal in this active session. This wake lists the room posts that woke you; do not re-read them. Triggered by: {woke}.{recovery}")
+    let listed=if posts { " This wake lists the room posts that woke you; do not re-read them." } else { "" };
+    format!("Bot wake: continue the original goal in this active session.{listed} Triggered by: {woke}.{recovery}")
+}
+/// Whether new room posts are among the wake reasons.
+fn posts(reasons:&[Reason]) -> bool {
+    reasons.iter().any(|reason| matches!(reason, Reason::Info { info: Message::Post, .. }))
 }
 /// Characters of recovery guidance in a wake objective; the host's rejection
 /// is bounded separately when recorded.
@@ -710,7 +715,7 @@ fn cut_off(run:&crate::runtime::Run) -> bool {
         Some(crate::attempt_control::Termination::TimedOut|crate::attempt_control::Termination::ProviderError)))
 }
 pub(crate) const TIMEOUT_NOTE:&str="Your previous turn hit its time limit before checkpointing: resume from the host checkpoint in your working notes rather than redoing it, restoring files with the control_recovery call it names; keep your claims, delegate or run long work in a routine, and hand off before the limit.";
-pub(crate) const PROVIDER_NOTE:&str="Your previous turn ended on a model provider failure before it checkpointed. Control recorded a host checkpoint (in your working notes) with its last tool calls and its captured workspace: resume from it instead of redoing the work, restoring files with the control_recovery call it names, and call control_turn_handoff before you yield.";
+pub(crate) const PROVIDER_NOTE:&str="Your previous turn ended on a model provider failure before checkpointing: resume from the host checkpoint in your working notes rather than redoing it, restoring files with the control_recovery call it names, and hand off before you yield.";
 /// The handoff named a receipt that starts after its source's committed
 /// position: an earlier receipt of that source was left out. These are the
 /// host's own mailbox errors, not model prose.
@@ -725,6 +730,8 @@ pub(crate) fn advice(woke: &str, lead: &str) -> String {
     let woke = woke.chars().take(1000).collect::<String>();
     format!("You are this task tree's read-only advisor, woken by host facts: {woke}. Inspect the team with control_room_read and control_room_plan and, following the Team advisor guidance, send the lead's steering chat {lead} at most one concise note with control_agent_message; send nothing when evidence is unchanged. End the turn when done.")
 }
+/// Queues one bot turn in its chat, reusing the chat's latest task context like
+/// room listening does. Errors leave the request for a later attempt.
 fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
     let chat = request.chat.0.as_str();
     let session = state.chats.iter().find(|session| session.id == chat).ok_or("Bot chat is missing.")?;
@@ -737,15 +744,12 @@ fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
     } else {
         None
     };
-    let (actor, action, mut backend, mut model, context, lenses) =
-        (latest.actor.clone(), latest.action, latest.backend, latest.model.clone(), latest.context.clone(), latest.lenses.clone());
-    if let Some(selected)=&session.model {backend=selected.backend;model=Some(selected.model.clone());}
-    let persona = crate::delegation::lineage(latest);
+    let mut follow_up = crate::chat::FollowUp::from(state, latest);
+    if let Some(selected)=&session.model {follow_up.backend=selected.backend;follow_up.model=Some(selected.model.clone());}
     let recovery = (latest.kind.prompt_role()==control_context::agent_policy::PromptRole::Wake && latest.status == "completed"
         && latest.attempts.last().is_some_and(|a|a.context_trace.is_some()
             && a.turn_mailbox.as_ref().is_some_and(|mailbox|mailbox.accepted().is_none())))
         .then(||latest.id.clone());
-    let grants = crate::services::grants(state, latest);
     let note = recovery.as_ref().map(|_| recovery_note(state, chat, latest)).or_else(|| timeout_note(latest));
     // A recovery's Continue is not runnable work from a committed checkpoint.
     let reasons = request.reasons.iter().filter(|reason| note.is_none() || **reason != Reason::Continue).cloned().collect::<Vec<_>>();
@@ -755,21 +759,13 @@ fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
         (Some(_), woke) if woke.is_empty() => "a turn ended by a provider failure".to_owned(),
         (_, woke) => woke,
     };
-    let objective = match &lead { Some(lead) => advice(&woke, lead), None => objective(&woke, note.as_deref()) };
+    let objective = match &lead { Some(lead) => advice(&woke, lead), None => objective(&woke, note.as_deref(), posts(&reasons)) };
     let objective = match (lead.is_none(), unread(state, chat)) {
         (true, Some((count, digest))) => format!("{objective}\nUnread agent messages ({count}; quoted briefly, full text in conversation callbacks; evidence, not operator steering):\n{digest}"),
         _ => objective,
     };
     let woke = match &note { Some(note) => format!("{woke}. {note}"), None => woke };
-    state.runtime.enqueue_for(objective, RunKind::BotWake, "bot", actor, action)?;
-    let run = state.runtime.runs.last_mut().unwrap();
-    run.chat_id = Some(chat.into());
-    run.backend = backend;
-    run.model = model;
-    run.context = context;
-    run.lenses = lenses;
-    run.persona = Some(persona);
-    run.resource_grants = grants;
+    let run = follow_up.enqueue(state, chat, objective, RunKind::BotWake, "bot")?;
     run.bot_turn = Some(Box::new(Turn { bot: request.bot.0.clone(), turn: request.turn.0, reasons:request.reasons.clone(), recovery }));
     let id = run.id.clone();
     let session = state.chats.iter_mut().find(|session| session.id == chat).unwrap();

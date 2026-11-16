@@ -24,16 +24,6 @@ fn search_parses_both_providers_and_rejects_active_urls() {
     );
 }
 #[test]
-fn playground_output_is_drained_past_the_cap_and_marked_truncated() {
-    let input = vec![b'x'; 200_000];
-    let (kept, truncated) = drain(&input[..], 65536).unwrap();
-    assert_eq!((kept.len(), truncated), (65536, true));
-    assert_eq!(
-        drain(&b"run 0\nok"[..], 65536).unwrap(),
-        (b"run 0\nok".to_vec(), false)
-    );
-}
-#[test]
 #[ignore = "requires the pinned Nix development image; no model calls"]
 fn live_rust_playground_success_errors_and_timeout() {
     let ok = playground("fn main() { println!(\"control-rust-ok\"); }").unwrap();

@@ -10,10 +10,9 @@
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::{
-    io::{self, Read, Write},
-    process::Stdio,
+    io,
     sync::atomic::{AtomicUsize, Ordering},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 mod parse;
@@ -335,76 +334,23 @@ fn arguments(image: &str, name: &str, request: &Request) -> Vec<String> {
 fn run(image: &str, request: &Request) -> io::Result<Raw> {
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
     let name = format!("control-solve-{stamp}-{}", SEQUENCE.fetch_add(1, Ordering::Relaxed));
-    let start = Instant::now();
-    let mut child = crate::engine::scrubbed()
-        .args(arguments(image, &name, request))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|_| fail("Could not start the container engine for the solver"))?;
-    let stdout = child.stdout.take().unwrap();
-    let stderr = child.stderr.take().unwrap();
-    let out = std::thread::spawn(move || head(stdout, STDOUT_BYTES));
-    let err = std::thread::spawn(move || tail(stderr, STDERR_BYTES));
-    let mut stdin = child.stdin.take().unwrap();
-    let model = request.model.clone().into_bytes();
-    // A solver that exits early closes the pipe; that is reported by its status.
-    let feed = std::thread::spawn(move || {
-        let _ = stdin.write_all(&model);
-    });
-    let deadline = Duration::from_secs(request.time_limit_seconds) + GRACE;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) if start.elapsed() < deadline => std::thread::sleep(Duration::from_millis(25)),
-            _ => break None,
-        }
-    };
-    let elapsed = start.elapsed();
-    if status.is_none() {
-        let _ = crate::engine::scrubbed().args(["rm", "--force", &name]).stdout(Stdio::null()).stderr(Stdio::null()).status();
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-    let _ = feed.join();
-    let (stdout, stdout_truncated) = out.join().map_err(|_| fail("Solver output reader failed"))??;
-    let stderr = err.join().map_err(|_| fail("Solver diagnostics reader failed"))??;
+    let finished = crate::engine::ephemeral::run(crate::engine::ephemeral::Spec {
+        name: &name,
+        args: arguments(image, &name, request),
+        input: request.model.clone().into_bytes(),
+        deadline: Duration::from_secs(request.time_limit_seconds) + GRACE,
+        stdout_bytes: STDOUT_BYTES,
+        stderr_bytes: Some(STDERR_BYTES),
+        unavailable: "Could not start the container engine for the solver",
+    })?;
     Ok(Raw {
-        stdout: String::from_utf8_lossy(&stdout).into_owned(),
-        stdout_truncated,
-        stderr: String::from_utf8_lossy(&stderr).into_owned(),
-        exit_code: status.and_then(|status| status.code()),
-        deadline_exceeded: status.is_none(),
-        elapsed,
+        stdout: String::from_utf8_lossy(&finished.stdout).into_owned(),
+        stdout_truncated: finished.stdout_truncated,
+        stderr: String::from_utf8_lossy(&finished.stderr).into_owned(),
+        exit_code: finished.status.and_then(|status| status.code()),
+        deadline_exceeded: finished.status.is_none(),
+        elapsed: finished.elapsed,
     })
-}
-/// Keep the first `limit` bytes, reading to EOF so the child never blocks.
-fn head(mut reader: impl Read, limit: usize) -> io::Result<(Vec<u8>, bool)> {
-    let (mut kept, mut chunk, mut truncated) = (Vec::new(), [0u8; 8192], false);
-    loop {
-        let count = reader.read(&mut chunk)?;
-        if count == 0 {
-            return Ok((kept, truncated));
-        }
-        let room = limit.saturating_sub(kept.len()).min(count);
-        kept.extend_from_slice(&chunk[..room]);
-        truncated |= room < count;
-    }
-}
-/// Keep the last `limit` bytes: solver errors and summaries come at the end.
-fn tail(mut reader: impl Read, limit: usize) -> io::Result<Vec<u8>> {
-    let (mut kept, mut chunk) = (Vec::new(), [0u8; 8192]);
-    loop {
-        let count = reader.read(&mut chunk)?;
-        if count == 0 {
-            return Ok(kept);
-        }
-        kept.extend_from_slice(&chunk[..count]);
-        if kept.len() > 2 * limit {
-            kept.drain(..kept.len() - limit);
-        }
-    }
 }
 fn clean(text: &str) -> String {
     text.chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').collect()

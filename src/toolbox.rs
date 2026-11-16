@@ -3,10 +3,9 @@ use base64::Engine;
 use scraper::{Html, Selector};
 use serde_json::{json, Value};
 use std::{
-    io::{self, Read, Write},
-    process::Stdio,
+    io::{self, Read},
     sync::Mutex,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 static PLAYGROUND: Mutex<()> = Mutex::new(());
@@ -260,68 +259,28 @@ pub(crate) fn playground_mode(code: &str, optimized:bool) -> io::Result<Value> {
         .unwrap_or_default()
         .as_nanos();
     let name = format!("control-playground-{stamp}");
-    let mut command = crate::engine::cli();
-    command.args([
-            "run",
-            "--rm",
-            "--pull=never",
-            "--name",
-            &name,
-            "--label",
-            "dev.control.tool=playground",
-            "--network=none",
-            "--user=65532:65532",
-            "--read-only",
-            "--cap-drop=ALL",
-            "--security-opt=no-new-privileges",
-            "--memory=768m",
-            "--cpus=1",
-            "--pids-limit=64",
-            "--tmpfs",
-            "/tmp:rw,nosuid,exec,mode=1777,size=96m",
-            "--env",
-            "HOME=/tmp",
-            "--workdir=/tmp",
-            "--entrypoint=/bin/control-playground",
-            "-i",
-            &image,
-        ]);
-    if optimized {command.arg("--bench");}
-    let mut child=command.stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|_| fail("Could not start the Nix playground"))?;
-    let stdout = child.stdout.take().unwrap();
-    let reader = std::thread::spawn(move || drain(stdout, 65536));
-    let delivered = child
-        .stdin
-        .take()
-        .is_some_and(|mut stdin| stdin.write_all(code.as_bytes()).is_ok());
-    let start = Instant::now();
-    let status = loop {
-        if !delivered || start.elapsed() > Duration::from_secs(20) {
-            break None;
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Err(_) => break None,
-            _ => std::thread::sleep(Duration::from_millis(50)),
-        }
-    };
-    if status.is_none() {
-        let _ = crate::engine::cli()
-            .args(["rm", "-f", &name])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        let _ = child.kill();
-        let _ = child.wait();
+    let mut args = [
+        "run", "--rm", "--pull=never", "--name", &name, "--label", "dev.control.tool=playground",
+        "--network=none", "--user=65532:65532", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
+        "--memory=768m", "--cpus=1", "--pids-limit=64", "--tmpfs", "/tmp:rw,nosuid,exec,mode=1777,size=96m",
+        "--env", "HOME=/tmp", "--workdir=/tmp", "--entrypoint=/bin/control-playground", "-i", &image,
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    if optimized {
+        args.push("--bench".into());
     }
-    let (bytes, truncated) = reader
-        .join()
-        .map_err(|_| fail("Playground output reader failed"))??;
-    if !status.is_some_and(|s| s.success()) {
+    let finished = crate::engine::ephemeral::run(crate::engine::ephemeral::Spec {
+        name: &name,
+        args,
+        input: code.as_bytes().to_vec(),
+        deadline: Duration::from_secs(20),
+        stdout_bytes: 65536,
+        stderr_bytes: None,
+        unavailable: "Could not start the Nix playground",
+    })?;
+    let (bytes, truncated, status) = (finished.stdout, finished.stdout_truncated, finished.status);
+    if !finished.delivered || !status.is_some_and(|s| s.success()) {
         return Err(fail(
             "Playground stopped or exceeded its limits. Check the configured Nix image.",
         ));
@@ -341,19 +300,6 @@ pub(crate) fn playground_mode(code: &str, optimized:bool) -> io::Result<Value> {
         .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
         .collect::<String>();
     Ok(json!({"status":status,"success":status=="run 0","output":output,"truncated":truncated,"image":image}))
-}
-/// Keep the first `limit` bytes and discard the rest, reading to EOF so the child never blocks on a full pipe.
-fn drain(mut reader: impl Read, limit: usize) -> io::Result<(Vec<u8>, bool)> {
-    let (mut kept, mut chunk, mut truncated) = (Vec::new(), [0u8; 8192], false);
-    loop {
-        let count = reader.read(&mut chunk)?;
-        if count == 0 {
-            return Ok((kept, truncated));
-        }
-        let room = limit.saturating_sub(kept.len()).min(count);
-        kept.extend_from_slice(&chunk[..room]);
-        truncated |= room < count;
-    }
 }
 
 #[cfg(test)]

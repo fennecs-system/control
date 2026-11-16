@@ -540,6 +540,7 @@ fn committed_runnable_work_resumes_once_and_failed_saves_retain_the_intent() {
             .objective
             .starts_with("Bot wake: continue the original goal in this active session.")
     );
+    assert!(!bot_runs(&state)[0].objective.contains("room posts"), "a wake without room posts lists none");
     let stored = serde_json::to_vec(&state).unwrap();
     let mut recovered: State = serde_json::from_slice(&stored).unwrap();
     recovered.runtime.runs.last_mut().unwrap().status = "completed".into();
@@ -573,6 +574,7 @@ fn room_messages_wake_a_bot_once_and_its_finished_turn_releases_the_next() {
         ("bot", Some(chat.as_str()))
     );
     assert!(runs[0].objective.contains("new messages in room #general"));
+    assert!(runs[0].objective.contains("This wake lists the room posts that woke you"), "a room-post wake says its posts are listed");
     assert!(
         state.chats[0]
             .messages
