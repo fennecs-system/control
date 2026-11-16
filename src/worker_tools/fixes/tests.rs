@@ -78,6 +78,7 @@ fn every_turn_handoff_rejection_names_a_callable_fix() {
         }
     }
     assert!(missing.is_empty(), "rejections without a callable fix:\n{}", missing.join("\n"));
+    eprintln!("turn rejections checked: {checked}");
     assert!(checked >= 30, "the scanner stopped finding rejections ({checked})");
 }
 
@@ -95,6 +96,7 @@ fn every_service_room_watch_and_message_rejection_reaches_the_model_with_a_fix()
             assert!(shown.starts_with(literal.trim_end()), "the host's own message is kept first");
         }
     }
+    eprintln!("service/room/watch/message rejections checked: {total}, {own} with their own fix");
     assert!(total >= 100, "the scanner stopped finding rejections ({total})");
     assert!(own > 0);
 }
