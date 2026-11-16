@@ -284,8 +284,9 @@ summaries on one slot; more slots split `--ctx-size` between them.
    example `~/.local/share/control/models/`).
 2. `nix run .#inference -- --model ~/.local/share/control/models/Qwen3.8-27B-Q4_K_M.gguf`
 3. Add the endpoint in Manage with the printed values and **Serves tool calls**.
-   Agent steps re-send about 10 k tokens of tool schemas, so keep a generous
-   timeout (the default 1800 s is fine on Metal; CPU needs far more).
+   Agent steps re-send about 3.4 k tokens of core tool schemas (more once a turn
+   loads deferred tools), so keep a generous timeout (the default 1800 s is fine
+   on Metal; CPU needs far more).
 4. Check it: `control models test qwen-local`, then `control models bench qwen-local 5`.
 5. In a chat, `/model local:qwen-local`. Future turns run on the local model;
    `/model default` returns to the node default.
@@ -328,10 +329,17 @@ hosted model is ever substituted when the endpoint fails.
 generates. Each step is one bounded `/v1/chat/completions` request with a system
 note, the same Control-assembled turn input Codex receives, and the attempt's
 worker MCP tools as OpenAI function tools: the list `tools/list` returns for that
-attempt (room, continuity, services, spawn, workspace, knowledge, …) plus
-`control_workspace_run`, the same credential-free offline shell Claude Code uses.
-Names and parameter schemas are unchanged; long descriptions keep their first
-sentences. Every call goes through the worker tool dispatch the CLI mailboxes use,
+attempt, which is the role's core set (continuity, rooms, services, watches,
+spawn, bots, guidance, `control_tool_search`) plus `control_workspace_run`, the
+same credential-free offline shell Claude Code uses. The other tools the attempt
+may call are named in the prompt's deferred index
+([LENSES.md](LENSES.md#current-boundaries)). The loop loads them natively: schemas
+a `control_tool_search` returns become function tools for the rest of the turn,
+and a call to an indexed name that is not yet loaded first fetches that one schema
+through the same search (no model step), then runs. A name the search does not
+return stays unknown and never executes. Local turns get no `control_call`; they do
+not need it. Names and parameter schemas are passed through unchanged; long
+descriptions keep their first sentences. Every call goes through the worker tool dispatch the CLI mailboxes use,
 so authorization, attempt fencing, the staged-handoff fence, judge policy, room
 idempotency and nudges are identical. Calls run one at a time in the order the
 model emits them (at most eight per step). A text reply without tool calls is the
@@ -353,10 +361,12 @@ persistent services are separate resources. Recovery starts a fresh attempt from
 Control's journal; server KV caches only speed up repeated prefixes.
 
 **Context fit.** The endpoint's declared limits are the budget. Turn-input
-planning reserves `OVERHEAD_TOKENS` (15 360) for tool schemas and the first
-exchange, so history is selected newest-first within what remains and omissions
-are recorded. Before each request the loop estimates tokens conservatively
-(3 bytes per token) for messages plus schemas. Input that cannot fit at admission
+planning reserves `OVERHEAD_TOKENS` (7 168: 4 096 for the role's core schemas,
+2 048 for schemas loaded during the turn and 1 024 for the first exchange; it was
+15 360 when every schema was sent), so history is selected newest-first within
+what remains and omissions are recorded. Before each request the loop estimates
+tokens conservatively (3 bytes per token) for messages plus the schemas offered
+at that step, including any loaded. Input that cannot fit at admission
 blocks the run before any model call. When a long turn outgrows the context, whole
 earlier steps of that turn (never the request, and never a call separated from its
 results) are summarized by the chat's compactor and replaced with one labelled,
@@ -377,8 +387,10 @@ compactions, elapsed time and token totals.
 
 What is not covered: tool calls run sequentially even when the model emits several
 in parallel. Token estimates are conservative byte counts, not a tokenizer. Image
-inputs are not sent. A 32k context holds roughly 10 k tokens of tool schemas, so
-long single turns rely on in-turn compaction.
+inputs are not sent. The core schemas are about 3.2–3.4 k tokens of a 32k context
+for members and leads (1.2 k for an advisor), down from about 13.9 k for every
+callable tool; long single turns still rely on in-turn compaction, and schemas a
+turn loads are not unloaded until it ends.
 
 ### End-to-end run on Metal (2026-11-16)
 
@@ -405,7 +417,9 @@ to the room, and its workspace change was checkpointed and published as an
 artifact. Server memory was a 4.3 GB process footprint (peak 4.5 GB) plus about
 18 GB of memory-mapped weights. Most of the cold latency is the first ~10.6 k-token
 prompt, which is mostly tool schemas. llama.cpp's prefix cache makes later steps
-and later turns cheap while the slot keeps that prefix.
+and later turns cheap while the slot keeps that prefix. (These runs predate
+deferred tool loading, which cuts the schemas to the role's core set; the cold
+first step has not been re-measured.)
 
 The first run exposed a real defect: room posts require a numeric nonce, and the
 loop's nonces were rejected. The model saw the errors, retried, then handed off

@@ -448,18 +448,8 @@ fn judge_tools_are_enforced_even_when_unadvertised_names_are_forged() {
         parent: Some("parent".into()),
     });
     let shared = Arc::new(Mutex::new(s));
-    let listed = rpc_at(
-        &shared,
-        &id,
-        &json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/list"}}),
-        None,
-    );
-    let names = listed["result"]["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|t| t["name"].as_str().unwrap())
-        .collect::<Vec<_>>();
+    let callable = callable(&shared, &id);
+    let names = callable.iter().map(String::as_str).collect::<Vec<_>>();
     assert!(names.contains(&"control_workspace_run"));
     assert!(!names.contains(&"control_agent_spawn_blocking"));
     assert!(!names.contains(&"control_agent_delegate"));
@@ -664,6 +654,14 @@ fn design_pause_blocks_further_tool_effects_until_user_answers() {
 fn rpc(state: &Arc<Mutex<State>>, run: &str, value: &Value) -> Value {
     rpc_at(state, run, value, None)
 }
+/// Every tool a session may call: its listed core plus its deferred index.
+fn callable(state: &Arc<Mutex<State>>, run: &str) -> Vec<String> {
+    let listed = rpc(state, run, &json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/list"}}));
+    let index = rpc(state, run, &json!({"request":{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"control_tool_search","arguments":{}}}}));
+    listed["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_owned())
+        .chain(index["result"]["structuredContent"]["data"]["deferred"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_owned()))
+        .collect()
+}
 /// Codex leaves a tools/call pending when its reply is a JSON-RPC error, so
 /// every tool failure is a result; only protocol faults stay JSON-RPC errors.
 #[test]
@@ -787,17 +785,8 @@ fn workers_get_concrete_tools_without_operator_authority_or_room_access() {
     let run = state.runtime.runs[0].id.clone();
     state.runtime.runs[0].status = "running".into();
     let state = Arc::new(Mutex::new(state));
-    let list = rpc(
-        &state,
-        &run,
-        &json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/list"}}),
-    );
-    let names: std::collections::BTreeSet<_> = list["result"]["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|t| t["name"].as_str())
-        .collect();
+    let callable = callable(&state, &run);
+    let names: std::collections::BTreeSet<_> = callable.iter().map(String::as_str).collect();
     for name in [
         "control_agent_spawn_blocking",
         "control_agent_result",

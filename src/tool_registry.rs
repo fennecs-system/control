@@ -146,7 +146,8 @@ pub fn worker_definitions(improve: bool) -> Vec<Value> {
         .collect::<Vec<_>>();
     tools.push(crate::design::definition());
     tools.extend(crate::knowledge_tools::definitions().into_iter().map(|mut definition| {
-        definition["name"] = json!(definition["name"].as_str().unwrap().replace('.', "_"));
+        let name = definition["name"].as_str().unwrap();
+        definition["name"] = json!(control_context::worker_name(name).expect("Knowledge tools have catalogued worker spellings"));
         definition
     }));
     tools.push(crate::web_access::definition());
