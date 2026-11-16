@@ -200,7 +200,10 @@ cut-shaped blocks:
   blocks back (eagerly; replay and load stay near 100 ms).
 - **Un-archiving.** Any mutable access to an archived run (a continuation
   recording itself on it, a delivery update) un-archives it: it is saved in the
-  state again and shadows its block copy, which the next merge drops.
+  state again and shadows its block copy, which the next merge drops. Filling
+  journal-backed text back in at load is not a change (the save writes the
+  journal position), so it keeps runs archived. A run archived again later is
+  in two blocks until a merge: load and merge keep the newer block's copy.
 - Readers outside the server (`config::read_state`) see only the state's hot
   runs; none of them read runs today.
 
