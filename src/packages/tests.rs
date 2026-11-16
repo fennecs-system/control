@@ -65,7 +65,7 @@ fn shared() -> Arc<Mutex<State>> {
 fn running(state: &mut State, packages: Vec<control_context::PackageInput>) -> String {
     let chat = crate::chat::create(state);
     crate::chat::send(state, &chat, "Build the castle", "test").unwrap();
-    let run = state.runtime.runs.last_mut().unwrap();
+    let run = &mut **state.runtime.runs.last_mut().unwrap();
     run.status = "running".into();
     run.attempts.push(crate::usage::Attempt { workspace_id: Some(format!("{}-attempt", run.id)), ..Default::default() });
     *run.context = Some(control_context::Resolved { packages, ..Default::default() });

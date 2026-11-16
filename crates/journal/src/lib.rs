@@ -6,6 +6,9 @@
 //! and never move. A journal is a [`control_comonad::Space`], so stores and
 //! lenses read it directly. [`Journal`] is the pluggable seam: files today,
 //! sealed or compressed segments later, memory in tests.
+pub mod lens;
+pub mod snapshot;
+
 use control_comonad::Space;
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
@@ -105,6 +108,11 @@ impl FileJournal {
             file.sync_data()?;
         }
         Ok(Self { file, starts, end: line, poisoned: false })
+    }
+    /// Whether a failed append may have left a partial line that could not be
+    /// removed: its outcome is unknown until the journal is reopened.
+    pub fn poisoned(&self) -> bool {
+        self.poisoned
     }
 }
 impl Journal for FileJournal {

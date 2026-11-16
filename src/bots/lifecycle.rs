@@ -576,7 +576,8 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
         let scan = &mut scans[team_at[position]];
         match run.status.as_str() {
             "queued" | "running" | "waiting" | "cancelling" => scan.active = true,
-            status if !run.attempts.is_empty() && super::terminal(status) => {
+            // A continued turn's outcome belongs to its continuation.
+            status if !run.attempts.is_empty() && crate::application::runs::status::finished(status) && !crate::application::runs::status::superseded(status) => {
                 if !echo(run) { scan.settled += 1; }
                 let (count, open) = &mut streak[position];
                 match status {

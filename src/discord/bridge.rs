@@ -43,20 +43,21 @@ struct Bridge {
     /// This node's tag in button custom IDs.
     tag: String,
 }
-/// Cache only delivery fields; reload on size, modification time or inode changes.
+/// Cache only delivery fields; reload when the snapshot or its patch log
+/// changes size, modification time or inode.
 #[derive(Default)]
 struct StateCache {
-    stamp: Option<(SystemTime, u64, u64)>,
+    stamp: Option<[Option<(SystemTime, u64, u64)>; 2]>,
     value: std::rc::Rc<Snapshot>,
 }
 impl StateCache {
-    fn load(&mut self, path: &Path) -> std::rc::Rc<Snapshot> {
+    fn load(&mut self, directory: &Path) -> std::rc::Rc<Snapshot> {
         use std::os::unix::fs::MetadataExt;
-        let stamp = fs::symlink_metadata(path).ok().filter(|m| m.is_file()).map(|m| (m.modified().unwrap_or(UNIX_EPOCH), m.len(), m.ino()));
+        let stamp = [directory.join("state.json"), directory.join(config::STATE_LOG)].map(|path| fs::symlink_metadata(path).ok().filter(|m| m.is_file()).map(|m| (m.modified().unwrap_or(UNIX_EPOCH), m.len(), m.ino())));
+        let stamp = stamp[0].is_some().then_some(stamp);
         if stamp.is_none() || stamp != self.stamp {
             self.value = std::rc::Rc::new(
-                config::read_regular(path, isize::MAX as usize, false).ok()
-                    .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                config::read_state_in(directory, isize::MAX as usize).ok().flatten()
                     .unwrap_or_default()
             );
             self.stamp = stamp;
@@ -537,7 +538,7 @@ impl Bridge {
         self.send(channel, content, None).is_ok()
     }
     fn snapshot(&self) -> Result<std::rc::Rc<Snapshot>, &'static str> {
-        Ok(self.state.borrow_mut().load(&config::state("state.json")?))
+        Ok(self.state.borrow_mut().load(&config::state_directory()?))
     }
     /// Posts a message. A `nonce` makes Discord drop a repeat of the same send
     /// (a retry after a crash or a lost response) instead of posting it twice.

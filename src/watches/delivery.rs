@@ -52,7 +52,7 @@ pub(crate) fn drained(state: &State, chat: &str, retains: impl Fn(&str) -> bool)
         && working.processed.iter().filter_map(|r| position(r, &w.id)).max().unwrap_or(0) >= w.seen
         && !retains(&w.id)).map(|w| w.id.clone()).collect::<Vec<_>>();
     if candidates.is_empty() || state.runtime.runs.iter().any(|r| r.chat_id.as_deref() == Some(chat)
-        && matches!(r.status.as_str(), "queued" | "running" | "waiting" | "cancelling")) {
+        && crate::application::runs::status::active(&r.status)) {
         return Vec::new();
     }
     candidates

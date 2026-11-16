@@ -78,7 +78,7 @@ impl<'a> Entry<'a> {
         if self.task_view {
             use control_context::agent_policy::PromptRole;
             if let Some(run) = self.run.filter(|run| run.kind.prompt_role() == PromptRole::Wake) {
-                return if matches!(run.status.as_str(), "blocked" | "failed" | "interrupted" | "cancelled") {
+                return if crate::application::runs::status::resumable(&run.status) {
                     format!("Failure from {}:\n{}\n", run.id, self.response().1)
                 } else if run.status=="completed" {
                     run.attempts.last().and_then(|a| a.task_progress())

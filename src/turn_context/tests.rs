@@ -66,7 +66,7 @@ fn fixture() -> (State, String) {
     )
     .unwrap();
     state.chats[0].continuity = Some(Box::new(Managed::default()));
-    let run = &mut state.runtime.runs[0];
+    let run = &mut *state.runtime.runs[0];
     run.attempts.push(Attempt {
         workspace_id: Some(format!("{}-attempt-1", run.id)),
         ..Default::default()

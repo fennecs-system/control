@@ -344,3 +344,65 @@ fn unfinished_or_unprocessed_watches_are_kept() {
     reconcile_at(&mut state, 80_000, ok).unwrap();
     assert!(state.watches.is_empty());
 }
+
+/// A journal-style save: the patch from the last committed encoding, applied
+/// to that document, must reproduce the state; a failed save commits nothing.
+struct Journal {
+    base: control_journal::snapshot::Encoded,
+    document: serde_json::Value,
+    patches: usize,
+}
+impl Journal {
+    fn new(state: &State) -> Self {
+        let base = crate::history::persisting(|| control_journal::snapshot::encode(state)).unwrap();
+        let document = serde_json::from_slice(base.bytes()).unwrap();
+        Self { base, document, patches: 0 }
+    }
+    fn save(&mut self, state: &State) -> io::Result<()> {
+        let encoded = crate::history::persisting(|| control_journal::snapshot::encode(state))?;
+        if let Some(patch) = control_journal::snapshot::diff(&self.base, &encoded) {
+            control_journal::snapshot::apply(&mut self.document, control_journal::snapshot::edits(&patch)?)?;
+            self.patches += 1;
+        }
+        let fresh: serde_json::Value = crate::history::uncached(|| crate::history::persisting(|| serde_json::to_value(state))).unwrap();
+        assert_eq!(self.document, fresh, "the patch reproduces the saved state");
+        self.base = encoded;
+        Ok(())
+    }
+}
+
+#[test]
+fn the_streak_and_collected_watches_are_journal_patches_and_failed_saves_commit_none() {
+    let (mut state, chat) = fixture();
+    managed_bot(&mut state, &chat);
+    finished(&mut state, &chat, "w-done");
+    post(&mut state, Some("peer"), "The farm needs checking");
+    let mut journal = Journal::new(&state);
+    reconcile_at(&mut state, 1_000, |s| journal.save(s)).unwrap();
+    // A failed recovery save leaves nothing new to journal.
+    fail_queued(&mut state, &chat, Some("Processed source budget exceeded"));
+    journal.save(&state).unwrap();
+    assert!(reconcile_at(&mut state, 40_000, |_| Err(io::Error::other("disk full"))).is_err());
+    let unchanged = crate::history::persisting(|| control_journal::snapshot::encode(&state)).unwrap();
+    assert!(control_journal::snapshot::diff(&journal.base, &unchanged).is_none(), "rollback leaves nothing to journal");
+    // Recovery, parking and the reported streak are ordinary patches; mutated
+    // runs drop their cached bytes, so the patch still reproduces the state.
+    let mut now = 40_000;
+    while now < 30 * 60_000 {
+        reconcile_at(&mut state, now, |s| journal.save(s)).unwrap();
+        fail_queued(&mut state, &chat, Some("Processed source budget exceeded"));
+        journal.save(&state).unwrap();
+        now += 15_000;
+    }
+    assert!(checkpointing(&state, &chat).reported);
+    assert_eq!(journal.document["chats"][0]["continuity"]["checkpointing"]["reported"], true);
+    // The publication ends the streak and deletes the drained watch in one patch.
+    publish(&mut state, &chat, 1, vec![Range::Watch { watch: "w-done".into(), after: 0, through: 2 }]);
+    journal.save(&state).unwrap();
+    let before = journal.patches;
+    reconcile_at(&mut state, now + 1, |s| journal.save(s)).unwrap();
+    assert_eq!(journal.patches, before + 1);
+    assert!(state.watches.is_empty());
+    assert_eq!(journal.document["watches"], json!([]));
+    assert_eq!(journal.document["chats"][0]["continuity"]["checkpointing"]["failures"], json!(0));
+}

@@ -782,7 +782,7 @@ fn commit(
     // journal as one line before the save, so the save carries only live work.
     // Text positions stay valid (edits clear them); a failed save restores the
     // activity below.
-    let archived = crate::history::finished(status).then(|| crate::history::archive_run(r).ok()).flatten();
+    let archived = crate::application::runs::status::finished(status).then(|| crate::history::archive_run(r).ok()).flatten();
     let previous_chat = chat_index.map(|index| {
         let chat = &s.chats[index];
         (
@@ -1150,6 +1150,7 @@ pub(crate) fn record_activity_for(
     let Some(run) = state.runtime.runs.iter_mut().find(|r| r.id == id) else {
         return false;
     };
+    let run = &mut **run;
     if run.status != "running" {
         // A synchronous copy can finish after cancellation was requested. Close
         // its existing internal phase; provider progress remains fenced out.

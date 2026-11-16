@@ -54,6 +54,38 @@ pub fn state_directory() -> Result<PathBuf, &'static str> {
     Ok(path)
 }
 
+/// The patch log that extends `state.json` (see the server's `storage`).
+pub const STATE_LOG: &str = "state.log";
+
+/// The persisted state's schema in this build. Version 0 is the monolithic
+/// `state.json` from before the patch log; version 1 adds the log and the
+/// `_snapshot`/`_schema` members without changing the state's shape, so its
+/// step has no lenses. A shape change appends a step of
+/// [`control_journal::lens`] lenses, which are also recorded in every snapshot
+/// so older builds can translate back. Version 2 keeps finished runs far from
+/// the focus in archive blocks outside the state; builds before it cannot see
+/// them, so the step is `External` and they refuse to read it.
+pub fn state_schema() -> control_journal::lens::Schema {
+    use control_journal::lens::{Lens, Schema};
+    Schema { version: 2, lenses: vec![vec![], vec![Lens::External { name: "runtime.runs".into() }]] }
+}
+
+/// The one loader for state outside the server: the snapshot plus its log's
+/// valid lines, translated to this build's schema, deserialized as `T` (any
+/// partial view of the state). It takes no lock and repairs nothing; files
+/// over `limit` bytes are refused. `None` when there is no state yet.
+pub fn read_state<T: serde::de::DeserializeOwned>(limit: usize) -> io::Result<Option<T>> {
+    read_state_in(&state_directory().map_err(io::Error::other)?, limit)
+}
+/// [`read_state`] for an explicit state directory.
+pub fn read_state_in<T: serde::de::DeserializeOwned>(directory: &Path, limit: usize) -> io::Result<Option<T>> {
+    control_journal::snapshot::read(&directory.join("state.json"), &directory.join(STATE_LOG), &state_schema(), |path| {
+        read_regular(path, limit, false)
+    })?
+    .map(|document| serde_json::from_value(document).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "State does not match its schema")))
+    .transpose()
+}
+
 pub fn state(name: &str) -> Result<PathBuf, &'static str> {
     if Path::new(name)
         .components()

@@ -1,5 +1,76 @@
 # Performance checks
 
+## State saves as a patch journal (2026-11-16)
+
+macOS disk-write diagnostics showed 8–34 GB/hour written by Control during
+swarm runs: nearly every tool call rewrote and synced the whole 18 MB
+`state.json`. Saves now append one transaction line of changed paths to
+`state.log` and compact into the snapshot only when the log outgrows it
+([design](HISTORY.md#state-checkpoints-a-snapshot-plus-a-patch-journal)).
+
+`storage::tests::profiling::profile_swarm_hour` replays a simulated swarm hour
+of 2,000 saves (the rate that reproduces the diagnostic: 37 GB/hour before) on a
+copy of the maintainer's 18.1 MB state (6,881 runs, 128 chats): room posts and
+agent messages across the six largest chats, watch deliveries, tool receipts on
+running turns, new turns and finished turns, in a fixed 7:5:4:2:2 mix. Same
+mutation sequence for both paths, release build, APFS on the internal SSD,
+`F_FULLFSYNC` durability as before.
+
+| 2,000 saves | Before (atomic rewrite) | After (patch journal) |
+| --- | --- | --- |
+| Bytes written | 37.4 GB (18.7 MB/save) | 1.38 MB (690 B/save) |
+| Save p50 / p99 / max | 30.9 / 38.0 / 47.1 ms | 25.2 / 29.3 / 39.4 ms |
+| Compactions | — | 0 (log 1.4 MB < snapshot) |
+
+Encoding with ranges costs 18.0 ms against 12.7 ms for `serde_json::to_vec`
+(p50, 21 samples); diffing an unchanged 18 MB state costs 1.3 ms. Cold load:
+41.6 ms to parse the monolithic file; 64 ms to load and adopt a clean snapshot
+(parse plus one encoding to confirm it is the diff base, no write); 102 ms to
+replay a 2,001-line, 1.4 MB log (then one compaction); 92 ms to recover from a
+torn final line, which is dropped with earlier saves intact.
+
+`sample` profiles of the save loop (700 saves each, 12 s at 1 ms) put the
+before path at 44% sync, 34% serialization and 17% writing 18 MB; after, 29%
+sync, 58% encoding, 10% diffing and about 1% writing. Bytes are no longer the
+cost; encoding all 6,881 runs on every save is. Moving finished runs out of the
+hot state is the next step and should cut encoding by about two thirds. The
+measurement does not cover APFS metadata writes, which `F_FULLFSYNC` still
+incurs once per save, or concurrent saves (each still syncs under the state
+mutex; group commit is not implemented).
+
+**Cached run encodings.** `Run` is now `history::Cached<Record>`. A save serializes a run once and then copies its saved bytes until the run is next borrowed mutably; any `&mut` access forgets them, so there is no dirty flag to forget. When a changed run, or one written from saved bytes, has to be diffed, diffing indexes just that run's bytes to find the member that changed. Debug builds and tests check every save against a fresh, uncached serialization.
+
+A clean start now adopts the snapshot by indexing the file's bytes (`snapshot::base`) instead of re-encoding the state.
+
+Same fixture and mutation sequence:
+
+| | Patch journal (#224) | With cached runs |
+| --- | --- | --- |
+| Encode (unchanged state, p50) | 18.0 ms | 5.6 ms |
+| Save p50 / p99 | 25.2 / 29.3 ms | 12.1 / 15.9 ms |
+| Bytes per save | 690 B | 690 B |
+| Clean start (parse + base) | 64 ms | 52.6 ms (42 parse + 10 index) |
+
+In the `sample` profile of the save loop, 62% of the time is now the sync, 22% encoding and 10% diffing.
+
+**Finished runs in archive blocks.** On the same state, the first two saves move 6,144 of the 6,881 runs into two blocks (10.3 MB, 73 ms, once). That leaves 743 hot runs: the newest 512 plus older resumable or still-referenced ones. Over the simulated hour:
+
+| | Cached runs | Archived runs |
+| --- | --- | --- |
+| State encoded per save (hot) | 18.1 MB | 8.5 MB |
+| Save p50 / p99 | 12.1 / 15.9 ms | 9.8 / 12.9 ms |
+| Bytes written per save | 690 B | 1,171 B (log 690 B, plus new and merged blocks) |
+| Replay of a 2,001-line log | 106 ms | 72 ms |
+| Clean start | 52.6 ms | 60 ms (snapshot plus blocks, read eagerly) |
+
+Array diffs anchor on byte-identical elements, so moving 64 runs from the middle of `runtime.runs` costs one 30-byte splice rather than a rewrite of everything after them.
+
+```sh
+CONTROL_PROFILE_STATE=/scratch/state.json CONTROL_PROFILE_DIR=/scratch/bench \
+  cargo test --release --locked --bin control \
+  storage::tests::profiling::profile_swarm_hour -- --ignored --exact --nocapture
+```
+
 ## Bounded checkpoint recovery (2026-11-16)
 
 A swarm run's persistent bots took 269 `continue` wakes; about 90% followed a

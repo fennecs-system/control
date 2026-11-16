@@ -812,7 +812,8 @@ fn isolated_supervisor_retains_intent_after_worker_panic() {
     }
     assert!(threads.join().is_err());
     let saved: State =
-        serde_json::from_slice(&fs::read(crate::config::state("state.json").unwrap()).unwrap())
+        crate::config::read_state::<crate::State>(isize::MAX as usize)
+            .unwrap()
             .unwrap();
     assert_eq!(saved.runtime.runs[0].status, "running");
     assert_eq!(saved.runtime.runs[0].attempts.len(), 1);
@@ -1010,7 +1011,8 @@ fn isolated_supervisor_overlaps_cancels_orders_and_joins() {
         .collect();
     assert_eq!(attempts.len(), 4);
     let saved: State =
-        serde_json::from_slice(&fs::read(crate::config::state("state.json").unwrap()).unwrap())
+        crate::config::read_state::<crate::State>(isize::MAX as usize)
+            .unwrap()
             .unwrap();
     assert_eq!(saved.runtime.runs[4].status, "queued");
     assert!(
@@ -1061,8 +1063,7 @@ fn live_shutdown(parallel: bool) {
         "QA port is already in use"
     );
     let binary = std::env::var("CONTROL_QA_SERVER_BIN").expect("built server binary");
-    if let Ok(bytes) = fs::read(crate::config::state("state.json").unwrap()) {
-        let previous: State = serde_json::from_slice(&bytes).unwrap();
+    if let Some(previous) = crate::config::read_state::<crate::State>(isize::MAX as usize).unwrap() {
         assert!(
             previous.runtime.runs.is_empty(),
             "Use fresh QA state; an old queued turn must not dispatch during a repeated check"
@@ -1246,7 +1247,8 @@ fn live_shutdown(parallel: bool) {
         std::thread::sleep(Duration::from_millis(50));
     }
     let state: State =
-        serde_json::from_slice(&fs::read(crate::config::state("state.json").unwrap()).unwrap())
+        crate::config::read_state::<crate::State>(isize::MAX as usize)
+            .unwrap()
             .unwrap();
     let chat = state.chats.iter().find(|c| c.id == chat).unwrap();
     assert!(chat.workspace.is_none());
