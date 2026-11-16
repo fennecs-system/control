@@ -263,6 +263,8 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     let ganglia = Library::default().get("ganglia").unwrap().clone();
     assert_eq!((ganglia.name.as_str(), ganglia.revision), ("Ganglia", 1));
     assert!(ganglia.instructions.starts_with("Reflexes and routines run locally; turns are strategy."));
+    assert!(ganglia.instructions.contains("long-running work on a system that acts faster than a turn"));
+    assert!(ganglia.instructions.contains("need only the autonomy routine rule"));
     assert!(ganglia.instructions.contains("shared always-on reflex layer"));
     assert!(ganglia.instructions.contains("never raw streams"));
     assert!(ganglia.instructions.contains("saved as a tool package"));

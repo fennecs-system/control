@@ -322,7 +322,12 @@ opted-in advisor do no lifecycle work.
 **Ganglia** (`/use ganglia`): reflexes and routines run locally; turns are
 strategy. An octopus's arms act on their own through local ganglia while its
 central brain decides where to go. The lens is the build procedure for that
-split when a team drives an external system repeatedly:
+split when a team drives an external system repeatedly.
+
+Use it for long-running work with reflexes: systems that act faster than a turn,
+such as games, robots, live services or monitoring. It is not for one-off tasks
+such as scraping a website or ordinary coding; the task autonomy routine rule
+already covers those. The procedure:
 
 1. Build layers bottom-up. First one shared always-on reflex layer for
    reactions faster than a turn (protect, recover, maintain), built early by one
