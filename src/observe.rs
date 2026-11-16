@@ -21,9 +21,18 @@ use serde_json::{Value, json};
 use std::{collections::{BTreeMap, BTreeSet}, hash::{Hash, Hasher}, io, sync::{Arc, Mutex}, time::Duration};
 
 /// How long a turn's start waits for a refresh before using the last value.
+#[cfg(not(test))]
 const WAKE_WAIT: Duration = Duration::from_secs(2);
 /// How long a local model step or a tool result waits for a refresh.
+#[cfg(not(test))]
 const STEP_WAIT: Duration = Duration::from_millis(250);
+// Tests wait long enough that a loaded machine never decides whether an
+// instant probe's value lands; bounded waits are tested with explicit ones
+// against probes held until the test releases them.
+#[cfg(test)]
+const WAKE_WAIT: Duration = Duration::from_secs(60);
+#[cfg(test)]
+const STEP_WAIT: Duration = Duration::from_secs(60);
 /// Consecutive status-style execs on one service, with nothing declared,
 /// after which the attempt is told once to declare an observation instead.
 const POLLS_BEFORE_NUDGE: u32 = 4;
@@ -300,10 +309,13 @@ pub(crate) fn for_result(shared: &Arc<Mutex<State>>, run: &str) -> Option<String
     for_result_with(shared, run, crate::services::probe)
 }
 fn for_result_with(shared: &Arc<Mutex<State>>, run: &str, probe: Prober) -> Option<String> {
+    result_within(shared, run, STEP_WAIT, probe)
+}
+fn result_within(shared: &Arc<Mutex<State>>, run: &str, wait: Duration, probe: Prober) -> Option<String> {
     if !shared.lock().ok()?.runtime.runs.iter().any(|r| r.id == run && r.status == "running") {
         return None;
     }
-    let (block, attempt) = block_with(shared, run, STEP_WAIT, probe)?;
+    let (block, attempt) = block_with(shared, run, wait, probe)?;
     let mut state = shared.lock().ok()?;
     let state = &mut *state;
     let previous = attempt.as_ref().and_then(|attempt| state.observations.shown.get(attempt)).copied();

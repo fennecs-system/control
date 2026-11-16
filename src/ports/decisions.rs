@@ -1,5 +1,11 @@
 //! Exactly-once approval notices. Persisting a receipt and its queued run is one
 //! checkpoint; restarting Control never replays an acknowledged decision.
+//!
+//! A decision wakes its requester at most once, from the process that made it.
+//! One that cannot be delivered (its requester ended without a host checkpoint
+//! or was cancelled by the operator, or an approved port has since stopped) is
+//! retired rather than kept for later, and one read back after a restart is
+//! never delivered, so neither a redeploy nor a later rule change replays it.
 use crate::runtime::RunKind;
 use super::*;
 
@@ -7,9 +13,13 @@ use super::*;
 pub(super) struct Receipt {
     pub(super) allowed: bool,
     acknowledged: bool,
+    /// Decided by this process. Never persisted: a receipt loaded from disk was
+    /// decided before the restart and only ever gets acknowledged.
+    #[serde(skip)]
+    live: bool,
 }
 impl Receipt {
-    pub(super) fn pending(allowed: bool) -> Self { Self { allowed, acknowledged:false } }
+    pub(super) fn pending(allowed: bool) -> Self { Self { allowed, acknowledged:false, live:true } }
 }
 
 fn target<'a>(state: &'a State, port: &Port) -> Option<&'a crate::runtime::Run> {
@@ -32,7 +42,27 @@ pub(super) fn advance(state: &mut State, save: impl FnOnce(&State) -> io::Result
     advance_with_wake(state, save, crate::worker::wake)
 }
 
+/// The undelivered decision on `port` can no longer wake its requester: it was
+/// read back after a restart, approves a port or service that has since
+/// stopped, or its requester ended without a host checkpoint or belongs to work
+/// the operator cancelled after the request.
+fn obsolete(state: &State, port: &Port, time: u64) -> bool {
+    let Some(decision) = port.decision.as_ref().filter(|decision| !decision.acknowledged) else { return false };
+    if !decision.live || (decision.allowed && (port.status != Status::Approved || service(state, port, time).is_err())) {
+        return true;
+    }
+    let Some(root) = target(state, port) else { return true };
+    let origin = state.runtime.runs.iter().find(|run| run.id == port.origin_run && run.actor == port.actor);
+    origin.is_some_and(|origin| crate::chat::cancelled_after(state, origin)) || crate::chat::cancelled_after(state, root)
+}
+
 fn advance_with_wake(state: &mut State, save: impl FnOnce(&State) -> io::Result<()>, wake: impl FnOnce()) -> io::Result<()> {
+    // Retire undeliverable decisions now instead of keeping them for a later
+    // pass. This needs no checkpoint of its own: the next save carries it, and
+    // a receipt reloaded before then is not live, so it is retired again.
+    let time = now();
+    let retired = state.ports.iter().enumerate().filter(|(_, port)| obsolete(state, port, time)).map(|(index, _)| index).collect::<Vec<_>>();
+    for index in retired { state.ports[index].decision.as_mut().unwrap().acknowledged = true; }
     let Some(root) = state.ports.iter()
         .filter(|port|port.decision.as_ref().is_some_and(|decision|!decision.acknowledged))
         .filter_map(|port|target(state,port))
