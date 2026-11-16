@@ -1,5 +1,42 @@
 # Performance checks
 
+## Cancel-all and container ownership reconciliation (2026-11-16)
+
+Investigated a reported CPU spike after `/cancel all` on a swarm root (lead,
+five player bots, an advisor, services and watches) on a node with an 18 MB
+`state.json` (6,881 runs). macOS ARM release builds, no models or credentials.
+
+The cancel path itself is cheap. `worker::tests::cancel_profile` runs the real
+dispatcher, worker threads, durable checkpoints and commit path on 127 chats,
+5,773 runs and 4,000 posts, with seven turns running and a thread re-rendering
+the transcript and navigation per change. Cancelling all seven took 417 ms,
+11 checkpoints, nine renders and 0.19 CPU-seconds including a 3 s tail. On a
+read-only copy of the 18 MB node state, one checkpoint serialises in 13 ms and
+writes/syncs in about 31 ms (17 ms CPU); transcript, detail, requests, port and
+bot reconciliation passes each took at most 14 ms. Per-item whole-state writes
+therefore do not explain a sustained spike at this size.
+
+The one cost found that scales with history is container ownership
+reconciliation, which the dispatcher runs every 2 s and which stops inactive
+owners' containers after cancellation. Each listed container scanned every
+historical attempt through `expected_path`, building a path (and reading the
+environment) per comparison. Sampling showed `expected_path`,
+`runtime::workspace`, `getenv` and allocation dominating. Attempts are now
+indexed by generation once per pass; `expected_path` still decides, in the
+original owner/attempt order.
+
+| `lifecycle::tests::reconcile_profile`, 48 containers | Before | After |
+| --- | ---: | ---: |
+| 500 attempts | 20.6 ms | 0.09 ms |
+| 3,000 attempts | 119 ms | 0.23 ms |
+| 12,000 attempts | 483 ms | 0.73 ms |
+| Copy of the 18 MB node state (3,248 owners), 24 containers | 66 ms | 0.29 ms |
+
+The spike itself was not reproduced: docker teardown, live services/watches and
+the browser were outside these fixtures. Separately, macOS disk-write reports
+for this node show 8–34 GB per hour of whole-state rewrites during normal swarm
+operation (per tool call), which a smaller hot state would reduce.
+
 ## Explicit history-read failures (2026-11-14)
 
 Compared main `6bf92ef` with the R3 history-read patch, Linux aarch64 / pinned

@@ -219,3 +219,50 @@ fn injected_engine_races_failures_and_exact_id_termination() {
         .is_err()
     );
 }
+
+fn owner(generation: &str, active: bool, jobs: &[&str]) -> Owner {
+    let mut attempt = Attempt::new();
+    attempt.workspace_id = Some(generation.into());
+    attempt.command_jobs = jobs.iter().map(|id| serde_json::from_value(serde_json::json!({"id":id,"generation":generation,"image":"i","node":"node",
+        "command":"","read_only":false,"build_environment":false,"review_source":false,"deadline_unix":0,"container_id":null,
+        "status":"running","output":"","exit_code":null})).unwrap()).collect();
+    Owner { active, attempts: vec![attempt] }
+}
+#[test]
+fn reconcile_matches_each_resource_shape_to_its_first_owner() {
+    // `a-attempt-1` is a prefix of `a-attempt-10`; the latter's resources
+    // must not be attributed to the former, and the earliest owner wins.
+    let owners = [owner("a-attempt-1", true, &[]), owner("a-attempt-10", false, &["7"]), owner("a-attempt-10", true, &[])];
+    let row = |name: &str| (name.to_owned(), "node".to_owned(), "run".to_owned());
+    let mut stopped = Vec::new();
+    reconcile_with(&owners, "node", ["control-a-attempt-1", "control-a-attempt-1-tool", "control-a-attempt-10-probe",
+        "control-a-attempt-10-job-7", "control-a-attempt-10-tool"].map(row).to_vec(), |attempt, name| {
+        stopped.push((attempt.workspace_id.clone().unwrap(), name.to_owned()));
+        Ok(())
+    }).unwrap();
+    assert_eq!(stopped, [("a-attempt-10".to_owned(), "control-a-attempt-10-probe".to_owned()),
+        ("a-attempt-10".into(), "control-a-attempt-10-job-7".into()), ("a-attempt-10".into(), "control-a-attempt-10-tool".into())]);
+    // A preview needs a project; an unknown job is not an owned resource.
+    for name in ["control-a-attempt-1-preview", "control-a-attempt-10-job-8"] {
+        assert!(reconcile_with(&owners, "node", vec![row(name)], |_, _| Ok(())).unwrap_err().contains(name));
+    }
+}
+
+#[test]
+#[ignore = "explicit synthetic release timing; no engine, credentials or models"]
+fn reconcile_profile() {
+    use std::time::Instant;
+    for history in [500, 3_000, 12_000] {
+        let owners = (0..history).map(|n| owner(&format!("run-{n}-attempt-1"), n + 24 >= history, &[])).collect::<Vec<_>>();
+        // The newest attempts' containers, as during a live swarm or its cancellation.
+        let listed = (history - 24..history).flat_map(|n| [format!("control-run-{n}-attempt-1"), format!("control-run-{n}-attempt-1-tool")])
+            .map(|name| (name, "node".to_owned(), "run".to_owned())).collect::<Vec<_>>();
+        let mut samples = (0..9).map(|_| {
+            let start = Instant::now();
+            reconcile_with(&owners, "node", std::hint::black_box(listed.clone()), |_, _| Ok(())).unwrap();
+            start.elapsed().as_micros()
+        }).collect::<Vec<_>>();
+        samples.sort_unstable();
+        println!("{}", serde_json::json!({"workload":"lifecycle_reconcile","attempts":history,"containers":listed.len(),"median_us":samples[4],"min_us":samples[0],"max_us":samples[8]}));
+    }
+}
