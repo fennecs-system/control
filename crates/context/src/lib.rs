@@ -7,7 +7,7 @@ pub mod tool_policy;
 pub mod turn_context;
 pub mod working_state;
 pub mod turn_mailbox;
-pub use library::{package_reference, valid_id, Definition, DocumentInput, LensVersion, Library, PackageInput, Resolved};
+pub use library::{package_reference, valid_id, Audience, Definition, DocumentInput, Guidance, LensVersion, Library, PackageInput, Resolved};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tool {
     pub name: &'static str,
@@ -20,7 +20,7 @@ pub struct Tool {
     pub aliases: &'static str,
     pub mcp_names: &'static [&'static str],
 }
-pub const TOOLS: [Tool; 27] = [
+pub const TOOLS: [Tool; 29] = [
     Tool {
         name: "service.watch", title: "Watches", description: "Routines and program output that wake agents",
         href: None, aliases: "watch routine reflex monitor stream stdout events wake tail websocket ssh",
@@ -186,6 +186,17 @@ pub const TOOLS: [Tool; 27] = [
         available: true,
     },
     Tool {
+        name: "model.generate",
+        title: "Local model",
+        description: "Bounded text inference · configured private endpoint",
+        href: None,
+        aliases: "llm local model llama qwen gguf inference generate text completion",
+        mcp_names: &["control.model.generate", "control_model_generate"],
+        execution: "Rust adapter / operator-run inference service",
+        surface: "worker MCP / operator MCP / CLI",
+        available: true,
+    },
+    Tool {
         name: "search.path",
         title: "Path search",
         description: "A* / Dijkstra over an inline graph or grid",
@@ -193,6 +204,17 @@ pub const TOOLS: [Tool; 27] = [
         aliases: "route routing shortest path planning graph grid astar dijkstra navigation",
         mcp_names: &["control.search.path", "control_search_path"],
         execution: "pure Rust",
+        surface: "MCP",
+        available: true,
+    },
+    Tool {
+        name: "solver.solve",
+        title: "Solver",
+        description: "Optimisation and constraints · HiGHS, Z3, CP-SAT",
+        href: None,
+        aliases: "optimization optimisation constraint lp milp mip smt sat cp scheduling assignment packing routing minizinc",
+        mcp_names: &["control.solve", "control_solve"],
+        execution: "offline Nix solver container",
         surface: "MCP",
         available: true,
     },
@@ -275,11 +297,12 @@ pub const TOOLS: [Tool; 27] = [
         title: "Lenses",
         description: "Library · compose context and tool selections",
         href: Some("/lenses"),
-        aliases: "context composition",
+        aliases: "context composition guidance on demand",
         mcp_names: &[
             "control.lenses.list",
             "control.lens.read",
             "control.lenses.resolve",
+            "control_guidance",
         ],
         execution: "pure Rust / lens library",
         surface: "lens library / MCP",

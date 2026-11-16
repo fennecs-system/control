@@ -55,7 +55,9 @@ pub struct Payload {
 
 fn text(value: &str) -> Result<(), &'static str> {
     if value.chars().count() > 1000 {
-        Err("Each working-state text field must contain at most 1000 characters")
+        Err(
+            "Each working-state text field must contain at most 1000 characters: shorten the longest notes, or retry control_turn_handoff {\"disposition\":{\"kind\":\"continue\"}} without payload to keep the committed notes",
+        )
     } else {
         Ok(())
     }
@@ -63,7 +65,9 @@ fn text(value: &str) -> Result<(), &'static str> {
 impl Payload {
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.subgoal.trim().is_empty() {
-            return Err("Working state requires a current subgoal");
+            return Err(
+                "Working state requires a current subgoal: set payload.subgoal, or retry control_turn_handoff {\"disposition\":{\"kind\":\"continue\"}} without payload to keep the committed notes",
+            );
         }
         if self.findings.len() > 16
             || self.tried.len() > 16
@@ -71,15 +75,19 @@ impl Payload {
             || self.next.len() > 8
         {
             return Err(
-                "Working state permits 16 findings, 16 tried approaches, 16 pending actions and 8 next actions",
+                "Working state permits 16 findings, 16 tried approaches, 16 pending actions and 8 next actions: merge or drop older entries, or retry control_turn_handoff {\"disposition\":{\"kind\":\"continue\"}} without payload to keep the committed notes",
             );
         }
         if serde_json::to_vec(self)
-            .map_err(|_| "Working state could not be encoded")?
+            .map_err(|_| {
+                "Working state could not be encoded: ask the operator via control_design_ask"
+            })?
             .len()
             > MAX_PAYLOAD_BYTES
         {
-            return Err("Working state must fit in 12 KiB UTF-8 JSON; remove redundant notes");
+            return Err(
+                "Working state must fit in 12 KiB UTF-8 JSON: remove redundant notes, or retry control_turn_handoff {\"disposition\":{\"kind\":\"continue\"}} without payload to keep the committed notes",
+            );
         }
         text(&self.subgoal)?;
         for f in &self.findings {

@@ -55,6 +55,8 @@ fn a_fast_command_returns_its_result_inline() {
     assert_eq!((done["status"].as_str(), done["output"].as_str(), done["exit_code"].as_i64()), (Some("completed"), Some("ok\n"), Some(0)));
     assert_eq!(done["execution_id"], admitted["execution_id"]);
     assert!(done.get("wait").is_none());
+    // An inline finished result says so; no status call is needed.
+    assert_eq!(done["final"], true);
 }
 
 #[test]
@@ -69,8 +71,12 @@ fn a_slow_command_falls_back_to_its_handle_and_zero_waits_return_at_once() {
     assert_eq!(pending["status"], "requested");
     assert!(pending["wait"].as_str().unwrap().contains("control_service_exec_status"));
     let started = Instant::now();
-    assert_eq!(f.wait(admitted.clone(), Duration::ZERO, &CancelToken::new()), admitted);
+    let immediate = f.wait(admitted.clone(), Duration::ZERO, &CancelToken::new());
     assert!(started.elapsed() < Duration::from_millis(50));
+    // Still running: the handle names the exact status call; it is not final.
+    assert_eq!((&immediate["execution_id"], &immediate["status"]), (&admitted["execution_id"], &admitted["status"]));
+    assert!(immediate["wait"].as_str().unwrap().contains(&format!("\"execution_id\":\"{}\"", admitted["execution_id"].as_str().unwrap())));
+    assert!(immediate.get("final").is_none());
     // Bounds are checked before any submission.
     assert!(wait_bound(MAX_WAIT_SECONDS).is_ok());
     assert!(wait_bound(MAX_WAIT_SECONDS + 1).unwrap_err().to_string().contains("wait_seconds"));

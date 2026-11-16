@@ -336,6 +336,40 @@ fn paged_history_exceeds_old_entry_and_text_limits_with_bounded_model_inputs() {
 }
 
 #[test]
+fn a_local_model_chat_compacts_on_its_own_endpoint_by_default_and_its_turn_fits() {
+    let (mut state, _) = fixture();
+    // No operator opt-in: automatic summaries are off and list no chats.
+    state.runtime.compaction.settings = Settings { recent_entries: 2, history_bytes: 6000, ..Default::default() };
+    for message in &mut state.chats[0].messages {
+        message.reply = "Long tool evidence ".repeat(40);
+    }
+    assert!(prepare(&state).is_none(), "a hosted-default chat is not compacted without opt-in");
+    let conversation = Conversation::of(&state, &state.chats[0]);
+    let raw: usize = (0..32).filter_map(|i| conversation.entry(i)).map(|e| e.render().len()).sum();
+    assert!(raw > 6000, "the history outgrows the local budget");
+    state.runtime.compaction.models[0].tools = true;
+    state.chats[0].model = Some(crate::providers::Model::captured(crate::backend::Backend::Local, "local-qwen".into()));
+    let job = hydrate(&state, prepare(&state).expect("local chats compact by default"));
+    assert_eq!(job.model.id, "local-qwen");
+    let dir = scratch();
+    let mut models = std::collections::BTreeSet::new();
+    let view = execute(&job, &dir, |model, system, input| {
+        models.insert(model.id.clone());
+        control_ai::model::Request { model: &model.model, system, input, limits: &model.limits }.chat_completions()?;
+        Ok(control_ai::model::Response { text: "Earlier entries: preserve the task and svc-a".into(), tokens: None })
+    })
+    .unwrap();
+    assert_eq!(models.into_iter().collect::<Vec<_>>(), vec!["local-qwen".to_owned()], "only the local endpoint summarizes");
+    state.runtime.compaction.views.insert(job.chat.clone(), view);
+    let conversation = Conversation::of(&state, &state.chats[0]);
+    let window = selector(&state).window(&conversation, 32);
+    assert!(window.items.iter().any(|item| matches!(item, Item::Summary(..))));
+    assert!(window.render(&conversation).iter().map(String::len).sum::<usize>() <= 6000);
+    assert_eq!(status(&state, &job.chat)["policy"], "local chat model default");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 #[ignore = "explicit release benchmark; synthetic evidence and no model traffic"]
 fn selection_profile() {
     use std::{hint::black_box, time::Instant};

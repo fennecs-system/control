@@ -1,7 +1,7 @@
 # Workspace commands
 
 Agents can use `control_workspace_start` with a command, an optional deadline
-(1–1800 seconds; default 600), and a declared `worker` or `build` environment.
+(1–1800 seconds; default 600), and a declared `worker`, `build` or `solver` environment (see [solvers](SOLVERS.md)).
 The tool returns a `job_id` immediately. `control_workspace_status` reads its
 status, bounded output and exit code; `control_workspace_cancel` requests its
 termination. Claude's short `control_workspace_run` tool remains available.

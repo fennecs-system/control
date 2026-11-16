@@ -68,8 +68,11 @@ fn a_timed_out_turn_is_one_advisor_fact_until_the_member_settles_otherwise() {
     let text = facts[1].describe(&root);
     assert!(text.contains(&format!("the lead {root}'s turn reached its time limit and was stopped before it checkpointed")), "{text}");
     assert!(text.contains(&format!("member {worker}'s turn reached its time limit")), "{text}");
-    let objective = &bot_runs(&state).into_iter().rfind(|run| run.chat_id.as_deref() == Some(advisor.as_str())).unwrap().objective;
-    assert!(objective.contains("For a turn stopped at its time limit, suggest splitting that work into smaller turns, or, for the lead, delegating it to a member."), "{objective}");
+    // The advisor lens (inline for the advisor) carries the split-or-delegate
+    // suggestion; the wake names the facts and points at that procedure.
+    let run = bot_runs(&state).into_iter().rfind(|run| run.chat_id.as_deref() == Some(advisor.as_str())).unwrap();
+    assert!(run.objective.contains("turn reached its time limit") && run.objective.contains("following the Team advisor guidance"), "{}", run.objective);
+    assert!(state.lens_library.get("advisor").unwrap().instructions.contains("For a turn stopped at its time limit, suggest splitting the work"));
 }
 
 #[test]
@@ -114,7 +117,7 @@ fn a_bot_woken_after_a_timed_out_turn_is_told_to_split_or_delegate() {
     assert_eq!(run.status, "queued");
     assert!(run.objective.contains(TIMEOUT_NOTE), "{}", run.objective);
     let woke = &state.chats[0].messages.last().unwrap().text;
-    assert!(woke.starts_with("Bot woke: new messages in room #general. Your previous turn reached its time limit"), "{woke}");
+    assert!(woke.starts_with("Bot woke: new messages in room #general. Your previous turn hit its time limit"), "{woke}");
     // A turn that ended otherwise carries no such note.
     let index = state.runtime.runs.iter().rposition(|run| run.bot_turn.is_some() && run.status == "queued").unwrap();
     state.runtime.runs[index].status = "completed".into();
