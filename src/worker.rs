@@ -1288,6 +1288,10 @@ fn execute(
     let blocked = |m: &str| ("blocked", m.to_owned());
     let failed = |m: &str| ("failed", m.to_owned());
     let scope = identity::authorize(actor, action).map_err(blocked)?;
+    // Selection refuses this first; a run captured before that check still fails before effects.
+    if !attempt.backend.runs_agents() {
+        return Err(blocked(crate::backend::LOCAL_AGENT_PENDING));
+    }
     let captured = if attempt.backend == crate::backend::Backend::Codex {crate::turn_context::input(attempt).map_err(|e|failed(&e.to_string()))?}else{None};
     if crate::lifecycle::cancelled(bridge) {
         return Err(("cancelled", "Cancelled before launch.".into()));

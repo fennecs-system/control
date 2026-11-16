@@ -779,6 +779,17 @@ local evaluation supports explicit experimentation only: it exposed a truncated
 commit ID that the original eight-anchor score missed. The v2 comparison fixture
 now scores that ID and the concurrency limit, with identifier boundaries.
 
+The local-inference slice reuses that registry for direct bounded generation:
+`control_model_generate` (operator: `control.model.generate`, `control models
+generate|bench`) with declared limits, honest usage, provenance (declared revision
+plus server-reported identity) and connection-closing cancellation. A `local`
+backend and `local:NAME` selector list endpoint models with a text-only capability;
+selecting one for agent turns is refused before effects until a local agent
+adapter passes the tool-call, malformed-output, cancellation, authority and
+recovery contract tests. [LOCAL-MODELS.md](LOCAL-MODELS.md#local-agent-turns-status-and-follow-up)
+records the Codex-over-llama.cpp finding (MCP tools sent as an unsupported
+Responses `namespace`) and the native Rust loop alternative.
+
 M1 defines separate captured selections for worker, lead, reviewer and compactor.
 S1 can independently expose an agent-started model service through tools/MCP;
 M1 concerns using a model to execute Control's own agent or summary attempts.

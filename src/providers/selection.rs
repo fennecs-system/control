@@ -3,7 +3,7 @@ use super::Model;
 use crate::{backend::Backend, runtime::Runtime};
 
 pub(crate) fn schema() -> serde_json::Value {
-    serde_json::json!({"type":"string","maxLength":128,"description":"Optional configured model ID, e.g. claude:opus or codex:MODEL_ID. Omit to inherit the parent's captured model. Unknown/unavailable models never silently fall back to another provider."})
+    serde_json::json!({"type":"string","maxLength":128,"description":"Optional configured model ID, e.g. claude:opus or codex:MODEL_ID. Omit to inherit the parent's captured model. Unknown/unavailable models never silently fall back to another provider. local:NAME endpoint models are text-only (control_model_generate) and are refused for agent turns."})
 }
 
 /// Omission preserves a parent's captured choice even after configuration changes.
@@ -21,13 +21,15 @@ pub(crate) fn resolve(
         (Some(Backend::Codex), name)
     } else if let Some(name) = selector.strip_prefix("claude:") {
         (Some(Backend::Claude), name)
+    } else if let Some(name) = selector.strip_prefix("local:") {
+        (Some(Backend::Local), name)
     } else {
         (None, selector)
     };
     if !crate::usage::valid_model(name) {
-        return Err("Use a configured model ID, optionally prefixed with codex: or claude:.");
+        return Err("Use a configured model ID, optionally prefixed with codex:, claude: or local:.");
     }
-    let models = super::configured(runtime);
+    let models = super::choices(runtime);
     let matching: Vec<_> = models
         .iter()
         .filter(|m| m.model == name && provider.is_none_or(|p| m.backend == p))
@@ -36,10 +38,14 @@ pub(crate) fn resolve(
         .iter()
         .find(|m| m.backend == provider.unwrap_or(backend))
         .copied()
-        .or_else(|| (matching.len() == 1).then(|| matching[0]));
-    selected
+        .or_else(|| (matching.len() == 1).then(|| matching[0]))
         .cloned()
-        .ok_or("Model is not configured or is ambiguous. Use /model to list choices.")
+        .ok_or("Model is not configured or is ambiguous. Use /model to list choices.")?;
+    // Capability, not a listing, decides whether an agent turn can run.
+    if !selected.backend.runs_agents() {
+        return Err(crate::backend::LOCAL_AGENT_PENDING);
+    }
+    Ok(selected)
 }
 
 pub(crate) fn command(
@@ -59,13 +65,20 @@ pub(crate) fn command(
     });
     if option.is_empty() {
         let selected = current;
-        let choices = super::configured(&state.runtime)
+        let choices = super::choices(&state.runtime)
             .iter()
-            .map(|m| format!("{}:{}", m.backend.id(), m.model))
+            .map(|m| {
+                format!(
+                    "{}:{}{}",
+                    m.backend.id(),
+                    m.model,
+                    if m.backend.runs_agents() { "" } else { " (text-only)" }
+                )
+            })
             .collect::<Vec<_>>()
             .join(", ");
         return Ok(format!(
-            "Selected {}:{}. Configured: {choices}. Use /model PROVIDER:MODEL or /model default. Changes apply to future turns; active attempts keep their captured model. Listing does not establish account access.",
+            "Selected {}:{}. Configured: {choices}. Use /model PROVIDER:MODEL or /model default. Changes apply to future turns; active attempts keep their captured model. Listing does not establish account access. Text-only local models are available to agents through control_model_generate.",
             selected.backend.id(),
             selected.model
         ));

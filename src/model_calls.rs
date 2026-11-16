@@ -1,9 +1,9 @@
 //! Host adapter for operator-configured text endpoints. Inference stays in tools.
-use control_ai::model::{Limits, Request, Response};
+use control_ai::model::{Limits, Request, Response, Served};
 use serde::{Deserialize, Serialize};
 use std::{
     io::{self, Read},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +32,11 @@ impl Endpoint {
             return Err(io::Error::other("Invalid text model metadata"));
         }
         if let Some(backend) = self.cli {
+            if backend == crate::backend::Backend::Local {
+                return Err(io::Error::other(
+                    "Local text models use an endpoint URL, not a CLI adapter",
+                ));
+            }
             if !self.url.is_empty() {
                 return Err(io::Error::other(
                     "CLI text models do not accept an endpoint URL",
@@ -62,12 +67,51 @@ impl Endpoint {
         }
         Ok(Target::Endpoint(url))
     }
+    /// Operator-declared identity plus what the server reported about itself.
+    pub fn provenance(&self, served: &Served) -> serde_json::Value {
+        serde_json::json!({"id":self.id,"model":self.model,"revision":self.revision,
+            "adapter":self.cli.map_or("private-endpoint",|b|b.id()),
+            "served_model":served.model,"runtime_fingerprint":served.fingerprint})
+    }
+}
+
+/// One completed bounded call, with the limits actually applied.
+#[derive(Debug)]
+pub struct Generation {
+    pub response: Response,
+    pub served: Served,
+    pub limits: Limits,
+    pub elapsed: Duration,
 }
 
 /// One bounded request, no retries, tools, credential forwarding or cloud fallback.
 pub fn call(endpoint: &Endpoint, system: &str, input: &str) -> io::Result<Response> {
-    let mut url = match endpoint.validate()? {
-        Target::Cli(backend) => return cli::call(endpoint, backend, system, input),
+    generate(endpoint, system, input, None, &|| false).map(|g| g.response)
+}
+
+/// `output_tokens` may lower, never raise, the declared output ceiling. `cancel`
+/// is polled while waiting; a cancelled plain-HTTP call closes its connection so
+/// the server can stop generating. CLI adapters and HTTPS are checked only
+/// before the request starts and remain bounded by the declared timeout.
+pub fn generate(
+    endpoint: &Endpoint,
+    system: &str,
+    input: &str,
+    output_tokens: Option<u32>,
+    cancel: &dyn Fn() -> bool,
+) -> io::Result<Generation> {
+    let limits = endpoint.limits.narrowed(output_tokens)?;
+    let target = endpoint.validate()?;
+    if cancel() {
+        return Err(cancelled());
+    }
+    let started = Instant::now();
+    let mut url = match target {
+        Target::Cli(backend) => {
+            let narrowed = Endpoint { limits: limits.clone(), ..endpoint.clone() };
+            let response = cli::call(&narrowed, backend, system, input)?;
+            return Ok(Generation { response, served: Served::default(), limits, elapsed: started.elapsed() });
+        }
         Target::Endpoint(url) => url,
     };
     url.set_path("/v1/chat/completions");
@@ -75,36 +119,26 @@ pub fn call(endpoint: &Endpoint, system: &str, input: &str) -> io::Result<Respon
         model: &endpoint.model,
         system,
         input,
-        limits: &endpoint.limits,
+        limits: &limits,
     }
     .chat_completions()?;
-    let client = reqwest::blocking::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(endpoint.timeout_seconds))
-        .build()
-        .map_err(|_| io::Error::other("Cannot create model transport"))?;
-    let response = client
-        .post(url)
-        .json(&body)
-        .send()
-        .map_err(|_| io::Error::other("Model endpoint unavailable; no fallback was used"))?;
-    if !response.status().is_success() {
-        return Err(io::Error::other("Model endpoint rejected the request"));
-    }
-    let mut bytes = Vec::new();
-    response.take(131073).read_to_end(&mut bytes)?;
-    if bytes.len() > 131072 {
-        return Err(io::Error::other("Model response exceeds size limit"));
-    }
-    let value =
+    let body = serde_json::to_vec(&body).map_err(io::Error::other)?;
+    let bytes = transport::post(&url, &body, Duration::from_secs(endpoint.timeout_seconds), cancel)?;
+    let value: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|_| io::Error::other("Malformed model response"))?;
-    control_ai::model::decode(value, &endpoint.limits)
+    let served = control_ai::model::served(&value);
+    let response = control_ai::model::decode(value, &limits)?;
+    Ok(Generation { response, served, limits, elapsed: started.elapsed() })
+}
+fn cancelled() -> io::Error {
+    io::Error::new(io::ErrorKind::Interrupted, "Model call cancelled; no fallback was used")
 }
 
 mod cli;
 #[path = "../tools/compaction-eval/mod.rs"]
 mod evaluation;
+pub mod tool;
+mod transport;
 pub enum Target {
     Endpoint(reqwest::Url),
     Cli(crate::backend::Backend),
@@ -113,17 +147,15 @@ pub fn recover() -> io::Result<()> {
     cli::recover()
 }
 
+const USAGE: &str = "Use control models test MODEL_ID, control models generate MODEL_ID [--max-output-tokens N] < prompt, control models bench MODEL_ID [RUNS] or control models compare MODEL_ID...";
 pub fn command(args: &[String]) -> io::Result<()> {
     crate::shutdown::install()?;
     if args.first().is_some_and(|s| s == "compare") {
         return evaluation::command(&args[1..]);
     }
-    let [action, id] = args else {
-        return Err(io::Error::other("Use control models test MODEL_ID"));
+    let (Some(action), Some(id)) = (args.first(), args.get(1)) else {
+        return Err(io::Error::other(USAGE));
     };
-    if action != "test" {
-        return Err(io::Error::other("Use control models test MODEL_ID"));
-    }
     let mut runtime = crate::runtime::Runtime::default();
     crate::providers::load_settings(&mut runtime)?;
     let endpoint = runtime
@@ -132,15 +164,44 @@ pub fn command(args: &[String]) -> io::Result<()> {
         .iter()
         .find(|m| m.id == *id)
         .ok_or_else(|| io::Error::other("Text model is not configured"))?;
-    let response = call(
-        endpoint,
-        "You are testing a text-only model endpoint. No tools are available.",
-        "Reply briefly with ready.",
-    )?;
-    println!(
-        "{}",
-        serde_json::json!({"model":endpoint.id,"revision":endpoint.revision,"response_bytes":response.text.len(),"tokens":response.tokens})
-    );
+    let stop = || crate::shutdown::requested();
+    match (action.as_str(), &args[2..]) {
+        ("test", []) => {
+            let response = call(
+                endpoint,
+                "You are testing a text-only model endpoint. No tools are available.",
+                "Reply briefly with ready.",
+            )?;
+            println!(
+                "{}",
+                serde_json::json!({"model":endpoint.id,"revision":endpoint.revision,"response_bytes":response.text.len(),"tokens":response.tokens})
+            );
+        }
+        ("generate", rest) => {
+            let output_tokens = match rest {
+                [] => None,
+                [flag, value] if flag == "--max-output-tokens" => Some(
+                    value.parse().map_err(|_| io::Error::other("Invalid output token count"))?,
+                ),
+                _ => return Err(io::Error::other(USAGE)),
+            };
+            let mut prompt = String::new();
+            std::io::stdin()
+                .take(endpoint.limits.input_bytes as u64 + 1)
+                .read_to_string(&mut prompt)?;
+            let generation = generate(endpoint, tool::SYSTEM, &prompt, output_tokens, &stop)?;
+            println!("{}", tool::report(endpoint, &generation));
+        }
+        ("bench", rest) => {
+            let runs = match rest {
+                [] => 3,
+                [runs] => runs.parse().ok().filter(|n| (1..=20).contains(n)).ok_or_else(|| io::Error::other("RUNS must be 1-20"))?,
+                _ => return Err(io::Error::other(USAGE)),
+            };
+            println!("{}", tool::bench(endpoint, runs, &stop)?);
+        }
+        _ => return Err(io::Error::other(USAGE)),
+    }
     Ok(())
 }
 

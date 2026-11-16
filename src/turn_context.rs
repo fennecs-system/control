@@ -249,7 +249,7 @@ pub(crate) fn capture(state: &State, index: usize) -> io::Result<TraceRef> {
         crate::backend::Backend::Claude => {
             crate::claude::render_prompt(&objective, attempt.review_only)
         }
-        crate::backend::Backend::Codex => {
+        crate::backend::Backend::Codex | crate::backend::Backend::Local => {
             let scope =
                 crate::identity::authorize(&run.actor, run.action).map_err(io::Error::other)?;
             let room = state
@@ -339,7 +339,8 @@ fn project_with(state: &State, id: &str, compactor: &dyn crate::conversation::Co
         .ok_or_else(|| io::Error::other("Run has no conversation entry"))?;
     let scope = crate::identity::authorize(&run.actor, run.action).map_err(io::Error::other)?;
     let prefix = match run.backend {
-        crate::backend::Backend::Codex => {
+        // A future local agent adapter receives the same Control-owned policy text.
+        crate::backend::Backend::Codex | crate::backend::Backend::Local => {
             crate::worker::render_prompt_mode("", scope, session.room.as_deref(), true, true)
         }
         crate::backend::Backend::Claude => {

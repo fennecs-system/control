@@ -25,6 +25,18 @@ impl Limits {
         }
         Ok(())
     }
+    /// A per-call output ceiling that can only lower the declared one.
+    pub fn narrowed(&self, output_tokens: Option<u32>) -> io::Result<Self> {
+        self.validate()?;
+        match output_tokens {
+            None => Ok(self.clone()),
+            Some(0) => Err(io::Error::other("Requested output tokens must be positive")),
+            Some(requested) => Ok(Self {
+                output_tokens: requested.min(self.output_tokens),
+                ..self.clone()
+            }),
+        }
+    }
     /// Conservative byte bound, not a tokenizer or a claimed token count.
     pub fn input_budget(&self) -> usize {
         self.input_bytes.min(
@@ -45,7 +57,7 @@ impl Request<'_> {
         self.limits.validate()?;
         if self.system.len().saturating_add(self.input.len()) > self.limits.input_budget() {
             return Err(io::Error::other(
-                "Input exceeds declared compactor context budget; reduce leaf size or increase model limits",
+                "Input exceeds the model's declared context budget; reduce the input or increase model limits",
             ));
         }
         Ok(
@@ -66,20 +78,27 @@ pub fn decode(value: Value, limits: &Limits) -> io::Result<Response> {
         .filter(|v| v.len() == 1)
         .ok_or_else(|| io::Error::other("Expected one text completion"))?;
     let choice = &choices[0];
-    if choice["finish_reason"] != "stop"
-        || choice["message"]["tool_calls"]
-            .as_array()
-            .is_some_and(|v| !v.is_empty())
+    if choice["message"]["tool_calls"]
+        .as_array()
+        .is_some_and(|v| !v.is_empty())
         || !choice["message"]["function_call"].is_null()
     {
         return Err(io::Error::other(
-            "Incomplete or tool-bearing summary rejected",
+            "Tool-bearing text completion rejected; no tools are available",
         ));
+    }
+    if choice["finish_reason"] == "length" {
+        return Err(io::Error::other(
+            "Output reached the declared token limit; partial text was discarded",
+        ));
+    }
+    if choice["finish_reason"] != "stop" {
+        return Err(io::Error::other("Incomplete text completion rejected"));
     }
     let text = choice["message"]["content"]
         .as_str()
         .filter(|s| !s.trim().is_empty() && s.len() <= limits.output_bytes)
-        .ok_or_else(|| io::Error::other("Missing or oversized summary text"))?
+        .ok_or_else(|| io::Error::other("Missing or oversized completion text"))?
         .to_owned();
     let tokens = value.get("usage").and_then(|u| {
         Some(Tokens {
@@ -91,6 +110,26 @@ pub fn decode(value: Value, limits: &Limits) -> io::Result<Response> {
         })
     });
     Ok(Response { text, tokens })
+}
+
+/// Runtime identity the server reports about itself. It is untrusted metadata
+/// recorded beside the operator-declared revision, never a substitute for it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Served {
+    pub model: Option<String>,
+    pub fingerprint: Option<String>,
+}
+pub fn served(value: &Value) -> Served {
+    let field = |name: &str| {
+        value[name]
+            .as_str()
+            .filter(|s| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control))
+            .map(str::to_owned)
+    };
+    Served {
+        model: field("model"),
+        fingerprint: field("system_fingerprint"),
+    }
 }
 
 #[cfg(test)]

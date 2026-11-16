@@ -1,5 +1,22 @@
 # Performance checks
 
+## Local model generation (2026-11-16)
+
+`control_model_generate` adds no work to chat, scheduling or rendering paths; it
+runs only when called. Summary and generation calls to plain-HTTP endpoints now use
+a small std `TcpStream` client that polls cancellation every 100 ms instead of a
+blocking reqwest call (HTTPS keeps reqwest). Response bodies keep the existing
+128 KiB ceiling. The polling interval adds at most ~100 ms after cancellation and
+does not delay a completed response, which is returned as soon as its framing is
+complete. End-to-end Qwen3.8-27B Q4_K_M figures through this adapter on an
+M3 Max with a host Metal llama.cpp server (live node running): median 4.8 s for
+41–107 output tokens, 14.3–16.6 output tokens/s, against 16.6 tokens/s server
+decode (the end-to-end figure also includes prompt processing), so adapter
+overhead is small relative to inference. Details, memory
+and the CPU-container comparison are in
+[LOCAL-MODELS.md](LOCAL-MODELS.md#measurement-on-an-m3-max-2026-11-16). These are
+single runs, not a controlled benchmark.
+
 ## Timed-out turns and steering notes (2026-11-16)
 
 The advisor's `timed_out` fact adds one per-chat slot and one attempt check per

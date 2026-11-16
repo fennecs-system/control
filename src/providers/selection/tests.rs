@@ -54,3 +54,36 @@ fn chat_selection_is_durable_does_not_wake_models_and_preserves_active_turns() {
         assert_eq!(conversation.entry(index).unwrap().render(), "");
     }
 }
+#[test]
+fn local_endpoint_models_are_listed_as_text_only_and_refused_for_agent_turns() {
+    let mut state = crate::State::default();
+    state
+        .runtime
+        .compaction
+        .models
+        .push(crate::model_calls::tests::endpoint());
+    let mut cli = crate::model_calls::tests::endpoint();
+    cli.id = "cli-summary".into();
+    cli.url.clear();
+    cli.cli = Some(Backend::Codex);
+    state.runtime.compaction.models.push(cli);
+    let listed = super::super::choices(&state.runtime);
+    assert!(listed.contains(&Model::captured(Backend::Local, "local-qwen".into())));
+    assert!(!listed.iter().any(|m| m.model == "cli-summary"));
+    for selector in ["local:local-qwen", "local-qwen"] {
+        assert_eq!(
+            resolve(&state.runtime, Backend::Codex, "old", Some(selector)),
+            Err(crate::backend::LOCAL_AGENT_PENDING),
+            "{selector}"
+        );
+    }
+    assert!(resolve(&state.runtime, Backend::Codex, "old", Some("local:missing")).is_err());
+    let chat = crate::chat::create(&mut state);
+    crate::chat::send(&mut state, &chat, "/model", "test").unwrap();
+    assert!(crate::chat::send(&mut state, &chat, "/model local:local-qwen", "test").is_err());
+    assert!(state.chats[0].model.is_none());
+    assert!(state.runtime.runs.is_empty());
+    // A local selection can never become the persisted node default.
+    let local = Model::captured(Backend::Local, "local-qwen".into());
+    assert!(super::super::validate_models(std::slice::from_ref(&local), &local).is_err());
+}

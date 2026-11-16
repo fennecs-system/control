@@ -114,6 +114,7 @@ fn dispatch_at(
                     "control.web.search" => "control_web_search",
                     "control.rust.run" => "control_rust_run",
                     "control.rust.bench" => "control_rust_bench",
+                    "control.model.generate" => "control_model_generate",
                     other => other,
                 });
             }
@@ -347,9 +348,17 @@ fn dispatch_at(
                 "control_web_search" => "control.web.search",
                 "control_rust_run" => "control.rust.run",
                 "control_rust_bench" => "control.rust.bench",
+                "control_model_generate" => crate::model_calls::tool::NAME,
                 other => other,
             };
-            if crate::toolbox::known(name) {
+            if name == crate::model_calls::tool::NAME {
+                drop(state);
+                // Inference runs on the host, outside the state lock; cancelling the
+                // attempt closes the endpoint connection so the server stops generating.
+                crate::toolbox::result(crate::model_calls::tool::call(&request["params"]["arguments"], &|| {
+                    crate::lifecycle::cancelled(Some((shared, run_id)))
+                }))
+            } else if crate::toolbox::known(name) {
                 drop(state);
                 // Network requests and compilation must not hold the control-plane state lock.
                 crate::toolbox::result(crate::toolbox::call(name, &request["params"]["arguments"]))

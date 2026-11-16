@@ -209,6 +209,8 @@ fn migrate(
 
 fn validate_models(models: &[Model], selected: &Model) -> std::io::Result<()> {
     if models.len() > 64
+        || !selected.backend.runs_agents()
+        || models.iter().any(|m|!m.backend.runs_agents())
         || !models.iter().any(|m|m.same(selected))
         || models
             .iter()
@@ -233,6 +235,16 @@ fn configured(runtime: &crate::runtime::Runtime) -> Vec<Model> {
     }
     models
 }
+/// Everything a chat or spawn may name: saved agent models plus each private
+/// endpoint text model, listed with its capability rather than as interchangeable.
+pub(crate) fn choices(runtime: &crate::runtime::Runtime) -> Vec<Model> {
+    let mut models = configured(runtime);
+    models.extend(local(runtime).map(|m|Model::captured(crate::backend::Backend::Local,m.id.clone())));
+    models
+}
+fn local(runtime: &crate::runtime::Runtime) -> impl Iterator<Item=&crate::model_calls::Endpoint> {
+    runtime.compaction.models.iter().filter(|m|m.cli.is_none())
+}
 
 pub fn render(runtime: &crate::runtime::Runtime) -> String {
     let mut html = String::from("<div class='providers-page'><h2>Models &amp; providers</h2><p class='provider-description'>Choose the default agent model and configure optional history summaries.</p><p id='saved' class='provider-saved save-confirmation' role='status'>Saved.</p><section class='provider-section' aria-labelledby='agent-models-heading'><h3 id='agent-models-heading'>Agent models</h3><p class='provider-description'>Used for chats and newly spawned agents. Select a model to make it the default.</p><div class='model-list' aria-label='Configured models'>");
@@ -250,6 +262,10 @@ pub fn render(runtime: &crate::runtime::Runtime) -> String {
         let capacity=entry.capacity;
         html.push_str(&format!("<section class='model-row'><form method='post' action='/providers'><input type='hidden' name='action' value='select'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='model' value='{model}'><button class='model-choice' aria-pressed='{selected}'><span class='model-dot' aria-hidden='true'></span><span class='model-name'><span class='model-id' title='{model}'>{model}</span><span class='model-provider'>{label}</span></span>{marker}</button></form><details class='model-edit'><summary aria-label='Edit {label} model {model}'>Edit</summary><div class='model-edit-body'><form method='post' action='/providers'><input type='hidden' name='action' value='edit'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='old_model' value='{model}'><label>Model ID<input name='model' required maxlength='100' value='{model}' spellcheck='false' autocapitalize='none'></label><button class='primary'>Save model</button></form>"));
         html.push_str(&format!("<form class='model-capacity' method='post' action='/providers'><input type='hidden' name='action' value='capacity'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='model' value='{model}'><h4>Context capacity</h4><p class='provider-description'>Leave context tokens empty to use the provider policy. Instructions that cannot fit are reported, never truncated.</p><div class='provider-fields'><label>Context tokens<input name='context_tokens' type='number' min='1' placeholder='Unknown' value='{}'></label><label>Output token reserve<input name='output_tokens' type='number' min='1' value='{}'></label><label>Provider/tool token reserve<input name='overhead_tokens' type='number' min='0' value='{}'></label></div><p class='provider-description'>Input bytes conservatively count as tokens.</p><button class='primary'>Save capacity</button></form></div></details></section>",capacity.map(|c|c.context_tokens.to_string()).unwrap_or_default(),capacity.map_or(2048,|c|c.output_tokens),capacity.map_or(4096,|c|c.overhead_tokens)));
+    }
+    for endpoint in local(runtime) {
+        let id = crate::escape(&endpoint.id);
+        html.push_str(&format!("<section class='model-row'><div class='model-choice' aria-disabled='true'><span class='model-dot' aria-hidden='true'></span><span class='model-name'><span class='model-id' title='{id}'>{id}</span><span class='model-provider'>Local endpoint · {} · text generation only</span></span></div><p class='provider-description'>Use <code>control_model_generate</code> with model <code>{id}</code>. Local agent turns are not available yet; selecting <code>local:{id}</code> for a chat is refused.</p></section>", crate::escape(&endpoint.model)));
     }
     html.push_str("</div><details class='model-add'><summary>+ New model</summary>");
     for backend in [
