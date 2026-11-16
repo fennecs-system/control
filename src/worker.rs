@@ -1371,7 +1371,8 @@ fn execute(
             let run = s.runtime.runs.iter().find(|r| r.id == run_id)?;
             s.chats.iter().find(|c| Some(&c.id) == run.chat_id.as_ref())?.room.clone().filter(|r| crate::rooms::valid(r))
         });
-        let prompt = captured.unwrap_or_else(|| render_prompt(objective, scope, room.as_deref(), bridge.is_some()));
+        // Like the CLI backends: the declared observation tops the turn, outside the transcript.
+        let prompt = crate::observe::prepend(bridge, captured.unwrap_or_else(|| render_prompt(objective, scope, room.as_deref(), bridge.is_some())));
         let output = crate::local_agent::execute(attempt, bridge, &absolute, &prompt)?;
         if let Some((state,run))=bridge {crate::command_jobs::quiesce(state,run,id).map_err(|e|failed(&e.to_string()))?;}
         if !attempt.review_only { publish_workspace(attempt,&workspace, id, bridge)
