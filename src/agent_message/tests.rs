@@ -39,7 +39,7 @@ fn send(state: &mut State, nonce: &str, chat: &str) -> io::Result<Value> {
         MessageCall {
             chat_id: chat.into(),
             text: "Ports are free; retry".into(),
-            services: vec![],
+            services: vec![], urgent: true,
         },
         |_| Ok(()),
     )
@@ -150,7 +150,7 @@ fn siblings_exchange_targeted_callbacks_after_steering_finishes_without_a_root_b
     let call = || MessageCall {
         chat_id: cass.clone(),
         text: "The handoff point is clear; collect the tool".into(),
-        services: vec![],
+        services: vec![], urgent: true,
     };
     let attempt = AttemptRef {
         run: &alice_run,
@@ -215,7 +215,7 @@ fn siblings_exchange_targeted_callbacks_after_steering_finishes_without_a_root_b
         MessageCall {
             chat_id: alice.clone(),
             text: "Pickup verified; the tool dependency is released".into(),
-            services: vec![],
+            services: vec![], urgent: true,
         },
         |_| Ok(()),
     )
@@ -255,7 +255,7 @@ fn peers_cannot_route_to_the_operator_or_cross_tasks_actors_and_broken_lineage()
             MessageCall {
                 chat_id: target.into(),
                 text: "Coordinate".into(),
-                services: vec![],
+                services: vec![], urgent: true,
             },
             |_| panic!("rejected messages must not save"),
         )
@@ -309,7 +309,7 @@ fn peers_preserve_stops_action_scope_judges_and_atomic_delivery() {
     let call = || MessageCall {
         chat_id: cass.clone(),
         text: "Coordinate".into(),
-        services: vec![],
+        services: vec![], urgent: true,
     };
     for status in [
         "cancelled",
@@ -402,7 +402,7 @@ fn peer_messages_share_only_explicitly_selected_accessible_service_generations()
     let call = || MessageCall {
         chat_id: cass.clone(),
         text: "Service ready".into(),
-        services: vec![service.clone()],
+        services: vec![service.clone()], urgent: true,
     };
     assert!(
         handle(&mut state, &attempt, call(), |_| panic!(
@@ -421,7 +421,7 @@ fn peer_messages_share_only_explicitly_selected_accessible_service_generations()
         MessageCall {
             chat_id: cass.clone(),
             text: "Ready".into(),
-            services: vec![],
+            services: vec![], urgent: true,
         },
         |_| Ok(()),
     )
@@ -468,7 +468,7 @@ fn peer_archive_failure_rolls_back_message_receipt_and_grants_before_save() {
         MessageCall {
             chat_id: cass,
             text: "New dependency evidence".into(),
-            services: vec![],
+            services: vec![], urgent: true,
         },
         |evidence| {
             assert_eq!(evidence.status, "completed");
@@ -496,7 +496,7 @@ fn failed_saves_leave_nothing_queued() {
         MessageCall {
             chat_id: child.clone(),
             text: "Retry".into(),
-            services: vec![],
+            services: vec![], urgent: true,
         },
         |_| Err(io::Error::other("disk full")),
     );
@@ -517,6 +517,9 @@ fn receipts_of_running_attempts_are_never_evicted() {
         services: vec![],
         peer_cursor: None,
         note: false,
+        urgent: false,
+        digest: false,
+        at_ms: 0,
     }));
     assert!(
         send(&mut state, "n1", &child).is_err(),
@@ -580,7 +583,7 @@ fn explicit_late_service_grants_reach_only_the_queued_turn_and_survive_continuat
     let call = || MessageCall {
         chat_id: child.clone(),
         text: "The new service is ready".into(),
-        services: vec![service.clone()],
+        services: vec![service.clone()], urgent: true,
     };
     let attempt = AttemptRef {
         run: &run,
@@ -660,7 +663,7 @@ fn late_grants_survive_design_answers_inserted_before_the_grant_turn() {
         MessageCall {
             chat_id: child.clone(),
             text: "Service ready".into(),
-            services: vec![service],
+            services: vec![service], urgent: true,
         },
         |_| Ok(()),
     )
@@ -761,7 +764,7 @@ fn late_grants_reject_foreign_services_and_roll_back_atomically() {
     let call = || MessageCall {
         chat_id: child.clone(),
         text: "Continue".into(),
-        services: vec![service.clone()],
+        services: vec![service.clone()], urgent: true,
     };
     let attempt = AttemptRef {
         run: &run,
@@ -797,3 +800,5 @@ fn late_grants_reject_foreign_services_and_roll_back_atomically() {
 mod advisor;
 #[path = "tests/persistent.rs"]
 mod persistent;
+#[path = "tests/urgency.rs"]
+mod urgency;

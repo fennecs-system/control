@@ -10,6 +10,7 @@ enum Msg {
     Exit(Option<i32>),
     Kind(String),
     Direct,
+    Quiet,
 }
 impl Info for Msg {
     fn urgent(&self) -> bool {
@@ -17,6 +18,9 @@ impl Info for Msg {
     }
     fn direct(&self) -> bool {
         matches!(self, Self::Direct)
+    }
+    fn deferred(&self) -> bool {
+        matches!(self, Self::Quiet)
     }
     fn merge(&mut self, newer: &Self) -> bool {
         match (self, newer) {
@@ -31,6 +35,7 @@ impl Info for Msg {
             }
             (Msg::Kind(held), Msg::Kind(kind)) => held == kind,
             (Msg::Direct, Msg::Direct) => true,
+            (Msg::Quiet, Msg::Quiet) => true,
             _ => false,
         }
     }
@@ -55,6 +60,7 @@ fn define(s: &mut S, name: &str, sources: Vec<Source>, budget: Budget, now: u64)
         sources,
         budget,
         restart: Restart::Permanent,
+        defer_ms: None,
     };
     assert!(s.step(Event::Define(definition), Now(now)).is_empty());
 }
@@ -382,6 +388,7 @@ fn runnable_continuations_coalesce_obey_budget_and_do_not_resurrect_temporary_bo
             sources: vec![room("general")],
             budget: budget(0, 60_000, 10),
             restart: Restart::Temporary,
+            defer_ms: None,
         }),
         Now(0),
     );
@@ -462,6 +469,7 @@ fn temporary_bots_end_after_their_first_turn_and_redefinition_can_make_them_perm
         sources: vec![room("general")],
         budget: budget(0, 60_000, 1),
         restart: Restart::Temporary,
+        defer_ms: None,
     };
     assert!(s.step(Event::Define(once.clone()), Now(0)).is_empty());
     let turn = turns(&s.step(message(None, 1), Now(1)))[0].1;
@@ -475,6 +483,7 @@ fn temporary_bots_end_after_their_first_turn_and_redefinition_can_make_them_perm
     s.step(
         Event::Define(Definition {
             restart: Restart::Permanent,
+            defer_ms: None,
             ..once
         }),
         Now(5),
@@ -517,6 +526,7 @@ fn explicit_rearm_keeps_exactly_one_next_callback_and_stop_still_wins() {
         sources: vec![room("general")],
         budget: budget(0, 60_000, 1),
         restart: Restart::Temporary,
+        defer_ms: None,
     };
     s.step(Event::Define(once.clone()), Now(0));
     let first = turns(&s.step(message(None, 1), Now(1)))[0].1;
@@ -553,6 +563,7 @@ fn a_paused_temporary_callback_keeps_its_mailbox_until_explicit_resume() {
             sources: vec![room("general")],
             budget: budget(0, 60_000, 1),
             restart: Restart::Temporary,
+            defer_ms: None,
         }),
         Now(0),
     );
@@ -861,6 +872,7 @@ fn pause_stop_and_validation_follow_the_command_contract() {
             sources: vec![],
             budget: budget(0, 1, 1),
             restart: Restart::Permanent,
+            defer_ms: None,
         },
         Definition {
             bot: bot("x"),
@@ -868,6 +880,7 @@ fn pause_stop_and_validation_follow_the_command_contract() {
             sources: vec![room("general")],
             budget: budget(0, 0, 1),
             restart: Restart::Permanent,
+            defer_ms: None,
         },
         Definition {
             bot: bot("x"),
@@ -875,6 +888,7 @@ fn pause_stop_and_validation_follow_the_command_contract() {
             sources: vec![Source::Timer { every_ms: 0 }],
             budget: budget(0, 1, 1),
             restart: Restart::Permanent,
+            defer_ms: None,
         },
         Definition {
             bot: bot("x"),
@@ -882,6 +896,7 @@ fn pause_stop_and_validation_follow_the_command_contract() {
             sources: vec![room("general")],
             budget: budget(0, 1, 257),
             restart: Restart::Permanent,
+            defer_ms: None,
         },
     ] {
         assert!(definition.validate().is_err());
@@ -982,6 +997,7 @@ fn outstanding_turns_keep_their_destination_stops_clear_timers_and_cursor_zero_c
         sources: vec![room("general"), Source::Timer { every_ms: 100 }],
         budget: budget(0, 60_000, 10),
         restart: Restart::Permanent,
+        defer_ms: None,
     };
     assert!(s.step(Event::Define(moved), Now(2)).is_empty());
     assert_eq!(
@@ -1071,4 +1087,77 @@ fn selective_waits_retain_direct_input_while_open_waits_and_early_input_release(
     s.step(direct(4), Now(9));
     s.step(wait(vec![]), Now(10));
     assert_eq!(turns(&s.step(done("agent", active), Now(11))).len(), 1);
+}
+
+fn quiet(cursor: u64) -> Event<Msg> {
+    Event::Info { topic: topic("conversation", "chat-agent"), cursor, from: None, info: Msg::Quiet }
+}
+fn deferring(s: &mut S, defer_ms: Option<u64>) {
+    let definition = Definition {
+        bot: bot("agent"),
+        chat: ChatId("chat-agent".into()),
+        sources: vec![room("general"), Source::Topic(topic("conversation", "chat-agent"))],
+        budget: budget(0, 60_000, 10),
+        restart: Restart::Permanent,
+        defer_ms,
+    };
+    assert!(s.step(Event::Define(definition), Now(0)).is_empty());
+}
+#[test]
+fn deferred_input_rides_with_the_next_wake_and_never_starts_one_alone() {
+    let mut s = S::default();
+    deferring(&mut s, None);
+    assert!(s.step(quiet(1), Now(1)).is_empty(), "deferred input is not a wake");
+    assert!(s.step(quiet(2), Now(2)).is_empty());
+    assert!(s.step(Event::Tick, Now(10_000_000)).is_empty(), "without a bound it waits for another reason");
+    assert_eq!(s.next_deadline(Now(3)), None, "a sleeping bot with only deferred input sets no deadline");
+    let woken = s.step(message(None, 1), Now(10_000_001));
+    let (_, _, reasons) = turns(&woken)[0];
+    assert_eq!(reasons.len(), 2, "the post wakes and carries the coalesced deferred input");
+    assert!(reasons.iter().any(|r| matches!(r, Reason::Info { info: Msg::Quiet, through: 2, .. })));
+    assert!(!woken.iter().any(|p| matches!(p.effect, Effect::BudgetExhausted { .. })), "no budget notice for deferred input");
+}
+#[test]
+fn deferred_input_starts_a_turn_after_its_bound_from_the_oldest_admission() {
+    let mut s = S::default();
+    deferring(&mut s, Some(1_000));
+    assert!(s.step(quiet(1), Now(100)).is_empty());
+    assert!(s.step(quiet(2), Now(900)).is_empty(), "newer input does not restart the clock");
+    assert_eq!(s.next_deadline(Now(901)), Some(Now(1_100)));
+    assert!(s.step(Event::Tick, Now(1_099)).is_empty());
+    let due = s.step(Event::Tick, Now(1_100));
+    let (_, turn, reasons) = turns(&due)[0];
+    assert!(matches!(reasons, [Reason::Info { info: Msg::Quiet, through: 2, .. }]));
+    // The clock restarts with the next deferred input after that turn.
+    s.step(done("agent", turn), Now(1_200));
+    assert!(s.step(quiet(3), Now(1_300)).is_empty());
+    assert_eq!(s.next_deadline(Now(1_301)), Some(Now(2_300)));
+    // Processing it before the bound clears the clock.
+    s.step(Event::Processed { bot: bot("agent"), topic: topic("conversation", "chat-agent"), through: 3 }, Now(1_400));
+    assert_eq!(s.next_deadline(Now(1_401)), None);
+    assert!(s.step(Event::Tick, Now(5_000)).is_empty());
+}
+#[test]
+fn deferred_input_releases_only_waits_that_select_it_or_open_waits_past_the_bound() {
+    let mut s = S::default();
+    deferring(&mut s, Some(1_000));
+    let active = turns(&s.step(message(None, 1), Now(1)))[0].1;
+    s.step(Event::Wait { bot: bot("agent"), topics: vec![], until: None }, Now(2));
+    s.step(done("agent", active), Now(3));
+    assert!(s.step(quiet(1), Now(10)).is_empty(), "an open wait is not released by deferred input");
+    assert_eq!(s.next_deadline(Now(11)), Some(Now(1_010)));
+    let (_, active, _) = turns(&s.step(Event::Tick, Now(1_010)))[0];
+    // A selective wait on the conversation is an explicit wait for messages.
+    s.step(Event::Wait { bot: bot("agent"), topics: vec![topic("conversation", "chat-agent")], until: None }, Now(1_011));
+    s.step(done("agent", active), Now(1_012));
+    assert_eq!(turns(&s.step(quiet(2), Now(1_013))).len(), 1);
+}
+#[test]
+fn deferral_state_survives_serialization() {
+    let mut s = S::default();
+    deferring(&mut s, Some(1_000));
+    s.step(quiet(1), Now(100));
+    let mut restored: S = serde_json::from_slice(&serde_json::to_vec(&s).unwrap()).unwrap();
+    assert_eq!(restored.next_deadline(Now(101)), Some(Now(1_100)));
+    assert_eq!(turns(&restored.step(Event::Tick, Now(1_100))).len(), 1);
 }

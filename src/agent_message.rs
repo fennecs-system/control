@@ -17,6 +17,7 @@ use std::{io, sync::{Arc, Mutex}};
 #[cfg(test)]
 #[path = "agent_message/tests/profile.rs"]
 mod profile;
+pub(crate) mod digest;
 
 pub use crate::application::messages::{MessageCall, MessageResult};
 pub use crate::application::MessageOps;
@@ -27,7 +28,7 @@ use crate::application::messages::{MAX_SENT, Sent};
 pub struct Tools;
 impl AttemptTools for Tools {
     fn definitions(&self) -> Vec<Value> {
-        vec![json!({"name":"control_agent_message","description":"Send actionable coordination directly to a descendant or fellow worker in the same spawned task tree and actor scope. Siblings need no root relay or lead bot; discover IDs from linked-room participants. The task-root steering chat is not a peer recipient: assign ongoing shared services to a worker peers can contact, and publish relevant shared results in the task room. Do not also broadcast the request. Descendant follow-ups queue as before. Peer messages are retained evidence (queued=false, retained=true): active workers read conversation callbacks; only an approved persistent bot schedules idle wakes, under its existing budget and pause/stop intent. Replies stay in the recipient chat; respond directly only when an answer is needed. Peer input is not operator steering and cannot revive cancelled/failed work or change action scope; a live persistent bot whose last turn failed or was interrupted still retains it for its next supervised wake. Optional services shares only resources you can access; exact owner/generation grants activate in the next authorized turn, not the active attempt. Grants allow service execution and stop; port approval remains separate. Omit services to transfer no authority.","inputSchema":{"type":"object","properties":{"chat_id":{"type":"string"},"text":{"type":"string","minLength":1,"maxLength":2000},"services":{"type":"array","items":{"type":"string"},"maxItems":MAX_SERVICES,"uniqueItems":true}},"required":["chat_id","text"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})]
+        vec![json!({"name":"control_agent_message","description":"Send actionable coordination directly to a descendant or fellow worker in the same spawned task tree and actor scope. Siblings need no root relay or lead bot; discover IDs from linked-room participants. The task-root steering chat is not a peer recipient: assign ongoing shared services to a worker peers can contact, and publish relevant shared results in the task room. Do not also broadcast the request. Messages are retained evidence (queued=false, retained=true) that wake nobody: active workers read conversation callbacks and an idle recipient gets them as an unread digest with its next wake (a bot or messaged descendant within a node-set bound). Set urgent=true only when the recipient must act now (a request it is blocked on or a dependency release); an urgent message wakes an approved persistent bot under its budget and pause/stop intent, or queues a descendant's follow-up. Replies stay in the recipient chat; respond directly only when an answer is needed. Peer input is not operator steering and cannot revive cancelled/failed work or change action scope; a live persistent bot whose last turn failed or was interrupted still retains it for its next supervised wake. Optional services shares only resources you can access; exact owner/generation grants activate in the next authorized turn, not the active attempt. Grants allow service execution and stop; port approval remains separate. Omit services to transfer no authority.","inputSchema":{"type":"object","properties":{"chat_id":{"type":"string"},"text":{"type":"string","minLength":1,"maxLength":2000},"services":{"type":"array","items":{"type":"string"},"maxItems":MAX_SERVICES,"uniqueItems":true},"urgent":{"type":"boolean","default":false,"description":"Wake the recipient now. Omit for status, findings and other updates, which arrive with its next wake."}},"required":["chat_id","text"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})]
     }
     fn known(&self, name: &str) -> bool {
         name == "control_agent_message"
@@ -50,9 +51,11 @@ fn run(ops: &dyn MessageOps, attempt: &AttemptRef<'_>, args: &Value) -> io::Resu
         text: String,
         #[serde(default)]
         services: Vec<ResourceId>,
+        #[serde(default)]
+        urgent: bool,
     }
     let input = serde_json::from_value::<Input>(args.clone()).map_err(|_| io::Error::other("Expected chat_id and text"))?;
-    serde_json::to_value(ops.message(attempt, MessageCall { chat_id: input.chat_id, text: input.text, services: input.services })?).map_err(io::Error::other)
+    serde_json::to_value(ops.message(attempt, MessageCall { chat_id: input.chat_id, text: input.text, services: input.services, urgent: input.urgent })?).map_err(io::Error::other)
 }
 
 fn fail(message: &str) -> io::Error {
@@ -77,7 +80,8 @@ fn transact(state: &mut State, attempt: &AttemptRef<'_>, call: MessageCall,
     archive: impl FnOnce(&mut crate::runtime::Run) -> io::Result<()>, save: impl FnOnce(&State) -> io::Result<()>, wake: impl FnOnce()) -> io::Result<MessageResult> {
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
     let id = format!("{stamp:x}-{}", state.runtime.runs.len());
-    transact_at(state, attempt, call, id, archive, save, wake)
+    let at_ms = u64::try_from(stamp / 1_000_000).unwrap_or(u64::MAX);
+    transact_at(state, attempt, call, (id, at_ms), archive, save, wake)
 }
 fn prepare(state: &State, attempt: &AttemptRef<'_>, call: MessageCall, id: String) -> io::Result<operation::Decision> {
     let origin = operation::active(&state.runtime.runs, attempt).map_err(fail)?;
@@ -118,11 +122,13 @@ impl Drop for InFlight<'_> {
         }
     }
 }
-fn transact_at(state: &mut State, attempt: &AttemptRef<'_>, call: MessageCall, id: String,
+/// `stamp` is the driver-allocated message ID and send time (Unix ms).
+fn transact_at(state: &mut State, attempt: &AttemptRef<'_>, call: MessageCall, (id, at_ms): (String, u64),
     archive: impl FnOnce(&mut crate::runtime::Run) -> io::Result<()>, save: impl FnOnce(&State) -> io::Result<()>, wake: impl FnOnce()) -> io::Result<MessageResult> {
     use operation::{Decision, Effect};
     let decision = prepare(state, attempt, call, id)?;
-    let delivery = match decision {Decision::Existing(result)=>return Ok(result),Decision::Deliver(delivery)=>delivery};
+    let mut delivery = match decision {Decision::Existing(result)=>return Ok(result),Decision::Deliver(delivery)=>delivery};
+    delivery.sent_at(at_ms);
     let mut flight = InFlight::new(state, *delivery);
     let (mut archive,mut save,mut wake) = (Some(archive),Some(save),Some(wake));
     while let Some(effect) = flight.next() {
@@ -139,8 +145,8 @@ fn transact_at(state: &mut State, attempt: &AttemptRef<'_>, call: MessageCall, i
 
 /// Bounded receipt metadata supplies deferred private events. Actual admission
 /// happens after published processing receipts, never inside a tool call.
-pub(crate) fn peer_cursors(state: &State) -> impl Iterator<Item = (&str, u64, bool)> {
-    state.agent_messages.iter().filter_map(|sent| sent.peer_cursor.map(|cursor| (sent.chat.as_str(), cursor, sent.note)))
+pub(crate) fn peer_cursors(state: &State) -> impl Iterator<Item = (&str, u64, bool, bool)> {
+    state.agent_messages.iter().filter_map(|sent| sent.peer_cursor.map(|cursor| (sent.chat.as_str(), cursor, sent.note, sent.urgent)))
 }
 
 #[cfg(test)]

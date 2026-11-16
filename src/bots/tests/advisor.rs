@@ -149,7 +149,7 @@ fn notes_and_lead_turns_woken_only_by_notes_do_not_re_trigger_the_advisor() {
     state.runtime.runs.push(note);
     state.chats.iter_mut().find(|chat| chat.id == root).unwrap().messages.push(crate::chat::Message { speaker: Default::default(), text: "Advisor note".into(), run_id: Some("note-1".into()), reply: String::new() });
     state.agent_messages.push(crate::application::messages::Sent { key: "advisor/note".into(), origin: "advisor-turn".into(), chat: root.clone(),
-        run: "note-1".into(), services: vec![], peer_cursor: Some(cursor), note: true });
+        run: "note-1".into(), services: vec![], peer_cursor: Some(cursor), note: true, urgent: false, digest: false, at_ms: 0 });
     // ...that wakes the approved lead once, as a `Note` reason.
     reconcile_at(&mut state, 40_000, ok).unwrap();
     let woken = bot_runs(&state).into_iter().filter(|run| run.chat_id.as_deref() == Some(&root)).collect::<Vec<_>>();

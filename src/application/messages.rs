@@ -23,6 +23,9 @@ pub struct MessageCall {
     pub chat_id: String,
     pub text: String,
     pub services: Vec<ResourceId>,
+    /// Wake the recipient now. Otherwise the message is retained for its next
+    /// wake, which an unattended recipient gets within the digest bound.
+    pub urgent: bool,
 }
 /// Application output; protocol adapters choose the wire representation.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -33,6 +36,8 @@ pub struct MessageResult {
     pub services: Vec<ResourceId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retained: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub urgent: Option<bool>,
 }
 /// Existing persisted receipt format is unchanged.
 #[derive(Clone, Serialize, Deserialize)]
@@ -48,6 +53,19 @@ pub struct Sent {
     /// An advisor's evidence note. Older receipts deserialize as ordinary messages.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) note: bool,
+    /// Sent with urgent=true: it wakes the recipient now.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) urgent: bool,
+    /// A non-urgent message that would once have queued its non-bot
+    /// recipient's turn; it is delivered as a digest after the bound instead.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) digest: bool,
+    /// When it was sent (Unix ms), for the digest bound.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) at_ms: u64,
+}
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 impl From<&Sent> for MessageResult {
     fn from(sent: &Sent) -> Self {
@@ -58,6 +76,7 @@ impl From<&Sent> for MessageResult {
             queued: !peer,
             services: sent.services.clone(),
             retained: peer.then_some(true),
+            urgent: sent.urgent.then_some(true),
         }
     }
 }
@@ -109,6 +128,10 @@ struct Undo {
     pruned: Option<Vec<Sent>>,
 }
 impl Delivery {
+    /// The driver owns the clock; the digest bound counts from here.
+    pub fn sent_at(&mut self, at_ms: u64) {
+        self.receipt.at_ms = at_ms;
+    }
     pub fn apply(self, state: Edit<'_>) -> Pending {
         let peer = self.receipt.peer_cursor.is_some();
         let chat = &mut state.chats[self.target];
@@ -167,6 +190,24 @@ impl Pending {
             state.sent.truncate(undo.sent);
         }
     }
+}
+/// Whether a run only records a retained message: it never executes.
+pub(crate) fn record(run: &Run) -> bool {
+    run.kind == RunKind::AgentMessage && run.status == "completed" && run.attempts.is_empty()
+}
+/// A digest receipt its recipient has not taken yet: no later turn of that
+/// chat exists and no published handoff processed it.
+pub(crate) fn awaiting(runs: &[Run], chats: &[Session], sent: &Sent) -> bool {
+    let (Some(cursor), true) = (sent.peer_cursor, sent.digest) else { return false };
+    let Some(index) = runs.iter().position(|run| run.id == sent.run) else { return false };
+    let processed = chats.iter().find(|chat| chat.id == sent.chat)
+        .and_then(|chat| chat.continuity.as_ref()?.working.as_ref())
+        .into_iter().flat_map(|working| &working.processed)
+        .filter_map(|range| match range {
+            control_context::turn_mailbox::Range::Conversation { chat, through, .. } if *chat == sent.chat => Some(*through),
+            _ => None,
+        }).max().unwrap_or(0);
+    processed < cursor && !runs[index + 1..].iter().any(|run| run.chat_id.as_deref() == Some(sent.chat.as_str()) && !record(run))
 }
 fn ancestry<'a>(
     chats: &'a [Session],
@@ -369,6 +410,7 @@ pub(crate) fn plan(
                     .iter()
                     .any(|run| run.id == sent.origin && run.status == "running")
                     || heads.get(sent.chat.as_str()) == Some(&sent.key.as_str())
+                    || awaiting(state.runs, state.chats, sent)
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -420,11 +462,13 @@ pub(crate) fn plan(
         .filter(|service| crate::services::accessible(service, &service.resource.owner.node, from))
         .map(Service::grant)
         .collect::<Vec<Grant>>();
-    // Peer messages, and any message to an approved persistent bot, are
-    // retained conversation evidence: a running session reads it through its
-    // callbacks and the bot's supervisor coalesces the rest into one wake,
-    // instead of one queued turn per message piling up behind it.
-    let retained_only = !descendant || state.bots.persists(&call.chat_id);
+    // Peer messages, any message to an approved persistent bot, and every
+    // non-urgent message are retained conversation evidence: a running session
+    // reads it through its callbacks and the recipient's next wake carries the
+    // rest as one digest, instead of one queued turn per message piling up.
+    // Only an urgent message to a descendant that is not a bot queues a turn.
+    let bot = state.bots.persists(&call.chat_id);
+    let retained_only = !descendant || bot || !call.urgent;
     if retained_only {
         queued.status = "completed".into();
         queued.emitted = Some("completed".into());
@@ -447,6 +491,9 @@ pub(crate) fn plan(
         services: call.services,
         peer_cursor: retained_only.then_some((session.messages.len() + 1) as u64),
         note: advisor,
+        urgent: call.urgent,
+        digest: descendant && !bot && !call.urgent,
+        at_ms: 0,
     };
     let result = MessageResult::from(&receipt);
     Ok(Decision::Deliver(Box::new(Delivery {

@@ -318,7 +318,9 @@ pub(super) fn exec(shared: &Arc<Mutex<State>>, run: &str, generation: &str, nonc
     };
     let execution_id = admitted["execution_id"].as_str().unwrap_or_default().to_owned();
     // settle keeps admitted fields, so inline results also carry the hint.
-    Ok(settle(shared, Waiter { run, generation, node, service_id: &service_id }, &execution_id, admitted, wait, &crate::shutdown::token()))
+    let mut value = settle(shared, Waiter { run, generation, node, service_id: &service_id }, &execution_id, admitted, wait, &crate::shutdown::token());
+    crate::observe::attach(shared, run, &mut value);
+    Ok(value)
 }
 /// The caller whose access is rechecked on every wake while waiting.
 #[derive(Clone, Copy)]
@@ -733,6 +735,26 @@ fn capture_fed(
         interrupted,
         timed_out,
     })
+}
+/// Output of a declared observation's command.
+pub(crate) struct Probe {
+    pub(crate) text: String,
+    pub(crate) exit_code: Option<i32>,
+    pub(crate) timed_out: bool,
+}
+/// Runs a declared observation's bounded command in a verified service as the
+/// service user, without an execution record or exec slot. A command still
+/// running at `timeout` is stopped inside the service under its own marker.
+/// Queries the engine: call without the state lock.
+pub(crate) fn probe(service: &Service, command: &str, owner: &str, timeout: Duration) -> io::Result<Probe> {
+    let (id, user) = super::exec_target(service)?;
+    let marker = format!("observe-{}", &hash(owner.as_bytes())[..32]);
+    let run = crate::engine::exec(&id, &user, Some("/workspace"), &[(MARKER, marker.as_str())], &["bash", "-c", &launch(command)]);
+    let result = capture(run, timeout, || false, |_| {})?;
+    if result.timed_out || result.interrupted || result.exit_code.is_none() {
+        reap(service, &marker);
+    }
+    Ok(Probe { text: result.output.text(), exit_code: result.exit_code, timed_out: result.timed_out })
 }
 pub(super) fn logs(id: &str) -> io::Result<String> {
     let mut command = crate::engine::cli();

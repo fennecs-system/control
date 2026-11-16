@@ -1441,7 +1441,7 @@ fn execute(
             record_activity_for(&mut state, id, &generation, event);
         })
     });
-    let prompt = captured.unwrap_or_else(|| render_prompt(objective,scope,room.as_deref(),bridge.is_some()));
+    let prompt = crate::observe::prepend(bridge, captured.unwrap_or_else(|| render_prompt(objective,scope,room.as_deref(),bridge.is_some())));
     if child
         .stdin
         .take()
