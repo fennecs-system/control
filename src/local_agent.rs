@@ -31,7 +31,7 @@ pub(crate) const OVERHEAD_TOKENS: u32 = CORE_TOKENS + LOADED_TOKENS + 1024;
 const CORE_TOKENS: u32 = 4096;
 /// Schemas a turn loads on demand; the loop still re-checks the actual size every step.
 const LOADED_TOKENS: u32 = 2048;
-const SYSTEM: &str = "You are an agent running inside Control on a local model. Act only through the provided tools; there is no other way to read files, run commands or reach rooms. Use control_workspace_run for short shell commands in /workspace. Call tools with arguments that are a JSON object matching the schema. Tools in the prompt's \"More tools\" index are callable by their full control_ name; Control loads the schema on first use. When the request is complete or you are waiting on someone, call control_turn_handoff if it is offered; otherwise reply with a brief plain-text final report and no tool call.";
+pub(crate) const SYSTEM: &str = "You are an agent running inside Control on a local model. Act only through the provided tools; there is no other way to read files, run commands or reach rooms. Use control_workspace_run for short shell commands in /workspace. Call tools with arguments that are a JSON object matching the schema. Tools in the prompt's \"More tools\" index are callable by their full control_ name; Control loads the schema on first use. When the request is complete or you are waiting on someone, call control_turn_handoff if it is offered; otherwise reply with a brief plain-text final report and no tool call.";
 const RESULT_BYTES: usize = 12000;
 const CALLS_PER_STEP: usize = 8;
 

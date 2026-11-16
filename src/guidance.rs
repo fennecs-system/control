@@ -18,9 +18,10 @@ struct Input {
 const NAME: &str = "control_guidance";
 
 /// Built-in topics for conventions every run shares, beside its lenses.
-const BUILT_IN: [(&str, &str, &str); 2] = [
+const BUILT_IN: [(&str, &str, &str); 3] = [
     ("session", "Active sessions, callbacks, handoff dispositions and turn limits.", agent_policy::SESSION_GUIDANCE_DETAIL),
     ("rooms", "Rooms, direct messages, claims and steering in a team.", agent_policy::ROOM_GUIDANCE_DETAIL),
+    ("environment", "Worker images, profiles, Nix builds, toolchains and network scope.", crate::worker::ENVIRONMENT_GUIDANCE),
 ];
 
 /// Read `topic` from `context` as `role` sees it, or list the topics.
@@ -43,7 +44,7 @@ pub(crate) fn read(context: Option<&Resolved>, role: Audience, topic: Option<&st
 
 impl AttemptTools for Tools {
     fn definitions(&self) -> Vec<Value> {
-        vec![json!({"name":NAME,"description":"Read guidance on demand: the full captured text of a lens named in your prompt's guidance index, or the built-in topics session and rooms. Without topic, list the topics. Read a topic when its situation arises, not every turn. Read-only; grants nothing.","inputSchema":{"type":"object","properties":{"topic":{"type":"string","maxLength":80}},"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}})]
+        vec![json!({"name":NAME,"description":"Read guidance on demand: the full captured text of a lens named in your prompt's guidance index, or the built-in topics session, rooms and environment. Without topic, list the topics. Read a topic when its situation arises, not every turn. Read-only; grants nothing.","inputSchema":{"type":"object","properties":{"topic":{"type":"string","maxLength":80}},"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}})]
     }
     fn known(&self, name: &str) -> bool {
         name == NAME

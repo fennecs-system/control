@@ -49,17 +49,17 @@ fn broken(_: &Service, _: &str, _: &str, _: Duration) -> io::Result<ProbeOutput>
 }
 
 #[test]
-fn a_declared_command_tops_each_turn_and_never_enters_the_transcript_or_checkpoint() {
+fn a_declared_command_ends_each_turn_and_never_enters_the_transcript_or_checkpoint() {
     let (shared, chat, run) = fixture();
     let set = declare(&shared, &run, json!({"service_id":"svc-game","command":"status --brief","refresh_seconds":0}), ticking);
     assert_eq!(set["observation"]["source"], json!({"kind":"command","service":"svc-game","command":"status --brief"}));
     assert!(set["preview"].as_str().unwrap().contains("status --brief -> hp=20"), "the first value is shown at once");
 
-    let prompt = prepend_with(&shared, &run, "Objective:\nmine diamonds".into(), ticking);
-    let (block, rest) = prompt.split_once("\n\n").unwrap();
+    let prompt = append_with(&shared, &run, "Objective:\nmine diamonds".into(), ticking);
+    // Last, so the unchanged turn input stays a cacheable prefix.
+    let block = prompt.strip_prefix("Objective:\nmine diamonds\n\n").expect("the turn input comes first, unchanged");
     assert!(block.starts_with("[Observation: latest output of `status --brief` in svc-game, 0 s old."), "{block}");
     assert!(block.contains("hp=20") && block.ends_with("[End observation]"));
-    assert_eq!(rest, "Objective:\nmine diamonds", "the turn input follows unchanged");
 
     let state = shared.lock().unwrap();
     let saved = serde_json::to_string(&*state).unwrap();
@@ -74,12 +74,12 @@ fn a_declared_command_tops_each_turn_and_never_enters_the_transcript_or_checkpoi
 fn refresh_seconds_reuses_a_recent_value_and_zero_refreshes_every_turn() {
     let (shared, _, run) = fixture();
     declare(&shared, &run, json!({"service_id":"svc-game","command":"cached","refresh_seconds":3600}), ticking);
-    let first = prepend_with(&shared, &run, String::new(), ticking);
-    let second = prepend_with(&shared, &run, String::new(), ticking);
+    let first = append_with(&shared, &run, String::new(), ticking);
+    let second = append_with(&shared, &run, String::new(), ticking);
     assert_eq!(first, second, "a value younger than refresh_seconds is reused without a command");
     declare(&shared, &run, json!({"service_id":"svc-game","command":"fresh","refresh_seconds":0}), ticking);
-    let first = prepend_with(&shared, &run, String::new(), ticking);
-    let second = prepend_with(&shared, &run, String::new(), ticking);
+    let first = append_with(&shared, &run, String::new(), ticking);
+    let second = append_with(&shared, &run, String::new(), ticking);
     assert_ne!(first, second, "refresh_seconds=0 reruns at every turn");
 }
 
@@ -140,7 +140,7 @@ fn a_failed_command_keeps_its_output_with_the_exit_status() {
     }
     // A service that is gone is not probed.
     shared.lock().unwrap().services.clear();
-    let block = prepend_with(&shared, &run, "turn".into(), |_, _, _, _| panic!("a missing service is not probed"));
+    let block = append_with(&shared, &run, "turn".into(), |_, _, _, _| panic!("a missing service is not probed"));
     assert!(block.contains("service unavailable to this chat"), "{block}");
 }
 
@@ -166,7 +166,7 @@ fn a_watch_source_reuses_its_latest_notification_without_running_anything() {
     })).unwrap());
     let set = declare(&shared, &run, json!({"watch_id":"w-1"}), broken);
     assert!(set["preview"].as_str().unwrap().contains("watch game events (w-1)"));
-    let block = prepend_with(&shared, &run, String::new(), broken);
+    let block = append_with(&shared, &run, String::new(), broken);
     assert!(block.contains("{\"hp\":17}") && !block.contains("{\"hp\":18}"), "{block}");
     // Another chat's watch is refused.
     shared.lock().unwrap().watches[0].chat = "someone-else".into();
@@ -188,7 +188,7 @@ fn declarations_are_visible_clearable_and_checked() {
     assert!(error.is_err());
     assert!(declare(&shared, &run, json!({}), ticking)["observation"].is_object());
     assert_eq!(declare(&shared, &run, json!({"clear":true}), ticking)["cleared"], true);
-    assert_eq!(prepend_with(&shared, &run, "input".into(), ticking), "input", "a cleared chat gets no block");
+    assert_eq!(append_with(&shared, &run, "input".into(), ticking), "input", "a cleared chat gets no block");
     // Only services the chat can use, and one source at a time.
     for args in [json!({"service_id":"svc-missing","command":"look"}), json!({"service_id":"svc-game","command":"look","watch_id":"w"}), json!({"command":"look"})] {
         assert!(set_with(&shared, &attempt(&run), input(args), |_| Ok(()), ticking).is_err());

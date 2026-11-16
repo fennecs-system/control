@@ -200,18 +200,22 @@ impl Compactor for Recent {
     fn window(&self, conversation: &Conversation<'_>, current: usize) -> Window {
         let mut items = Vec::new();
         let mut count = 0;
+        // Entries that render nothing (wake prose) are not omitted history:
+        // counting them would add a changing note before history at every wake.
+        let mut omitted = 0;
         for index in (0..current.min(conversation.len())).rev() {
-            let Some(entry) = conversation.entry(index) else { break };
+            let Some(entry) = conversation.entry(index) else { omitted = index + 1; break };
             let text = entry.render();
             if text.is_empty() { continue; }
             count += text.chars().count();
             if count > self.chars {
+                omitted = index + 1;
                 break;
             }
             items.push(Item::Entry(index));
         }
         items.reverse();
-        Window { omitted: current - items.len(), items }
+        Window { omitted, items }
     }
 }
 

@@ -108,7 +108,7 @@ pub const TOOLS: [Tool; 31] = [
             w("control_watch_status", "inspect watches"),
             w("control_watch_stop", "stop one"),
             w("control_watch_wake", "wake on next line"),
-            w("control_observe_set", "pin status atop each turn"),
+            w("control_observe_set", "pin status to each turn"),
         ], execution: "service PID 1 supervisor / Rust follower", surface: "chat / worker MCP", available: true,
     },
     Tool {

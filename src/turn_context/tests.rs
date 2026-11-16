@@ -125,8 +125,10 @@ fn cass_monitoring_fixture_keeps_task_context_constant_over_a_hundred_wakes() {
         "current event appears once"
     );
     assert!(after.text.len() < before.text.len() + 500);
+    // Wake prose renders nothing, so no history was cut: an "omitted" note
+    // here would change at every wake and break the cacheable prefix.
     assert!(
-        after
+        !after
             .text
             .contains("earlier entries are outside the selected history view")
     );

@@ -142,3 +142,111 @@ fn wake_policy_is_a_short_core_with_guidance_on_demand() {
     assert!(member.contains("room_plan (") && !lead.contains("room_plan ("));
 }
 
+/// Two consecutive member wakes of one chat: a bot wake, then a peer message,
+/// each with its own working notes and observation. Returns both full inputs.
+fn consecutive_member_wakes(team: &mut Team) -> [(String, PreparedContext); 2] {
+    let chat = team.state.runtime.runs.iter().find(|r| r.id == team.member).unwrap().chat_id.clone().unwrap();
+    let notes = |state: &mut State, subgoal: &str| {
+        let session = state.chats.iter_mut().find(|c| c.id == chat).unwrap();
+        session.continuity.as_mut().unwrap().working = Some(control_context::turn_mailbox::WorkingState {
+            revision: 1, run: "r".into(), generation: "g".into(), checkpoint: "c".into(),
+            payload: control_context::working_state::Payload { subgoal: subgoal.into(), ..Default::default() },
+            processed: vec![], disposition: control_context::turn_mailbox::Disposition::Continue,
+        });
+    };
+    notes(&mut team.state, "Milestone 12: routine running, waiting for its target event.");
+    let first = project(&team.state, &team.member).unwrap();
+    let seed = team.state.runtime.runs.iter().find(|r| r.id == team.member).unwrap().clone();
+    let worker = seed.persona.clone();
+    let next = turn(&mut team.state, &chat, crate::runtime::RunKind::AgentMessage, "Control event: Message from member 3: dependency released; milestone 13 is yours.", Some(&seed), worker);
+    notes(&mut team.state, "Milestone 13 claimed; starting its routine.");
+    let second = project(&team.state, &next).unwrap();
+    [(crate::observe::place("[Observation 2 s old]\nhp=20 pos=1,2,3\n[End observation]", first.text.clone()), first),
+     (crate::observe::place("[Observation 1 s old]\nhp=17 pos=4,5,6\n[End observation]", second.text.clone()), second)]
+}
+
+/// Bytes of a prepared wake before its first per-turn section.
+fn stable_bytes(prepared: &PreparedContext) -> usize {
+    let included = |s: &&SectionTrace| s.included;
+    let prefix = prepared.text.len() - prepared.sections.iter().filter(included).map(|s| s.bytes).sum::<usize>();
+    prefix + prepared.sections.iter().filter(included)
+        .take_while(|s| !matches!(s.kind, SectionKind::WorkingState | SectionKind::Request))
+        .map(|s| s.bytes).sum::<usize>()
+}
+
+/// The fixed adapter framing sent on every turn was about 2.3-3.2 KB; tool
+/// detail now lives in tool descriptions and control_guidance topics.
+#[test]
+fn adapter_framing_stays_short_and_keeps_its_safety_essentials() {
+    use crate::identity::Workspace;
+    let codex = [true, false].map(|managed| crate::worker::render_prompt_mode("", Workspace::User, Some("general"), true, managed));
+    let claude = [false, true].map(|review| crate::claude::render_prompt("", review));
+    for text in codex.iter().chain(&claude) {
+        assert!(text.len() <= 1_344, "{} bytes: {text}", text.len());
+        assert!(text.contains("secrets") && text.contains("credentials") && text.contains("untrusted"), "{text}");
+        assert!(text.contains("control_guidance topic environment") && text.ends_with("Objective:\n"));
+    }
+    for text in &codex {
+        assert!(text.contains("no authority to administer Control") && text.contains("deploy") && text.contains("never copy private history"));
+    }
+    assert!(claude[1].contains("Source is read-only"));
+    let environment = crate::guidance::read(None, control_context::Audience::Member, Some("environment")).unwrap();
+    assert_eq!(environment["text"], crate::worker::ENVIRONMENT_GUIDANCE, "the detail is one topic away");
+}
+
+#[test]
+fn consecutive_wakes_share_their_stable_prefix() {
+    let mut team = team();
+    let [(first, prepared), (second, _)] = consecutive_member_wakes(&mut team);
+    let stable = stable_bytes(&prepared);
+    // Framing, lens policy, guidance and tool index, the assignment and history
+    // come first; working notes, the event and the observation come after.
+    assert!(stable * 2 > first.len(), "stable {stable} of {}", first.len());
+    assert!(first[..stable].ends_with("Assistant: Claimed the next milestone; routine running; waiting on its events.\n"));
+    assert!(second.starts_with(&first[..stable]), "the next wake reuses the whole stable prefix");
+    for dynamic in ["Milestone 12: routine running", "Current event", "hp=20", "continuing controller"] {
+        assert!(first[stable..].contains(dynamic), "{dynamic} is per-turn");
+    }
+    assert!(second.ends_with("[End observation]") && !second.contains("hp=20"));
+}
+
+fn common_prefix(a: &str, b: &str) -> usize {
+    let mut n = a.bytes().zip(b.bytes()).take_while(|(x, y)| x == y).count();
+    while !a.is_char_boundary(n) {
+        n -= 1;
+    }
+    n
+}
+
+/// Writes the per-section prompt texts of the run -128 shaped team to
+/// `CONTROL_PROMPT_DUMP` for tokenizer measurement (docs/PERFORMANCE.md).
+#[test]
+#[ignore = "writes measurement files; set CONTROL_PROMPT_DUMP"]
+fn dump_prompt_sections() {
+    let Some(dir) = std::env::var_os("CONTROL_PROMPT_DUMP").map(std::path::PathBuf::from) else { return };
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut team = team();
+    let write = |name: &str, text: &str| std::fs::write(dir.join(name), text).unwrap();
+    let member = team.state.runtime.runs.iter().find(|r| r.id == team.member).unwrap().clone();
+    let session = team.state.chats.iter().find(|c| Some(&c.id) == member.chat_id.as_ref()).unwrap().clone();
+    let scope = crate::identity::authorize(&member.actor, member.action).unwrap();
+    write("framing-codex.txt", &crate::worker::render_prompt_mode("", scope, session.room.as_deref(), true, true));
+    write("framing-codex-legacy.txt", &crate::worker::render_prompt_mode("", scope, session.room.as_deref(), true, false));
+    write("framing-claude.txt", &crate::claude::render_prompt("", false));
+    write("policy.txt", &crate::chat::prompt_prefix(&member, &session));
+    write("index.txt", &crate::worker_tools::prompt_index(&team.state, &member));
+    write("session.txt", control_context::agent_policy::ACTIVE_SESSION_GUIDANCE);
+    use crate::worker_tools::deferred;
+    let facts = deferred::Facts::of(&team.state, &member, true);
+    write("tools-codex.json", &serde_json::to_string(&deferred::listed(&deferred::Facts { shell: false, local: false, ..facts })).unwrap());
+    write("tools-local.json", &serde_json::to_string(&crate::local_agent::functions(&deferred::listed(&deferred::Facts { shell: true, local: true, ..facts }))).unwrap());
+    write("system-local.txt", crate::local_agent::SYSTEM);
+    let [(first, _), (second, _)] = consecutive_member_wakes(&mut team);
+    let shared = common_prefix(&first, &second);
+    write("wake1.txt", &first);
+    write("wake2.txt", &second);
+    write("wake2-shared.txt", &second[..shared]);
+    write("wake2-dynamic.txt", &second[shared..]);
+    println!("{}", serde_json::json!({"wake1":first.len(),"wake2":second.len(),"shared":shared}));
+}
+
