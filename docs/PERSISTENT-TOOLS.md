@@ -305,6 +305,12 @@ A restart never replays an in-flight command. Other services remain running. The
 no host command execution, arbitrary container selection or new network authority.
 Task-specific adapters and server configuration remain outside Control's source.
 
+Commands are for one-off work: setup, inspection and installing or editing a
+routine. Anything repeated or polled belongs in a routine, a watch program that
+works toward a target and escalates only outcomes (see [WATCHES.md](WATCHES.md#routines)).
+Routines supply perception, reflexes and tactics; the model keeps strategy and
+planning, and is not spent on one exec and one status poll per action.
+
 Keep task programs, worktrees, downloads and durable application data under
 `/workspace`. Commands start there by default; configure applications that would
 otherwise write to `/home/agent` or elsewhere to use a workspace data directory.
