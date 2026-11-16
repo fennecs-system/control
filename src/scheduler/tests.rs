@@ -85,6 +85,11 @@ fn private_limits_are_validated_and_do_not_come_from_saved_runtime_state() {
     assert!(load_limits_in(&file, None).is_err(), "a stall window below four turns fails closed");
     std::fs::write(&file, b"{\"advisor_stall_turns\":40}").unwrap();
     assert_eq!(load_limits_in(&file, None).unwrap().advisor_stall_turns, 40);
+    assert_eq!(load_limits_in(&file, None).unwrap().advisor_bottleneck_members, 2);
+    std::fs::write(&file, b"{\"advisor_bottleneck_members\":1}").unwrap();
+    assert!(load_limits_in(&file, None).is_err(), "one waiting member is a dependency, not a bottleneck");
+    std::fs::write(&file, b"{\"advisor_bottleneck_members\":3}").unwrap();
+    assert_eq!(load_limits_in(&file, None).unwrap().advisor_bottleneck_members, 3);
     std::fs::write(&file, b"{\"max_parallel_runs\":4}").unwrap();
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
     assert_eq!(load_limits_in(&file, None).unwrap().max_parallel_runs, 4);

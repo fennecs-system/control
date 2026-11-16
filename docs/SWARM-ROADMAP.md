@@ -45,7 +45,8 @@ WASM tooling fix shipped in #143; both platform checks passed before merging.
   woken only by edge-triggered host facts on a `task:<root>` topic (team
   quiescence, a member's repeated consecutive failures, a retired restart loop,
   an abandoned claim, members newly blocked on a claim, members reporting a
-  similar blocker, turns settling while open claims do not advance; never
+  similar blocker, turns settling while open claims do not advance, one
+  claim holding up several members transitively; never
   single failures or exits). It helps the lead steer:
   each evidence note goes only to the lead's steering chat, and the lead
   decides what reaches the team.

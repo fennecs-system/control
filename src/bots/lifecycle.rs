@@ -4,7 +4,8 @@
 //! They are gaps a lead could miss (the team went quiet, a member keeps
 //! failing, a restart loop was retired, a claim lost its owner, members became
 //! blocked on a claim, members report a similar blocker, turns keep settling
-//! while open claims do not advance), never single failures. Judge turns, retained peer
+//! while open claims do not advance, one claim holds up several members), never
+//! single failures. Judge turns, retained peer
 //! evidence (runs without an attempt) and turns woken only by advisor notes,
 //! including the lead's, are not team activity, so an advisor cannot wake
 //! itself through the team it advises. The model interprets; the host only
@@ -78,6 +79,9 @@ pub struct Facts {
     /// Members blocked or failing with similar reasons, one entry per reason.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shared: Vec<Shared>,
+    /// Live claims that several members wait on, directly or transitively.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bottlenecks: Vec<Bottleneck>,
     /// Chats the facts concern, newest first and bounded.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub chats: Vec<String>,
@@ -140,6 +144,110 @@ pub struct Stall {
 pub struct Shared {
     pub reason: String,
     pub members: Vec<String>,
+}
+/// A live (working or blocked) claim whose transitive dependents through
+/// `blocked_on` belong to at least `advisor_bottleneck_members` members other
+/// than its owner: the team's critical path. Ages count node-wide claim updates
+/// (the claim revision sequence), not time.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Bottleneck {
+    pub room: String,
+    pub key: String,
+    pub owner: String,
+    /// working, blocked or abandoned.
+    pub status: String,
+    /// The claim this one itself waits on, when blocked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_on: Option<String>,
+    /// Claim updates since this incarnation was acquired.
+    pub open: u64,
+    /// Claim updates since it last advanced, or since it was acquired.
+    pub idle: u64,
+    /// Distinct dependent members other than the owner, sorted and bounded.
+    pub members: Vec<String>,
+    /// Dependent claims, nearest first and bounded.
+    pub waiting: Vec<Waiter>,
+    /// All dependent claims, direct and transitive.
+    pub dependents: u32,
+    /// The claim waits on itself through its dependents: a circular wait.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cycle: bool,
+}
+/// Bottlenecks a snapshot remembers.
+const BOTTLENECKS: usize = 64;
+
+/// Live claims that `threshold` or more members wait on, each with an identity
+/// of (claim incarnation, dependent claim set). `claims` are the team members'
+/// claims; dependents are their live blocked claims. Visited sets make cycles
+/// in `blocked_on` terminate.
+fn bottlenecks(state: &State, claims: &[&Claim], threshold: usize) -> Vec<(u64, Bottleneck)> {
+    // Live members' claims waiting on each (room, key).
+    let mut waiting: Fast<(&str, &str), Vec<&Claim>> = Fast::default();
+    for claim in claims.iter().filter(|claim| claim.status == Status::Blocked && !claim.abandoned) {
+        if let Some(on) = claim.blocked_on.as_deref() {
+            waiting.entry((claim.room.as_str(), on)).or_default().push(claim);
+        }
+    }
+    if waiting.values().map(Vec::len).sum::<usize>() < threshold {
+        return Vec::new();
+    }
+    let live = state.collective.claims.iter()
+        .filter(|claim| matches!(claim.status, Status::Working | Status::Blocked) && waiting.contains_key(&(claim.room.as_str(), claim.key.as_str())));
+    let mut found = Vec::new();
+    for held in live {
+        let mut visited: Fast<&str, ()> = Fast::default();
+        let (mut cycle, mut next) = (false, 0);
+        let mut frontier = vec![held];
+        // Breadth first, so the nearest dependents are listed first.
+        while next < frontier.len() {
+            let at = frontier[next];
+            next += 1;
+            for &claim in waiting.get(&(at.room.as_str(), at.key.as_str())).into_iter().flatten() {
+                if claim.key == held.key {
+                    cycle = true;
+                } else if visited.insert(claim.key.as_str(), ()).is_none() {
+                    frontier.push(claim);
+                }
+            }
+        }
+        let seen = &frontier[1..];
+        let mut members = seen.iter().map(|claim| claim.owner.as_str()).filter(|owner| *owner != held.owner).collect::<Vec<_>>();
+        members.sort_unstable();
+        members.dedup();
+        if members.len() < threshold {
+            continue;
+        }
+        let mut keys = seen.iter().map(|claim| claim.key.as_str()).collect::<Vec<_>>();
+        keys.sort_unstable();
+        let mut identity = Fx::default();
+        for part in [held.room.as_str(), held.key.as_str()].into_iter().chain(keys) {
+            identity.write(part.as_bytes());
+        }
+        identity.add(held.incarnation);
+        let seq = state.collective.claim_seq;
+        found.push((identity.finish(), Bottleneck {
+            room: held.room.clone(),
+            key: held.key.clone(),
+            owner: held.owner.clone(),
+            status: if held.abandoned { "abandoned" } else if held.status == Status::Blocked { "blocked" } else { "working" }.into(),
+            blocked_on: held.blocked_on.clone(),
+            open: seq.saturating_sub(held.incarnation),
+            idle: seq.saturating_sub(held.incarnation.max(held.advanced_at)),
+            members: members.iter().take(FAILING).map(|member| (*member).to_owned()).collect(),
+            waiting: seen.iter().take(CHATS).map(|claim| Waiter { key: claim.key.clone(), chat: claim.owner.clone() }).collect(),
+            dependents: u32::try_from(seen.len()).unwrap_or(u32::MAX),
+            cycle,
+        }));
+    }
+    // Widest first; the bound keeps the most consequential.
+    found.sort_by(|(_, a), (_, b)| b.members.len().cmp(&a.members.len()).then(b.dependents.cmp(&a.dependents)).then_with(|| (&a.room, &a.key).cmp(&(&b.room, &b.key))));
+    found.truncate(BOTTLENECKS);
+    found
+}
+fn identities(necks: &[(u64, Bottleneck)]) -> Vec<u64> {
+    let mut identities = necks.iter().map(|(identity, _)| *identity).collect::<Vec<_>>();
+    identities.sort_unstable();
+    identities
 }
 /// Characters of a reported reason kept in a fact.
 const REASON: usize = 120;
@@ -223,6 +331,9 @@ impl Facts {
         for shared in &newer.shared {
             self.share(shared);
         }
+        for bottleneck in &newer.bottlenecks {
+            self.bottleneck(bottleneck);
+        }
         for chat in &newer.chats {
             self.concern(chat);
         }
@@ -239,6 +350,14 @@ impl Facts {
             }
         } else if self.shared.len() < CHATS {
             self.shared.push(newer.clone());
+        }
+    }
+    /// A newer observation of the same claim replaces the held one.
+    fn bottleneck(&mut self, newer: &Bottleneck) {
+        if let Some(held) = self.bottlenecks.iter_mut().find(|held| held.room == newer.room && held.key == newer.key) {
+            held.clone_from(newer);
+        } else if self.bottlenecks.len() < CHATS {
+            self.bottlenecks.push(newer.clone());
         }
     }
     fn concern(&mut self, chat: &str) {
@@ -260,13 +379,22 @@ impl Facts {
     }
     fn is_empty(&self) -> bool {
         self.repeated == 0 && self.retired == 0 && self.abandoned == 0 && self.blocked.is_empty() && !self.quiescent
-            && self.stalled.is_none() && self.shared.is_empty()
+            && self.stalled.is_none() && self.shared.is_empty() && self.bottlenecks.is_empty()
     }
     pub(super) fn describe(&self, root: &str) -> String {
         let mut parts = Vec::new();
         if self.repeated > 0 { parts.push(format!("{} member(s) failed several turns in a row", self.repeated)); }
         if self.retired > 0 { parts.push(format!("{} watched restart loop(s) retired after repeated exits", self.retired)); }
         if self.abandoned > 0 { parts.push(format!("{} claim(s) abandoned by a lost owner", self.abandoned)); }
+        for neck in &self.bottlenecks {
+            let on = neck.blocked_on.as_ref().map_or(String::new(), |on| format!(" on {on}"));
+            let cycle = if neck.cycle { ", in a circular wait" } else { "" };
+            let mut members = neck.members.iter().take(CHATS).map(String::as_str).collect::<Vec<_>>().join(", ");
+            if neck.members.len() > CHATS { members.push_str(", …"); }
+            let keys = neck.waiting.iter().map(|waiter| waiter.key.as_str()).collect::<Vec<_>>().join(", ");
+            parts.push(format!("bottleneck {}/{} (owner {}, {}{on}{cycle}; acquired {} claim updates ago, {} since it last advanced) holds up {} claim(s) of {} member(s) directly or transitively ({members}): {keys}",
+                neck.room, neck.key, neck.owner, neck.status, neck.open, neck.idle, neck.dependents, neck.members.len()));
+        }
         for blocked in &self.blocked {
             let producer = blocked.producer.as_ref().map_or(blocked.status.clone(), |owner| format!("owner {owner}, {}", blocked.status));
             let keys = blocked.waiting.iter().map(|waiter| waiter.key.as_str()).collect::<Vec<_>>().join(", ");
@@ -319,6 +447,14 @@ pub(super) struct Team {
     /// unchanged reasons are not compared again.
     #[serde(default, skip_serializing_if = "is_zero_revision")]
     pub(super) reasons: u64,
+    /// Fingerprint of the members' claim revisions `necks` was computed
+    /// from, so unchanged claims are not walked again.
+    #[serde(default, skip_serializing_if = "is_zero_revision")]
+    pub(super) claims: u64,
+    /// Identities of the current bottlenecks (claim incarnation and dependent
+    /// set), sorted; one is reported again only after its dependents change.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) necks: Vec<u64>,
 }
 fn is_zero_count(value: &usize) -> bool {
     *value == 0
@@ -426,14 +562,16 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
         if let Some(&position) = member.get(request.chat.0.as_str()) { scans[team_at[position]].active = true; }
     }
     // Per team: live member claims blocked on another claim, open (working or
-    // blocked) claims, the latest claim advance and reported blocker reasons.
+    // blocked) claims, the latest claim advance, reported blocker reasons and
+    // a fingerprint of every member claim revision.
     #[derive(Default)]
-    struct Claims<'a> { blocked: Vec<&'a Claim>, open: u32, progress: u64, reasons: Vec<(&'a str, &'a str, u64)> }
+    struct Claims<'a> { blocked: Vec<&'a Claim>, open: u32, progress: u64, reasons: Vec<(&'a str, &'a str, u64)>, revisions: Fx }
     let mut held = roots.iter().map(|_| Claims::default()).collect::<Vec<_>>();
     for claim in &state.collective.claims {
         let Some(&position) = member.get(claim.owner.as_str()) else { continue };
         let team = &mut held[team_at[position]];
         team.progress = team.progress.max(claim.advanced_at);
+        team.revisions.add(claim.revision);
         if claim.abandoned || !matches!(claim.status, Status::Working | Status::Blocked) {
             continue;
         }
@@ -457,8 +595,9 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
         }
     }
     let window = state.runtime.execution.advisor_stall_turns.max(4);
-    roots.into_iter().zip(scans).zip(failing).zip(held).filter_map(|(((root, scan), failing), held)| {
-        let Claims { blocked, open, progress, reasons } = held;
+    let crowd = state.runtime.execution.advisor_bottleneck_members.max(2);
+    roots.into_iter().zip(scans).zip(failing).zip(held).enumerate().filter_map(|(slot, (((root, scan), failing), held))| {
+        let Claims { blocked, open, progress, reasons, revisions } = held;
         let newest = blocked.iter().map(|claim| claim.blocked_at).max().unwrap_or(0);
         // Reasons are compared only when two members could share one and the
         // reasons changed since the last observation (claim revisions and run
@@ -474,11 +613,21 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
         sharing.sort_unstable();
         sharing.dedup();
         sharing.truncate(FAILING);
+        // The dependency graph is walked only when a member claim changed (any
+        // update, abandonment or release gives it a new revision).
+        let revisions = revisions.finish();
+        let necks = known.is_none_or(|known| known.claims != revisions).then(|| {
+            let claims = state.collective.claims.iter()
+                .filter(|claim| member.get(claim.owner.as_str()).is_some_and(|&position| team_at[position] == slot))
+                .collect::<Vec<_>>();
+            bottlenecks(state, &claims, crowd)
+        });
         let Some(known) = known else {
             // Subscription starts here: earlier history is not reported.
             let failing = failing.into_iter().map(str::to_owned).collect();
             let sharing = sharing.into_iter().map(str::to_owned).collect();
-            return Some((root.to_owned(), Team { cursor: 0, failing, settled: scan.settled, blocked: newest, progress, since: scan.settled, open: open > 0, stalled: false, sharing, reasons: fingerprint }, Facts::default()));
+            let necks = identities(necks.as_deref().unwrap_or_default());
+            return Some((root.to_owned(), Team { cursor: 0, failing, settled: scan.settled, blocked: newest, progress, since: scan.settled, open: open > 0, stalled: false, sharing, reasons: fingerprint, claims: revisions, necks }, Facts::default()));
         };
         let mut team = known.clone();
         let mut facts = Facts::default();
@@ -508,6 +657,15 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
             if team.sharing.len() != sharing.len() || team.sharing.iter().zip(&sharing).any(|(known, now)| known != now) {
                 team.sharing = sharing.into_iter().map(str::to_owned).collect();
             }
+        }
+        // A bottleneck is reported when it appears or its dependents change.
+        if let Some(necks) = necks {
+            for (_, neck) in necks.iter().filter(|(identity, _)| known.necks.binary_search(identity).is_err()) {
+                facts.bottleneck(neck);
+                facts.concern(&neck.owner);
+            }
+            team.claims = revisions;
+            team.necks = identities(&necks);
         }
         // Busy but stalled: turns keep settling while claims stay open and
         // none advances. Progress, or open claims appearing or clearing,
