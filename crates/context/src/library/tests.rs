@@ -223,7 +223,8 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert_eq!(investigation.includes, ["evidence"]);
     assert!(investigation.tools.is_empty());
     let autonomy = Library::default().get("autonomy").unwrap().clone();
-    assert_eq!(autonomy.revision, 6);
+    assert_eq!(autonomy.revision, 7);
+    assert!(autonomy.instructions.contains("the model decides what to do, when and by whom"));
     assert!(autonomy.instructions.contains("a setback means recover, not quit"));
     assert!(autonomy.instructions.contains("two consecutive routine cycles"));
     assert!(autonomy.instructions.contains("Weigh risk by reversibility"));
@@ -256,7 +257,7 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert!(swarm.includes.contains(&"planning".to_string()));
     let previous: Vec<Definition> = serde_json::from_str(include_str!("../builtin-lens-history.json")).unwrap();
     assert!(previous.iter().any(|d| d.id == "investigation" && d.revision == 1));
-    for revision in 1..=5 {
+    for revision in 1..=6 {
         assert!(previous.iter().any(|d| d.id == "autonomy" && d.revision == revision));
     }
     for revision in 1..=10 {
