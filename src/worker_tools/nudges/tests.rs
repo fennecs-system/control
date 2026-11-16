@@ -81,6 +81,17 @@ fn approved_bots_are_warned_before_their_captured_turn_limit() {
 }
 
 #[test]
+fn context_notes_belong_to_the_local_loop_and_never_reach_hosted_sessions() {
+    // Codex and Claude manage their own context: their tool results carry only
+    // the deadline and steering notes, however long the attempt runs.
+    let (mut state, _, run) = running(Some(3600));
+    for second in (0..3600).step_by(60) {
+        assert!(notes(&mut state, &run, "control_workspace_run", 1000 + second).iter().all(|note| !note.contains("% full")));
+    }
+    assert_eq!(context_text(81, true), "Context 81% full: publish your checkpoint (control_turn_handoff) and continue in the next turn.");
+    assert_eq!(context_text(81, false), "Context 81% full: finish with a brief final report soon.");
+}
+#[test]
 fn local_model_attempts_are_warned_before_their_captured_local_limit() {
     // A local chat and a local bot both use the captured local limit (default
     // 3600 s, threshold 540 s), not the 600 s or bot defaults.

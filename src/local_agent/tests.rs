@@ -22,6 +22,9 @@ struct Mock {
     records: Vec<(String, String)>,
     tool_text: String,
     meters: Vec<Meter>,
+    /// Target lengths requested from the compactor, and scripted failures.
+    words: Vec<usize>,
+    summary_errors: VecDeque<io::Error>,
 }
 impl Host for Mock {
     fn tools(&mut self) -> io::Result<Vec<Value>> {
@@ -44,8 +47,12 @@ impl Host for Mock {
         self.requests.push(body.clone());
         self.replies.pop_front().unwrap_or_else(|| Err(io::Error::other("script exhausted")))
     }
-    fn summarize(&mut self, evidence: &str) -> io::Result<String> {
+    fn summarize(&mut self, evidence: &str, words: usize) -> io::Result<String> {
         self.summaries.push(evidence.into());
+        self.words.push(words);
+        if let Some(error) = self.summary_errors.pop_front() {
+            return Err(error);
+        }
         Ok("earlier: posted status updates; constraint: keep the room informed".into())
     }
     fn record(&mut self, kind: &str, _: &str, text: &str, _: &str, status: &str) {
@@ -58,8 +65,11 @@ impl Host for Mock {
 fn mock(replies: Vec<Value>) -> Mock {
     Mock { replies: replies.into_iter().map(Ok).collect(), ..Default::default() }
 }
+fn compactor(input_bytes: usize) -> Compactor {
+    Compactor { input_bytes, output_tokens: 512 }
+}
 fn go(host: &mut Mock) -> Result<Outcome, Failure> {
-    run(host, "qwen-local", &limits(), 20000, "Current request: post a status", &Policy::default())
+    run(host, "qwen-local", &limits(), compactor(20000), "Current request: post a status", &Policy::default())
 }
 
 #[test]
@@ -148,14 +158,14 @@ fn cancellation_and_deadlines_stop_between_steps_and_during_calls() {
     assert_eq!(host.requests.len(), 1);
     // The step budget is a hard bound.
     let mut host = mock((0..3).map(|_| reply(None, call("control_room_post", r#"{"message":"x"}"#), "tool_calls")).collect());
-    let failure = run(&mut host, "m", &limits(), 20000, "p", &Policy { max_steps: 2, ..Policy::default() }).err().unwrap();
+    let failure = run(&mut host, "m", &limits(), compactor(20000), "p", &Policy { max_steps: 2, ..Policy::default() }).err().unwrap();
     assert!(failure.1.contains("after 2 model steps"));
 }
 #[test]
 fn oversized_mandatory_input_is_refused_before_any_model_call() {
     let mut host = mock(vec![]);
     let small = Limits { context_tokens: 2048, output_tokens: 512, input_bytes: 1024, output_bytes: 2048 };
-    let failure = run(&mut host, "m", &small, 1000, &"x".repeat(6000), &Policy::default()).err().unwrap();
+    let failure = run(&mut host, "m", &small, compactor(1000), &"x".repeat(6000), &Policy::default()).err().unwrap();
     assert_eq!(failure.0, "blocked");
     assert!(failure.1.contains("does not fit"), "{}", failure.1);
     assert!(host.requests.is_empty());
@@ -171,7 +181,7 @@ fn a_turn_that_outgrows_the_context_is_compacted_on_the_local_compactor_and_then
     replies.push(reply(Some("All updates posted."), json!(null), "stop"));
     let mut host = mock(replies);
     host.tool_text = "room transcript ".repeat(300);
-    let outcome = run(&mut host, "m", &small, 6000, "Current request: post six updates", &Policy::default()).unwrap();
+    let outcome = run(&mut host, "m", &small, compactor(6000), "Current request: post six updates", &Policy::default()).unwrap();
     assert_eq!(outcome.text, "All updates posted.");
     assert!(outcome.compactions >= 1);
     assert!(!host.summaries.is_empty());
@@ -181,7 +191,7 @@ fn a_turn_that_outgrows_the_context_is_compacted_on_the_local_compactor_and_then
         assert!(used <= small.context_tokens - small.output_tokens, "request exceeded the budget: {used}");
     }
     let last = serde_json::to_string(&host.requests.last().unwrap()["messages"]).unwrap();
-    assert!(last.contains("Summary of earlier steps"));
+    assert!(last.contains("Summary of steps"));
     assert!(last.contains("Current request: post six updates"), "the request itself is never compacted");
     // Every kept tool result still follows its call.
     for request in &host.requests {
@@ -197,10 +207,121 @@ fn a_turn_that_outgrows_the_context_is_compacted_on_the_local_compactor_and_then
 #[test]
 fn context_that_cannot_be_compacted_further_fails_visibly() {
     let small = Limits { context_tokens: 4096, output_tokens: 512, input_bytes: 28000, output_bytes: 2048 };
+    // A single bulky newest result is shortened as a last resort, not fatal.
+    let mut host = mock(vec![
+        reply(None, call("control_room_post", r#"{"message":"x"}"#), "tool_calls"),
+        reply(Some("Done."), json!(null), "stop"),
+    ]);
+    host.tool_text = "y".repeat(11000);
+    assert_eq!(run(&mut host, "m", &small, compactor(6000), "p", &Policy::default()).unwrap().text, "Done.");
+    let last = serde_json::to_string(&host.requests[1]["messages"]).unwrap();
+    assert!(last.contains("more bytes of this earlier result"), "{last}");
+    // A request that leaves no room even then fails visibly.
     let mut host = mock(vec![reply(None, call("control_room_post", r#"{"message":"x"}"#), "tool_calls")]);
     host.tool_text = "y".repeat(11000);
-    let failure = run(&mut host, "m", &small, 6000, "p", &Policy::default()).err().unwrap();
+    let failure = run(&mut host, "m", &small, compactor(6000), &"p".repeat(9300), &Policy::default()).err().unwrap();
     assert!(failure.1.contains("context is exhausted"), "{}", failure.1);
+}
+
+/// A long setup turn: every step runs a long script whose result echoes it,
+/// followed by bulky output. Returns the input tokens of each request.
+fn setup_turn(limits: &Limits, policy: &Policy, steps: usize) -> (Mock, Result<Outcome, Failure>, Vec<u32>) {
+    let script = "apt-get install -y build-essential pkg-config libssl-dev\n".repeat(20);
+    let arguments = json!({"message":script}).to_string();
+    let mut replies: Vec<Value> = (0..steps).map(|_| reply(None, call("control_room_post", &arguments), "tool_calls")).collect();
+    replies.push(reply(Some("Setup finished."), json!(null), "stop"));
+    let mut host = mock(replies);
+    host.tool_text = format!("$ {script}\n{}", "Setting up package 1.2.3 (amd64) ...\n".repeat(150));
+    let outcome = run(&mut host, "m", limits, compactor(6000), "Current request: set up the build host", policy);
+    let used = host.requests.iter()
+        .map(|r| tokens(size(r["messages"].as_array().unwrap())) + tokens(size(r["tools"].as_array().unwrap())))
+        .collect();
+    (host, outcome, used)
+}
+#[test]
+fn a_lean_transcript_grows_slowly_and_carries_nothing_twice() {
+    // A large context, so neither run compacts: only the rolling window differs.
+    let wide = Limits { context_tokens: 131072, output_tokens: 1024, input_bytes: 28000, output_bytes: 8192 };
+    let (_, _, full) = setup_turn(&wide, &Policy { verbatim_steps: usize::MAX, ..Policy::default() }, 12);
+    let (host, outcome, lean) = setup_turn(&wide, &Policy::default(), 12);
+    assert_eq!(outcome.unwrap().compactions, 0);
+    let growth = |used: &[u32]| used.windows(2).map(|w| w[1] - w[0]).collect::<Vec<_>>();
+    println!("input tokens per request, whole transcript: {full:?}\n  growth per step: {:?}", growth(&full));
+    println!("input tokens per request, rolling window:   {lean:?}\n  growth per step: {:?}", growth(&lean));
+    let (full_step, lean_step) = (growth(&full)[10], growth(&lean)[10]);
+    assert!(lean_step * 5 < full_step, "a step past the window adds {lean_step} tokens, against {full_step} unwindowed");
+    assert!(lean.last().unwrap() * 2 < *full.last().unwrap());
+    // The newest results are whole; their echoed script is cited, not repeated.
+    let last = host.requests.last().unwrap()["messages"].as_array().unwrap();
+    let results = last.iter().filter(|m| m["role"] == "tool").collect::<Vec<_>>();
+    assert!(results.iter().all(|m| !m["content"].as_str().unwrap().contains("apt-get install")));
+    assert!(results.iter().rev().take(4).all(|m| m["content"].as_str().unwrap().contains("[the call's message argument")
+        && !m["content"].as_str().unwrap().contains("more bytes of this earlier result")));
+    assert!(results.iter().rev().skip(4).all(|m| m["content"].as_str().unwrap().contains("more bytes of this earlier result")));
+    // Older calls keep a short head of their script.
+    let calls = last.iter().filter(|m| m["tool_calls"].is_array()).collect::<Vec<_>>();
+    assert!(calls[0]["tool_calls"][0]["function"]["arguments"].as_str().unwrap().contains("bytes elided"));
+}
+#[test]
+fn a_long_turn_compacts_before_its_context_is_exhausted_and_is_told_once() {
+    let small = Limits { context_tokens: 8192, output_tokens: 512, input_bytes: 28000, output_bytes: 2048 };
+    let budget = small.context_tokens - small.output_tokens;
+    let (host, outcome, used) = setup_turn(&small, &Policy::default(), 16);
+    let outcome = outcome.unwrap();
+    assert_eq!(outcome.text, "Setup finished.");
+    assert!(outcome.compactions >= 1);
+    println!("input tokens per request (budget {budget}): {used:?}");
+    // Every request stays under the compaction threshold plus one step.
+    let peak = *used.iter().max().unwrap();
+    assert!(peak < budget, "peak {peak} of {budget}");
+    // The summary was asked for under an explicit length.
+    assert!(host.words.iter().all(|&w| w == crate::compaction::target_words(512)));
+    // The context note was added once, to one tool result, naming the handoff.
+    let notes = host.records.iter().filter(|(k, _)| k == "note").collect::<Vec<_>>();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].1.starts_with("Context ") && notes[0].1.contains("% full: publish your checkpoint (control_turn_handoff)"));
+    let last = serde_json::to_string(&host.requests.last().unwrap()["messages"]).unwrap();
+    assert!(last.matches("% full: publish your checkpoint").count() <= 1);
+    assert!(host.requests.iter().any(|r| r.to_string().contains("% full: publish your checkpoint")));
+}
+#[test]
+fn a_truncated_summary_is_retried_shorter_then_replaced_by_a_digest() {
+    let small = Limits { context_tokens: 8192, output_tokens: 512, input_bytes: 28000, output_bytes: 2048 };
+    let truncated = || io::Error::other("Output reached the declared token limit; partial text was discarded");
+    let target = crate::compaction::target_words(512);
+    // One truncated summary: retried with a tighter target, which succeeds.
+    let mut host = mock(vec![]);
+    host.summary_errors = VecDeque::from([truncated()]);
+    let script = "x".repeat(3000);
+    let mut replies: Vec<Value> = (0..12).map(|i| reply(None, call("control_room_post", &json!({"message":format!("{i}{script}")}).to_string()), "tool_calls")).collect();
+    replies.push(reply(Some("Done."), json!(null), "stop"));
+    host.replies = replies.into_iter().map(Ok).collect();
+    host.tool_text = "output line\n".repeat(800);
+    let outcome = run(&mut host, "m", &small, compactor(6000), "set up", &Policy::default()).unwrap();
+    assert!(outcome.compactions >= 1);
+    assert_eq!(&host.words[..2], &[target, target / 3]);
+    assert!(host.records.iter().any(|(k, t)| k == "compaction" && t.contains("retried with a shorter summary target")));
+    // Every summary fails: the turn continues on a labelled deterministic digest.
+    let script = "y".repeat(3000);
+    let mut replies: Vec<Value> = (0..12).map(|i| reply(None, call("control_room_post", &json!({"message":format!("{i}{script}")}).to_string()), "tool_calls")).collect();
+    replies.push(reply(Some("Done."), json!(null), "stop"));
+    let mut host = mock(replies);
+    host.summary_errors = (0..64).map(|_| truncated()).collect();
+    host.tool_text = "output line\n".repeat(800);
+    let outcome = run(&mut host, "m", &small, compactor(6000), "set up", &Policy::default()).unwrap();
+    assert_eq!(outcome.text, "Done.");
+    assert!(outcome.compactions >= 1);
+    let last = serde_json::to_string(&host.requests.last().unwrap()["messages"]).unwrap();
+    assert!(last.contains("Digest of steps"), "{last}");
+    assert!(last.contains("called control_room_post"));
+    assert!(host.records.iter().any(|(k, t)| k == "compaction" && t.contains("deterministic digest") && t.contains("declared token limit")));
+    // Cancellation during a summary is not papered over with a digest.
+    let mut host = mock((0..12).map(|i| reply(None, call("control_room_post", &json!({"message":format!("{i}{script}")}).to_string()), "tool_calls")).collect());
+    host.tool_text = "output line\n".repeat(800);
+    host.summary_errors = VecDeque::from([io::Error::new(io::ErrorKind::Interrupted, "Model call cancelled")]);
+    let _ = run(&mut host, "m", &small, compactor(6000), "set up", &Policy::default());
+    assert!(!host.words.is_empty());
+    assert!(!host.records.iter().any(|(k, t)| k == "compaction" && t.contains("Model call cancelled")));
 }
 #[test]
 fn worker_tool_schemas_fit_the_declared_overhead_reserve() {
@@ -249,7 +370,7 @@ fn deferred_tools_load_natively_on_search_or_first_use() {
         }
         fn poll(&mut self) -> Poll { self.0.poll() }
         fn model(&mut self, body: &Value) -> io::Result<Value> { self.0.model(body) }
-        fn summarize(&mut self, evidence: &str) -> io::Result<String> { self.0.summarize(evidence) }
+        fn summarize(&mut self, evidence: &str, words: usize) -> io::Result<String> { self.0.summarize(evidence, words) }
         fn record(&mut self, kind: &str, id: &str, text: &str, output: &str, status: &str) { self.0.record(kind, id, text, output, status) }
         fn metered(&mut self, meter: &Meter) { self.0.metered(meter) }
     }
@@ -259,7 +380,7 @@ fn deferred_tools_load_natively_on_search_or_first_use() {
         reply(None, call("control_nope", "{}"), "tool_calls"),
         reply(Some("Stopped."), json!(null), "stop"),
     ]));
-    let outcome = run(&mut host, "qwen-local", &limits(), 20000, "Stop the watch", &Policy::default()).unwrap();
+    let outcome = run(&mut host, "qwen-local", &limits(), compactor(20000), "Stop the watch", &Policy::default()).unwrap();
     assert_eq!(outcome.text, "Stopped.");
     let calls = host.0.calls.iter().map(|(n, a, nonce)| format!("{n} {a} {nonce}")).collect::<Vec<_>>();
     assert_eq!(calls, [
@@ -346,6 +467,6 @@ fn stopped_turns_keep_the_usage_reported_before_they_stopped() {
     // Refused before any call: nothing is metered (the worker records not launched).
     let mut host = mock(vec![]);
     let small = Limits { context_tokens: 2048, output_tokens: 512, input_bytes: 1024, output_bytes: 2048 };
-    assert_eq!(run(&mut host, "m", &small, 1000, &"x".repeat(6000), &Policy::default()).err().unwrap().0, "blocked");
+    assert_eq!(run(&mut host, "m", &small, compactor(1000), &"x".repeat(6000), &Policy::default()).err().unwrap().0, "blocked");
     assert!(host.meters.is_empty());
 }

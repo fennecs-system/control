@@ -51,6 +51,15 @@ pub(crate) fn deadline_threshold(limit: u64) -> u64 {
 pub(crate) fn deadline_text(remaining: u64) -> String {
     format!("{remaining} s left in this turn: publish your checkpoint (control_turn_handoff) now and continue in a routine or the next turn.")
 }
+/// The once-per-turn note when a turn's context passes its threshold (local
+/// endpoints, where Control owns the transcript and measures its size).
+pub(crate) fn context_text(percent: u32, handoff: bool) -> String {
+    if handoff {
+        format!("Context {percent}% full: publish your checkpoint (control_turn_handoff) and continue in the next turn.")
+    } else {
+        format!("Context {percent}% full: finish with a brief final report soon.")
+    }
+}
 pub(crate) fn steering_text(members: usize) -> String {
     format!("You are steering {members} active members: delegate this work to a member and end your turn.")
 }

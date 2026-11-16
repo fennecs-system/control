@@ -369,6 +369,92 @@ fn a_local_model_chat_compacts_on_its_own_endpoint_by_default_and_its_turn_fits(
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// An infinite-style local chat over many turns: between turns the chat's
+/// summary tree compacts at the edges of its history; inside each turn the
+/// local loop's step lens keeps the long turn within the endpoint. The two
+/// compose: a turn starts from the bounded history projection, and only its
+/// final report (never its in-turn summaries) enters the chat history.
+#[test]
+fn a_long_local_chat_compacts_across_turns_and_within_each_turn() {
+    use crate::local_agent::{Compactor as Steps, Host, Meter, Poll, Policy};
+    use serde_json::{Value, json};
+    #[derive(Default)]
+    struct Turn {
+        steps: usize,
+        requests: Vec<usize>,
+        folds: usize,
+    }
+    impl Host for Turn {
+        fn tools(&mut self) -> io::Result<Vec<Value>> {
+            Ok(vec![json!({"name":"control_workspace_run","description":"Run","inputSchema":{"type":"object"}})])
+        }
+        fn call(&mut self, _: &str, _: &Value, _: &str) -> Value {
+            json!({"content":[{"type":"text","text":"build log line\n".repeat(400)}]})
+        }
+        fn poll(&mut self) -> Poll {
+            Poll::Continue
+        }
+        fn model(&mut self, body: &Value) -> io::Result<Value> {
+            self.requests.push(body.to_string().len());
+            self.steps += 1;
+            let message = if self.steps <= 14 {
+                json!({"role":"assistant","content":null,"tool_calls":[{"id":format!("c{}",self.steps),"type":"function","function":{"name":"control_workspace_run","arguments":"{\"command\":\"make\"}"}}]})
+            } else {
+                json!({"role":"assistant","content":"Built and verified svc-a."})
+            };
+            Ok(json!({"choices":[{"finish_reason":if self.steps <= 14 {"tool_calls"} else {"stop"},"message":message}]}))
+        }
+        fn summarize(&mut self, _: &str, _: usize) -> io::Result<String> {
+            self.folds += 1;
+            Ok("ran make; build logs were long".into())
+        }
+        fn record(&mut self, _: &str, _: &str, _: &str, _: &str, _: &str) {}
+        fn metered(&mut self, _: &Meter) {}
+    }
+    let (mut state, _) = fixture();
+    state.runtime.compaction.settings = Settings { recent_entries: 2, history_bytes: 6000, ..Default::default() };
+    state.runtime.compaction.models[0].tools = true;
+    state.chats[0].model = Some(crate::providers::Model::captured(crate::backend::Backend::Local, "local-qwen".into()));
+    let limits = control_ai::model::Limits { context_tokens: 8192, output_tokens: 512, input_bytes: 28000, output_bytes: 2048 };
+    let dir = scratch();
+    let mut summarized_turns = 0;
+    for turn in 0..6 {
+        // Between turns: the chat's tree folds older entries at the edge.
+        if let Some(job) = prepare(&state) {
+            let job = hydrate(&state, job);
+            let view = execute(&job, &dir, |_, _, _| {
+                Ok(control_ai::model::Response { text: "Earlier turns: built svc-a repeatedly".into(), tokens: None })
+            })
+            .unwrap();
+            state.runtime.compaction.views.insert(job.chat.clone(), view);
+        }
+        let conversation = Conversation::of(&state, &state.chats[0]);
+        let count = state.chats[0].messages.len();
+        let window = selector(&state).window(&conversation, count);
+        summarized_turns += usize::from(window.items.iter().any(|item| matches!(item, Item::Summary(..))));
+        let history = window.render(&conversation).join("\n");
+        assert!(history.len() <= 6000, "turn {turn}: the history projection stays bounded");
+        // Within the turn: fourteen bulky steps through the local step lens.
+        let mut host = Turn::default();
+        let prompt = format!("{history}\nCurrent request: build svc-a ({turn})");
+        let outcome = crate::local_agent::run(&mut host, "m", &limits, Steps { input_bytes: 6000, output_tokens: 512 }, &prompt, &Policy::default()).unwrap();
+        assert_eq!(outcome.text, "Built and verified svc-a.");
+        assert!(host.folds >= 1, "turn {turn}: the long turn folded older steps");
+        let budget = ((limits.context_tokens - limits.output_tokens) * 3) as usize;
+        assert!(host.requests.iter().all(|&bytes| bytes <= budget), "turn {turn}: every request fits");
+        state.chats[0].messages.push(crate::chat::Message {
+            speaker: Default::default(),
+            text: format!("Build svc-a ({turn})"),
+            run_id: None,
+            reply: outcome.text,
+        });
+        state.chats[0].revision += 1;
+    }
+    assert!(summarized_turns >= 5, "the chat tree served compacted history on later turns");
+    assert!(state.chats[0].messages.iter().all(|m| !m.reply.contains("Summary of steps")), "in-turn summaries stay in the turn");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 #[ignore = "explicit release benchmark; synthetic evidence and no model traffic"]
 fn selection_profile() {
