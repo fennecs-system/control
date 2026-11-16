@@ -147,6 +147,18 @@ made members spend turns proving rather than doing; and jobs aborted on
 self-imposed guards before starting. Control services also accept many
 concurrent commands, so non-exclusive work need not take turns.
 
+Coordination revision 12 keeps the steering chat responsive: whoever steers a
+team assigns goals, resolves consequential choices and unblocks, keeping its
+turns short, and delegates implementation, long work and ongoing infrastructure
+to members, spawned or assigned. It merges the earlier steering-chat and
+infrastructure sentences and shortens others to stay within the 4,000-character
+lens limit. In
+one run a lead bot spent a whole turn writing and testing a library itself, hit
+its 600-second attempt limit, lost the unpublished work and left its team
+without steering for ten minutes. The host backs this with advisory notes on
+tool results (see [turn continuity](TURN-CONTINUITY.md#deadline-and-steering-notes))
+and a `timed_out` advisor fact.
+
 Inspect existing task tools and peer findings before implementing common
 capabilities again. Share a verified reusable implementation with its invocation,
 version and evidence through existing artifacts or an explicitly shared service.
@@ -276,10 +288,15 @@ comes from the judge role and the operator's bot approval.
    - a member cannot checkpoint: more than `bot_recovery_continues` (default 2)
      of its turns ended without an accepted handoff since its last published
      one. The fact names the member, the count and the host's last handoff
-     rejection, if any; it is reported once per streak.
+     rejection, if any; it is reported once per streak;
+   - a turn timed out: a member's latest turn, or the lead's, reached its
+     attempt time limit and was stopped before it checkpointed (`timed_out`,
+     naming the lead as the lead). It is reported once until that chat's
+     next turn settles otherwise. The advisor suggests splitting the work, or
+     for the lead, delegating it to a member.
 
-   A single failed, interrupted or cancelled turn (provider errors included)
-   and a single failed watch exit are never facts. Facts coalesce into one
+   Apart from a timeout, a single failed, interrupted or cancelled turn
+   (provider errors included) and a single failed watch exit are never facts. Facts coalesce into one
    reason under the bot's existing 30-second cooldown and 60 turns per hour.
    There is no clock rule: a quiet team is reported once per settled change,
    and elapsed time is never a fact.

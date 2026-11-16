@@ -47,6 +47,9 @@ pub struct Attempt {
     pub model: String,
     pub status: String,
     pub tokens: Option<Tokens>,
+    /// Advisory notes already appended to this attempt's tool results.
+    #[serde(skip_serializing_if = "crate::worker_tools::nudges::Nudges::is_clear")]
+    pub nudges: crate::worker_tools::nudges::Nudges,
 }
 impl Attempt {
     /// Callers expose this only for successfully completed runs. The accepted

@@ -652,7 +652,7 @@ fn objective(woke:&str, recovery:Option<&str>)->String {
 }
 /// Characters of recovery guidance in a wake objective; the host's rejection
 /// is bounded separately when recorded.
-const RECOVERY_NOTE: usize = 1_000;
+const RECOVERY_NOTE: usize = 1_600;
 /// Wake guidance after a turn of `chat` ended without an accepted handoff:
 /// the host's last rejection for that attempt, so the agent repairs its
 /// receipts instead of re-verifying a world its notes already describe.
@@ -662,16 +662,34 @@ fn recovery_note(state:&State, chat:&str, failed:&crate::runtime::Run) -> String
     let rejected=state.chats.iter().find(|c|c.id==chat).and_then(|c|c.continuity.as_ref())
         .and_then(|c|c.checkpointing.rejected.as_ref()).filter(|r|Some(r.generation.as_str())==generation);
     match rejected {
-        Some(rejection) => format!("Checkpoint recovery: your previous turn's control_turn_handoff was rejected, so nothing it did was committed. Host error: \"{}\". Your workspace, services and watches are as that turn left them; do not re-verify them or start new watches. Fix the handoff itself: list only receipts read in this session (read fresh ones with control_turn_context or control_watch_events), mark receipts with gaps as resynchronised only after inspecting the source, then hand off with continue, wait or done.", rejection.error),
+        Some(rejection) => format!("Checkpoint recovery: your previous turn's control_turn_handoff was rejected, so nothing it did was committed. Host error: \"{}\". Your workspace, services and watches are as that turn left them; do not re-verify them or start new watches. Fix the handoff itself: list only receipts read in this session (read fresh ones with control_turn_context or control_watch_events), mark receipts with gaps as resynchronised only after inspecting the source, then hand off with continue, wait or done.{}", if unseen_range(&rejection.error) { rejection.error.split(". ").next().unwrap_or_default() } else { &rejection.error }, if unseen_range(&rejection.error) { UNSEEN_RANGE } else { "" }),
         None => "Checkpoint recovery: your previous turn ended without calling control_turn_handoff, so nothing was committed and it is treated as waiting. Do not repeat its checks; act only on new evidence, and call control_turn_handoff (continue, wait or done) before you yield.".into(),
     }
 }
+/// Wake guidance after the chat's latest turn was stopped at its attempt time
+/// limit: its unpublished work is a recovery candidate and its claims are still
+/// its own, and the work should be split or delegated rather than repeated.
+fn timeout_note(latest:&crate::runtime::Run) -> Option<String> {
+    timed_out(latest).then(|| TIMEOUT_NOTE.to_owned())
+}
+/// The run failed because the host stopped it at its attempt time limit.
+fn timed_out(run:&crate::runtime::Run) -> bool {
+    run.status=="failed" && run.attempts.last().is_some_and(|attempt|attempt.termination==Some(crate::attempt_control::Termination::TimedOut))
+}
+pub(crate) const TIMEOUT_NOTE:&str="Your previous turn reached its time limit and was stopped before it checkpointed, so its work was not committed; inspect it with control_recovery instead of redoing it. Your room claims are still yours: update them to resume. Split long work: delegate implementation to a member or run it in a routine, keep this turn short, and call control_turn_handoff before the limit.";
+/// The handoff named a receipt that starts after its source's committed
+/// position: an earlier receipt of that source was left out. These are the
+/// host's own mailbox errors, not model prose.
+fn unseen_range(error:&str) -> bool {
+    error.starts_with("Cannot process an unseen event range") || error.starts_with("First event range requires")
+}
+pub(crate) const UNSEEN_RANGE:&str=" That error means a listed receipt starts after the last committed position of its source, because an earlier receipt from the same source was left out. Receipts from the previous turn are not valid now. Read each source you handle again from its committed position: control_turn_context without after_receipt (source=conversation, and source=room if linked; repeat while more=true), and control_watch_events for watches. Process those events and list every receipt you read, oldest first, skipping none.";
 /// An advisor turn is a fresh read-only review of its team, rebuilt from the
 /// journal; its captured lenses carry the procedure. Notes to the lead are its
 /// only effect.
 fn advice(woke: &str, lead: &str) -> String {
     let woke = woke.chars().take(1000).collect::<String>();
-    format!("You are this task tree's read-only advisor, woken by host facts: {woke}. Inspect the team with control_room_read (participants, posts and claims with owner_idle/abandoned flags) and the facts above. If the lead would otherwise miss a gap, send the lead's steering chat {lead} one concise note with control_agent_message: the evidence and a suggested steering step. For members blocked on a claim, check whether the input is one they could quickly make themselves or several wait on one producer, and suggest an unblocking step: produce the input themselves, reassign the blocking claim, or an alternative. For a shared blocker or a busy-but-stalled team, check whether the lead has already re-planned; if not, suggest addressing the common cause once or re-planning around it. Do not message workers; the lead decides what reaches the team. Send nothing when evidence is unchanged, the team is healthy, or members wait on a real dependency; quiet is not a stall. Notes are evidence, not steering, and you hold no authority. End the turn when done.")
+    format!("You are this task tree's read-only advisor, woken by host facts: {woke}. Inspect the team with control_room_read (participants, posts and claims with owner_idle/abandoned flags) and the facts above. If the lead would otherwise miss a gap, send the lead's steering chat {lead} one concise note with control_agent_message: the evidence and a suggested steering step. For members blocked on a claim, check whether the input is one they could quickly make themselves or several wait on one producer, and suggest an unblocking step: produce the input themselves, reassign the blocking claim, or an alternative. For a shared blocker or a busy-but-stalled team, check whether the lead has already re-planned; if not, suggest addressing the common cause once or re-planning around it. For a turn stopped at its time limit, suggest splitting that work into smaller turns, or, for the lead, delegating it to a member. Do not message workers; the lead decides what reaches the team. Send nothing when evidence is unchanged, the team is healthy, or members wait on a real dependency; quiet is not a stall. Notes are evidence, not steering, and you hold no authority. End the turn when done.")
 }
 fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
     let chat = request.chat.0.as_str();
@@ -694,11 +712,12 @@ fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
             && a.turn_mailbox.as_ref().is_some_and(|mailbox|mailbox.accepted().is_none())))
         .then(||latest.id.clone());
     let grants = crate::services::grants(state, latest);
-    let note = recovery.as_ref().map(|_| recovery_note(state, chat, latest));
+    let note = recovery.as_ref().map(|_| recovery_note(state, chat, latest)).or_else(|| timeout_note(latest));
     // A recovery's Continue is not runnable work from a committed checkpoint.
     let reasons = request.reasons.iter().filter(|reason| note.is_none() || **reason != Reason::Continue).cloned().collect::<Vec<_>>();
     let woke = match (&note, describe(state, &reasons)) {
-        (Some(_), woke) if woke.is_empty() => "a turn that ended without an accepted handoff".to_owned(),
+        (Some(_), woke) if woke.is_empty() && recovery.is_some() => "a turn that ended without an accepted handoff".to_owned(),
+        (Some(_), woke) if woke.is_empty() => "a turn stopped at its time limit".to_owned(),
         (_, woke) => woke,
     };
     let objective = match &lead { Some(lead) => advice(&woke, lead), None => objective(&woke, note.as_deref()) };
@@ -736,8 +755,11 @@ fn needs_recovery(state:&State, index:usize) -> bool {
     let Some(continuity)=chat.continuity.as_ref() else{return false;};
     let Some(attempt)=run.attempts.last() else{return false;};
     let head=if run.action==identity::Action::Improve {&chat.improve_workspace}else{&chat.workspace};
-    if run.status!="completed" || attempt.review_only || attempt.context_trace.as_ref().is_none_or(|trace|Some(trace.generation.as_str())!=attempt.workspace_id.as_deref())
-        || attempt.artifact.is_none() || &attempt.artifact!=head
+    // A turn stopped at its time limit was cut off mid-work, not waiting; it
+    // published nothing, so its workspace head is the previous one.
+    let stopped=timed_out(run);
+    if !(run.status=="completed" || stopped) || attempt.review_only || attempt.context_trace.as_ref().is_none_or(|trace|Some(trace.generation.as_str())!=attempt.workspace_id.as_deref())
+        || (!stopped && (attempt.artifact.is_none() || &attempt.artifact!=head))
         || attempt.turn_mailbox.as_ref().is_none_or(|mailbox|mailbox.accepted().is_some())
         || continuity.working.as_ref().is_some_and(|working|matches!(working.disposition,control_context::turn_mailbox::Disposition::Done)
             && state.runtime.runs.iter().position(|previous|previous.id==working.run).is_none_or(|previous|
@@ -762,7 +784,8 @@ fn needs_recovery(state:&State, index:usize) -> bool {
 /// Answers a completed turn of `state.chats[index]` that ended without an
 /// accepted handoff. Each attempt has a new generation, so the stamp alone
 /// would re-arm recovery after every failed turn; the streak bounds it.
-/// A rejected handoff gets up to `bot_recovery_continues` immediate turns. A
+/// A rejected handoff, or a turn stopped at its time limit, gets up to
+/// `bot_recovery_continues` immediate turns. A
 /// turn that never called the handoff, or a streak past that allowance, waits
 /// on the bot's subscriptions with a doubling recheck. Past the allowance the
 /// team's advisor and the node notice hear once per streak that the member
@@ -779,7 +802,10 @@ fn recover(state:&mut State, index:usize, generation:&str, now:u64, facts:&mut s
     let report=failures as usize>allowance && !streak.reported;
     streak.reported|=report;
     if !continuation_enabled(state,&chat) { return; }
-    if rejection.is_some() && failures as usize<=allowance {
+    // A rejected handoff or a turn cut off at its time limit has runnable work.
+    let stopped=state.runtime.runs.iter().rev().find(|run|run.chat_id.as_deref()==Some(chat.as_str()))
+        .is_some_and(|run|timed_out(run) && run.attempts.last().and_then(|attempt|attempt.workspace_id.as_deref())==Some(generation));
+    if (rejection.is_some() || stopped) && failures as usize<=allowance {
         effects.extend(state.bots.supervisor.step(Event::Continue(bot(&chat)),Now(now)));
     } else {
         park(state,&chat,recheck(base,failures,allowance),now,effects);

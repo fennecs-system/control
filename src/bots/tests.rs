@@ -2294,3 +2294,5 @@ mod reconcile_profile;
 mod advisor;
 #[path = "tests/recovery.rs"]
 mod recovery;
+#[path = "tests/timeout.rs"]
+mod timeout;

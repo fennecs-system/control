@@ -33,6 +33,12 @@ pub struct Limits {
     /// First recheck of a bot that could not checkpoint, in seconds; it
     /// doubles with each further failed turn, up to 64 times or one day.
     pub bot_recovery_recheck_seconds: u64,
+    /// Seconds a turn of a chat steering active members may run before its
+    /// tool results suggest delegating the work and ending the turn. Advisory.
+    pub steering_turn_seconds: u64,
+    /// Command executions in one turn of a chat steering active members before
+    /// the same advisory suggestion.
+    pub steering_exec_calls: usize,
 }
 impl Default for Limits {
     fn default() -> Self {
@@ -46,6 +52,8 @@ impl Default for Limits {
             advisor_bottleneck_members: 2,
             bot_recovery_continues: 2,
             bot_recovery_recheck_seconds: 300,
+            steering_turn_seconds: 240,
+            steering_exec_calls: 6,
         }
     }
 }
@@ -66,6 +74,9 @@ impl Limits {
         }
         if self.bot_recovery_continues > 16 || !(30..=86_400).contains(&self.bot_recovery_recheck_seconds) {
             return Err(io::Error::other("bot_recovery_continues must be 0–16 and bot_recovery_recheck_seconds 30–86400"));
+        }
+        if !(30..=86_400).contains(&self.steering_turn_seconds) || !(1..=1024).contains(&self.steering_exec_calls) {
+            return Err(io::Error::other("steering_turn_seconds must be 30–86400 and steering_exec_calls 1–1024"));
         }
         Ok(self)
     }
