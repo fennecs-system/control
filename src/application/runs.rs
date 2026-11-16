@@ -3,6 +3,27 @@
 use crate::identity::{Action, Actor};
 use control_context::agent_policy::RunKind;
 use serde::{Deserialize, Serialize};
+/// Run statuses, decided in one place.
+pub(crate) mod status {
+    /// Executing, queued or awaiting input: the run will still change.
+    pub(crate) fn active(status: &str) -> bool {
+        matches!(status, "queued" | "running" | "cancelling" | "waiting")
+    }
+    /// Every other status. A finished run does not execute again, though a
+    /// resumable one can be continued by a new run, and a finished run's
+    /// records (delivery, links) may still be updated.
+    pub(crate) fn finished(status: &str) -> bool {
+        !active(status)
+    }
+    /// Finished without success: a continuation can resume from it.
+    pub(crate) fn resumable(status: &str) -> bool {
+        matches!(status, "blocked" | "failed" | "interrupted" | "cancelled")
+    }
+    /// Finished because a continuation took over: its outcome is the continuation's.
+    pub(crate) fn superseded(status: &str) -> bool {
+        status == "continued"
+    }
+}
 /// A run as saved. Code uses [`Run`], which remembers its saved form between
 /// saves (see `history::Cached`); finished runs then cost a copy, not a
 /// re-serialization.

@@ -1,3 +1,5 @@
+pub(crate) mod archive;
+
 use crate::State;
 use crate::config::{STATE_LOG as LOG, state_schema as schema};
 use control_effect::sync::Changes;
@@ -137,6 +139,8 @@ fn recover(directory: &Path, data: Vec<u8>) -> io::Result<(State, Option<Recover
         nonce: Option<String>,
         #[serde(rename = "_schema", default)]
         schema: Schema,
+        #[serde(rename = "_archive", default)]
+        archive: archive::Archive,
     }
     let identity: Identity = serde_json::from_slice(&data).map_err(io::Error::other)?;
     let mut log = FileJournal::open(&directory.join(LOG))?;
@@ -154,8 +158,8 @@ fn recover(directory: &Path, data: Vec<u8>) -> io::Result<(State, Option<Recover
         }
     }
     let clean = identity.schema == ours && found.as_ref().is_some_and(|(_, patches)| patches.is_empty());
-    let state = if clean || (found.is_none() && identity.schema == ours) {
-        serde_json::from_slice(&data).map_err(io::Error::other)?
+    let (mut state, archived) = if clean || (found.is_none() && identity.schema == ours) {
+        (serde_json::from_slice(&data).map_err(io::Error::other)?, identity.archive)
     } else {
         let mut document: serde_json::Value = serde_json::from_slice(&data).map_err(io::Error::other)?;
         snapshot::identify(&mut document);
@@ -166,8 +170,12 @@ fn recover(directory: &Path, data: Vec<u8>) -> io::Result<(State, Option<Recover
                 snapshot::apply(&mut document, patch.into_iter().filter_map(|edit| lens::edit(&route, edit)).collect())?;
             }
         }
-        serde_json::from_value(document).map_err(io::Error::other)?
+        let archived = document.get("_archive").cloned().map(serde_json::from_value).transpose().map_err(io::Error::other)?.unwrap_or_default();
+        (serde_json::from_value(document).map_err(io::Error::other)?, archived)
     };
+    // Archived runs come back beside the hot ones before anything reads runs.
+    archive::load(directory, &mut state, &archived)?;
+    archives().lock().unwrap_or_else(PoisonError::into_inner).insert(directory.to_owned(), archived);
     Ok((state, Some(Recovered { data, nonce: identity.nonce, log, clean })))
 }
 
@@ -188,8 +196,8 @@ fn adopt(directory: &Path, recovered: Recovered) -> bool {
 /// `state.json` alone is complete. Used on shutdown: a stopped node can be
 /// read (or rolled back to an older build) from the snapshot by itself.
 pub fn compact(state: &State) -> io::Result<()> {
-    let encoded = encode(state).map_err(io::Error::other)?;
     let directory = crate::config::state_directory().map_err(io::Error::other)?;
+    let encoded = encode(state, &archived(&directory)).map_err(io::Error::other)?;
     legacy_result(persist(&directory, encoded, true))?;
     changes().bump();
     crate::live_updates::notify();
@@ -286,14 +294,27 @@ impl std::error::Error for CheckpointError {
 /// (`history::Cached`), so this costs what changed plus a copy of the rest.
 /// Debug builds and tests check every encoding against a fresh, uncached
 /// serialization: the cache can only change the cost, never the bytes.
-fn encode(state: &State) -> serde_json::Result<Encoded> {
-    let encoded = crate::history::persisting(|| snapshot::encode(state))?;
+/// Archived runs are left out; `archive` lists their blocks.
+fn encode(state: &State, archive: &archive::Archive) -> serde_json::Result<Encoded> {
+    let saved = archive::Saved { archive, state };
+    let encoded = crate::history::persisting(|| snapshot::encode(&saved))?;
     #[cfg(debug_assertions)]
     {
-        let fresh = crate::history::uncached(|| crate::history::persisting(|| serde_json::to_vec(state)))?;
+        let fresh = crate::history::uncached(|| crate::history::persisting(|| serde_json::to_vec(&saved)))?;
         assert!(fresh == encoded.bytes(), "the cached state encoding differs from a fresh one");
     }
     Ok(encoded)
+}
+
+/// The archive blocks the state in `directory` references, by directory like
+/// `published` but never dropped on a failed save: the runs marked archived in
+/// memory are only in those blocks.
+fn archives() -> &'static Mutex<HashMap<PathBuf, archive::Archive>> {
+    static ARCHIVES: OnceLock<Mutex<HashMap<PathBuf, archive::Archive>>> = OnceLock::new();
+    ARCHIVES.get_or_init(Mutex::default)
+}
+fn archived(directory: &Path) -> archive::Archive {
+    archives().lock().unwrap_or_else(PoisonError::into_inner).get(directory).cloned().unwrap_or_default()
 }
 
 /// Synchronous, phase-aware checkpoint boundary. Success includes file and
@@ -307,14 +328,37 @@ fn encode(state: &State) -> serde_json::Result<Encoded> {
 /// atomic `state.json` replacement followed by a fresh log. Either way the
 /// change is durable before this returns, so receipts and idempotency records
 /// keep their guarantees.
+///
+/// Finished runs far from the focus move to archive blocks first
+/// (`storage::archive`); the blocks are durable before this save, which
+/// commits them, references them.
 pub fn checkpoint(state: &State) -> Result<(), CheckpointError> {
-    let encoded = encode(state)
-        .map_err(|error| CheckpointError::NotReplaced(io::Error::other(error)))?;
     let directory = crate::config::state_directory()
         .map_err(|error| CheckpointError::NotReplaced(io::Error::other(error)))?;
-    persist(&directory, encoded, false)?;
+    checkpoint_in(&directory, state)?;
     changes().bump();
     crate::live_updates::notify();
+    Ok(())
+}
+fn checkpoint_in(directory: &Path, state: &State) -> Result<(), CheckpointError> {
+    let directory = directory.to_owned();
+    let mut archive = archived(&directory);
+    let pending = archive::step(&directory, state, &mut archive).map_err(CheckpointError::NotReplaced)?;
+    let saved = encode(state, &archive)
+        .map_err(|error| CheckpointError::NotReplaced(io::Error::other(error)))
+        .and_then(|encoded| persist(&directory, encoded, false));
+    match saved {
+        Ok(()) => {
+            archives().lock().unwrap_or_else(PoisonError::into_inner).insert(directory, archive);
+            pending.commit();
+        }
+        Err(CheckpointError::NotReplaced(error)) => {
+            pending.undo(state);
+            return Err(CheckpointError::NotReplaced(error));
+        }
+        // The save may be published: keep its blocks; restart decides.
+        Err(error) => return Err(error),
+    }
     Ok(())
 }
 

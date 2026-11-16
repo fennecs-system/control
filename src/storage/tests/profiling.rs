@@ -124,13 +124,27 @@ fn profile_swarm_hour() {
         for i in 0..6 {
             swarm_step(&mut state, 16 + i * 20, chats, &mut active);
         }
-        let encode = |state: &State| encode(state).unwrap();
+        let encode = |state: &State| encode(state, &archived(&directory)).unwrap();
         persist(&directory, encode(&state), true).unwrap();
+        let blocks = || -> std::collections::HashMap<PathBuf, u64> {
+            fs::read_dir(directory.join("history/runs")).into_iter().flatten().flatten().map(|e| (e.path(), e.metadata().map_or(0, |m| m.len()))).collect()
+        };
+        if mode != "before" {
+            // The first save fills the run cache, the second moves finished runs to blocks.
+            let start = Instant::now();
+            checkpoint_in(&directory, &state).unwrap();
+            checkpoint_in(&directory, &state).unwrap();
+            let archived_runs = state.runtime.runs.iter().filter(|run| run.archived()).count();
+            println!("{}", serde_json::json!({"case": "archive_migration", "ms": start.elapsed().as_secs_f64() * 1e3, "archived_runs": archived_runs, "hot_runs": state.runtime.runs.len() - archived_runs,
+                "block_bytes": blocks().values().sum::<u64>(), "blocks": blocks().len(), "snapshot_bytes": fs::metadata(directory.join("state.json")).unwrap().len()}));
+            persist(&directory, encode(&state), true).unwrap();
+        }
         let (mut written, mut latencies, mut compactions) = (0u64, Vec::new(), 0);
         let log_length = || fs::metadata(directory.join(LOG)).map_or(0, |m| m.len());
         for step in 0..saves {
             swarm_step(&mut state, step, chats, &mut active);
             let before = log_length();
+            let known = blocks();
             let start = Instant::now();
             if mode == "before" {
                 // The old path: a fresh serialization (no cached runs) and a full rewrite.
@@ -138,10 +152,11 @@ fn profile_swarm_hour() {
                 write_checkpoint(&directory, &bytes).unwrap();
                 written += bytes.len() as u64;
             } else {
-                persist(&directory, encode(black_box(&state)), false).unwrap();
+                checkpoint_in(&directory, black_box(&state)).unwrap();
             }
             latencies.push(start.elapsed().as_nanos());
             if mode != "before" {
+                written += blocks().iter().filter(|(path, _)| !known.contains_key(*path)).map(|(_, size)| size).sum::<u64>();
                 let after = log_length();
                 if after >= before {
                     written += after - before;

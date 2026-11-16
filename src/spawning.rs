@@ -65,7 +65,7 @@ impl Batch {
     /// repeated parent admissions. Explicit runnable handoffs remain separate.
     pub(crate) fn awaits_callback(&self,state:&State)->bool {
         !self.cancelled && self.notify && (self.pending()>0 || self.children.iter().any(|id|
-            delegation::leaf(state,id).is_ok_and(|run|!matches!(run.status.as_str(),"completed"|"failed"|"interrupted"|"blocked"|"cancelled"))))
+            delegation::leaf(state,id).is_ok_and(|run|!crate::application::runs::status::finished(&run.status))))
     }
     pub(crate) fn reserved(&self) -> usize {
         self.input.objectives.len()

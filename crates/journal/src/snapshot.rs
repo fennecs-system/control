@@ -329,28 +329,53 @@ fn node(old: &Encoded, o: usize, new: &Encoded, n: usize, at: &mut Vec<Seg>, out
             let prefix = a.iter().zip(&b).take_while(|&(&x, &y)| old.range(x) == new.range(y)).count();
             let limit = a.len().min(b.len()) - prefix;
             let suffix = a.iter().rev().zip(b.iter().rev()).take(limit).take_while(|&(&x, &y)| old.range(x) == new.range(y)).count();
-            let (ma, mb) = (a.len() - prefix - suffix, b.len() - prefix - suffix);
-            let paired = ma.min(mb);
-            for i in prefix..prefix + paired {
-                at.push(Seg::Index(i));
-                node(old, a[i], new, b[i], at, out);
-                at.pop();
+            // Anchor the middles on elements that are byte-identical on both
+            // sides, in order; between anchors, pair what remains positionally
+            // (the same element changed) and delete or insert the rest. Runs
+            // leaving from anywhere in the array then cost their removal, not a
+            // rewrite of everything that shifted. Edits name positions in the
+            // array as already edited, so they apply in order.
+            let (a_end, b_end) = (a.len() - suffix, b.len() - suffix);
+            let mut olds: std::collections::HashMap<&[u8], Vec<usize>> = std::collections::HashMap::new();
+            for (i, &child) in a.iter().enumerate().take(a_end).skip(prefix) {
+                olds.entry(old.range(child)).or_default().push(i);
             }
-            if ma != mb {
-                let start = prefix + paired;
-                op(out, b"\"a\",", at);
-                out.extend_from_slice(format!(",{start},{},[", ma - paired).as_bytes());
-                for (i, &child) in b[start..prefix + mb].iter().enumerate() {
-                    if i > 0 {
-                        out.push(b',');
-                    }
-                    out.extend_from_slice(new.range(child));
+            let mut anchors = Vec::new();
+            let mut next = prefix;
+            for (j, &child) in b.iter().enumerate().take(b_end).skip(prefix) {
+                if let Some(&i) = olds.get(new.range(child)).and_then(|list| list.iter().find(|&&i| i >= next)) {
+                    anchors.push((i, j));
+                    next = i + 1;
                 }
-                out.extend_from_slice(b"]]");
+            }
+            anchors.push((a_end, b_end));
+            let (mut i, mut j) = (prefix, prefix);
+            for (anchor_a, anchor_b) in anchors {
+                let paired = (anchor_a - i).min(anchor_b - j);
+                for t in 0..paired {
+                    at.push(Seg::Index(j + t));
+                    node(old, a[i + t], new, b[j + t], at, out);
+                    at.pop();
+                }
+                if anchor_a - i != anchor_b - j {
+                    splice(out, at, j + paired, anchor_a - i - paired, new, &b[j + paired..anchor_b]);
+                }
+                (i, j) = (anchor_a + 1, anchor_b + 1);
             }
         }
         _ => set(out, at, new.range(n)),
     }
+}
+fn splice(out: &mut Vec<u8>, at: &[Seg], position: usize, delete: usize, new: &Encoded, insert: &[usize]) {
+    op(out, b"\"a\",", at);
+    out.extend_from_slice(format!(",{position},{delete},[").as_bytes());
+    for (i, &child) in insert.iter().enumerate() {
+        if i > 0 {
+            out.push(b',');
+        }
+        out.extend_from_slice(new.range(child));
+    }
+    out.extend_from_slice(b"]]");
 }
 fn set(out: &mut Vec<u8>, at: &[Seg], value: &[u8]) {
     op(out, b"\"s\",", at);

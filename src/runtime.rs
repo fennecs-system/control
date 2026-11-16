@@ -10,6 +10,13 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+fn hot_runs<S: serde::Serializer>(runs: &[Run], serializer: S) -> Result<S::Ok, S::Error> {
+    if crate::history::is_persisting() {
+        serializer.collect_seq(runs.iter().filter(|run| !run.archived()))
+    } else {
+        serializer.collect_seq(runs)
+    }
+}
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Runtime {
@@ -24,6 +31,9 @@ pub struct Runtime {
     // Read old checkpoints for migration; new configuration belongs in the home directory.
     #[serde(skip_serializing)]
     pub model: Option<String>,
+    /// Every run, in creation order. Saves leave out runs kept in archive
+    /// blocks (`storage::archive`); they are loaded back at startup.
+    #[serde(serialize_with = "hot_runs")]
     pub runs: Vec<Run>,
     pub notice: String,
     // Why dispatch is paused, shown on queued chat messages; rebuilt by the next reconcile.
@@ -240,8 +250,7 @@ impl Runtime {
                 .saturating_add(1);
             if let Some(run) = self.runs.iter_mut().find(|r| {
                 r.id == id
-                    && ["blocked", "failed", "interrupted", "cancelled"]
-                        .contains(&r.status.as_str())
+                    && crate::application::runs::status::resumable(&r.status)
             }) {
                 if let Err(message) = identity::authorize(&run.actor, run.action) {
                     self.notice = message.into();
@@ -336,7 +345,7 @@ fn run_record(run: &Run) -> String {
     if ["queued", "running", "waiting"].contains(&run.status.as_str()) {
         html.push_str(&format!("<form class='decision-form' method='post' action='/cancel-run'><input type='hidden' name='id' value='{}'><button>Cancel</button></form>",escape(&run.id)));
     }
-    if ["blocked", "failed", "interrupted", "cancelled"].contains(&run.status.as_str()) {
+    if crate::application::runs::status::resumable(&run.status) {
         html.push_str(&format!("<form class='decision-form' method='post' action='/retry-run'><input type='hidden' name='id' value='{}'><button class='primary'>Retry</button></form>",escape(&run.id)));
     }
     html.push_str("</article>");

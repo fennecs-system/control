@@ -78,6 +78,25 @@ fn values_saved_whole_are_still_diffed_inside() {
     assert!(patch.len() < 400);
 }
 
+/// Removing scattered elements (runs leaving for the archive) costs the
+/// removals, not a rewrite of every element that shifted.
+#[test]
+fn scattered_removals_cost_the_removals() {
+    let old = state(1, 0);
+    let mut new = old.clone();
+    let runs = new["runtime"]["runs"].as_array_mut().unwrap();
+    let mut index = 0;
+    runs.retain(|_| {
+        index += 1;
+        index % 5 != 0
+    });
+    runs[3]["status"] = json!("changed");
+    runs.push(json!({"id": "appended"}));
+    let size = check(&old, &new);
+    assert!(size < 1200, "{size} bytes for ten removals, a change and an append");
+    check(&new, &old);
+}
+
 #[test]
 fn a_new_message_costs_the_message_not_the_chat() {
     let old = state(6, 400);

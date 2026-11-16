@@ -150,10 +150,6 @@ pub(crate) fn hydrated(chat: Option<&str>, attempts: &[Attempt]) -> Vec<Hydrated
         .collect()
 }
 
-/// Statuses after which an attempt's activity no longer changes.
-pub(crate) fn finished(status: &str) -> bool {
-    !matches!(status, "queued" | "running" | "cancelling" | "waiting")
-}
 
 #[cfg(test)]
 mod tests;
@@ -222,6 +218,10 @@ impl std::fmt::Display for Spilled<String> {
 thread_local! {
     static PERSISTING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
+/// Whether the current serialization is a save.
+pub(crate) fn is_persisting() -> bool {
+    PERSISTING.with(|p| p.get())
+}
 /// Runs `f` (a state save) so journal-backed fields write their position.
 pub(crate) fn persisting<R>(f: impl FnOnce() -> R) -> R {
     struct Reset(bool);
@@ -245,15 +245,36 @@ pub(crate) fn persisting<R>(f: impl FnOnce() -> R) -> R {
 pub(crate) struct Cached<T> {
     value: T,
     saved: OnceLock<Box<serde_json::value::RawValue>>,
+    /// Saved in an archive block (`storage::archive`) and unchanged since: the
+    /// state's own encoding leaves it out. Forgotten with the bytes.
+    archived: std::sync::atomic::AtomicBool,
+}
+impl<T> Cached<T> {
+    /// A value read back from `saved`, its exact saved form.
+    pub(crate) fn restored(value: T, saved: Box<serde_json::value::RawValue>, archived: bool) -> Self {
+        Self { value, saved: OnceLock::from(saved), archived: archived.into() }
+    }
+    /// The saved form, when the value is unchanged since it was saved.
+    pub(crate) fn saved(&self) -> Option<&serde_json::value::RawValue> {
+        self.saved.get().map(AsRef::as_ref)
+    }
+    pub(crate) fn archived(&self) -> bool {
+        self.archived.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    /// Marks an unchanged value as written to an archive block (or not, to
+    /// undo that when the save recording it fails). Changed values never are.
+    pub(crate) fn set_archived(&self, archived: bool) {
+        self.archived.store(archived && self.saved.get().is_some(), std::sync::atomic::Ordering::Relaxed);
+    }
 }
 impl<T> From<T> for Cached<T> {
     fn from(value: T) -> Self {
-        Self { value, saved: OnceLock::new() }
+        Self { value, saved: OnceLock::new(), archived: false.into() }
     }
 }
 impl<T: Clone> Clone for Cached<T> {
     fn clone(&self) -> Self {
-        Self { value: self.value.clone(), saved: self.saved.clone() }
+        Self { value: self.value.clone(), saved: self.saved.clone(), archived: self.archived().into() }
     }
 }
 impl<T: std::fmt::Debug> std::fmt::Debug for Cached<T> {
@@ -275,6 +296,7 @@ impl<T> std::ops::Deref for Cached<T> {
 impl<T> std::ops::DerefMut for Cached<T> {
     fn deref_mut(&mut self) -> &mut T {
         self.saved.take();
+        *self.archived.get_mut() = false;
         &mut self.value
     }
 }

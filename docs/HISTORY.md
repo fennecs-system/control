@@ -155,6 +155,12 @@ start and stop this build once first, so the log is folded into the snapshot.
 If an older build then rewrites `state.json`, the stale log no longer names it
 and is ignored.
 
+Schema version 2 moves archived runs out of the state (an `External` lens step:
+nothing to translate forward, no way back). Builds with lens support but
+without archives refuse to read it rather than silently miss those runs.
+Builds from before the log read `state.json` and see only the hot runs; the
+archived ones stay in `history/runs/` for a later upgrade.
+
 ### How this maps onto Journal, Store and lens
 
 The log is a `FileJournal`, with its format and crash semantics: JSON lines,
@@ -167,11 +173,38 @@ verbatim (one patch each) near the focus, and everything older is folded into
 one complete block, the snapshot, that never changes once written; a new
 compaction writes a new block under a new name rather than editing the old one.
 
-Finished runs and old chat messages are positions far from the focus too. Their
-bulky text already lives in the per-chat journals; their small records still
-live in `state.json` (copied from their saved bytes on each save, loaded and
-held in memory) and are never pruned. Moving them out into cut-shaped
-immutable blocks, with lookup by id, is the next step.
+Finished runs are positions far from the focus too, and leave the state for
+cut-shaped blocks:
+
+    state/history/runs/<start>-<level>.jsonl   one saved run per line, never rewritten
+
+- **Which runs.** `application::runs::status` decides statuses in one place:
+  `active` (queued, running, cancelling, waiting), `finished` (everything
+  else), `resumable` (blocked, failed, interrupted, cancelled) and
+  `superseded` (continued). A run is archivable when it is finished, not
+  resumable, outside the newest 512 runs, unchanged since its last save and
+  not pointed at by a run that stays hot (persona root or parent, delegation
+  child or continuation, spawned children).
+- **Blocks.** Archivable runs move 64 or more at a time. A block covers
+  archive positions `start .. start + 2^level`, aligned like `lens::cut`
+  blocks; two adjacent blocks of one level merge into their parent, so the
+  archive has O(log n) blocks. The state keeps only the list (`_archive`).
+- **Commit.** A block is written to a temporary file, synced, renamed and the
+  directory synced before the save that references it; that save commits it.
+  A failed save unmarks the runs and deletes the new blocks. Blocks no
+  committed save references (a crash in between) are deleted at load, and
+  blocks a merge replaced only after the merge's save commits.
+- **Lookups.** In memory every run stays in `Runtime::runs`, in creation
+  order, so lookups by id, views, recovery and history checks are unchanged;
+  an archived run is only left out of the state's encoding. Startup reads the
+  blocks back (eagerly; replay and load stay near 100 ms).
+- **Un-archiving.** Any mutable access to an archived run (a continuation
+  recording itself on it, a delivery update) un-archives it: it is saved in the
+  state again and shadows its block copy, which the next merge drops.
+- Readers outside the server (`config::read_state`) see only the state's hot
+  runs; none of them read runs today.
+
+Old chat messages are the next positions to move the same way.
 
 ## Turn continuity
 
