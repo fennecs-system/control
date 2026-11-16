@@ -538,7 +538,7 @@ fn committed_runnable_work_resumes_once_and_failed_saves_retain_the_intent() {
     assert!(
         bot_runs(&state)[0]
             .objective
-            .contains("while meaningful progress is possible")
+            .starts_with("Bot wake: continue the original goal in this active session.")
     );
     let stored = serde_json::to_vec(&state).unwrap();
     let mut recovered: State = serde_json::from_slice(&stored).unwrap();
@@ -1966,7 +1966,7 @@ fn a_bot_follows_its_chats_watches_and_wakes_on_lines_and_exits() {
         runs[0]
             .objective
             .contains("3 new lines from watch game (w-game)")
-            && runs[0].objective.contains("control_watch_events"),
+            && !runs[0].objective.contains("control_watch_events"),
         "{}",
         runs[0].objective
     );

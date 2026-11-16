@@ -32,7 +32,7 @@ fn rpc_at(
         && let Ok(mut state)=shared.lock()
     {
         if name!="control_turn_context" && crate::turn_context::callback_notice(&mut state,run_id) {
-            content.push(json!({"type":"text","text":"Use control_turn_context at the next action boundary for new callbacks or remaining attempt time. Keep this session active while useful work remains; hand off when waiting or done, or before an explicitly reported deadline."}));
+            content.push(json!({"type":"text","text":"New callbacks: read them with control_turn_context at the next action boundary."}));
         }
         if !refused {
             for note in nudges::notes(&mut state,run_id,name,nudges::now()) {
@@ -112,6 +112,10 @@ fn dispatch_at(
             if judge {
                 tools.retain(|tool|(advisor && tool["name"]=="control_agent_message") || matches!(tool["name"].as_str(),Some("control.web.search"|"control.rust.run"|"control.rust.bench"|"control.solve"|"control.search.path"|"control_agent_result"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_knowledge_read"|"control_knowledge_search")));
             }
+            if judge {
+                // Read-only captured guidance; advisors read their own procedure.
+                tools.extend(crate::tool_registry::AttemptTools::definitions(&crate::guidance::Tools));
+            }
             if claude {
                 tools.push(crate::claude::definition());
                 if judge { let tool=tools.last_mut().unwrap();
@@ -144,6 +148,10 @@ fn dispatch_at(
             }
             if matches!(request["params"]["name"].as_str(),Some("control_room_ack"|"control_room_notifications")) && managed {
                 return error("Managed sessions read room posts with control_turn_context {\"source\":\"room\"}; control_turn_handoff acknowledges them when you yield.");
+            }
+            // Pure read of the run's captured context, for every role including judges.
+            if request["params"]["name"]=="control_guidance" {
+                return json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(crate::guidance::answer(run,&request["params"]["arguments"]))});
             }
             if judge && !(advisor && request["params"]["name"]=="control_agent_message") && !matches!(request["params"]["name"].as_str(),Some("control_workspace_run"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_web_search"|"control_rust_run"|"control_rust_bench"|"control_solve"|"control_search_path"|"control_room_list"|"control_room_read"|"control_room_plan"|"control_room_post"|"control_agent_result"|"control_knowledge_read"|"control_knowledge_search"|"control_packages_search"|"control_package_read")) {
                 return error("Judge policy permits read-only source inspection, isolated verification and room collaboration only.");

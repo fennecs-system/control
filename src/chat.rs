@@ -641,7 +641,7 @@ pub(crate) fn prompt_prefix(run:&crate::runtime::Run,session:&Session)->String {
         .unwrap_or_else(|| selected_lenses(session));
     let refs: Vec<_> = names.iter().map(String::as_str).collect();
     let context = if let Some(context) = &*run.context {
-        crate::lens_library::prompt(context)
+        crate::lens_library::prompt(context, crate::lens_library::audience(run))
     } else if names.is_empty() {
         String::new()
     } else {

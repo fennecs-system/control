@@ -38,6 +38,7 @@ mod github;
 mod graph_search;
 mod knowledge;
 mod knowledge_tools;
+mod guidance;
 mod lens_library;
 mod lens_ui;
 mod lifecycle;

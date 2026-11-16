@@ -456,7 +456,7 @@ fn a_timed_out_turn_continues_promptly_within_the_bounded_streak() {
     assert!(!run.objective.contains("unfinished runnable work from your committed checkpoint"), "{}", run.objective);
     assert!(run.bot_turn.as_ref().unwrap().recovery.is_none(), "no published report to recover from");
     let woke = &state.chats[0].messages.last().unwrap().text;
-    assert!(woke.starts_with("Bot woke: a turn stopped at its time limit. Your previous turn reached its time limit"), "{woke}");
+    assert!(woke.starts_with("Bot woke: a turn stopped at its time limit. Your previous turn hit its time limit"), "{woke}");
     assert_eq!(checkpointing(&state, &chat).failures, 1, "it counts toward the recovery streak");
     // Repeated timeouts stay bounded: two prompt continues, then a recheck.
     assert!(time_out_queued(&mut state, &chat));

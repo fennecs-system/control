@@ -7,7 +7,7 @@ pub mod tool_policy;
 pub mod turn_context;
 pub mod working_state;
 pub mod turn_mailbox;
-pub use library::{package_reference, valid_id, Definition, DocumentInput, LensVersion, Library, PackageInput, Resolved};
+pub use library::{package_reference, valid_id, Audience, Definition, DocumentInput, Guidance, LensVersion, Library, PackageInput, Resolved};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tool {
     pub name: &'static str,
@@ -297,11 +297,12 @@ pub const TOOLS: [Tool; 29] = [
         title: "Lenses",
         description: "Library · compose context and tool selections",
         href: Some("/lenses"),
-        aliases: "context composition",
+        aliases: "context composition guidance on demand",
         mcp_names: &[
             "control.lenses.list",
             "control.lens.read",
             "control.lenses.resolve",
+            "control_guidance",
         ],
         execution: "pure Rust / lens library",
         surface: "lens library / MCP",

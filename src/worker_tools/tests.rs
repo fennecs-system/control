@@ -498,6 +498,16 @@ fn judge_tools_are_enforced_even_when_unadvertised_names_are_forged() {
         );
     }
     assert_eq!(shared.lock().unwrap().runtime.runs.len(), 1);
+    // Captured guidance is a read every role may make, judges included.
+    assert!(names.contains(&"control_guidance"));
+    let read = rpc_at(
+        &shared,
+        &id,
+        &json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_guidance","arguments":{"topic":"session"}}}}),
+        None,
+    );
+    assert_eq!(read["result"]["isError"], false, "{read}");
+    assert_eq!(read["result"]["structuredContent"]["data"]["text"], control_context::agent_policy::SESSION_GUIDANCE_DETAIL);
 }
 #[test]
 fn an_approved_advisor_judge_gains_only_evidence_notes() {

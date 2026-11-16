@@ -26,7 +26,65 @@ pub struct Definition {
     /// admitted when captured) or `name@version` (pinned). Context, not a grant.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub packages: Vec<String>,
+    /// One-line index entry. A lens with a summary is guidance on demand:
+    /// prompts carry the summary and agents read the captured text with
+    /// `control_guidance` when the situation arises.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub summary: String,
+    /// Team roles that see this lens at all; empty means every role.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub roles: Vec<Audience>,
+    /// Roles that receive the full text inline rather than the summary.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub inline: Vec<Audience>,
 }
+/// A run's place in its task tree, derived by the host from delegation
+/// records, never from prose: the root steers, spawned workers are members
+/// and the read-only judge advises. A lone chat is its own lead.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Audience {
+    Lead,
+    Member,
+    Advisor,
+}
+impl Audience {
+    pub const ALL: [Self; 3] = [Self::Lead, Self::Member, Self::Advisor];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Lead => "lead",
+            Self::Member => "member",
+            Self::Advisor => "advisor",
+        }
+    }
+}
+/// A captured lens read on demand. Contexts captured before guidance on
+/// demand have none; all their instructions are inline.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Guidance {
+    pub id: String,
+    pub name: String,
+    pub revision: u64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roles: Vec<Audience>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inline: Vec<Audience>,
+    pub text: String,
+}
+impl Guidance {
+    pub fn visible(&self, role: Audience) -> bool {
+        self.roles.is_empty() || self.roles.contains(&role)
+    }
+    /// The full text belongs in `role`'s prompt rather than its index.
+    pub fn inline_for(&self, role: Audience) -> bool {
+        self.visible(role) && (self.summary.is_empty() || self.inline.contains(&role))
+    }
+}
+/// Characters in a lens summary: one index line.
+pub const MAX_SUMMARY: usize = 240;
 /// One admitted package version offered to resolution, like `DocumentInput`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -90,6 +148,27 @@ pub struct Resolved {
     pub instructions: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub packages: Vec<PackageInput>,
+    /// Role-scoped or on-demand lenses with their captured text, kept out of
+    /// `instructions`, which every role receives inline.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guidance: Vec<Guidance>,
+}
+impl Resolved {
+    /// Captured texts `role` receives inline, in resolution order.
+    pub fn inline(&self, role: Audience) -> impl Iterator<Item = &str> {
+        self.instructions.iter().map(String::as_str)
+            .chain(self.guidance.iter().filter(move |g| g.inline_for(role)).map(|g| g.text.as_str()))
+    }
+    /// Lenses `role` sees as an index line and can read on demand.
+    pub fn on_demand(&self, role: Audience) -> impl Iterator<Item = &Guidance> {
+        self.guidance.iter().filter(move |g| g.visible(role) && !g.inline_for(role))
+    }
+    /// The captured lens `topic` (an ID or name, any case) visible to `role`.
+    pub fn guidance_for(&self, topic: &str, role: Audience) -> Option<&Guidance> {
+        let topic = topic.trim();
+        self.guidance.iter().filter(|g| g.visible(role))
+            .find(|g| g.id.eq_ignore_ascii_case(topic) || g.name.eq_ignore_ascii_case(topic))
+    }
 }
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty()
@@ -192,6 +271,7 @@ impl Library {
             + resolved
                 .instructions
                 .iter()
+                .chain(resolved.guidance.iter().map(|g| &g.text))
                 .map(|s| s.chars().count())
                 .sum::<usize>()
             > 48000
@@ -257,7 +337,18 @@ impl Library {
                 None => out.packages.push(input.clone()),
             }
         }
-        if !d.instructions.trim().is_empty() && !out.instructions.contains(&d.instructions) {
+        let text = !d.instructions.trim().is_empty();
+        if text && (!d.summary.is_empty() || !d.roles.is_empty()) {
+            out.guidance.push(Guidance {
+                id: d.id.clone(),
+                name: d.name.clone(),
+                revision: d.revision,
+                summary: d.summary.clone(),
+                roles: d.roles.clone(),
+                inline: d.inline.clone(),
+                text: d.instructions.clone(),
+            });
+        } else if text && !out.instructions.contains(&d.instructions) {
             out.instructions.push(d.instructions.clone());
         }
         out.lenses.push(LensVersion {
@@ -283,6 +374,10 @@ impl Library {
                 || d.includes.len() > MAX_REFERENCES
                 || d.documents.len() > MAX_REFERENCES
                 || d.packages.len() > MAX_REFERENCES
+                || d.summary.chars().count() > MAX_SUMMARY
+                || d.summary.contains('\n')
+                || d.roles.len() > 3
+                || d.inline.len() > 3
                 || !versions.insert((&d.id, d.revision))
             {
                 return Err("Invalid lens definition or duplicate revision.".into());
