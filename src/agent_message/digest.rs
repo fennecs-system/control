@@ -55,21 +55,30 @@ fn starved(state: &State, now_ms: u64) -> Vec<String> {
         && crate::application::runs::status::active(&run.status)));
     chats
 }
-/// Cheap check for the reconcile fast path.
-pub(crate) fn due(state: &State, now_ms: u64) -> bool {
+/// Digest receipts past the bound. Cheap: a flag and a time per receipt.
+fn overdue(state: &State, now_ms: u64) -> Vec<usize> {
     let bound = state.runtime.execution.peer_digest_seconds.saturating_mul(1000);
-    state.agent_messages.iter().any(|sent| sent.digest && sent.at_ms.saturating_add(bound) <= now_ms)
-        && !starved(state, now_ms).is_empty()
+    state.agent_messages.iter().enumerate()
+        .filter(|(_, sent)| sent.digest && sent.at_ms.saturating_add(bound) <= now_ms)
+        .map(|(index, _)| index).collect()
 }
-/// Delivers due digests and checkpoints them; a failed save restores the
-/// queue and chats so the messages stay pending for a later pass.
+/// Delivers due digests and retires the flags of overdue messages some turn
+/// already took, so later passes skip them. Checkpoints both; a failed save
+/// restores the queue, chats and flags so the messages stay pending.
 pub(crate) fn reconcile(state: &mut State, now_ms: u64, save: &mut impl FnMut(&State) -> std::io::Result<()>) -> Result<(), &'static str> {
-    if !due(state, now_ms) {
+    let overdue = overdue(state, now_ms);
+    if overdue.is_empty() {
         return Ok(());
     }
     let (runs, notice) = (state.runtime.runs.len(), state.runtime.notice.clone());
     let chats = state.chats.iter().map(|session| (session.messages.len(), session.revision)).collect::<Vec<_>>();
-    if deliver(state, now_ms) == 0 {
+    let delivered = deliver(state, now_ms);
+    // After delivery a carried message has a later turn, so it is no longer awaited.
+    let retired = overdue.into_iter().filter(|&index| !awaiting(&state.runtime.runs, &state.chats, &state.agent_messages[index])).collect::<Vec<_>>();
+    for &index in &retired {
+        state.agent_messages[index].digest = false;
+    }
+    if delivered == 0 && retired.is_empty() {
         return Ok(());
     }
     if save(state).is_err() {
@@ -78,6 +87,9 @@ pub(crate) fn reconcile(state: &mut State, now_ms: u64, save: &mut impl FnMut(&S
         for (session, (messages, revision)) in state.chats.iter_mut().zip(chats) {
             session.messages.truncate(messages);
             session.revision = revision;
+        }
+        for index in retired {
+            state.agent_messages[index].digest = true;
         }
         return Err("Could not save agent message digests; they remain pending.");
     }

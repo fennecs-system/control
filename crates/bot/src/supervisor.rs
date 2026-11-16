@@ -476,7 +476,8 @@ impl<I: Info> Supervisor<I> {
                         Reason::Info{topic,info,..} if wait.releases(topic, info) => Some(info.deferred()),
                         _ => None,
                     }).collect::<Vec<_>>();
-                    bot.selected |= !released.is_empty() && released.iter().all(|deferred| *deferred);
+                    // Deferred input the wait selected wakes like any other.
+                    bot.selected |= released.contains(&true);
                     bot.wait = released.is_empty().then_some(wait);
                 }
             }

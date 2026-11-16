@@ -116,6 +116,7 @@ fn an_unattended_descendant_gets_one_digest_turn_after_the_bound() {
     assert!(run.objective.contains("(2 message(s)") && run.objective.contains(STATUS) && run.objective.contains("furnace is lit"));
     crate::bots::reconcile_at_ms(&mut state, sent + 3_600_000).unwrap();
     assert_eq!(state.runtime.runs.iter().filter(|run| run.source == "agent-digest").count(), 1, "delivered once");
+    assert!(state.agent_messages.iter().all(|sent| !sent.digest), "delivered messages leave the overdue scan");
 
     // Any other turn of the recipient takes the messages instead.
     let (mut state, _, child, _) = family();
@@ -127,6 +128,7 @@ fn an_unattended_descendant_gets_one_digest_turn_after_the_bound() {
     state.runtime.runs.last_mut().unwrap().status = "completed".into();
     crate::bots::reconcile_at_ms(&mut state, now() + 3_600_000).unwrap();
     assert_eq!(queued(&state), 0, "the operator's turn already carried the message");
+    assert!(state.agent_messages.iter().all(|sent| !sent.digest), "a message another turn took is retired");
     let _ = lead;
 }
 

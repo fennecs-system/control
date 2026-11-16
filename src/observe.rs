@@ -107,7 +107,9 @@ fn record(state: &mut State, chat: &str, source: &Source, text: Option<String>, 
     }
     latest.checked_ms = now;
     latest.note = note;
-    if let Some(text) = text && latest.text.as_ref() != Some(&text) {
+    // A command's successful run confirms its value now; a watch's unchanged
+    // value is dated from when the host first saw it.
+    if let Some(text) = text && (matches!(source, Source::Command { .. }) || latest.text.as_ref() != Some(&text)) {
         latest.text = Some(text);
         latest.at_ms = now;
     }

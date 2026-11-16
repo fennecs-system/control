@@ -1,5 +1,30 @@
 # Performance checks
 
+## Retained peer messages and fresh observations (2026-11-16)
+
+Each reconcile pass now also scans the agent-message receipts (at most 256)
+for overdue digest flags. Bots compare one more definition field when checking
+for drift, and the supervisor checks deferral per pending reason. Retired
+receipts drop their flag, so a node at rest scans only flags. Observation
+refreshes run on their own thread, outside the state lock and outside
+reconcile.
+
+`bots::tests::reconcile_profile` (release, Apple Silicon, other builds
+running), three alternating base (`ce2ff76`) / head pairs. Median ns per pass:
+
+| Case | Base | Head |
+| --- | --- | --- |
+| 64 chats idle | 28,474–29,948 | 28,665–29,145 |
+| 64 chats offered | 36,100–37,546 | 36,167–36,532 |
+| 512 chats idle | 208,711–215,293 | 206,661–212,358 |
+| 512 chats offered | 218,857–226,913 | 214,193–222,389 |
+
+The ranges overlap, so no regression is measurable and no flamegraph was taken.
+The wake reduction is the intended effect. In run -128's member chats, 34 of
+143 supervised wakes had only a peer message as their reason. Those now wait
+for the member's next wake, or for the digest bound, unless the sender marks
+the message urgent.
+
 ## Planning tools (2026-11-16)
 
 `control_search_path` timings from the ignored `graph_search::tests::profile`
