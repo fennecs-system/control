@@ -278,13 +278,8 @@ fn provenance_comes_from_the_image_registry_label() {
 }
 
 #[test]
-fn output_readers_keep_the_head_and_the_tail() {
-    let input = vec![b'x'; 300_000];
-    assert_eq!(head(&input[..], 1000).map(|(kept, truncated)| (kept.len(), truncated)).unwrap(), (1000, true));
-    let mut text = vec![b'a'; 200_000];
-    text.extend_from_slice(b"END");
-    let kept = tail(&text[..], 1000).unwrap();
-    assert!(kept.len() >= 1000 && kept.len() <= 2000 && kept.ends_with(b"END"));
+fn diagnostics_keep_their_end() {
+    // The bounded readers themselves are tested with the shared runner (engine::ephemeral).
     assert!(last_chars(&"y".repeat(5000), 100).starts_with("[earlier diagnostics omitted]"));
 }
 

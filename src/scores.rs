@@ -185,19 +185,24 @@ fn due(state: &State, time: u64) -> Vec<Due> {
         } else {
             return None;
         };
-        let target = state.services.iter()
-            .find(|service| service.resource.id.as_str() == probe.service && service.resource.generation.get() == probe.generation)
-            .map(|service| (service.binding_snapshot(), probe.command.clone()))
+        let target = crate::services::probe_target(state, &probe.service, |service| service.resource.generation.get() == probe.generation)
+            .map(|service| (service, probe.command.clone()))
             .ok_or_else(|| "The probe's service has stopped or was replaced; declare the probe again with a running service.".to_owned());
         Some(Due { chat: probe.chat.clone(), name: probe.name.clone(), trigger, milestones, target })
     }).collect()
 }
+/// Runs the probe command once, under a reap marker unique to this sample.
 fn sample(service: &crate::services::Service, command: &str, timeout: Duration) -> Result<BTreeMap<String, f64>, String> {
-    let (output, code) = crate::services::host_probe(service, command, timeout).map_err(|error| error.to_string())?;
-    if code != Some(0) {
-        return Err(format!("The probe exited with status {}", code.map_or_else(|| "unknown".into(), |code| code.to_string())));
+    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+    let owner = format!("score\u{0}{}\u{0}{nonce}", service.resource.id.as_str());
+    let output = crate::services::probe(service, command, &owner, timeout).map_err(|error| error.to_string())?;
+    if output.timed_out || output.exit_code.is_none() {
+        return Err("The probe did not finish within its time bound".into());
     }
-    parse(&output)
+    if output.exit_code != Some(0) {
+        return Err(format!("The probe exited with status {}", output.status()));
+    }
+    parse(&output.text)
 }
 /// Records one sampling attempt. Returns whether the probe still exists.
 fn apply(state: &mut State, chat: &str, name: &str, time: u64, trigger: Trigger, milestones: u64, outcome: Result<BTreeMap<String, f64>, String>) -> bool {

@@ -131,9 +131,8 @@ fn diagnose(stderr: &[u8]) -> String {
         known => known.replace("Codex", "Claude"),
     }
 }
-/// A credential-free shell is the only workspace execution capability Claude receives.
-/// The caller supplies persisted attempt inputs, never Docker options from the model.
-pub fn shell(
+#[cfg(test)]
+fn shell(
     image: &str,
     name: &str,
     node: &str,
@@ -142,7 +141,13 @@ pub fn shell(
 ) -> io::Result<Value> {
     shell_scoped(image,name,node,workspace,command,false)
 }
+/// A credential-free shell is the only workspace execution capability Claude receives.
+/// The caller supplies persisted attempt inputs, never Docker options from the model.
 pub fn shell_scoped(image:&str,name:&str,node:&str,workspace:&Path,command:&str,readonly:bool)->io::Result<Value> {
+    shell_bounded(image,name,node,workspace,command,readonly,Duration::from_secs(25))
+}
+/// A command stopped at `deadline` fails with [`io::ErrorKind::TimedOut`].
+fn shell_bounded(image:&str,name:&str,node:&str,workspace:&Path,command:&str,readonly:bool,deadline:Duration)->io::Result<Value> {
     if crate::shutdown::requested() { return Err(fail("Control is stopping; workspace command was not started.")); }
     if command.is_empty() || command.len() > 16000 {
         return Err(fail("Command must contain 1–16000 bytes"));
@@ -177,16 +182,15 @@ pub fn shell_scoped(image:&str,name:&str,node:&str,workspace:&Path,command:&str,
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Ok(status),
-            Ok(None) if !crate::shutdown::requested() && start.elapsed() < Duration::from_secs(25) => {
+            Ok(None) if !crate::shutdown::requested() && start.elapsed() < deadline => {
                 std::thread::sleep(Duration::from_millis(50))
             }
-            _ => {
+            waited => {
                 let _ = child.kill();
                 let _ = child.wait();
                 crate::lifecycle::stop_resource(name, node, image, workspace).map_err(fail)?;
-                break Err(fail(
-                    "Workspace command stopped after its deadline or a process error",
-                ));
+                let kind = if matches!(waited, Ok(None)) && !crate::shutdown::requested() { io::ErrorKind::TimedOut } else { io::ErrorKind::Other };
+                break Err(io::Error::new(kind, "Workspace command stopped after its deadline or a process error"));
             }
         }
     };
@@ -221,6 +225,9 @@ pub fn claim(workspace: &Path, nonce: &str) -> io::Result<()> {
     fs::File::open(root)?.sync_all()
 }
 
+/// A probe stopped at its bound: the engine was slow, isolation was not refuted.
+pub(crate) const PROBE_TIMED_OUT: &str = "Claude tool isolation probe timed out after 90 s: the container engine is busy or slow, which is not an isolation failure. No account credentials were mounted; retry shortly.";
+/// The offline isolation probe; a timeout fails with [`io::ErrorKind::TimedOut`].
 pub fn probe(image: &str, node: &str, root: &Path) -> io::Result<()> {
     probe_named(
         image,
@@ -233,7 +240,10 @@ fn probe_named(image: &str, node: &str, root: &Path, name: &str) -> io::Result<(
     let directory = root.join("claude-isolation-probe");
     fs::create_dir_all(&directory)?;
     let command = "set -eu; test ! -e /home/agent/.claude/.credentials.json; test ! -S /var/run/docker.sock; test ! -e /proc/1/root/home/agent/.claude/.credentials.json; test -z \"${ANTHROPIC_API_KEY-}${CLAUDE_CODE_OAUTH_TOKEN-}\"; printf verified > isolation-check";
-    let output = shell(image, name, node, &directory, command)?;
+    let output = shell_bounded(image, name, node, &directory, command, false, crate::worker::SANDBOX_PROBE_WAIT).map_err(|error| match error.kind() {
+        io::ErrorKind::TimedOut => io::Error::new(io::ErrorKind::TimedOut, PROBE_TIMED_OUT),
+        _ => error,
+    })?;
     if output["exit_code"] != 0 || fs::read(directory.join("isolation-check"))? != b"verified" {
         return Err(fail(
             "Claude workspace isolation check failed; no credentials were mounted",
@@ -277,8 +287,9 @@ pub fn execute(
     let root = workspace
         .parent()
         .ok_or_else(|| blocked("Invalid attempt workspace"))?;
-    probe_named(image, node, root, &format!("control-{id}-probe")).map_err(|_| {
-        blocked("Claude tool isolation probe failed. No account credentials were mounted.")
+    probe_named(image, node, root, &format!("control-{id}-probe")).map_err(|error| match error.kind() {
+        io::ErrorKind::TimedOut => blocked(PROBE_TIMED_OUT),
+        _ => blocked("Claude tool isolation probe failed. No account credentials were mounted."),
     })?;
     let meta = fs::symlink_metadata(&auth)
         .map_err(|_| blocked("Claude credential metadata unavailable"))?;

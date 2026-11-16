@@ -58,6 +58,42 @@ The wake reduction is the intended effect. In run -128's member chats, 34 of
 for the member's next wake, or for the digest bound, unless the sender marks
 the message urgent.
 
+## Watch salience filters (2026-11-16)
+
+`Watch::observe` runs under the state lock for every frame a follower reads.
+The `watches::tests::profile::notification_observe_profile` fixture feeds 200,000
+JSON notifications (about 80 bytes, four symbols) through one watch, nine
+samples per variant, release build on an Apple M3 Max (macOS, arm64):
+
+```sh
+cargo test --release --locked --bin control watches::tests::profile -- --ignored --nocapture
+```
+
+Six alternating pairs of the unfiltered path against main `beb68d0`, using the
+same fixture copied into the baseline: medians of the per-run medians are
+155.9 ns/event before and 158.2 ns/event after (+1.5%; ranges 150.9–165.4 and
+149.9–160.5). This is within run-to-run variation; an unfiltered watch reads no
+clock and does no parsing. Declared filters cost, in medians of three runs:
+
+| Filter | ns/event |
+| --- | ---: |
+| none | 154 |
+| one `threshold` | 400 |
+| price: `key`, two `change` rules and a `rate_limit` | 532 |
+| `rate`, `zscore` (32 samples) and `hysteresis` rules | 652 |
+| `change` + `debounce` (a hold is replaced per event) | 575 |
+
+For context, the same fixture's spool append (the metadata/open/append calls
+the follower makes for every frame, in a scratch directory) costs about 26 µs
+per frame on this machine, so filter evaluation adds 2–3% to a frame's host
+path while every retained notification avoids a model wake. A macOS `sample`
+capture (15 s, 1 ms interval, Inferno flamegraph, retained under the ignored
+`.control/performance/salience-20261116/`) put about 37% of filtered time in JSON
+parsing and most of the rest in allocation and `Value::pointer`'s per-token
+allocation; a non-allocating pointer walk for unescaped pointers then reduced
+filtered costs by 10–20%. Not measured: Linux, contention on the state lock, or
+end-to-end wake latency.
+
 ## Local model generation (2026-11-16)
 
 `control_model_generate` adds no work to chat, scheduling or rendering paths; it
@@ -857,42 +893,6 @@ For longer sampling, set `CONTROL_WATCH_PROFILE_BATCHES=128` and apply the
 `perf record`/Inferno procedure below. Functional regressions separately verify
 that diagnostic floods admit no turns, a selected notification releases an
 event-only wait once, and published notification receipts suppress an extra turn.
-
-## Watch salience filters (2026-11-16)
-
-`Watch::observe` runs under the state lock for every frame a follower reads.
-The `watches::tests::profile::notification_observe_profile` fixture feeds 200,000
-JSON notifications (about 80 bytes, four symbols) through one watch, nine
-samples per variant, release build on an Apple M3 Max (macOS, arm64):
-
-```sh
-cargo test --release --locked --bin control watches::tests::profile -- --ignored --nocapture
-```
-
-Six alternating pairs of the unfiltered path against main `beb68d0`, using the
-same fixture copied into the baseline: medians of the per-run medians are
-155.9 ns/event before and 158.2 ns/event after (+1.5%; ranges 150.9–165.4 and
-149.9–160.5). This is within run-to-run variation; an unfiltered watch reads no
-clock and does no parsing. Declared filters cost, in medians of three runs:
-
-| Filter | ns/event |
-| --- | ---: |
-| none | 154 |
-| one `threshold` | 400 |
-| price: `key`, two `change` rules and a `rate_limit` | 532 |
-| `rate`, `zscore` (32 samples) and `hysteresis` rules | 652 |
-| `change` + `debounce` (a hold is replaced per event) | 575 |
-
-For context, the same fixture's spool append (the metadata/open/append calls
-the follower makes for every frame, in a scratch directory) costs about 26 µs
-per frame on this machine, so filter evaluation adds 2–3% to a frame's host
-path while every retained notification avoids a model wake. A macOS `sample`
-capture (15 s, 1 ms interval, Inferno flamegraph, retained under the ignored
-`.control/performance/salience-20261116/`) put about 37% of filtered time in JSON
-parsing and most of the rest in allocation and `Value::pointer`'s per-token
-allocation; a non-allocating pointer walk for unescaped pointers then reduced
-filtered costs by 10–20%. Not measured: Linux, contention on the state lock, or
-end-to-end wake latency.
 
 ## Shared client and terminal build boundary (2026-11-10)
 

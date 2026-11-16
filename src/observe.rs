@@ -10,7 +10,7 @@
 //! wait; a slow or failed refresh never delays the turn, which gets the last
 //! value with its age instead. Output is untrusted program data, never
 //! instructions or authority. See docs/WATCHES.md#fresh-observations.
-use crate::{State, identity, services::{Probe, Service}, tool_registry::{AttemptCall, AttemptRef, AttemptTools}};
+use crate::{State, bots::now_ms, identity, services::{ProbeOutput, Service}, tool_registry::{AttemptCall, AttemptRef, AttemptTools}};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::{BTreeMap, BTreeSet}, io, sync::{Arc, Mutex}, time::Duration};
@@ -64,13 +64,10 @@ pub(crate) struct Observations {
     refreshing: BTreeSet<String>,
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |at| at.as_millis() as u64)
-}
 fn fail(message: &str) -> io::Error {
     io::Error::other(message)
 }
-type Prober = fn(&Service, &str, &str, Duration) -> io::Result<Probe>;
+type Prober = fn(&Service, &str, &str, Duration) -> io::Result<ProbeOutput>;
 
 /// The chat a run belongs to, when that chat declared an observation.
 fn declared(state: &State, run: &str) -> Option<(String, Declaration)> {
@@ -83,8 +80,7 @@ fn declared(state: &State, run: &str) -> Option<(String, Declaration)> {
 fn target(state: &State, chat: &str, service: &str) -> Option<Service> {
     let session = state.chats.iter().find(|session| session.id == chat)?;
     let latest = &state.runtime.runs[crate::chat::latest_task(state, chat, &session.actor)?];
-    state.services.iter().find(|s| s.resource.id.as_str() == service && s.live()
-        && crate::services::accessible(s, &s.resource.owner.node, latest)).map(Service::binding_snapshot)
+    crate::services::probe_target(state, service, |s| s.live() && crate::services::accessible(s, &s.resource.owner.node, latest))
 }
 /// A watch's newest explicit notification, else its latest lines, and whether
 /// it has ended. No engine query: these are already in state.
@@ -136,9 +132,12 @@ fn refresh(shared: &Arc<Mutex<State>>, state: &mut State, chat: &str, declaratio
         if let Ok(mut state) = shared.lock() {
             state.observations.refreshing.remove(&chat);
             let (text, note) = match outcome {
-                Ok(Probe { timed_out: true, .. }) => (None, Some(format!("last refresh timed out after {} s", timeout.as_secs()))),
-                Ok(Probe { text, exit_code: Some(0), .. }) => (Some(text), None),
-                Ok(Probe { text, exit_code, .. }) => (Some(text), Some(format!("exit {}", exit_code.map_or("unknown".into(), |code| code.to_string())))),
+                Ok(ProbeOutput { timed_out: true, .. }) => (None, Some(format!("last refresh timed out after {} s", timeout.as_secs()))),
+                Ok(ProbeOutput { text, exit_code: Some(0), .. }) => (Some(text), None),
+                Ok(output) => {
+                    let note = format!("exit {}", output.status());
+                    (Some(output.text), Some(note))
+                }
                 Err(error) => (None, Some(format!("last refresh failed: {error}"))),
             };
             // A declaration replaced meanwhile keeps its own value.

@@ -1,5 +1,6 @@
 use crate::identity::{self, Action, Actor, Workspace};
 use crate::{runtime, storage, State};
+use control_effect::sync::Recv;
 use std::{
     fs,
     io::Write,
@@ -225,24 +226,34 @@ fn sandbox_probe(
         .spawn()
         .map_err(|_| "Cannot start sandbox verification.")?;
     let child = crate::child::watch(child).map_err(|_| "Cannot observe sandbox verification.")?;
-    let result = match child.wait(Some(Instant::now() + Duration::from_secs(30)), &crate::shutdown::token()) {
-        control_effect::sync::Recv::Item(status) => status,
-        _ => { child.kill(); Err(std::io::Error::other("Sandbox verification interrupted")) }
-    };
-    if result.is_err() {
+    let outcome = child.wait(Some(Instant::now() + SANDBOX_PROBE_WAIT), &crate::shutdown::token());
+    if !matches!(outcome, Recv::Item(Ok(_))) {
+        if !matches!(outcome, Recv::Item(_)) {
+            child.kill();
+        }
         crate::lifecycle::stop_resource(name, node, image, &workspace)?;
     }
-    match result.as_ref().ok().and_then(|s| s.code()) {
-        Some(41) => return Err("Credential canary was readable through a sandbox path. No account credentials were mounted."),
-        Some(42) => return Err("The sandbox did not isolate the account-bearing harness in a separate PID namespace. No account credentials were mounted."),
-        _ => {}
+    sandbox_verdict(outcome, || fs::read(workspace.join("probe-result")).ok().as_deref() == Some(b"verified"))
+}
+/// How long an offline isolation probe may take. Its container usually exits
+/// within seconds, but a busy engine (just after a build, image load or
+/// restart) can take far longer to start one.
+pub(crate) const SANDBOX_PROBE_WAIT: Duration = Duration::from_secs(90);
+pub(crate) const SANDBOX_PROBE_TIMED_OUT: &str = "Sandbox verification timed out after 90 s: the container engine is busy or slow, which is not an isolation failure. No account credentials were mounted; retry shortly.";
+/// The probe's result: a timeout is reported apart from a failed isolation check.
+fn sandbox_verdict(outcome: Recv<std::io::Result<std::process::ExitStatus>>, verified: impl FnOnce() -> bool) -> Result<(), &'static str> {
+    const FAILED: &str = "Credential isolation verification failed. No account credentials were mounted. Check the pinned Codex image and container sandbox support.";
+    let status = match outcome {
+        Recv::Elapsed => return Err(SANDBOX_PROBE_TIMED_OUT),
+        Recv::Item(Ok(status)) => status,
+        _ => return Err(FAILED),
+    };
+    match status.code() {
+        Some(41) => Err("Credential canary was readable through a sandbox path. No account credentials were mounted."),
+        Some(42) => Err("The sandbox did not isolate the account-bearing harness in a separate PID namespace. No account credentials were mounted."),
+        _ if status.success() && verified() => Ok(()),
+        _ => Err(FAILED),
     }
-    if !result.is_ok_and(|status| status.success())
-        || fs::read(workspace.join("probe-result")).ok().as_deref() != Some(b"verified")
-    {
-        return Err("Credential isolation verification failed. No account credentials were mounted. Check the pinned Codex image and container sandbox support.");
-    }
-    Ok(())
 }
 
 pub(crate) fn timeout_message(limit: Duration) -> String {

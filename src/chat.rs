@@ -176,6 +176,55 @@ pub(crate) fn continuation(state: &State, chat: &str, from: usize, objective: St
     let request = Submission { objective, kind, source: source.into(), actor: latest.actor.clone(), action: latest.action };
     Ok(request.into_continuation(latest, chat, id, order, grants))
 }
+/// The settings a host-queued follow-up turn (a bot wake, a room or agent
+/// digest, background agent results) carries from a run of its chat, normally
+/// the chat's latest task: who it runs as, its backend, model, context and
+/// lenses, its persona lineage and the services that run may use.
+pub(crate) struct FollowUp {
+    pub(crate) actor: Actor,
+    pub(crate) action: Action,
+    pub(crate) backend: crate::backend::Backend,
+    pub(crate) model: Option<String>,
+    pub(crate) context: crate::history::Spilled<Option<control_context::Resolved>>,
+    pub(crate) lenses: Option<Vec<String>>,
+    pub(crate) persona: crate::delegation::Persona,
+    pub(crate) grants: Vec<crate::services::Grant>,
+}
+impl FollowUp {
+    pub(crate) fn from(state: &State, run: &crate::runtime::Run) -> Self {
+        Self {
+            actor: run.actor.clone(),
+            action: run.action,
+            backend: run.backend,
+            model: run.model.clone(),
+            context: run.context.clone(),
+            lenses: run.lenses.clone(),
+            persona: crate::delegation::lineage(run),
+            grants: crate::services::grants(state, run),
+        }
+    }
+    /// Adds grants not already carried, keeping their order.
+    pub(crate) fn grant(&mut self, grants: impl IntoIterator<Item = crate::services::Grant>) {
+        for grant in grants {
+            if !self.grants.contains(&grant) {
+                self.grants.push(grant);
+            }
+        }
+    }
+    /// Queues the turn in `chat` and returns it for kind-specific fields.
+    pub(crate) fn enqueue<'a>(self, state: &'a mut State, chat: &str, objective: String, kind: crate::runtime::RunKind, source: &str) -> Result<&'a mut crate::runtime::Run, &'static str> {
+        state.runtime.enqueue_for(objective, kind, source, self.actor, self.action)?;
+        let run = state.runtime.runs.last_mut().unwrap();
+        run.chat_id = Some(chat.to_owned());
+        run.backend = self.backend;
+        run.model = self.model;
+        run.context = self.context;
+        run.lenses = self.lenses;
+        run.persona = Some(self.persona);
+        run.resource_grants = self.grants;
+        Ok(run)
+    }
+}
 fn command_menu(actor: &Actor) -> String {
     command_menu_for(identity::authorize(actor, Action::Task).is_ok(), identity::authorize(actor, Action::Improve).is_ok())
 }

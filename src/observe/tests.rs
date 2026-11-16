@@ -30,21 +30,21 @@ fn declare(shared: &Arc<Mutex<State>>, run: &str, args: Value, probe: Prober) ->
 }
 
 static TICKS: AtomicU64 = AtomicU64::new(0);
-fn ticking(_: &Service, command: &str, _: &str, _: Duration) -> io::Result<Probe> {
+fn ticking(_: &Service, command: &str, _: &str, _: Duration) -> io::Result<ProbeOutput> {
     let tick = TICKS.fetch_add(1, Ordering::SeqCst);
-    Ok(Probe { text: format!("{command} -> hp=20 tick={tick}"), exit_code: Some(0), timed_out: false })
+    Ok(ProbeOutput { text: format!("{command} -> hp=20 tick={tick}"), exit_code: Some(0), timed_out: false })
 }
-fn slow(_: &Service, _: &str, _: &str, _: Duration) -> io::Result<Probe> {
+fn slow(_: &Service, _: &str, _: &str, _: Duration) -> io::Result<ProbeOutput> {
     std::thread::sleep(Duration::from_millis(300));
-    Ok(Probe { text: "slow fresh value".into(), exit_code: Some(0), timed_out: false })
+    Ok(ProbeOutput { text: "slow fresh value".into(), exit_code: Some(0), timed_out: false })
 }
-fn timing_out(_: &Service, _: &str, _: &str, timeout: Duration) -> io::Result<Probe> {
-    Ok(Probe { text: "partial".into(), exit_code: None, timed_out: !timeout.is_zero() })
+fn timing_out(_: &Service, _: &str, _: &str, timeout: Duration) -> io::Result<ProbeOutput> {
+    Ok(ProbeOutput { text: "partial".into(), exit_code: None, timed_out: !timeout.is_zero() })
 }
-fn huge(_: &Service, _: &str, _: &str, _: Duration) -> io::Result<Probe> {
-    Ok(Probe { text: "é".repeat(5_000), exit_code: Some(0), timed_out: false })
+fn huge(_: &Service, _: &str, _: &str, _: Duration) -> io::Result<ProbeOutput> {
+    Ok(ProbeOutput { text: "é".repeat(5_000), exit_code: Some(0), timed_out: false })
 }
-fn broken(_: &Service, _: &str, _: &str, _: Duration) -> io::Result<Probe> {
+fn broken(_: &Service, _: &str, _: &str, _: Duration) -> io::Result<ProbeOutput> {
     Err(io::Error::other("Service is no longer running"))
 }
 
@@ -125,6 +125,23 @@ fn values_are_capped_to_max_bytes_on_a_character_boundary() {
     // The default is the node's cap.
     declare(&shared, &run, json!({"service_id":"svc-game","command":"dump"}), huge);
     assert_eq!(shared.lock().unwrap().observations.declared.values().next().unwrap().max_bytes, 2_048);
+}
+
+fn failing(_: &Service, command: &str, _: &str, _: Duration) -> io::Result<ProbeOutput> {
+    Ok(ProbeOutput { text: "partial state".into(), exit_code: (command == "exit-3").then_some(3), timed_out: false })
+}
+#[test]
+fn a_failed_command_keeps_its_output_with_the_exit_status() {
+    let (shared, _, run) = fixture();
+    for (command, note) in [("exit-3", "; exit 3."), ("killed", "; exit unknown.")] {
+        let set = declare(&shared, &run, json!({"service_id":"svc-game","command":command,"refresh_seconds":0}), failing);
+        let preview = set["preview"].as_str().unwrap();
+        assert!(preview.contains(note) && preview.contains("\npartial state\n"), "{preview}");
+    }
+    // A service that is gone is not probed.
+    shared.lock().unwrap().services.clear();
+    let block = prepend_with(&shared, &run, "turn".into(), |_, _, _, _| panic!("a missing service is not probed"));
+    assert!(block.contains("service unavailable to this chat"), "{block}");
 }
 
 #[test]
