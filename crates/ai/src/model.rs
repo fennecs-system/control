@@ -67,6 +67,27 @@ impl Request<'_> {
     }
 }
 
+/// One completion's usage. OpenAI-style `usage` first; llama.cpp's `timings`
+/// supply the prefix-cache hit (`cache_n`) when `prompt_tokens_details` is
+/// absent, and the whole count when `usage` is. Cached tokens are part of input.
+/// `None`: the server reported nothing, which is unknown rather than zero.
+pub fn usage(value: &Value) -> Option<Tokens> {
+    let timings = &value["timings"];
+    let cache = timings["cache_n"].as_u64();
+    let u = &value["usage"];
+    if let (Some(input), Some(output)) = (u["prompt_tokens"].as_u64(), u["completion_tokens"].as_u64()) {
+        let cached = u["prompt_tokens_details"]["cached_tokens"].as_u64().or(cache).unwrap_or(0);
+        return Some(Tokens { input_tokens: input, cached_input_tokens: cached.min(input), output_tokens: output });
+    }
+    let processed = timings["prompt_n"].as_u64()?;
+    let cached = cache.unwrap_or(0);
+    Some(Tokens {
+        input_tokens: processed.saturating_add(cached),
+        cached_input_tokens: cached,
+        output_tokens: timings["predicted_n"].as_u64()?,
+    })
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Response {
     pub text: String,
@@ -100,15 +121,7 @@ pub fn decode(value: Value, limits: &Limits) -> io::Result<Response> {
         .filter(|s| !s.trim().is_empty() && s.len() <= limits.output_bytes)
         .ok_or_else(|| io::Error::other("Missing or oversized completion text"))?
         .to_owned();
-    let tokens = value.get("usage").and_then(|u| {
-        Some(Tokens {
-            input_tokens: u["prompt_tokens"].as_u64()?,
-            cached_input_tokens: u["prompt_tokens_details"]["cached_tokens"]
-                .as_u64()
-                .unwrap_or(0),
-            output_tokens: u["completion_tokens"].as_u64()?,
-        })
-    });
+    let tokens = usage(&value);
     Ok(Response { text, tokens })
 }
 
@@ -175,14 +188,7 @@ pub fn decode_step(value: &Value, limits: &Limits) -> io::Result<Step> {
             arguments,
         });
     }
-    let tokens = value.get("usage").and_then(|u| {
-        Some(Tokens {
-            input_tokens: u["prompt_tokens"].as_u64()?,
-            cached_input_tokens: u["prompt_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0),
-            output_tokens: u["completion_tokens"].as_u64()?,
-        })
-    });
-    Ok(Step { text, calls, truncated: choices[0]["finish_reason"] == "length", tokens })
+    Ok(Step { text, calls, truncated: choices[0]["finish_reason"] == "length", tokens: usage(value) })
 }
 
 /// Runtime identity the server reports about itself. It is untrusted metadata

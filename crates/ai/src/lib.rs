@@ -6,7 +6,7 @@ pub mod model;
 mod types;
 use serde_json::Value;
 use std::io::{self, Read};
-pub use types::{Activity, Tokens, Usage};
+pub use types::{tokens_label, Accounting, Activity, Tokens, Usage};
 
 /// Provider-reported results. Missing usage is unknown, never an estimate of zero.
 #[derive(Debug, Default)]
@@ -46,11 +46,18 @@ pub fn json_lines(reader: impl Read, decoder: impl Decoder, emit: impl FnMut(Eve
     json_lines_usage(reader, decoder, emit).0
 }
 /// [`json_lines`] plus the usage the provider reported, also on failure.
-pub fn json_lines_usage(
+pub fn json_lines_usage(reader: impl Read, decoder: impl Decoder, emit: impl FnMut(Event)) -> (io::Result<Output>, Usage) {
+    json_lines_live(reader, decoder, emit, |_| {})
+}
+/// [`json_lines_usage`] that also reports the usage so far whenever a record
+/// changes its token counts, so a running turn can show live totals.
+pub fn json_lines_live(
     reader: impl Read,
     mut decoder: impl Decoder,
     mut emit: impl FnMut(Event),
+    mut progress: impl FnMut(&Usage),
 ) -> (io::Result<Output>, Usage) {
+    let mut seen = None;
     let mut reader = reader;
     let mut line = Vec::new();
     let mut oversized = false;
@@ -65,6 +72,11 @@ pub fn json_lines_usage(
         for &byte in &chunk[..length] {
             if byte == b'\n' {
                 record(&line, oversized, &mut decoder, &mut emit);
+                let now = decoder.usage();
+                if now.tokens != seen {
+                    seen = now.tokens;
+                    progress(&now);
+                }
                 line.clear();
                 oversized = false;
             } else if !oversized {

@@ -123,6 +123,12 @@ fn clean(text: &str) -> String {
         .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
         .collect()
 }
+/// The attempt's token line from the chat detail, live while it runs.
+fn attempt_tokens(attempt:&Value)->Option<String> {
+    let tokens=serde_json::from_value(attempt["tokens"].clone()).ok().flatten();
+    let accounting=serde_json::from_value(attempt["accounting"].clone()).unwrap_or_default();
+    control_ai::tokens_label(tokens,accounting,attempt["status"]=="running")
+}
 fn folded_activity(lines:&mut Vec<Line<'static>>,events:&[Value]) {
     let mut count=0;let mut failed=0;let mut latest=None;let mut failure=None;
     for event in events.iter().filter(|event|event["kind"]!="message") {
@@ -471,6 +477,9 @@ impl App {
                         if let Some(count) = attempt["omitted_history"].as_u64().filter(|n| *n > 0)
                         {
                             lines.push(Line::styled(format!("Context window · {count} earlier exchanges excluded from attempt {}. History retained.", index + 1), Style::default().fg(Color::Rgb(133, 133, 143))));
+                        }
+                        if let Some(tokens) = attempt_tokens(attempt) {
+                            lines.push(Line::styled(format!("Tokens · attempt {} · {tokens}", index + 1), Style::default().fg(Color::Rgb(133, 133, 143))));
                         }
                         if let Some(events) = attempt["activity"].as_array() {
                             if !self.show_activity {folded_activity(&mut lines,events);}

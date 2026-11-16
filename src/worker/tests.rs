@@ -215,6 +215,52 @@ fn codex_completion_distinguishes_finished_tools_and_host_handoffs() {
     }
 }
 
+/// Live usage reaches the running attempt in state, fenced like activity, and
+/// the monitor, run history and transcript show it before the attempt ends.
+#[test]
+fn running_usage_is_live_in_state_and_rendered_until_the_attempt_finishes() {
+    use crate::usage::{Accounting, Tokens};
+    let mut state = State::default();
+    let chat = crate::chat::create(&mut state);
+    crate::chat::send(&mut state, &chat, "Build", "test").unwrap();
+    checkpoint_next(&mut state, |_| Ok(())).unwrap();
+    let id = state.runtime.runs[0].id.clone();
+    let generation = state.runtime.runs[0].attempts[0].workspace_id.clone().unwrap();
+    {
+        let attempt = &mut state.runtime.runs[0].attempts[0];
+        attempt.provider = "Local".into();
+        attempt.model = "local:qwen-local".into();
+    }
+    let revision = state.chats.iter().find(|c| c.id == chat).unwrap().revision;
+    let so_far = Tokens { input_tokens: 12000, cached_input_tokens: 11000, output_tokens: 300 };
+    let usage = |tokens| control_ai::Usage { tokens: Some(tokens), complete: false, model: Some("qwen3-coder-30b".into()) };
+    assert!(!record_usage_for(&mut state, &id, "stale-generation", usage(so_far)));
+    assert_eq!(state.runtime.runs[0].attempts[0].tokens, None);
+    assert!(record_usage_for(&mut state, &id, &generation, usage(so_far)));
+    let attempt = &state.runtime.runs[0].attempts[0];
+    assert_eq!((attempt.tokens, attempt.accounting, attempt.reported_model.as_deref()), (Some(so_far), Accounting::Partial, Some("qwen3-coder-30b")));
+    assert!(state.chats.iter().find(|c| c.id == chat).unwrap().revision > revision, "open views refresh");
+
+    let monitor = crate::usage::render(&state.runtime);
+    assert!(monitor.contains("Running now"), "{monitor}");
+    assert!(monitor.contains("local:qwen-local (served: qwen3-coder-30b)</td><td>12000</td><td>11000</td><td>300</td><td>so far"), "{monitor}");
+    assert!(monitor.contains("running (totals so far): 1 · unknown attempts: 0 · partial (stopped mid-turn, lower bound): 0"), "{monitor}");
+    assert!(state.runtime.runs_page(None, None).contains("12000 input (11000 cached) · 300 output tokens so far"));
+    let transcript = crate::chat::transcript(&state, &chat).unwrap();
+    assert!(transcript.contains("Tokens · attempt 1 · 12000 input (11000 cached) · 300 output tokens so far"), "{transcript}");
+
+    // Finished: the attempt's own record replaces the live one.
+    let attempt = &mut state.runtime.runs[0].attempts[0];
+    attempt.status = "completed".into();
+    attempt.record_usage(control_ai::Usage { tokens: Some(so_far), complete: true, model: None });
+    state.runtime.runs[0].status = "completed".into();
+    assert!(!record_usage_for(&mut state, &id, &generation, usage(Tokens::default())), "a finished run takes no live usage");
+    let monitor = crate::usage::render(&state.runtime);
+    assert!(!monitor.contains("Running now"));
+    assert!(monitor.contains("running (totals so far): 0"));
+    assert!(crate::chat::transcript(&state, &chat).unwrap().contains("Tokens · attempt 1 · 12000 input (11000 cached) · 300 output tokens</p>"));
+}
+
 #[test]
 fn stale_codex_exit_cannot_interrupt_another_attempt() {
     let mut state = State::default();

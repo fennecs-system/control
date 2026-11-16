@@ -254,19 +254,21 @@ fn probe_named(image: &str, node: &str, root: &Path, name: &str) -> io::Result<(
 
 #[cfg(test)]
 fn capture(reader: impl Read, update: impl FnMut(Activity)) -> io::Result<(String, Option<Tokens>)> {
-    capture_with(reader, update, &std::sync::atomic::AtomicBool::new(false)).0
+    capture_with(reader, update, |_| {}, &std::sync::atomic::AtomicBool::new(false)).0
 }
 /// The final reply, and the usage reported whether or not there was one.
+/// `progress` sees the usage so far each time a call reports more.
 fn capture_with(
     reader: impl Read,
     mut update: impl FnMut(Activity),
+    progress: impl FnMut(&control_ai::Usage),
     bad_tools: &std::sync::atomic::AtomicBool,
 ) -> (io::Result<(String, Option<Tokens>)>, control_ai::Usage) {
     let allowed = control_context::worker_mcp_names();
-    let (output, usage) = control_ai::json_lines_usage(reader, control_ai::claude::Claude::new(&allowed), |event| match event {
+    let (output, usage) = control_ai::json_lines_live(reader, control_ai::claude::Claude::new(&allowed), |event| match event {
         control_ai::Event::Activity(activity) => update(activity),
         control_ai::Event::RejectedTools => bad_tools.store(true, std::sync::atomic::Ordering::Relaxed),
-    });
+    }, progress);
     let reply = output.and_then(|output| Ok((output.text.ok_or_else(|| fail("Claude did not return a final result"))?, output.tokens)));
     (reply, usage)
 }
@@ -324,6 +326,12 @@ pub fn execute(
             if let Some((s, r)) = &live
                 && let Ok(mut s) = s.lock() {
                     crate::worker::record_activity_for(&mut s, r, &generation, event);
+                }
+        }, |usage| {
+            // Live totals while the turn runs; the finished attempt replaces them.
+            if let Some((s, r)) = &live
+                && let Ok(mut s) = s.lock() {
+                    crate::worker::record_usage_for(&mut s, r, &generation, usage.clone());
                 }
         }, &flag)
     });

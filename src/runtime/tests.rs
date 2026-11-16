@@ -17,7 +17,15 @@ fn run_history_shows_attempts_and_measured_tokens() {
         },
         crate::usage::Attempt::default(),
     ];
-    assert!(run_record(&runtime.runs[0]).contains("2 attempt(s) · 120 input · 30 output tokens"));
+    assert!(run_record(&runtime.runs[0]).contains("2 attempt(s) · 120 input (0 cached) · 30 output tokens (1/2 measured)"));
+    // A running attempt shows its live totals as a lower bound so far.
+    runtime.runs[0].attempts.push(crate::usage::Attempt {
+        status: "running".into(),
+        tokens: Some(crate::usage::Tokens { input_tokens: 1000, cached_input_tokens: 900, output_tokens: 20 }),
+        accounting: crate::usage::Accounting::Partial,
+        ..Default::default()
+    });
+    assert!(run_record(&runtime.runs[0]).contains("3 attempt(s) · 1120 input (900 cached) · 50 output tokens so far (2/3 measured)"));
 }
 #[test]
 fn failed_cancel_form_checkpoint_restores_target_run_and_notice() {
