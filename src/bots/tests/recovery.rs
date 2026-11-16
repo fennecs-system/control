@@ -200,7 +200,7 @@ fn recovery_wake_text_carries_the_last_rejection_not_a_generic_continue() {
     let run = chat_runs(&state, &chat).into_iter().last().unwrap();
     assert!(continues(run));
     assert!(run.objective.contains("Host error: \"Cannot process an unseen event range\""), "{}", run.objective);
-    assert!(run.objective.contains("Read each source you handle again from its committed position"), "{}", run.objective);
+    assert!(run.objective.contains("Omit processed from your handoff"), "{}", run.objective);
     assert!(run.objective.contains("do not re-verify them or start new watches"));
     assert!(!run.objective.contains("unfinished runnable work from your committed checkpoint"));
     let woke = &state.chats[0].messages.last().unwrap().text;
@@ -422,6 +422,24 @@ fn time_out_queued(state: &mut State, chat: &str) -> bool {
     true
 }
 
+#[test]
+fn a_provider_failure_resumes_from_its_host_checkpoint_like_a_timeout() {
+    let (mut state, chat) = fixture();
+    managed_bot(&mut state, &chat);
+    post(&mut state, Some("peer"), "A relevant callback");
+    reconcile_at(&mut state, 1_000, ok).unwrap();
+    assert!(time_out_queued(&mut state, &chat));
+    let index = state.runtime.runs.iter().rposition(|run| run.bot_turn.is_some()).unwrap();
+    state.runtime.runs[index].attempts[0].termination = Some(crate::attempt_control::Termination::ProviderError);
+    reconcile_at(&mut state, 40_000, ok).unwrap();
+    let runs = chat_runs(&state, &chat);
+    assert_eq!(runs.len(), 2, "a turn cut off by its provider is runnable work");
+    assert!(continues(runs[1]));
+    assert!(runs[1].objective.contains(crate::bots::PROVIDER_NOTE), "{}", runs[1].objective);
+    let woke = &state.chats[0].messages.last().unwrap().text;
+    assert!(woke.starts_with("Bot woke: a turn ended by a provider failure."), "{woke}");
+    assert_eq!(checkpointing(&state, &chat).failures, 1, "it shares the bounded recovery streak");
+}
 #[test]
 fn a_timed_out_turn_continues_promptly_within_the_bounded_streak() {
     let (mut state, chat) = fixture();
