@@ -50,7 +50,7 @@ Private `~/.config/control/execution.json` (mode 0600) configures these separate
 limits; omitted fields retain their defaults:
 
 ```json
-{"max_parallel_runs":3,"max_agents_per_root":64,"max_pending_agent_intents":256,"max_advisors_per_root":1,"advisor_failure_streak":3,"advisor_stall_turns":24,"advisor_bottleneck_members":2}
+{"max_parallel_runs":3,"max_agents_per_root":64,"max_pending_agent_intents":256,"max_advisors_per_root":1,"advisor_failure_streak":3,"advisor_stall_turns":24,"advisor_bottleneck_members":2,"bot_recovery_continues":2,"bot_recovery_recheck_seconds":300}
 ```
 
 `max_advisors_per_root` (0–8; 0 disables advisors) caps the
@@ -61,6 +61,11 @@ consecutive failed or blocked turns of one member make a fact for its advisor.
 open and none becomes done or resumes from blocked, make a busy-but-stalled fact.
 `advisor_bottleneck_members` (2–64) is how many members other than a claim's owner
 must wait on it, directly or transitively, to make a bottleneck fact.
+`bot_recovery_continues` (0–16) is how many immediate recovery turns a persistent
+bot gets after its `control_turn_handoff` is rejected, counted since its last
+published handoff; `bot_recovery_recheck_seconds` (30–86,400) is the first
+backoff recheck once it is past that allowance or a turn ends without calling
+the handoff (see [turn continuity](TURN-CONTINUITY.md#commit-and-recovery)).
 Agent budgets must be positive integers up to 65,536. The MCP transport's
 input-size limit also applies. Node pending-intent capacity is
 shared across roots; root reservations include spawned and delegated descendants,

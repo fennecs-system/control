@@ -619,3 +619,29 @@ fn failed_receipt_save_and_failed_handoff_save_leave_no_processing_or_fence() {
             .is_some()
     );
 }
+#[test]
+fn rejected_handoffs_are_remembered_for_the_recovery_wake() {
+    let (mut state, id, generation) = fixture();
+    let cx = AttemptRef { run: &id, generation: &generation, nonce: "draft" };
+    let rejected = |state: &State| state.chats[0].continuity.as_ref().unwrap().checkpointing.rejected.clone();
+    // An unread receipt is the host's refusal, kept with its attempt.
+    let handoff = json!({"base_revision":0,"payload":{"subgoal":"Next useful action","findings":[],"tried":[],"pending":[],"next":[]},"processed":["never-delivered"],"disposition":{"kind":"continue"},"progress":null});
+    let error = handle(&mut state, &cx, "control_turn_handoff", &handoff, |_| Ok(())).unwrap_err().to_string();
+    let rejection = rejected(&state).unwrap();
+    assert_eq!(rejection.generation, generation);
+    assert_eq!(rejection.error, error);
+    // A storage failure is not a rejected receipt, and reads record nothing.
+    state.chats[0].continuity.as_mut().unwrap().checkpointing = Default::default();
+    let page = handle(&mut state, &cx, "control_turn_context", &json!({}), |_| Ok(())).unwrap();
+    let valid = json!({"base_revision":0,"payload":{"subgoal":"Next useful action","findings":[],"tried":[],"pending":[],"next":[]},"processed":[page["receipt"]],"disposition":{"kind":"continue"},"progress":null});
+    assert!(handle(&mut state, &cx, "control_turn_handoff", &valid, |_| Err(err("disk full"))).is_err());
+    assert!(handle(&mut state, &cx, "control_turn_context", &json!({"source":"bogus"}), |_| Ok(())).is_err());
+    assert_eq!(rejected(&state), None);
+    // A stale attempt cannot write another attempt's record.
+    let stale = AttemptRef { generation: "stale", ..cx };
+    assert!(handle(&mut state, &stale, "control_turn_handoff", &handoff, |_| Ok(())).is_err());
+    assert_eq!(rejected(&state), None);
+    // Long errors are bounded.
+    reject(&mut state, &cx, &"x".repeat(5_000));
+    assert_eq!(rejected(&state).unwrap().error.chars().count(), REJECTION + 1);
+}

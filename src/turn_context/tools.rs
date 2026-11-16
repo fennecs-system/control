@@ -85,7 +85,44 @@ fn after(range: &Range) -> u64 {
         | Range::Conversation { after, .. } => *after,
     }
 }
+/// Characters of a rejected handoff's error kept for the recovery wake.
+const REJECTION: usize = 600;
 fn handle(
+    state: &mut State,
+    attempt: &AttemptRef<'_>,
+    name: &str,
+    args: &Value,
+    save: impl FnOnce(&State) -> io::Result<()>,
+) -> io::Result<Value> {
+    // A failed save is a storage fault, not a rejected receipt; it leaves
+    // state untouched.
+    let mut unsaved = false;
+    let result = respond(state, attempt, name, args, |state: &State| save(state).inspect_err(|_| unsaved = true));
+    if name == "control_turn_handoff"
+        && !unsaved
+        && let Err(error) = &result
+    {
+        reject(state, attempt, &error.to_string());
+    }
+    result
+}
+/// Remembers why the host refused an active attempt's handoff, so a recovery
+/// turn can repair that receipt instead of re-verifying the world. No separate
+/// save: it is evidence, persisted with the attempt's completion checkpoint.
+fn reject(state: &mut State, attempt: &AttemptRef<'_>, error: &str) {
+    let Some(chat) = state.runtime.runs.iter()
+        .find(|r| r.id == attempt.run && r.status == "running"
+            && r.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation))
+        .and_then(|r| r.chat_id.clone()) else { return };
+    if let Some(continuity) = state.chats.iter_mut().find(|c| c.id == chat).and_then(|c| c.continuity.as_mut()) {
+        let error = match error.char_indices().nth(REJECTION) {
+            Some((end, _)) => format!("{}…", &error[..end]),
+            None => error.to_owned(),
+        };
+        continuity.checkpointing.rejected = Some(super::Rejection { generation: attempt.generation.into(), error });
+    }
+}
+fn respond(
     state: &mut State,
     attempt: &AttemptRef<'_>,
     name: &str,

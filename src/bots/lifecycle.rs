@@ -4,7 +4,8 @@
 //! They are gaps a lead could miss (the team went quiet, a member keeps
 //! failing, a restart loop was retired, a claim lost its owner, members became
 //! blocked on a claim, members report a similar blocker, turns keep settling
-//! while open claims do not advance, one claim holds up several members), never
+//! while open claims do not advance, one claim holds up several members, a
+//! member's turns keep ending without an accepted handoff), never
 //! single failures. Judge turns, retained peer
 //! evidence (runs without an attempt) and turns woken only by advisor notes,
 //! including the lead's, are not team activity, so an advisor cannot wake
@@ -82,9 +83,23 @@ pub struct Facts {
     /// Live claims that several members wait on, directly or transitively.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bottlenecks: Vec<Bottleneck>,
+    /// Bots whose turns keep ending without an accepted handoff past their
+    /// recovery allowance; they now wait with a backoff recheck.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uncheckpointed: Vec<Uncheckpointed>,
     /// Chats the facts concern, newest first and bounded.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub chats: Vec<String>,
+}
+/// A member that cannot checkpoint: `turns` consecutive turns ended without an
+/// accepted handoff. `rejection` is the host's last refusal, shortened; none
+/// means its turns ended without calling the handoff at all.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Uncheckpointed {
+    pub chat: String,
+    pub turns: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejection: Option<String>,
 }
 /// Member claims that became blocked on one claim, so several members waiting
 /// on one producer read as one bottleneck. The producer's owner and status are
@@ -334,8 +349,20 @@ impl Facts {
         for bottleneck in &newer.bottlenecks {
             self.bottleneck(bottleneck);
         }
+        for stuck in &newer.uncheckpointed {
+            self.uncheckpointed(stuck.clone());
+        }
         for chat in &newer.chats {
             self.concern(chat);
+        }
+    }
+    /// A newer report for the same member replaces the held one.
+    pub(super) fn uncheckpointed(&mut self, mut newer: Uncheckpointed) {
+        newer.rejection = newer.rejection.as_deref().map(excerpt);
+        if let Some(held) = self.uncheckpointed.iter_mut().find(|held| held.chat == newer.chat) {
+            *held = newer;
+        } else if self.uncheckpointed.len() < CHATS {
+            self.uncheckpointed.push(newer);
         }
     }
     /// Folds a shared blocker into an entry with the same reason or a common
@@ -379,7 +406,7 @@ impl Facts {
     }
     fn is_empty(&self) -> bool {
         self.repeated == 0 && self.retired == 0 && self.abandoned == 0 && self.blocked.is_empty() && !self.quiescent
-            && self.stalled.is_none() && self.shared.is_empty() && self.bottlenecks.is_empty()
+            && self.stalled.is_none() && self.shared.is_empty() && self.bottlenecks.is_empty() && self.uncheckpointed.is_empty()
     }
     pub(super) fn describe(&self, root: &str) -> String {
         let mut parts = Vec::new();
@@ -405,6 +432,12 @@ impl Facts {
         }
         if let Some(stall) = self.stalled {
             parts.push(format!("busy but stalled: {} team turns settled while {} claim(s) stayed open and none became done or resumed from blocked", stall.turns, stall.open));
+        }
+        for stuck in &self.uncheckpointed {
+            parts.push(match &stuck.rejection {
+                Some(rejection) => format!("member {} cannot checkpoint: {} turn(s) ended without an accepted handoff; last rejection: \"{rejection}\"", stuck.chat, stuck.turns),
+                None => format!("member {} cannot checkpoint: {} turn(s) ended without calling control_turn_handoff", stuck.chat, stuck.turns),
+            });
         }
         if self.quiescent { parts.push("the team went quiet: no member turn is running or queued".into()); }
         let chats = if self.chats.is_empty() { String::new() } else { format!(" (chats: {})", self.chats.join(", ")) };

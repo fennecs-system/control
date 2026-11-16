@@ -19,6 +19,38 @@ pub struct Managed {
     pub recovered: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub working: Option<control_context::turn_mailbox::WorkingState>,
+    /// Turns that ended without an accepted handoff since the last one was
+    /// published. Each attempt has a new generation, so `recovered` alone
+    /// cannot bound repeated recovery.
+    #[serde(default, skip_serializing_if = "Checkpointing::is_clear")]
+    pub checkpointing: Checkpointing,
+}
+/// Host observations of a chat failing to checkpoint; cleared by the next
+/// published handoff. Evidence for wake text and lifecycle facts, never authority.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Checkpointing {
+    /// Completed turns, since the last published handoff, that ended without one.
+    #[serde(default)]
+    pub failures: u32,
+    /// The latest `control_turn_handoff` the host rejected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejected: Option<Rejection>,
+    /// This streak was reported as unable to checkpoint.
+    #[serde(default)]
+    pub reported: bool,
+}
+impl Checkpointing {
+    pub fn is_clear(&self) -> bool {
+        *self == Self::default()
+    }
+}
+/// A rejected handoff: the attempt generation and the host's bounded error.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Rejection {
+    pub generation: String,
+    pub error: String,
 }
 pub(crate) fn managed(state: &State, run: &crate::runtime::Run) -> bool {
     !crate::delegation::is_judge(run) && state

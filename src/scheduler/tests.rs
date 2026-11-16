@@ -90,6 +90,15 @@ fn private_limits_are_validated_and_do_not_come_from_saved_runtime_state() {
     assert!(load_limits_in(&file, None).is_err(), "one waiting member is a dependency, not a bottleneck");
     std::fs::write(&file, b"{\"advisor_bottleneck_members\":3}").unwrap();
     assert_eq!(load_limits_in(&file, None).unwrap().advisor_bottleneck_members, 3);
+    assert_eq!(load_limits_in(&file, None).unwrap().bot_recovery_continues, 2);
+    assert_eq!(load_limits_in(&file, None).unwrap().bot_recovery_recheck_seconds, 300);
+    std::fs::write(&file, b"{\"bot_recovery_continues\":0,\"bot_recovery_recheck_seconds\":60}").unwrap();
+    let limits = load_limits_in(&file, None).unwrap();
+    assert_eq!((limits.bot_recovery_continues, limits.bot_recovery_recheck_seconds), (0, 60));
+    std::fs::write(&file, b"{\"bot_recovery_continues\":17}").unwrap();
+    assert!(load_limits_in(&file, None).is_err(), "recovery retries stay small");
+    std::fs::write(&file, b"{\"bot_recovery_recheck_seconds\":5}").unwrap();
+    assert!(load_limits_in(&file, None).is_err(), "a parked bot never rechecks faster than the cooldown");
     std::fs::write(&file, b"{\"max_parallel_runs\":4}").unwrap();
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
     assert_eq!(load_limits_in(&file, None).unwrap().max_parallel_runs, 4);

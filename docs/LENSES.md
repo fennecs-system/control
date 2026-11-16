@@ -272,7 +272,11 @@ comes from the judge role and the operator's bot approval.
      since it was acquired and since it last advanced, and the waiting members
      and claims. It is derived from claim state alone and reported once per
      claim incarnation and dependent set; it is reported again when that set
-     changes. The dependency graph is walked only when a member claim changes.
+     changes. The dependency graph is walked only when a member claim changes;
+   - a member cannot checkpoint: more than `bot_recovery_continues` (default 2)
+     of its turns ended without an accepted handoff since its last published
+     one. The fact names the member, the count and the host's last handoff
+     rejection, if any; it is reported once per streak.
 
    A single failed, interrupted or cancelled turn (provider errors included)
    and a single failed watch exit are never facts. Facts coalesce into one
