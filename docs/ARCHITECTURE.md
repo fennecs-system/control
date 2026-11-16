@@ -1,221 +1,123 @@
 # Control architecture
 
-Design direction, 2026-10-29. This describes the intended system; the current
-implementation boundary is recorded below.
+## Purpose
 
-## An augmentable construction tool
+Control is a constructor for code and the systems built from it. It combines a
+harness, an MCP server, knowledge and conversations, declarative execution
+environments and model adapters into one tool that a person can run, understand
+and extend on their own machine.
 
-Control is a general-purpose constructor for code and the systems built from it.
-It brings together a harness, an MCP server, knowledge and conversations,
-declarative execution environments, and potentially a model-calling service and
-router. These are parts of one tool that a person can run, understand, extend,
-and improve on their own machine or infrastructure.
+Deterministic work stays in code: scheduling, permission checks, retries and
+cleanup do not spend model tokens. Rust supplies the server, harness and tools;
+WASM provides browser components; Nix declares dependencies, images and
+deployments. Control's own code and integrations are Rust/Haskell/Lean/WASM/Nix
+with no Node runtime or authored JavaScript/Python. Third-party tooling in other
+languages runs only inside tool or agent containers, and task-specific servers
+and adapters live in those environments, not in Control's source. These choices
+rule out classes of mistakes; they do not prove model behavior or external
+effects correct.
 
-The ambition extends beyond a coding chat client: combine intent, explicit
-context, tools, agents, and verification to produce reviewable changes and running
-systems. Keep ordinary deterministic work in code rather than spending model
-tokens on scheduling, permission checks, retries, or cleanup.
-
-Rust, functional programming, and Nix are foundations. Use typed data and explicit
-state transitions, keep the context core pure, and isolate effects behind small
-contracts. Nix declares reproducible dependencies and deployments; Rust supplies
-the native server, harness, and tools; WASM provides browser components. Control's
-application and integration layers have no Node runtime or authored JavaScript/Python.
-These choices rule out classes of mistakes; they do not prove model behavior or
-distributed effects correct.
-
-Non-Rust third-party tooling may run inside tool or agent containers. Control
-and authored integrations remain Rust/Haskell/Lean/WASM/Nix; an upstream runtime
-inside an isolated tool is not a host integration runtime. The
-[demonstration goals](DEMONSTRATIONS.md) exercise website construction, browser
-research with a tool view, and coordinated agents using these boundaries.
-Agent-generated programs can use tool-specific languages inside granted
-containers. Their server packages and adapters belong to those private tool
-environments, not Control's maintained source or a host integration runtime.
-
-## One node, distinct responsibilities
-
-A future persistent bot binds a versioned persona, composable lenses, policy,
-resource grants, limits and conversations. Its identity outlives any run or
-container. Declarative event/callback definitions reuse the deterministic
-supervisor; child bots inherit authority ceilings and budgets. Human questions
-reuse the bridge, while capability grants and consequential external actions
-remain separate authorization decisions. See the [roadmap](../roadmap.md) and
-[inspiration review](BOT-INSPIRATIONS.md); this is direction, not implemented
-unattended automation.
-
-Project grants, isolated worktrees and local preview services are described in
-[Projects and previews](WORKSPACES.md). Resource intent and authorization belong
-to the node; agents invoke tools against those captured resources. Base images
-stay immutable. Environment changes belong in private worker state or separate
-tool containers. Nix package acquisition and shared cache publication are
-distinct capabilities, not implicit consequences of being inside a sandbox.
-
-A node defines its authorized identities and roles independently of its model
-backend. Several Discord IDs can represent one person, all with the user role.
-Task/chat permission never grants Control source editing, settings or an operator
-session; source improvements require architect authority. A DM addresses the
-node attached to that bot, not an implicit global model account. Subscription,
-API and self-hosted adapters share this authorization boundary. Operators remain
-responsible for provider terms; permissions cannot certify contractual compliance.
-Personal node configuration lives under `~/.config/control/` (or an explicit
-configuration directory), outside the checkout and worker source snapshots.
+## Responsibilities
 
 | Boundary | Responsibility |
 | --- | --- |
-| Harness and durable state | Conversations, run/attempt identities, context provenance, task progress, recovery rules, cancellation, and usage. A conversation outlives a process or container. |
-| MCP and tool broker | Describe tools and authorize each invocation against the original actor, local policy, and captured constraints. UI and agent callers use the same contracts. |
-| Nix execution | Declare tool closures, worker images or microVMs, resource limits, and deployment services. A reproducible environment and an enforced sandbox are separate requirements. |
-| Model adapters and optional router | Translate model requests, events, tools, and accounting. A future router can choose an authorized backend under declared cost, capability, and data-location constraints. |
-| Clients | Rust terminal, web/WASM, Discord, and other adapters attach to the same node-owned conversation state. They do not each implement an agent runtime. |
-| Federation | Exchange explicitly shared resources and, later, bounded work between independently administered nodes. Peer identity and local operator authority remain separate. |
+| Harness and durable state | Conversations, run/attempt identities, context provenance, recovery, cancellation and usage. A conversation outlives any process or container. |
+| MCP and tool broker | Describe tools and authorize each call against the original actor, node policy and captured constraints. UI and agent callers use the same contracts. |
+| Nix execution | Declare tool closures, worker images, resource limits and deployment services. A reproducible environment and an enforced sandbox are separate requirements. |
+| Model adapters | Translate requests, events, tools and accounting for Codex, Claude Code and local endpoints. Provider choice does not change tools, permissions or publication. |
+| Clients | The web UI, terminal and Discord attach to the same node-owned state; none implements its own agent runtime. |
+| Federation | Exchange explicitly shared resources between independently administered nodes. Peer identity and local operator authority stay separate. |
 
-Lenses remain pure, composable functions over explicit snapshots. They select
-context and tool descriptions without ownership or effects. The execution layer
-enforces which selected tools may actually run. Personas guide behavior; policy
-and deterministic supervision enforce authority.
+Identity and roles belong to the node, independently of the model backend.
+Several Discord IDs can represent one person. Chat permission never grants
+source editing, settings or an operator session; source improvements need the
+architect role. Operators remain responsible for provider terms. Personal
+configuration lives under `~/.config/control/`, outside the checkout.
 
-Domain transitions operate on narrow typed state and return effect descriptions.
-The runtime interprets those effects: checkpointing, containers, networking and
-model calls. This follows the state/effect separation of a state monad without
-requiring a monad framework: clients submit commands and consume projections or
-events, rather than threading the application's complete state through every
-interface. Keep transitions deterministic and test interpreters separately;
-extract shared components when an actual caller needs them.
+Lenses are pure, composable functions over explicit snapshots. They select
+context and tool descriptions; the execution layer decides which selected tools
+may run. Personas guide behavior; policy and deterministic supervision enforce
+authority.
 
-## A deployable collective tool
+Domain transitions take narrow typed state and return effect descriptions; the
+runtime interprets those effects (checkpointing, containers, networking, model
+calls). Clients submit commands and read projections rather than sharing the
+whole application state. See [state and effect boundaries](STATE-BOUNDARIES.md)
+and [library boundaries](CRATE-BOUNDARIES.md).
 
-Imagine distributing Control together with a Nix configuration and an optional
-model: a declared environment that can become a useful node without relying on
-one operator's laptop or a mandatory central service. Hosted model APIs remain an
-option; compatible local inference could make a deployment independent of them.
+## How it works now
 
-The target bundle identifies the Control revision, Nix inputs and closures,
-worker/tool image digests, enabled services and capabilities, resource requirements,
-and optional model weights and inference runtime. Distribute the native Control
-executable with embedded UI assets, plus the declared dependencies it needs.
-Mutable conversations, workspaces, node identity, and credential material live
-outside that immutable bundle. Replacing a deployment must preserve its state;
-rolling back code does not roll back external effects.
+Control is a Rust local server with a web UI, a thin terminal client and a
+Discord bridge. The release binary embeds the UI assets and the worker seccomp
+profile. A state-directory lock (`state.lock`) prevents competing servers.
+Configuration and state have independent roots.
 
-Provide a NixOS module for a complete declarative Linux node, alongside packaging
-for supported Nix hosts. Portability has an explicit platform contract: Linux
-containers and microVMs need a compatible runtime, and local models need suitable
-memory, hardware, drivers, and redistribution terms. Nix alone does not supply
-those guarantees.
+- **Runs and workspaces.** Backend and model are captured per run. Ordinary
+  chats keep published file checkpoints; a chat's pointer advances only with a
+  committed successful result. Restart marks in-flight runs interrupted and does
+  not replay model or tool steps; unpublished work is kept as a recovery
+  candidate. Project grants, isolated worktrees and previews are described in
+  [projects and previews](WORKSPACES.md).
+- **Providers.** Codex and Claude Code run in pinned Nix containers. Claude's
+  built-in tools are disabled; its harness sees a mailbox while workspace
+  commands run in a separate offline container without credentials (see
+  [Claude](CLAUDE.md)). Local models run through Control's native tool loop
+  (see [local models](LOCAL-MODELS.md)).
+- **Commands and builds.** Long commands are durable broker jobs in
+  credential-free offline containers. An operator-installed Nix build image
+  supplies vendored dependencies. See [command jobs](COMMAND-JOBS.md) and
+  [build environments](BUILD-ENVIRONMENTS.md).
+- **Delegation.** A parent checkpoints, releases its execution slot and resumes
+  with the child's result. Judges get read-only source and cannot publish or
+  advance a workspace. Spawn batches have bounded admission and a durable
+  backlog. See [delegation](DELEGATION.md).
+- **Persistent services.** Services, their data and model attempts have
+  independent lifetimes. Services keep a retained `/workspace` volume and an
+  explicit restart policy; provider containers are recreated per attempt.
+  Restoring files does not restore live process state. Scoped
+  [TCP grants](PORTS.md) connect verified services through trusted relays while
+  their container network stays disabled. See
+  [persistent tools](PERSISTENT-TOOLS.md).
+- **Artifacts.** One bounded service lists and reads published files for the
+  web viewer and MCP. Hashes, paths and attempt provenance describe files
+  without making them accepted knowledge or authority. The viewer executes no
+  content.
+- **Self-improvement.** Improvement is an architect-authorized chat mode with
+  its own checkpoints. The optional [GitHub broker](GITHUB.md) opens draft PRs
+  from completed improvements; workers never receive the GitHub token, and
+  publishing does not merge or deploy.
+- **Bots.** Operator-approved bots are chats that sleep until room messages,
+  service events or timers wake them. The pure `control_bot::Supervisor`
+  decides; `src/bots.rs` queues ordinary turns within budgets. See
+  [watches](WATCHES.md) and [room notifications](ROOM-NOTIFICATIONS.md).
+- **External harnesses.** `control mcp` gives an independently run Claude Code
+  or Codex CLI read access and approval-gated requests; it cannot submit jobs or
+  administer Control (see [Claude](CLAUDE.md)).
 
-Anyone should be able to adapt their own node and contribute improvements. On a
-shared node, existing operator roles, review, and deployment policy still apply.
-Self-improvement produces attributable source/configuration changes and evidence
-for the receiving operator to accept.
+The [threat model](THREAT-MODEL.md) records the enforced boundaries and known
+gaps. Live workspace disk quotas and some ambiguous container-creation recovery
+cases still limit unattended use. Unknown containers require inspection, never
+guessed cleanup.
 
-## Federation as interoperability
+## Direction
 
-Nodes should be able to find and connect with other nodes, share useful lenses,
-tools, knowledge, and collaboration spaces, and eventually delegate constrained
-work. Social-style connections make a collective useful without requiring a
-single shared administrator or database. Participation is optional; one node must
-remain useful on its own.
+- **Deployable bundles.** A bundle would identify the Control revision, Nix
+  inputs, image digests, enabled capabilities, resource needs and optional model
+  weights. Mutable conversations, workspaces, identity and credentials stay
+  outside it; rolling back code does not roll back external effects. Linux
+  containers and local models still need a compatible runtime, hardware and
+  redistribution terms. See [NixOS](NIXOS.md) for the current packaged path.
+- **Federation.** Nodes share versioned lenses, tools and knowledge, and later
+  delegate constrained work. Importing a peer resource never installs code,
+  evaluates Nix, activates capabilities or grants authority. One node must stay
+  useful on its own. See [federation](FEDERATION.md).
+- **Durable execution.** [Pi Durable](https://earendil.com/posts/pi-durable/)
+  is a reference for checkpointed steps, intent before effects, replay-safety
+  classification and observable compaction. Local deduplication does not make
+  external effects exactly-once.
+- **Bots and teams.** Personas, schedules and reviewed self-improvement build
+  on the existing bot supervisor rather than new core concepts. See
+  [inspirations](BOT-INSPIRATIONS.md) and the [roadmap](SWARM-ROADMAP.md).
 
-Share versioned descriptions and explicit artifacts, not ambient trust. Importing
-a peer resource cannot install code, evaluate Nix, activate capabilities, or grant
-source-editing authority. Treat executable extensions differently from inert
-context. Prefer small versioned protocols and capability negotiation over assuming
-every peer runs the same build. See [the federation specification](FEDERATION.md).
-
-## Lessons to evaluate from Pi Durable
-
-[The Pi Durable post](https://earendil.com/posts/pi-durable/) offers useful semantics:
-checkpoint model/tool steps, persist intent before effects, deduplicate submissions,
-classify replay safety, give child work explicit cancellation/lifetime relationships,
-and keep compaction observable without deleting history. It also separates storage
-from execution environments. Borrow these ideas as requirements to evaluate, without
-adopting its implementation. Local request deduplication does not guarantee
-exactly-once external effects.
-
-Control should add immutable execution provenance and explicitly authorized
-federation to that discussion. Prefer a small typed core over a general mutable
-hook framework. Judge the result through restart/replay tests, reproducible
-deployments, bounded resources, and usable interfaces; language choice alone does
-not establish that Control exceeds another harness.
-
-This review makes no runtime changes. The next architectural dependency remains
-an immutable execution manifest and explicit recovery semantics, as recorded in
-[the earlier investigations](RESEARCH-NOTES.md).
-
-## Current implementation boundary
-
-Control currently has a Rust local server and thin TUI, persisted conversations
-and attempts, composable lens snapshots, Codex and Claude Code Nix containers,
-selected brokered tool integrations, and signed offline federation resource exchange. A restart marks
-in-flight runs interrupted; it does not resume individual model/tool steps.
-
-The macOS release binary embeds the UI, security profile, TUI and Discord bridge.
-Configuration and state have independent home-directory roots. Published file
-snapshots give ordinary chats workspace continuity; a state pointer advances only
-with a committed successful result. Artifact list/read is one bounded service used
-by the chat explorer/viewer and MCP. Output hashes, relative paths and attempt
-provenance describe files without making them accepted knowledge or authority.
-The first viewer executes no content and performs no edits.
-
-Improvement is a persistent architect-authorized chat mode rather than a separate
-prompt page. Conversation history follows the discussion and implementation;
-ordinary-task and source-improvement workspaces keep independent checkpoints.
-Each queued turn captures its action, and each message/dispatch/tool call checks
-the original actor. Discussion behavior is instructed through the prompt;
-filesystem isolation and the lack of live application/deployment are enforced
-separately. Agents shows current execution and the queue, while Runs keeps history.
-
-Long commands are durable broker jobs in credential-free offline containers,
-separate from provider execution. An operator-installed Nix build image supplies
-immutable vendored dependencies; output and scratch are private to the task.
-Delegation checkpoints the parent, releases its bounded execution slot, runs a
-bounded child and resumes with scoped retained feedback. Different-provider judges
-have read-only source and cannot publish or advance a workspace. Deterministic
-admission, scheduling and publication fences remain Rust supervisor duties.
-See [command jobs](COMMAND-JOBS.md), [build environments](BUILD-ENVIRONMENTS.md)
-and [delegation](DELEGATION.md).
-
-The optional [GitHub broker](GITHUB.md) binds publication to private node
-configuration, checks captured source against the remote base and opens draft PRs
-from completed improvements. Provider credentials and GitHub credentials have
-separate consumers; workers never receive the GitHub token. Publishing does not
-merge or deploy. The [threat model](THREAT-MODEL.md) records enforced boundaries
-and remaining gaps.
-
-A persistent execution environment is a broader resource than a persistent shell:
-it can retain project files, shells, build state and supervised services while
-agents attach, stop or change provider. Keep environment identity and lifetime
-separate from chat history and individual model attempts. Its declarative Nix
-base stays immutable; writable state, network grants, leases, resource limits and
-cleanup belong to the Rust supervisor. A container or microVM is an isolation
-choice, not a reason to grant the model host administration.
-
-Control retains file checkpoints, preview services and leased offline tool
-containers, while provider containers are recreated per attempt. Tool tmpfs
-survives Control process restarts while its container remains alive; it is not
-durable disk. Restoring files does not restore live process state. Explicit
-service restart policy, durable tool storage and Nix VMs remain future work.
-Service lifetime, data lifetime and model-attempt lifetime are independent.
-Task-specific protocols are tool workloads, not special cases in core scheduling.
-Separate [scoped TCP grants](PORTS.md) connect verified services through trusted
-relays while their Docker network remains disabled.
-
-Backend/model selection is captured per run. The Claude adapter runs an unmodified,
-pinned CLI with built-in tools disabled and an explicit Control MCP bridge.
-Its harness sees a mailbox, while a separate offline container mounts the task
-workspace without any login or harness process. Shared node authorization gates
-tool calls; durable admission prevents replaying an ambiguously acknowledged
-workspace command. The external `control mcp` entry point also remains available
-to a user's independently run Claude Code. See [both paths](CLAUDE.md).
-
-A state-directory lock prevents competing servers. Durable interrupted attempts
-and node labels prevent dispatch alongside earlier active containers; unknown
-containers require inspection, not guessed cleanup. Live workspace disk quotas
-and the remaining ambiguous-creation recovery cases still gate broader unattended use.
-
-A complete packaged node, NixOS module, native multi-provider loop/router, bundled
-local inference, automatic effect-safe task resumption and networked federation
-remain future work. Bounded child scheduling and durable spawn backlog admission
-are implemented. The existing browser transcript refresh and TUI
-revision polling are not a durable incremental event subscription API.
+Nix VMs, effect-safe resumption of individual steps and networked federation
+remain future work.

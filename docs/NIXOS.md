@@ -1,14 +1,13 @@
 # Local deployment on NixOS
 
-Control's flake builds the native binary with its embedded Rust/WASM UI and
-separate Linux worker images. Run Control as your normal user, with configuration
-and credentials in your home directory. No separate Linux builder is needed on
-an `x86_64-linux` or `aarch64-linux` host of the matching architecture.
+Run Control as your normal user, with configuration and credentials in your home
+directory. An `x86_64-linux` or `aarch64-linux` host builds its own worker images;
+no separate Linux builder is needed.
 
 ## Prepare the machine
 
 Add these settings to your NixOS configuration, replacing `yourUser` with your
-existing login name:
+login name:
 
 ```nix
 { pkgs, ... }: {
@@ -19,9 +18,9 @@ existing login name:
 }
 ```
 
-Apply with `sudo nixos-rebuild switch`, then log out and back in for Docker group
-membership to take effect. Docker group membership grants root-equivalent access
-to this machine. Verify `docker info` succeeds as your normal user before continuing.
+Apply with `sudo nixos-rebuild switch`, then log out and back in so the Docker
+group applies. Docker group membership is root-equivalent on this machine. Check
+that `docker info` works as your normal user.
 
 ## Install and start
 
@@ -34,30 +33,23 @@ nix run .#codex -- -c 'cli_auth_credentials_store="file"' login
 ./target/release/control serve
 ```
 
-Setup builds the native Nix package and its embedded UI, loads the worker image,
-saves its immutable ID and initializes private configuration. It also registers
-the checkout for explicit improvement requests. Existing configuration, state and
-model selection are preserved. Login and service startup are explicit.
+Setup builds the package, loads and pins the worker image, initializes private
+configuration and registers the checkout for `/improve`. It preserves existing
+configuration, state and models, and never signs in or starts services. For
+optional images and the `--full` worker profile, see [setup](setup.md#prerequisites).
 
-For Nix, Node/npm, Java and Python inside worker containers, use
-`nix run .#setup -- --full`. Optional `--claude`, `--browser` and
-`--build-environment` flags add those images; see [setup](setup.md).
+In another terminal, run `./target/release/control open` for the web UI (or
+`open --link` to print a single-use sign-in link), or `control tui` for terminal
+chat. The server listens on `127.0.0.1:8080`, so no firewall change is needed.
+Configuration lives in `~/.config/control/` and state in `~/.local/state/control/`.
 
-In another terminal, run `./target/release/control open` for the web UI or use
-`tui` for terminal chat. `open --link` prints a one-use sign-in link if no desktop
-browser is available. The server listens on `127.0.0.1:8080`; no firewall opening
-is needed. Configuration defaults to `~/.config/control/` and state to
-`~/.local/state/control/`, independent of the checkout or package path.
-
-Setup retains Nix output links under `${XDG_DATA_HOME:-$HOME/.local/share}/control/`.
-The stable executable is `package/bin/control` there; a copy remains at
-`target/release/control` for the checkout commands above. Keep the output links
-to protect the package's runtime libraries and images from garbage collection.
+The stable executable is `~/.local/share/control/package/bin/control` (under
+`$XDG_DATA_HOME` if set). Keep the output links there; they protect the package
+and images from garbage collection.
 
 ## Optional systemd user service
 
-Stop the foreground server first, then create
-`~/.config/systemd/user/control.service`:
+Stop the foreground server, then create `~/.config/systemd/user/control.service`:
 
 ```ini
 [Unit]
@@ -81,16 +73,15 @@ systemctl --user status control.service
 journalctl --user -u control.service -f
 ```
 
-The service uses your existing home directory, configuration, provider login
-and Docker access. For operation after logout and startup at boot, enable
-lingering with `sudo loginctl enable-linger "$USER"`. Stop it with
-`systemctl --user stop control.service` before running a foreground server against
-the same state.
+The service uses your home directory, configuration, provider login and Docker
+access. To keep it running after logout and start it at boot, run
+`sudo loginctl enable-linger "$USER"`. Stop the service before running a
+foreground server against the same state.
 
 ## Updating
 
-Pull a reviewed revision and rerun setup with the same image flags. Stop or finish
-active work before replacing image pins and restarting the service:
+Pull a reviewed revision, let active work finish, then rerun setup with the same
+flags and restart:
 
 ```sh
 nix run .#setup
@@ -99,20 +90,15 @@ systemctl --user restart control.service
 "$HOME/.local/share/control/package/bin/control" tui --check
 ```
 
-Keep configuration, state and provider credentials outside the repository and
-Nix store. Do not remove Docker images still used by active runs or services.
+Do not remove Docker images still used by active runs or services.
 
 ## Build only
 
-For inspection or custom deployment, `nix build .#control` (or just `nix build`)
-produces `./result/bin/control`. This does not load images, change pins or start
-services. Nix vendors both Cargo lockfiles, builds the UI offline with matching
-wasm-bindgen, and runs the native workspace tests. The UI has a separate derivation
-so backend-only edits reuse its output. Existing image outputs remain available,
-for example `nix build .#worker-image`; normal installation uses setup to load and
-pin them automatically.
+`nix build .#control` (or `nix build`) produces `./result/bin/control` without
+loading images, changing pins or starting services. The build vendors both Cargo
+lockfiles, builds the UI offline in its own derivation and runs the workspace
+tests. Images build separately, for example `nix build .#worker-image`; setup
+loads and pins them.
 
-For a daemon without terminal dependencies, `nix build .#control-server` produces
-the same web/MCP server with the `tui` feature disabled. It retains the embedded
-web UI and reports that `control tui` is unavailable in this variant. The default
-package and setup command retain terminal support. Neither build starts services.
+`nix build .#control-server` builds the same web/MCP server without the `tui`
+feature or terminal dependencies.

@@ -1,37 +1,39 @@
 # Shared knowledge
 
-`control.knowledge.search` returns at most ten concise matches. Query words match
-independently of their order, ignoring case; every whitespace-separated word must
-occur somewhere in the title or body. Results retain stable document/claim order.
-Use the returned ID with `control.knowledge.read` for pages of at most 4,000 Unicode
-characters. Workers use the underscore aliases `control_knowledge_search` and
-`control_knowledge_read`.
+Three tools read and propose knowledge. The operator bridge and HTTP MCP use the
+dotted names; workers use the underscore aliases.
 
-A worker can read the document revisions captured by its lenses when its run was
-prepared. Editing a note or changing lenses later does not expose a new document
-to that running attempt. Local operator MCP calls can read current documents.
-Documents remain notes, not automatically verified facts. All authorized workers
-can search and read claims explicitly admitted by the local operator; claim scope
-describes applicability and does not grant authority.
+| Tool | Purpose |
+| --- | --- |
+| `control.knowledge.search` | Up to 10 matches. Every whitespace-separated query word (1–200 characters in total, case-insensitive, any order) must appear in the title or body. Results keep stable document/claim order. |
+| `control.knowledge.read` | Read a search result by ID, in pages of at most 4,000 Unicode characters (offset up to 32,000). |
+| `control.knowledge.propose` | Submit one claim for operator review. |
 
-`control_knowledge_propose` submits one claim (280 characters), evidence (1,000),
-scope (300), and recheck condition (`validity`, 300). Control records the run's
-actor, chat, attempt, request identity and captured lens/document revisions. The
-worker cannot supply or change that provenance. A retry with the same request
-identity returns the same result; changed contents are rejected. There is a node
-limit of 256 retained proposals. Failed disk checkpoints roll back the proposal.
+## What a worker can read
 
-Pending proposals appear under **Knowledge → Review**. Only an authenticated
-local operator can accept or reject them there. Admission is terminal and does
-not overwrite documents. Failed review checkpoints restore the pending state.
-Judges can read knowledge but cannot submit proposals. Inactive or stale worker
-mailboxes cannot propose claims.
+A worker reads the document revisions its lenses captured when its run was
+prepared. Later note or lens edits do not reach a running attempt. Operator MCP
+calls read current documents. All authorized workers can read claims the local
+operator has admitted. Documents are notes, not verified facts; a claim's scope
+describes where it applies and grants no authority.
 
-The native MCP bridge exposes the same three dotted tools. A local proposal
-requires `chat` identifying a local operator chat. Its actor is the local
-operator, rather than a worker identity; identical submissions are idempotent.
+## Proposals
 
-Accepted claims retain evidence, scope, recheck condition and compact provenance
-when read. Evidence is supplied for operator review, not independently verified
-by this tool. Automatic compaction, claim replacement and event notifications are
-separate work; no background model calls occur here.
+A proposal has a claim (280 characters), evidence (1,000), scope (300) and a
+recheck condition (`validity`, 300). Control records the actor, chat, attempt,
+request identity and captured lens/document revisions; the worker cannot set or
+change that provenance. A retry with the same request identity returns the same
+result; changed contents are rejected. A node retains at most 256 proposals. A
+failed checkpoint rolls the proposal back.
+
+On the operator bridge, `chat` must name a local operator chat; the actor is the
+local operator. Judges can read knowledge but cannot propose. Inactive or stale
+worker mailboxes cannot propose.
+
+## Review
+
+Pending proposals appear under **Knowledge → Review**. Only an authenticated local
+operator can accept or reject them. Admission is final and does not overwrite
+documents; a failed review checkpoint restores the pending state. Accepted claims
+keep their evidence, scope, recheck condition and compact provenance. Evidence is
+for the reviewer; the tool does not verify it. No background model calls occur.
