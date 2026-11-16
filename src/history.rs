@@ -234,6 +234,85 @@ pub(crate) fn persisting<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// A value that remembers its saved form. A save serializes it once and then
+/// copies those bytes until the value is next borrowed mutably, so encoding
+/// the state costs what changed rather than everything kept. Any `&mut` access
+/// (field assignment through `DerefMut` included) forgets the bytes, so a
+/// stale encoding cannot be written: the cache is valid by construction, with
+/// no dirty flags to forget. Only saves (`persisting`) use it; every other
+/// serialization (views, APIs) sees the value itself.
+#[derive(Default)]
+pub(crate) struct Cached<T> {
+    value: T,
+    saved: OnceLock<Box<serde_json::value::RawValue>>,
+}
+impl<T> From<T> for Cached<T> {
+    fn from(value: T) -> Self {
+        Self { value, saved: OnceLock::new() }
+    }
+}
+impl<T: Clone> Clone for Cached<T> {
+    fn clone(&self) -> Self {
+        Self { value: self.value.clone(), saved: self.saved.clone() }
+    }
+}
+impl<T: std::fmt::Debug> std::fmt::Debug for Cached<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.value.fmt(f)
+    }
+}
+impl<T: PartialEq> PartialEq for Cached<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+}
+impl<T> std::ops::Deref for Cached<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.value
+    }
+}
+impl<T> std::ops::DerefMut for Cached<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        self.saved.take();
+        &mut self.value
+    }
+}
+thread_local! {
+    /// Tests and debug builds re-serialize everything to check the cache.
+    static UNCACHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+/// Runs `f` with every `Cached` value serialized afresh: the oracle the cached
+/// encoding must equal.
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
+pub(crate) fn uncached<R>(f: impl FnOnce() -> R) -> R {
+    let previous = UNCACHED.with(|u| u.replace(true));
+    let result = f();
+    UNCACHED.with(|u| u.set(previous));
+    result
+}
+impl<T: Serialize> Serialize for Cached<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if !PERSISTING.with(|p| p.get()) || UNCACHED.with(|u| u.get()) {
+            return self.value.serialize(serializer);
+        }
+        let saved = match self.saved.get() {
+            Some(saved) => saved,
+            None => {
+                let bytes = serde_json::to_string(&self.value).map_err(serde::ser::Error::custom)?;
+                let raw = serde_json::value::RawValue::from_string(bytes).map_err(serde::ser::Error::custom)?;
+                self.saved.get_or_init(|| raw)
+            }
+        };
+        saved.serialize(serializer)
+    }
+}
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Cached<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        T::deserialize(deserializer).map(Self::from)
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Marker {
@@ -274,6 +353,7 @@ struct Text<'a> {
 /// Fills journal-backed run text back in after loading.
 pub(crate) fn hydrate_text(state: &mut crate::State) -> io::Result<()> {
     for run in &mut state.runtime.runs {
+        let run = &mut **run;
         if let Some(at) = run.objective.at.or(run.result.at).or(run.context.at).or(run.continuation.at) {
             let line = with(run.chat_id.as_deref(), |journal| journal.read(at))?.ok_or_else(|| io::Error::other("History entry missing"))?;
             let text: Text<'static> = serde_json::from_slice(&line).map_err(io::Error::other)?;

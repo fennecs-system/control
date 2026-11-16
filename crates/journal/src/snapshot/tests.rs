@@ -38,6 +38,46 @@ fn identical_documents_need_no_patch() {
     assert_eq!(check(&document, &document.clone()), 0);
 }
 
+/// What a value written from saved bytes looks like: its range without members.
+fn forget_members(encoded: &mut Encoded, node: usize) {
+    let end = encoded.nodes[node].subtree_end as usize;
+    let removed = (end - node - 1) as u32;
+    encoded.nodes.drain(node + 1..end);
+    for other in &mut encoded.nodes {
+        if other.subtree_end as usize >= end {
+            other.subtree_end -= removed;
+        }
+    }
+    encoded.nodes[node].subtree_end = node as u32 + 1;
+}
+
+#[test]
+fn values_saved_whole_are_still_diffed_inside() {
+    let old = state(6, 40);
+    let mut new = old.clone();
+    new["chats"][2]["messages"].as_array_mut().unwrap().push(message(40));
+    let mut base = encode(&old).unwrap();
+    // The third chat as cached bytes: find its node and drop its members.
+    let chats = base.children(0).into_iter().find(|&c| base.key(c) == b"\"chats\"").unwrap();
+    let third = base.children(chats)[2];
+    forget_members(&mut base, third);
+    let mut current = encode(&new).unwrap();
+    let patch = diff(&base, &current).unwrap();
+    assert_eq!(replay(&old, &patch), new);
+    assert!(patch.len() < 400, "{} bytes: the message, not the chat", patch.len());
+    // And the other way round: the new side saved whole.
+    let chats = current.children(0).into_iter().find(|&c| current.key(c) == b"\"chats\"").unwrap();
+    let third = current.children(chats)[2];
+    forget_members(&mut current, third);
+    let patch = diff(&encode(&old).unwrap(), &current).unwrap();
+    assert_eq!(replay(&old, &patch), new);
+    assert!(patch.len() < 400);
+    // Both sides saved whole.
+    let patch = diff(&base, &current).unwrap();
+    assert_eq!(replay(&old, &patch), new);
+    assert!(patch.len() < 400);
+}
+
 #[test]
 fn a_new_message_costs_the_message_not_the_chat() {
     let old = state(6, 400);
@@ -110,14 +150,31 @@ fn random_edit_sequences_replay_to_the_same_document() {
     }
 }
 
+/// Indexing bytes finds exactly the ranges encoding records, for any document.
+#[test]
+fn indexing_bytes_matches_encoding() {
+    let documents = [
+        json!(null),
+        json!("a \"quoted\" \\ string with ] and } inside"),
+        json!([1, -2.5e10, true, null, "x", [], {}]),
+        json!({"k\"ey": {"nested": [{"a": "x".repeat(300)}, {"b": [1, 2, 3]}]}, "": ""}),
+        state(4, 20),
+    ];
+    for document in documents {
+        let encoded = encode(&document).unwrap();
+        assert_eq!(index(encoded.bytes().to_vec()).unwrap(), encoded, "{document}");
+    }
+    assert!(index(b"{\"a\":".to_vec()).is_err() && index(b"[1,2".to_vec()).is_err() && index(b"{} x".to_vec()).is_err());
+}
+
 #[test]
 fn snapshots_carry_their_name_and_schema_and_are_recognised() {
     let schema = json!({"version": 1, "lenses": [[]]});
     for document in [json!({}), state(1, 2)] {
         let encoded = encode(&document).unwrap();
         let bytes = snapshot(&encoded, "n1", &schema);
-        assert!(matches(&bytes, &encoded, "n1", &schema));
-        assert!(!matches(&bytes, &encoded, "n2", &schema));
+        assert_eq!(base(&bytes, "n1", &schema), Some(encoded.clone()), "the file is its own diff base");
+        assert_eq!(base(&bytes, "n2", &schema), None);
         let mut parsed: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(identify(&mut parsed), (Some("n1".into()), Some(schema.clone())));
         assert_eq!(parsed, document);

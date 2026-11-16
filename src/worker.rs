@@ -1150,6 +1150,7 @@ pub(crate) fn record_activity_for(
     let Some(run) = state.runtime.runs.iter_mut().find(|r| r.id == id) else {
         return false;
     };
+    let run = &mut **run;
     if run.status != "running" {
         // A synchronous copy can finish after cancellation was requested. Close
         // its existing internal phase; provider progress remains fenced out.

@@ -15,7 +15,7 @@ required-features = ["tui"]
 
 [dependencies]
 serde = { version = "1", features = ["derive", "rc"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["raw_value"] }
 control-context = { path = "crates/context" }
 control-http = { path = "crates/http" }
 control-ai = { path = "crates/ai" }

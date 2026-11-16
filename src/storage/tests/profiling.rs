@@ -91,20 +91,27 @@ fn profile_swarm_hour() {
     let start = Instant::now();
     let initial: State = serde_json::from_slice(&data).unwrap();
     println!("{}", serde_json::json!({"case": "monolithic_parse", "state_bytes": data.len(), "ms": start.elapsed().as_secs_f64() * 1e3}));
-    let (mut plain, mut ranged, mut compared) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut plain, mut ranged, mut cached, mut compared, mut indexed) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let base = crate::history::persisting(|| snapshot::encode(&initial)).unwrap();
+    let fresh = |f: &dyn Fn()| crate::history::uncached(|| crate::history::persisting(f));
     for _ in 0..21 {
         let start = Instant::now();
-        black_box(crate::history::persisting(|| serde_json::to_vec(&initial)).unwrap());
+        fresh(&|| drop(black_box(serde_json::to_vec(&initial).unwrap())));
         plain.push(start.elapsed().as_nanos());
         let start = Instant::now();
-        let encoded = black_box(crate::history::persisting(|| snapshot::encode(&initial)).unwrap());
+        fresh(&|| drop(black_box(snapshot::encode(&initial).unwrap())));
         ranged.push(start.elapsed().as_nanos());
+        let start = Instant::now();
+        let encoded = black_box(crate::history::persisting(|| snapshot::encode(&initial)).unwrap());
+        cached.push(start.elapsed().as_nanos());
+        let start = Instant::now();
+        black_box(snapshot::index(encoded.bytes().to_vec()).unwrap());
+        indexed.push(start.elapsed().as_nanos());
         let start = Instant::now();
         black_box(snapshot::diff(&base, &encoded));
         compared.push(start.elapsed().as_nanos());
     }
-    println!("{}", serde_json::json!({"case": "encode_stages", "to_vec": quantiles(&mut plain), "encode_with_ranges": quantiles(&mut ranged), "diff_unchanged": quantiles(&mut compared)}));
+    println!("{}", serde_json::json!({"case": "encode_stages", "to_vec": quantiles(&mut plain), "encode_with_ranges": quantiles(&mut ranged), "encode_cached": quantiles(&mut cached), "index_bytes": quantiles(&mut indexed), "diff_unchanged": quantiles(&mut compared)}));
     let mut by_size: Vec<usize> = (0..initial.chats.len()).collect();
     by_size.sort_by_key(|&i| std::cmp::Reverse(initial.chats[i].messages.len()));
     let chats = &by_size[..6.min(by_size.len())];
@@ -117,7 +124,7 @@ fn profile_swarm_hour() {
         for i in 0..6 {
             swarm_step(&mut state, 16 + i * 20, chats, &mut active);
         }
-        let encode = |state: &State| crate::history::persisting(|| snapshot::encode(state)).unwrap();
+        let encode = |state: &State| encode(state).unwrap();
         persist(&directory, encode(&state), true).unwrap();
         let (mut written, mut latencies, mut compactions) = (0u64, Vec::new(), 0);
         let log_length = || fs::metadata(directory.join(LOG)).map_or(0, |m| m.len());
@@ -126,7 +133,8 @@ fn profile_swarm_hour() {
             let before = log_length();
             let start = Instant::now();
             if mode == "before" {
-                let bytes = crate::history::persisting(|| serde_json::to_vec(black_box(&state))).unwrap();
+                // The old path: a fresh serialization (no cached runs) and a full rewrite.
+                let bytes = crate::history::uncached(|| crate::history::persisting(|| serde_json::to_vec(black_box(&state)))).unwrap();
                 write_checkpoint(&directory, &bytes).unwrap();
                 written += bytes.len() as u64;
             } else {
@@ -156,7 +164,7 @@ fn profile_swarm_hour() {
             published().lock().unwrap().remove(&directory);
             let start = Instant::now();
             let (loaded, recovered) = recover(&directory, read_checkpoint(&directory).unwrap().unwrap()).unwrap();
-            let adopted = adopt(&directory, &loaded, recovered.unwrap());
+            let adopted = adopt(&directory, recovered.unwrap());
             (loaded, adopted, start.elapsed().as_secs_f64() * 1e3)
         };
         let lines = fs::read(directory.join(LOG)).unwrap().iter().filter(|&&b| b == b'\n').count();

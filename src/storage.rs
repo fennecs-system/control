@@ -89,9 +89,10 @@ pub fn load() -> io::Result<State> {
     let mut changed = crate::knowledge::migrate(&mut state);
     changed |= state.lens_library.merge_defaults();
     changed |= interrupt_active(&mut state);
-    // Without an exact, current snapshot to diff against, the first save
+    // Without a current snapshot to adopt as the diff base, the first save
     // compacts: replayed logs, older schemas and migrations all end here.
-    if changed || !published.is_some_and(|published| adopt(&directory, &state, published)) {
+    let adopted = published.is_some_and(|published| adopt(&directory, published));
+    if changed || !adopted {
         save(&state)?;
     }
     Ok(state)
@@ -170,15 +171,14 @@ fn recover(directory: &Path, data: Vec<u8>) -> io::Result<(State, Option<Recover
     Ok((state, Some(Recovered { data, nonce: identity.nonce, log, clean })))
 }
 
-/// Adopts the published snapshot as the diff base when it is exactly what this
-/// build would write for `state`, so a clean restart writes nothing.
-fn adopt(directory: &Path, state: &State, recovered: Recovered) -> bool {
+/// Adopts the published snapshot as the diff base, so a clean restart writes
+/// nothing. The base is indexed from the file's bytes, not re-encoded: a diff
+/// against it turns exactly that document into the next state, whether or not
+/// this build would have written the same bytes for it.
+fn adopt(directory: &Path, recovered: Recovered) -> bool {
     let Recovered { data, nonce: Some(nonce), log, clean: true } = recovered else { return false };
-    let Ok(encoded) = crate::history::persisting(|| snapshot::encode(state)) else { return false };
     let schema = serde_json::to_value(schema()).expect("schemas serialize");
-    if !snapshot::matches(&data, &encoded, &nonce, &schema) {
-        return false;
-    }
+    let Some(encoded) = snapshot::base(&data, &nonce, &schema) else { return false };
     let log_bytes = (0..log.len()).filter_map(|i| log.read(i).ok().flatten()).map(|line| line.len() + 1).sum();
     published().lock().unwrap_or_else(PoisonError::into_inner).insert(directory.to_owned(), Published { log, log_bytes, base: Some(encoded) });
     true
@@ -188,7 +188,7 @@ fn adopt(directory: &Path, state: &State, recovered: Recovered) -> bool {
 /// `state.json` alone is complete. Used on shutdown: a stopped node can be
 /// read (or rolled back to an older build) from the snapshot by itself.
 pub fn compact(state: &State) -> io::Result<()> {
-    let encoded = crate::history::persisting(|| snapshot::encode(state)).map_err(io::Error::other)?;
+    let encoded = encode(state).map_err(io::Error::other)?;
     let directory = crate::config::state_directory().map_err(io::Error::other)?;
     legacy_result(persist(&directory, encoded, true))?;
     changes().bump();
@@ -282,6 +282,20 @@ impl std::error::Error for CheckpointError {
     }
 }
 
+/// The state's saved encoding. Finished runs reuse their saved bytes
+/// (`history::Cached`), so this costs what changed plus a copy of the rest.
+/// Debug builds and tests check every encoding against a fresh, uncached
+/// serialization: the cache can only change the cost, never the bytes.
+fn encode(state: &State) -> serde_json::Result<Encoded> {
+    let encoded = crate::history::persisting(|| snapshot::encode(state))?;
+    #[cfg(debug_assertions)]
+    {
+        let fresh = crate::history::uncached(|| crate::history::persisting(|| serde_json::to_vec(state)))?;
+        assert!(fresh == encoded.bytes(), "the cached state encoding differs from a fresh one");
+    }
+    Ok(encoded)
+}
+
 /// Synchronous, phase-aware checkpoint boundary. Success includes file and
 /// directory sync; only success wakes state-change subscribers. This API does
 /// not permit releasing the application's write lock during persistence.
@@ -294,7 +308,7 @@ impl std::error::Error for CheckpointError {
 /// change is durable before this returns, so receipts and idempotency records
 /// keep their guarantees.
 pub fn checkpoint(state: &State) -> Result<(), CheckpointError> {
-    let encoded = crate::history::persisting(|| snapshot::encode(state))
+    let encoded = encode(state)
         .map_err(|error| CheckpointError::NotReplaced(io::Error::other(error)))?;
     let directory = crate::config::state_directory()
         .map_err(|error| CheckpointError::NotReplaced(io::Error::other(error)))?;

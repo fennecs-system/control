@@ -76,6 +76,11 @@ A checkpoint no longer rewrites `state.json`. It writes what changed:
   remove member, splice array. A new chat message is a splice of that message,
   not the chat; a run's status is a set of one string. An unchanged save
   writes nothing. Diffing is a pure function of two values; nothing is parsed.
+- **Cached runs.** `Run` is `history::Cached<Record>`: a save serializes a run
+  once and copies its saved bytes until the run is next borrowed mutably (any
+  `&mut` access forgets them), so encoding costs what changed plus a copy of
+  the rest. Diffing indexes a run's saved bytes when it must look inside one.
+  Debug builds check every save against a fresh, uncached serialization.
 - **Transactions.** Everything one save changed (a run, its chat, a receipt, a
   watch cursor) is one line, `{"sum":"<fnv-1a>","ops":[…]}`. The line is the
   transaction record and its newline the commit marker. Recovery replays the
@@ -98,9 +103,9 @@ A checkpoint no longer rewrites `state.json`. It writes what changed:
   (the new snapshot already contains it). Replay is bounded by the snapshot's
   size and compaction at most doubles the bytes the log wrote.
 - **Restart.** A clean stop compacts, so `state.json` alone is the whole state.
-  Startup adopts that snapshot as the diff base without writing when it is
-  exactly what this build would save; after a crash it replays the log and
-  compacts once.
+  Startup adopts that snapshot as the diff base without writing, indexing
+  the file's bytes rather than re-encoding the state; after a crash it
+  replays the log and compacts once.
 - **Readers** that do not own the state (the Discord bridge, federation export)
   read snapshot plus log through one loader, `control::config::read_state` (or
   `read_state_in` for a given directory), typed as any partial view of the state, without a lock and
@@ -164,8 +169,8 @@ compaction writes a new block under a new name rather than editing the old one.
 
 Finished runs and old chat messages are positions far from the focus too. Their
 bulky text already lives in the per-chat journals; their small records still
-live in `state.json`, are re-encoded on every save (diffing skips them, but
-encoding still costs CPU) and are never pruned. Moving them out into cut-shaped
+live in `state.json` (copied from their saved bytes on each save, loaded and
+held in memory) and are never pruned. Moving them out into cut-shaped
 immutable blocks, with lookup by id, is the next step.
 
 ## Turn continuity

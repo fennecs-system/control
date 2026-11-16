@@ -158,7 +158,7 @@ fn child_continuations_finish_before_notification_and_cannot_cross_scope() {
     state.runtime.runs[2].actor = identity::Actor::Unknown;
     assert!(reconcile(&mut state, |_| panic!("Mismatched scope must not notify")).is_err());
     assert!(state.runtime.runs[0].spawns[0].completions.is_empty());
-    state.runtime.runs[2].actor = child.actor;
+    state.runtime.runs[2].actor = child.actor.clone();
     reconcile(&mut state, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.len(), 4);
     assert!(state.runtime.runs[3].objective.contains("failed"));

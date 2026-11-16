@@ -76,7 +76,7 @@ fn continuations_keep_captured_settings_but_start_with_fresh_execution_state() {
 fn continuations_establish_lineage_when_the_origin_has_no_persona() {
     let origin = request("original").into_run("origin".into(), 1, Default::default(), None);
     let run = request("continue").into_continuation(&origin, "chat", "next".into(), 2, Vec::new());
-    let persona = run.persona.unwrap();
+    let persona = run.persona.clone().unwrap();
     assert_eq!(persona.root, "origin");
     assert_eq!(persona.depth, 0);
     assert_eq!(persona.parent, None);
