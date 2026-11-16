@@ -7,6 +7,9 @@ use std::{
 };
 
 pub fn directory() -> Result<PathBuf, &'static str> {
+    #[cfg(any(test, feature = "test-isolation"))]
+    return isolated(std::env::var_os("CONTROL_CONFIG_DIR"), "config", &operator_directories());
+    #[cfg(not(any(test, feature = "test-isolation")))]
     resolve(
         std::env::var_os("CONTROL_CONFIG_DIR"),
         std::env::var_os("XDG_CONFIG_HOME"),
@@ -43,13 +46,72 @@ pub fn read_regular(path: &Path, limit: usize, private: bool) -> io::Result<Vec<
 }
 
 pub fn state_directory() -> Result<PathBuf, &'static str> {
-    let path = std::env::var_os("CONTROL_STATE_DIR")
+    #[cfg(any(test, feature = "test-isolation"))]
+    return isolated(std::env::var_os("CONTROL_STATE_DIR"), "state", &operator_directories());
+    #[cfg(not(any(test, feature = "test-isolation")))]
+    resolve_state(
+        std::env::var_os("CONTROL_STATE_DIR"),
+        std::env::var_os("XDG_STATE_HOME"),
+        std::env::var_os("HOME"),
+    )
+}
+
+fn resolve_state(
+    explicit: Option<OsString>,
+    xdg: Option<OsString>,
+    home: Option<OsString>,
+) -> Result<PathBuf, &'static str> {
+    let path = explicit
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("XDG_STATE_HOME").map(|p| PathBuf::from(p).join("control")))
-        .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".local/state/control")))
+        .or_else(|| xdg.map(|p| PathBuf::from(p).join("control")))
+        .or_else(|| home.map(|p| PathBuf::from(p).join(".local/state/control")))
         .ok_or("Set HOME or CONTROL_STATE_DIR to locate this node's state")?;
     if !path.is_absolute() {
         return Err("Control state paths must be absolute");
+    }
+    Ok(path)
+}
+
+/// Root of this test process's node directories. Test builds (`cfg(test)`, or
+/// the `test-isolation` feature that every `cargo test` build of the binary
+/// enables) resolve configuration and state below it unless
+/// `CONTROL_CONFIG_DIR`/`CONTROL_STATE_DIR` name scratch directories, so a test
+/// can never read or overwrite the operator's live node.
+#[cfg(any(test, feature = "test-isolation"))]
+pub fn test_root() -> PathBuf {
+    std::env::temp_dir().join(format!("control-test-{}", std::process::id()))
+}
+
+/// Every location a non-test build could resolve for the operator's node: the
+/// XDG and HOME defaults for both configuration and state.
+#[cfg(any(test, feature = "test-isolation"))]
+pub fn operator_directories() -> Vec<PathBuf> {
+    let var = std::env::var_os;
+    [
+        resolve(None, var("XDG_CONFIG_HOME"), None),
+        resolve(None, None, var("HOME")),
+        resolve_state(None, var("XDG_STATE_HOME"), None),
+        resolve_state(None, None, var("HOME")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// Test resolution: an explicit directory is honoured unless it is (or lies
+/// within) one of the operator's node directories; otherwise the per-process
+/// temporary root. XDG and HOME defaults are never used.
+#[cfg(any(test, feature = "test-isolation"))]
+fn isolated(explicit: Option<OsString>, kind: &str, operator: &[PathBuf]) -> Result<PathBuf, &'static str> {
+    let path = explicit.map(PathBuf::from).unwrap_or_else(|| test_root().join(kind));
+    if !path.is_absolute() {
+        return Err("Control test node paths must be absolute");
+    }
+    if let Some(real) = operator.iter().find(|real| path.starts_with(real)) {
+        panic!(
+            "test build refused the operator's node directory {}; set CONTROL_STATE_DIR and CONTROL_CONFIG_DIR to scratch directories",
+            real.display()
+        );
     }
     Ok(path)
 }

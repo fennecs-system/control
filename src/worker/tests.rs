@@ -2,6 +2,43 @@
 use super::*;
 use crate::runtime::RunKind;
 
+/// The binary's tests link the library through the `test-isolation` feature, so
+/// with no `CONTROL_*_DIR` set every node directory is under the test root, and
+/// no helper ever resolves the operator's real configuration or state.
+#[test]
+fn test_builds_never_resolve_operator_node_directories() {
+    let root = crate::config::test_root();
+    assert!(root.starts_with(std::env::temp_dir()));
+    if std::env::var_os("CONTROL_STATE_DIR").is_none() {
+        assert_eq!(crate::config::state_directory(), Ok(root.join("state")));
+    }
+    if std::env::var_os("CONTROL_CONFIG_DIR").is_none() {
+        assert_eq!(crate::config::directory(), Ok(root.join("config")));
+    }
+    if std::env::var_os("CONTROL_CODEX_AUTH_FILE").is_none() {
+        assert_eq!(Credentials::path(), Ok(root.join("codex/auth.json")));
+    }
+    let operator = crate::config::operator_directories();
+    let helpers = [
+        ("config::directory", crate::config::directory().map_err(std::io::Error::other)),
+        ("config::state_directory", crate::config::state_directory().map_err(std::io::Error::other)),
+        ("config::state", crate::config::state("state.json").map_err(std::io::Error::other)),
+        ("outbox::path", control::outbox::path().map_err(std::io::Error::other)),
+        ("history::path", crate::history::path(None)),
+        ("packages::store", crate::packages::store()),
+        ("runtime::workspace", crate::runtime::workspace("run").map_err(std::io::Error::other)),
+        ("codex credentials", Credentials::path().map_err(std::io::Error::other)),
+    ];
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        let credentials = Credentials::path().unwrap();
+        assert!(!credentials.starts_with(home.join(".codex")), "Codex credentials resolved {}", credentials.display());
+    }
+    for (name, path) in helpers {
+        let path = path.unwrap();
+        assert!(!operator.iter().any(|real| path.starts_with(real)), "{name} resolved {}", path.display());
+    }
+}
+
 #[test]
 fn codex_tool_outcome_survives_activity_truncation_and_drains_final_results() {
     for completion in [None, Some("completed"), Some("failed")] {
