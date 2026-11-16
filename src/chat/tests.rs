@@ -544,7 +544,7 @@ fn attempt_activity_and_context_trimming_survive_serialization_and_escape_html()
     assert_eq!(stored.runtime.runs[0].attempts.len(), 1);
     assert_eq!(stored.runtime.runs[0].status, "queued");
     let html = transcript(&stored, &id).unwrap();
-    assert!(html.contains("1 earlier exchanges excluded"));
+    assert!(html.contains("<p class='message-status attempt-status'><span title='Attempt 1'>attempt 1</span> · <span title='Context window · 1 earlier exchange excluded from attempt 1. Chat history retained.'>1 earlier exchange excluded</span></p>"), "{html}");
     assert!(html.contains("echo &lt;script&gt;"));
     assert!(html.contains("&lt;img src=x onerror=bad()&gt;"));
     assert!(!html.contains("<script>"));

@@ -57,13 +57,65 @@ impl Accounting {
         *self == Self::Unrecorded
     }
 }
-/// One attempt's token line for transcripts and terminals. A running attempt
-/// shows the totals reported so far; nothing is shown before a model call.
-pub fn tokens_label(tokens: Option<Tokens>, accounting: Accounting, running: bool) -> Option<String> {
-    match (tokens, accounting) {
-        (Some(t), _) => Some(format!("{} input ({} cached) · {} output tokens{}", t.input_tokens, t.cached_input_tokens, t.output_tokens,
-            if running { " so far" } else if accounting == Accounting::Partial { ", at least" } else { "" })),
-        (None, Accounting::Unknown | Accounting::Partial | Accounting::Reported) => Some(if running { "tokens not reported yet" } else { "tokens not reported" }.into()),
-        (None, Accounting::Unrecorded | Accounting::NotLaunched) => None,
-    }
+/// One part of an attempt's status line: compact text and its full wording.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StatusPart {
+    pub text: String,
+    pub title: String,
 }
+fn part(text: String, title: String) -> StatusPart {
+    StatusPart { text, title }
+}
+/// `12345` as `12,345`.
+fn grouped(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+/// One attempt's compact status line for transcripts and terminals, e.g.
+/// `attempt 1 · ↑ 5,074 in (3,235 cached) · ↓ 77 out… · 1 earlier exchange excluded`.
+/// A running attempt's totals are those reported so far (`…`); a stopped
+/// attempt's per-call sums are a lower bound (`≥`). Nothing is said about
+/// tokens before a model call. A lone attempt label means nothing to show.
+pub fn attempt_status(index: usize, tokens: Option<Tokens>, accounting: Accounting, running: bool, omitted: usize) -> Vec<StatusPart> {
+    let n = index + 1;
+    let mut parts = vec![part(format!("attempt {n}"), format!("Attempt {n}"))];
+    match (tokens, accounting) {
+        (Some(t), _) => {
+            let (at_least, more, wording) = match (running, accounting) {
+                (true, _) => ("", "…", " so far; the attempt is still running"),
+                (false, Accounting::Partial) => ("≥", "", ", at least; the provider stopped before reporting its totals"),
+                _ => ("", "", ""),
+            };
+            let (input, cached, output) = (grouped(t.input_tokens), grouped(t.cached_input_tokens), grouped(t.output_tokens));
+            parts.push(part(format!("↑ {at_least}{input} in ({cached} cached)"), format!("{input} input tokens ({cached} cached){wording}")));
+            parts.push(part(format!("↓ {at_least}{output} out{more}"), format!("{output} output tokens{wording}")));
+        }
+        (None, Accounting::Unknown | Accounting::Partial | Accounting::Reported) => parts.push(if running {
+            part("tokens pending…".into(), "The provider has not reported token usage yet".into())
+        } else {
+            part("tokens unreported".into(), "The provider reported no token usage".into())
+        }),
+        (None, Accounting::Unrecorded | Accounting::NotLaunched) => {}
+    }
+    if omitted > 0 {
+        let plural = if omitted == 1 { "exchange" } else { "exchanges" };
+        parts.push(part(
+            format!("{omitted} earlier {plural} excluded"),
+            format!("Context window · {omitted} earlier {plural} excluded from attempt {n}. Chat history retained."),
+        ));
+    }
+    parts
+}
+/// The compact parts joined as plain text, for terminals.
+pub fn status_text(parts: &[StatusPart]) -> String {
+    parts.iter().map(|p| p.text.as_str()).collect::<Vec<_>>().join(" · ")
+}
+#[cfg(test)]
+mod tests;

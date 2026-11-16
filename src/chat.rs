@@ -934,14 +934,13 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
         }
         if let Some(attempts) = run.map(|r|&r.attempts) {
             for (index, attempt) in attempts.iter().enumerate() {
-                if attempt.context_trace.is_some() && let Some(run)=run {
-                    html.push_str(&format!("<p class='message-status'><a target='_top' href='/chat/{}/context?run={}&amp;attempt={}'>Control input · attempt {} ↗</a></p>",escape(id),escape(&run.id),index+1,index+1));
-                }
-                if let Some(count) = Some(attempt.omitted_history).filter(|n| *n > 0) {
-                    html.push_str(&format!("<p class='message-status'>Context window · {count} earlier exchanges excluded from attempt {}. Chat history retained.</p>", index + 1));
-                }
-                if let Some(tokens) = attempt.tokens_label() {
-                    html.push_str(&format!("<p class='message-status'>Tokens · attempt {} · {}</p>", index + 1, escape(&tokens)));
+                // One compact line per attempt; titles carry the full wording.
+                let parts=attempt.status(index);
+                let input=run.filter(|_|attempt.context_trace.is_some()).map(|run|format!("<a target='_top' href='/chat/{}/context?run={}&amp;attempt={}' title='Control input for attempt {}'>input ↗</a>",escape(id),escape(&run.id),index+1,index+1));
+                if parts.len()>1 || input.is_some() {
+                    let mut line=parts.iter().map(|p|format!("<span title='{}'>{}</span>",escape(&p.title),escape(&p.text))).collect::<Vec<_>>();
+                    line.extend(input);
+                    html.push_str(&format!("<p class='message-status attempt-status'>{}</p>",line.join(" · ")));
                 }
                 let events=match crate::history::activity(run.and_then(|r|r.chat_id.as_deref()),attempt) {
                     Ok(events)=>events,

@@ -123,11 +123,13 @@ fn clean(text: &str) -> String {
         .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
         .collect()
 }
-/// The attempt's token line from the chat detail, live while it runs.
-fn attempt_tokens(attempt:&Value)->Option<String> {
+/// The attempt's compact status line from the chat detail, live while it runs.
+fn attempt_status(index:usize,attempt:&Value)->Option<String> {
     let tokens=serde_json::from_value(attempt["tokens"].clone()).ok().flatten();
     let accounting=serde_json::from_value(attempt["accounting"].clone()).unwrap_or_default();
-    control_ai::tokens_label(tokens,accounting,attempt["status"]=="running")
+    let omitted=attempt["omitted_history"].as_u64().unwrap_or(0) as usize;
+    let parts=control_ai::attempt_status(index,tokens,accounting,attempt["status"]=="running",omitted);
+    (parts.len()>1).then(||control_ai::status_text(&parts))
 }
 fn folded_activity(lines:&mut Vec<Line<'static>>,events:&[Value]) {
     let mut count=0;let mut failed=0;let mut latest=None;let mut failure=None;
@@ -474,12 +476,8 @@ impl App {
                         if let Some(error) = attempt["history_error"].as_str() {
                             lines.push(Line::styled(format!("  ! {}",clean(error)),Style::default().fg(Color::Rgb(237,139,155))));
                         }
-                        if let Some(count) = attempt["omitted_history"].as_u64().filter(|n| *n > 0)
-                        {
-                            lines.push(Line::styled(format!("Context window · {count} earlier exchanges excluded from attempt {}. History retained.", index + 1), Style::default().fg(Color::Rgb(133, 133, 143))));
-                        }
-                        if let Some(tokens) = attempt_tokens(attempt) {
-                            lines.push(Line::styled(format!("Tokens · attempt {} · {tokens}", index + 1), Style::default().fg(Color::Rgb(133, 133, 143))));
+                        if let Some(status) = attempt_status(index, attempt) {
+                            lines.push(Line::styled(status, Style::default().fg(Color::Rgb(143, 129, 172))));
                         }
                         if let Some(events) = attempt["activity"].as_array() {
                             if !self.show_activity {folded_activity(&mut lines,events);}
