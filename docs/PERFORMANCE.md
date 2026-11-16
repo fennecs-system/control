@@ -1,5 +1,78 @@
 # Performance checks
 
+## Retained peer messages and fresh observations (2026-11-16)
+
+Each reconcile pass now also scans the agent-message receipts (at most 256)
+for overdue digest flags. Bots compare one more definition field when checking
+for drift, and the supervisor checks deferral per pending reason. Retired
+receipts drop their flag, so a node at rest scans only flags. Observation
+refreshes run on their own thread, outside the state lock and outside
+reconcile.
+
+`bots::tests::reconcile_profile` (release, Apple Silicon, other builds
+running), three alternating base (`ce2ff76`) / head pairs. Median ns per pass:
+
+| Case | Base | Head |
+| --- | --- | --- |
+| 64 chats idle | 28,474–29,948 | 28,665–29,145 |
+| 64 chats offered | 36,100–37,546 | 36,167–36,532 |
+| 512 chats idle | 208,711–215,293 | 206,661–212,358 |
+| 512 chats offered | 218,857–226,913 | 214,193–222,389 |
+
+The ranges overlap, so no regression is measurable and no flamegraph was taken.
+The wake reduction is the intended effect. In run -128's member chats, 34 of
+143 supervised wakes had only a peer message as their reason. Those now wait
+for the member's next wake, or for the digest bound, unless the sender marks
+the message urgent.
+
+## Local model generation (2026-11-16)
+
+`control_model_generate` adds no work to chat, scheduling or rendering paths; it
+runs only when called. Summary and generation calls to plain-HTTP endpoints now use
+a small std `TcpStream` client that polls cancellation every 100 ms instead of a
+blocking reqwest call (HTTPS keeps reqwest). Response bodies keep the existing
+128 KiB ceiling. The polling interval adds at most ~100 ms after cancellation and
+does not delay a completed response, which is returned as soon as its framing is
+complete. End-to-end Qwen3.8-27B Q4_K_M figures through this adapter on an
+M3 Max with a host Metal llama.cpp server (live node running): median 4.8 s for
+41–107 output tokens, 14.3–16.6 output tokens/s, against 16.6 tokens/s server
+decode (the end-to-end figure also includes prompt processing), so adapter
+overhead is small relative to inference. Details, memory
+and the CPU-container comparison are in
+[LOCAL-MODELS.md](LOCAL-MODELS.md#measurement-on-an-m3-max-2026-11-16). These are
+single runs, not a controlled benchmark.
+
+Local agent turns add no work to Codex/Claude paths. Each local step re-sends about
+10.6 k tokens of system text and tool schemas. The first step of a cold slot cost
+71 s of prompt processing on Metal; later steps and later turns reuse llama.cpp's
+prefix cache (0.5–4 s of new prompt per step). An end-to-end four-tool turn took
+49 s. Model requests run without the state lock; tool calls take the same locks as the CLI mailboxes. See
+[LOCAL-MODELS.md](LOCAL-MODELS.md#end-to-end-run-on-metal-2026-11-16).
+
+## Planning tools (2026-11-16)
+
+`control_search_path` timings from the ignored `graph_search::tests::profile`
+fixture: release build, one Apple Silicon laptop, median of five calls each,
+including JSON deserialisation and graph construction. The graph is a random
+geometric graph (20,000 points in a 1000×1000 square, five random neighbours
+each, undirected, cost = length × [1, 2)); the grids have 100,000 random
+blocked cells (about 10%), corner to corner.
+
+| Case | A* | Dijkstra | Expanded (A* / Dijkstra) |
+| --- | ---: | ---: | ---: |
+| graph, 20k nodes / 100k edges | 27.0 ms | 25.9 ms | 2,448 / 10,489 |
+| grid 1000×1000, 4-connected | 9.3 ms | 78.8 ms | 53,270 / 904,797 |
+| grid 1000×1000, 8-connected | 40.0 ms | 79.6 ms | 162,274 / 904,797 |
+| grid 100³ open, 26-connected | 2.0 ms | — | 99 / — |
+
+Deserialising the maximum graph alone takes 17.3 ms, so graph calls are bounded
+by input handling rather than search; A* still expands a quarter of the nodes.
+On grids, which are generated from a small description, the search dominates
+and A* is up to 8× faster. All cases are far inside the 2-second limit.
+`control_room_plan` walks at most one room's 128 claims linearly and needs no
+benchmark. Reproduce with
+`cargo test --release --locked --bin control graph_search::tests::profile -- --ignored --nocapture`.
+
 ## Timed-out turns and steering notes (2026-11-16)
 
 The advisor's `timed_out` fact adds one per-chat slot and one attempt check per
@@ -18,6 +91,51 @@ The ranges overlap; no regression is measurable. The tool-result notes run on
 the broker path under the state lock already taken for callback notices: a few
 field reads per call, plus one pass over chats and active runs only once a
 steering threshold is reached and the note has not yet been sent.
+
+## Guidance on demand: wake-context bytes (2026-11-16)
+
+Every wake starts a fresh provider session, so its whole context is resent.
+Before this change about 17 KB of each wake was generic policy: every captured
+lens's full text plus long room and session guidance, the same for lead,
+members and advisor. Now prompts carry a short core and one index line per
+on-demand lens ([LENSES.md](LENSES.md#guidance-on-demand-and-role-scoping)),
+and role-scoped lenses are left out for other roles.
+
+`turn_context::tests::policy_size` builds a run -128-shaped team (lead with
+`swarm` + `advisor`, a persistent member and the advisor, each woken by a room
+post after a dozen earlier callbacks) and measures the policy section and the
+whole wake text. Same fixture on `96cef20` (before) and this branch (after),
+UTF-8 bytes:
+
+| Role | Policy before | Policy after | Wake before | Wake after |
+| --- | ---: | ---: | ---: | ---: |
+| Lead | 17,209 | 2,958 | 26,447 | 12,196 |
+| Member | 17,209 | 2,768 | 26,538 | 12,097 |
+| Advisor | 15,875 | 5,122 | 19,255 | 7,655 |
+
+The advisor keeps its own 2.8 KB procedure inline. The fixture fails if a
+member's policy exceeds 3,072 bytes, a lead's 3,328 or the advisor's 5,632.
+
+Replay of the 182 captured run -128 contexts (read-only from
+`context-traces/contexts.jsonl`), replacing each policy section with this
+branch's policy for its role and keeping everything else:
+
+| Role | Contexts | Wake median before | Wake median after | Wake max after |
+| --- | ---: | ---: | ---: | ---: |
+| Lead and other root chats | 17 | 27,517 | 13,730 | 17,141 |
+| Member | 165 | 35,251 | 21,363 | 31,386 |
+
+The remainder is task-specific: the original assignment, working notes,
+recovery evidence and history. The adapter framing before the policy (about
+3 KB: environment, room protocol, language and reporting rules) is unchanged
+and is the next candidate. Tool schemas are sent separately at session start:
+47 core worker tools, 46,645 bytes of JSON before room tools, so per-role tool
+exposure (scoped in [LENSES.md](LENSES.md#current-boundaries)) is the larger
+remaining saving. Rendering adds one pass over at most 128 captured lenses per
+prompt; `control_guidance` is a read of the captured context under the state
+lock already taken for tool calls. Reproduce with
+`cargo test --locked --bin control policy_size -- --nocapture`
+(`CONTROL_PRINT_POLICY=1` prints the member's wake text).
 
 ## Chat callsigns (2026-11-16)
 

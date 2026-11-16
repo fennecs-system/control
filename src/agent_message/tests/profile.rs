@@ -46,7 +46,7 @@ fn routing_profile() {
             for _ in 0..rounds {
                 black_box(handle(&mut state,
                     &AttemptRef { run: &sender, generation: "benchmark-attempt", nonce: "benchmark" },
-                    MessageCall { chat_id: target.clone(), text: "A dependency changed; proceed with your assignment".into(), services: vec![] },
+                    MessageCall { chat_id: target.clone(), text: "A dependency changed; proceed with your assignment".into(), services: vec![], urgent: true },
                     |_| Ok(())).unwrap());
                 state.runtime.runs.truncate(runs);
                 let session = state.chats.last_mut().unwrap();

@@ -21,7 +21,7 @@ pub trait AttemptTools: Sync {
     fn known(&self, name: &str) -> bool;
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value>;
 }
-static ATTEMPT_TOOLS: [&dyn AttemptTools; 11] = [
+static ATTEMPT_TOOLS: [&dyn AttemptTools; 13] = [
     &crate::github::inspection::Tools,
     &crate::compaction::Tools,
     &crate::recovery::Tools,
@@ -32,7 +32,9 @@ static ATTEMPT_TOOLS: [&dyn AttemptTools; 11] = [
     &crate::bots::Tools,
     &crate::agent_message::Tools,
     &crate::watches::Tools,
+    &crate::observe::Tools,
     &crate::packages::Tools,
+    &crate::guidance::Tools,
 ];
 pub fn attempt_tools(name: &str) -> Option<&'static dyn AttemptTools> {
     ATTEMPT_TOOLS.iter().copied().find(|tools| tools.known(name))

@@ -9,6 +9,7 @@ mod bots;
 #[allow(dead_code)]
 mod watch_frame;
 mod watches;
+mod observe;
 #[path = "../tools/browser/main.rs"]
 mod browser;
 mod browser_ui;
@@ -35,8 +36,10 @@ mod doctor;
 mod engine;
 mod federation;
 mod github;
+mod graph_search;
 mod knowledge;
 mod knowledge_tools;
+mod guidance;
 mod lens_library;
 mod lens_ui;
 mod lifecycle;
@@ -49,6 +52,7 @@ mod navigation;
 mod performance;
 mod providers;
 mod model_calls;
+mod local_agent;
 mod compaction;
 mod packages;
 mod projects;
@@ -58,6 +62,7 @@ mod process_tree;
 mod rooms;
 mod runtime;
 mod rust_bench;
+mod solver;
 mod scheduler;
 mod services;
 mod spawning;
@@ -98,6 +103,7 @@ struct State {
     collective: collective::Collective,
     bots: bots::Bots,
     watches: Vec<watches::Watch>,
+    observations: observe::Observations,
     agent_messages: Vec<application::messages::Sent>,
     documents: Vec<knowledge::Document>,
     lens_library: control_context::Library,

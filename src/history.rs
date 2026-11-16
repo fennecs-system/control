@@ -266,6 +266,14 @@ impl<T> Cached<T> {
     pub(crate) fn set_archived(&self, archived: bool) {
         self.archived.store(archived && self.saved.get().is_some(), std::sync::atomic::Ordering::Relaxed);
     }
+    /// Mutable access for an edit that leaves the saved form unchanged, such
+    /// as filling journal-backed text back in after loading (the save writes
+    /// the journal position, not the text). Keeps the saved bytes and the
+    /// archived mark, which any other `&mut` access forgets: un-archiving every
+    /// run at load would put the whole archive back into the next snapshot.
+    pub(crate) fn unchanged_mut(&mut self) -> &mut T {
+        &mut self.value
+    }
 }
 impl<T> From<T> for Cached<T> {
     fn from(value: T) -> Self {
@@ -372,10 +380,11 @@ struct Text<'a> {
     context: Cow<'a, Option<control_context::Resolved>>,
     continuation: Cow<'a, Option<crate::design::Continuation>>,
 }
-/// Fills journal-backed run text back in after loading.
+/// Fills journal-backed run text back in after loading. Only in-memory text
+/// changes, never the saved form, so archived runs stay archived.
 pub(crate) fn hydrate_text(state: &mut crate::State) -> io::Result<()> {
     for run in &mut state.runtime.runs {
-        let run = &mut **run;
+        let run = run.unchanged_mut();
         if let Some(at) = run.objective.at.or(run.result.at).or(run.context.at).or(run.continuation.at) {
             let line = with(run.chat_id.as_deref(), |journal| journal.read(at))?.ok_or_else(|| io::Error::other("History entry missing"))?;
             let text: Text<'static> = serde_json::from_slice(&line).map_err(io::Error::other)?;

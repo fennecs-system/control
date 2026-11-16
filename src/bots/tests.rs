@@ -198,7 +198,7 @@ fn publication_precedes_deferred_peer_admission_for_an_ordinary_active_worker() 
     command_at(&mut state, &chat, "on", Now(0)).unwrap();
     let run = state.runtime.runs[0].id.clone();
     state.runtime.runs[0].status = "running".into();
-    state.agent_messages.push(serde_json::from_value(json!({"key":"peer-receipt","origin":"peer-run","chat":chat,"run":"peer-evidence","peer_cursor":2})).unwrap());
+    state.agent_messages.push(serde_json::from_value(json!({"key":"peer-receipt","origin":"peer-run","chat":chat,"run":"peer-evidence","peer_cursor":2,"urgent":true})).unwrap());
     assert!(
         state.bots.requests.is_empty(),
         "retaining a peer receipt does not request a turn inside the tool"
@@ -538,7 +538,7 @@ fn committed_runnable_work_resumes_once_and_failed_saves_retain_the_intent() {
     assert!(
         bot_runs(&state)[0]
             .objective
-            .contains("while meaningful progress is possible")
+            .starts_with("Bot wake: continue the original goal in this active session.")
     );
     let stored = serde_json::to_vec(&state).unwrap();
     let mut recovered: State = serde_json::from_slice(&stored).unwrap();
@@ -1995,7 +1995,7 @@ fn a_bot_follows_its_chats_watches_and_wakes_on_lines_and_exits() {
         runs[0]
             .objective
             .contains("3 new lines from watch game (w-game)")
-            && runs[0].objective.contains("control_watch_events"),
+            && !runs[0].objective.contains("control_watch_events"),
         "{}",
         runs[0].objective
     );
@@ -2325,3 +2325,5 @@ mod advisor;
 mod recovery;
 #[path = "tests/timeout.rs"]
 mod timeout;
+#[path = "tests/handoff_cost.rs"]
+mod handoff_cost;

@@ -169,7 +169,7 @@ fn dispatch(connection: &mut Option<Hive>, root: &Path, request: &Value) -> Valu
                 } else if crate::tool_registry::bridge_forward(name) {
                     hive(connection).and_then(|h| h.rpc("tools/call", request["params"].clone()))
                 } else {
-                    Err(fail("Tool unavailable: this bridge exposes read-only Control access, web search, offline captures and Rust snippets"))
+                    Err(fail("Tool unavailable: this bridge exposes read-only Control access, web search, offline captures, Rust snippets and solvers"))
                 };
                 Ok(result.unwrap_or_else(
                     |e| json!({"content":[{"type":"text","text":e.to_string()}],"isError":true}),

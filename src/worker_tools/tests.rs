@@ -498,6 +498,16 @@ fn judge_tools_are_enforced_even_when_unadvertised_names_are_forged() {
         );
     }
     assert_eq!(shared.lock().unwrap().runtime.runs.len(), 1);
+    // Captured guidance is a read every role may make, judges included.
+    assert!(names.contains(&"control_guidance"));
+    let read = rpc_at(
+        &shared,
+        &id,
+        &json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_guidance","arguments":{"topic":"session"}}}}),
+        None,
+    );
+    assert_eq!(read["result"]["isError"], false, "{read}");
+    assert_eq!(read["result"]["structuredContent"]["data"]["text"], control_context::agent_policy::SESSION_GUIDANCE_DETAIL);
 }
 #[test]
 fn an_approved_advisor_judge_gains_only_evidence_notes() {
@@ -677,7 +687,7 @@ fn tool_failures_are_results_and_protocol_faults_stay_errors() {
         let response = call(id.clone(), name, arguments);
         assert_eq!(response["id"], id, "{response}");
         let message = crate::toolbox::failure_text(&response).unwrap_or_else(|| panic!("{name}: {response}"));
-        if let Some(expected) = expected { assert_eq!(message, expected); }
+        if let Some(expected) = expected { assert!(message.starts_with(expected), "{message}"); }
     }
     assert!(shared.lock().unwrap().collective.posts.is_empty());
     for (request, code) in [
@@ -699,7 +709,7 @@ fn tool_failures_are_results_and_protocol_faults_stay_errors() {
     crate::chat::send(&mut state, &chat, "/steer Keep the public API", "test").unwrap();
     let managed_state = Arc::new(Mutex::new(state));
     let failed = rpc(&managed_state, &managed, &json!({"nonce":"8-1","request":{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"control_room_post","arguments":{"room":"general","message":"x","delivery":"shout"}}}}));
-    assert_eq!(crate::toolbox::failure_text(&failed), Some("Expected delivery=record or notify."), "{failed}");
+    assert!(crate::toolbox::failure_text(&failed).is_some_and(|text| text.starts_with("Expected delivery=record or notify. Next: call control_room_read {}")), "{failed}");
     assert!(failed["result"]["content"][1]["text"].as_str().unwrap().contains("control_turn_context"), "{failed}");
     let fault = rpc(&managed_state, &managed, &json!({"nonce":"8-2","request":{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{}}}));
     assert_eq!(fault["error"]["code"], -32602);
@@ -734,10 +744,9 @@ fn stale_workspace_is_rejected_for_room_posts_before_dispatch() {
     ] {
         let request = json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":args}}});
         let response = rpc_at(&state, &id, &request, Some(&stale));
-        assert_eq!(
-            crate::toolbox::failure_text(&response).unwrap(),
-            "Mailbox belongs to an inactive attempt"
-        );
+        // Room refusals keep the host's message first and add a callable fix.
+        let text = crate::toolbox::failure_text(&response).unwrap();
+        assert!(text.starts_with("Mailbox belongs to an inactive attempt") && crate::worker_tools::fixes::names_fix(text), "{text}");
     }
     assert!(state.lock().unwrap().collective.posts.is_empty());
     assert!(state.lock().unwrap().collective.room_watches.is_empty());

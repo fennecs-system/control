@@ -212,7 +212,7 @@ with interchangeable drivers; complete the remaining extractions incrementally.
 | P2 | U2 CUA; W2 workflow tools | Scoped browser/resource operations; validated recipes using existing spawn/wait/message primitives. |
 | P2 | M1 model adapters; C1–C3 summary strategies | Bounded reads and summary-call adapter enable C1 before general local tool execution; on/off plus model selector. |
 | P2 | L1 lenses/persona/SOUL configuration; L2/L3 reviewed improvement | Captured revisions, scoped tools, evaluation and admission; no new supervisor personality or learning lifecycle. |
-| P2 | H1 layered control (reflexes, perception, skills, strategy) | Autonomy r7 rule and agent-built packages first; declarative salience filters on notification watches; accelerators, summarisers and observation feeds only for a demonstrated real-time need. |
+| P2 | H1 layered control (reflexes, perception, skills, strategy) | Autonomy r7 rule and agent-built packages first; declarative salience filters on notification watches; accelerators, summarisers and observation feeds only for a demonstrated real-time need. Planning tools shipped; behaviour-tree/state-machine routines go through W2, prototyped as a package. |
 | Later | Federation, inference bundles, general workflow languages, weight training | Demonstrated local need. |
 
 ## V1: Manage Vault and scoped secret injection
@@ -779,6 +779,30 @@ local evaluation supports explicit experimentation only: it exposed a truncated
 commit ID that the original eight-anchor score missed. The v2 comparison fixture
 now scores that ID and the concurrency limit, with identifier boundaries.
 
+The local-inference slice reuses that registry for direct bounded generation:
+`control_model_generate` (operator: `control.model.generate`, `control models
+generate|bench`) with declared limits, honest usage, provenance (declared revision
+plus server-reported identity) and connection-closing cancellation.
+
+Local agent turns are delivered by a native Rust tool loop (`local` backend,
+`local:NAME` for chats, spawns and bots, enabled per endpoint by a declared
+tool-call capability). Control sends the same turn input and the attempt's worker
+MCP tools as function tools to `/v1/chat/completions`. It executes calls through
+the existing worker dispatch, so authority, handoff fencing, publication and
+fresh-attempt recovery are unchanged. Malformed calls get bounded corrective
+feedback, cancellation closes the request, and admission counts tool schemas. A
+turn that outgrows the context compacts its earlier steps. A local-model chat's
+history compaction defaults to the same endpoint's summary tree; an explicit
+operator choice can override it. `nix run .#inference` selects Metal on Apple
+Silicon (approved host-native llama.cpp from the pinned nixpkgs, as a launchd
+agent) and the Nix container elsewhere (CUDA if available, else CPU). Qwen3.8-27B
+Q4_K_M completed real Control-tool turns on Metal at 13–15 decode tokens/s
+([LOCAL-MODELS.md](LOCAL-MODELS.md#local-agent-turns)).
+Plain Codex-over-llama.cpp was rejected because Codex sends MCP tools as a
+Responses `namespace` tool, which llama.cpp skips. Remaining work: parallel tool
+execution, tokenizer-exact budgets, and a quality comparison of local and hosted
+models on the same gameplay tasks.
+
 M1 defines separate captured selections for worker, lead, reviewer and compactor.
 S1 can independently expose an agent-started model service through tools/MCP;
 M1 concerns using a model to execute Control's own agent or summary attempts.
@@ -1070,6 +1094,23 @@ Control's source.
   systems without a structured API (Minecraft has one through Mineflayer).
 - **Measurement:** scorecard turns per completed goal and model wakes per hour,
   to show the split works rather than asserting it.
+
+**Strategy aids (shipped):** [planning tools](PLANNING-TOOLS.md) give the
+strategy layer computed answers instead of token reasoning: `control_room_plan`
+(critical path, bottlenecks, parallel frontier and available members over the
+claim graph, sharing the advisor's bottleneck walk) and `control_search_path`
+(bounded A*/Dijkstra over inline graphs and 2D/3D grids).
+
+**Routines as a generic language (not implemented):** behaviour trees and
+state machines are the natural declarative form for the tactics layer: named
+states, guarded transitions, commit/hysteresis so a routine does not flap
+between goals, and escalation as an explicit outcome. They belong to the
+[W1/W2 workflow layer](#w1w2-schedules-and-a-small-workflow-layer) rather than
+a new runtime: a W2 recipe step can be a routine, W1 schedules or watch events
+trigger it, and [L1 personas](#l1-versioned-lenses-personas-and-soulmd) and
+scheduling decide who runs it. Prototype first as an agent-built package run as
+a watch; promote a generic interpreter only after real routines show which
+constructs are needed.
 
 First exit: a run whose agents build a shared reflex loop and skills, start them
 as watches, and complete milestones with markedly fewer model turns per claim than

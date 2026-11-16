@@ -281,8 +281,8 @@ pub(crate) fn enqueue_test(
 }
 pub(super) fn definitions() -> Vec<Value> {
     vec![
-        json!({"name":"control_service_exec","description":"Run a one-off command inside an exact chat-owned running service, using its private files and approved loopback relays: setup, inspection, or installing and editing a routine. For anything repeated or polled, write a routine (control_watch_start) instead. Use shell commands/heredocs to create small task files, configure clients or install dependencies; bring files or trees from your task workspace with control_service_copy instead. No host paths, mounts or engine options. Waits up to wait_seconds (default 15, max 30) and returns the final status, exit code and output inline when the command finishes in time; otherwise returns its execution_id with status running: poll control_service_exec_status. Use wait_seconds=0 to return at once. Commands from every agent sharing the service run concurrently, each with its own execution_id, output and timeout, up to the service process limit (a larger shape allows more), capped by a node ceiling (default 64); at the limit, or while a control_service_copy holds the service, the request is refused with the active execution_ids and nothing is submitted. Commands are bounded by timeout_seconds; they survive model turns only until then. Run routines and other long-running work with control_watch_start: restart=transient runs finite work such as large downloads once; restart=permanent restarts persistent clients, servers or daemons after exit. Both survive model turns without a task deadline. Use exec for bounded commands: a timed-out or interrupted command is stopped inside the service with every process it started, detached ones included. The service keeps running; it is stopped only if that cannot be verified. Background programs must redirect their output to private files; the service foreground process must remain alive. Uncertain commands are never replayed.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"command":{"type":"string","minLength":1,"maxLength":16000},"timeout_seconds":{"type":"integer","minimum":1,"maximum":1800,"default":120},"wait_seconds":{"type":"integer","minimum":0,"maximum":MAX_WAIT_SECONDS,"default":DEFAULT_WAIT_SECONDS}},"required":["service_id","command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":true}}),
-        json!({"name":"control_service_exec_status","description":"Read a chat-owned service command's bounded live output, exit code and durable outcome. Optional wait_seconds (max 30, default 0) waits for an active command to finish and returns as soon as it does. Use a fresh execution_id only for a deliberate new command; retries with the same request identity never replay effects.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"execution_id":{"type":"string"},"wait_seconds":{"type":"integer","minimum":0,"maximum":MAX_WAIT_SECONDS,"default":0}},"required":["service_id","execution_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
+        json!({"name":"control_service_exec","description":"Run a one-off command inside an exact chat-owned running service, using its private files and approved loopback relays: setup, inspection, or installing and editing a routine. For anything repeated or polled, write a routine (control_watch_start) instead. Use shell commands/heredocs to create small task files, configure clients or install dependencies; bring files or trees from your task workspace with control_service_copy instead. No host paths, mounts or engine options. Results return inline when the command finishes within wait_seconds (default 15, max 30): final status, exit code and output, marked final=true. Call control_service_exec_status only when the result says running and gives an execution_id. Use wait_seconds=0 to return at once. Commands from every agent sharing the service run concurrently, each with its own execution_id, output and timeout, up to the service process limit (a larger shape allows more), capped by a node ceiling (default 64); at the limit, or while a control_service_copy holds the service, the request is refused with the active execution_ids and nothing is submitted. Commands are bounded by timeout_seconds; they survive model turns only until then. Run routines and other long-running work with control_watch_start: restart=transient runs finite work such as large downloads once; restart=permanent restarts persistent clients, servers or daemons after exit. Both survive model turns without a task deadline. Use exec for bounded commands: a timed-out or interrupted command is stopped inside the service with every process it started, detached ones included. The service keeps running; it is stopped only if that cannot be verified. Background programs must redirect their output to private files; the service foreground process must remain alive. Uncertain commands are never replayed.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"command":{"type":"string","minLength":1,"maxLength":16000},"timeout_seconds":{"type":"integer","minimum":1,"maximum":1800,"default":120},"wait_seconds":{"type":"integer","minimum":0,"maximum":MAX_WAIT_SECONDS,"default":DEFAULT_WAIT_SECONDS}},"required":["service_id","command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":true}}),
+        json!({"name":"control_service_exec_status","description":"Read a chat-owned service command's bounded live output, exit code and durable outcome. Only needed when control_service_exec or control_service_copy said running and gave an execution_id; a result marked final=true is already complete. Optional wait_seconds (max 30, default 0) waits for an active command to finish and returns as soon as it does. Use a fresh execution_id only for a deliberate new command; retries with the same request identity never replay effects.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"execution_id":{"type":"string"},"wait_seconds":{"type":"integer","minimum":0,"maximum":MAX_WAIT_SECONDS,"default":0}},"required":["service_id","execution_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
     ]
 }
 pub(super) fn hash(value: &[u8]) -> String {
@@ -318,7 +318,9 @@ pub(super) fn exec(shared: &Arc<Mutex<State>>, run: &str, generation: &str, nonc
     };
     let execution_id = admitted["execution_id"].as_str().unwrap_or_default().to_owned();
     // settle keeps admitted fields, so inline results also carry the hint.
-    Ok(settle(shared, Waiter { run, generation, node, service_id: &service_id }, &execution_id, admitted, wait, &crate::shutdown::token()))
+    let mut value = settle(shared, Waiter { run, generation, node, service_id: &service_id }, &execution_id, admitted, wait, &crate::shutdown::token());
+    crate::observe::attach(shared, run, &mut value);
+    Ok(value)
 }
 /// The caller whose access is rechecked on every wake while waiting.
 #[derive(Clone, Copy)]
@@ -334,13 +336,26 @@ pub(super) struct Waiter<'a> {
 /// summary lacks (a copy's tally) are kept. Waiting never creates or replays
 /// an effect, so a retried request simply waits on the same execution.
 pub(super) fn settle(shared: &Arc<Mutex<State>>, waiter: Waiter<'_>, execution_id: &str, admitted: Value, wait: Duration, token: &CancelToken) -> Value {
-    if wait.is_zero() || !admitted["status"].as_str().is_some_and(|s| matches!(s, "requested" | "running")) {
-        return admitted;
-    }
-    let mut value = wait_until(shared, waiter, execution_id, admitted.clone(), Instant::now() + wait, token);
-    if let (Some(value), Some(admitted)) = (value.as_object_mut(), admitted.as_object()) {
-        for (key, field) in admitted {
-            value.entry(key.clone()).or_insert_with(|| field.clone());
+    let active = |value: &Value| value["status"].as_str().is_some_and(|s| matches!(s, "requested" | "running"));
+    let service_id = waiter.service_id;
+    let mut value = if wait.is_zero() || !active(&admitted) {
+        admitted
+    } else {
+        let mut value = wait_until(shared, waiter, execution_id, admitted.clone(), Instant::now() + wait, token);
+        if let (Some(value), Some(admitted)) = (value.as_object_mut(), admitted.as_object()) {
+            for (key, field) in admitted {
+                value.entry(key.clone()).or_insert_with(|| field.clone());
+            }
+        }
+        value
+    };
+    // Say which result is final, so a finished command is not polled again.
+    let finished = !active(&value);
+    if let Some(object) = value.as_object_mut() {
+        if finished {
+            object.insert("final".into(), json!(true));
+        } else {
+            object.entry("wait").or_insert_with(|| json!(format!("Still running: call control_service_exec_status {{\"service_id\":\"{service_id}\",\"execution_id\":\"{execution_id}\",\"wait_seconds\":30}} for its result.")));
         }
     }
     value
@@ -376,7 +391,7 @@ fn wait_until(shared: &Arc<Mutex<State>>, waiter: Waiter<'_>, execution_id: &str
         };
         let now = Instant::now();
         if now >= limit || token.is_cancelled() {
-            last["wait"] = json!("Still running: poll control_service_exec_status with this execution_id, optionally with wait_seconds.");
+            last["wait"] = json!(format!("Still running: call control_service_exec_status {{\"service_id\":\"{}\",\"execution_id\":\"{execution_id}\",\"wait_seconds\":30}} for its result.", waiter.service_id));
             return last;
         }
         signal.wait_newer(seen, Some(limit.min(now + RECHECK)), token);
@@ -513,8 +528,8 @@ pub(super) fn admit_work(
     let service_id = service.resource.id.as_str();
     if let Some(copy) = active.iter().find(|e| e.copy.is_some()) {
         return Err(fail(format!(
-            "Service {service_id} is reserved for copy {}; nothing was submitted. Poll control_service_exec_status for it and retry after it finishes.",
-            copy.holder(state)
+            "Service {service_id} is reserved for copy {}; nothing was submitted. Call control_service_exec_status {{\"service_id\":\"{service_id}\",\"execution_id\":\"{}\",\"wait_seconds\":30}} and retry after it finishes.",
+            copy.holder(state), copy.id
         )));
     }
     let ceiling = concurrency();
@@ -527,8 +542,8 @@ pub(super) fn admit_work(
             format!("node setting service-commands-max={limit}")
         };
         return Err(fail(format!(
-            "Service {service_id} is running {} of {limit} concurrent commands ({bound}); nothing was submitted. Active: {holders}. Poll control_service_exec_status until one finishes, then retry; run long-lived programs as watches (control_watch_start), or use another service.",
-            active.len()
+            "Service {service_id} is running {} of {limit} concurrent commands ({bound}); nothing was submitted. Active: {holders}. Call control_service_exec_status {{\"service_id\":\"{service_id}\",\"execution_id\":\"{}\",\"wait_seconds\":30}} until one finishes, then retry; run long-lived programs as watches (control_watch_start), or use another service.",
+            active.len(), active.first().map_or("", |e| e.id.as_str())
         )));
     }
     let waiting = if work.copy.is_some() { active.len() } else { 0 };
@@ -733,6 +748,26 @@ fn capture_fed(
         interrupted,
         timed_out,
     })
+}
+/// Output of a declared observation's command.
+pub(crate) struct Probe {
+    pub(crate) text: String,
+    pub(crate) exit_code: Option<i32>,
+    pub(crate) timed_out: bool,
+}
+/// Runs a declared observation's bounded command in a verified service as the
+/// service user, without an execution record or exec slot. A command still
+/// running at `timeout` is stopped inside the service under its own marker.
+/// Queries the engine: call without the state lock.
+pub(crate) fn probe(service: &Service, command: &str, owner: &str, timeout: Duration) -> io::Result<Probe> {
+    let (id, user) = super::exec_target(service)?;
+    let marker = format!("observe-{}", &hash(owner.as_bytes())[..32]);
+    let run = crate::engine::exec(&id, &user, Some("/workspace"), &[(MARKER, marker.as_str())], &["bash", "-c", &launch(command)]);
+    let result = capture(run, timeout, || false, |_| {})?;
+    if result.timed_out || result.interrupted || result.exit_code.is_none() {
+        reap(service, &marker);
+    }
+    Ok(Probe { text: result.output.text(), exit_code: result.exit_code, timed_out: result.timed_out })
 }
 pub(super) fn logs(id: &str) -> io::Result<String> {
     let mut command = crate::engine::cli();

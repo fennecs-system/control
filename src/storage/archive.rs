@@ -23,7 +23,7 @@ use crate::State;
 use crate::application::runs::{Record, Run, status};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
@@ -166,7 +166,9 @@ fn merge(directory: &Path, state: &State, archive: &mut Archive, pending: &mut P
     {
         // Runs un-archived since (now hot again) leave the merged block.
         let archived: HashSet<&str> = state.runtime.runs.iter().filter(|run| run.archived()).map(|run| run.id.as_str()).collect();
-        let mut lines = Vec::new();
+        // A run archived twice keeps only its newer (right-most) copy.
+        let mut lines: Vec<Option<String>> = Vec::new();
+        let mut at: HashMap<String, usize> = HashMap::new();
         for span in [left, right] {
             for line in fs::read_to_string(span.file(directory))?.lines() {
                 #[derive(Deserialize)]
@@ -175,12 +177,15 @@ fn merge(directory: &Path, state: &State, archive: &mut Archive, pending: &mut P
                 }
                 let id: Id = serde_json::from_str(line).map_err(io::Error::other)?;
                 if archived.contains(id.id.as_str()) {
-                    lines.push(line.to_owned());
+                    if let Some(older) = at.insert(id.id, lines.len()) {
+                        lines[older] = None;
+                    }
+                    lines.push(Some(line.to_owned()));
                 }
             }
         }
         let parent = Span { start: left.start, level: left.level + 1 };
-        let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let lines: Vec<&str> = lines.iter().flatten().map(String::as_str).collect();
         pending.written.push(write_block(directory, parent, &lines)?);
         pending.replaced.extend([left.file(directory), right.file(directory)]);
         archive.blocks.truncate(archive.blocks.len() - 2);
@@ -206,16 +211,28 @@ pub(crate) fn load(directory: &Path, state: &mut State, archive: &Archive) -> io
         return Ok(());
     }
     let hot: HashSet<String> = state.runtime.runs.iter().map(|run| run.id.clone()).collect();
-    let mut archived = Vec::new();
+    // A run un-archived and later archived again is in an older block too,
+    // until a merge drops that copy: the newest block's copy wins.
+    let mut archived: Vec<Run> = Vec::new();
+    let mut at: HashMap<String, usize> = HashMap::new();
     for span in &archive.blocks {
         for line in fs::read_to_string(span.file(directory))?.lines() {
             let record: Record = serde_json::from_str(line).map_err(io::Error::other)?;
             if !hot.contains(&record.id) {
                 let saved = serde_json::value::RawValue::from_string(line.to_owned()).map_err(io::Error::other)?;
-                archived.push(Run::restored(record, saved, true));
+                let run = Run::restored(record, saved, true);
+                match at.get(&run.id) {
+                    Some(&index) => archived[index] = run,
+                    None => {
+                        at.insert(run.id.clone(), archived.len());
+                        archived.push(run);
+                    }
+                }
             }
         }
     }
+    // Re-archived runs sit at later archive positions than their creation.
+    archived.sort_by(|a, b| creation(&a.id).cmp(&creation(&b.id)));
     let hot = std::mem::take(&mut state.runtime.runs);
     state.runtime.runs = merge_by_creation(archived, hot);
     Ok(())

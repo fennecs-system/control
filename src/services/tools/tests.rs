@@ -93,7 +93,7 @@ fn exec_description_reserves_repetition_for_routines() {
     let definitions = Tools.definitions();
     let exec = definitions.iter().find(|d| d["name"] == "control_service_exec").unwrap()["description"].as_str().unwrap();
     assert!(exec.starts_with("Run a one-off command inside"));
-    for phrase in ["setup, inspection, or installing and editing a routine", "For anything repeated or polled, write a routine (control_watch_start) instead", "Uncertain commands are never replayed", "Waits up to wait_seconds"] {
+    for phrase in ["setup, inspection, or installing and editing a routine", "For anything repeated or polled, write a routine (control_watch_start) instead", "Uncertain commands are never replayed", "Results return inline when the command finishes within wait_seconds", "Call control_service_exec_status only when the result says running and gives an execution_id"] {
         assert!(exec.contains(phrase), "{phrase}");
     }
 }

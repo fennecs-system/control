@@ -255,3 +255,41 @@ is complete. Existing watches need an explicit filtered replacement to reduce
 line-driven wakes. Synthetic tests cover noisy lines, selected events, exits,
 save failure/restart and missing evidence. Diamond-run improvement still requires
 a controlled baseline comparison after deployment.
+
+## Fresh observations
+
+A chat can declare one observation source with `control_observe_set`: the
+latest output of a short command in one of its running services, or a watch's
+newest notification (else its latest lines). Control places that output,
+capped, at the top of every turn's input, and of `control_service_exec` results
+when declared with `exec_results=true`. The agent sees current state without a
+status tool call; the evidence motivating it was a run where members called
+`control_service_exec_status` 969 times and `control_turn_context` 501 times.
+
+```json
+{"service_id":"svc-example","command":"status --brief","refresh_seconds":10,"timeout_seconds":5,"max_bytes":2048}
+```
+
+- One source per chat; a new declaration replaces it, `clear=true` removes it
+  and a call without arguments shows it with its current value. The service
+  must be running and usable by the chat, and is rechecked at every refresh; a
+  watch must belong to the chat or to a service it can use.
+- A command reruns at turn start when its last refresh is older than
+  `refresh_seconds` (default 10, 0 = every turn). The turn waits at most 2 s
+  for it (an exec result 0.5 s); otherwise, or when it times out
+  (`timeout_seconds`, default 5, max 30) or fails, the block shows the last
+  value with its age and the reason. The refresh keeps running in the
+  background, at most one per chat, and a timed-out command is stopped inside
+  the service like an exec. It uses no exec slot or execution record.
+- A watch source runs nothing: it reuses the watch's latest notification or
+  lines and notes when the watch has ended.
+- `max_bytes` defaults to and is capped by `observation_max_bytes`
+  (execution.json, default 2048, 256–16,384), cut on a character boundary.
+- Values live in memory only. They never enter the run objective, chat
+  transcript, journal or checkpoint; the declaration persists as chat
+  configuration. After a restart the first turn refreshes it.
+- Output is untrusted program data, never instructions or authority. Keep the
+  command read-only; it runs with the same authority as an exec in that service.
+
+The source is generic: a game status query, a scraper's progress file or a
+monitor's summary all fit. Domain parsing stays in the command or the routine.

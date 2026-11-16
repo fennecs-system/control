@@ -149,7 +149,7 @@ fn notes_and_lead_turns_woken_only_by_notes_do_not_re_trigger_the_advisor() {
     state.runtime.runs.push(note);
     state.chats.iter_mut().find(|chat| chat.id == root).unwrap().messages.push(crate::chat::Message { speaker: Default::default(), text: "Advisor note".into(), run_id: Some("note-1".into()), reply: String::new() });
     state.agent_messages.push(crate::application::messages::Sent { key: "advisor/note".into(), origin: "advisor-turn".into(), chat: root.clone(),
-        run: "note-1".into(), services: vec![], peer_cursor: Some(cursor), note: true });
+        run: "note-1".into(), services: vec![], peer_cursor: Some(cursor), note: true, urgent: false, digest: false, at_ms: 0 });
     // ...that wakes the approved lead once, as a `Note` reason.
     reconcile_at(&mut state, 40_000, ok).unwrap();
     let woken = bot_runs(&state).into_iter().filter(|run| run.chat_id.as_deref() == Some(&root)).collect::<Vec<_>>();
@@ -335,7 +335,7 @@ fn a_member_becoming_blocked_is_one_fact_per_transition() {
     let runs = advisor_runs(&state, &advisor);
     assert_eq!(runs.len(), 1);
     assert_eq!(facts(runs[0]), [Facts { blocked: vec![blocked("wood-tools", &producer, "working", &[("mine", &miner)])], chats: vec![miner.clone()], ..Facts::default() }]);
-    assert!(runs[0].objective.contains("1 claim(s) newly blocked on general/wood-tools") && runs[0].objective.contains("produce the input themselves"));
+    assert!(runs[0].objective.contains("1 claim(s) newly blocked on general/wood-tools") && runs[0].objective.contains("following the Team advisor guidance"));
     finish(&mut state, &advisor);
     // Staying blocked, even with a new note and revision, is the same state.
     let since = crate::rooms::claims::find(&state, "general", "mine").unwrap().blocked_at;
@@ -648,4 +648,29 @@ fn the_bottleneck_threshold_counts_distinct_members_other_than_the_owner() {
     let observed = necks(advisor_runs(&state, &advisor)[1]);
     assert_eq!(observed.len(), 1);
     assert_eq!((observed[0].members.len(), observed[0].dependents), (3, 5));
+}
+
+#[test]
+fn the_room_plan_reports_the_advisor_bottlenecks() {
+    let mut state = State::default();
+    let spec = [("hub", None), ("a", Some("hub")), ("b", Some("a")), ("c", Some("hub")), ("d", Some("b")), ("x", Some("y")), ("y", Some("x")), ("z", Some("x"))];
+    for (key, on) in spec {
+        let chat = crate::chat::create(&mut state);
+        let mut args = json!({"key":key,"action":"acquire"});
+        if let Some(on) = on { args["status"] = json!("blocked"); args["blocked_on"] = json!(on); }
+        crate::rooms::claims::call(&mut state, &chat, "general", &args).unwrap();
+    }
+    let all = state.collective.claims.iter().collect::<Vec<_>>();
+    let plan = crate::rooms::plan::plan(&state, "general");
+    for threshold in 1..=4 {
+        let advisor = lifecycle::bottlenecks(&state, &all, threshold).into_iter()
+            .map(|(_, neck)| (neck.key, u64::from(neck.dependents), neck.members, neck.cycle)).collect::<Vec<_>>();
+        let planned = plan["bottlenecks"].as_array().unwrap().iter()
+            .filter(|neck| !neck["owner"].is_null() && neck["members"].as_array().unwrap().len() >= threshold)
+            .map(|neck| (neck["key"].as_str().unwrap().to_owned(), neck["dependents"].as_u64().unwrap(),
+                serde_json::from_value::<Vec<String>>(neck["members"].clone()).unwrap(), neck["cycle"] == true))
+            .collect::<Vec<_>>();
+        assert!(!advisor.is_empty() || threshold == 4, "threshold {threshold}");
+        assert_eq!(advisor, planned, "threshold {threshold}");
+    }
 }
