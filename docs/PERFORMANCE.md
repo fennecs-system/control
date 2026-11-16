@@ -1,5 +1,32 @@
 # Performance checks
 
+## Chat callsigns (2026-11-16)
+
+Chats are shown by callsigns derived on read (`callsigns::all`: one pass over
+the chats in creation order, a fixed-size ring of the last 48 callsigns and
+per-word counts, no hashing or allocation per chat). The new
+`performance::chat_lists` fixture renders `control.chats.list` (TUI picker,
+Discord `!chats`), the web conversation tree and one `control.chat.read` for
+10, 100 and 1,000 chats in task trees of eight. Release builds, Apple Silicon,
+`CONTROL_TIMING_ROUNDS=300`, the same fixture in both revisions, three
+alternating before/after runs; medians of the run medians:
+
+| Workload | Chats | Before | After |
+| --- | ---: | ---: | ---: |
+| `chats_list` | 10 / 100 / 1,000 | 19.1 / 189.9 / 1,970 µs | 20.8 / 195.1 / 2,036 µs |
+| `web_conversation_tree` | 10 / 100 / 1,000 | 6.4 / 44.6 / 131.0 µs | 4.6 / 30.1 / 137.8 µs |
+| `chat_read` | 10 / 100 / 1,000 | 2.2 / 2.5 / 5.2 µs | 2.2 / 3.2 / 14.1 µs |
+
+The list costs about 3% more for the full derivation pass; the web tree is
+smaller (short names, 14 KB instead of 26 KB at 1,000 chats) and faster up to
+100 chats, 5% slower at 1,000. Reading one chat derives the callsigns before
+it, about 9 µs for the 500th of 1,000 chats. A first version keyed the window
+in a `HashMap` and cost 374 µs for the 1,000-chat tree and 115 µs per read.
+
+```sh
+cargo test --release --locked --bin control performance::chat_lists -- --ignored --exact --nocapture
+```
+
 ## State saves as a patch journal (2026-11-16)
 
 macOS disk-write diagnostics showed 8–34 GB/hour written by Control during
