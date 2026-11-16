@@ -58,6 +58,10 @@ pub trait Info: Clone + Debug + PartialEq {
     /// Input addressed to this bot releases a wait that selected no topics. A
     /// wait that selected topics keeps it pending for the next turn instead.
     fn direct(&self) -> bool { false }
+    /// Retained input that wakes nobody on its own: it rides with the next
+    /// turn another reason starts, or starts one after the definition's
+    /// `defer_ms`. Only a wait that selected its topic is released by it.
+    fn deferred(&self) -> bool { false }
 }
 
 /// Bounds automatic turns: a minimum gap between turns and a cap per window.
@@ -90,6 +94,10 @@ pub struct Definition {
     pub budget: Budget,
     #[cfg_attr(feature = "serde", serde(default))]
     pub restart: Restart,
+    /// How long deferred input may wait for another wake before it starts a
+    /// turn itself. `None` keeps it until something else wakes the bot.
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    pub defer_ms: Option<u64>,
 }
 impl Definition {
     pub fn validate(&self) -> Result<(), &'static str> {
@@ -201,6 +209,12 @@ struct Bot<I> {
     held: Vec<Topic>,
     #[cfg_attr(feature = "serde", serde(default))]
     wait: Option<Wait>,
+    /// When the oldest pending deferred reason was admitted.
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    deferred_since: Option<u64>,
+    /// A wait that selected deferred input was released by it: it wakes now.
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "std::ops::Not::not"))]
+    selected: bool,
 }
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -279,7 +293,22 @@ impl<I: Info> Bot<I> {
         } else {
             0
         };
-        Some(cooled.max(reopened))
+        let due = if self.waking() { 0 } else { self.deferred_due()? };
+        Some(cooled.max(reopened).max(due))
+    }
+    /// Whether a pending reason may start a turn now rather than ride along.
+    fn waking(&self) -> bool {
+        self.selected || self.pending.iter().any(|reason| !matches!(reason, Reason::Info { info, .. } if info.deferred()))
+    }
+    /// When pending deferred input starts a turn by itself, if ever.
+    fn deferred_due(&self) -> Option<u64> {
+        self.deferred_since?.checked_add(self.definition.defer_ms?)
+    }
+    /// Keeps the deferral clock on the oldest deferred reason still pending.
+    fn note_deferred(&mut self, now: u64) {
+        let deferred = self.pending.iter().any(|reason| matches!(reason, Reason::Info { info, .. } if info.deferred()));
+        self.deferred_since = if deferred { Some(self.deferred_since.unwrap_or(now)) } else { None };
+        self.selected &= deferred;
     }
 }
 
@@ -342,6 +371,10 @@ impl<I: Info> Supervisor<I> {
             && b.cursors.get(&topic.key()).is_none_or(|seen| through > *seen)
             && b.processed.get(&topic.key()).is_none_or(|seen| through > *seen))
     }
+    /// The published processing watermark of a bot's topic (0 when none).
+    pub fn processed(&self, bot: &BotId, topic: &Topic) -> u64 {
+        self.bots.get(bot).and_then(|b| b.processed.get(&topic.key()).copied()).unwrap_or(0)
+    }
     /// Turns requested but not yet completed, for reconciliation after restart.
     pub fn outstanding(&self) -> impl Iterator<Item = (&BotId, &ChatId, &TurnId)> {
         self.bots.iter().filter_map(|(id, bot)| bot.turn.as_ref().map(|(turn, chat)| (id, chat, turn)))
@@ -349,7 +382,8 @@ impl<I: Info> Supervisor<I> {
     /// The earliest time a `Tick` could produce an effect; drivers wait until
     /// then or the next event instead of polling.
     pub fn next_deadline(&self, now: Now) -> Option<Now> {
-        self.bots.values().flat_map(|bot| [bot.timer_due.filter(|_| !bot.paused && bot.wait.is_none()), bot.wait.as_ref().filter(|_| !bot.paused).and_then(|wait| wait.until), bot.ready_at(now.0)]).flatten().min().map(Now)
+        self.bots.values().flat_map(|bot| [bot.timer_due.filter(|_| !bot.paused && bot.wait.is_none()), bot.wait.as_ref().filter(|_| !bot.paused).and_then(|wait| wait.until),
+            bot.wait.as_ref().filter(|wait| !bot.paused && wait.topics.is_empty()).and_then(|_| bot.deferred_due()), bot.ready_at(now.0)]).flatten().min().map(Now)
     }
     fn define(&mut self, definition: Definition, now: u64) {
         if definition.validate().is_err() {
@@ -386,6 +420,8 @@ impl<I: Info> Supervisor<I> {
                     rearm: false,
                     held: Vec::new(),
                     wait: None,
+                    deferred_since: None,
+                    selected: false,
                 };
                 self.bots.insert(bot.definition.bot.clone(), bot);
             }
@@ -436,10 +472,13 @@ impl<I: Info> Supervisor<I> {
                     // Evidence admitted before the wait releases it at once,
                     // so registering a wait late never loses its wake.
                     let wait = Wait{topics,until};
-                    bot.wait = (!bot.pending.iter().any(|reason| match reason {
-                        Reason::Info{topic,info,..} => wait.releases(topic, info),
-                        _ => false,
-                    })).then_some(wait);
+                    let released = bot.pending.iter().filter_map(|reason| match reason {
+                        Reason::Info{topic,info,..} if wait.releases(topic, info) => Some(info.deferred()),
+                        _ => None,
+                    }).collect::<Vec<_>>();
+                    // Deferred input the wait selected wakes like any other.
+                    bot.selected |= released.contains(&true);
+                    bot.wait = released.is_empty().then_some(wait);
                 }
             }
             Event::Processed { bot:id,topic,through } => {
@@ -447,6 +486,7 @@ impl<I: Info> Supervisor<I> {
                     let cursor = bot.processed.entry(topic.key()).or_default();
                     *cursor = (*cursor).max(through);
                     bot.pending.retain(|reason| !matches!(reason,Reason::Info{topic:t,through:pending,..} if t==&topic && *pending<=through));
+                    bot.note_deferred(now);
                     // A later ingestion watermark keeps its gap visible.
                     if bot.cursors.get(&topic.key()).is_some_and(|seen|*seen<=through) {
                         bot.overflowed.retain(|t|t!=&topic);
@@ -462,6 +502,7 @@ impl<I: Info> Supervisor<I> {
                     bot.overflowed.clear();
                     bot.timer_due = None;
                     bot.wait = None;
+                    bot.deferred_since = None;
                     if bot.turn.is_none() {
                         self.bots.remove(&id);
                     }
@@ -475,8 +516,10 @@ impl<I: Info> Supervisor<I> {
                             && bot.processed.get(&key).is_none_or(|seen| cursor > *seen)
                             && bot.wait.as_ref().is_some_and(|wait| wait.releases(&topic, &info)) {
                             bot.wait = None;
+                            bot.selected |= info.deferred();
                         }
                         bot.accept(Some((key.clone(), cursor)), Reason::Info { topic: topic.clone(), through: cursor, info: info.clone() });
+                        bot.note_deferred(now);
                     }
                 }
             }
@@ -503,6 +546,11 @@ impl<I: Info> Supervisor<I> {
                 bot.wait = None;
                 bot.accept(None, Reason::Timer);
             }
+            // Deferred input that waited its bound releases an open wait;
+            // a wait that selected topics keeps it for the next turn.
+            if bot.wait.as_ref().is_some_and(|wait| wait.topics.is_empty()) && bot.deferred_due().is_some_and(|due| due <= now) {
+                bot.wait = None;
+            }
             if let (Some(due), Some(every)) = (bot.timer_due, bot.definition.timer())
                 && due <= now
             {
@@ -515,7 +563,7 @@ impl<I: Info> Supervisor<I> {
         let mut planned = Vec::new();
         for (id, bot) in &mut self.bots {
             let Some(ready) = bot.ready_at(now) else {
-                if !bot.pending.is_empty() && bot.turn.is_none() && bot.wait.is_none() && !bot.paused && !bot.stopping && !bot.exhausted {
+                if bot.waking() && bot.turn.is_none() && bot.wait.is_none() && !bot.paused && !bot.stopping && !bot.exhausted {
                     bot.exhausted = true;
                     self.revision += 1;
                     planned.push(Planned {
@@ -537,6 +585,8 @@ impl<I: Info> Supervisor<I> {
                 bot.turns.push_back(now);
                 bot.exhausted = false;
                 let mut reasons = std::mem::take(&mut bot.pending);
+                bot.deferred_since = None;
+                bot.selected = false;
                 if bot.dropped > 0 {
                     reasons.push(Reason::Overflow { dropped: std::mem::take(&mut bot.dropped), topics: std::mem::take(&mut bot.overflowed) });
                 }
@@ -546,7 +596,7 @@ impl<I: Info> Supervisor<I> {
                     Reason::Timer | Reason::Continue => &[],
                 }).cloned().collect();
                 Effect::RequestTurn { bot: id.clone(), chat: bot.definition.chat.clone(), turn, reasons }
-            } else if bot.recent(now).count() >= bot.definition.budget.turns_per_window as usize && !bot.exhausted {
+            } else if bot.recent(now).count() >= bot.definition.budget.turns_per_window as usize && !bot.exhausted && (bot.waking() || bot.deferred_due().is_some_and(|due| due <= now)) {
                 bot.exhausted = true;
                 Effect::BudgetExhausted { bot: id.clone(), until: ready }
             } else {

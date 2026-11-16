@@ -9,6 +9,7 @@ mod bots;
 #[allow(dead_code)]
 mod watch_frame;
 mod watches;
+mod observe;
 #[path = "../tools/browser/main.rs"]
 mod browser;
 mod browser_ui;
@@ -102,6 +103,7 @@ struct State {
     collective: collective::Collective,
     bots: bots::Bots,
     watches: Vec<watches::Watch>,
+    observations: observe::Observations,
     agent_messages: Vec<application::messages::Sent>,
     documents: Vec<knowledge::Document>,
     lens_library: control_context::Library,

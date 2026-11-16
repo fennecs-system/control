@@ -11,7 +11,7 @@ type E = Event<Exited>;
 
 fn room() -> Topic { Topic::new("room", "room") }
 fn definition() -> Definition {
-    Definition { bot: BotId("bot".into()), chat: ChatId("chat-original".into()), sources:vec![Source::Topic(room())], budget:Budget{cooldown_ms:10, window_ms:100, turns_per_window:1}, restart: Restart::Permanent }
+    Definition { bot: BotId("bot".into()), chat: ChatId("chat-original".into()), sources:vec![Source::Topic(room())], budget:Budget{cooldown_ms:10, window_ms:100, turns_per_window:1}, restart: Restart::Permanent, defer_ms: None }
 }
 fn message(cursor:u64) -> E { Event::Info{topic:room(), cursor, from:None, info:Exited} }
 fn turn(effects:&[Planned<BotId,Effect<Exited>>]) -> TurnId {

@@ -198,7 +198,7 @@ fn publication_precedes_deferred_peer_admission_for_an_ordinary_active_worker() 
     command_at(&mut state, &chat, "on", Now(0)).unwrap();
     let run = state.runtime.runs[0].id.clone();
     state.runtime.runs[0].status = "running".into();
-    state.agent_messages.push(serde_json::from_value(json!({"key":"peer-receipt","origin":"peer-run","chat":chat,"run":"peer-evidence","peer_cursor":2})).unwrap());
+    state.agent_messages.push(serde_json::from_value(json!({"key":"peer-receipt","origin":"peer-run","chat":chat,"run":"peer-evidence","peer_cursor":2,"urgent":true})).unwrap());
     assert!(
         state.bots.requests.is_empty(),
         "retaining a peer receipt does not request a turn inside the tool"

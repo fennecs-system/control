@@ -28,11 +28,46 @@ the relevant peer a targeted callback, and that peer sends back the answer only
 when it releases a dependency. Shared room membership alone does not authorize
 messaging across unrelated task trees.
 Peer messages are retained conversation evidence, not executable continuations.
-A parent's message to a descendant normally queues that descendant's next turn;
-when the descendant is an approved persistent bot, it is retained like a peer
-message instead. A running session sees it through its callbacks, and the bot's
+A parent's urgent message to a descendant queues that descendant's next turn;
+when the descendant is an approved persistent bot, or the message is not urgent,
+it is retained like a peer message instead (see below). A running session sees it through its callbacks, and the bot's
 supervisor coalesces whatever remains into one wake, so a busy member does not
 accumulate one queued turn per message.
+### Urgent and retained messages
+
+`control_agent_message` messages wake nobody unless the sender sets
+`urgent: true`. A non-urgent message is retained: a running recipient reads it
+through its conversation callbacks, and an idle recipient gets it with its next
+wake as an unread count and a compact digest (urgent messages first, then the
+newest; at most eight quotes of 160 characters, the rest counted, under 2 KB).
+The full text stays in the recipient's conversation. Status records such as
+"verified, deposited five logs" belong here, or in a `record` room post.
+
+An urgent message is for a request the recipient must act on now: it wakes an
+approved persistent bot under its existing budget, pause and stop intent, or
+queues a descendant's follow-up turn as before. It does not let a peer wake a
+chat that is not a bot. What still wakes regardless of the flag:
+
+| Input | Wakes |
+| --- | --- |
+| Operator message | always (its own turn) |
+| Resolution of a claim the bot waits on | yes |
+| Wait that selected the bot's `conversation:<chat>` topic | any message, urgent or not |
+| Advisor note to the lead | yes (host-facts escalation, already deduplicated) |
+| Urgent message to a bot or a descendant | yes |
+| Non-urgent message | no; carried by the next wake |
+
+Retained messages are never starved. A persistent bot's supervisor defers
+them (`Info::deferred`): they ride with whatever wakes the bot next, and if
+nothing does within `peer_digest_seconds` (execution.json, default 600, 30–86,400)
+of the oldest one, they start one budgeted turn themselves. A wait with no
+topics is released by that bound too; a wait that selected other topics keeps
+them for its release, as before. A descendant that is not a bot, sent a
+non-urgent message by its parent, gets one coalesced digest turn after the same
+bound unless another turn of its own took the messages first (a later turn, or
+a published handoff that processed them). Peer messages to a chat that is not a
+bot never woke it and still do not. The supervisor's coalescing is unchanged.
+
 Active workers consume them at ordinary action boundaries; unattended wakeups use
 only the recipient's approved persistent bot and existing turn budget. Paused/off
 bots do not dispatch queued wakes, and idle approval never comes from a message.

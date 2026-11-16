@@ -50,7 +50,7 @@ Private `~/.config/control/execution.json` (mode 0600) configures these separate
 limits; omitted fields retain their defaults:
 
 ```json
-{"max_parallel_runs":3,"max_agents_per_root":64,"max_pending_agent_intents":256,"max_advisors_per_root":1,"advisor_failure_streak":3,"advisor_stall_turns":24,"advisor_bottleneck_members":2,"bot_recovery_continues":2,"bot_recovery_recheck_seconds":300,"steering_turn_seconds":240,"steering_exec_calls":6}
+{"max_parallel_runs":3,"max_agents_per_root":64,"max_pending_agent_intents":256,"max_advisors_per_root":1,"advisor_failure_streak":3,"advisor_stall_turns":24,"advisor_bottleneck_members":2,"bot_recovery_continues":2,"bot_recovery_recheck_seconds":300,"steering_turn_seconds":240,"steering_exec_calls":6,"peer_digest_seconds":600,"observation_max_bytes":2048}
 ```
 
 `max_advisors_per_root` (0–8; 0 disables advisors) caps the
@@ -71,6 +71,11 @@ long a turn of a chat steering active members may run, or how many command
 executions it may request, before its tool results suggest delegating the work
 and ending the turn, once per attempt (see
 [deadline and steering notes](TURN-CONTINUITY.md#deadline-and-steering-notes)).
+`peer_digest_seconds` (30–86,400) is how long a non-urgent agent message waits
+for another wake of its recipient before it is delivered as a digest turn (see
+[urgent and retained messages](ROOM-NOTIFICATIONS.md#urgent-and-retained-messages)).
+`observation_max_bytes` (256–16,384) caps each chat's
+[fresh observation](WATCHES.md#fresh-observations).
 Agent budgets must be positive integers up to 65,536. The MCP transport's
 input-size limit also applies. Node pending-intent capacity is
 shared across roots; root reservations include spawned and delegated descendants,

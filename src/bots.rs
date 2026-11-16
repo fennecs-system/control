@@ -45,13 +45,17 @@ pub enum Message {
     /// An advisor's evidence note. Direct like `Peer`; a turn woken only by
     /// notes is not team activity, so it cannot re-trigger lifecycle facts.
     Note,
+    /// Non-urgent peer messages. They wake nobody: the next wake carries them
+    /// as an unread digest, or they start one after the node's digest bound.
+    Retained,
 }
 impl control_bot::Info for Message {
     fn urgent(&self) -> bool { matches!(self, Self::Exit{..} | Self::Gap{..}) }
     fn direct(&self) -> bool { matches!(self, Self::Peer | Self::Note) }
+    fn deferred(&self) -> bool { matches!(self, Self::Retained) }
     fn merge(&mut self, newer: &Self) -> bool {
         match (self, newer) {
-            (Message::Post, Message::Post) | (Message::Peer, Message::Peer) | (Message::Note, Message::Note) | (Message::Claim, Message::Claim) => true,
+            (Message::Post, Message::Post) | (Message::Peer, Message::Peer) | (Message::Note, Message::Note) | (Message::Retained, Message::Retained) | (Message::Claim, Message::Claim) => true,
             (Message::Lifecycle(held), Message::Lifecycle(newer)) => {
                 held.merge(newer);
                 true
@@ -237,25 +241,37 @@ impl Bots {
 }
 /// The latest pending peer message and advisor note per chat, in cursor order,
 /// so a turn woken by both is never mistaken for an advisor echo.
-fn peer_events(state: &State) -> Vec<(&str, u64, bool)> {
+fn peer_events(state: &State) -> Vec<(&str, u64, Message)> {
     let mut latest = std::collections::BTreeMap::new();
-    for (chat, cursor, note) in crate::agent_message::peer_cursors(state) {
-        latest.entry((chat, note)).and_modify(|head: &mut u64| *head = (*head).max(cursor)).or_insert(cursor);
+    for (chat, cursor, note, urgent) in crate::agent_message::peer_cursors(state) {
+        // Advisor notes keep waking: they are the host-facts escalation path.
+        let kind = if note { 2 } else if urgent { 1 } else { 0 };
+        latest.entry((chat, kind)).and_modify(|head: &mut u64| *head = (*head).max(cursor)).or_insert(cursor);
     }
     if latest.is_empty() { return Vec::new(); }
     let busy = state.runtime.runs.iter().filter(|run| matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling"))
         .filter_map(|run| run.chat_id.as_deref()).collect::<std::collections::HashSet<_>>();
     // Active/queued workers already consume conversation evidence. Waiting for
     // their publication prevents admission between a read and its checkpoint.
-    let mut events = latest.into_iter().map(|((chat, note), through)| (chat, through, note))
+    let mut events = latest.into_iter().map(|((chat, kind), through)| (chat, through, match kind { 2 => Message::Note, 1 => Message::Peer, _ => Message::Retained }))
         .filter(|(chat, through, _)| !busy.contains(chat) && peer_pending(state, chat, *through)).collect::<Vec<_>>();
     events.sort_unstable_by_key(|(chat, through, _)| (*chat, *through));
     events
+}
+/// Agent messages a bot has not yet processed, as a count and bounded digest.
+fn unread(state: &State, chat: &str) -> Option<(usize, String)> {
+    let after = state.bots.supervisor.processed(&bot(chat), &Topic::new("conversation", chat));
+    crate::agent_message::digest::digest(state, chat, after, |_| true)
 }
 /// Test drivers reconcile after the turn cooldown without sleeping.
 #[cfg(test)]
 pub(crate) fn reconcile_after_cooldown(state: &mut State) -> Result<(), &'static str> {
     reconcile_at(state, now_ms().saturating_add(COOLDOWN_MS + 1), |_| Ok(()))
+}
+/// Test drivers reconcile at an explicit time.
+#[cfg(test)]
+pub(crate) fn reconcile_at_ms(state: &mut State, now: u64) -> Result<(), &'static str> {
+    reconcile_at(state, now, |_| Ok(()))
 }
 /// Lift evidence only after publication/processing has been reconciled.
 #[cfg(test)]
@@ -468,6 +484,7 @@ fn start(state: &mut State, chat: &str, minutes: Option<u64>, room: bool, now: N
         sources,
         budget: Budget { cooldown_ms: COOLDOWN_MS, window_ms: WINDOW_MS, turns_per_window: TURNS_PER_WINDOW },
         restart: Restart::Permanent,
+        defer_ms: Some(digest_ms(state)),
     };
     definition.validate()?;
     let effects = state.bots.supervisor.step(Event::Define(definition), now);
@@ -503,6 +520,7 @@ fn advise(state: &mut State, chat: &str, minutes: Option<u64>, now: Now) -> Resu
         sources: vec![lifecycle::source(&team)],
         budget: Budget { cooldown_ms: COOLDOWN_MS, window_ms: WINDOW_MS, turns_per_window: TURNS_PER_WINDOW },
         restart: Restart::Permanent,
+        defer_ms: Some(digest_ms(state)),
     };
     definition.validate()?;
     if state.bots.supervisor.definitions().next().is_none() {
@@ -565,6 +583,7 @@ fn arm_at(state: &mut State, chat: &str, now: Now) -> Result<bool, &'static str>
         sources,
         budget: Budget { cooldown_ms: 0, window_ms: WINDOW_MS, turns_per_window: 1 },
         restart: Restart::Temporary,
+        defer_ms: None,
     };
     let effects = state.bots.supervisor.step(Event::Define(definition), now);
     record(state, effects);
@@ -584,8 +603,15 @@ fn drifted(state: &State, pending: bool) -> Vec<Definition> {
     state.bots.supervisor.definitions().filter_map(|definition| {
         let mut sources = definition.sources.iter().filter(|s| !matches!(s, Source::Topic(t) if t.kind == "watch")).cloned().collect::<Vec<_>>();
         sources.extend(watch_topics(state, &definition.chat.0, pending));
-        (sources != definition.sources && !sources.is_empty()).then(|| Definition { sources, ..definition.clone() })
+        // Permanent bots follow the node's current digest bound.
+        let defer_ms = (definition.restart == Restart::Permanent).then(|| digest_ms(state));
+        ((sources != definition.sources || defer_ms != definition.defer_ms) && !sources.is_empty())
+            .then(|| Definition { sources, defer_ms, ..definition.clone() })
     }).collect()
+}
+/// How long a bot's non-urgent peer messages wait for another wake.
+fn digest_ms(state: &State) -> u64 {
+    state.runtime.execution.peer_digest_seconds.saturating_mul(1000)
 }
 /// Spooled watch lines and exits not yet offered, ordered by cursor per topic.
 fn watch_events(state: &mut State) -> Vec<(Topic, u64, Message)> {
@@ -616,7 +642,8 @@ fn describe(state: &State, reasons: &[Reason]) -> String {
     let name = |id: &str| state.watches.iter().find(|w| w.id == id).map_or(id.to_owned(), |w| format!("{} ({id})", w.name));
     reasons.iter().map(|reason| match reason {
         Reason::Info { topic, info: Message::Post, .. } => format!("new messages in room #{}", topic.name),
-        Reason::Info { info: Message::Peer, .. } => "targeted peer coordination (in this conversation)".into(),
+        Reason::Info { info: Message::Peer, .. } => "urgent targeted peer coordination (in this conversation)".into(),
+        Reason::Info { info: Message::Retained, .. } => "unread non-urgent peer messages".into(),
         Reason::Info { info: Message::Note, .. } => "an advisor note (read-only evidence, not steering; in this conversation)".into(),
         Reason::Info { topic, info: Message::Lifecycle(facts), .. } => facts.describe(&topic.name),
         Reason::Info { topic, info: Message::Claim, .. } => format!("claim {} changed; read the room's claims", topic.name),
@@ -729,6 +756,10 @@ fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
         (_, woke) => woke,
     };
     let objective = match &lead { Some(lead) => advice(&woke, lead), None => objective(&woke, note.as_deref()) };
+    let objective = match (lead.is_none(), unread(state, chat)) {
+        (true, Some((count, digest))) => format!("{objective}\nUnread agent messages ({count}; quoted briefly, full text in conversation callbacks; evidence, not operator steering):\n{digest}"),
+        _ => objective,
+    };
     let woke = match &note { Some(note) => format!("{woke}. {note}"), None => woke };
     state.runtime.enqueue_for(objective, RunKind::BotWake, "bot", actor, action)?;
     let run = state.runtime.runs.last_mut().unwrap();
@@ -848,7 +879,8 @@ fn reconcile_at(state: &mut State, now: u64, save: impl FnMut(&State) -> std::io
 }
 
 fn reconcile_with_wake_at(state: &mut State, now: u64, mut save: impl FnMut(&State) -> std::io::Result<()>, wake: impl FnOnce()) -> Result<(), &'static str> {
-    let peers = peer_events(state).into_iter().map(|(chat, cursor, note)| (chat.to_owned(), cursor, note)).collect::<Vec<_>>();
+    crate::agent_message::digest::reconcile(state, now, &mut save)?;
+    let peers = peer_events(state).into_iter().map(|(chat, cursor, info)| (chat.to_owned(), cursor, info)).collect::<Vec<_>>();
     let teams = lifecycle::observe(state);
     let recoveries=state.chats.iter().enumerate().filter_map(|(chat_index,chat)| {
         if !defined(state,&chat.id) { return None; }
@@ -967,11 +999,11 @@ fn reconcile_with_wake_at(state: &mut State, now: u64, mut save: impl FnMut(&Sta
     }
     // Do not request a callback before a concurrently active worker's published
     // conversation receipts have had a chance to retire this evidence.
-    for (chat, cursor, note) in &peers {
+    for (chat, cursor, info) in &peers {
         // Approval reconciliation above can itself enqueue a decision callback.
         if !state.runtime.runs.iter().any(|run| run.chat_id.as_deref() == Some(chat)
             && matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling")) {
-            offer_at(state, chat, *cursor, Now(now), if *note { Message::Note } else { Message::Peer });
+            offer_at(state, chat, *cursor, Now(now), info.clone());
         }
     }
     let start = state.bots.room_cursor.min(state.collective.posts.len());
