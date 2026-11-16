@@ -2296,3 +2296,5 @@ mod advisor;
 mod recovery;
 #[path = "tests/timeout.rs"]
 mod timeout;
+#[path = "tests/handoff_cost.rs"]
+mod handoff_cost;

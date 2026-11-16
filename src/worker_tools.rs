@@ -6,6 +6,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+pub(crate) mod fixes;
 pub(crate) mod nudges;
 
 fn rpc_at(
@@ -15,6 +16,14 @@ fn rpc_at(
     let name=envelope["request"]["params"]["name"].as_str().unwrap_or("");
     // A refused call changes no state, so it neither counts nor carries notes.
     let refused=response["result"]["isError"]==true;
+    // Every refusal from these families names a callable fix.
+    if refused && envelope["request"]["method"]=="tools/call" && fixes::covered(name)
+        && let Some(text)=response.get_mut("result").and_then(|result|result.get_mut("content"))
+            .and_then(|content|content.get_mut(0)).and_then(|item|item.get_mut("text"))
+        && let Some(message)=text.as_str()
+    {
+        *text=json!(fixes::actionable(name,message));
+    }
     if envelope["request"]["method"]=="tools/call"
         && name!="control_turn_handoff"
         // get_mut, not IndexMut: indexing would insert "result":null into an
@@ -130,10 +139,10 @@ fn dispatch_at(
         "tools/call" => {
             if run.attempts.last().and_then(|a|a.turn_mailbox.as_ref()).and_then(|m|m.accepted()).is_some()
                 && !control_context::tool_policy::after_handoff(request["params"]["name"].as_str().unwrap_or("")) {
-                return error("A handoff is staged; only observations and handoff corrections may run before this attempt finishes.");
+                return error("A handoff is staged; only observations and handoff corrections may run before this attempt finishes. No further call is needed; to change it, call control_turn_handoff {\"disposition\":{\"kind\":\"continue\"}} again.");
             }
             if matches!(request["params"]["name"].as_str(),Some("control_room_ack"|"control_room_notifications")) && managed {
-                return error("Managed sessions acknowledge delivered callback receipts through control_turn_handoff after processing; use control_turn_context with source=room.");
+                return error("Managed sessions read room posts with control_turn_context {\"source\":\"room\"}; control_turn_handoff acknowledges them when you yield.");
             }
             if judge && !(advisor && request["params"]["name"]=="control_agent_message") && !matches!(request["params"]["name"].as_str(),Some("control_workspace_run"|"control_workspace_start"|"control_workspace_status"|"control_workspace_cancel"|"control_web_search"|"control_rust_run"|"control_rust_bench"|"control_search_path"|"control_room_list"|"control_room_read"|"control_room_plan"|"control_room_post"|"control_agent_result"|"control_knowledge_read"|"control_knowledge_search"|"control_packages_search"|"control_package_read")) {
                 return error("Judge policy permits read-only source inspection, isolated verification and room collaboration only.");
