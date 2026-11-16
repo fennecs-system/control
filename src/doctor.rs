@@ -73,6 +73,14 @@ pub fn run() -> io::Result<()> {
         Ok(_) => {}
         Err(error) => check("declared build environment", false, &error.to_string()),
     }
+    match crate::solver::image() {
+        Ok(Some(image)) if engine => match crate::solver::installed(&image) {
+            Ok(solvers) => check(&format!("solver image ({solvers})"), true, ""),
+            Err(error) => check("solver image", false, &error.to_string()),
+        },
+        Ok(_) => {}
+        Err(error) => check("solver image", false, &error.to_string()),
+    }
     let mut runtime = crate::runtime::Runtime::default();
     crate::providers::load_settings(&mut runtime)?;
     // Every backend with a pinned image is checked; the selected one must be complete.

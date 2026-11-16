@@ -81,6 +81,7 @@ policies! {
     "control.web.search" => (Toolbox,false,Local,true),
     "control.rust.run" => (Toolbox,false,Local,true),
     "control.rust.bench" => (Toolbox,false,Local,true),
+    "control.solve" => (Toolbox,false,Local,true),
     "control.artifacts.list" => (Artifacts,false,Read,true),
     "control.artifact.read" => (Artifacts,false,Read,true),
     "control.browser.capture" => (Browser,false,Local,false),

@@ -74,8 +74,9 @@ nix run .#codex -- mcp add control -- "$PWD/target/release/control" mcp
 ```
 
 This bridge provides read-only chat, lens, room and artifact access, plus search,
-Rust snippets, browser capture and project access requests requiring operator
-approval. Add `--browser` to setup for the browser image.
+Rust snippets, [solvers](docs/SOLVERS.md), browser capture and project access requests
+requiring operator approval. Add `--browser` to setup for the browser image and
+`--solver` for the HiGHS, Z3 and CP-SAT solver image.
 See [Claude setup and authentication](docs/CLAUDE.md) for both integration paths.
 Use your own model access according to your provider's terms.
 

@@ -58,6 +58,7 @@ mod process_tree;
 mod rooms;
 mod runtime;
 mod rust_bench;
+mod solver;
 mod scheduler;
 mod services;
 mod spawning;
