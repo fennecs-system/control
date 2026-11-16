@@ -212,7 +212,7 @@ with interchangeable drivers; complete the remaining extractions incrementally.
 | P2 | U2 CUA; W2 workflow tools | Scoped browser/resource operations; validated recipes using existing spawn/wait/message primitives. |
 | P2 | M1 model adapters; C1–C3 summary strategies | Bounded reads and summary-call adapter enable C1 before general local tool execution; on/off plus model selector. |
 | P2 | L1 lenses/persona/SOUL configuration; L2/L3 reviewed improvement | Captured revisions, scoped tools, evaluation and admission; no new supervisor personality or learning lifecycle. |
-| P2 | H1 layered control (reflexes, perception, skills, strategy) | Autonomy r7 rule and agent-built packages first; accelerators, salience-filtered watches and observation feeds only for a demonstrated real-time need. |
+| P2 | H1 layered control (reflexes, perception, skills, strategy) | Autonomy r7 rule and agent-built packages first; declarative salience filters on notification watches; accelerators, summarisers and observation feeds only for a demonstrated real-time need. |
 | Later | Federation, inference bundles, general workflow languages, weight training | Demonstrated local need. |
 
 ## V1: Manage Vault and scoped secret injection
@@ -1062,8 +1062,10 @@ Control's source.
 - **Accelerators for services:** schedule GPUs for perception/policy services
   (S1 shapes), with the same budget and admission rules.
 - **Salience filtering:** fast loops emit far more events than a model should
-  see; watches need a declared filter or summariser so only strategically
-  relevant changes wake the agent.
+  see. Notification watches now take a declared `salience` filter (threshold,
+  change/dedup, rate, z-score, hysteresis, debounce, rate limit; see
+  [WATCHES.md](WATCHES.md#salience-filters-perception)); filtered events stay
+  readable. A model summariser remains open until a run demonstrates the need.
 - **Observation feeds:** a streaming frame or state input to a service, for
   systems without a structured API (Minecraft has one through Mineflayer).
 - **Measurement:** scorecard turns per completed goal and model wakes per hour,

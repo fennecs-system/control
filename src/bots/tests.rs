@@ -1439,6 +1439,7 @@ fn watching(state: &mut State, chat: &str, id: &str) {
         wake_policy: Default::default(),
         notification_channel: false,
         notifications: None,
+        salience: None,
         created_by: None,
         seen: 0,
         lines: 0,
@@ -1851,6 +1852,34 @@ fn explicit_notifications_release_waits_without_log_matching_or_extra_turns() {
             .recent
             .contains(&"replay".into())
     );
+}
+#[test]
+fn salience_filtered_notifications_wake_once_including_a_debounce_released_while_quiet() {
+    use crate::watch_frame::{Event as WatchEvent, Frame};
+    let (mut state, chat) = fixture();
+    state.chats[0].room = None;
+    watching(&mut state, &chat, "w-scrape");
+    state.watches[0].notification_channel = true;
+    state.watches[0].wake_policy = crate::watches::WakePolicy::ExitOnly {};
+    let filter = serde_json::from_value(serde_json::json!({"rules":[[{"kind":"change","field":"/hash"},{"kind":"debounce","seconds":30}]]})).unwrap();
+    state.watches[0].salience = Some(Box::new(crate::watches::Salience::new(filter)));
+    command_at(&mut state, &chat, "on", Now(0)).unwrap();
+    for seq in 1..=200 {
+        let hash = if seq < 150 { "a" } else { "b" };
+        state.watches[0].observe_at(&Frame { seq, event: WatchEvent::Notification(format!(r#"{{"hash":"{hash}"}}"#).into_bytes()) }, seq * 100);
+    }
+    reconcile_at(&mut state, 20_000, |_| Ok(())).unwrap();
+    assert!(bot_runs(&state).is_empty(), "held during the quiet period");
+    // The routine has gone quiet; a later supervisor pass releases the hold.
+    reconcile_at(&mut state, 50_000, |_| Ok(())).unwrap();
+    assert_eq!(bot_runs(&state).len(), 1);
+    assert!(matches!(
+        &bot_runs(&state)[0].bot_turn.as_ref().unwrap().reasons[..],
+        [Reason::Info { through: 200, info: Message::Notifications(1), .. }]
+    ));
+    assert!(bot_runs(&state)[0].objective.contains(r#"{"hash":"b"}"#));
+    let summary = state.watches[0].summary();
+    assert_eq!((summary["salience"]["woke"].as_u64(), summary["salience"]["retained"].as_u64()), (Some(1), Some(200)));
 }
 #[test]
 fn selected_watch_wakes_keep_exact_cursors_across_save_failure_and_restart() {
