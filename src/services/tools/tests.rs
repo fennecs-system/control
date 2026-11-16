@@ -75,11 +75,11 @@ fn service_tools_decode_typed_calls_and_keep_lenient_service_ids() {
     );
     assert_eq!(
         error("control_service_exec", json!({"command":"true"})),
-        "Expected service_id, command and optional timeout_seconds"
+        "Expected service_id, command and optional timeout_seconds and wait_seconds"
     );
     assert_eq!(
         error("control_service_exec_status", json!({"service_id":"svc-a"})),
-        "Expected service_id and execution_id"
+        "Expected service_id, execution_id and optional wait_seconds"
     );
     assert_eq!(
         error("control_service_restart", json!({})),

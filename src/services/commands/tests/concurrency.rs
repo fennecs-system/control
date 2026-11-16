@@ -43,7 +43,7 @@ fn concurrent_commands_launch_together_and_report_independently() {
     };
     update(&shared, &snapshot, &second, |e| e.status = Status::Running, false).unwrap();
     finish(&second, "ok\n", 0);
-    let read = |id: &str| status(&shared, &run, "attempt-a", &node, Handle { service_id: service.clone(), execution_id: id.into() }).unwrap();
+    let read = |id: &str| status(&shared, &run, "attempt-a", &node, Handle { service_id: service.clone(), execution_id: id.into(), wait_seconds: 0 }).unwrap();
     let (a, b) = (read(&first), read(&second));
     assert_eq!((a["status"].as_str(), b["status"].as_str()), (Some("running"), Some("completed")));
     assert_eq!((a["output"].as_str(), b["output"].as_str()), (Some(""), Some("ok\n")));

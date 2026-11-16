@@ -87,9 +87,9 @@ them. Operator stdio/HTTP MCP does not yet expose service management.
 | `control_service_status` | Inspect one handle, or list active services and ten recent completed handles. |
 | `control_service_attach` | Read status and bounded output for an owned handle; does not extend its lease. |
 | `control_service_stop` | Record stop intent. Wait for `Stopped` before assuming removal succeeded. |
-| `control_service_exec` | Submit a bounded command inside an owned running service; returns an execution ID. |
-| `control_service_exec_status` | Read that command's live output, durable status and exit code. |
-| `control_service_copy` | Copy a file or tree from the task workspace into an owned running service's `/workspace`; returns an execution ID. |
+| `control_service_exec` | Submit a bounded command inside an owned running service; waits up to `wait_seconds` (default 15) for its result, else returns an execution ID. |
+| `control_service_exec_status` | Read that command's live output, durable status and exit code; optional `wait_seconds` long-polls until it finishes. |
+| `control_service_copy` | Copy a file or tree from the task workspace into an owned running service's `/workspace`; waits like exec, else returns an execution ID. |
 
 Commands run in a fresh container from the attempt's captured, immutable Nix
 worker image. Rebuild worker/Claude images with the documented Nix setup before
@@ -271,7 +271,18 @@ separately reviewed, small results can be read back through bounded command
 output.
 
 Commands survive model turns and have a 1–1800 second timeout (default 120), capped
-by the service lease. Poll `control_service_exec_status` until complete.
+by the service lease. Admission wakes the service supervisor, which launches the
+command at once rather than on its 2 s reconciliation tick. `control_service_exec`
+and `control_service_copy` then wait inline up to `wait_seconds` (0–30, default
+15) and return the final status, exit code and output when the command finishes
+in time. Otherwise they return the usual `execution_id` with a running status:
+poll `control_service_exec_status`, which accepts the same `wait_seconds` (default
+0) as a long poll. The wait holds no state lock, wakes on the command's
+completion, and ends early when the attempt is cancelled or replaced, when
+Control stops, or 3 s before the attempt's deadline. It is bounded below the
+worker bridge's 35 s reply timeout. `wait_seconds` is not part of the request
+identity: a retry with the same nonce waits on the same execution and never
+submits another.
 Agents sharing a service run commands concurrently, each with its own
 `execution_id`, request identity, timeout, output and outcome. The service's
 resources are the bound: every command is at least one process under its

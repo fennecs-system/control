@@ -37,6 +37,9 @@ pub struct Input {
     to: String,
     #[serde(default = "default_timeout")]
     timeout_seconds: u64,
+    /// How long to wait for the result inline; not part of request identity.
+    #[serde(default = "commands::default_wait")]
+    wait_seconds: u64,
 }
 fn default_timeout() -> u64 {
     300
@@ -50,7 +53,7 @@ pub(super) struct Transfer {
 }
 
 pub(super) fn definition() -> Value {
-    json!({"name":"control_service_copy","description":"Copy a file or directory tree from your task workspace (/workspace in your run container, including approved project folders) into an accessible running service's /workspace, e.g. to bring a reusable tool into a service. from and to are paths relative to /workspace (a leading /workspace/ is accepted); no host paths, mounts or engine options. Files are written as the service user; existing files at the same paths are replaced and other files are kept. Symlinks, special files, non-UTF-8 names and credential, Control-internal or generated names (.git, .env*, auth.json, target, node_modules, .control-*) are skipped and reported, never followed. Admitted tool packages at .control-tools/<name> are the one Control-internal source you may copy; destinations cannot use .control-* names. Total bytes and entries are bounded by node settings (default 256 MiB and 20000 entries) and by memory-backed or capped legacy workspaces; the tree is checked before anything is written. The copy is asynchronous and takes the service exclusively: it waits for running commands to finish, and new commands and copies are refused until it completes. Returns an execution_id; poll control_service_exec_status until it completes before finishing your turn, because the copy reads your live workspace. A failed or interrupted copy may leave some files written; retries with the same request identity never replay it.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"from":{"type":"string","minLength":1,"maxLength":1024},"to":{"type":"string","minLength":1,"maxLength":1024},"timeout_seconds":{"type":"integer","minimum":1,"maximum":1800,"default":300}},"required":["service_id","from","to"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":false}})
+    json!({"name":"control_service_copy","description":"Copy a file or directory tree from your task workspace (/workspace in your run container, including approved project folders) into an accessible running service's /workspace, e.g. to bring a reusable tool into a service. from and to are paths relative to /workspace (a leading /workspace/ is accepted); no host paths, mounts or engine options. Files are written as the service user; existing files at the same paths are replaced and other files are kept. Symlinks, special files, non-UTF-8 names and credential, Control-internal or generated names (.git, .env*, auth.json, target, node_modules, .control-*) are skipped and reported, never followed. Admitted tool packages at .control-tools/<name> are the one Control-internal source you may copy; destinations cannot use .control-* names. Total bytes and entries are bounded by node settings (default 256 MiB and 20000 entries) and by memory-backed or capped legacy workspaces; the tree is checked before anything is written. The copy takes the service exclusively: it waits for running commands to finish, and new commands and copies are refused until it completes. Waits up to wait_seconds (default 15, max 30) and returns the outcome inline if it finishes in time; otherwise returns its execution_id: poll control_service_exec_status until it completes before finishing your turn, because the copy reads your live workspace. A failed or interrupted copy may leave some files written; retries with the same request identity never replay it.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"from":{"type":"string","minLength":1,"maxLength":1024},"to":{"type":"string","minLength":1,"maxLength":1024},"timeout_seconds":{"type":"integer","minimum":1,"maximum":1800,"default":300},"wait_seconds":{"type":"integer","minimum":0,"maximum":commands::MAX_WAIT_SECONDS,"default":commands::default_wait()}},"required":["service_id","from","to"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":false}})
 }
 
 /// Normalizes a `/workspace`-relative path. Each segment must be a plain name:
@@ -393,7 +396,12 @@ fn pax_record(key: &str, value: &str) -> String {
 /// state lock. A retried identity returns its recorded outcome without
 /// reading the workspace again.
 pub(super) fn request(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, node: &NodeId, input: Input) -> io::Result<Value> {
-    request_with(shared, attempt, node, input, |generation| crate::runtime::workspace(generation).map_err(fail), crate::storage::save)
+    let wait = commands::wait_bound(input.wait_seconds)?;
+    let service_id = input.service_id.clone();
+    let admitted = request_with(shared, attempt, node, input, |generation| crate::runtime::workspace(generation).map_err(fail), crate::storage::save)?;
+    let execution_id = admitted["execution_id"].as_str().unwrap_or_default().to_owned();
+    let waiter = commands::Waiter { run: attempt.run, generation: attempt.generation, node, service_id: &service_id };
+    Ok(commands::settle(shared, waiter, &execution_id, admitted, wait, &crate::shutdown::token()))
 }
 pub(super) fn request_with(
     shared: &Arc<Mutex<State>>,

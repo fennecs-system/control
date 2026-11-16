@@ -1353,3 +1353,43 @@ drops the command text from state, so a running record is at most about 18 KB
 `persisted_command_records_stay_bounded`. Reproduce with
 `cargo test --release --locked --bin control services::commands::tests::dispatch_profile -- --ignored --nocapture`
 (`CONTROL_PROFILE_ROUNDS` sets passes per batch).
+
+## Service command wake and inline wait (2026-11-16)
+
+Persistent players drive a game through `control_service_exec` and then poll
+`control_service_exec_status`, about one status call per command (run -128:
+20–28 actions per player in 25 min, each costing two or three model round
+trips). Two host latencies sat under each action: the supervisor launched
+admitted commands only on its 2 s tick, and the result needed a second tool
+call. Admission and every request status change now bump one `Changes` signal;
+the supervisor dispatches on it, keeping the 2 s tick for engine reconciliation
+and as a fallback. Exec and copy then wait inline (`wait_seconds`, default 15,
+max 30, below the bridge's 35 s reply timeout) on the same signal, without the
+state lock, and return the final result if the command finishes in time.
+
+The ignored live fixture
+`services::commands::tests::live_latency::live_exec_latency_before_and_after_wake_and_inline_wait`
+creates its own service from the pinned worker image with an isolated state
+directory and runs 40 `echo ok` commands, submitted at spread tick phases,
+under each policy. Before is the tick-only dispatcher with a status poll that
+succeeds the moment the record is terminal (a lower bound: a real poll adds a
+model round trip). Debug build, Docker Desktop on one Apple Silicon laptop:
+
+| Policy | submit→start p50 / p95 | submit→result p50 / p95 | Dispatch passes |
+| --- | ---: | ---: | ---: |
+| 2 s tick, poll status | 1018 / 1910 ms | 1102 / 1996 ms | 43 |
+| Wake on admit, inline wait | 20 / 25 ms | 107 / 189 ms | 142 |
+
+The remaining ~85 ms is `docker inspect` plus `docker exec`. Each command
+now costs about three dispatch passes (admission, its own launch, completion)
+instead of sharing the tick's one; a pass is unchanged
+(`dispatch_profile`, release, medians before → after: 8 services idle
+465 → 413 ns, 128 services with 64 running each 15.5 → 15.8 µs), so even 1,000
+commands a minute add well under 1 ms of supervisor CPU. Idle supervision is
+unchanged: with no admissions it still wakes once per tick. Each inline wait
+wakes only on request status changes (not output progress) and rechecks
+cancellation, attempt replacement and the turn deadline at least once a second.
+The agent saves one status round trip per command that finishes within the
+wait. Reproduce with `CONTROL_QA_SERVICE_IMAGE=<image id>`,
+`CONTROL_STATE_DIR=<temporary directory>` and optionally `CONTROL_QA_ROUNDS`:
+`cargo test --locked --bin control live_exec_latency -- --ignored --nocapture`.
