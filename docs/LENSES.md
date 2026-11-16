@@ -320,53 +320,29 @@ opted-in advisor do no lifecycle work.
 ## Ganglia
 
 **Ganglia** (`/use ganglia`): reflexes and routines run locally; turns are
-strategy. An octopus's arms act on their own through local ganglia while its
-central brain decides where to go. The lens is the build procedure for that
-split when a team drives an external system repeatedly.
+strategy. An octopus's arms act through local ganglia while its brain decides
+where to go. Use it for long-running work on systems that act faster than a
+turn (games, robots, live services, monitoring), not one-off tasks such as
+scraping or ordinary coding, which the autonomy routine rule covers.
 
-Use it for long-running work with reflexes: systems that act faster than a turn,
-such as games, robots, live services or monitoring. It is not for one-off tasks
-such as scraping a website or ordinary coding; the task autonomy routine rule
-already covers those. The procedure:
+The lens is a build procedure: one shared always-on reflex layer first, built
+early and reused by every member; then skills as bounded routines, including
+timed manoeuvres the model parameterises; routines escalate only salient
+changes; turns set goals and re-plan; everything lives in a folder ready to save
+as a [tool package](TOOL-PACKAGES.md). It turns the operator's repeated steering
+in runs -121 and -128, which drove a system one tool call per action, into
+standing procedure, and adds no tool or authority.
 
-1. Build layers bottom-up. First one shared always-on reflex layer for
-   reactions faster than a turn (protect, recover, maintain), built early by one
-   member while others keep working and reused by every member instead of each
-   embedding its own guards. Reflexes commit (see the jitter pitfall below).
-   Then skills: bounded routines on top of it that work toward a target.
-   Supervise from their events.
-2. Routines observe and filter, escalating only salient changes (milestones,
-   failures, threats they cannot handle), never raw streams.
-3. Composite manoeuvres (sequenced, timed behaviours) are skills too: the model
-   selects and parameterises them rather than issuing their steps.
-4. Turns are strategy: choose goals, assign skills and change plans from
-   escalations, without re-checking the world each step.
-5. Reflexes and skills live in one self-contained folder with a README and
-   notification contract, ready to save as a [tool package](TOOL-PACKAGES.md).
+**Pitfall: jitter.** In run -128 the shared reflex layer thrashed: a player
+surrounded by hostiles walked a few metres, stopped, swung once and re-planned.
+Every 500 ms tick re-decided on the nearest threat alone, any threat in a wide
+radius cancelled the routine (forcing a fresh path search), each reaction acted
+once, and the mode flipped at a health threshold. Reflexes must commit: hold
+until the trigger stays clear, act continuously, weigh every threat, preempt
+only for imminent ones, and pause rather than cancel routines.
 
-**Pitfall: jitter.** In run -128 the swarm's shared reflex layer thrashed: a
-player surrounded by hostiles walked a few metres, stopped, swung once,
-re-planned, and repeated. The cause was preemption without hysteresis. Each
-500 ms tick re-decided from scratch on the single nearest threat; any threat
-within a wide radius cancelled the running routine, clearing its goal and
-controls, so resuming meant a fresh path search; a reaction did one action and
-then returned control; and the mode flipped whenever health crossed a
-threshold. Reflexes should commit instead: an engaged reaction acts
-continuously and holds until its trigger has stayed clear for a while, weighs
-all threats and conditions rather than the nearest, preempts a routine only for
-imminent triggers while watching distant ones, and pauses a routine's goal to
-resume it rather than cancelling and recomputing it.
-
-Runs -121 and -128 drove an external system one small job per tool call, and
-the operator repeatedly steered them towards exactly this: a shared safety and
-upkeep loop, skills that run to a target, and escalation only of what matters.
-The lens turns that steering into standing procedure. It applies the task
-autonomy rule that a routine reacts and the model decides; it does not restate
-it, and adds no tool, scheduler or authority.
-
-Ganglia is opt-in: the `swarm` preset does not include it, so the scorecard can
-compare otherwise identical runs with and without it before any claim that it
-helps. Select it alongside `swarm` before launching a team.
+Opt-in: `swarm` does not include it, so the scorecard can compare runs with and
+without it.
 
 ## Tool packages
 

@@ -263,17 +263,15 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     let ganglia = Library::default().get("ganglia").unwrap().clone();
     assert_eq!((ganglia.name.as_str(), ganglia.revision), ("Ganglia", 1));
     assert!(ganglia.instructions.starts_with("Reflexes and routines run locally; turns are strategy."));
-    assert!(ganglia.instructions.contains("long-running work on a system that acts faster than a turn"));
-    assert!(ganglia.instructions.contains("need only the autonomy routine rule"));
+    assert!(ganglia.instructions.contains("long-running work on systems faster than a turn, not one-off tasks"));
     assert!(ganglia.instructions.contains("shared always-on reflex layer"));
     // Reflexes commit (hysteresis) rather than thrash: the run -128 lesson.
-    assert!(ganglia.instructions.contains("holds until its trigger stays clear a while"));
-    assert!(ganglia.instructions.contains("weighs every threat rather than the nearest"));
-    assert!(ganglia.instructions.contains("preempts a routine only for imminent triggers"));
-    assert!(ganglia.instructions.contains("not cancel and recompute it"));
-    assert!(ganglia.instructions.contains("never raw streams"));
+    assert!(ganglia.instructions.contains("hold until the trigger stays clear a while"));
+    assert!(ganglia.instructions.contains("weigh every threat, preempt only for imminent ones"));
+    assert!(ganglia.instructions.contains("pause routines rather than cancel them"));
+    assert!(ganglia.instructions.contains("escalate only milestones, failures and threats they cannot handle"));
     assert!(ganglia.instructions.contains("save as a tool package"));
-    assert!(ganglia.instructions.chars().count() <= 1400);
+    assert!(ganglia.instructions.chars().count() <= 900);
     let previous: Vec<Definition> = serde_json::from_str(include_str!("../builtin-lens-history.json")).unwrap();
     assert!(previous.iter().any(|d| d.id == "investigation" && d.revision == 1));
     for revision in 1..=5 {
