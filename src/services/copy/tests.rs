@@ -234,11 +234,11 @@ fn admission_is_scoped_bounded_durable_and_idempotent() {
     let mut state = shared.lock().unwrap();
     let command = commands::Work { service_id: id.clone(), digest: commands::hash(b"other"), command: "true".into(), display: "true".into(), timeout_seconds: 60, copy: None };
     assert!(commands::admit_work(&mut state, &run, "attempt-a", "copy-a", &node, command, |_| panic!("no save")).is_err());
-    // One lane: a new copy waits for the active one.
+    // A copy holds the service exclusively: another copy is refused.
     drop(state);
     root.write("tool/main.rs", b"fn main() {}");
     let busy = request_with(&shared, &at(&run, "attempt-a", "copy-b"), &node, input(&id, "tool", "tool"), workspace, |_| panic!("no save")).unwrap_err();
-    assert!(busy.to_string().contains("active command"), "{busy}");
+    assert!(busy.to_string().contains("reserved for copy"), "{busy}");
 }
 
 #[test]
@@ -384,6 +384,42 @@ fn live_copy_streams_a_tree_into_a_real_service_as_its_user() {
     assert!(done["diagnostic"].as_str().unwrap().contains("Extraction in the service failed"), "{done}");
     assert!(matches!(shared.lock().unwrap().services[0].resource.phase, Phase::Running(_)));
     assert_eq!(check("test -x /workspace/tools/mc/bin/run && echo intact").trim(), "intact");
+
+    // Commands from different agents run at once: the first finishes only
+    // after observing a file the second writes while the first still runs.
+    let exec = |nonce: &str, command: &str| {
+        let work = commands::Work { service_id: service.resource.id.as_str().into(), digest: commands::hash(command.as_bytes()), command: command.into(), display: command.into(), timeout_seconds: 20, copy: None };
+        let admitted = commands::admit_work(&mut shared.lock().unwrap(), &run, "attempt-a", nonce, &node, work, crate::storage::save).unwrap();
+        admitted["execution_id"].as_str().unwrap().to_owned()
+    };
+    let status = |id: &str| {
+        let handle = serde_json::from_value(json!({"service_id":service.resource.id.as_str(),"execution_id":id})).unwrap();
+        commands::status(&shared, &run, "attempt-a", &node, handle).unwrap()
+    };
+    let waiter = exec("wait-for-peer", "for _ in $(seq 100); do test -f /workspace/peer && { echo saw-peer; exit 0; }; sleep 0.1; done; exit 9");
+    let peer = exec("peer", "sleep 1; touch /workspace/peer; echo peer-done");
+    commands::dispatch(&shared, &mut threads).unwrap();
+    assert_eq!(threads.len(), 2, "both commands launch in one pass");
+    for thread in threads.drain(..) {
+        thread.join().unwrap();
+    }
+    let (waited, peered) = (status(&waiter), status(&peer));
+    assert_eq!((waited["status"].as_str(), waited["output"].as_str()), (Some("completed"), Some("saw-peer\n")), "{waited}");
+    assert_eq!((peered["status"].as_str(), peered["output"].as_str()), (Some("completed"), Some("peer-done\n")), "{peered}");
+
+    // A copy waits for a running command and launches alone after it.
+    let slow = exec("slow", "sleep 2; echo slow-done");
+    commands::dispatch(&shared, &mut threads).unwrap();
+    let queued = request(&shared, &at(&run, "attempt-a", "copy-after"), &node, input(service.resource.id.as_str(), "mc-client/README.md", "after.md")).unwrap();
+    assert!(queued["diagnostic"].as_str().unwrap().contains("Waiting for 1 running"), "{queued}");
+    commands::dispatch(&shared, &mut threads).unwrap();
+    assert_eq!(threads.len(), 1, "the copy does not launch beside a running command");
+    threads.drain(..).for_each(|thread| thread.join().unwrap());
+    assert_eq!(status(&slow)["status"], "completed");
+    commands::dispatch(&shared, &mut threads).unwrap();
+    threads.drain(..).for_each(|thread| thread.join().unwrap());
+    assert_eq!(status(queued["execution_id"].as_str().unwrap())["status"], "completed");
+    assert_eq!(check("cat /workspace/after.md").trim(), "v2");
     drop(cleanup);
 }
 
