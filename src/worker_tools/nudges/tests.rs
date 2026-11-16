@@ -132,14 +132,18 @@ fn nudges_are_appended_to_tool_results_through_the_broker() {
     let started = now().saturating_sub(560);
     state.runtime.runs[0].attempts.last_mut().unwrap().started_unix = started;
     let shared = Arc::new(Mutex::new(state));
-    let call = |nonce: &str| super::super::rpc_at(&shared, &run, &json!({"nonce":nonce,"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_room_list","arguments":{}}}}), None);
+    let call = |nonce: &str| super::super::rpc_at(&shared, &run, &json!({"nonce":nonce,"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_tool_search","arguments":{}}}}), None);
     let response = call("1");
     let texts = response["result"]["content"].as_array().unwrap().iter().filter_map(|item| item["text"].as_str()).collect::<Vec<_>>();
     assert!(texts.iter().any(|text| text.contains("s left in this turn: publish your checkpoint (control_turn_handoff)")), "{response}");
     assert!(texts.contains(&steering_text(1).as_str()), "{response}");
+    // Clients that show only structuredContent see the same notes.
+    let structured = response["result"]["structuredContent"]["notes"].as_array().unwrap().iter().filter_map(serde_json::Value::as_str).collect::<Vec<_>>();
+    assert_eq!(structured, texts[1..], "{response}");
     let again = call("2");
     let texts = again["result"]["content"].as_array().unwrap().iter().filter_map(|item| item["text"].as_str()).collect::<Vec<_>>();
     assert!(!texts.iter().any(|text| text.contains("left in this turn") || text.contains("You are steering")), "{again}");
+    assert!(again["result"]["structuredContent"].get("notes").is_none(), "{again}");
 }
 
 #[test]

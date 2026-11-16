@@ -37,23 +37,61 @@ fn rpc_at(
     {
         *text=json!(fixes::actionable(name,message));
     }
-    if envelope["request"]["method"]=="tools/call"
-        && name!="control_turn_handoff"
-        // get_mut, not IndexMut: indexing would insert "result":null into an
-        // error reply, which clients reject as an invalid JSON-RPC response.
-        && let Some(content)=response.get_mut("result").and_then(|result|result.get_mut("content")).and_then(Value::as_array_mut)
-        && let Ok(mut state)=shared.lock()
-    {
+    if envelope["request"]["method"]!="tools/call" {
+        return response;
+    }
+    // get_mut, not IndexMut: indexing would insert "result":null into an
+    // error reply, which clients reject as an invalid JSON-RPC response.
+    let Some(result)=response.get_mut("result").filter(|result|result["content"].is_array()) else { return response };
+    media_visible(result);
+    if name!="control_turn_handoff" && let Ok(mut state)=shared.lock() {
+        let mut notes=Vec::new();
         if name!="control_turn_context" && crate::turn_context::callback_notice(&mut state,run_id) {
-            content.push(json!({"type":"text","text":"New callbacks: read them with control_turn_context at the next action boundary."}));
+            notes.push("New callbacks: read them with control_turn_context at the next action boundary.".to_owned());
         }
         if !refused {
-            for note in nudges::notes(&mut state,run_id,name,nudges::now()) {
-                content.push(json!({"type":"text","text":note}));
-            }
+            notes.extend(nudges::notes(&mut state,run_id,name,nudges::now()));
         }
+        attach_notes(result,&notes);
     }
     response
+}
+/// Adds host `notes` to the tool `result` so every MCP client shows them to
+/// its model. Clients that find `structuredContent` show only that JSON in
+/// place of the text items (Codex 0.164 always; Claude Code 2.1 unless a
+/// flag opts into content), so each note goes both into a text item and into
+/// a `notes` array beside the structured data.
+fn attach_notes(result: &mut Value, notes: &[String]) {
+    if notes.is_empty() {
+        return;
+    }
+    if let Some(content) = result.get_mut("content").and_then(Value::as_array_mut) {
+        content.extend(notes.iter().map(|note| json!({"type":"text","text":note})));
+    }
+    if let Some(structured) = result.get_mut("structuredContent").and_then(Value::as_object_mut) {
+        let listed = structured.entry("notes").or_insert_with(|| json!([]));
+        if let Some(listed) = listed.as_array_mut() {
+            listed.extend(notes.iter().cloned().map(Value::String));
+        }
+    }
+}
+/// A result carrying an image or other non-text item leaves without
+/// `structuredContent`. Codex 0.164 replaces the whole content with
+/// `structuredContent` when it is present, so the image would never reach the
+/// model; Claude Code keeps non-text items either way. The data stays in a
+/// text item: the result's own (compacted) JSON text, or the structured JSON
+/// when the result has no text item.
+fn media_visible(result: &mut Value) {
+    let Some(fields) = result.as_object_mut() else { return };
+    let Some(content) = fields.get("content").and_then(Value::as_array) else { return };
+    if !content.iter().any(|item| item["type"] != "text") || !fields.contains_key("structuredContent") {
+        return;
+    }
+    let texted = content.iter().any(|item| item["type"] == "text");
+    let structured = fields.remove("structuredContent").unwrap_or_default();
+    if !texted && let Some(content) = fields.get_mut("content").and_then(Value::as_array_mut) {
+        content.insert(0, json!({"type":"text","text":structured.to_string()}));
+    }
 }
 /// Dispatches one request; a successful tool result leaves in the shared
 /// compact shape ([`compact`]), whichever tool family produced it.
