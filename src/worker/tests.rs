@@ -115,6 +115,20 @@ fn codex_tool_outcome_survives_activity_truncation_and_drains_final_results() {
 }
 
 #[test]
+fn admission_captures_the_local_turn_limit_only_for_local_attempts() {
+    for (backend, expected) in [(crate::backend::Backend::Local, Some(3600)), (crate::backend::Backend::Codex, None)] {
+        let mut state = State::default();
+        let chat = crate::chat::create(&mut state);
+        crate::chat::send(&mut state, &chat, "Set up", "test").unwrap();
+        state.runtime.runs[0].backend = backend;
+        checkpoint_next(&mut state, |_| Ok(())).unwrap();
+        let attempt = &state.runtime.runs[0].attempts[0];
+        assert_eq!(attempt.local_timeout_seconds, expected, "{backend:?}");
+        assert_eq!(attempt.bot_timeout_seconds, Some(1200));
+    }
+}
+
+#[test]
 fn unfinished_codex_tool_prevents_success_without_publishing_or_retrying() {
     let mut state = State::default();
     let chat = crate::chat::create(&mut state);

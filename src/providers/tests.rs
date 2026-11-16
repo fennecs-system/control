@@ -388,3 +388,31 @@ fn each_text_model_is_shown_once_with_its_capabilities_and_an_edit_form() {
     assert!(tools.contains("summaries · text generation · agent turns"));
     assert!(tools.contains("name='tools' type='checkbox' checked"));
 }
+#[test]
+fn local_endpoint_cards_carry_a_live_statistics_line_read_only_while_open() {
+    // No local endpoint: nothing for the page client to poll.
+    let mut runtime = crate::runtime::Runtime::default();
+    let cli = crate::model_calls::Endpoint { id: "codex-summary".into(), cli: Some(crate::backend::Backend::Codex), url: String::new(), ..crate::model_calls::tests::endpoint() };
+    runtime.compaction.models.push(cli);
+    let html = render(&runtime);
+    assert!(!html.contains("data-live-src") && !html.contains("data-live="));
+    // A local endpoint's card gets a slot keyed by its name, filled from
+    // /providers/live every 5 s while the page is open.
+    runtime.compaction.models.push(crate::model_calls::tests::endpoint());
+    let html = render(&runtime);
+    assert_eq!(html.matches("data-live-src='/providers/live' data-live-every='5'").count(), 1);
+    let card = html.split("<h4>local-qwen</h4>").nth(1).unwrap().split("</article>").next().unwrap();
+    assert!(card.contains("data-live='local-qwen' data-live-fallback='Live statistics unavailable.'"));
+    let cli_card = html.split("<h4>codex-summary</h4>").nth(1).unwrap().split("</article>").next().unwrap();
+    assert!(!cli_card.contains("data-live="));
+    // The endpoint answers only GET and only for its own path.
+    let state = std::sync::Mutex::new(crate::State::default());
+    let mut response = Vec::new();
+    assert!(!live_http(&mut response, &state, "GET", "/providers"));
+    assert!(live_http(&mut response, &state, "POST", "/providers/live"));
+    assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 400"));
+    response.clear();
+    assert!(live_http(&mut response, &state, "GET", "/providers/live"));
+    let text = String::from_utf8_lossy(&response);
+    assert!(text.starts_with("HTTP/1.1 200") && text.ends_with("{}"), "{text}");
+}

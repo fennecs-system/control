@@ -28,6 +28,19 @@ pub(super) fn post(
     timeout: Duration,
     cancel: &dyn Fn() -> bool,
 ) -> io::Result<Vec<u8>> {
+    exchange(url, Some(body), timeout, cancel)
+}
+/// One bounded read-only GET (server statistics), with the same framing,
+/// size ceiling and timeout as `post`.
+pub(super) fn get(url: &reqwest::Url, timeout: Duration) -> io::Result<Vec<u8>> {
+    exchange(url, None, timeout, &|| false)
+}
+fn exchange(
+    url: &reqwest::Url,
+    body: Option<&[u8]>,
+    timeout: Duration,
+    cancel: &dyn Fn() -> bool,
+) -> io::Result<Vec<u8>> {
     if url.scheme() == "https" {
         return tls(url, body, timeout);
     }
@@ -51,15 +64,18 @@ pub(super) fn post(
         Some(port) => format!("{host}:{port}"),
         None => host.to_owned(),
     };
-    let head = format!(
-        "POST {} HTTP/1.1\r\nHost: {authority}\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        url.path(),
-        body.len()
-    );
+    let head = match body {
+        Some(body) => format!(
+            "POST {} HTTP/1.1\r\nHost: {authority}\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            url.path(),
+            body.len()
+        ),
+        None => format!("GET {} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n", url.path()),
+    };
     stream.set_write_timeout(Some(remaining().max(Duration::from_millis(1))))?;
     stream
         .write_all(head.as_bytes())
-        .and_then(|_| stream.write_all(body))
+        .and_then(|_| stream.write_all(body.unwrap_or_default()))
         .map_err(|_| unavailable())?;
     stream.set_read_timeout(Some(POLL))?;
     let mut received = Vec::new();
@@ -197,19 +213,18 @@ fn reason(body: &[u8]) -> Option<String> {
 }
 
 /// TLS endpoints are bounded by the timeout only; cancellation is checked before.
-fn tls(url: &reqwest::Url, body: &[u8], timeout: Duration) -> io::Result<Vec<u8>> {
+fn tls(url: &reqwest::Url, body: Option<&[u8]>, timeout: Duration) -> io::Result<Vec<u8>> {
     let client = reqwest::blocking::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(timeout)
         .build()
         .map_err(|_| io::Error::other("Cannot create model transport"))?;
-    let response = client
-        .post(url.clone())
-        .header("content-type", "application/json")
-        .body(body.to_vec())
-        .send()
-        .map_err(|_| unavailable())?;
+    let request = match body {
+        Some(body) => client.post(url.clone()).header("content-type", "application/json").body(body.to_vec()),
+        None => client.get(url.clone()),
+    };
+    let response = request.send().map_err(|_| unavailable())?;
     let status = response.status().as_u16();
     let mut bytes = Vec::new();
     response.take(BODY_BYTES as u64 + 1).read_to_end(&mut bytes)?;

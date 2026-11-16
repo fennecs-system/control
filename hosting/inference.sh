@@ -147,8 +147,10 @@ case "$sha" in *[!0-9a-f]*|'') printf '%s\n' 'Invalid SHA-256.' >&2; exit 2 ;; e
 [ "${#sha}" -eq 64 ] || { printf '%s\n' 'Invalid SHA-256.' >&2; exit 2; }
 
 # Shared flags: one alias, no web UI, OpenAI tool calls through the model's
-# chat template, and no hidden reasoning spending the output allowance.
-server_flags=(--no-webui --alias "$alias" --ctx-size "$ctx" -np "$parallel" --jinja --reasoning-budget 0)
+# chat template, no hidden reasoning spending the output allowance, and the
+# read-only Prometheus /metrics and /slots endpoints behind `control models stats`
+# and the live line in Manage → Models (loopback only, like the API).
+server_flags=(--no-webui --alias "$alias" --ctx-size "$ctx" -np "$parallel" --jinja --reasoning-budget 0 --metrics --slots)
 # --dry-run prints the launchd agent or container command and changes nothing.
 if [ "$dry" = false ]; then
   stop_service "$label" "$container"

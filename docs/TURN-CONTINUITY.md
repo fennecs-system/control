@@ -96,7 +96,22 @@ messages queued behind them.) An explicit operator `worker-timeout-secs` /
 `CONTROL_WORKER_TIMEOUT_SECS` limit is captured at admission and takes priority
 for every attempt. Ordinary attempts retain the 600-second default. Approval
 during an active attempt switches only the implicit default to the captured bot
-limit. Context budget responses return `null` for unlimited remaining time. Quiet output is not a health
+limit.
+
+**Local-model turns (2026-11-16).** Every attempt on the local backend (a
+`local:NAME` chat, spawn or bot) uses its own default limit, 3,600 seconds
+(`local-turn-timeout-secs` / `CONTROL_LOCAL_TURN_TIMEOUT_SECS`, 60 s–24 h; `0`
+or `none` for unlimited), captured at admission like the bot limit and applied
+to chats and bots alike; it replaces both the 600-second and bot defaults for
+that attempt, and an explicit `worker-timeout-secs` still wins. A lead on Qwen
+27B (Metal, about 150–200 prompt tokens/s and 15 output tokens/s, roughly ten
+times slower per step than a hosted model) hit the 600-second limit during its
+first setup turn: the workspace was retained but the turn was lost. The
+deadline warning, the context budget's `limit_seconds`/`remaining_seconds`, the
+service-exec wait cap and the host checkpoint all read the same selected limit
+(`attempt_control::deadline`), so a local turn is warned at 15 % (540 s) before
+3,600 s and its interruption is recorded the same way. Attempts admitted before
+this release carry no local limit and run unlimited. Context budget responses return `null` for unlimited remaining time. Quiet output is not a health
 failure, and no periodic finish window or automatic progress extension is used.
 
 `control_turn_handoff` is an explicit yield: once its validated draft is durable,
@@ -533,8 +548,10 @@ at most once per attempt and never after a handoff is staged:
   The limit is decided by the chat, not the run kind: every run in a chat
   that is an approved permanent bot (its wakes and any queued message turns)
   uses the bot turn limit (default 1,200 s), while a chat that is not
-  (including a temporary or stopped bot) keeps the 600-second default; an
-  explicit `worker-timeout-secs` overrides both.
+  (including a temporary or stopped bot) keeps the 600-second default. An
+  attempt on a local model uses the local turn limit (default 3,600 s) whether
+  or not its chat is a bot; an explicit `worker-timeout-secs` overrides all
+  three.
 - When the acting chat steers active members (chats spawned from it, directly or
   through members, with a turn queued, running or waiting, or approved as
   persistent bots) and its turn has run `steering_turn_seconds` (default 240) or
