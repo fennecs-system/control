@@ -1,4 +1,4 @@
-use control_ai::{Decoder, Event, MAX_RECORD_BYTES, claude::Claude, codex::Codex, json_lines};
+use control_ai::{Decoder, Event, MAX_RECORD_BYTES, Tokens, Usage, claude::Claude, codex::Codex, json_lines, json_lines_usage};
 use serde_json::json;
 use std::io::{self, Read};
 
@@ -97,6 +97,49 @@ fn adapters_share_events_and_usage_without_application_state() {
     let output = json_lines(records.as_bytes(), Codex::default(), |e| events.push(e)).unwrap();
     assert_eq!(output.tokens, Some(usage));
     assert!(matches!(&events[0], Event::Activity(a) if a.text == "cargo test"));
+}
+
+fn tokens(input: u64, cached: u64, output: u64) -> Option<Tokens> {
+    Some(Tokens { input_tokens: input, cached_input_tokens: cached, output_tokens: output })
+}
+
+/// Recorded provider streams for the ways a turn ends. Usage is read from
+/// whatever the provider reported, also when the turn failed or was stopped.
+#[test]
+fn recorded_streams_report_usage_for_every_ending() {
+    let codex = |data: &str| json_lines_usage(data.as_bytes(), Codex::default(), |_| {});
+    // Stopped by the host right after an accepted handoff: Codex reports
+    // usage only in turn.completed, so nothing is known.
+    let (output, usage) = codex(include_str!("fixtures/codex-handoff-stopped.jsonl"));
+    assert!(output.is_ok());
+    assert_eq!(usage, Usage::default(), "unknown, not zero");
+    // The same handoff when the turn may end by itself.
+    let (_, usage) = codex(include_str!("fixtures/codex-handoff-completed.jsonl"));
+    assert_eq!(usage, Usage { tokens: tokens(184_233, 160_128, 2_210), complete: true, model: None });
+    let (_, usage) = codex(include_str!("fixtures/codex-turn-failed.jsonl"));
+    assert_eq!(usage.tokens, None);
+
+    let claude = |data: &str| json_lines_usage(data.as_bytes(), Claude::new(ALLOWED), |_| {});
+    // Stopped mid-turn: the per-call usage seen so far, each call counted once
+    // with its latest counts, flagged as a lower bound.
+    let (output, usage) = claude(include_str!("fixtures/claude-stopped-mid-turn.jsonl"));
+    assert!(output.is_err(), "no final result");
+    assert_eq!(usage, Usage {
+        tokens: tokens(16_103 + 16_225, 12_000 + 16_100, 61 + 40),
+        complete: false,
+        model: Some("claude-sonnet-4-5-20250929".into()),
+    });
+    // An error result still carries the turn's totals.
+    let (output, usage) = claude(include_str!("fixtures/claude-error-result.jsonl"));
+    assert!(output.unwrap_err().to_string().contains("error_max_turns"));
+    assert_eq!(usage, Usage {
+        tokens: tokens(500_561, 480_100, 7_300),
+        complete: true,
+        model: Some("claude-opus-4-1-20250805".into()),
+    });
+    // A successful result's totals win over the per-call sum.
+    let (output, usage) = claude(&format!("{INIT}{FINAL}"));
+    assert_eq!((output.unwrap().tokens, usage.tokens, usage.complete), (tokens(45, 30, 2), tokens(45, 30, 2), true));
 }
 
 #[test]

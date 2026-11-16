@@ -6,7 +6,7 @@ pub mod model;
 mod types;
 use serde_json::Value;
 use std::io::{self, Read};
-pub use types::{Activity, Tokens};
+pub use types::{Activity, Tokens, Usage};
 
 /// Provider-reported results. Missing usage is unknown, never an estimate of zero.
 #[derive(Debug, Default)]
@@ -31,17 +31,26 @@ pub trait Decoder {
         false
     }
     fn finish(self) -> io::Result<Output>;
+    /// Usage reported so far, available even when `finish` fails: a turn that
+    /// ends with an error or is stopped still consumed tokens.
+    fn usage(&self) -> Usage {
+        Usage::default()
+    }
 }
 
 pub const MAX_RECORD_BYTES: usize = 1_048_576;
 
 /// Reuses one bounded buffer and parses each record once. No transcript retention,
 /// queues, background tasks, cloned JSON trees or allocation per input chunk.
-pub fn json_lines(
+pub fn json_lines(reader: impl Read, decoder: impl Decoder, emit: impl FnMut(Event)) -> io::Result<Output> {
+    json_lines_usage(reader, decoder, emit).0
+}
+/// [`json_lines`] plus the usage the provider reported, also on failure.
+pub fn json_lines_usage(
     reader: impl Read,
     mut decoder: impl Decoder,
     mut emit: impl FnMut(Event),
-) -> io::Result<Output> {
+) -> (io::Result<Output>, Usage) {
     let mut reader = reader;
     let mut line = Vec::new();
     let mut oversized = false;
@@ -51,7 +60,7 @@ pub fn json_lines(
             Ok(0) => break,
             Ok(n) => n,
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-            Err(e) => return Err(e),
+            Err(e) => return (Err(e), decoder.usage()),
         };
         for &byte in &chunk[..length] {
             if byte == b'\n' {
@@ -75,7 +84,8 @@ pub fn json_lines(
             decoder.malformed();
         }
     }
-    decoder.finish()
+    let usage = decoder.usage();
+    (decoder.finish(), usage)
 }
 fn record(line: &[u8], oversized: bool, decoder: &mut impl Decoder, emit: &mut dyn FnMut(Event)) {
     if oversized {

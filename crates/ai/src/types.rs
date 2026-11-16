@@ -23,3 +23,15 @@ pub struct Activity {
     pub status: String,
 }
 use serde::{Deserialize, Serialize};
+
+/// What a provider reported about one attempt's usage, whatever its outcome.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Usage {
+    /// `None`: the provider reported nothing. Unknown, never zero.
+    pub tokens: Option<Tokens>,
+    /// The provider's own end-of-turn total. Otherwise `tokens` sums the
+    /// per-call reports seen before the stream ended: a lower bound.
+    pub complete: bool,
+    /// The model the provider says served the attempt, when it says.
+    pub model: Option<String>,
+}

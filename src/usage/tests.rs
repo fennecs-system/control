@@ -100,7 +100,7 @@ fn structured_activity_keeps_tools_bounded_and_excludes_reasoning() {
         serde_json::json!({"type":"turn.completed","usage":{"input_tokens":12,"cached_input_tokens":4,"output_tokens":8}})
     );
     let mut activity = Vec::new();
-    let tokens = capture_with(events.as_bytes(), |event| activity.push(event)).unwrap();
+    let tokens = capture_with(events.as_bytes(), |event| activity.push(event)).tokens.unwrap();
     assert_eq!(tokens.output_tokens, 8);
     assert_eq!(activity.len(), 2);
     assert_eq!(activity[0].text, "cargo check");
@@ -236,4 +236,30 @@ fn days_and_legacy_attempts_keep_unknown_distinct_from_zero() {
         ..Attempt::default()
     });
     assert_eq!((sum.attempts, sum.measured), (2, 1));
+}
+/// Every ending records its provenance: provider totals, a lower bound from
+/// per-call reports, unknown when the provider reported nothing, and no model
+/// call when the provider never started. Unknown never becomes zero.
+#[test]
+fn attempts_record_usage_provenance_for_every_ending() {
+    let tokens = Some(Tokens { input_tokens: 10, cached_input_tokens: 4, output_tokens: 2 });
+    let mut attempt = Attempt::default();
+    attempt.record_usage(control_ai::Usage { tokens, complete: true, model: Some("claude-x".into()) });
+    assert_eq!((attempt.accounting, attempt.tokens, attempt.reported_model.as_deref()), (Accounting::Reported, tokens, Some("claude-x")));
+    attempt.record_usage(control_ai::Usage { tokens, complete: false, model: None });
+    assert_eq!((attempt.accounting, attempt.reported_model.as_deref()), (Accounting::Partial, Some("claude-x")), "a model already reported is kept");
+    attempt.record_usage(control_ai::Usage::default());
+    assert_eq!((attempt.accounting, attempt.tokens), (Accounting::Unknown, None));
+    let json = serde_json::to_value(&attempt).unwrap();
+    assert_eq!(json["accounting"], "unknown");
+    let legacy: Attempt = serde_json::from_value(serde_json::json!({"status":"completed"})).unwrap();
+    assert!(legacy.accounting.is_unrecorded() && serde_json::to_value(&legacy).unwrap().get("accounting").is_none());
+
+    let mut sum = Summary::default();
+    for accounting in [Accounting::Reported, Accounting::Partial, Accounting::Unknown, Accounting::NotLaunched, Accounting::Unrecorded] {
+        let measured = matches!(accounting, Accounting::Reported | Accounting::Partial);
+        sum.add(&Attempt { accounting, tokens: measured.then_some(tokens).flatten(), ..Attempt::default() });
+    }
+    assert_eq!((sum.attempts, sum.measured, sum.partial, sum.no_call), (5, 3, 1, 1));
+    assert_eq!(sum.tokens.input_tokens, 20);
 }

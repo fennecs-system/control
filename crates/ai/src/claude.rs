@@ -1,4 +1,4 @@
-use crate::{Activity, Decoder, Event, Output, Tokens};
+use crate::{Activity, Decoder, Event, Output, Tokens, Usage};
 use serde_json::Value;
 use std::io;
 fn fail(message: &str) -> io::Error {
@@ -16,12 +16,38 @@ pub struct Claude<'a> {
     /// Subtype and error text of an unsuccessful result event, for the user.
     failure: Option<String>,
     tools: Vec<(String, String)>,
+    /// The result event's totals, also when the result is an error.
+    reported: Option<Tokens>,
+    /// Per-call usage of finished API calls, and of the call still streaming
+    /// (one call's content blocks arrive as consecutive assistant events
+    /// repeating its message id and usage).
+    calls: Option<Tokens>,
+    call: Option<(String, Tokens)>,
+    model: Option<String>,
+}
+/// Claude counts cache reads and writes outside `input_tokens`; Control's
+/// input includes them, with reads also shown as cached.
+fn tokens(usage: &Value) -> Option<Tokens> {
+    let (input, output) = (usage["input_tokens"].as_u64()?, usage["output_tokens"].as_u64()?);
+    let cached = usage["cache_read_input_tokens"].as_u64().unwrap_or(0);
+    let created = usage["cache_creation_input_tokens"].as_u64().unwrap_or(0);
+    Some(Tokens {
+        input_tokens: input.saturating_add(cached).saturating_add(created),
+        cached_input_tokens: cached,
+        output_tokens: output,
+    })
+}
+fn model(value: &Value) -> Option<String> {
+    value.as_str().filter(|m| !m.is_empty()).map(|m| m.chars().filter(|c| !c.is_control()).take(100).collect())
 }
 impl Claude<'_> {
     fn event(&mut self, value: &Value) -> Option<Activity> {
         match value["type"].as_str()? {
             "system" if value["subtype"] == "init" => {
                 self.initialized = true;
+                if let Some(model) = model(&value["model"]) {
+                    self.model = Some(model);
+                }
                 let allowed = self.allowed_tools;
                 if !value["tools"].as_array().is_some_and(|tools| {
                     tools.iter().all(|t| {
@@ -37,6 +63,9 @@ impl Claude<'_> {
                 }
             }
             "result" => {
+                if let Some(total) = tokens(&value["usage"]) {
+                    self.reported = Some(total);
+                }
                 if value["is_error"] != false || value["subtype"] != "success" {
                     let detail: String = value["result"]
                         .as_str()
@@ -71,21 +100,10 @@ impl Claude<'_> {
                     return None;
                 };
                 self.result = Some(text.chars().take(16000).collect());
-                let usage = &value["usage"];
-                if let (Some(input), Some(output)) = (
-                    usage["input_tokens"].as_u64(),
-                    usage["output_tokens"].as_u64(),
-                ) {
-                    let cached = usage["cache_read_input_tokens"].as_u64().unwrap_or(0);
-                    let created = usage["cache_creation_input_tokens"].as_u64().unwrap_or(0);
-                    self.tokens = Some(Tokens {
-                        input_tokens: input.saturating_add(cached).saturating_add(created),
-                        cached_input_tokens: cached,
-                        output_tokens: output,
-                    });
-                }
+                self.tokens = tokens(&value["usage"]);
             }
             "assistant" => {
+                self.call_usage(&value["message"]);
                 let mut text = String::new();
                 let mut remaining = 4000usize;
                 let mut first = true;
@@ -129,6 +147,21 @@ impl Claude<'_> {
             _ => {}
         }
         None
+    }
+    fn call_usage(&mut self, message: &Value) {
+        if let Some(model) = model(&message["model"]) {
+            self.model = Some(model);
+        }
+        let (Some(id), Some(usage)) = (message["id"].as_str(), tokens(&message["usage"])) else { return };
+        match &mut self.call {
+            // Later blocks of the same call carry its latest counts.
+            Some((current, latest)) if current == id => *latest = usage,
+            call => {
+                if let Some((_, finished)) = call.replace((id.to_owned(), usage)) {
+                    self.calls.get_or_insert_with(Tokens::default).add(finished);
+                }
+            }
+        }
     }
     fn tools(&mut self, value: &Value, emit: &mut dyn FnMut(Event)) {
         fn clean<'a>(parts: impl Iterator<Item = &'a str>, limit: usize) -> String {
@@ -215,6 +248,19 @@ impl Decoder for Claude<'_> {
     }
     fn malformed(&mut self) {
         self.invalid = true;
+    }
+    /// The result event's totals when it arrived (success or error), else the
+    /// sum of per-call usage: a lower bound for a turn stopped before its result.
+    fn usage(&self) -> Usage {
+        let model = self.model.clone();
+        if let Some(total) = self.reported {
+            return Usage { tokens: Some(total), complete: true, model };
+        }
+        let mut calls = self.calls;
+        if let Some((_, current)) = &self.call {
+            calls.get_or_insert_with(Tokens::default).add(*current);
+        }
+        Usage { tokens: calls, complete: false, model }
     }
     fn finish(self) -> io::Result<Output> {
         let (text, tokens) = self.finish_result()?;
