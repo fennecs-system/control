@@ -540,6 +540,11 @@ impl Channel {
                 let names = if lenses.is_empty() { "no lenses".to_owned() } else { lenses.join(" + ") };
                 Ok(format!("Future messages in {}: {names}.\n{}", detail["title"].as_str().unwrap_or("this chat"), Self::link(&chat)))
             }
+            Navigation::Rename(name) => {
+                let chat = target.ok_or("Select a chat with /chats first.")?;
+                let detail = chats::rename(hive, &chat, &name).map_err(fail)?;
+                Ok(format!("Renamed this chat to {}.\n{}", detail["title"].as_str().unwrap_or(&name), Self::link(&chat)))
+            }
             Navigation::List => {
                 let list = hive.tool("control.chats.list", json!({})).map_err(fail)?;
                 Ok(chat_list(to, &list))

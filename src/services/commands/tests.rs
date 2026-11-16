@@ -277,6 +277,7 @@ fn input(service: &str, command: &str) -> Input {
         service_id: service.into(),
         command: command.to_owned().try_into().unwrap(),
         timeout_seconds: 60,
+        wait_seconds: 0,
     }
 }
 #[test]
@@ -557,3 +558,7 @@ fn capture_publishes_output_before_command_exit() {
 mod dispatch_profile;
 #[path = "tests/concurrency.rs"]
 mod concurrency;
+#[path = "tests/wait.rs"]
+mod wait;
+#[path = "tests/live_latency.rs"]
+mod live_latency;

@@ -19,6 +19,33 @@ the broker path under the state lock already taken for callback notices: a few
 field reads per call, plus one pass over chats and active runs only once a
 steering threshold is reached and the note has not yet been sent.
 
+## Chat callsigns (2026-11-16)
+
+Chats are shown by callsigns derived on read (`callsigns::all`: one pass over
+the chats in creation order, a fixed-size ring of the last 48 callsigns and
+per-word counts, no hashing or allocation per chat). The new
+`performance::chat_lists` fixture renders `control.chats.list` (TUI picker,
+Discord `!chats`), the web conversation tree and one `control.chat.read` for
+10, 100 and 1,000 chats in task trees of eight. Release builds, Apple Silicon,
+`CONTROL_TIMING_ROUNDS=300`, the same fixture in both revisions, three
+alternating before/after runs; medians of the run medians:
+
+| Workload | Chats | Before | After |
+| --- | ---: | ---: | ---: |
+| `chats_list` | 10 / 100 / 1,000 | 19.1 / 189.9 / 1,970 µs | 20.8 / 195.1 / 2,036 µs |
+| `web_conversation_tree` | 10 / 100 / 1,000 | 6.4 / 44.6 / 131.0 µs | 4.6 / 30.1 / 137.8 µs |
+| `chat_read` | 10 / 100 / 1,000 | 2.2 / 2.5 / 5.2 µs | 2.2 / 3.2 / 14.1 µs |
+
+The list costs about 3% more for the full derivation pass; the web tree is
+smaller (short names, 14 KB instead of 26 KB at 1,000 chats) and faster up to
+100 chats, 5% slower at 1,000. Reading one chat derives the callsigns before
+it, about 9 µs for the 500th of 1,000 chats. A first version keyed the window
+in a `HashMap` and cost 374 µs for the 1,000-chat tree and 115 µs per read.
+
+```sh
+cargo test --release --locked --bin control performance::chat_lists -- --ignored --exact --nocapture
+```
+
 ## State saves as a patch journal (2026-11-16)
 
 macOS disk-write diagnostics showed 8–34 GB/hour written by Control during
@@ -1345,3 +1372,43 @@ drops the command text from state, so a running record is at most about 18 KB
 `persisted_command_records_stay_bounded`. Reproduce with
 `cargo test --release --locked --bin control services::commands::tests::dispatch_profile -- --ignored --nocapture`
 (`CONTROL_PROFILE_ROUNDS` sets passes per batch).
+
+## Service command wake and inline wait (2026-11-16)
+
+Persistent players drive a game through `control_service_exec` and then poll
+`control_service_exec_status`, about one status call per command (run -128:
+20–28 actions per player in 25 min, each costing two or three model round
+trips). Two host latencies sat under each action: the supervisor launched
+admitted commands only on its 2 s tick, and the result needed a second tool
+call. Admission and every request status change now bump one `Changes` signal;
+the supervisor dispatches on it, keeping the 2 s tick for engine reconciliation
+and as a fallback. Exec and copy then wait inline (`wait_seconds`, default 15,
+max 30, below the bridge's 35 s reply timeout) on the same signal, without the
+state lock, and return the final result if the command finishes in time.
+
+The ignored live fixture
+`services::commands::tests::live_latency::live_exec_latency_before_and_after_wake_and_inline_wait`
+creates its own service from the pinned worker image with an isolated state
+directory and runs 40 `echo ok` commands, submitted at spread tick phases,
+under each policy. Before is the tick-only dispatcher with a status poll that
+succeeds the moment the record is terminal (a lower bound: a real poll adds a
+model round trip). Debug build, Docker Desktop on one Apple Silicon laptop:
+
+| Policy | submit→start p50 / p95 | submit→result p50 / p95 | Dispatch passes |
+| --- | ---: | ---: | ---: |
+| 2 s tick, poll status | 1018 / 1910 ms | 1102 / 1996 ms | 43 |
+| Wake on admit, inline wait | 20 / 25 ms | 107 / 189 ms | 142 |
+
+The remaining ~85 ms is `docker inspect` plus `docker exec`. Each command
+now costs about three dispatch passes (admission, its own launch, completion)
+instead of sharing the tick's one; a pass is unchanged
+(`dispatch_profile`, release, medians before → after: 8 services idle
+465 → 413 ns, 128 services with 64 running each 15.5 → 15.8 µs), so even 1,000
+commands a minute add well under 1 ms of supervisor CPU. Idle supervision is
+unchanged: with no admissions it still wakes once per tick. Each inline wait
+wakes only on request status changes (not output progress) and rechecks
+cancellation, attempt replacement and the turn deadline at least once a second.
+The agent saves one status round trip per command that finishes within the
+wait. Reproduce with `CONTROL_QA_SERVICE_IMAGE=<image id>`,
+`CONTROL_STATE_DIR=<temporary directory>` and optionally `CONTROL_QA_ROUNDS`:
+`cargo test --locked --bin control live_exec_latency -- --ignored --nocapture`.

@@ -89,6 +89,7 @@ fn the_tree_shows_bots_services_and_processes_of_active_task_trees() {
     assert!(render(&state).is_none());
     let lead = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &lead, "Run a <civilisation>", "test").unwrap();
+    state.chats[0].name = Some("Run a <civilisation>".into());
     let worker = crate::chat::create(&mut state);
     state.chats.iter_mut().find(|chat| chat.id == worker).unwrap().parent_chat = Some(lead.clone());
     let html = render(&state).unwrap();
@@ -107,10 +108,17 @@ fn the_tree_shows_bots_services_and_processes_of_active_task_trees() {
     assert!(render(&state).is_none(), "trees without bots, services or active turns are omitted");
 }
 #[test]
-fn sibling_titles_drop_their_shared_template_words() {
-    assert_eq!(distinct_titles(&["Own civilisation bot CivFarmer: food", "Own civilisation bot CivMiner: tools"]), ["CivFarmer: food", "CivMiner: tools"]);
-    assert_eq!(distinct_titles(&["Own farm", "Own mine"]), ["Own farm", "Own mine"], "a single shared word is kept");
-    assert_eq!(distinct_titles(&["Same title here", "Same title here"]), ["Same title here", "Same title here"]);
-    assert_eq!(distinct_titles(&["Alone"]), ["Alone"]);
-    assert_eq!(distinct_titles(&["Own civilisation bot A: x", "Own civilisation bot B: y", "Own server infrastructure"]), ["A: x", "B: y", "Own server infrastructure"], "a template shared by some siblings is still dropped");
+fn nodes_show_callsigns_and_renames() {
+    let mut state = State::default();
+    let lead = crate::chat::create(&mut state);
+    let worker = crate::chat::create(&mut state);
+    state.chats[1].parent_chat = Some(lead.clone());
+    state.chats[1].name = Some("player1".into());
+    state.runtime.enqueue("Work".into(), crate::runtime::RunKind::Chat, "test");
+    state.runtime.runs[0].chat_id = Some(worker.clone());
+    state.runtime.runs[0].status = "running".into();
+    let svg = render(&state).unwrap();
+    let lead_name = crate::callsigns::name(&state.chats, &lead).unwrap().into_owned();
+    assert!(svg.contains(&format!(">{lead_name}</text>")), "{svg}");
+    assert!(svg.contains(">player1</text>"), "{svg}");
 }

@@ -177,6 +177,8 @@ fn the_prefix_maps_to_control_commands_both_ways() {
     assert_eq!(channel.route(&bang, &me(), inbound(None, "!help")), Some(Routed::Help));
     assert!(matches!(channel.route(&bang, &me(), inbound(None, "!bot deny bot-1")), Some(Routed::Decide(n)) if n.id == "bot-1"));
     assert_eq!(channel.route(&bang, &me(), inbound(None, "!use swarm, review")), Some(Routed::Navigate(Navigation::Use(Some(vec!["swarm".into(), "review".into()])))));
+    assert_eq!(channel.route(&bang, &me(), inbound(None, "!rename Farm lead")), Some(Routed::Navigate(Navigation::Rename("Farm lead".into()))));
+    assert!(bang.help().contains("!rename — Rename this chat"));
 }
 
 #[test]

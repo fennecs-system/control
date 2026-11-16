@@ -12,6 +12,7 @@ mod watches;
 #[path = "../tools/browser/main.rs"]
 mod browser;
 mod browser_ui;
+mod callsigns;
 mod channel_settings;
 mod chat;
 mod child;

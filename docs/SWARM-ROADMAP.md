@@ -212,6 +212,7 @@ with interchangeable drivers; complete the remaining extractions incrementally.
 | P2 | U2 CUA; W2 workflow tools | Scoped browser/resource operations; validated recipes using existing spawn/wait/message primitives. |
 | P2 | M1 model adapters; C1–C3 summary strategies | Bounded reads and summary-call adapter enable C1 before general local tool execution; on/off plus model selector. |
 | P2 | L1 lenses/persona/SOUL configuration; L2/L3 reviewed improvement | Captured revisions, scoped tools, evaluation and admission; no new supervisor personality or learning lifecycle. |
+| P2 | H1 layered control (reflexes, perception, skills, strategy) | Autonomy r7 rule and agent-built packages first; accelerators, salience-filtered watches and observation feeds only for a demonstrated real-time need. |
 | Later | Federation, inference bundles, general workflow languages, weight training | Demonstrated local need. |
 
 ## V1: Manage Vault and scoped secret injection
@@ -1030,6 +1031,47 @@ explicit adapter contract before that separation. Do not expose a shared mount
 of other chats to warm containers or expire resources while useful work runs.
 Lightweight provider containers remain required. Measure startup and delivery
 separately from model inference; see [PERFORMANCE.md](PERFORMANCE.md).
+
+## H1: layered control — the model decides, routines react
+
+Runs -121 and -128 drove an external system like a joystick: one small job per
+tool call, then a status poll, about one action per minute at two or three model
+round trips each. The model is the brain for strategic, tactical and
+organisational decisions; immediate reactions belong in programs the agents
+write and run. Animals walk without deliberating and decide to go to the coffee
+shop; a commander sets the plan, not each soldier's next step.
+
+| Layer | Timescale | Runs as | Example (game) |
+| --- | --- | --- | --- |
+| Reflexes / control | 10–100 ms | always-on loop per agent: classic control, behaviour trees, small policies | eat, fight or flee, avoid hazards, aim |
+| Perception | 30–200 ms | small local model or parser feeding the loops | detect threats, read the scene or HUD |
+| Tactics (skills) | ~1 s | bounded routines started as watches toward a target | gather N then deliver, hold a position, build a segment from a plan |
+| Strategy | seconds–minutes | model turns | what to do next, who does it, when to change the plan |
+
+Lower layers escalate only outcomes, milestones and situations they cannot
+handle; the model supervises from those events and never polls per step.
+
+**Already generic in Control:** services and concurrent commands host the loops;
+watches run them across turns and report outcomes; ports expose a local
+perception or policy model as its own service; packages version reflexes, skills
+and trained policies as a reusable library across runs; autonomy r7 states the
+rule. Game-specific reflexes and skills stay in agent-built packages, never in
+Control's source.
+
+**Gaps for real-time systems** (demonstrated need first):
+- **Accelerators for services:** schedule GPUs for perception/policy services
+  (S1 shapes), with the same budget and admission rules.
+- **Salience filtering:** fast loops emit far more events than a model should
+  see; watches need a declared filter or summariser so only strategically
+  relevant changes wake the agent.
+- **Observation feeds:** a streaming frame or state input to a service, for
+  systems without a structured API (Minecraft has one through Mineflayer).
+- **Measurement:** scorecard turns per completed goal and model wakes per hour,
+  to show the split works rather than asserting it.
+
+First exit: a run whose agents build a shared reflex loop and skills, start them
+as watches, and complete milestones with markedly fewer model turns per claim than
+-121 (77) — evaluated as a paired trial.
 
 ## Regression lanes, deferrals and delivery evidence
 

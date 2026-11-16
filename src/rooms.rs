@@ -47,7 +47,7 @@ pub fn read(state: &State, room: &str) -> Value {
     let posts = state.collective.posts.iter().filter(|p| p.room == room).rev().take(50)
         .map(|p| json!({"text":p.text,"chat":p.chat,"run":p.run,"delivery":p.delivery,"author":if p.run.is_some(){"agent"}else{"operator"}}));
     json!({"room":room,"posts":posts.collect::<Vec<_>>(),"claims":claims::listed(state, room),
-        "chats":state.chats.iter().rev().filter(|c| c.room.as_deref()==Some(room)).take(50).map(|c|json!({"id":c.id,"title":c.title})).collect::<Vec<_>>()})
+        "chats":state.chats.iter().zip(crate::callsigns::all(&state.chats)).rev().filter(|(c, _)| c.room.as_deref()==Some(room)).take(50).map(|(c, callsign)|json!({"id":c.id,"title":crate::callsigns::label(c, callsign)})).collect::<Vec<_>>()})
 }
 pub fn tool(state: &mut State, name: &str, args: &Value) -> Result<Value, &'static str> {
     if name == "control.rooms.list" {
@@ -95,9 +95,9 @@ pub fn render(state: &State, room: &str) -> String {
                 html.push_str(&format!("<ul class='room-threads' aria-label='Threads in #{channel}'>"));
                 has_threads = true;
             }
-            let title = state.chats.iter().find(|chat| chat.id == thread).map_or(thread, |chat| chat.title.as_str());
+            let title = crate::callsigns::name_or_id(&state.chats, thread);
             let current = if name == room { " aria-current='page'" } else { "" };
-            html.push_str(&format!("<li><a href='/?view=rooms&amp;channel={name}'{current} title='{}'><span class='room-thread-icon' aria-hidden='true'>↳</span><span class='room-name'>{}</span></a></li>", escape(&format!("#{channel} · {title}")), escape(title)));
+            html.push_str(&format!("<li><a href='/?view=rooms&amp;channel={name}'{current} title='{}'><span class='room-thread-icon' aria-hidden='true'>↳</span><span class='room-name'>{}</span></a></li>", escape(&format!("#{channel} · {title}")), escape(&title)));
         }
         if has_threads { html.push_str("</ul>"); }
         html.push_str("</li>");
@@ -130,7 +130,7 @@ pub fn render(state: &State, room: &str) -> String {
         let status = activity.get(chat.id.as_str()).copied().or_else(|| listening(state, &chat.id).then_some("listening"));
         if let Some(status) = status {
             active.insert(chat.id.as_str());
-            html.push_str(&format!("<li><a href='/chat/{}'><span class='dot' aria-hidden='true'></span><span>{}<small>{status}</small></span></a></li>", escape(&chat.id), escape(&chat.title)));
+            html.push_str(&format!("<li><a href='/chat/{}'><span class='dot' aria-hidden='true'></span><span>{}<small>{status}</small></span></a></li>", escape(&chat.id), escape(&crate::callsigns::name_or_id(&state.chats, &chat.id))));
         }
     }
     if active.is_empty() {

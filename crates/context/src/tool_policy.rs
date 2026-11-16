@@ -61,6 +61,7 @@ policies! {
     "control.chats.list" => (Chat,false,Read,true),
     "control.chat.create" => (Chat,true,Hidden,true),
     "control.chat.lenses" => (Chat,true,Hidden,true),
+    "control.chat.rename" => (Chat,true,Hidden,true),
     "control.chat.read" => (Chat,false,Read,true),
     "control.requests.list" => (Chat,false,Hidden,true),
     "control.chat.send" => (Chat,true,Hidden,true),

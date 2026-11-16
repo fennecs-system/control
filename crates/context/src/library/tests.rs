@@ -69,6 +69,12 @@ fn optional_procedures_compose_without_adding_tools_or_authority() {
     assert_eq!(swarm.instructions.iter().filter(|text| planning.instructions.contains(text)).count(), 1);
     let swarm_only = library.resolve(&["swarm".into()], &[]).unwrap();
     assert!(swarm_only.lenses.iter().any(|lens| lens.id == "planning"));
+    // Ganglia is opt-in so runs with and without it can be compared.
+    assert!(!swarm_only.lenses.iter().any(|lens| lens.id == "ganglia"));
+    let ganglia = library.resolve(&["swarm".into(), "ganglia".into()], &[]).unwrap();
+    assert_eq!(ganglia.tools, swarm_only.tools);
+    assert!(ganglia.documents.is_empty() && ganglia.packages.is_empty());
+    assert_eq!(ganglia.lenses.len(), swarm_only.lenses.len() + 1);
     assert!(swarm_only.instructions.contains(&planning.instructions[0]));
     assert_eq!(selected.lenses.iter().filter(|lens| lens.id == "planning").count(), 1);
     assert!(!ordinary.lenses.iter().any(|lens| lens.id == "coordination"));
@@ -223,7 +229,8 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert_eq!(investigation.includes, ["evidence"]);
     assert!(investigation.tools.is_empty());
     let autonomy = Library::default().get("autonomy").unwrap().clone();
-    assert_eq!(autonomy.revision, 6);
+    assert_eq!(autonomy.revision, 7);
+    assert!(autonomy.instructions.contains("the model decides what to do, when and by whom"));
     assert!(autonomy.instructions.contains("a setback means recover, not quit"));
     assert!(autonomy.instructions.contains("two consecutive routine cycles"));
     assert!(autonomy.instructions.contains("Weigh risk by reversibility"));
@@ -255,9 +262,22 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     let swarm = Library::default().get("swarm").unwrap().clone();
     assert_eq!(swarm.revision, 2);
     assert!(swarm.includes.contains(&"planning".to_string()));
+    let ganglia = Library::default().get("ganglia").unwrap().clone();
+    assert_eq!((ganglia.name.as_str(), ganglia.revision), ("Ganglia", 1));
+    assert!(ganglia.instructions.starts_with("Reflexes and routines run locally; turns are strategy."));
+    assert!(ganglia.instructions.contains("long-running work on systems faster than a turn, not one-off tasks"));
+    assert!(ganglia.instructions.contains("shared always-on reflex layer"));
+    // Reflexes commit (hysteresis) rather than thrash: the run -128 lesson.
+    assert!(ganglia.instructions.contains("hold until the trigger stays clear a while"));
+    assert!(ganglia.instructions.contains("weigh every threat, preempt only for imminent ones"));
+    assert!(ganglia.instructions.contains("pause routines rather than cancel them"));
+    assert!(ganglia.instructions.contains("escalate only milestones, failures and threats they cannot handle"));
+    assert!(ganglia.instructions.contains("a layer that blocks the task is bypassed or removed, not patched again and again"));
+    assert!(ganglia.instructions.contains("save as a tool package"));
+    assert!(ganglia.instructions.chars().count() <= 900);
     let previous: Vec<Definition> = serde_json::from_str(include_str!("../builtin-lens-history.json")).unwrap();
     assert!(previous.iter().any(|d| d.id == "investigation" && d.revision == 1));
-    for revision in 1..=5 {
+    for revision in 1..=6 {
         assert!(previous.iter().any(|d| d.id == "autonomy" && d.revision == revision));
     }
     for revision in 1..=11 {

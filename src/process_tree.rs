@@ -210,6 +210,8 @@ fn forest(state: &State) -> Vec<Tree> {
     let roots = state.chats.iter().rev()
         .filter(|chat| chat.parent_chat.as_deref().is_none_or(|parent| !state.chats.iter().any(|c| c.id == parent)))
         .map(|chat| chat.id.as_str());
+    // Shown names, derived once a tree has something to show.
+    let mut names: Option<Names<'_>> = None;
     let mut trees = Vec::new();
     for root in roots {
         let mut subtree = vec![root];
@@ -224,7 +226,9 @@ fn forest(state: &State) -> Vec<Tree> {
             continue;
         }
         let mut tree = Tree { nodes: Vec::new(), children: Vec::new() };
-        add_chat(state, &kids, &mut tree, None, root, None, 0);
+        let names = names.get_or_insert_with(|| state.chats.iter().zip(crate::callsigns::all(&state.chats))
+            .map(|(chat, callsign)| (chat.id.as_str(), crate::callsigns::label(chat, callsign))).collect());
+        add_chat(state, &kids, names, &mut tree, None, root, 0);
         trees.push(tree);
         if trees.len() == MAX_TREES {
             break;
@@ -232,25 +236,15 @@ fn forest(state: &State) -> Vec<Tree> {
     }
     trees
 }
-/// Sibling titles often share a spawning template; drop the shared leading
-/// words so each node shows what distinguishes it.
-fn distinct_titles(titles: &[&str]) -> Vec<String> {
-    let words: Vec<Vec<&str>> = titles.iter().map(|title| title.split_whitespace().collect()).collect();
-    let common = |a: &[&str], b: &[&str]| a.iter().zip(b).take_while(|(x, y)| x == y).count();
-    words.iter().enumerate().zip(titles).map(|((i, mine), title)| {
-        let shared = words.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, other)| common(mine, other)).max().unwrap_or(0);
-        if shared >= 2 && mine.len() > shared { mine[shared..].join(" ") } else { (*title).to_owned() }
-    }).collect()
-}
-fn add_chat(state: &State, kids: &std::collections::HashMap<&str, Vec<&str>>, tree: &mut Tree, parent: Option<usize>, chat: &str, title: Option<String>, depth: usize) {
-    let session = state.chats.iter().find(|c| c.id == chat);
+type Names<'a> = std::collections::HashMap<&'a str, std::borrow::Cow<'a, str>>;
+fn add_chat(state: &State, kids: &std::collections::HashMap<&str, Vec<&str>>, names: &Names<'_>, tree: &mut Tree, parent: Option<usize>, chat: &str, depth: usize) {
     let status = latest_status(state, chat);
     let bot = crate::bots::status(state, chat);
     let kind = if parent.is_none() { Kind::Steering } else if bot.is_some() { Kind::Bot } else { Kind::Agent };
     let detail = bot.unwrap_or_else(|| status.map_or("no turns".into(), |status| format!("turn {status}")));
     let node = tree.add(parent, Node {
         kind,
-        title: title.unwrap_or_else(|| session.map_or(chat, |s| s.title.as_str()).to_owned()),
+        title: names.get(chat).map_or(chat, |name| name.as_ref()).to_owned(),
         detail,
         href: crate::chat::valid_id(chat).then(|| format!("/chat/{chat}")),
         active: busy(status),
@@ -259,9 +253,8 @@ fn add_chat(state: &State, kids: &std::collections::HashMap<&str, Vec<&str>>, tr
         return;
     }
     let children = kids.get(chat).cloned().unwrap_or_default();
-    let titles: Vec<&str> = children.iter().map(|child| state.chats.iter().find(|c| c.id == *child).map_or(*child, |c| c.title.as_str())).collect();
-    for (child, title) in children.iter().zip(distinct_titles(&titles)) {
-        add_chat(state, kids, tree, Some(node), child, Some(title), depth + 1);
+    for child in children {
+        add_chat(state, kids, names, tree, Some(node), child, depth + 1);
     }
     for service in state.services.iter().filter(|s| s.live() && s.resource.owner.chat.as_str() == chat) {
         let id = service.resource.id.as_str();

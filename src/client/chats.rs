@@ -13,6 +13,9 @@ pub enum Navigation {
     /// `/use LENS…` for future messages; `/use none` clears. `None` when it
     /// names no lens: a no-op on every client.
     Use(Option<Vec<String>>),
+    /// `/rename NAME` names the active chat in every client (`control.chat.rename`).
+    /// The server validates the name; an empty one returns its usage.
+    Rename(String),
 }
 /// Client navigation commands, for help text and menus.
 pub const COMMANDS: &[(&str, &str)] = &[
@@ -25,6 +28,9 @@ pub fn navigation(text: &str) -> Option<Navigation> {
     let text = text.trim();
     if let Some(arguments) = use_arguments(text) {
         return Some(Navigation::Use(lenses(arguments).map(|names| names.into_iter().map(str::to_owned).collect())));
+    }
+    if let Some(name) = control_context::commands::tail(text, control_context::commands::Kind::Rename) {
+        return Some(Navigation::Rename(name.trim().into()));
     }
     match text {
         "/chats" | "/resume" => Some(Navigation::List),
@@ -87,6 +93,12 @@ pub fn check_lenses(hive: &mut super::Hive, lenses: &[impl AsRef<str>]) -> std::
 pub fn use_lenses(hive: &mut super::Hive, chat: &str, lenses: &[String]) -> std::io::Result<Value> {
     check_lenses(hive, lenses)?;
     hive.tool("control.chat.lenses", serde_json::json!({"id":chat,"lenses":lenses}))
+}
+
+/// Names `chat` as `/rename` does, for every client. Returns the chat view,
+/// whose `title` is the new name.
+pub fn rename(hive: &mut super::Hive, chat: &str, name: &str) -> std::io::Result<Value> {
+    hive.tool("control.chat.rename", serde_json::json!({"id":chat,"name":name}))
 }
 
 /// One `control.chats.list` row.

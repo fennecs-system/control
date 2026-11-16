@@ -237,3 +237,41 @@ fn operator_views() {
         }
     }
 }
+/// The chat list/tree every client renders: `control.chats.list` (TUI picker,
+/// Discord `!chats`), the web conversation tree and one chat's heading, over
+/// task trees of eight chats.
+#[test]
+#[ignore = "explicit release-mode synthetic timing; no credentials, models or source execution"]
+fn chat_lists() {
+    let rounds = std::env::var("CONTROL_TIMING_ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(9);
+    let id = |index: usize| format!("c-{:x}-{index}", 0x1870_0000_0000_u64 + index as u64 * 7919);
+    for chats in [10, 100, 1000] {
+        let mut state = State::default();
+        for index in 0..chats {
+            chat::create(&mut state);
+            let chat = state.chats.last_mut().unwrap();
+            chat.id = id(index);
+            chat.title = format!("Own player{index} in private Minecraft civilisation. Read /world <&> λ");
+            chat.activity_order = index as u64;
+            chat.parent_chat = (index % 8 != 0).then(|| id(index - index % 8));
+        }
+        let active: &'static str = state.chats[chats / 2].id.clone().leak();
+        let workloads: [(&str, &View); 3] = [
+            ("chats_list", &|s| chat::list(s).to_string().len()),
+            ("web_conversation_tree", &move |s| crate::navigation::conversations(s, active).len()),
+            ("chat_read_heading", &move |s| chat::detail(s, active).unwrap()["title"].to_string().len()),
+        ];
+        for (name, workload) in workloads {
+            let mut samples = Vec::new();
+            for _ in 0..rounds {
+                let start = Instant::now();
+                for _ in 0..10 {
+                    black_box(workload(black_box(&state)));
+                }
+                samples.push(start.elapsed().as_nanos() / 10);
+            }
+            samples.sort_unstable();
+            println!("{}", serde_json::json!({"workload":name,"chats":chats,"median_ns":samples[samples.len() / 2],"min_ns":samples[0],"bytes":workload(&state)}));
+        }
+    }
+}
