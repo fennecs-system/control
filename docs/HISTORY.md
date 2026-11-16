@@ -105,6 +105,23 @@ A checkpoint no longer rewrites `state.json`. It writes what changed:
   read snapshot plus log with `control::config::read_state`, without a lock and
   without repairing anything.
 
+### Inspecting the state
+
+Both files are plain JSON. `control doctor` reports their sizes and whether
+snapshot plus log parse. After a clean stop `state.json` alone is the state.
+While Control runs (or after a crash) recent saves are in the log:
+
+    cd ~/.local/state/control
+    jq '.chats | length' state.json                 # the snapshot
+    jq -c 'del(.ops)' state.log | head -1           # header: which snapshot, schema
+    tail -n +2 state.log | jq -c '.ops[] | [.[0], .[1]]'   # each save: kind and path
+    jq -r ._snapshot state.json                     # must match the header's "snapshot"
+
+Edits are `["s", path, value]` (set), `["r", path]` (remove member) and
+`["a", path, at, delete, [values…]]` (splice). A log whose header names another
+snapshot is obsolete. To copy or back up a running node, copy both files, the
+log second, or stop Control first. Do not edit either file while Control runs.
+
 ### Schema evolution and rollback
 
 Snapshots and log headers carry the schema they were written with:

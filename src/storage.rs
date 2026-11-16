@@ -142,10 +142,15 @@ fn recover(directory: &Path, data: Vec<u8>) -> io::Result<(State, Option<Recover
     let lines = (0..log.len()).map(|i| log.read(i)).collect::<io::Result<Option<Vec<_>>>>()?.unwrap_or_default();
     let found = identity.nonce.as_deref().and_then(|nonce| snapshot::patches(lines, nonce));
     let ours = schema();
-    if let Some((_, patches)) = &found
-        && (patches.len() as u64) + 1 < log.len()
-    {
-        log.truncate(patches.len() as u64 + 1)?;
+    if let Some((_, patches)) = &found {
+        let committed = patches.len() as u64 + 1;
+        if committed < log.len() {
+            eprintln!("state.log: dropping {} uncommitted line(s) after the last complete save", log.len() - committed);
+            log.truncate(committed)?;
+        }
+        if !patches.is_empty() {
+            eprintln!("state.log: replaying {} save(s) made since the last compaction", patches.len());
+        }
     }
     let clean = identity.schema == ours && found.as_ref().is_some_and(|(_, patches)| patches.is_empty());
     let state = if clean || (found.is_none() && identity.schema == ours) {

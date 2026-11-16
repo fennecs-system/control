@@ -272,3 +272,43 @@ fn a_crash_at_every_step_of_compaction_recovers_the_committed_state() {
         assert!(recovered(&scratch) == committed, "crash at: {step}");
     }
 }
+
+/// A full disk (here a file-size limit, in a child process because the limit
+/// is per process): the append and the compaction both fail as not replaced,
+/// leave no partial line or snapshot, and the next save after space returns
+/// succeeds from the same base.
+#[test]
+fn a_full_disk_fails_saves_cleanly_without_corrupting_state() {
+    const CHILD: &str = "CONTROL_STATE_LOG_FULL_DISK_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "storage::tests::log::a_full_disk_fails_saves_cleanly_without_corrupting_state", "--nocapture"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        return;
+    }
+    let scratch = Scratch::new("full-disk");
+    let (mut state, chat) = with_chat();
+    scratch.save(&state);
+    let (snapshot_before, log_before) = (scratch.snapshot(), scratch.log());
+    let before = crate::history::persisting(|| serde_json::to_value(&state).unwrap());
+    let limit = |bytes: u64| unsafe {
+        let mut current = std::mem::zeroed::<libc::rlimit>();
+        assert_eq!(libc::getrlimit(libc::RLIMIT_FSIZE, &mut current), 0);
+        current.rlim_cur = bytes.min(current.rlim_max);
+        assert_eq!(libc::setrlimit(libc::RLIMIT_FSIZE, &current), 0);
+    };
+    unsafe { libc::signal(libc::SIGXFSZ, libc::SIG_IGN) };
+    limit(log_before.len() as u64 + 16);
+    crate::chat::send(&mut state, &chat, &"does not fit ".repeat(100), "test").unwrap();
+    let encode = |state: &State| crate::history::persisting(|| snapshot::encode(state)).unwrap();
+    assert!(matches!(persist(&scratch.0, encode(&state), false), Err(CheckpointError::NotReplaced(_))), "append fails cleanly");
+    assert!(matches!(persist(&scratch.0, encode(&state), true), Err(CheckpointError::NotReplaced(_))), "compaction fails cleanly");
+    assert_eq!((scratch.snapshot(), scratch.log()), (snapshot_before, log_before), "no partial line or snapshot");
+    assert!(recovered(&scratch) == before);
+    limit(libc::RLIM_INFINITY);
+    scratch.save(&state);
+    assert!(same(&scratch.restart(), &state), "saves resume once space returns");
+}
