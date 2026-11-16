@@ -99,13 +99,24 @@ impl Hive {
         let mut target = endpoint.join("/").map_err(failure)?;
         target.path_segments_mut().map_err(|_| failure("Invalid server URL"))?
             .pop_if_empty().extend(["chat", chat, "project"]);
-        let response = self.client.post(target).timeout(Duration::from_secs(120))
+        let response = self.client.post(target).timeout(Duration::from_secs(15))
             .header("Origin", endpoint.origin().ascii_serialization())
             .form(&[("approve", "yes"), ("request", request)]).send()
-            .map_err(|_| failure("Project approval did not finish; use /open to refresh before retrying."))?;
+            .map_err(|_| failure("Project approval was not confirmed; use /open to refresh before retrying."))?;
         let status = response.status();
-        let detail = self.tool("control.chat.read", json!({"id":chat}))?;
-        Ok(ProjectApproval::from_response(detail, request, status.as_u16() == 303))
+        // The server accepts at once and imports in the background; wait for
+        // the recorded outcome rather than holding the request open.
+        let started = std::time::Instant::now();
+        loop {
+            let detail = self.tool("control.chat.read", json!({"id":chat}))?;
+            if detail["project_importing"] != true || detail["project"]["request"] != request {
+                return Ok(ProjectApproval::from_response(detail, request, status.as_u16() == 303));
+            }
+            if started.elapsed() > Duration::from_secs(1800) {
+                return Err(failure("Folder import is still running; use /open to check it later."));
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
     }
 
     pub fn connect(server: &str) -> io::Result<Self> {

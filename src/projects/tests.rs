@@ -552,11 +552,13 @@ fn live_folder_approval_errors_and_multiple_named_worktrees() {
             &shared,
             "POST",
             &format!("/chat/{id}/project"),
+            "",
             format!("request={request}&approve=yes").as_bytes()
         ));
         let response = String::from_utf8(response).unwrap();
         assert!(response.starts_with("HTTP/1.1 303"), "{response}");
-        assert!(response.contains(&format!("Location: /chat/{id}\r\n")));
+        assert!(response.contains(&format!("location: /chat/{id}/project?importing={request}\r\n")));
+        wait_for_import(&id);
     };
     open(&fixture.0.join("missing").display().to_string(), None);
     approve();
@@ -566,7 +568,7 @@ fn live_folder_approval_errors_and_multiple_named_worktrees() {
         assert!(project.error.is_some());
         assert!(project.grant.is_none());
         assert!(
-            crate::chat::transcript(&state, &id)
+            crate::chat::requests(&state, &id)
                 .unwrap()
                 .contains("role='alert'")
         );
@@ -659,6 +661,164 @@ fn live_folder_approval_errors_and_multiple_named_worktrees() {
     let saved: State =
         crate::config::read_state_in(&state_dir, isize::MAX as usize).unwrap().unwrap();
     assert_eq!(saved.chats[0].project.as_ref().unwrap().mounts.len(), 2);
+}
+fn wait_for_import(id: &str) {
+    let started = std::time::Instant::now();
+    while importing(id).is_some() {
+        assert!(started.elapsed() < std::time::Duration::from_secs(60), "import did not finish");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+/// Holds approval attachment until the test opens it, standing in for a slow copy.
+static GATE: (Mutex<bool>, std::sync::Condvar) = (Mutex::new(false), std::sync::Condvar::new());
+fn gated_save(_: &State) -> io::Result<()> {
+    let (open, changed) = &GATE;
+    let mut open = open.lock().unwrap();
+    while !*open { open = changed.wait(open).unwrap(); }
+    Ok(())
+}
+fn open_gate() {
+    *GATE.0.lock().unwrap() = true;
+    GATE.1.notify_all();
+}
+fn no_save(_: &State) -> io::Result<()> { Ok(()) }
+fn exchange(shared: &Arc<Mutex<State>>, method: &str, path: &str, query: &str, body: &str, save: Save) -> String {
+    let mut response = Vec::new();
+    assert!(http_in(&mut response, shared, method, path, query, body.as_bytes(), save));
+    String::from_utf8(response).unwrap()
+}
+fn pending_request(shared: &Arc<Mutex<State>>) -> String {
+    shared.lock().unwrap().chats[0].project.as_ref().unwrap().request.clone()
+}
+#[test]
+fn approval_responds_at_once_imports_in_the_background_and_returns_to_the_chat() {
+    let fixture = Fixture::new();
+    let first = fixture.0.join("mc263-client");
+    let second = fixture.0.join("mc-pi-skills");
+    for folder in [&first, &second] {
+        fs::create_dir(folder).unwrap();
+        fs::write(folder.join("README.md"), "tool").unwrap();
+    }
+    let mut initial = State::default();
+    let id = crate::chat::create(&mut initial);
+    crate::chat::send(&mut initial, &id, &format!("/open {}", first.display()), "test").unwrap();
+    let shared = Arc::new(Mutex::new(initial));
+    let page = format!("/chat/{id}/project");
+    let request = pending_request(&shared);
+    // The attachment is held open, yet approval answers immediately.
+    let response = exchange(&shared, "POST", &page, "", &format!("request={request}&approve=yes"), gated_save);
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(response.contains(&format!("location: /chat/{id}/project?importing={request}\r\n")), "{response}");
+    assert_eq!(importing(&id).unwrap().request, request);
+    // A repeated click neither fails nor starts another copy.
+    let repeated = exchange(&shared, "POST", &page, "", &format!("request={request}&approve=yes"), gated_save);
+    assert!(repeated.starts_with("HTTP/1.1 303"), "{repeated}");
+    assert_eq!(IMPORTS.lock().unwrap().iter().filter(|import| import.chat == id).count(), 1);
+    let progress = exchange(&shared, "GET", &page, &format!("importing={request}"), "", no_save);
+    assert!(progress.starts_with("HTTP/1.1 200"), "{progress}");
+    assert!(progress.contains("Importing folder…") && progress.contains("role='status'"), "{progress}");
+    assert!(progress.contains(&format!("http-equiv='refresh' content='1;url=/chat/{id}/project?importing={request}'")));
+    assert!(!progress.contains("Trust folder and open"), "no second approval while importing");
+    {
+        let mut state = shared.lock().unwrap();
+        assert!(crate::chat::transcript(&state, &id).unwrap().contains("Importing folder…"));
+        assert_eq!(crate::chat::detail(&state, &id).unwrap()["project_importing"], true);
+        assert!(crate::chat::send(&mut state, &id, "hello", "test").unwrap_err().contains("still importing"));
+        assert!(state.chats[0].project.as_ref().unwrap().needs_approval());
+    }
+    open_gate();
+    wait_for_import(&id);
+    let done = exchange(&shared, "GET", &page, &format!("importing={request}"), "", no_save);
+    assert!(done.starts_with("HTTP/1.1 303"), "{done}");
+    assert!(done.contains(&format!("location: /chat/{id}\r\n")), "{done}");
+    let grant = {
+        let state = shared.lock().unwrap();
+        let project = state.chats[0].project.as_ref().unwrap();
+        assert!(!project.needs_approval() && project.error.is_none());
+        assert_eq!(project.mounts.len(), 1);
+        project.grant.clone().unwrap()
+    };
+    // Adding a folder to the open project follows the same path.
+    crate::chat::send(&mut shared.lock().unwrap(), &id, &format!("/open {}", second.display()), "test").unwrap();
+    let request = pending_request(&shared);
+    let response = exchange(&shared, "POST", &page, "", &format!("request={request}&approve=yes"), gated_save);
+    assert!(response.contains(&format!("location: /chat/{id}/project?importing={request}\r\n")), "{response}");
+    wait_for_import(&id);
+    let done = exchange(&shared, "GET", &page, &format!("importing={request}"), "", no_save);
+    assert!(done.contains(&format!("location: /chat/{id}\r\n")), "{done}");
+    let state = shared.lock().unwrap();
+    let project = state.chats[0].project.as_ref().unwrap();
+    assert_eq!(project.mounts.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["mc263-client", "mc-pi-skills"]);
+    assert_ne!(project.grant.as_deref(), Some(grant.as_str()));
+    let seed = root().unwrap().join("grants").join(project.grant.as_ref().unwrap()).join("seed");
+    assert_eq!(fs::read_to_string(seed.join("mc-pi-skills/README.md")).unwrap(), "tool");
+    assert!(seed.join("mc263-client/README.md").exists());
+}
+#[test]
+fn in_chat_folder_decisions_answer_like_port_decisions() {
+    let fixture = Fixture::new();
+    let folder = fixture.source();
+    fs::write(folder.join("code.txt"), "code").unwrap();
+    let mut initial = State::default();
+    let id = crate::chat::create(&mut initial);
+    crate::chat::send(&mut initial, &id, &format!("/open {}", folder.display()), "test").unwrap();
+    let shared = Arc::new(Mutex::new(initial));
+    let page = format!("/chat/{id}/project");
+    {
+        let panel = crate::chat::requests(&shared.lock().unwrap(), &id).unwrap();
+        assert!(panel.contains(&format!("<form class='decision-form' method='post' action='{page}'")), "{panel}");
+        assert!(panel.contains("Trust folder and open</button><p role='alert' hidden></p></form>"));
+    }
+    // A stale request is refused in the form, not as an error page.
+    let stale = exchange(&shared, "POST", &page, "", "request=p-0&approve=yes&response=json", no_save);
+    assert!(stale.starts_with("HTTP/1.1 400") && stale.contains("application/json") && stale.contains("request changed"), "{stale}");
+    let request = pending_request(&shared);
+    let accepted = exchange(&shared, "POST", &page, "", &format!("request={request}&approve=yes&response=json"), no_save);
+    assert!(accepted.starts_with("HTTP/1.1 200") && accepted.ends_with("{\"ok\":true}"), "{accepted}");
+    wait_for_import(&id);
+    assert!(!shared.lock().unwrap().chats[0].project.as_ref().unwrap().needs_approval());
+    // An import that fails is reported to the form that approved it.
+    crate::chat::send(&mut shared.lock().unwrap(), &id, &format!("/open {}", fixture.0.join("missing").display()), "test").unwrap();
+    let request = pending_request(&shared);
+    let accepted = exchange(&shared, "POST", &page, "", &format!("request={request}&approve=yes&response=json"), no_save);
+    if accepted.starts_with("HTTP/1.1 200") { wait_for_import(&id); } else { assert!(accepted.contains("\"error\""), "{accepted}"); }
+    assert!(shared.lock().unwrap().chats[0].project.as_ref().unwrap().error.is_some());
+}
+#[test]
+fn background_import_errors_appear_beside_the_request_for_retry() {
+    let fixture = Fixture::new();
+    let mut initial = State::default();
+    let id = crate::chat::create(&mut initial);
+    let missing = fixture.0.join("missing");
+    crate::chat::send(&mut initial, &id, &format!("/open {}", missing.display()), "test").unwrap();
+    let shared = Arc::new(Mutex::new(initial));
+    let page = format!("/chat/{id}/project");
+    let request = pending_request(&shared);
+    let response = exchange(&shared, "POST", &page, "", &format!("request={request}&approve=yes"), no_save);
+    assert!(response.contains(&format!("location: /chat/{id}/project?importing={request}\r\n")), "{response}");
+    wait_for_import(&id);
+    let shown = exchange(&shared, "GET", &page, &format!("importing={request}"), "", no_save);
+    assert!(shown.starts_with("HTTP/1.1 200"), "{shown}");
+    assert!(shown.contains("role='alert'"), "{shown}");
+    assert!(shown.contains("Trust folder and open"), "the request stays available to retry");
+    assert!(!shown.contains("http-equiv='refresh'"));
+    {
+        let state = shared.lock().unwrap();
+        let project = state.chats[0].project.as_ref().unwrap();
+        assert!(project.error.is_some() && project.grant.is_none());
+        assert!(crate::chat::transcript(&state, &id).unwrap().contains("Folder request · see Requests"));
+    }
+    // Approving a replaced request is refused and grants nothing.
+    let stale = exchange(&shared, "POST", &page, "", "request=p-0&approve=yes", no_save);
+    assert!(stale.starts_with("HTTP/1.1 400") && stale.contains("request changed"), "{stale}");
+    assert!(importing(&id).is_none());
+    fs::create_dir(&missing).unwrap();
+    fs::write(missing.join("code.txt"), "now present").unwrap();
+    let retry = exchange(&shared, "POST", &page, "", &format!("request={request}&approve=yes"), no_save);
+    assert!(retry.starts_with("HTTP/1.1 303"), "{retry}");
+    wait_for_import(&id);
+    let project = shared.lock().unwrap().chats[0].project.clone().unwrap();
+    assert!(!project.needs_approval() && project.error.is_none());
 }
 #[test]
 #[ignore = "requires CONTROL_QA_IMAGE pinned Nix image and local engine; no credentials or model calls"]

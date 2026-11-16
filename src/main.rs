@@ -341,7 +341,7 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
     if services::http(&mut stream, &state, method, path, &data[header_end..header_end + length]) { return; }
     if web_access::http(&mut stream, &state, method, path, &data[header_end..header_end + length]) { return; }
     if github::http(&mut stream,&state,method,path,&data[header_end..header_end+length]) {return;}
-    if projects::http(&mut stream,&state,method,path,&data[header_end..header_end+length]) {return;}
+    if projects::http(&mut stream,&state,method,path,query,&data[header_end..header_end+length]) {return;}
     if packages::http(&mut stream,&state,method,path,&data[header_end..header_end+length]) {return;}
     if tools_http::handle(
         &mut stream,
@@ -718,6 +718,9 @@ fn main() -> std::io::Result<()> {
     // Already-admitted HTTP tool calls have their own bounded waits. Let those
     // handlers finish too before the final state save and process exit.
     let requests_result = requests.join();
+    // Approved folder imports run after their HTTP response; each stops at its
+    // next copied entry and records the interruption beside its request.
+    projects::join_imports();
     let state = state.lock().map_err(|_| std::io::Error::other("State unavailable during shutdown; retained attempts require inspection on restart."))?;
     // A stopped node leaves a self-contained `state.json` (empty patch log), so
     // older builds and offline readers need nothing else.

@@ -23,6 +23,14 @@ has its own Git metadata. Pending or failed additions keep already-approved
 folders and their edits; an import error appears beside its request for retry.
 Existing single-folder chats retain their layout until another folder is approved.
 
+Approval answers at once, like port and bot decisions; the import runs in the
+background. The request shows **Importing folder…** with the entries copied so
+far, and the chat shows `Opened /workspace/<name>` when it completes. Without
+the chat client, the approval page refreshes itself and returns to the chat.
+An import error appears beside the request, which stays available to retry.
+Messages to the agent wait until the import finishes; a restart interrupts it
+and grants nothing.
+
 Control imports the current files, including uncommitted edits, into a private
 Git worktree. The original checkout and its Git metadata remain unchanged.
 Each attempt and child conversation gets independent writable files and Git

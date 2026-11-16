@@ -356,7 +356,8 @@ fn attach_port_approvals(frame:&web_sys::HtmlIFrameElement)->Result<(),JsValue> 
         // Submit targets are forms. Use a realm-independent tag check rather
         // than instanceof, which rejects iframe forms in Chromium.
         let Some(form)=event.target().map(|target|target.unchecked_into::<web_sys::HtmlFormElement>()) else{return;};
-        let Some(action)=form.get_attribute("action").filter(|action|matches!(action.as_str(),"/tools/ports"|"/tools/bots")) else{return;};
+        let submitter=event.submitter().and_then(|button|button.get_attribute("name"));
+        let Some(action)=form.get_attribute("action").filter(|action|decision_action(action,submitter.as_deref())) else{return;};
         if form.tag_name()!="FORM"{return;}
         if form.has_attribute("data-submitting"){event.prevent_default();return;}
         let prepare=||->Result<_,JsValue> {
@@ -387,7 +388,12 @@ fn attach_port_approvals(frame:&web_sys::HtmlIFrameElement)->Result<(),JsValue> 
         for control in &controls {let _=control.set_attribute("disabled","");}
         let button=event.submitter().map(|button| {
             let label=button.text_content().unwrap_or_default();
-            button.set_text_content(Some(if matches!(button.get_attribute("name").as_deref(),Some("revoke"|"deny")){"Denying…"}else{"Allowing…"}));
+            button.set_text_content(Some(match button.get_attribute("name").as_deref() {
+                Some("revoke"|"deny")=>"Denying…",
+                // Folder approval is accepted at once; the refreshed panel shows the import.
+                Some("approve")=>"Importing…",
+                _=>"Allowing…",
+            }));
             (button,label)
         });
         let response=request.clone();let failed_form=form.clone();let failed_controls=controls.clone();let failed_button=button.clone();
@@ -419,6 +425,14 @@ fn attach_port_approvals(frame:&web_sys::HtmlIFrameElement)->Result<(),JsValue> 
     });
     document.add_event_listener_with_callback("submit",submit.as_ref().unchecked_ref())?;
     submit.forget();Ok(())
+}
+/// Operator decisions posted without leaving the chat: port and bot requests,
+/// and folder approvals (`/chat/ID/project` with its approve button). Changing
+/// the requested folder stays a normal form submission.
+fn decision_action(action:&str,submitter:Option<&str>)->bool {
+    matches!(action,"/tools/ports"|"/tools/bots")
+        || (submitter==Some("approve") && action.strip_prefix("/chat/").and_then(|rest|rest.strip_suffix("/project"))
+            .is_some_and(|id|!id.is_empty() && !id.contains('/')))
 }
 fn restore_port_form(form:&web_sys::HtmlFormElement,controls:&[web_sys::Element],button:Option<&(web_sys::HtmlElement,String)>) {
     let _=form.remove_attribute("data-submitting");let _=form.remove_attribute("aria-busy");
