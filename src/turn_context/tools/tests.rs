@@ -697,6 +697,30 @@ fn only_a_disposition_is_required_and_wait_topics_are_normalised_not_refused() {
     assert_eq!(mailbox.accepted().unwrap().progress.as_deref(), Some("try 11"));
 }
 #[test]
+fn a_wait_on_a_pending_port_request_sleeps_until_its_decision() {
+    let (mut state, id, generation) = fixture();
+    let chat = state.chats[0].id.clone();
+    crate::bots::command(&mut state, &chat, "on").unwrap();
+    let port = |status: &str| serde_json::from_value::<crate::ports::Port>(json!({
+        "id":"port-1","service":"svc-a","generation":1,"container":"b".repeat(64),"node":"node-a","chat":chat,
+        "actor":{"type":"local_operator"},"origin_run":id,"origin_attempt":generation,"name":"download","direction":"egress",
+        "service_port":3128,"target":{"host":"files.example","port":443},"status":status,"approval":null,"diagnostic":""})).unwrap();
+    state.ports.push(port("pending"));
+    // Only the port is named: an explicit wait, not every subscription.
+    let wait = hand_off(&mut state, &id, &generation, "port", json!({"disposition":{"kind":"wait","topics":["port:port-1"]}})).unwrap();
+    assert_eq!(wait["disposition"]["topics"], json!([]), "{wait}");
+    assert!(wait["adjusted"].to_string().contains("port:port-1: the operator's decision starts this chat's next turn"), "{wait}");
+    // With other topics it narrows to them; an unknown request is dropped.
+    let both = hand_off(&mut state, &id, &generation, "both", json!({"disposition":{"kind":"wait","topics":["port:port-1","port:nope","#general"]}})).unwrap();
+    assert_eq!(both["disposition"]["topics"], json!(["room:general"]), "{both}");
+    assert!(both["adjusted"].to_string().contains("dropped port:nope"), "{both}");
+    // Already decided: act on it now.
+    state.ports[0] = port("approved");
+    let decided = hand_off(&mut state, &id, &generation, "decided", json!({"disposition":{"kind":"wait","topics":["port:port-1"]}})).unwrap();
+    assert_eq!(decided["disposition"]["kind"], "continue", "{decided}");
+    assert!(decided["adjusted"].to_string().contains("already approved"), "{decided}");
+}
+#[test]
 fn omitted_receipts_process_what_was_delivered_and_explicit_ones_exactly_those() {
     let (mut state, id, generation) = fixture();
     post(&mut state, "first");

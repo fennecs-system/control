@@ -42,6 +42,9 @@ pub struct Limits {
     /// Seconds a non-urgent agent message may wait for another wake of its
     /// recipient before it is delivered as a digest turn of its own.
     pub peer_digest_seconds: u64,
+    /// Model steps one local-model turn may take before Control stops it and
+    /// writes a host checkpoint; the agent is warned `STEP_NOTE_LEFT` steps before.
+    pub local_agent_steps: usize,
     /// Bytes of a declared observation placed at the top of each turn.
     pub observation_max_bytes: usize,
 }
@@ -61,6 +64,7 @@ impl Default for Limits {
             steering_exec_calls: 6,
             peer_digest_seconds: 600,
             observation_max_bytes: 2048,
+            local_agent_steps: 64,
         }
     }
 }
@@ -87,6 +91,9 @@ impl Limits {
         }
         if !(30..=86_400).contains(&self.peer_digest_seconds) || !(256..=16_384).contains(&self.observation_max_bytes) {
             return Err(io::Error::other("peer_digest_seconds must be 30–86400 and observation_max_bytes 256–16384"));
+        }
+        if !(16..=1024).contains(&self.local_agent_steps) {
+            return Err(io::Error::other("local_agent_steps must be 16–1024"));
         }
         Ok(self)
     }

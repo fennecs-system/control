@@ -4,9 +4,19 @@ use crate::{State, usage::Attempt};
 use serde::{Deserialize, Serialize};
 use std::{sync::{Arc, Mutex}, time::Duration};
 
+/// Why an attempt ended before publishing. `StepLimit`: a local-model turn reached
+/// its model-step cap (`local_agent_steps`) without a final report or handoff.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Termination { TimedOut, Cancelled, Restarted, ProviderError, PublicationFailed }
+pub enum Termination { TimedOut, Cancelled, Restarted, ProviderError, PublicationFailed, StepLimit }
+
+/// The run failed after being cut off mid-work before it checkpointed: stopped
+/// at its time limit or model-step cap, or ended by a provider failure. Its host
+/// checkpoint lets the next turn resume.
+pub fn cut_off(run: &crate::runtime::Run) -> bool {
+    run.status == "failed" && run.attempts.last().is_some_and(|attempt| matches!(attempt.termination,
+        Some(Termination::TimedOut | Termination::ProviderError | Termination::StepLimit)))
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Decision { Continue, Finish(String), TimedOut(u64) }

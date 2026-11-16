@@ -52,6 +52,13 @@ fn rpc_at(
         if !refused {
             notes.extend(nudges::notes(&mut state,run_id,name,nudges::now()));
         }
+        // A service command that could not reach a host one of this chat's
+        // egress requests names: wait for the decision, or use the relay.
+        if matches!(name,"control_service_exec"|"control_service_exec_status")
+            && let Some(hint)=crate::ports::egress_hint(&state,run_id,&envelope["request"]["params"]["arguments"].to_string(),&result.to_string())
+        {
+            notes.push(hint);
+        }
         attach_notes(result,&notes);
     }
     response

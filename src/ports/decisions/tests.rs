@@ -264,3 +264,42 @@ fn denial_wakes_without_granting_access_and_cancelled_requests_never_wake() {
     advance(&mut cancelled, |_| panic!("cancelled origin must not wake")).unwrap();
     assert_eq!(cancelled.runtime.runs.len(), 1);
 }
+#[test]
+fn approving_egress_wakes_a_chat_whose_turn_was_cut_off_with_the_relay_line() {
+    let (mut state, run, chat) = super::super::tests::fixture();
+    admit(&mut state, &run, "attempt-a", "notice", Input {
+        service_id: "svc-a".to_owned().try_into().unwrap(),
+        name: "download".to_owned().try_into().unwrap(),
+        direction: Direction::Egress,
+        service_port: std::num::NonZeroU16::new(3128).unwrap(),
+        target: Some(Endpoint { host: "files.example".into(), port: std::num::NonZeroU16::new(443).unwrap() }),
+        peer_port_id: None,
+    }, "node-a".to_owned().try_into().unwrap(), |_| Ok(())).unwrap();
+    // The requesting turn spent its model steps retrying while the request was pending.
+    state.runtime.runs[0].status = "failed".into();
+    state.runtime.runs[0].attempts[0].termination = Some(crate::attempt_control::Termination::StepLimit);
+    advance(&mut state, |_| panic!("nothing is decided yet")).unwrap();
+    state.ports[0].status = Status::Approved;
+    state.ports[0].decision = Some(Receipt::pending(true));
+    advance(&mut state, |_| Ok(())).unwrap();
+    let wake = state.runtime.runs.last().unwrap();
+    assert_eq!((wake.kind, wake.chat_id.as_deref()), (RunKind::PortDecision, Some(chat.as_str())));
+    assert!(wake.objective.contains("download") && wake.objective.contains("approved"), "{}", wake.objective);
+    assert!(wake.objective.contains("curl --connect-to files.example:443:127.0.0.1:3128 https://files.example/…"), "{}", wake.objective);
+    assert!(state.ports[0].decision.as_ref().unwrap().acknowledged);
+    // A denial wakes a timed-out requester the same way, without relay instructions.
+    let (mut denied, _) = approved();
+    denied.ports[0].status = Status::Stopping;
+    denied.ports[0].approval = None;
+    denied.ports[0].decision = Some(Receipt::pending(false));
+    denied.runtime.runs[0].status = "failed".into();
+    denied.runtime.runs[0].attempts[0].termination = Some(crate::attempt_control::Termination::TimedOut);
+    advance(&mut denied, |_| Ok(())).unwrap();
+    let wake = denied.runtime.runs.last().unwrap();
+    assert_eq!(wake.kind, RunKind::PortDecision);
+    assert!(wake.objective.contains("denied") && !wake.objective.contains("--connect-to"), "{}", wake.objective);
+    // An ordinary failure (no host checkpoint) still does not wake.
+    let (mut failed, _) = approved();
+    failed.runtime.runs[0].status = "failed".into();
+    advance(&mut failed, |_| panic!("a plain failure must not wake")).unwrap();
+}

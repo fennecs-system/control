@@ -5,7 +5,7 @@ use super::*;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Receipt {
-    allowed: bool,
+    pub(super) allowed: bool,
     acknowledged: bool,
 }
 impl Receipt {
@@ -14,7 +14,10 @@ impl Receipt {
 
 fn target<'a>(state: &'a State, port: &Port) -> Option<&'a crate::runtime::Run> {
     let origin = state.runtime.runs.iter().find(|run|run.id == port.origin_run && run.actor == port.actor)?;
-    if matches!(origin.status.as_str(),"cancelled"|"cancelling"|"failed"|"interrupted"|"blocked")
+    // A turn cut off before its handoff (time limit, step cap, provider
+    // failure) left a host checkpoint; its request still belongs to the chat.
+    let cut_off = crate::attempt_control::cut_off(origin);
+    if (!cut_off && matches!(origin.status.as_str(),"cancelled"|"cancelling"|"failed"|"interrupted"|"blocked"))
         || !origin.attempts.iter().any(|attempt|attempt.workspace_id.as_deref()==Some(&port.origin_attempt)) {return None;}
     let root = origin.persona.as_ref().map_or(origin.id.as_str(), |persona|persona.root.as_str());
     let root = state.runtime.runs.iter().find(|run|run.id == root && run.actor == origin.actor && run.action == origin.action)?;
@@ -64,7 +67,9 @@ fn advance_with_wake(state: &mut State, save: impl FnOnce(&State) -> io::Result<
     }
     let decisions = indices.iter().map(|index| {
         let port = &state.ports[*index];
-        format!("{} ({}): {}. Recheck control_port_status for current readiness and endpoints.",port.name.0,port.id.as_str(),if port.decision.as_ref().unwrap().allowed {"approved"} else {"denied"})
+        let allowed = port.decision.as_ref().unwrap().allowed;
+        let usage = port.usage().filter(|_| allowed).map(|usage| format!(" {usage}")).unwrap_or_default();
+        format!("{} ({}): {}. Recheck control_port_status for current readiness and endpoints.{usage}",port.name.0,port.id.as_str(),if allowed {"approved"} else {"denied"})
     }).collect::<Vec<_>>().join("\n");
     let run_count = state.runtime.runs.len();
     let message_count = state.chats[chat_index].messages.len();

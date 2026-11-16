@@ -109,6 +109,14 @@ fn private_limits_are_validated_and_do_not_come_from_saved_runtime_state() {
         std::fs::write(&file, invalid).unwrap();
         assert!(load_limits_in(&file, None).is_err(), "steering nudges fail closed outside their range");
     }
+    std::fs::write(&file, b"{}").unwrap();
+    assert_eq!(load_limits_in(&file, None).unwrap().local_agent_steps, 64);
+    std::fs::write(&file, b"{\"local_agent_steps\":128}").unwrap();
+    assert_eq!(load_limits_in(&file, None).unwrap().local_agent_steps, 128);
+    for invalid in [b"{\"local_agent_steps\":8}".as_slice(), b"{\"local_agent_steps\":4096}".as_slice()] {
+        std::fs::write(&file, invalid).unwrap();
+        assert!(load_limits_in(&file, None).is_err(), "the local step cap fails closed outside its range");
+    }
     std::fs::write(&file, b"{\"max_parallel_runs\":4}").unwrap();
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
     assert_eq!(load_limits_in(&file, None).unwrap().max_parallel_runs, 4);

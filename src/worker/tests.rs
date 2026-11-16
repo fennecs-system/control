@@ -2169,3 +2169,30 @@ fn a_cut_off_turn_leaves_a_host_checkpoint_the_next_turn_resumes_from() {
     let continuity = state.chats[0].continuity.as_ref().unwrap();
     assert!(continuity.working.is_some() && continuity.interrupted.is_none());
 }
+#[test]
+fn a_local_turn_stopped_at_its_step_cap_leaves_a_host_checkpoint() {
+    use crate::attempt_control::Termination;
+    let mut state = State::default();
+    let chat = crate::chat::create(&mut state);
+    crate::chat::send(&mut state, &chat, "Download the server", "test").unwrap();
+    checkpoint_next(&mut state, |_| Ok(())).unwrap();
+    let id = state.runtime.runs[0].id.clone();
+    state.runtime.runs[0].attempts[0].activity = vec![crate::usage::Activity {
+        id: "local-1-0".into(), kind: "mcp_tool_call".into(), text: "control_service_exec".into(),
+        output: "curl: (6) Could not resolve host: files.example".into(), status: "completed".into(),
+    }];
+    let mut attempt = state.runtime.runs[0].attempts[0].clone();
+    attempt.activity.clear();
+    // Set by the local loop at its cap; the worker's finish keeps it.
+    attempt.termination = Some(Termination::StepLimit);
+    let capped = Err(("failed", "Local agent reached its 64-step limit".into()));
+    commit(&mut state, &id, Action::Task, attempt, capped, false, |_| Ok(())).unwrap();
+    assert!(crate::attempt_control::cut_off(&state.runtime.runs[0]));
+    let note = state.chats[0].continuity.as_ref().unwrap().interrupted.clone().unwrap();
+    assert_eq!(note.cause, Termination::StepLimit);
+    crate::chat::send(&mut state, &chat, "Continue", "test").unwrap();
+    let next = checkpoint_next(&mut state, |_| Ok(())).unwrap();
+    let input = crate::turn_context::input(state.runtime.runs[next].attempts.last().unwrap()).unwrap().unwrap();
+    assert!(input.contains("your previous turn used all its model steps"), "{input}");
+    assert!(input.contains("Could not resolve host: files.example"), "{input}");
+}

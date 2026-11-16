@@ -455,8 +455,23 @@ Workspace changes are then checkpointed and published exactly as for Codex.
 more than eight calls, an empty reply or a reply cut at the output limit never
 execute. The model receives a corrective tool result or note and may retry; four
 malformed steps in a row fail the attempt visibly. A valid step resets the count.
-A response without exactly one choice is an immediate failure. The loop also stops
-after 64 model steps.
+A response without exactly one choice is an immediate failure.
+
+**Step cap.** A turn stops after `local_agent_steps` model steps (execution.json,
+default 64, 16–1,024). Once per turn, when 8 steps remain (a quarter of the cap
+if fewer), Control appends `N model steps left in this turn: publish your
+checkpoint (control_turn_handoff) and continue next turn.` to the newest tool
+result. A turn that still reaches the cap fails with cause `step_limit`, which
+writes the same host checkpoint as a timeout (last tool calls, staged draft,
+captured workspace); the next turn of the chat renders it, a persistent bot gets
+a prompt recovery turn within `bot_recovery_continues`, and a pending operator
+decision (port or bot request) resumes it. The default stays 64: each step
+re-sends the turn's context (run -138 spent about 1 M input tokens in 64 steps),
+the 3,600-second turn limit is the main bound, and the warning plus checkpoint
+make the cap lose nothing a handoff keeps. Run -138's lead spent its steps
+retrying `curl` against hosts it had requested egress for; see
+[PORTS.md](PORTS.md) for the relay usage, `port:` waits and failure hints added
+in response.
 
 **Cancellation and deadlines.** The loop checks cancellation, design questions,
 blocking delegation and the attempt deadline before every step and after every

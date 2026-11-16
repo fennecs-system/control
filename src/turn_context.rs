@@ -37,7 +37,7 @@ pub struct Managed {
     pub interrupted: Option<HostCheckpoint>,
 }
 /// What Control itself records when a managed turn is cut off by its time
-/// limit or a provider failure, so the next turn resumes instead of
+/// limit, its model-step cap or a provider failure, so the next turn resumes instead of
 /// rediscovering: the cause, the captured workspace candidate and a bounded
 /// summary of the last tool calls. Built from host records only, without a
 /// model call. It is evidence, never authority, and it advances no head or
@@ -73,7 +73,7 @@ impl HostCheckpoint {
     /// unpublishable turn keeps the existing recovery semantics alone.
     pub fn of(attempt: &Attempt, activity: &[crate::usage::Activity]) -> Option<Self> {
         use crate::attempt_control::Termination;
-        let cause = attempt.termination.filter(|t| matches!(t, Termination::TimedOut | Termination::ProviderError))?;
+        let cause = attempt.termination.filter(|t| matches!(t, Termination::TimedOut | Termination::ProviderError | Termination::StepLimit))?;
         if attempt.review_only || attempt.turn_mailbox.is_none() {
             return None;
         }
@@ -97,6 +97,7 @@ impl HostCheckpoint {
     pub fn render(&self) -> String {
         let cause = match self.cause {
             crate::attempt_control::Termination::TimedOut => "reached its time limit",
+            crate::attempt_control::Termination::StepLimit => "used all its model steps",
             _ => "ended on a model provider failure",
         };
         let files = if self.captured {

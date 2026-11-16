@@ -83,6 +83,17 @@ only the fields each version's schema requires and following each refusal's
 fix. Before: 2.0 context reads, 2.0 handoffs and 1 refusal per turn. After: 0
 context reads, 1 handoff, no refusals.
 
+**Local step cap and approval waits (2026-11-17).** Run -138's lead on a local
+model ran `control_service_exec` 33 times retrying `curl` that could not resolve
+hosts it had requested egress for, then stopped at 64 model steps and lost the
+turn. A local turn is now warned once when few steps remain, and reaching the cap
+(`local_agent_steps`, cause `step_limit`) writes the host checkpoint above and is
+resumed like a timeout ([LOCAL-MODELS.md](LOCAL-MODELS.md#local-agent-turns)).
+A handoff can wait on `port:PORT_ID` for a pending port request; the decision,
+approved or denied, queues the requester's next turn, including after a cut-off
+turn. Port records and service-exec failures that name a requested host say how
+to wait or how to use the relay ([PORTS.md](PORTS.md)).
+
 ## Persistent attempts and R1 (2026-11-07)
 
 Approved persistent bots get their own default turn limit, 1,200 seconds

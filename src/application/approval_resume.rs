@@ -76,7 +76,8 @@ pub(crate) fn decide(runs: &[Run], chat: &str, origins: &[&str]) -> Eligibility 
         })
     });
     match (requested, latest) {
-        (Some(_), Some(at)) if !steered && runs[at].status == "completed" => {
+        // A turn cut off before its handoff resumes from its host checkpoint.
+        (Some(_), Some(at)) if !steered && (runs[at].status == "completed" || crate::attempt_control::cut_off(&runs[at])) => {
             Eligibility::Candidate(at)
         }
         _ => Eligibility::Note,

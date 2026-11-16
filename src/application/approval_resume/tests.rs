@@ -61,6 +61,12 @@ fn missing_requests_and_unsuccessful_latest_turns_are_not_resumed() {
         ];
         assert_eq!(decide(&runs, "chat", &["origin"]), Eligibility::Note);
     }
+    // A turn cut off before its handoff left a host checkpoint and resumes.
+    for cause in [crate::attempt_control::Termination::StepLimit, crate::attempt_control::Termination::TimedOut] {
+        let mut cut = run("origin", "chat", "failed", RunKind::Task);
+        cut.attempts.push(crate::usage::Attempt { termination: Some(cause), ..Default::default() });
+        assert_eq!(decide(&[cut], "chat", &["origin"]), Eligibility::Candidate(0));
+    }
     let runs = [run("origin", "chat", "completed", RunKind::Task)];
     assert_eq!(decide(&runs, "chat", &["missing"]), Eligibility::Note);
     assert_eq!(decide(&[], "chat", &["origin"]), Eligibility::Note);

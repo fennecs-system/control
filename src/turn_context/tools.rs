@@ -20,7 +20,7 @@ fn payload_schema() -> Value {
 fn disposition_schema() -> Value {
     json!({"oneOf":[
         {"type":"object","properties":{"kind":{"type":"string","enum":["continue","done"]}},"required":["kind"],"additionalProperties":false},
-        {"type":"object","properties":{"kind":{"const":"wait"},"topics":{"type":"array","maxItems":16,"items":{"type":"string","maxLength":128},"description":"Choose only relevant dependencies from wake_topics, or claim:<room>/<key> to wake once when that live claim resolves as done, released or abandoned; progress updates do not wake. A key nobody has claimed cannot be awaited. An explicit wait suspends periodic check-ins. Empty topics wake on urgent failures or direct messages; selected topics wake only on those topics and urgent failures, retaining other messages for the next turn, so include this chat's conversation topic to be woken by direct messages. Omit topics to keep every current subscription. Bare names (a room or watch id) are matched to wake_topics; names that match no subscription are dropped and reported. Omit recheck_seconds to sleep until then."},"recheck_seconds":{"type":["integer","null"],"minimum":1,"maximum":u32::MAX,"description":"Optional fallback when a callback cannot establish readiness. Omit/null for event-only waiting; no implicit polling deadline."}},"required":["kind"],"additionalProperties":false}
+        {"type":"object","properties":{"kind":{"const":"wait"},"topics":{"type":"array","maxItems":16,"items":{"type":"string","maxLength":128},"description":"Choose only relevant dependencies from wake_topics, or claim:<room>/<key> to wake once when that live claim resolves as done, released or abandoned; progress updates do not wake. A key nobody has claimed cannot be awaited. port:<port_id> waits for a pending port request: the operator's decision starts the next turn. An explicit wait suspends periodic check-ins. Empty topics wake on urgent failures or direct messages; selected topics wake only on those topics and urgent failures, retaining other messages for the next turn, so include this chat's conversation topic to be woken by direct messages. Omit topics to keep every current subscription. Bare names (a room or watch id) are matched to wake_topics; names that match no subscription are dropped and reported. Omit recheck_seconds to sleep until then."},"recheck_seconds":{"type":["integer","null"],"minimum":1,"maximum":u32::MAX,"description":"Optional fallback when a callback cannot establish readiness. Omit/null for event-only waiting; no implicit polling deadline."}},"required":["kind"],"additionalProperties":false}
     ]})
 }
 impl AttemptTools for Tools {
@@ -275,7 +275,7 @@ fn disposition(state: &State, chat: &str, value: Value, adjusted: &mut Vec<Strin
         _ => return Err(err(HANDOFF_SHAPE)),
     };
     let mut topics: Vec<String> = Vec::new();
-    let mut resolved = false;
+    let (mut resolved, mut awaited) = (false, false);
     for raw in &requested {
         let topic = raw.trim();
         let add = |topic: String, topics: &mut Vec<String>| if !topics.contains(&topic) { topics.push(topic) };
@@ -289,6 +289,22 @@ fn disposition(state: &State, chat: &str, value: Value, adjusted: &mut Vec<Strin
                     adjusted.push(format!("{message} Recorded continue instead of waiting."));
                 }
                 Err(message) => adjusted.push(format!("dropped {topic}: {message}")),
+            }
+            continue;
+        }
+        // A pending port request's decision queues this chat's next turn
+        // itself (approved or denied), so waiting on it needs no subscription.
+        if let Some(id) = topic.strip_prefix("port:") {
+            match crate::ports::wait_topic(state, chat, id) {
+                Ok(()) => {
+                    awaited = true;
+                    adjusted.push(format!("{topic}: the operator's decision starts this chat's next turn; no subscription needed"));
+                }
+                Err((true, message)) => {
+                    resolved = true;
+                    adjusted.push(format!("{message}. Recorded continue instead of waiting."));
+                }
+                Err((false, message)) => adjusted.push(format!("dropped {topic}: {message}")),
             }
             continue;
         }
@@ -315,7 +331,7 @@ fn disposition(state: &State, chat: &str, value: Value, adjusted: &mut Vec<Strin
     if resolved {
         return Ok(Disposition::Continue);
     }
-    if !requested.is_empty() && topics.is_empty() {
+    if !requested.is_empty() && topics.is_empty() && !awaited {
         adjusted.push("no named topic matched a current subscription: waiting on every current subscription".into());
         return Ok(Disposition::Wait { topics: everything(), recheck_seconds });
     }
