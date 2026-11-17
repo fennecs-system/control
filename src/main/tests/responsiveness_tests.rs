@@ -63,7 +63,7 @@ fn legacy_session_view_redirects_to_the_canonical_chat_page() {
     assert_eq!(location(&format!("view=runs&channel={id}")).as_deref(), Some("/bots/history?expand=1"), "run history is Bots / History with turns listed");
     assert_eq!(location(&format!("view=agents&channel={id}")), None);
     assert_eq!(location("view=lenses").as_deref(), Some("/dna"), "the gene library is the DNA page");
-    assert_eq!(location(""), None);
+    assert_eq!(location("").as_deref(), Some("/dms?new=1"), "the landing view is a new DM");
 }
 #[test]
 fn public_root_never_reflects_query_html_and_bodies_need_a_valid_length() {

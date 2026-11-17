@@ -255,7 +255,7 @@ fn running_usage_is_live_in_state_and_rendered_until_the_attempt_finishes() {
     assert_eq!((attempt.tokens, attempt.accounting, attempt.reported_model.as_deref()), (Some(so_far), Accounting::Partial, Some("qwen3-coder-30b")));
     assert!(state.chats.iter().find(|c| c.id == chat).unwrap().revision > revision, "open views refresh");
 
-    let monitor = crate::usage::render(&state.runtime);
+    let monitor = crate::usage::render(&state);
     assert!(monitor.contains("Running now"), "{monitor}");
     assert!(monitor.contains("local:qwen-local (served: qwen3-coder-30b)</td><td>12000</td><td>11000</td><td>300</td><td>so far"), "{monitor}");
     assert!(monitor.contains("running (totals so far): 1 · unknown attempts: 0 · partial (stopped mid-turn, lower bound): 0"), "{monitor}");
@@ -269,7 +269,7 @@ fn running_usage_is_live_in_state_and_rendered_until_the_attempt_finishes() {
     attempt.record_usage(control_ai::Usage { tokens: Some(so_far), complete: true, model: None });
     state.runtime.runs[0].status = "completed".into();
     assert!(!record_usage_for(&mut state, &id, &generation, usage(Tokens::default())), "a finished run takes no live usage");
-    let monitor = crate::usage::render(&state.runtime);
+    let monitor = crate::usage::render(&state);
     assert!(!monitor.contains("Running now"));
     assert!(monitor.contains("running (totals so far): 0"));
     let transcript = crate::chat::transcript(&state, &chat).unwrap();

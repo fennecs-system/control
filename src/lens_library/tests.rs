@@ -90,3 +90,36 @@ fn saving_validates_and_preserves_history_and_rolls_back_disk_failure() {
     assert!(save_with(&mut state, bad, |_| Ok(())).is_err());
     assert!(state.lens_library.get("cycle").is_none());
 }
+#[test]
+fn dna_page_lists_genes_compactly_and_keeps_every_editor_capability() {
+    let mut state = crate::State::default();
+    crate::ui_previews::genes(&mut state, 30);
+    state.documents.push(crate::knowledge::Document { id: "castle".into(), title: "Castle.md".into(), body: "Keep".into(), revision: 1, saved_at: None });
+    state.lens_library.definitions.iter_mut().find(|d| d.id == "gene-0003").unwrap().documents = vec!["castle".into()];
+    let html = render(&state, "gene-0003", None, None, false);
+    let genes = state.lens_library.current().len();
+    assert_eq!(html.matches("class='dna-gene'").count(), genes, "one compact row per gene");
+    assert!(html.contains(&format!("<p class='dna-list-head'>{genes} genes</p>")));
+    // gene-0003 includes gene-0002 and gene-0004 includes it.
+    assert!(html.contains("href='/dna?id=gene-0003' aria-current='page'><span class='dna-gene-name'>Gene 3: castle &lt;&amp;&gt; relay</span>"));
+    assert!(html.contains("<span class='dna-gene-meta'>v4 · includes 1 · used by 1 · all roles</span>"));
+    assert!(html.contains("<span class='dna-gene-meta'>v1 · includes 1 · used by 1 · lead</span>"), "role scoping shows in the list");
+    assert!(html.contains("Castle layout guidance, part 2") && html.contains("Keep relay port"), "summary, else first instruction line");
+    assert!(!html.contains("<details class='dna-group' open>"), "advanced sections start collapsed");
+    for capability in [
+        "href='/dna?new=1'", "href='/dna/export'", "action='/dna/save'", "name='revision' value='4'",
+        "name='name'", "name='id'", "readonly", "name='summary'", "name='instructions'",
+        "name='include_gene-0002' checked", "name='tool_", "name='document_castle' checked",
+        "No packages admitted", "name='role_lead'", "name='inline_lead'", "Save gene",
+        "<summary>Resolved context</summary>", "Effective instructions", "Resolved data",
+        "not an execution allowlist",
+    ] {
+        assert!(html.contains(capability), "{capability}");
+    }
+    assert!(html.contains("<summary>Includes <span class='dna-count'>1</span></summary>"));
+    assert!(html.contains("<summary>Knowledge documents <span class='dna-count'>1</span></summary>"));
+    assert!(!html.contains("name='include_gene-0003'"), "a gene cannot include itself");
+    let new = render(&state, "", None, None, false);
+    assert!(new.contains("<h3>New gene</h3>") && !new.contains("readonly") && !new.contains("aria-current"));
+    assert!(!new.contains("Resolved context"));
+}

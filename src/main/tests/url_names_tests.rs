@@ -100,10 +100,18 @@ fn legacy_urls_redirect_permanently_with_tail_and_query() {
 }
 
 #[test]
+fn root_lands_on_a_new_dm_and_the_retired_overview_on_usage() {
+    let (state, _) = fixture();
+    for (target, expected) in [("/", "/dms?new=1"), ("/?view=hub", "/?view=monitor"), ("/?view=overview", "/?view=monitor")] {
+        let response = request(&state, "GET", target, "");
+        assert_eq!(status_and_location(&response), ("303 See Other", Some(expected)), "{target}: {response}");
+    }
+}
+#[test]
 fn current_names_serve_and_pages_link_only_to_current_names() {
     let (state, id) = fixture();
     let pages = [
-        "/".to_owned(),
+        "/?view=monitor".to_owned(),
         "/?view=agents".to_owned(),
         "/?view=rooms".to_owned(),
         "/?view=tools".to_owned(),

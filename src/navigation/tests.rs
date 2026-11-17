@@ -68,3 +68,34 @@ fn navigation_shows_dna_and_dms_at_their_existing_urls() {
     let page = crate::render(&crate::State::default(), "lens-page", "none", &crate::lens_library::render(&crate::State::default(), "", None, None, false));
     assert!(page.contains("<h2>DNA</h2>") && page.contains("＋ New gene"));
 }
+#[test]
+fn sidebar_puts_tools_before_dna_and_has_no_overview() {
+    let nav = super::primary("monitor");
+    let at = |label: &str| nav.find(&format!("<span>{label}</span>")).unwrap_or_else(|| panic!("{label} missing"));
+    assert!(at("Rooms") < at("Tools") && at("Tools") < at("DNA") && at("DNA") < at("Personas") && at("Personas") < at("Usage"));
+    assert!(!nav.contains("Overview") && !nav.contains("href='/'"), "{nav}");
+    assert_eq!(nav.matches("<a href=").count(), 9);
+}
+#[test]
+fn landing_is_a_new_dm_and_overview_urls_move_to_usage() {
+    let mut state = crate::State::default();
+    crate::chat::create(&mut state);
+    let location = |query: &str| crate::legacy_session_location(&state, &crate::fields(query));
+    assert_eq!(location("").as_deref(), Some("/dms?new=1"), "/ lands on the new-DM composer");
+    assert_eq!(location("lens=research").as_deref(), Some("/dms?new=1"));
+    assert_eq!(location("view=hub").as_deref(), Some("/?view=monitor"));
+    assert_eq!(location("view=overview").as_deref(), Some("/?view=monitor"));
+    assert_eq!(location("view=monitor"), None);
+    let mut response = Vec::new();
+    assert!(crate::session_http::handle(&mut response, &mut state, "GET", "/dms?new=1", "none", "", &[]));
+    let landing = String::from_utf8(response).unwrap();
+    assert!(landing.contains("<h2>New DM</h2>") && landing.contains("id='chat-list-new'"));
+    assert!(landing.contains("href='/dms?new=1' aria-current='page'>+ New DM</a>"), "The DM picker stays beside the composer");
+    for view in ["monitor", "hub", "no-such-view"] {
+        let usage = crate::render(&state, view, "none", "general");
+        assert!(usage.contains("<h2>Usage</h2>") && usage.contains("<b>1</b><span>DMS</span>"), "{view}");
+        assert!(usage.contains("<span>GENES</span>") && usage.contains("<span>RUNS</span>"));
+    }
+    let (page, _) = crate::public_page(&state, &crate::fields("view=history"), "none");
+    assert!(page.contains("<h2>Usage</h2>"), "Internal views from a query fall back to Usage");
+}

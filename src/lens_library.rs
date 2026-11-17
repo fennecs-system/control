@@ -179,6 +179,29 @@ pub fn choices(state: &State, selected: &[String], form: &str) -> String {
 fn checkbox(prefix: &str, id: &str, name: &str, checked: bool) -> String {
     format!("<label class='library-choice'><input type='checkbox' name='{prefix}_{}'{}><span>{}</span></label>",escape(id),if checked{" checked"}else{""},escape(name))
 }
+/// One collapsed editor section; its summary counts the current selections.
+/// Closed disclosures still submit their checkboxes with the form.
+fn group(title: &str, selected: usize, note: &str, choices: &str) -> String {
+    let count = if selected == 0 { String::new() } else { format!(" <span class='dna-count'>{selected}</span>") };
+    let note = if note.is_empty() { String::new() } else { format!("<p class='muted'>{note}</p>") };
+    format!("<details class='dna-group'><summary>{title}{count}</summary>{note}<div class='library-choices'>{choices}</div></details>")
+}
+/// The gene list's one line: its summary, else its first instruction line.
+fn blurb(definition: &Definition) -> String {
+    let text = if definition.summary.is_empty() {
+        definition.instructions.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or("")
+    } else {
+        definition.summary.as_str()
+    };
+    let mut line = text.chars().take(120).collect::<String>();
+    if line.len() < text.len() {
+        line.push('…');
+    }
+    escape(&line)
+}
+fn roles(roles: &[Audience]) -> String {
+    if roles.is_empty() { "all roles".into() } else { roles.iter().map(|role| role.as_str()).collect::<Vec<_>>().join(", ") }
+}
 pub fn render(
     state: &State,
     id: &str,
@@ -191,98 +214,84 @@ pub fn render(
     let definition = submitted
         .or_else(|| state.lens_library.get(id))
         .unwrap_or(&blank);
-    let mut html=String::from("<div class='section-heading'><h2>DNA</h2><a class='primary' href='/dna?new=1'>＋ New gene</a></div><p class='muted'>Each gene bundles knowledge, tools, instructions and other genes; spawned workers inherit a DM's DNA.</p><div class='knowledge-workspace lens-workspace'><aside class='note-files' aria-label='Genes'>");
-    for lens in current {
+    let mut included_by = HashMap::<&str, usize>::new();
+    for lens in &current {
+        for include in &lens.includes {
+            *included_by.entry(include.as_str()).or_default() += 1;
+        }
+    }
+    let used_by = |id: &str| included_by.get(id).copied().unwrap_or(0);
+    let mut html = format!("<div class='section-heading'><h2>DNA</h2><div class='dna-actions'><a href='/dna/export' download>Export ↓</a><a class='primary' href='/dna?new=1'>＋ New gene</a></div></div><p class='muted'>Each gene bundles knowledge, tools, instructions and other genes; spawned workers inherit a DM's DNA.</p><div class='dna-layout'><div class='dna-genes' role='navigation' aria-label='Genes'><p class='dna-list-head'>{} genes</p>", current.len());
+    for lens in &current {
         html.push_str(&format!(
-            "<a href='/dna?id={}'{}>{} <small>v{}</small></a>",
+            "<a class='dna-gene' href='/dna?id={}'{}><span class='dna-gene-name'>{}</span><span class='dna-gene-summary'>{}</span><span class='dna-gene-meta'>v{} · includes {} · used by {} · {}</span></a>",
             escape(&lens.id),
-            if lens.id == definition.id {
-                " aria-current='page'"
-            } else {
-                ""
-            },
+            if lens.id == definition.id { " aria-current='page'" } else { "" },
             escape(&lens.name),
-            lens.revision
+            blurb(lens),
+            lens.revision,
+            lens.includes.len(),
+            used_by(&lens.id),
+            roles(&lens.roles),
         ));
     }
-    html.push_str("<a class='lens-export' href='/dna/export'>Export genes ↓</a></aside><section class='knowledge-content'>");
+    html.push_str("</div><section class='dna-detail'>");
     if let Some(message) = notice {
         html.push_str(&format!(
             "<p class='{}' role='{}'>{}</p>",
-            if saved {
-                "save-confirmation"
-            } else {
-                "save-error"
-            },
+            if saved { "save-confirmation" } else { "save-error" },
             if saved { "status" } else { "alert" },
             escape(message)
         ));
     }
-    html.push_str(&format!("<form class='lens-definition' method='post' action='/dna/save'><input type='hidden' name='revision' value='{}'><div class='lens-name-row'><label>Name<input name='name' required maxlength='80' value='{}' placeholder='Project context'></label><label>Identifier<input name='id' required maxlength='64' pattern='[a-z0-9-]+' value='{}' placeholder='project-context'{}></label></div><fieldset><legend>Include genes</legend><div class='library-choices'>",definition.revision,escape(&definition.name),escape(&definition.id),if state.lens_library.get(&definition.id).is_some(){" readonly"}else{""}));
-    for other in state.lens_library.current() {
-        if other.id != definition.id {
-            html.push_str(&checkbox(
-                "include",
-                &other.id,
-                &other.name,
-                definition.includes.contains(&other.id),
-            ));
-        }
+    let existing = state.lens_library.get(&definition.id).is_some();
+    if existing {
+        html.push_str(&format!("<div class='dna-detail-head'><h3>{}</h3><span>{} · v{} · used by {}</span></div>", escape(&definition.name), escape(&definition.id), definition.revision, used_by(&definition.id)));
+    } else {
+        html.push_str("<div class='dna-detail-head'><h3>New gene</h3></div>");
     }
-    html.push_str("</div></fieldset><fieldset><legend>Tool context</legend><p class='muted'>Descriptive tool hints, not an execution allowlist. Host permissions are enforced separately.</p><div class='library-choices'>");
-    for tool in control_context::TOOLS {
-        html.push_str(&checkbox(
-            "tool",
-            tool.name,
-            &format!(
-                "{}{}",
-                tool.name,
-                if tool.available {
-                    ""
-                } else {
-                    " · not connected"
-                }
-            ),
-            definition.tools.iter().any(|s| s == tool.name),
-        ));
-    }
-    html.push_str("</div></fieldset><fieldset><legend>Knowledge documents</legend><div class='library-choices'>");
-    for doc in &state.documents {
-        html.push_str(&checkbox(
-            "document",
-            &doc.id,
-            &doc.title,
-            definition.documents.contains(&doc.id),
-        ));
-    }
+    html.push_str(&format!("<form class='lens-definition dna-editor' method='post' action='/dna/save'><input type='hidden' name='revision' value='{}'><div class='lens-name-row'><label>Name<input name='name' required maxlength='80' value='{}' placeholder='Project context'></label><label>Identifier<input name='id' required maxlength='64' pattern='[a-z0-9-]+' value='{}' placeholder='project-context'{}></label></div>",definition.revision,escape(&definition.name),escape(&definition.id),if existing{" readonly"}else{""}));
+    html.push_str(&format!("<label>On-demand summary<input name='summary' maxlength='240' value='{}' placeholder='One line; empty includes the instructions in every prompt'></label>", escape(&definition.summary)));
+    html.push_str(&format!("<label>Instructions<textarea name='instructions' rows='6' maxlength='4000' placeholder='Guidance to include in this context…'>{}</textarea></label>",escape(&definition.instructions)));
+    let includes = current.iter().filter(|other| other.id != definition.id)
+        .map(|other| checkbox("include", &other.id, &other.name, definition.includes.contains(&other.id)))
+        .collect::<String>();
+    html.push_str(&group("Includes", definition.includes.len(), "", &includes));
+    let tools = control_context::TOOLS.iter().map(|tool| checkbox(
+        "tool",
+        tool.name,
+        &format!("{}{}", tool.name, if tool.available { "" } else { " · not connected" }),
+        definition.tools.iter().any(|s| s == tool.name),
+    )).collect::<String>();
+    html.push_str(&group("Tool context", definition.tools.len(), "Descriptive tool hints, not an execution allowlist. Host permissions are enforced separately.", &tools));
+    let mut documents = state.documents.iter()
+        .map(|doc| checkbox("document", &doc.id, &doc.title, definition.documents.contains(&doc.id)))
+        .collect::<String>();
     if state.documents.is_empty() {
-        html.push_str("<p class='muted'>No documents yet. Add them in Knowledge.</p>");
+        documents.push_str("<p class='muted'>No documents yet. Add them in Knowledge.</p>");
     }
-    html.push_str("</div></fieldset><fieldset><legend>Tool packages</legend><p class='muted'>Opt runs into operator-admitted packages. Each choice pins one version; runs get a private copy at /workspace/.control-tools/NAME.</p><div class='library-choices'>");
+    html.push_str(&group("Knowledge documents", definition.documents.len(), "", &documents));
+    let mut packages = String::new();
     let mut shown = std::collections::BTreeSet::new();
     for package in state.packages.iter().filter(|p| p.revoked.is_none()) {
         let reference = format!("{}@{}", package.name, package.version);
         shown.insert(reference.clone());
-        html.push_str(&checkbox("package", &reference, &format!("{} v{} · {}", package.name, package.version, package.description), definition.packages.contains(&reference)));
+        packages.push_str(&checkbox("package", &reference, &format!("{} v{} · {}", package.name, package.version, package.description), definition.packages.contains(&reference)));
     }
     // Keep existing references (unpinned or revoked) visible so a save preserves or drops them deliberately.
     for reference in definition.packages.iter().filter(|r| !shown.contains(*r)) {
-        html.push_str(&checkbox("package", reference, &format!("{reference} · not currently admitted as pinned"), true));
+        packages.push_str(&checkbox("package", reference, &format!("{reference} · not currently admitted as pinned"), true));
     }
     if state.packages.is_empty() && definition.packages.is_empty() {
-        html.push_str("<p class='muted'>No packages admitted. Use control package import.</p>");
+        packages.push_str("<p class='muted'>No packages admitted. Use control package import.</p>");
     }
-    html.push_str("</div></fieldset><fieldset><legend>Roles</legend><p class='muted'>Who sees this gene; none checked means every role. With a summary, prompts carry only that line and agents read the instructions on demand, except for roles marked inline.</p><div class='library-choices'>");
-    for role in Audience::ALL {
-        html.push_str(&checkbox("role", role.as_str(), role.as_str(), definition.roles.contains(&role)));
-    }
-    for role in Audience::ALL {
-        html.push_str(&checkbox("inline", role.as_str(), &format!("{} inline", role.as_str()), definition.inline.contains(&role)));
-    }
-    html.push_str(&format!("</div></fieldset><label>On-demand summary<input name='summary' maxlength='240' value='{}' placeholder='One line; empty includes the instructions in every prompt'></label>", escape(&definition.summary)));
-    html.push_str(&format!("<label>Instructions<textarea name='instructions' rows='4' maxlength='4000' placeholder='Guidance to include in this context…'>{}</textarea></label><button class='primary'>Save gene ↗</button></form>",escape(&definition.instructions)));
+    html.push_str(&group("Tool packages", definition.packages.len(), "Opt runs into operator-admitted packages. Each choice pins one version; runs get a private copy at /workspace/.control-tools/NAME.", &packages));
+    let visible = Audience::ALL.into_iter().map(|role| checkbox("role", role.as_str(), role.as_str(), definition.roles.contains(&role))).collect::<String>();
+    let inline = Audience::ALL.into_iter().map(|role| checkbox("inline", role.as_str(), &format!("{} inline", role.as_str()), definition.inline.contains(&role))).collect::<String>();
+    html.push_str(&group("Role scoping", definition.roles.len() + definition.inline.len(), "Who sees this gene; none checked means every role. With a summary, prompts carry only that line and agents read the instructions on demand, except for roles marked inline.", &format!("{visible}</div><div class='library-choices'>{inline}")));
+    html.push_str("<button class='primary'>Save gene ↗</button></form>");
     if !definition.id.is_empty() && submitted.is_none() {
-        html.push_str("<details class='resolved-context' open><summary>Resolved context</summary>");
+        html.push_str("<details class='dna-group resolved-context'><summary>Resolved context</summary>");
         match resolve(state, std::slice::from_ref(&definition.id)) {
             Ok(resolved) => {
                 html.push_str("<div class='resolved-tags'>");

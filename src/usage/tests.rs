@@ -164,7 +164,7 @@ fn aggregates_retries_preserves_legacy_runs_and_escapes_content() {
         },
     ];
     state.runtime.runs.push(run);
-    let html = render(&state.runtime);
+    let html = render(&state);
     assert!(html.contains("<b>150</b><span>INPUT"));
     assert!(html.contains("<b>25</b><span>OUTPUT"));
     assert!(html.contains("2/2"));
