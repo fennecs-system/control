@@ -6,6 +6,7 @@ const PRIMARY: &[(&str, &str, &str, &str)] = &[
     ("knowledge", "/knowledge", "▤", "Knowledge"),
     ("rooms", "/?view=rooms", "#", "Rooms"),
     ("lenses", "/dna", "◈", "DNA"),
+    ("personas", "/personas", "◇", "Personas"),
     ("tools", "/?view=tools", "⊞", "Tools"),
     ("monitor", "/?view=monitor", "▥", "Usage"),
     ("manage", "/?view=manage", "⚙", "Manage"),
@@ -13,7 +14,6 @@ const PRIMARY: &[(&str, &str, &str, &str)] = &[
 const MANAGE: &[(&str, &str)] = &[
     ("nodes", "Nodes"),
     ("authority", "Access requests"),
-    ("personas", "Personas"),
     ("providers", "Models &amp; providers"),
     ("discord-access", "Discord access"),
     ("integrations", "Integrations"),
@@ -30,6 +30,7 @@ pub fn primary(view: &str) -> String {
             "session-list" | "artifact-page" => "session",
             "editor" | "knowledge-page" => "knowledge",
             "lens-page" => "lenses",
+            "persona-page" => "personas",
             "browser" | "tool-page" => "tools",
             "hub" => "hub",
             other => other,

@@ -46,10 +46,10 @@ fn team() -> Team {
     state.runtime.runs[0].status = "completed".into();
     let root = seed.id.clone();
     let member_chat = chat_with(&mut state, Some(&lead_chat), &["swarm", "advisor"]);
-    let worker = Persona { role: Role::Worker, root: root.clone(), depth: 1, parent: Some(root.clone()) };
+    let worker = Persona { role: Role::Worker, root: root.clone(), depth: 1, parent: Some(root.clone()), bundle: None };
     turn(&mut state, &member_chat, crate::runtime::RunKind::Spawned, "Own member 2. Claim the next milestone from the shared backlog in #general and run it as a routine.", Some(&seed), Some(worker.clone()));
     let advisor_chat = chat_with(&mut state, Some(&lead_chat), &["swarm", "advisor"]);
-    let judge = Persona { role: Role::Judge, root: root.clone(), depth: 1, parent: Some(root.clone()) };
+    let judge = Persona { role: Role::Judge, root: root.clone(), depth: 1, parent: Some(root.clone()), bundle: None };
     turn(&mut state, &advisor_chat, crate::runtime::RunKind::Spawned, "Advise the lead on the shared outcome.", Some(&seed), Some(judge.clone()));
     for chat in [&lead_chat, &member_chat] {
         let session = state.chats.iter_mut().find(|c| &c.id == chat).unwrap();
@@ -238,7 +238,7 @@ fn dump_prompt_sections() {
     write("session.txt", control_context::agent_policy::ACTIVE_SESSION_GUIDANCE);
     use crate::worker_tools::deferred;
     let facts = deferred::Facts::of(&team.state, &member, true);
-    write("tools-codex.json", &serde_json::to_string(&deferred::listed(&deferred::Facts { shell: false, local: false, ..facts })).unwrap());
+    write("tools-codex.json", &serde_json::to_string(&deferred::listed(&deferred::Facts { shell: false, local: false, ..facts.clone() })).unwrap());
     write("tools-local.json", &serde_json::to_string(&crate::local_agent::functions(&deferred::listed(&deferred::Facts { shell: true, local: true, ..facts }))).unwrap());
     write("system-local.txt", crate::local_agent::SYSTEM);
     let [(first, _), (second, _)] = consecutive_member_wakes(&mut team);

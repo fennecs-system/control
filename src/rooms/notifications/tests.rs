@@ -542,7 +542,7 @@ fn budget_cannot_be_refilled_by_disabling_or_by_child_personas() {
         role: crate::delegation::Role::Worker,
         root: "notification-root".into(),
         depth: 1,
-        parent: Some("notification-parent".into()),
+        parent: Some("notification-parent".into()), bundle: None
     });
     assert!(
         call(
@@ -734,7 +734,7 @@ fn nonblocking_spawn_does_not_delay_the_idle_leads_room_wake() {
         role: crate::delegation::Role::Worker,
         root: root.clone(),
         depth: 1,
-        parent: Some(root),
+        parent: Some(root), bundle: None
     });
     state.runtime.runs.push(child);
     state.runtime.runs[0].status = "completed".into();

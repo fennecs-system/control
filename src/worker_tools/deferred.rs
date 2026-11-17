@@ -18,7 +18,7 @@ const NAMED_RESULTS: usize = 16;
 const RESULT_BYTES: usize = 32 * 1024;
 
 /// Host facts that decide what a run's session may see.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Facts {
     pub role: Audience,
     pub improve: bool,
@@ -31,10 +31,13 @@ pub(crate) struct Facts {
     pub local: bool,
     /// The run's chat may use room tools.
     pub rooms: bool,
+    /// The run's standing (`crate::personas::of`): its tool policy.
+    pub standing: crate::personas::Effective,
 }
 impl Facts {
     pub(crate) fn of(state: &crate::State, run: &crate::runtime::Run, managed: bool) -> Self {
-        let judge = crate::delegation::is_judge(run);
+        let standing = crate::personas::of(&state.bots, run);
+        let judge = standing.read_only();
         let chat = state.chats.iter().find(|c| Some(&c.id) == run.chat_id.as_ref());
         Self {
             role: crate::lens_library::audience(run),
@@ -42,10 +45,11 @@ impl Facts {
             managed,
             judge,
             // An approved advisor is a judge whose one extra effect is evidence notes.
-            advisor: judge && run.chat_id.as_deref().is_some_and(|chat| state.bots.advises(chat)),
+            advisor: judge && standing.approved,
             shell: matches!(run.backend, crate::backend::Backend::Claude | crate::backend::Backend::Local),
             local: run.backend == crate::backend::Backend::Local,
             rooms: chat.is_some_and(|chat| chat.actor == run.actor),
+            standing,
         }
     }
 }
@@ -78,6 +82,8 @@ pub(crate) fn offered(facts: &Facts) -> Vec<Value> {
             // Managed sessions read room posts through control_turn_context.
             && !(facts.managed && matches!(name, "control_room_ack" | "control_room_notifications"))
             && (!facts.judge || control_context::judge_may_call(name, facts.advisor))
+            // A persona's deny list hides what it may not call.
+            && (facts.judge || facts.standing.may_call(name))
     });
     tools
 }
@@ -117,7 +123,7 @@ fn compact(schema: &mut Value) {
                         map.remove(key);
                     }
                 }
-                for key in ["maxLength", "minLength", "maxItems", "uniqueItems", "additionalProperties"] {
+                for key in ["maxLength", "minLength", "maxItems", "minItems", "uniqueItems", "additionalProperties"] {
                     if map.get(key).is_some_and(|v| v.is_number() || v.is_boolean()) {
                         map.remove(key);
                     }

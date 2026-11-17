@@ -33,7 +33,7 @@ fn continuations_keep_captured_settings_but_start_with_fresh_execution_state() {
             role: crate::delegation::Role::Worker,
             root: "root".into(),
             depth: 1,
-            parent: Some("parent".into()),
+            parent: Some("parent".into()), bundle: None
         });
         let stale: crate::services::Grant = serde_json::from_value(serde_json::json!({
             "id":"service", "owner":{"node":"node", "chat":"chat"}, "generation":1,

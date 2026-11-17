@@ -204,7 +204,7 @@ fn requests_from_a_grandchild_spawned_by_a_later_turn_resume_the_lead() {
             role: crate::delegation::Role::Worker,
             root: root.clone(),
             depth,
-            parent: Some(parent.clone()),
+            parent: Some(parent.clone()), bundle: None
         });
         run.attempts = vec![crate::usage::Attempt {
             workspace_id: Some(format!("{id}-attempt")),

@@ -94,7 +94,7 @@ pub(crate) fn fixture() -> State {
         role: Role::Worker,
         root: "parent".into(),
         depth: 1,
-        parent: Some("parent".into()),
+        parent: Some("parent".into()), bundle: None
     });
     child.attempts = vec![Attempt {
         workspace_id: Some("child-attempt-1".into()),
@@ -113,7 +113,7 @@ pub(crate) fn fixture() -> State {
         role: Role::Worker,
         root: "parent".into(),
         depth: 0,
-        parent: None,
+        parent: None, bundle: None
     });
     s.runtime.runs.push(child);
     s.runtime.runs.push(resumed);

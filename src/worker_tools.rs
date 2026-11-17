@@ -166,7 +166,7 @@ fn dispatch_raw(
         && run.attempts.last().is_some_and(|attempt|attempt.turn_mailbox.is_some());
     let facts = deferred::Facts::of(&state, run, managed);
     // Backends without their own sandbox shell get Control's offline workspace tool.
-    let (claude, judge, advisor) = (facts.shell, facts.judge, facts.advisor);
+    let (claude, judge) = (facts.shell, facts.judge);
     let result = match request["method"].as_str().unwrap_or("") {
         "initialize" => {
             json!({"protocolVersion":control_context::tool_policy::MCP_LATEST,"capabilities":{"tools":{}},"serverInfo":{"name":"control-worker","version":"0.1"}})
@@ -190,8 +190,9 @@ fn dispatch_raw(
             if request["params"]["name"]==deferred::SEARCH {
                 return json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(deferred::search(&facts,&request["params"]["arguments"]))});
             }
-            if judge && !control_context::judge_may_call(request["params"]["name"].as_str().unwrap_or(""), advisor) {
-                return error("Judge policy permits read-only source inspection, isolated verification and room collaboration only. Next: call control_tool_search {} to list the tools you may call.");
+            // Standing (captured persona, else the built-in of its position) decides.
+            if !facts.standing.may_call(request["params"]["name"].as_str().unwrap_or("")) {
+                return error(if judge {"Judge policy permits read-only source inspection, isolated verification and room collaboration only. Next: call control_tool_search {} to list the tools you may call."} else {"This persona's standing denies that tool. Next: call control_tool_search {} to list the tools you may call."});
             }
             let blocking_spawn=request["params"]["name"]=="control_agent_spawn_blocking";
             if crate::delegation::pausing(run) && !blocking_spawn {

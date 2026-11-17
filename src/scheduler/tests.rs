@@ -205,7 +205,7 @@ fn background_agents_leave_a_slot_for_conversations_and_queue_behind_them() {
             role: crate::delegation::Role::Worker,
             root: "main".into(),
             depth: u8::from(parent.is_some()),
-            parent: parent.map(Into::into),
+            parent: parent.map(Into::into), bundle: None
         })
     };
     let enqueue = |runtime: &mut Runtime, chat: &str, agent: bool| {
@@ -282,7 +282,7 @@ fn lane_priority_never_reorders_turns_within_a_chat() {
                 role: crate::delegation::Role::Worker,
                 root: "main".into(),
                 depth: 1,
-                parent: Some("main".into()),
+                parent: Some("main".into()), bundle: None
             });
         }
     };

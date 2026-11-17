@@ -15,7 +15,7 @@ pub(super) fn observer(state: &mut State) -> (String, String) {
     let judge = spawned(state, &root, "Antibody");
     let lead = state.runtime.runs[0].id.clone();
     let run = state.runtime.runs.last_mut().unwrap();
-    run.persona = Some(crate::delegation::Persona { role: crate::delegation::Role::Judge, root: lead, depth: 1, parent: None });
+    run.persona = Some(crate::delegation::Persona { role: crate::delegation::Role::Judge, root: lead, depth: 1, parent: None, bundle: None });
     run.attempts = vec![crate::usage::Attempt { review_only: true, ..Default::default() }];
     (root, judge)
 }
@@ -58,6 +58,9 @@ fn antibodies_are_opt_in_operator_owned_and_hear_the_node_topic() {
     let definition = state.bots.supervisor.definitions().find(|d| d.chat.0 == judge).unwrap();
     assert_eq!(definition.sources, [lifecycle::node_source(), Source::Timer { every_ms: 3_600_000 }]);
     assert!(state.bots.antibody(&judge) && state.bots.advises(&judge) && antibodies_active(&state));
+    // Standing parity: the pre-persona judge reads as the built-in antibody.
+    let run = state.runtime.runs.iter().rev().find(|run| run.chat_id.as_deref() == Some(judge.as_str())).unwrap();
+    assert_eq!(crate::personas::of(&state.bots, run), crate::personas::Effective::builtin("antibody", true));
     assert!(status(&state, &judge).unwrap().starts_with("Antibody · sleeping · node pathology facts"));
     assert!(state.collective.room_watches.iter().all(|watch| watch.chat != judge), "no room inbox");
     command_at(&mut state, &judge, "off", Now(2)).unwrap();
@@ -124,4 +127,27 @@ fn finish_bot_turns(state: &mut State) {
         run.status = "completed".into();
         run.attempts = vec![crate::usage::Attempt { review_only: true, ..Default::default() }];
     }
+}
+
+#[test]
+fn a_captured_observer_persona_decides_its_mode_and_keeps_its_gene_gate() {
+    use control_context::persona::{builtin, Captured};
+    let mut state = State::default();
+    let (root, judge) = observer(&mut state);
+    let capture = |id: &str| Some(Box::new(Captured::of(&builtin(id).unwrap(), &[]).unwrap()));
+    // An advisor persona in an antibody-only tree: its own gate (the advisor gene) is closed.
+    state.runtime.runs.last_mut().unwrap().persona.as_mut().unwrap().bundle = capture("advisor");
+    assert_eq!(command_at(&mut state, &judge, "on", Now(0)).unwrap_err(), ADVISOR_OFF);
+    // An antibody persona runs on the node topic and may patrol.
+    state.runtime.runs.last_mut().unwrap().persona.as_mut().unwrap().bundle = capture("antibody");
+    command_at(&mut state, &judge, "on every 30", Now(1)).unwrap();
+    let definition = state.bots.supervisor.definitions().find(|d| d.chat.0 == judge).unwrap();
+    assert_eq!(definition.sources, [lifecycle::node_source(), Source::Timer { every_ms: 1_800_000 }]);
+    let run = state.runtime.runs.iter().rev().find(|run| run.chat_id.as_deref() == Some(judge.as_str())).unwrap();
+    let standing = crate::personas::of(&state.bots, run);
+    assert!(standing.captured && standing.antibody() && standing.notifies());
+    command_at(&mut state, &judge, "off", Now(2)).unwrap();
+    // Without the antibody gene on the root, the persona cannot run at all.
+    state.chats.iter_mut().find(|chat| chat.id == root).unwrap().lenses = Some(Vec::new());
+    assert_eq!(command_at(&mut state, &judge, "on", Now(3)).unwrap_err(), ANTIBODY_OFF);
 }

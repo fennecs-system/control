@@ -1930,7 +1930,7 @@ fn judge_dispatch_captures_readonly_policy_and_cannot_publish_a_development_head
         role: crate::delegation::Role::Judge,
         root: root.clone(),
         depth: 1,
-        parent: Some("parent".into()),
+        parent: Some("parent".into()), bundle: None
     });
     state.chats[0].workspace = Some("immutable-source".into());
     let index = checkpoint_next(&mut state, |_| Ok(())).unwrap();

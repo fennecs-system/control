@@ -211,17 +211,6 @@ impl Collective {
                 h.push_str("<label>Reviewer<select name='authority'><option value='human'>Human operator</option><option value='judge'>Judge · not connected</option></select></label><button class='primary'>Submit request ↗</button></form>");
                 h
             }
-            "personas" => {
-                let mut h = heading(
-                    "PERSONAS",
-                    "Engineer",
-                    "Reference only. This declaration does not configure agent runs.",
-                );
-                h.push_str("<details class='record'><summary>View declaration</summary><pre class='manifest'>");
-                h.push_str(&escape(include_str!("../examples/engineer.nix")));
-                h.push_str("</pre></details>");
-                h
-            }
             _ => return None,
         };
         if !self.notice.is_empty() {

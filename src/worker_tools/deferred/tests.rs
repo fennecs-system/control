@@ -3,7 +3,7 @@ use crate::State;
 use std::sync::{Arc, Mutex};
 
 fn facts(role: Audience) -> Facts {
-    Facts { role, improve: false, managed: true, judge: role == Audience::Advisor, advisor: false, shell: false, local: false, rooms: true }
+    Facts { role, improve: false, managed: true, judge: role == Audience::Advisor, advisor: false, shell: false, local: false, rooms: true, standing: crate::personas::Effective::builtin("worker", false) }
 }
 fn names(tools: &[Value]) -> Vec<&str> {
     tools.iter().map(name).collect()
@@ -138,7 +138,7 @@ fn member_state() -> (String, Value) {
     (session.parent_chat, session.room) = (Some(lead), Some("general".into()));
     crate::chat::send(&mut state, &chat, "Own member 2", "test").unwrap();
     let index = state.runtime.runs.len() - 1;
-    state.runtime.runs[index].persona = Some(crate::delegation::Persona { role: crate::delegation::Role::Worker, root: "root".into(), depth: 1, parent: None });
+    state.runtime.runs[index].persona = Some(crate::delegation::Persona { role: crate::delegation::Role::Worker, root: "root".into(), depth: 1, parent: None, bundle: None });
     crate::worker::checkpoint_next(&mut state, |_| Ok(())).unwrap();
     let id = state.runtime.runs[index].id.clone();
     assert_eq!(state.runtime.runs[index].status, "running");

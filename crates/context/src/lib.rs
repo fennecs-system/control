@@ -3,6 +3,7 @@ mod library;
 pub mod agent_policy;
 pub mod commands;
 pub mod limits;
+pub mod persona;
 pub mod tool_policy;
 pub mod turn_context;
 pub mod working_state;
@@ -175,7 +176,7 @@ pub const TOOLS: [Tool; 34] = [
         mcp_names:&[
             w("control_agent_spawn_blocking", "await a child or judge review"),
             w("control_agent_spawn", "start background agents; returns immediately").core(WORKERS)
-                .brief("Start background workers, one objective each; returns at once. Children inherit model, lenses and team room and own their goals. Completions arrive automatically; do not poll."),
+                .brief("Start background workers, one objective each; returns at once; never poll. Children own goals, inheriting model and genes unless given a persona."),
             w("control_agent_spawn_status", "batch status"),
             w("control_agent_spawn_cancel", "cancel a batch"),
             w("control_agent_result", "read a child result").core(JUDGE).judge(),
@@ -464,6 +465,9 @@ pub const TOOLS: [Tool; 34] = [
             op("control.run.scores"),
             op("control.chat.send"),
             op("control.chat.lenses"),
+            op("control.chat.persona"),
+            op("control.personas.list"),
+            op("control.persona.read"),
             op("control.chat.rename"),
         ],
         execution: "local Rust / chat service",

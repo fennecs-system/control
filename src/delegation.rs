@@ -22,6 +22,12 @@ pub struct Persona {
     pub root: String,
     pub depth: u8,
     pub parent: Option<String>,
+    /// The persona this run captured (purpose, DNA, standing, body,
+    /// behaviours). Continuations keep it with the rest of the lineage;
+    /// children get their own, never a copy. `None`: the built-in standing of
+    /// its tree position (`crate::personas`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle: Option<Box<control_context::persona::Captured>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +77,7 @@ pub(crate) fn lineage(run: &runtime::Run) -> Persona {
         root: run.id.clone(),
         depth: 0,
         parent: None,
+        bundle: None,
     })
 }
 fn root(run:&runtime::Run)->&str {run.persona.as_ref().map_or(run.id.as_str(),|persona|persona.root.as_str())}
@@ -409,6 +416,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
             root: root.root,
             depth: root.depth + 1,
             parent: Some(parent.id.clone()),
+            bundle: None,
         });
         let child_id = child.id.clone();
         state

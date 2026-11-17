@@ -258,16 +258,21 @@ pub(crate) fn plan(
 ) -> Result<Decision, &'static str> {
     let run = active(state.runs, attempt)?;
     let sender = run.chat_id.as_deref().ok_or("A chat is required")?;
-    // A read-only judge speaks only as its team's approved advisor, and only in
-    // evidence notes to the lead's steering chat, which filters them for the
-    // team: never to members, judges or other advisors, and with no services.
-    let advisor = crate::delegation::is_judge(run);
+    // Whom a run may steer is its standing (`crate::personas`). A read-only
+    // observer speaks only once approved, and only in evidence notes to a
+    // steering chat, which filters them for its team: never to members, judges
+    // or other advisors, and with no services.
+    let standing = crate::personas::of(state.bots, run);
+    let advisor = standing.read_only();
     // An antibody notes any other team's steering chat: a top-level chat with
     // spawned members, outside the antibody's own tree.
-    let antibody = advisor && state.bots.antibody(sender);
-    let advised = if advisor && !antibody { state.bots.advised_team(sender) } else { None };
+    let antibody = standing.antibody() && state.bots.antibody(sender);
+    let advised = if standing.advisor() { state.bots.advised_team(sender) } else { None };
     if (advisor && advised.is_none() && !antibody) || crate::delegation::pausing(run) {
         return Err("Read-only or pausing attempts cannot message agents");
+    }
+    if standing.standing.steers == control_context::persona::Steers::None {
+        return Err("This persona's standing steers no one; report through your result");
     }
     if advised.is_some_and(|lead| lead != call.chat_id) {
         return Err("An advisor notes only its team's steering chat; the lead decides what reaches members");

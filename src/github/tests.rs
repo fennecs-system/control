@@ -423,7 +423,7 @@ fn only_completed_same_chat_improvements_can_be_published() {
         role: crate::delegation::Role::Judge,
         root: "fixture".into(),
         depth: 1,
-        parent: Some("parent".into()),
+        parent: Some("parent".into()), bundle: None
     });
     assert!(selected(&state, &chat, &input).is_err());
     state.runtime.runs[0].persona = None;

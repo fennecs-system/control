@@ -445,7 +445,7 @@ fn judge_tools_are_enforced_even_when_unadvertised_names_are_forged() {
         role: crate::delegation::Role::Judge,
         root: "root".into(),
         depth: 1,
-        parent: Some("parent".into()),
+        parent: Some("parent".into()), bundle: None
     });
     let shared = Arc::new(Mutex::new(s));
     let callable = callable(&shared, &id);
@@ -513,7 +513,7 @@ fn an_approved_advisor_judge_gains_only_evidence_notes() {
     let run = s.runtime.runs.last_mut().unwrap();
     let id = run.id.clone();
     run.status = "running".into();
-    run.persona = Some(crate::delegation::Persona { role: crate::delegation::Role::Judge, root: "root".into(), depth: 1, parent: None });
+    run.persona = Some(crate::delegation::Persona { role: crate::delegation::Role::Judge, root: "root".into(), depth: 1, parent: None, bundle: None });
     let names = |shared: &Arc<Mutex<State>>| rpc_at(shared, &id, &json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/list"}}), None)["result"]["tools"]
         .as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
     let shared = Arc::new(Mutex::new(s));
@@ -1117,7 +1117,7 @@ fn an_approved_antibody_reads_every_team_notes_other_leads_and_notifies_the_oper
     let run = s.runtime.runs.last_mut().unwrap();
     let id = run.id.clone();
     run.status = "running".into();
-    run.persona = Some(crate::delegation::Persona { role: crate::delegation::Role::Judge, root: "root".into(), depth: 1, parent: None });
+    run.persona = Some(crate::delegation::Persona { role: crate::delegation::Role::Judge, root: "root".into(), depth: 1, parent: None, bundle: None });
     run.attempts = vec![crate::usage::Attempt { review_only: true, workspace_id: Some("gen-1".into()), ..Default::default() }];
     let shared = Arc::new(Mutex::new(s));
     let call = |nonce: &str, name: &str, arguments: Value| rpc(&shared, &id, &json!({"nonce":nonce,"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":arguments}}}));

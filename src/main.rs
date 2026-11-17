@@ -42,6 +42,7 @@ mod knowledge;
 mod knowledge_tools;
 mod guidance;
 mod lens_library;
+mod personas;
 mod lens_ui;
 mod lifecycle;
 mod attempt_control;
@@ -112,6 +113,7 @@ struct State {
     agent_messages: Vec<application::messages::Sent>,
     documents: Vec<knowledge::Document>,
     lens_library: control_context::Library,
+    personas: control_context::persona::Library,
     packages: Vec<packages::Manifest>,
     messages: Vec<String>,
     agents: Vec<String>,
@@ -192,6 +194,8 @@ fn render_with_content(state: &State, view: &str, lens: &str, channel: &str, sup
         "rooms" => rooms::render(state,channel),
         "lenses" => lens_library::render(state,if lens=="none"{"engineering"}else{lens},None,None,false),
         "lens-page" => channel.to_owned(),
+        "persona-page" => channel.to_owned(),
+        "personas" => personas::render(state, "lead", None, None),
         "agents" => format!("<div class='section-heading'><div><span class='eyebrow'>EXECUTION / SIMULATED</span><h2>Agent sessions</h2></div></div><p class='muted'>Spawn a local demonstration session. Remote execution is not connected.</p>{}<form method='post' action='/spawn'><label>Session objective<input required name='objective' placeholder='Map the knowledge graph…' maxlength='300'></label><label>Provider<select name='provider'><option>Anthropic</option><option>OpenAI</option><option>Self-hosted</option></select></label><button class='primary'>＋ Spawn demo agent</button></form>", state.agents.iter().enumerate().map(|(i,a)| format!("<div class='session'><span class='dot'></span><div><strong>agent / {:03}</strong><p>{}</p></div><span class='tag'>simulated</span></div>", i+1, escape(a))).collect::<String>()),
         "nodes" => "<span class='eyebrow'>NODES · PLANNED</span><h2>Nodes</h2><p class='muted'>Remote nodes are not connected.</p><div class='node-grid'><article><span class='node-icon'>⌘</span><h3>control.local</h3><p>This laptop</p><span class='tag'>local</span></article><article><span class='node-icon'>◇</span><h3>forge.tailnet</h3><p>Development · planned</p><span class='tag'>not connected</span></article><article><span class='node-icon'>◈</span><h3>archive.tailnet</h3><p>Knowledge · planned</p><span class='tag'>not connected</span></article></div>".into(),
         _ => lens_ui::overview(state,lens),
@@ -200,7 +204,7 @@ fn render_with_content(state: &State, view: &str, lens: &str, channel: &str, sup
     page
 }
 /// Views whose `channel` is trusted, pre-rendered HTML from internal routes only.
-const INTERNAL_VIEWS: [&str; 7] = ["session-list", "history", "artifact-page", "browser", "tool-page", "knowledge-page", "lens-page"];
+const INTERNAL_VIEWS: [&str; 8] = ["session-list", "history", "artifact-page", "browser", "tool-page", "knowledge-page", "lens-page", "persona-page"];
 /// `GET /`: query values are untrusted, so internal HTML-carrying views fall back to the hub.
 fn public_render(state: &State, query: &HashMap<String, String>, lens: &str) -> String {
     let view = query.get("view").map(String::as_str).filter(|v| !INTERNAL_VIEWS.contains(v)).unwrap_or("hub");
@@ -228,6 +232,7 @@ fn legacy_session_location(state: &State, query: &HashMap<String, String>) -> Op
     match query.get("view")?.as_str() {
         "runs" => Some(navigation::history_location("/bots/history/runs", query)),
         "lenses" => Some("/dna".to_owned()),
+        "personas" => Some("/personas".to_owned()),
         "session" => Some(query.get("channel")
             .filter(|id| chat::valid_id(id) && chat::detail(state, id).is_ok())
             .map_or_else(|| "/dms".to_owned(), |id| url_names::dm(id))),
@@ -408,6 +413,9 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
                 Err(message) => ("400 Bad Request", "", message.to_owned()),
             };
             let _ = control_http::respond(stream, status, "text/plain; charset=utf-8", body.as_bytes(), extra, control_http::Policy::Page);
+            return;
+        }
+        if personas::handle(&mut stream, state, method, path, &query, lens, &data[header_end..header_end + length]) {
             return;
         }
         if lens_library::handle(

@@ -60,7 +60,7 @@ non-Rust runtimes stay inside explicitly configured tool/agent containers.
 | P1 | [V1 Vault](#v1-manage-vault-and-scoped-secret-injection) | Agents use secrets by opaque reference; values never reach model context. |
 | P2 | [U2 interactive browser](#u2-computer-use-starting-with-an-interactive-browser); [W2 recipes](#w2-a-small-workflow-layer) | Scoped browser sessions; validated recipes over spawn/wait/message. |
 | P2 | [M1 follow-ups](#m1-model-follow-ups) | Hosted API adapters; local parallel tools; multi-model review turns. |
-| P2 | [L1 personas](#l1-versioned-personas-and-soulmd); [L2/L3 self-improvement](#l2l3-a-reviewed-self-improvement-loop) | Captured revisions, scoped tools, evaluation and admission. |
+| P2 | [L1 personas](#l1-versioned-personas-and-soulmd) (first slice shipped); [L2/L3 self-improvement](#l2l3-a-reviewed-self-improvement-loop) | Host-installed behaviours, procedure revisions; evaluation and admission. |
 | P2 | [H1 layered control](#h1-layered-control) | Fewer model turns per milestone in a paired trial. |
 | P2 | [I1 immune system](#i1-immune-system--antibodies-and-intel): antibodies, pathology facts, intel briefs | First slice in review; next a Google Workspace `Transport` and a paired trial of antibody notes. |
 | Later | [X1 execution backends](#x1-pluggable-execution-backends), [deferred items](#deferred) | Demonstrated local need. |
@@ -338,9 +338,24 @@ direction, and tool or page content cannot promote itself to instruction.
 Capture resolved revisions per attempt. Children get explicit role bindings, not
 a copy of the parent's identity.
 
-The [team advisor](LENSES.md) is the first concrete persona: the read-only judge
-role plus the `advisor` lens. When bundles land it becomes a bundle referencing
-that lens, with no supervisor change.
+The first slice has shipped ([personas](PERSONAS.md)): a versioned persona
+library beside DNA (purpose or `SOUL.md`, genes, standing, default model and
+opt-in behaviours), captured per run; built-in `lead`, `worker`, `advisor`,
+`antibody` and `judge`; spawn by persona and root-DM selection; and one reader
+of standing for every role check, with legacy runs mapped to the built-ins.
+Remaining:
+
+- **Procedure revisions and resource needs:** reference procedure revisions and
+  proposed service resources ([S1](#s1-service-resource-requests)) from a persona.
+- **Host-installed behaviours:** install watch, observation and probe behaviours
+  in a granted service at spawn instead of as first-turn standing orders; plug
+  behaviour trees, state machines and salience-filtered triggers into the
+  behaviours slot ([W1](#w1-cron-style-schedules), [W2](#w2-a-small-workflow-layer),
+  [H1](#h1-layered-control)).
+- **Personal definitions** under the configured home roots, and federation of
+  personas like genes.
+- **Evaluation:** a paired trial of persona-spawned teams (local-model workers
+  under a hosted lead) against the inherit-everything default.
 
 ## L2/L3: a reviewed self-improvement loop
 

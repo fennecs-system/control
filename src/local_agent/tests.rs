@@ -374,7 +374,7 @@ fn worker_tool_schemas_fit_the_declared_overhead_reserve() {
     for role in Audience::ALL {
         for improve in [false, true] {
             let facts = Facts { role, improve, managed: true, judge: role == Audience::Advisor, advisor: role == Audience::Advisor,
-                shell: true, local: true, rooms: true };
+                shell: true, local: true, rooms: true, standing: crate::personas::Effective::builtin("worker", false) };
             let definitions = listed(&facts);
             let tools = functions(&definitions);
             let estimate = tokens(size(&tools));

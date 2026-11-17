@@ -64,6 +64,10 @@ pub struct Session {
     pub workspace: Option<String>,
     #[serde(default)]
     pub lenses: Option<Vec<String>>,
+    /// The persona a root DM selected (`/persona`); each message captures its
+    /// current revision (`crate::personas`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona: Option<String>,
     #[serde(default)]
     pub design_context: Option<String>,
     #[serde(default)]

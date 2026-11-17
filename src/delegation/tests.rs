@@ -230,7 +230,7 @@ fn denied_identity_mismatched_actor_depth_and_total_budget_are_enforced() {
         root: id.clone(),
         role: Role::Worker,
         depth: MAX_DEPTH,
-        parent: None,
+        parent: None, bundle: None
     });
     assert!(
         request_with_save(&mut s, &id, "n", input(Role::Worker), |_| Ok(()))
@@ -245,7 +245,7 @@ fn denied_identity_mismatched_actor_depth_and_total_budget_are_enforced() {
             root: id.clone(),
             role: Role::Worker,
             depth: 1,
-            parent: Some(id.clone()),
+            parent: Some(id.clone()), bundle: None
         });
         s.runtime.runs.push(child);
     }
@@ -528,7 +528,7 @@ fn tree_with_children(count: usize, at_ms: u64, parent_kind: RunKind) -> (State,
             role: Role::Worker,
             root: parent.clone(),
             depth: 1,
-            parent: Some(parent),
+            parent: Some(parent), bundle: None
         });
     }
     (s, lead)

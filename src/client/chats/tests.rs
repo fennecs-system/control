@@ -2,6 +2,17 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn persona_commands_list_select_and_clear() {
+    assert_eq!(navigation("/personas"), Some(Navigation::Personas));
+    assert_eq!(navigation("/persona"), Some(Navigation::Personas), "a bare /persona lists");
+    assert_eq!(navigation("/persona  lead "), Some(Navigation::Persona("lead".into())));
+    assert_eq!(navigation("/persona none"), Some(Navigation::Persona("none".into())));
+    assert_eq!(navigation("/personality x"), None);
+    let list = persona_list(&json!([{"id":"worker","name":"Worker","revision":2,"lenses":["swarm"],"standing":{"sees":"team","steers":"team","answers_to":"lead","acts":"full"}}]));
+    assert!(list.contains("worker · Worker · v2 · DNA swarm · sees team · steers team · answers to lead"), "{list}");
+}
+
+#[test]
 fn navigation_is_the_same_vocabulary_as_the_tui() {
     assert_eq!(navigation("/chats"), Some(Navigation::List));
     assert_eq!(navigation(" /resume "), Some(Navigation::List));
