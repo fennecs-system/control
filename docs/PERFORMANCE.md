@@ -428,23 +428,27 @@ tree about 0.14 ms, one chat read about 14 µs.
 
 **Bots page and graveyard.** The graveyard (stopped bots and finished spawned
 agents) is projected in one pass over runs and chats, sorted by stop time, and
-only one page of 50 rows is formatted; later pages come from
+only one page of 50 tombstones is formatted; later pages come from
 `GET /bots/graveyard?older=ID[&q=…]` as the WASM client scrolls, and search
-filters the same pass. The process tree indexes latest run statuses, chat ids
-and service owners once per render; it used to scan runs and chats per chat,
-which made the page quadratic. `performance::bots_page` holds 10, 1,000 or
-10,000 dead bots (one turn each) and one live agent. Release, Apple Silicon,
-`CONTROL_TIMING_ROUNDS=51`, three alternating runs against the previous
-revision with the same fixture, medians:
+filters the same pass. The fennec skull is one inline SVG `<symbol>` per page;
+each stone is a `<use>` of it, and the staggered layout is CSS on list
+position, so appended pages add no path data or layout script. The process
+tree indexes latest run statuses, chat ids and service owners once per render;
+it used to scan runs and chats per chat, which made the page quadratic.
+`performance::bots_page` holds 10, 1,000 or 10,000 dead bots (one turn each)
+and one live agent. Release, Apple Silicon, `CONTROL_TIMING_ROUNDS=51`, three
+alternating runs against the previous revision with the same fixture, medians:
 
 | Workload | 10 | 1,000 | 10,000 dead bots |
 | --- | ---: | ---: | ---: |
 | Bots page, before (no graveyard) | 9.7 µs | 0.77 ms | 90.7 ms |
-| Bots page, after | 28.2 µs | 0.40 ms | 4.09 ms |
-| Next graveyard page | 1.5 µs | 0.23 ms | 2.17 ms |
-| Graveyard search | 4.2 µs | 0.28 ms | 2.45 ms |
+| Bots page, graveyard list | 29.1 µs | 0.40 ms | 4.37 ms |
+| Bots page, tombstone grid | 27.4 µs | 0.39 ms | 4.08 ms |
+| Next graveyard page, list → grid | 1.6 → 1.6 µs | 0.23 → 0.22 ms | 2.55 → 2.17 ms |
+| Graveyard search, list → grid | 4.3 → 4.1 µs | 0.28 → 0.27 ms | 2.80 → 2.34 ms |
 
-The page stays under 39 KB however many bots have died.
+The page stays under 38 KB however many bots have died (39 KB as a list); a
+50-stone scroll page is about 31 KB.
 
 ```sh
 CONTROL_TIMING_ROUNDS=51 cargo test --release --locked --bin control performance::bots_page -- --ignored --exact --nocapture
