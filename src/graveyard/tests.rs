@@ -171,40 +171,107 @@ fn headstones_form_a_grid_sharing_one_fennec_skull() {
     assert!(found.contains("<ol class='graveyard-grid'><li class='grave'") && found.matches("id='fennec-skull'").count() == 1);
 }
 
+type Point = (f64, f64);
+type Segment = (Point, Point);
+
+/// The closed polygons of an absolute `M`/`L`/`H`/`V`/`Z` path, as points.
+fn polygons(path: &str) -> Vec<Vec<Point>> {
+    let mut shapes: Vec<Vec<Point>> = Vec::new();
+    let mut rest = path;
+    while let Some(command) = rest.chars().next() {
+        let end = rest[1..].find(|c: char| c.is_ascii_alphabetic()).map_or(rest.len(), |index| index + 1);
+        let numbers = rest[1..end].split_whitespace().map(|n| n.parse::<f64>().unwrap()).collect::<Vec<_>>();
+        let last = shapes.last().and_then(|shape| shape.last()).copied().unwrap_or_default();
+        match command {
+            'M' => shapes.push(vec![(numbers[0], numbers[1])]),
+            'L' => shapes.last_mut().unwrap().push((numbers[0], numbers[1])),
+            'H' => shapes.last_mut().unwrap().push((numbers[0], last.1)),
+            'V' => shapes.last_mut().unwrap().push((last.0, numbers[0])),
+            'Z' => {}
+            other => panic!("straight segments only, not {other}"),
+        }
+        rest = &rest[end..];
+    }
+    shapes
+}
+fn segments(shape: &[Point]) -> Vec<Segment> {
+    (0..shape.len()).map(|index| (shape[index], shape[(index + 1) % shape.len()])).collect()
+}
+fn to_segment(p: Point, (a, b): Segment) -> f64 {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let t = (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
+    ((p.0 - a.0 - t * dx).powi(2) + (p.1 - a.1 - t * dy).powi(2)).sqrt()
+}
+/// Smallest distance between the centre lines of two sets of segments that
+/// do not cross: the nearest endpoint-to-segment distance.
+fn clearance(one: &[Segment], other: &[Segment]) -> f64 {
+    let mut best = f64::INFINITY;
+    for &first in one {
+        for &second in other {
+            for (point, segment) in [(first.0, second), (first.1, second), (second.0, first), (second.1, first)] {
+                best = best.min(to_segment(point, segment));
+            }
+        }
+    }
+    best
+}
+
 #[test]
-fn the_fennec_skull_is_angular_earless_jawless_and_toothed() {
+fn the_fennec_skull_is_squarish_earless_toothed_and_clear_at_26px() {
     let symbol = SKULL_SYMBOL.split("<symbol").nth(1).unwrap();
     let paths = symbol.split(" d='").skip(1).map(|path| path.split('\'').next().unwrap()).collect::<Vec<_>>();
     assert_eq!(paths.len(), 2, "one closed outline with the teeth, and the sockets: no facet lines or lower jaw");
-    for path in &paths {
-        assert!(!path.contains(|c: char| "CcSsQqTtAa".contains(c)), "straight facets only, no curves: {path}");
-    }
-    // The outline stays within the cranium: nothing rises above it as ears would.
-    let tops = paths.iter().flat_map(|path| path.split(|c: char| c.is_ascii_alphabetic()).filter_map(|pair| pair.split_whitespace().nth(1)?.parse::<f64>().ok()));
-    assert!(tops.fold(f64::INFINITY, f64::min) >= 5.0, "no ears above the crown");
-    // A low, flat-topped cranium no wider than the cheekbones: the outline's
-    // top is one horizontal edge at y 14 and its widest points are the cheeks.
-    let outline = paths[0];
-    assert!(outline.starts_with("M20 14H44L"), "a flat top: {outline}");
-    let points = outline.split(|c: char| c.is_ascii_alphabetic()).filter_map(|pair| { let mut xy = pair.split_whitespace().map(|v| v.parse::<f64>()); Some((xy.next()?.ok()?, xy.next()?.ok()?)) }).collect::<Vec<_>>();
-    assert!(points.iter().all(|(_, y)| *y >= 14.0), "nothing rises above the flat top");
-    let (left, right) = (points.iter().map(|p| p.0).fold(f64::INFINITY, f64::min), points.iter().map(|p| p.0).fold(0.0, f64::max));
-    assert!(points.iter().filter(|(x, _)| *x == left || *x == right).all(|(_, y)| *y == 28.0), "widest at the cheekbones, not above the eyes");
-    // A row of pointed teeth drawn in the same closed stroke as the outline:
-    // the snout edge runs straight into the zigzag and out again, with one
-    // stroke width and join for the whole skull and no filled shapes.
-    assert!(outline.contains("L42 36L40 42L38.2 48L36.5 42.5L35 46L33.5 42.5L32 46L30.5 42.5L29 46L27.5 42.5L25.8 48L24 42L22 36L"), "{outline}");
-    assert!(outline.ends_with('Z') && outline.matches('M').count() == 1, "one closed subpath");
-    assert_eq!(SKULL_SYMBOL.matches("stroke-width").count(), 1, "one stroke width");
-    assert!(SKULL_SYMBOL.contains("fill='none'") && !SKULL_SYMBOL.contains("<polygon") && !SKULL_SYMBOL.contains("<rect"));
-    // A short snout: the teeth hang from y 42 and nothing is drawn below them.
-    let bottom = paths.iter().flat_map(|path| path.split(|c: char| c.is_ascii_alphabetic()).filter_map(|pair| pair.split_whitespace().nth(1)?.parse::<f64>().ok()));
-    assert!(bottom.fold(0.0, f64::max) <= 48.0, "no jaw below the teeth");
-    // Mean eyes: each socket has a horizontal top and bottom edge.
-    let sockets = paths[1];
-    assert_eq!(sockets.matches('H').count(), 5, "two eye slits with flat top and bottom, and a flat-bottomed nose: {sockets}");
-    assert!(sockets.contains("M15 25H25L29 28L26 31H19Z") && sockets.contains("M49 25H39L35 28L38 31H45Z"), "slits slanting in towards the nose");
     assert!(SKULL_SYMBOL.contains("stroke-linejoin='miter'"), "angular joins");
+    assert_eq!(SKULL_SYMBOL.matches("stroke-width").count(), 1, "one stroke width");
+    assert!(SKULL_SYMBOL.contains("stroke-width='1.8'") && SKULL_SYMBOL.contains("fill='none'") && !SKULL_SYMBOL.contains("<polygon") && !SKULL_SYMBOL.contains("<rect"));
+    let stroke = 1.8;
+    let outline = paths[0];
+    assert!(outline.ends_with('Z') && outline.matches('M').count() == 1, "one closed subpath");
+    let head = polygons(outline).remove(0);
+    let sockets = polygons(paths[1]);
+    assert_eq!(sockets.len(), 3, "two eyes and a nose");
+    let (left_eye, right_eye, nose) = (&sockets[0], &sockets[1], &sockets[2]);
+
+    // A squarish head, not a bulb: a flat top at y 14, nothing above it, and
+    // no point more than a tenth wider than the top.
+    assert!(outline.starts_with("M16 14H48L"), "a flat top: {outline}");
+    assert!(head.iter().all(|(_, y)| *y >= 14.0), "no ears or dome above the flat top");
+    let widest = head.iter().map(|p| p.0).fold(f64::MIN, f64::max) - head.iter().map(|p| p.0).fold(f64::MAX, f64::min);
+    assert!(widest <= 1.1 * (48.0 - 16.0), "widest {widest} against a top of 32");
+
+    // Mean eyes: each slit has horizontal top and bottom edges and slants in
+    // towards the nose; the nose is flat-bottomed.
+    for eye in [left_eye, right_eye] {
+        assert_eq!(eye.len(), 5);
+        assert!(eye[0].1 == eye[1].1 && eye[3].1 == eye[4].1, "flat top and bottom: {eye:?}");
+    }
+    assert!(left_eye[2].0 > left_eye[1].0 && right_eye[2].0 < right_eye[1].0, "inner points aim at the nose");
+    assert!(paths[1].contains("M32 32L35.5 36L33.5 40H30.5L28.5 36Z"), "the nose keeps its shape");
+
+    // Teeth: one zigzag in the outline's own stroke, hanging below the snout.
+    assert!(outline.contains("L40 46L38 51.5L36 46.5L34 49.5L32 46.5L30 49.5L28 46.5L26 51.5L24 46L"), "{outline}");
+    let edges = segments(&head);
+    let teeth = edges.iter().copied().filter(|(a, b)| a.1 >= 46.0 && b.1 >= 46.0).collect::<Vec<_>>();
+    assert_eq!(teeth.len(), 8, "four teeth (canines and two incisors), each two strokes, wide enough to read at 26px");
+
+    // Clear gaps that survive 26px (0.4 px per unit): between eyes and the
+    // outline, eyes and the nose, the two eyes, and the nose and the teeth.
+    // Distances are between stroke centre lines, so a gap of g needs g + one
+    // stroke width; miter joins reach further at the teeth, hence the margin.
+    let eyes = [segments(left_eye), segments(right_eye)];
+    for eye in &eyes {
+        let gap = clearance(eye, &edges) - stroke;
+        assert!(gap >= stroke + 0.5, "eye to outline gap {gap}");
+        let gap = clearance(eye, &segments(nose)) - stroke;
+        assert!(gap >= stroke + 0.5, "eye to nose gap {gap}");
+    }
+    assert!(clearance(&eyes[0], &eyes[1]) - stroke >= stroke, "the two eyes stay apart");
+    // A 45° valley's miter reaches half a stroke / sin(22.5°) past its corner.
+    let miter = stroke / 2.0 / 22.5_f64.to_radians().sin();
+    let gap = clearance(&segments(nose), &teeth) - stroke / 2.0 - miter;
+    assert!(gap >= 1.5 * stroke, "nose to teeth gap {gap}, beyond the valleys' miter");
+    let gap = clearance(&segments(nose), &edges) - stroke;
+    assert!(gap >= 1.5 * stroke, "nose to snout gap {gap}");
 }
 
 #[test]
