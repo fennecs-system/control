@@ -83,6 +83,15 @@ budget reserves the declared output plus 512 tokens and counts each input byte a
 a token. This is conservative, not a tokenizer, and a server may still reject a
 request.
 
+Every summary node, of chat history or of a local turn's steps, uses one
+structured format: short bullets under **Goal & constraints**, **Findings**
+(facts and diagnoses with their exact paths, names and values), **Errors &
+fixes**, **Decisions/plan**, **Open questions** and **Next step**. A parent built
+from two child summaries merges them section by section, keeping every finding
+and decision unless later evidence replaces it, so findings survive any number of
+levels instead of being flattened into a list of actions. Changing the prompt
+changes summary identity, so existing chat summaries are rebuilt once.
+
 Summary nodes are private atomic files under `summaries/` in the state directory.
 Their identity covers the chat, source hashes, settings, prompt and declared
 model revision, so a changed source or model never reuses a stale summary.
@@ -128,6 +137,17 @@ then follow a `path` of 0/1 child indexes; `source=true` reads a leaf's original
 text. Each read returns at most 16 KiB with a continuation offset, and only roots
 owned by the current conversation can be read. Results carry checksums, ranges,
 model revision and usage. Source text is untrusted and may describe old state.
+
+The listing also returns `turns`: the step trees of this conversation's current
+and recent local-model attempts (below). Their roots are read the same way, with
+`start`/`end` counting the attempt's steps. `query` searches them, pi's
+`session_history` style: every whitespace-separated term must appear
+(ASCII case-insensitive), newest attempt and steps first, in node summaries and in
+the original steps. Each hit is a verbatim excerpt of about 600 bytes with its
+`root`, `path`, step and `offset`, so `{"root":…,"path":…,"source":true,"offset":…}`
+reads on from it. A search reads at most 256 nodes and returns at most 8 hits
+within `limit_bytes`; `complete: false` says it stopped early. It searches local
+turns only, not the chat tree's own sources.
 
 ### Compare compactors
 
@@ -410,12 +430,40 @@ at a third of that length, then replaced by a labelled deterministic digest of
 call names and result heads. If every older block is folded and the request is
 still over the threshold, the verbatim window narrows, and as a last resort the
 newest results are shrunk. Only if it still does not fit does the attempt fail.
-The originals stay in the attempt's activity; only the final report enters chat
-history.
+Only the final report enters chat history.
+
+In-turn summaries use the structured format of every tree node
+([How it works](#how-it-works)), so a parent block merges its children's
+findings. The agent can also mark what must survive: the system prompt asks it
+to write each key fact or diagnosis on a line starting `Finding:` and each choice
+on one starting `Decision:` (`Diagnosis:`, `Root cause:` and `Plan:` count too,
+after any list or emphasis markup). Control collects those lines from the
+replies and from the reasoning (which is never transcript) of the steps a node
+covers and carries them verbatim under the node, newest first within 1.6 KB,
+whatever the summary keeps; a deterministic digest carries them too. In a mock
+turn of over 30 steps (`local_agent::tests::a_diagnosis_survives_many_in_turn_compactions`,
+`local_agent::context::tests::a_marked_finding_survives_every_fold_even_when_summaries_drop_it`)
+a diagnosis from step 1 is still in the request after every fold although the
+compactor's summaries drop it.
+
+The turn's steps are nodes of the conversation's summary tree too, in the same
+node format and checks: each step that leaves the verbatim window becomes a leaf
+holding its original messages (up to 96 KiB), and each folded block a node over
+its two retained children, or over one original per step when it was summarized
+directly. They are content-addressed files under `summaries/turns/ATTEMPT/`.
+Only the roots of each attempt's cut are registered, in memory, for the eight
+most recent local attempts; an evicted attempt's files are deleted, and files a
+restart left unregistered are deleted after an hour. `control_history_read`
+lists, reads and searches them ([Inspect and recall](#inspect-and-recall)), and
+`/chat/ID/compaction` lists them as `turn_trees`. A failed write records a
+`local-recall` activity and never fails the turn.
 
 Once per turn, when a request reaches 80% of the budget or the turn first folds a
-block, Control appends a note asking the model to publish a checkpoint. Codex and
-Claude manage their own in-session context.
+block, Control appends a note asking the model to publish a checkpoint with its
+key findings and current plan in the working notes (`control_turn_handoff`
+`payload.findings` and `payload.next`; an omitted payload keeps the older notes),
+and to mark findings with `Finding:` lines meanwhile. The step-cap note asks the
+same. Codex and Claude manage their own in-session context.
 
 **Compaction.** A chat on a local model is compacted by the same endpoint through
 the summary tree by default, without being listed under automatic summaries;

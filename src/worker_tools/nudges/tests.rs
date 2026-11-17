@@ -42,7 +42,7 @@ fn deadline_warning_is_sent_once_per_attempt_below_the_threshold() {
     assert!(notes(&mut state, &run, "control_room_read", 1000 + 500).is_empty(), "100 s left is above the threshold");
     let sent = notes(&mut state, &run, "control_room_read", 1000 + 520);
     assert_eq!(sent, [deadline_text(80)]);
-    assert_eq!(sent[0], "80 s left in this turn: publish your checkpoint (control_turn_handoff) now and continue in a routine or the next turn.");
+    assert_eq!(sent[0], "80 s left in this turn: publish your checkpoint (control_turn_handoff) now and continue in a routine or the next turn. Record your key findings (facts, diagnoses) and current plan in its working notes, payload.findings and payload.next, so they survive compaction; an omitted payload keeps the older notes.");
     assert!(notes(&mut state, &run, "control_room_read", 1000 + 560).is_empty(), "once per attempt");
     // A new attempt warns again.
     state.runtime.runs[0].attempts.push(crate::usage::Attempt { started_unix: 2000, ..Default::default() });
@@ -88,8 +88,13 @@ fn context_notes_belong_to_the_local_loop_and_never_reach_hosted_sessions() {
     for second in (0..3600).step_by(60) {
         assert!(notes(&mut state, &run, "control_workspace_run", 1000 + second).iter().all(|note| !note.contains("% full")));
     }
-    assert_eq!(context_text(81, true), "Context 81% full: publish your checkpoint (control_turn_handoff) and continue in the next turn.");
-    assert_eq!(context_text(81, false), "Context 81% full: finish with a brief final report soon.");
+    // The note asks for findings and the plan in the working notes (the
+    // handoff payload) before compaction loses them, or marked lines without one.
+    let note = context_text(81, true);
+    assert!(note.starts_with("Context 81% full: publish your checkpoint (control_turn_handoff) and continue in the next turn."), "{note}");
+    assert!(note.contains("working notes, payload.findings and payload.next") && note.contains("Finding:"), "{note}");
+    assert_eq!(context_text(81, false), format!("Context 81% full: finish with a brief final report soon. {MARKS}"));
+    assert!(steps_text(4, true).contains("payload.findings and payload.next"));
 }
 #[test]
 fn local_model_attempts_are_warned_before_their_captured_local_limit() {

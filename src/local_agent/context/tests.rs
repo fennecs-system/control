@@ -115,3 +115,99 @@ fn folded_blocks_form_a_summary_tree_and_stay_folded() {
     assert!(host.0.last().unwrap().0.lines().all(|line| line.starts_with("user: Summary of steps") || !line.starts_with("user:")));
     assert!(lens.view(&longer, 4, false)[2]["content"].as_str().unwrap().starts_with("Summary of steps 1–8"));
 }
+
+#[test]
+fn marked_lines_are_found_through_list_and_emphasis_markup() {
+    let text = "Looking at the ELF header.\n- **Finding:** the Oracle JDK hard-codes /lib/ld-linux-aarch64.so.1\n  decision: install the glibc loader\nnot a finding: x\n### ROOT CAUSE: missing loader\nFindings are below";
+    assert_eq!(marked(text).collect::<Vec<_>>(), [
+        "Finding:** the Oracle JDK hard-codes /lib/ld-linux-aarch64.so.1",
+        "decision: install the glibc loader",
+        "ROOT CAUSE: missing loader",
+    ]);
+    let many: Vec<String> = (0..100).map(|i| format!("Finding: fact {i}")).collect();
+    let kept = newest(many);
+    assert!(kept.last().unwrap() == "Finding: fact 99" && kept.iter().map(|l| l.len() + 3).sum::<usize>() <= MARKED_BYTES);
+}
+
+/// A compactor that drops everything, or fails, and records retained nodes.
+#[derive(Default)]
+struct Forgetful {
+    fail: bool,
+    summaries: usize,
+    retained: Vec<(Block, String, Option<[String; 2]>, usize)>,
+}
+impl Host for Forgetful {
+    fn tools(&mut self) -> io::Result<Vec<Value>> { Ok(vec![]) }
+    fn call(&mut self, _: &str, _: &Value, _: &str) -> Value { Value::Null }
+    fn poll(&mut self) -> super::super::Poll { super::super::Poll::Continue }
+    fn model(&mut self, _: &Value) -> io::Result<Value> { Err(io::Error::other("unused")) }
+    fn summarize(&mut self, _: &str, _: usize) -> io::Result<String> {
+        self.summaries += 1;
+        if self.fail {
+            return Err(io::Error::other("Output reached the declared token limit"));
+        }
+        Ok("Goal & constraints: run the Java build\nFindings: none\nErrors & fixes: none\nDecisions/plan: none\nOpen questions: none\nNext step: continue".into())
+    }
+    fn record(&mut self, _: &str, _: &str, _: &str, _: &str, _: &str) {}
+    fn metered(&mut self, _: &super::super::Meter) {}
+    fn retain(&mut self, block: Block, text: &str, children: Option<[String; 2]>, sources: Vec<String>) -> Option<String> {
+        self.retained.push((block, text.to_owned(), children, sources.len()));
+        Some(format!("{:064x}", self.retained.len()))
+    }
+}
+const FINDING: &str = "Finding: the Oracle JDK hard-codes /lib/ld-linux-aarch64.so.1, absent in the Nix image";
+const DECISION: &str = "Decision: patch the interpreter with patchelf";
+/// Fold a growing turn step by step, as the loop does, until it has `steps`
+/// steps; returns the views after each step and the number of folds.
+fn long_turn(host: &mut Forgetful, steps: usize) -> (Vec<Vec<Value>>, usize) {
+    let mut messages = transcript(steps, &"output\n".repeat(300), "{}");
+    messages[2]["content"] = json!(format!("Checked the ELF interpreter.\n{FINDING}"));
+    let mut lens = Lens::default();
+    // Marked reasoning of step 2 is never transcript, yet survives.
+    lens.reasoned(1, &format!("The loader is missing, so\n{DECISION}"));
+    let compactor = Compactor { input_bytes: 1500, output_tokens: 512 };
+    let (mut views, mut folds) = (Vec::new(), 0);
+    for count in 6..=steps {
+        let prefix = &messages[..2 + 2 * count];
+        while let Some(block) = lens.unfolded(count, 4) {
+            folds += lens.fold(host, block, prefix, compactor).unwrap().len();
+        }
+        lens.retain_shrunk(host, prefix, count - 4);
+        views.push(lens.view(prefix, 4, false));
+    }
+    (views, folds)
+}
+#[test]
+fn a_marked_finding_survives_every_fold_even_when_summaries_drop_it() {
+    let mut host = Forgetful::default();
+    let (views, folds) = long_turn(&mut host, 24);
+    assert!(folds >= 9, "{folds} folds");
+    assert!(host.summaries >= 9);
+    for view in &views {
+        let first = view[2]["content"].as_str().unwrap();
+        assert!(first.starts_with("Summary of steps 1–") && first.contains("Findings: none"), "{first}");
+        assert!(first.contains(&format!("Marked by the agent in these steps (verbatim):\n- {FINDING}\n- {DECISION}")), "{first}");
+    }
+    // Every node joined the summary tree: a leaf per shrunk step, a node
+    // over two retained children or over one original per step.
+    for (block, text, children, sources) in &host.retained {
+        assert!(children.is_some() && *sources == 0 || children.is_none() && *sources as u64 == block.len(), "{block:?}");
+        if block.level > 0 && block.start == 0 {
+            assert!(text.contains(FINDING), "the retained node carries the marked lines");
+        }
+    }
+    assert!(host.retained.iter().any(|(_, _, children, _)| children.is_some()), "parents are built over their children");
+    let leaves: Vec<u64> = host.retained.iter().filter(|(b, ..)| b.level == 0).map(|(b, ..)| b.start).collect();
+    let mut unique = leaves.clone();
+    unique.dedup();
+    assert_eq!(leaves, unique, "each step is retained once");
+}
+#[test]
+fn the_digest_fallback_keeps_marked_findings() {
+    let mut host = Forgetful { fail: true, ..Default::default() };
+    let (views, folds) = long_turn(&mut host, 16);
+    assert!(folds >= 3);
+    let first = views.last().unwrap()[2]["content"].as_str().unwrap();
+    assert!(first.starts_with("Digest of steps 1–"), "{first}");
+    assert!(first.contains(FINDING) && first.contains(DECISION), "{first}");
+}

@@ -322,6 +322,8 @@ fn a_long_turn_compacts_before_its_context_is_exhausted_and_is_told_once() {
     let notes = host.records.iter().filter(|(k, _)| k == "note").collect::<Vec<_>>();
     assert_eq!(notes.len(), 1, "{notes:?}");
     assert!(notes[0].1.starts_with("Context ") && notes[0].1.contains("% full: publish your checkpoint (control_turn_handoff)"));
+    // It asks for findings and the plan in the working notes before they are compacted away.
+    assert!(notes[0].1.contains("working notes, payload.findings and payload.next") && notes[0].1.contains("Finding:"), "{notes:?}");
     let last = serde_json::to_string(&host.requests.last().unwrap()["messages"]).unwrap();
     assert!(last.matches("% full: publish your checkpoint").count() <= 1);
     assert!(host.requests.iter().any(|r| r.to_string().contains("% full: publish your checkpoint")));
@@ -676,6 +678,32 @@ fn a_cut_off_turn_hands_over_its_latest_reasoning() {
     let failure = run(&mut host, "m", &limits(), compactor(20000), "p", &Policy { max_steps: 2, ..Policy::default() }).err().unwrap();
     assert!(failure.1.contains("2-step limit") && host.step_limited);
     assert_eq!(host.reasoned.last().unwrap(), "plan step 1", "the worker carries the latest into the host checkpoint");
+}
+
+#[test]
+fn a_diagnosis_survives_many_in_turn_compactions() {
+    // Run -140: after nine in-turn summaries the lead forgot that the Oracle JDK
+    // hard-codes a loader absent in the Nix image. Marked lines now ride along
+    // with every node, whatever the compactor keeps.
+    let finding = "Finding: the Oracle JDK hard-codes /lib/ld-linux-aarch64.so.1, absent in the Nix image";
+    let decision = "Decision: run java through the Nix glibc loader";
+    let small = Limits { context_tokens: 8192, output_tokens: 512, input_bytes: 28000, output_bytes: 2048 };
+    let mut replies = vec![
+        reply(Some(&format!("Checked the interpreter.\n{finding}")), post("elf"), "tool_calls"),
+        thought(None, &format!("The loader is missing.\n{decision}"), post("plan"), "tool_calls"),
+    ];
+    replies.extend((0..28).map(|i| reply(None, post(&format!("check {i} {}", "x".repeat(2000))), "tool_calls")));
+    replies.push(reply(Some("Done."), json!(null), "stop"));
+    let mut host = mock(replies);
+    host.tool_text = "readelf output line\n".repeat(150);
+    let outcome = run(&mut host, "m", &small, compactor(6000), "Current request: make the JDK run", &Policy::default()).unwrap();
+    assert!(outcome.compactions >= 3, "{} compactions", outcome.compactions);
+    let last = serde_json::to_string(&host.requests.last().unwrap()["messages"]).unwrap();
+    // The mock compactor's summaries never mention them, yet both survive.
+    assert!(!host.summaries.is_empty() && !last.contains("Checked the interpreter"));
+    assert!(last.contains(finding) && last.contains(decision), "{last}");
+    // The compactor saw the marked reasoning too.
+    assert!(host.summaries.iter().any(|s| s.contains(decision)));
 }
 
 /// Serialized like a chat template renders them: schemas, then messages.
