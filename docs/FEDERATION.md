@@ -1,38 +1,62 @@
-# Control federation — specification 0.1 (review revision 1)
+# Federation
 
-Status: first slice implemented in `src/federation.rs`, reviewed by an author and adversarial reviewer. This is iterative design review, not model training. The first implementation is a deliberately bounded exchange of immutable context resources. Remote execution is specified separately and MUST remain disabled until its prerequisites are implemented and verified. The review exchange is recorded in [the review log](../reviews/2026-10-28-federation.md).
+Federation lets independently operated Control nodes share selected resources
+without making a peer an operator. Today it is an offline, operator-mediated
+exchange of signed lens bundles (`src/federation.rs`). There is no network
+listener, no live delivery and no remote execution. The design was reviewed in
+[the federation review log](../reviews/2026-10-28-federation.md).
 
-## Purpose and foundations
+## Foundations
 
-Control connects independently operated nodes. A node hosts identities, conversations, documents, pure lens definitions, agent state, and a deterministic execution supervisor. Federation lets an operator share selected resources or delegate bounded work without making another node its operator.
+Control borrows ideas, not wire formats:
 
-ActivityPub separates client interaction from directed server-to-server delivery through inboxes and outboxes. Control borrows explicit recipients, stable activity identifiers, and deduplication rather than treating every peer as a shared process. See [W3C ActivityPub, server-to-server interactions](https://www.w3.org/TR/activitypub/#server-to-server-interactions).
+- [ActivityPub](https://www.w3.org/TR/activitypub/#server-to-server-interactions):
+  directed delivery, explicit recipients, stable identifiers and deduplication.
+- AT Protocol ([identity](https://atproto.com/guides/identity),
+  [repositories](https://atproto.com/guides/data-repos),
+  [stack](https://atproto.com/guides/the-at-stack)): durable identity separate
+  from names and location, and immutable content-addressed data.
 
-AT Protocol separates durable identity from human-readable names and service location, and uses signed, content-addressed repositories. Control borrows the separation of identity, location, immutable content, and application views. See [AT Protocol identity](https://atproto.com/guides/identity), [data repositories](https://atproto.com/guides/data-repos), and [stack architecture](https://atproto.com/guides/the-at-stack).
-
-These are design foundations, not wire compatibility. Control 0.1 does not implement ActivityPub, DIDs, AT repositories, relays, public discovery, consensus, or a global ledger. A public social firehose is a poor default for private source code and chats.
+Control does not implement ActivityPub, DIDs, AT repositories, relays, public
+discovery, consensus or a global ledger. A public firehose is a poor default for
+private source code and chats.
 
 ## Invariants
 
-1. Every node is independently administered. A peer or its agent is never a local operator merely by joining.
-2. An authenticated identity proves who sent bytes. It does not prove their truth, safety, or authority.
-3. Effective capability is the intersection of issuer delegation, authenticated peer scope, local policy, resource policy, and run constraints. Lenses select context/tool descriptions and grant no capabilities.
-4. Private chats, source trees, credentials, operator cookies, and role bindings are never replicated implicitly.
-5. An imported object is an immutable foreign resource. It cannot overwrite a local document/lens, activate a tool, install a UI, start a run, or execute Nix.
-6. State transitions, authorization, retries, deadlines, quotas, and cleanup are deterministic code. Agents may propose plans and supervise meaning; they cannot adjudicate or bypass these mechanisms.
-7. Federation remains usable without an always-running model. Idle persistent agents are durable identities/mailboxes/personas, not continuously generating tokens.
+1. Every node is independently administered. Joining never makes a peer or its
+   agent a local operator.
+2. An authenticated identity proves who sent bytes, not that they are true, safe
+   or authorized.
+3. Effective capability is the intersection of issuer delegation, peer scope,
+   local policy, resource policy and run constraints. Lenses grant no capabilities.
+4. Private chats, source trees, credentials, operator cookies and role bindings
+   are never replicated implicitly.
+5. An imported object is an immutable foreign resource. It cannot overwrite a
+   local lens or document, activate a tool, install UI, start a run or execute Nix.
+6. State transitions, authorization, retries, deadlines, quotas and cleanup are
+   deterministic code. Agents may propose plans; they cannot bypass these checks.
+7. Federation works without an always-running model.
 
-## First delivery: signed resource exchange
+## Signed lens bundles
 
-The initial transport is explicit operator-mediated file exchange between two nodes, suitable over an existing trusted channel. It demonstrates authentic, selective, revocable acceptance of a context snapshot without exposing the laptop's HTTP operator interface. It is a foundation for federation, not a claim that live mesh networking exists.
+### Identity and trust
 
-Each node has an Ed25519 signing key generated from OS cryptographic randomness, stored in a private node-state directory, never in the source repository or worker mounts. Its node ID is `ed25519:` followed by the lowercase hex encoding of the 32 public-key bytes. Labels and network locations are separate metadata. This identity is key-bound: changing the key creates a new identity in 0.1. Secure rotation with continuity and endpoint discovery are future protocol work, not TOFU exceptions.
+Each node has an Ed25519 key (PKCS#8, generated from OS randomness) stored in its
+private federation directory, never in the repository or worker mounts. The node
+ID is `ed25519:` followed by 64 lowercase hex characters of the public key.
+Changing the key creates a new identity; there is no key rotation.
 
-Operator pairing pins an exact peer node ID with a local display label, inbound allowlist of resource kinds and root lens IDs, and a distinct permission to receive included document bodies (off by default). A wildcard root grant, if supported, must be explicit; kind alone does not authorize every resource on the sender. This root grant permits the bounded transitive definitions and explicitly permitted documents required by that root, not unrelated bundled records. Self-pairing is rejected. There is no automatic reciprocal trust and no transitive trust. A claim that another node trusts the sender grants nothing. Revoking a peer disables future imports immediately. Cached bytes already disclosed cannot be recalled; retained resources remain provenance-labelled and are no longer eligible for new context use without a fresh explicit local approval. Re-pairing never resets replay receipts. Expiry is an admission rule, not a promise of deletion or cryptographic recall.
+`trust` pins an exact peer ID with a label, one or more explicit root lens IDs
+and an optional `--allow-documents` permission (off by default). Wildcard roots
+are not supported. Self-trust is rejected. Trust is neither reciprocal nor
+transitive. `revoke` blocks future imports immediately; bytes already received
+cannot be recalled. Re-trusting a revoked peer is an explicit `trust` command and
+never resets replay receipts. Expiry is an admission rule, not deletion.
 
-### Resource envelope
+### Envelope
 
-The JSON carrier is strict: reject unknown or duplicate fields, invalid UTF-8, trailing data, and values outside the following profile. Hex is lowercase, even-length and fixed-length where stated. Integers are nonnegative JSON integers, not floats. Every external file is opened using no-follow and nonblocking flags where supported, checked via the opened descriptor to be regular, and read with a hard byte limit before parsing. A plain blocking open followed by metadata is insufficient: a FIFO can block before inspection. Platforms lacking equivalent safe primitives must reject unsupported input, not silently weaken this boundary.
+The carrier is strict JSON: unknown fields are rejected and hex must be lowercase
+with the stated length.
 
 ```json
 {
@@ -49,65 +73,103 @@ The JSON carrier is strict: reject unknown or duplicate fields, invalid UTF-8, t
 }
 ```
 
-`resource_id` is SHA-256 of the exact decoded payload bytes. Payload encoding is opaque for signature verification, avoiding a home-grown canonical JSON algorithm. Sender implementations serialize the payload once and sign those same bytes. Independently serialized semantic equivalents MAY have different resource IDs. Byte identity is required; global semantic identity is not.
+`resource_id` is the SHA-256 of the exact payload bytes. The payload is signed as
+opaque bytes, so no canonical JSON is needed; semantically equal payloads may have
+different IDs.
 
-The signature uses Ed25519 over a domain-separated, unambiguous preimage. Start with the UTF-8 bytes `control-federation/0.1` and a NUL byte, then encode sender, recipient, kind, sequence, resource_id, issued_at, expires_at, and payload in that exact order. Each field is encoded as its unsigned 64-bit big-endian byte length followed by its exact UTF-8 bytes. Integers use canonical decimal ASCII without leading zeros. The verifier reconstructs exactly this preimage; signatures bind recipient, kind, sequence, digest and validity. There is no unsigned endpoint or label used for authority. The outer JSON carrier's escaping/whitespace is not signed; the decoded payload string bytes are.
+The Ed25519 signature covers a domain-separated preimage: `control-federation/0.1`
+and a NUL byte, then sender, recipient, kind, sequence, resource_id, issued_at,
+expires_at and payload in that order. Each field is its unsigned 64-bit
+big-endian length followed by its UTF-8 bytes; integers are decimal ASCII. The
+outer JSON escaping is not signed.
 
-Initially only `lens_bundle` is accepted. The typed payload is `{ "roots": ["engineering"], "definitions": [<existing Definition schema>], "documents": [<existing DocumentInput schema>] }`. It contains exactly one selected revision per definition/document ID, the exact transitive closure of included definitions and documents, and no unrelated resources. Resolve only against this bundle's inputs, never destination-local current revisions. Missing references, duplicate IDs (even differing revisions), cycles, and an inconsistent resolved result are rejected. Bare local include IDs are safe only because the bundled graph is closed and unique.
+Only `lens_bundle` is accepted. Its payload is
+`{ "roots": [...], "definitions": [<Definition>], "documents": [<DocumentInput>] }`
+and must contain exactly the transitive closure of the roots: one revision per
+ID, no duplicates, no cycles, no missing references and nothing unrelated. It
+resolves only against its own contents, never the receiver's lenses.
 
-By default exports containing any referenced document fail with a clear request for an explicit `--include-documents` decision. This avoids publishing document bodies merely because the operator named a lens. With that flag, bodies are exact selected snapshots; receiver trust must separately permit document inclusion. Export reports the transitive selected document titles and serialized size; providing the explicit flag authorizes writing that selected bundle, without an additional interactive confirmation requirement. A definition-only lens with no document references needs no flag. A future `document_bundle` may share documents independently; it is not accepted in 0.1.
+Exporting a lens that references documents fails unless `--include-documents` is
+given; the receiver must also have granted `--allow-documents`. Export prints the
+included document titles and the byte size. Tool IDs are inert references; a
+bundle cannot declare tool implementations, and unknown IDs are rejected by the
+existing resolver. Signatures do not encrypt content; privacy review is the
+operator's responsibility.
 
-Tool IDs are inert references checked against the known descriptor schema; a remote resource cannot declare executable tool implementations. The first version rejects unknown descriptor IDs, matching the existing pure resolver. A future generic inspector could retain unknown IDs as inert data, but cannot activate them without a supported locally authorized implementation. Privacy review is the operator's responsibility; signatures do not encrypt content.
+### Import
 
-Recommended fixed initial limits: carrier 2 MiB, decoded payload 512 KiB, 128 definitions, 128 documents, 128 roots, 256 tool IDs, 64 KiB per text field, lifetime at most seven days, 256 imported objects and 64 MiB total persisted import bytes per local store. Both object count and aggregate stored bytes are bounded, including receipts/provenance rather than only document lengths. Implementations MUST publish their actual stricter limits. Reject at the boundary; do not truncate signed content or automatically evict replay records to admit more input.
+Import checks, in order: a bounded regular file (opened with `O_NOFOLLOW |
+O_NONBLOCK`, so symlinks and FIFOs are rejected without blocking); the strict
+carrier; protocol, kind, nonzero sequence and recipient equal to this node; a
+pinned, non-revoked sender; validity not expired, at most five minutes in the
+future and at most seven days long; payload digest; signature; payload schema and
+limits; and the peer's root and document scope. Invalid input creates no state.
 
-### Acceptance transaction and replay
+The replay key is `(sender, sequence)` on this node. An exact repeat is an
+idempotent duplicate with no new record. A different envelope with a used
+sequence is rejected as a conflict. Sequences may arrive out of order. Export
+reserves its sequence durably first, so a failed export can leave a harmless gap.
+Receipts survive revocation and re-trust. At capacity, imports are rejected;
+receipts are never evicted.
 
-Import checks, in order: bounded regular file; strict carrier profile; recipient equals local node; pinned non-revoked sender and allowed kind; timestamps not expired and no more than five minutes in the future; bounded lifetime; valid digest and signature; bounded valid payload. Invalid data produces no accepted-object state.
+Accepted bundles stay in quarantine in the federation ledger. They never change
+the node's lenses, documents, chats, roles, run queue or tool registry. There is
+no activation step yet.
 
-The replay receipt key is `(sender, recipient, sequence)`; the accepted resource identity includes its sender and resource_id. Export allocates a persisted, monotonically increasing sequence and never reuses one after a crash; gaps are harmless. First import atomically persists immutable payload, signature/provenance, and receipt metadata. An exact repeat is an idempotent duplicate success without creating another object or triggering a side effect. Reusing a sequence for different signed bytes is rejected as a conflict. Out-of-order unused sequences MAY be accepted so file delivery order does not become a hidden availability requirement. Durable receipts remain after revocation/re-pairing; hitting capacity rejects new imports rather than forgetting replay history. Acceptance MUST be serialized against revocation and concurrent imports. A failed persistence step does not acknowledge success. A single local state lock or equivalent atomic serialized transaction is required.
+### Storage and durability
 
-Imported resources live in a separate federation store and are inspectable by operator CLI. Local lens/document state is unchanged. Using one in a chat requires a later explicit activation/import-to-local operation with a new local ID, source attribution, and local policy checks. That operation is outside the initial slice. Re-export never asserts that the original author signed a modified payload.
+The federation directory is `federation/` under the node state directory
+(`~/.local/state/control/federation` by default), or `CONTROL_FEDERATION_DIR`.
+Each command holds an exclusive file lock. Files must be private (`0600`). The
+ledger (`ledger.json`) holds trust scopes, the export sequence and imported
+envelopes. Writes use a create-new temporary file, file sync, atomic rename and
+directory sync. If the directory sync fails after a rename, the command reports
+failure; reopening finds any committed state.
 
-CLI shape (names may follow existing command conventions): `control federation identity`, `trust <node-id> --label <label> --root <lens-id>`, `revoke <node-id>`, `export <lens-id> --recipient <node-id> --output <file>`, `import <file>`, and `status`. Private key material is never printed. Identity prints only public identity. Re-pairing a revoked identity must be an explicit operator action, not a side effect of import.
+Never restore an old ledger while keeping the node identity: that could reuse
+export sequences and lose replay records. Recover with a new identity instead.
+`O_NOFOLLOW` protects only the final path component, so parent directories must
+be operator-controlled. File I/O is supported on macOS and Linux; other platforms
+fail closed.
 
-## Future transport: directed, authenticated inboxes
+### Limits
 
-A future dedicated federation listener is separate from browser/operator endpoints. It accepts only versioned, bounded protocol messages, with per-peer request/concurrency/storage limits and no automatic fetch of arbitrary URLs from bodies. Ingress is authenticated by pinned node signatures, with TLS for confidentiality and server authentication. Tailscale is useful transport policy, not application authorization.
+| Limit | Value |
+| --- | --- |
+| Carrier file | 2 MiB |
+| Decoded payload | 512 KiB |
+| Roots, definitions, documents | 128 each |
+| Tool references | 256 in total |
+| Document title, body | 64 KiB each |
+| Peers | 128 |
+| Retained imports (receipts) | 256 |
+| Serialized ledger | 64 MiB |
+| Export lifetime | 1 day (receivers accept up to 7 days) |
+| Future clock skew | 5 minutes |
 
-Network messages add a recipient-bound request ID, short expiry, and operation-specific body digest. The durable inbox records the idempotency outcome before acknowledgement; outboxes retry with bounded exponential backoff and jitter. Servers never claim exactly-once execution across failures. Request retries return the recorded outcome, not repeated authority checks that launch another run. Unknown peers cannot create an inbox or consume unbounded resources. Never accept unsigned redirects, claimed forwarded operator identity, or transitive grants.
+The lens resolver's own limits also apply (ID, name, instruction, nesting and
+aggregate context sizes; see `crates/context`).
 
-No shared global order is required. Each node is authoritative for its local policy and task state. Resource versions are immutable; deliberate local merge produces a new version. Initial replication is selective pull/directed delivery, not a CRDT for every chat and not consensus across the collective.
+## Commands
 
-## Future delegated jobs and deterministic reconciliation
+`control federation help` lists the commands. They are local operator commands,
+not tools exposed to agents. Private keys are never printed.
 
-Remote execution is blocked until hard per-attempt writable-volume quotas, bounded artifact export, authenticated ingress, durable admission limits, cancellation, and startup worker reconciliation have been implemented and tested. The current CPU/memory/pid limits do not enforce disk quotas. Polling directory sizes is not a hard storage bound. Marking a run interrupted is not orphan cleanup.
+| Command | Effect |
+| --- | --- |
+| `identity` | Print this node's public ID |
+| `trust NODE --label NAME --root LENS [--root LENS] [--allow-documents]` | Pin a peer and its inbound scope |
+| `revoke NODE` | Block future imports from a peer |
+| `export LENS --recipient NODE --output FILE [--include-documents]` | Write a signed bundle of a local lens |
+| `import FILE` | Verify and quarantine a bundle |
+| `inspect INDEX` | Show a quarantined payload and its provenance |
+| `status` | List peers and quarantined imports |
 
-A future job offer names: protocol/request ID; issuer/recipient node IDs; bounded origin principal reference; explicit task class (`task`, never implicit `improve`); immutable context resource IDs; exact persona/policy revisions; pinned worker image digest; selected capabilities; deadline; max attempts; max child count/depth; CPU/memory/pids/writable bytes/artifact bytes; model/token limits; and output destinations. The local receiving operator authorizes the intersection; unknown identity or capability fails closed. Credentials remain receiving-node-owned. No Docker socket, arbitrary host mount, operator cookie, or automatically executable remote Nix expression is accepted.
+Export reads the lens library from the node's state, writes a new private file
+(the output path must not exist) and needs no trust entry for the recipient.
 
-Job state is receiver-authoritative: `offered -> accepted -> queued -> starting -> running -> succeeded|failed|cancelled|expired|lost`. Policy can transition `offered -> rejected`. Admission atomically reserves local budgets before `accepted`. Attempts have monotonically increasing fencing generations. A completion must match the active generation; stale completion is recorded as evidence and cannot change the job outcome. Terminal state never returns to running; explicit retry creates a new attempt within the reserved retry budget. Cancellation persists intent first and becomes terminal only after confirmed process termination. If termination is uncertain, retain resources/mark lost and block conflicting retry rather than asserting safe cancellation.
-
-Before launching, the supervisor checkpoints attempt identity and desired state, then creates a runtime-labelled container `(node, job, attempt, generation)` with quota-backed volumes and a hard deadline. Startup reconciliation enumerates only this node's owned labels, compares durable state, terminates or safely adopts known workers, and prevents new dispatch until discrepancies are resolved. A single active node-state writer lock is required. Containers must have a runtime-enforced lifetime independent of the web process, or an equally reliable external supervisor; an in-process timer alone is insufficient.
-
-Partitions cannot manufacture certainty. The sender records remote outcome as unknown after a lease/deadline uncertainty and must query/cancel/reconcile before retrying elsewhere. The receiver never extends authority merely because the sender is unavailable. Token quotas require enforcement at a provider broker or trusted harness, not only after-the-fact accounting. Unsupported hard limits reject the job rather than pretending the declared limit was enforced.
-
-Agents may propose or edit declarative workflow DAGs, choose peers, ask for more tools, and judge semantic evidence within explicit delegated management scopes. The deterministic supervisor validates acyclicity, budgets, authority, dependencies, state transitions, and restart policy. Bounded `while`/event subscriptions require explicit stop conditions, event deduplication, deadlines and iteration budgets. Scheduling an eligible queue item, retry backoff, and process cleanup never require a model call. Judges can recommend acceptance; reproducible checks remain distinct from model agreement. No general workflow programming language or Kubernetes-sized controller framework is necessary for this first state machine.
-
-## Threat model and verification
-
-Treat peers, agents, imported instructions, resource titles, and documents as potentially hostile. Protect against identity spoofing, recipient substitution, payload/header tampering, replay, duplicate execution, path traversal, symlink/FIFO reads, oversized input, unsigned field confusion, privilege confusion, forged provenance, dependency cycles, stale completion, malicious peer floods, and accidental private-context publication. Display imported text escaped/sanitized in browser/TUI. A signature is authenticity, not fact verification. A peer can retain anything deliberately shared with it.
-
-First-slice acceptance tests use two fresh temporary node directories and no credentials/network/model calls: identity persists across restart; independent identities differ; explicit trust required; valid bounded snapshot is accepted once; duplicate creates no second record; wrong recipient, wrong sender, changed body/header/signature, expired/future/overlong validity, unknown kind/fields, bad lengths/hex, invalid schema and oversized regular file are rejected; symlink/FIFO rejected without blocking; revocation blocks subsequent imports; concurrent/restarted imports remain idempotent; persistence failures never acknowledge success; import does not modify local lenses, chats, roles, run queue, or tool registry. Existing operator/browser protection and worker credential boundaries must remain intact.
-
-Network readiness adds TLS/authentication interoperability, bounded slow-client and concurrent-input tests, rejection of forged proxy identity, crash-before/after-ack tests, idempotent cancellation, hard disk-limit experiments, orchestrator-killed orphan reconciliation, stale-generation completions, and partition/retry scenarios. A successful two-file exchange is not evidence for these future guarantees.
-
-## Implemented profile and use
-
-`control federation help` lists the commands. State lives in `.control/federation`; `CONTROL_FEDERATION_DIR` can select an independent node directory. The CLI uses an exclusive OS file lock, private Ed25519 PKCS#8 identity, and a single atomic ledger containing trust scopes, export sequence, envelopes and receipts. Imports never write `.control/state.json`. `inspect INDEX` shows the original payload and provenance; `status` lists pinned/revoked peers and quarantine indexes. These are local operator commands, not MCP capabilities exposed to agents.
-
-Actual limits: 2 MiB carrier, 512 KiB decoded payload, 128 roots/definitions/documents, 256 total tool references, 128 peers, 256 retained delivery receipts, and a 64 MiB serialized ledger. Root scopes are explicit IDs; wildcards are unsupported. Existing resolver limits also apply: valid IDs up to 64 ASCII characters, names up to 80 characters, instructions up to 4,000 characters per definition, nesting below 32, and 48,000 aggregate context characters. Document title/body each have a 64 KiB byte limit. Generated exports expire after one day; receivers accept at most seven days and five minutes of future clock skew. File IO supports macOS and Linux; other platforms fail closed. Parent directories of configured paths must be operator-controlled; no-follow protects the final file component, not arbitrary hostile ancestor replacement.
-
-Example, with two node directories on this laptop (replace public ID placeholders with `identity` output):
+Example with two federation directories on one machine (replace `NODE_A` and
+`NODE_B` with the `identity` output):
 
 ```sh
 CONTROL_FEDERATION_DIR=/private/tmp/control-a control federation identity
@@ -119,8 +181,46 @@ CONTROL_FEDERATION_DIR=/private/tmp/control-b control federation inspect 0
 CONTROL_FEDERATION_DIR=/private/tmp/control-b control federation revoke NODE_A
 ```
 
-Run export from the source node's working directory to select its current local library. Explicit `--include-documents` is required when that selection contains document bodies; receiver trust separately needs `--allow-documents`. The output path must not exist, and the file is private. No pairing on the exporting side is required to send to an explicitly supplied recipient public key; only inbound acceptance grants are stored.
+## Threat model
 
-A sequence is reserved durably before export. Failed output creation can leave a sequence gap. Ledger writes use create-new temporary files, file sync, atomic rename, and directory sync. If rename succeeds but directory sync fails, the result is uncertain: the command reports failure without acknowledgement, and reopening/retrying discovers any committed receipt. Never restore an old ledger backup while retaining a node identity: that could reuse export sequences and lose replay records. Recover with a new identity unless replay/sequence continuity is independently guaranteed. Capacity exhaustion rejects input rather than evicting receipts.
+Treat peers, agents, imported instructions, titles and documents as potentially
+hostile. The exchange defends against identity spoofing, recipient substitution,
+tampering, replay, path traversal, symlink and FIFO reads, oversized input,
+unsigned-field confusion, forged provenance, dependency cycles and accidental
+publication of document bodies. Displayed payload text has control characters
+removed. A signature shows authenticity, not truth. A peer can keep anything
+deliberately shared with it.
 
-Future delivery, delegated jobs, imported-resource activation, key rotation, and a generic workflow interpreter are specified directions, not implemented features of this profile.
+The tests in `src/federation/tests.rs` use temporary node directories with no
+credentials, network or model calls.
+
+## Not implemented
+
+These directions are specified for future work; none exist today.
+
+**Network delivery.** A separate federation listener, not the operator HTTP
+interface, accepting only versioned, bounded, signed messages over TLS with
+per-peer limits. Messages carry a recipient-bound request ID, short expiry and
+body digest. A durable inbox records the outcome before acknowledging; outboxes
+retry with bounded backoff and jitter. No exactly-once claims, unsigned
+redirects, forwarded operator identity or transitive grants. No global order:
+each node is authoritative for its own policy and state, and replication is
+selective, not a CRDT or consensus. Tailscale is transport, not authorization.
+
+**Delegated jobs.** Blocked until hard per-attempt disk quotas, bounded artifact
+export, authenticated ingress, durable admission limits, cancellation and startup
+worker reconciliation are implemented and tested. Current CPU, memory and PID
+limits do not bound disk. A job offer would name the task class, immutable
+context IDs, pinned persona/policy revisions and worker image digest,
+capabilities, deadlines, attempt/child limits, resource and token limits and
+output destinations; the receiving operator authorizes the intersection and
+unknown identities or capabilities fail closed. Job state is receiver-owned
+(`offered → accepted → queued → starting → running → succeeded | failed |
+cancelled | expired | lost`, or `offered → rejected`), with fenced attempt
+generations so stale completions cannot change the outcome. Cancellation is
+terminal only after confirmed termination. Partitions leave outcomes unknown
+until reconciled. Token limits need enforcement at a provider broker, and
+unsupported hard limits reject the job.
+
+**Other gaps.** Activating an imported resource as a new local lens with
+attribution, a `document_bundle` kind, key rotation and endpoint discovery.

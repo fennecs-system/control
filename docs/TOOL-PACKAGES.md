@@ -6,15 +6,15 @@ stores each admitted version on the node and copies it into later runs that
 opt in. Packages are files with provenance. Admitting one grants no host
 access, network, credentials or new tool authority.
 
-The first package is the native Minecraft 26.3 Mineflayer client from run
-`-121`. Rebuilding it costs a swarm about 20 minutes, so a later run can mount v1
-instead. Minecraft protocol details stay in the package and its README, not in
+The examples below use `mc263-client`, a Minecraft client a swarm took about 20
+minutes to build. A later run can reuse an admitted version instead. Workload
+details such as the Minecraft protocol stay in the package and its README, not in
 Control.
 
-This is the L3 "versioned tool packages" slice of the
-[swarm roadmap](SWARM-ROADMAP.md#p2-a-reviewed-self-improvement-loop). It reuses
-the [knowledge proposal/review](KNOWLEDGE-TOOLS.md) pattern, the
-[project folder](WORKSPACES.md) import rules and [lens](LENSES.md) capture.
+Packages reuse the [project folder](WORKSPACES.md) import rules and
+[lens](LENSES.md) capture. Agent proposals and review, which would follow the
+[knowledge](KNOWLEDGE-TOOLS.md) pattern, are planned in the
+[swarm roadmap](SWARM-ROADMAP.md#l2l3-a-reviewed-self-improvement-loop).
 
 ## Store
 
@@ -45,12 +45,14 @@ There is no database.
 | --- | --- |
 | `name` | Package ID: lowercase letters, digits and dashes, at most 64 characters. |
 | `version`, `commit`, `tag` | Version number, the full commit ID and its tag. |
+| `files`, `bytes` | File count and total size of the version. |
 | `description` | One line, at most 300 characters. |
 | `usage` | How to use it, at most 2,000 characters. For example, where the folder must sit (`/workspace/castle`). |
 | `setup` | Up to eight setup commands, such as `npm ci` or `nix build`. These are documentation. Control never runs them. |
 | `entry` | Optional main file or README path inside the package. |
-| `provenance` | Source (operator import, or run/chat/agent for proposals), evidence and a recheck condition. |
-| `admitted` | Who admitted it, and when. Revocation adds who, when and why. |
+| `provenance` | Who admitted it and how, optional run/chat/agent references, evidence and a recheck condition. The host source path is shown only to the operator. |
+| `admitted_at` | When it was admitted. |
+| `revoked` | Present after revocation: who, when and why. |
 
 A package may ship its own `control-tool.json` at the repository root with
 `description`, `usage`, `setup` and `entry`. Operator-supplied fields override
@@ -74,9 +76,7 @@ queued or running attempt's package.
 ## Lifecycle
 
 ```text
-propose (agent, later) ──┐
-                         ├─▶ review ─▶ admitted ─▶ revoked
-import (operator) ───────┘             (terminal)
+import (operator) ─▶ admitted ─▶ revoked (terminal)
 ```
 
 - **Import (operator).** An authenticated local operator admits a Git repository
@@ -91,26 +91,13 @@ import (operator) ───────┘             (terminal)
     --recheck "When Mineflayer or minecraft-data ship official 26.3 support"
   ```
 
-  The CLI calls the operator MCP tool `control.package.import` with the local
-  operator session, so it uses the existing operator authentication. The import
-  reads the committed tree at `--rev` (default `HEAD`). Uncommitted edits are not
-  included. The slow Git and copy work runs without holding the state lock; the
-  index entry is checkpointed afterwards and rolled back if the save fails.
-  An operator import is itself the admission, so it creates no pending review.
-
-- **Propose (agent, later slice).** A worker submits a folder from its own
-  workspace as a new package or version with a description, usage, evidence and
-  recheck condition. As with knowledge proposals, Control records the actor,
-  chat, run, attempt and captured lens/package revisions; the worker cannot
-  supply or change provenance. The proposal commits the folder into a pending
-  area under the store, applying the same file rules as import. Judges can read
-  packages but cannot propose. Inactive or stale mailboxes cannot propose.
-
-- **Review (later slice).** Pending proposals appear beside knowledge claims
-  under **Knowledge → Review**, with the manifest, a bounded file listing and the
-  diff against the previous version. Only an authenticated local operator can
-  admit or reject. Admission and rejection are terminal; a changed folder is a
-  new proposal.
+  The path must be absolute. The CLI calls the operator MCP tool
+  `control.package.import` with the local operator session. The import reads the
+  committed tree at `--rev` (default `HEAD`); uncommitted edits are not included.
+  Git and copy work run without holding the state lock; the index entry is
+  checkpointed afterwards and its files removed if the save fails. An operator
+  import is itself the admission. `control package list [QUERY]` and
+  `control package show NAME [VERSION]` inspect the store.
 
 - **Revoke.** `control package revoke mc263-client 1 --reason "..."` (MCP
   `control.package.revoke`) marks a version revoked. Revocation is terminal.
@@ -177,15 +164,12 @@ read-only source like the rest of the workspace.
 Agent services have their own `/workspace` volume and no host mounts. To run a
 package in a service (for example, the Minecraft client at `/workspace/castle`),
 an agent copies `/workspace/.control-tools/mc263-client` into the service with the
-generic copy-into-service tool. Control does not add a package-specific path.
-If that tool only reads ordinary workspace paths, the agent first copies the
-folder to a normal workspace folder (`cp -R /workspace/.control-tools/mc263-client
-/workspace/castle`) and copies that.
+generic `control_service_copy` tool, which accepts `.control-tools/<name>` as its
+one Control-internal source. Control adds no package-specific path.
 
-A real read-only bind mount for every execution adapter (Codex, Claude workspace
-commands, command jobs and previews) is possible later. It would need changes to
-each adapter's restart identity checks, and the copy above already keeps the
-store immutable, so this slice does not add one.
+A read-only bind mount per execution adapter is not used: it would need changes
+to each adapter's restart identity checks, and the copy already keeps the store
+immutable.
 
 ## Security
 
@@ -212,19 +196,19 @@ store immutable, so this slice does not add one.
 - **No credentials.** The exclusion list is the same defence as project import.
   It is not universal secret detection. The operator reviews what they admit.
 - **Judges** can search and read captured packages and see them in their
-  read-only source. They cannot propose, import or revoke.
-- **Provenance** is written by Control from the operator command or (later) the
-  proposing attempt, never taken from package files.
+  read-only source. They cannot import or revoke.
+- **Provenance** is written by Control from the admitting action, never taken
+  from package files.
 
-## Out of scope for now
+## Not yet supported
 
-- Agent proposals and the review UI (the next slice; see above).
+- Agent proposals and an operator review queue. Like knowledge proposals,
+  Control would record the proposing actor, run and attempt itself, apply the
+  import file rules, and let only the operator admit or reject.
 - Signing, federation, remote registries, and publishing or fetching packages
   between nodes.
 - Dependency resolution between packages, and running setup automatically.
-- A read-only bind mount per adapter (see above), and per-package resource
-  quotas beyond the size bounds.
+- Per-package resource quotas beyond the size bounds.
 - Garbage collection of revoked versions.
-- Measuring reuse. The roadmap's measured two-agent reuse demonstration comes
-  after proposals: one swarm proposes a tool and the operator admits it; a fresh
-  swarm reuses it; then compare time to the milestone against a rebuild run.
+- Measured reuse: a fresh swarm reusing an admitted package, compared with a
+  rebuild run.

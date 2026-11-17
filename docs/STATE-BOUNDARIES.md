@@ -1,10 +1,9 @@
 # State and effect boundaries
 
-The direction is a small application layer with explicit transitions and effects.
-Rust does not need a general monad framework to provide the useful property:
-borrow the required domain state, apply a typed input, return effect descriptions,
-and feed interpreted results back into the transition. Lift domain operations
-into application operations without granting them ambient access to all state.
+Application operations borrow the domain state they need, apply a typed input
+and return ordered effect descriptions. A driver interprets the effects and
+feeds confirmed results back. Rust needs no monad framework for this, and
+operations never get ambient access to the whole application `State`.
 
 ```mermaid
 flowchart TD
@@ -17,184 +16,107 @@ flowchart TD
     Results --> Transition
 ```
 
-## First operation: directed agent messages
+## Operations on this boundary
 
-`application/messages.rs` plans from borrowed run, conversation, service, receipt
-and bot views. It takes an explicit run ID and contains no global `State`, JSON,
-clock, filesystem, lock, channel or executor. Command/result/receipt types and
-conversation/run records live in `application`; the old module names re-export
-records for incremental migration. Saved JSON fields and tool responses retain
-their existing format. This operation remains application policy, not a new bot
-supervisor concept.
+**Directed agent messages** (`src/application/messages.rs`). Planning reads
+borrowed run, conversation, service, receipt and bot views with an explicit run
+ID; it uses no global `State`, JSON, clock, filesystem, lock, channel or
+executor. Planning does not mutate state. Applying a plan changes only the
+recipient's messages and revision, the run ledger and notice, and the bounded
+receipt cache, then returns ordered effects:
 
-Planning does not mutate state. Applying a plan changes only the recipient's
-messages/revision, the run ledger/notice and bounded receipt cache. It returns a
-pending transition with explicit effects:
-
-1. Archive completed peer evidence (descendant follow-ups skip this effect).
+1. Archive completed peer evidence (descendant follow-ups skip this).
 2. Checkpoint the cross-domain update.
-3. Notify the dispatcher, exposed only after checkpoint success is acknowledged.
+3. Notify the dispatcher, only after the checkpoint is confirmed.
 
-An existing request receipt returns its typed result without further effects.
-The host rechecks source authority and recipient action authority before apply;
-lineage, service generation, stop/action scope and capacity rules remain intact.
-The existing bot supervisor still decides whether retained peer evidence can
-admit an unattended turn. Message delivery does not bypass approvals or create a
-second scheduling system.
+A repeated request returns its stored receipt without effects. The host rechecks
+source and recipient authority before applying. Lineage, service generation,
+stop scope and capacity rules still apply, and the bot supervisor still decides
+whether a message can admit an unattended turn. The driver in
+`src/agent_message.rs` holds the application mutex through authorization,
+planning, application and persistence. Its transaction guard restores only the
+touched fields on failure or unwind before a confirmed checkpoint, and keeps the
+committed receipt after confirmation.
 
-The current driver in `agent_message.rs` owns the application mutex throughout
-authorization, planning, application and journal/checkpoint I/O. Its transaction
-guard restores only touched fields on failure or unwind before a confirmed
-checkpoint; after confirmation it preserves the committed receipt. No complete
-history clone is required. Removed from the operation: the global state handle,
-JSON result construction, implicit clock allocation, direct enqueue wakeup and
-storage callbacks. The full-state checkpoint and its driver lock remain.
+**Room wakes** (`src/application/room_wakes.rs`). Planning consumes borrowed
+runs, conversations, posts and subscriptions, with an authorization predicate
+supplied by the host, and returns wait/advance/disarm/queue decisions. Some
+legacy records still carry journal-backed fields, so this is not yet a fully
+I/O-free projection. Plans hold positional indices and must be applied under the
+same exclusive ownership, with no other writer or suspension in between.
 
-The experimental Tokio driver is **test-only**, using fake archive/checkpoint
-effects and real suspension under a Tokio mutex. It runs the same operation and
-guard. Conformance checks cover ordering, duplicates/restart receipts, failed
-archive/checkpoint rollback, cancellation before and after confirmed commit,
-waiting writers and stale source attempts. This proves the transition need not
-choose a concurrency runtime; it is not a production async persistence adapter,
-an async speed comparison or a test of cancelling in-flight filesystem I/O.
+**Room notifications** (`src/application/room_notifications.rs`). Advance,
+disarm and queue changes apply through narrow run, chat and wake fields and
+return a checkpoint effect plus, for queued notifications, a dispatcher wake.
+The blocking interpreter in `src/rooms/notifications/driver.rs` holds the state
+borrow through persistence and uses the same guard rules. Cursor-only changes
+checkpoint without waking a worker.
 
-## Remaining boundaries
+**Continuations** (`Submission::into_continuation` in
+`src/application/runs.rs`). A continuation borrows the origin's captured
+settings and builds a fresh run through `into_run`. Captured models (including
+none), lenses and lineage carry over; attempts and stale grants do not. The host
+keeps actor authorization, capacity, current grants, clock and IDs, queue order
+and dispatcher notification.
 
-One-shot room wake planning (#151) lives in `application/room_wakes.rs`.
-It consumes borrowed runs, conversations, posts and
-subscription references, with an authorization predicate supplied by the host.
-It returns typed wait/advance/disarm/queue decisions. Continuation validation is
-shared with the existing listener driver through a compatibility wrapper.
-No global `State`, JSON encoding, clock or executor is passed to the planner.
-Legacy records still include journal-backed fields; this is not yet a fully
-materialized, I/O-free domain projection. Queue capacity, grants and effect
-interpretation remain host responsibilities.
-Its plans contain positional indices and must be consumed under exclusive
-ownership, without another writer or suspension between planning and application.
-The publication follow-up adds `application/room_notifications.rs`: typed
-advance/disarm/queue changes apply through narrow mutable run, chat and wake
-fields. The persisted wake receipt moves with its existing fields and defaults;
-saved JSON, notification text, captured settings and grant inheritance stay the
-same. Run identity is supplied by the driver. A queued run is constructed from
-captured settings directly rather than resolving provider defaults and then
-overwriting them.
+**Approval resumption** (`src/application/approval_resume.rs`). A read-only
+check over borrowed runs returns `Wait`, `Note` or `Candidate(index)`.
+Publication takes an `approval_resume::Edit` holding only runs, the queue notice
+and borrowed chat records; `chat::continuation` prepares the admitted run
+without changing state. Port and bot drivers acknowledge their request records
+in the same checkpoint and wake the dispatcher only after it succeeds. A
+rejected save restores the prior edits and sends no wake; reload does not replay
+acknowledged requests. Request grouping and rollback still live in those
+drivers.
 
-Applying a change returns a pending transition with ordered checkpoint and, for
-queued notifications, dispatcher-wake effects. The blocking interpreter in
-`rooms/notifications/driver.rs` owns the state borrow through persistence. Its
-guard restores only touched fields on failure or unwind before a confirmed
-checkpoint. A failure after confirmation retains the durable queued run. This
-aligns notification delivery with directed messages: dispatcher notification is
-exposed only after the save succeeds, rather than as a side effect of enqueue.
-Cursor-only changes checkpoint without waking a worker.
+## Alternate driver conformance
 
-Conformance fixtures exercise the same transition and guard with blocking and
-test-only Tokio interpreters, failed checkpoints, unwind, dropping a suspended
-transaction before/after confirmed commit, and restart without duplicate
-publication. These use fake persistence and do not establish safety of cancelling
-an in-flight filesystem commit. Production persistence remains synchronous and
-under the existing lock; neither the scheduler nor core gains a runtime or a
-notification-specific lifecycle.
+The messages and room-notification operations also run under a test-only Tokio
+driver (`tokio` is a dev-dependency only) with fake archive and checkpoint
+effects. Conformance tests cover ordering, duplicate and restart receipts,
+failed archive or checkpoint rollback, unwind, dropping a suspended transaction
+before and after a confirmed commit, waiting writers and stale source attempts.
+This shows the transitions do not depend on a concurrency runtime. It is not a
+production async persistence adapter, a speed comparison or a test of
+cancelling in-flight filesystem I/O.
 
-`storage::checkpoint` now distinguishes failures before attempting replacement
-(`NotReplaced`) from failures at rename or directory sync (`Unconfirmed`). Success
-requires both file and directory sync before notifying state-change subscribers.
-Real-file tests inject a directory-sync failure after replacement and verify that
-the new bytes are visible despite the error. This is an adapter boundary, with
-no new supervisor state, runtime or persistence dependency.
+## Checkpoint durability
 
-The storage adapter now reconciles an unconfirmed write once, while retaining
-exclusive writer ownership. It compares the published regular file with the
-exact intended bytes using a bounded buffer, then syncs that file and directory.
-Only confirmed equality/durability returns success and notifies subscribers.
-Different, missing or unreadable bytes remain unconfirmed; a visible file alone
-is not a durable acknowledgement. Successful writes gain no extra reads/syncs.
+`storage::checkpoint` distinguishes failures before replacement
+(`CheckpointError::NotReplaced`) from failures at rename or directory sync
+(`CheckpointError::Unconfirmed`). Success requires both file and directory sync
+before state-change subscribers are notified. On an unconfirmed write the
+adapter, still holding exclusive ownership, compares the published file with the
+intended bytes, then syncs file and directory. Only confirmed equality and
+durability count as success; a visible file alone does not.
 
-The legacy `storage::save` adapter returns ordinary errors only before replacement.
-If reconciliation cannot establish the outcome, it requests existing node
-shutdown and unwinds, poisoning the shared state mutex. Requests/dispatch cannot
-reacquire it, and shutdown cannot save an in-memory rollback over uncertain disk
-state. Project-approval staging files survive unwind, since that checkpoint may
-reference them. This deliberately changes the unreconciled-error path from an
-unsafe retry into a stopped node; no timeout, new supervisor mode or durable
-status object is introduced. All current production checkpoint callers use this
-adapter. Future consumers of the typed API must handle `Unconfirmed` explicitly.
+`storage::save`, used by all production checkpoint callers, returns ordinary
+errors only before replacement. If reconciliation cannot settle the outcome, it
+requests node shutdown and unwinds, poisoning the state mutex, so no request or
+shutdown path can save an in-memory rollback over uncertain disk state. Startup
+confirms the checkpoint file and directory before journal recovery and dispatch.
+Fault tests inject directory-sync failure and byte mismatches, and check
+shutdown, 503 and poison fencing in a child process. They are filesystem fault
+injections, not power-loss simulations.
 
-Startup confirms the checkpoint file and directory before journal recovery and
-dispatch. Fault tests cover transient directory-sync failure, exact-byte mismatch,
-an approval resume surviving reload without duplicate admission, and persistent
-uncertainty in a child process that verifies shutdown/503/poison fencing and
-retained candidate bytes. These are filesystem fault injections, not a hardware
-power-loss simulation. Persistence remains synchronous under the write lock;
-durable intent, generation/revision validation and cancellation settlement remain
-necessary before moving it outside that lock or introducing an async interpreter.
+## Limits and next steps
 
-This is not the complete A1/A2/A4 extraction or a finished server/web/TUI split.
-The application module still shares legacy service/delegation/bot record types,
-and other handlers still take broad state. The shared loopback MCP client is now
-a library module independent of terminal presentation. `control tui` and
-`control-harness` call the same library entry point, so they no longer compile
-the terminal source separately. An explicit server-only build excludes terminal
-code and dependencies; the default build retains the existing CLI. Web rendering
-remains in the server. These are module/build boundaries, not the finished
-independent crate split. Extract client/protocol code and web presentation
-behind actual application commands/queries rather than duplicating the rules or
-renaming their existing modules as independent layers.
+Persistence is synchronous and runs under the write lock. Before releasing the
+lock during persistence, add durable intent and typed effect identity carrying
+source generation and target revisions, revalidate authority and versions on
+completion, and reconcile unknown outcomes. A plan from these operations cannot
+be kept across another writer or an await: its rollback positions are only safe
+under exclusive ownership. An async interpreter must settle an in-flight commit
+before giving up that ownership, because dropping a future cannot undo a disk
+write.
 
-Before releasing the write lock during persistence, introduce durable intent and
-typed effect identity carrying source generation and relevant target/resource
-revisions. Revalidate authority and versions when completion returns; reconcile
-unknown outcomes. A private plan from this first slice **cannot** be retained
-across another writer or an await between planning and apply. Its rollback
-positions are safe only under exclusive ownership. An async interpreter must
-settle an in-flight commit's outcome before surrendering that ownership; dropping
-a future cannot undo a disk write whose outcome is unknown.
+The application module still shares legacy service, delegation and bot record
+types, and other handlers still take broad state. Web rendering remains in the
+server. Next candidates are callback admission and bounded queries that let
+rendering leave the lock; see [library boundaries](CRATE-BOUNDARIES.md) for the
+client/server split.
 
-Continuation construction now uses `Submission::into_continuation` in the
-application layer. It borrows the origin's captured settings and constructs a
-fresh run through the shared `into_run` constructor. The host still owns actor
-authorization, capacity, current service grants, clock/ID, queue ordering and
-dispatcher notification. Captured models (including `None`), lenses and lineage
-remain unchanged; attempts and stale grants are not copied. No record/schema or
-provider-session change is involved.
-
-Approval eligibility now lives in `application::approval_resume`: a read-only
-operation over borrowed runs derives `Wait`, `Note` or `Candidate(index)`.
-The host keeps authorization, capacity, request acknowledgement and durable
-publication, using the same continuation constructor. Existing busy-chat,
-human-steering, design-answer and failure rules are unchanged. Candidate indices
-are ephemeral under exclusive state ownership, not plans to carry across an
-await or another writer.
-
-Approval publication now takes an `approval_resume::Edit` containing only runs,
-the queue notice and borrowed chat records. `chat::continuation` prepares an
-admitted run without changing state or notifying a dispatcher. The host adds
-current grants, then the application operation records that run and its note.
-Port and bot drivers acknowledge their existing request records in the same
-checkpoint and notify the dispatcher only after successful persistence. Ordinary
-save rejection restores the prior edits and sends no wake; reload does not replay
-acknowledged requests. The existing checkpoint adapter reconciles or fences an
-uncertain publication instead of returning an ordinary rollback error.
-
-This completes the ordering of this blocking path, not its full extraction:
-request grouping, acknowledgement and rollback still live in the existing port
-and bot drivers, and bot reconciliation retains its wider snapshot. The root
-lock remains held throughout. No async or out-of-lock persistence is enabled.
-
-Bot presentation reads pause intent independently from the supervisor's retained
-turn handle. An outstanding request is not evidence of execution: queued work
-is labelled queued, a paused queued bot is paused, and an already-executing turn
-remains visible as running while paused. This projection changes no admission,
-pause, rearm or cancellation semantics and adds no persisted status source.
-
-Next, migrate callback admission and continuation/approval operations behind the
-same style of interface, then bounded queries that let web rendering leave the
-lock. Finish the client/TUI crate boundary over the shared library interface;
-extract web routing/rendering separately. Keep model and
-engine execution in adapters. Core crates retain generic state/event/effect rules
-and no HTTP, terminal, provider or runtime dependency.
-
-Benchmark the affected operation and sample real stacks before and after each
-slice. Keep startup, allocations/resident memory, history scaling and lock/fsync
-latency as separate measurements; a file move is not a speed improvement. See
-[PERFORMANCE.md](PERFORMANCE.md) for fixtures and measurement limits.
+Benchmark each migrated operation before and after, keeping startup,
+allocations, resident memory, history scaling and lock/fsync latency as separate
+measurements. Moving code is not a speed improvement. See
+[PERFORMANCE.md](PERFORMANCE.md).

@@ -1,159 +1,88 @@
 # Library boundaries
 
-Keep the application understandable through small interfaces and independently
-tested libraries. Extract an existing responsibility when the boundary removes
-coupling or repeated work; moving files alone does not create that boundary.
+Keep Control understandable through small interfaces and independently tested
+libraries. Extract a responsibility when the boundary removes coupling or
+repeated work; moving files alone does not create a boundary.
 
-The Pi/tinygrad design constraint is a small vocabulary with separate decisions
-and execution. Prefer a tool, strategy or configuration over a new core concept.
-Cron interpretation, recipes, personas, goal reasoning, learning procedures and
-compaction strategies compose existing operations; they do not belong in the
+The design constraint is a small core vocabulary with decisions separate from
+execution. Prefer a tool, strategy or configuration over a new core concept:
+cron interpretation, recipes, personas, goal reasoning, learning procedures and
+compaction strategies compose existing operations and stay out of the
 supervisor's lifecycle types. Application operations enforce authorization and
-durable acceptance; adapters perform I/O. A core API change must identify the
-generic invariant that the existing interfaces cannot express. Share helpers
-where useful without moving entire product behaviors into the core.
+durable acceptance; adapters perform I/O. A core API change must name the
+generic invariant that existing interfaces cannot express.
 
-Current libraries:
+## Workspace crates
 
-- `control-context`: deterministic captured context, lens composition and shared
-  command definitions, independent of mutable application state.
-- `control-http`: typed HTTP response construction and security/header policies.
-- `control-ai`: provider record decoding, normalized
-  activity, usage and final results. No credentials, networking, containers or UI.
-- `control-core`: borrowed scheduling inputs, validated slot capacity, pure
-  admission/dispatch/attempt-generation predicates and typed persistent-resource
-  transitions. Default builds use only `std`; optional Serde support validates
-  identities and leases at persistence boundaries. Full application commands,
-  authority checks, durable writes and Docker supervision remain in adapters.
-  See [persistent tools](PERSISTENT-TOOLS.md) for the current resource contract.
-- `control-effect`: `std`-only. `machine` defines the `Machine` trait (event and
-  supplied time in, stamped and durability-tagged effects out) with no clocks,
-  I/O or locks. `sync` provides `CancelToken`, a bounded cancellable channel and
-  a `Changes` generation counter, so drivers wait instead of polling. A durable
-  checkpoint does not make an effect eligible; interpreters revalidate its stamp
-  first. Its API follows tokio's shapes, so an async driver can replace a
-  blocking one without changing machines. Not a scheduler or an event bus.
-- `control-bot`: persistent, callback-driven bots (agents that manage a
-  collection of services and respond to events) as a pure `Supervisor` machine,
-  a first slice of the [bot-control contract](research/BOT-CONTROL.md). Bot
-  definitions subscribe to room messages, events observed on their services and
-  timers; budgets bound turns; commands pause, resume and stop. Cursors drop
-  replayed events, `TurnId`s make turn requests idempotent and stale completions
-  harmless, and `next_deadline` lets drivers wait instead of polling. Depends only
-  on `control-effect`, with optional Serde. The application owns authority,
-  persistence of state with its intents, and queuing turns.
-- The `control` library currently shares configuration, identity, diff rendering
-  and the Discord adapter between executables. Discord is compiled once rather
-  than included as source in two binaries. It consumes a typed delivery projection
-  instead of retaining the entire application's JSON tree. Authorization and DM
-  binding are rechecked at delivery; the projection never grants authority.
+| Crate | Responsibility |
+| --- | --- |
+| `control-context` | Pure lens selection and composition, captured context, shared command and tool-policy definitions, attempt mailboxes and working notes. No mutable application state or resource permissions. |
+| `control-http` | Typed HTTP response serialization and security headers. Routing, authorization and state stay in callers. |
+| `control-ai` | Provider record decoding into normalized activity, usage and final results, plus the bounded text-call contract. No credentials, networking, containers or UI. |
+| `control-core` | Borrowed scheduling inputs, validated slot capacity, pure admission/dispatch/attempt-generation predicates and typed persistent-resource transitions. `std` only; optional Serde validates identities and leases at persistence boundaries. See [persistent tools](PERSISTENT-TOOLS.md). |
+| `control-effect` | `std` only. `machine` defines the `Machine` trait: events and supplied time in, stamped, durability-tagged effects out, with no clocks, I/O or locks. `sync` provides `CancelToken`, a bounded cancellable channel and the `Changes` generation counter so drivers wait instead of polling. Interpreters revalidate an effect's stamp before acting. The API follows Tokio's shapes so an async driver can replace a blocking one. Not a scheduler or event bus. |
+| `control-bot` | Persistent, callback-driven bots as a pure `Supervisor` machine, a slice of the [bot-control contract](research/BOT-CONTROL.md). Bots subscribe to room messages, service events and timers; budgets bound turns; commands pause, resume and stop. Cursors drop replayed events, `TurnId`s make turn requests idempotent, and `next_deadline` lets drivers sleep. Depends only on `control-effect`. The application owns authority, persistence and queuing. |
+| `control-comonad` | Comonadic history views: `Space`, `Store`, `Tree` zippers and `lens` cuts that keep the focus verbatim and coarsen with distance. Pure and `std` only. |
+| `control-journal` | Append-only JSON-lines history, one file per conversation. Appends write and sync only the new line; positions never move. Implements `control_comonad::Space`. |
 
-Potential later splits are `control-tui` for the existing MCP client and terminal
-interface, and `control-web` for HTTP/UI adapters. Their dependency should be a
-small application interface, not direct access to every mutable runtime field.
-The TUI is already close to this boundary; web routing and rendering still need
-their state projection and authorization calls made explicit.
+The `control` library (`src/lib.rs`) shares configuration, identity, diff
+rendering, the outbox, the loopback MCP client, the terminal UI and the Discord
+adapter between executables. Discord follows typed delivery events from the
+outbox (`src/outbox.rs`) and reads no other application state except which
+inbound DMs were accepted. Authorization and DM binding are rechecked at
+delivery.
 
-These are proposed crate boundaries, not completed extractions: the terminal and
-loopback client are library modules compiled once, with terminal dependencies
-excluded by the server-only build. The TUI now calls typed client operations for
-port decisions and project approval; only the client owns their HTTP routes,
-forms, origin headers and confirmation rules. Production client transport fields
-are private. Server state, routing and rendering remain coupled in places.
-The Rust/WASM package under `web/` is the browser client, not yet a `control-web`
-server adapter.
+## Client and server
 
-This is a useful stopping point for general separation work: the existing pure
-domain/effect crates, borrowed application operations, blocking/async conformance
-fixture and client/server build boundary support the next model/summary feature.
-Migrate a remaining legacy access when its consumer needs it or measurement shows
-a problem. Full web extraction, independent client/TUI crates and out-of-lock
-persistence remain explicit follow-ups, not prerequisites for a text-only model
-adapter. Do not mark those broader boundaries complete or add runtime/plugin
-frameworks merely to close the architecture phase.
+The terminal UI and loopback client are library modules compiled once and used
+by `control tui` and `control-harness`. The `tui` feature is on by default;
+`--no-default-features` builds a server without terminal code or its
+dependencies. The terminal calls typed client operations for port decisions and
+project approval; only `src/client.rs` owns their HTTP routes, forms, origin
+headers and confirmation rules. The Rust/WASM package under `web/` is the
+browser client. Server state, routing and rendering remain coupled in places.
 
-MCP is another adapter, not core business logic. A future `control-mcp` should
-own JSON-RPC/protocol negotiation, tool discovery schemas and protocol error
-mapping, calling the same application operations as web and terminal clients.
-The shared tool catalogue already exists; do not implement a second tool system.
-Extract that crate after the application interface is real rather than exporting
-the whole state to an otherwise cosmetic protocol crate. HTTP and stdio can share
-its protocol logic while retaining their own framing and authentication.
+Possible later splits:
 
-Use `control-web` for the server-side web adapter and `control-web-ui` if/when
-renaming the existing Rust/WASM browser client is useful. These components can
-run in one binary and call each other directly; separate crates do not require
-separate processes, network hops, a message bus or repeated JSON serialization.
+- `control-tui` for the MCP client and terminal interface. It is already close
+  to this boundary.
+- `control-web` for server-side HTTP/UI adapters, once web routing and rendering
+  call explicit projections and authorization. `control-web-ui` could rename the
+  existing browser client.
+- `control-mcp` for JSON-RPC negotiation, tool discovery schemas and protocol
+  errors over the existing tool catalogue. HTTP and stdio can share its protocol
+  logic while keeping their own framing and authentication.
 
-The application interface should expose typed commands and bounded queries:
-create/send/steer a conversation, request a project, cancel a run, inspect a run,
-and read conversation updates. HTTP/MCP and local web handlers must invoke the
-same authorization and durable application operations. The TUI remains an MCP
-client. An in-process web adapter should call that application interface directly;
-it does not need loopback HTTP, JSON serialization or copied history to act like
-a client. Remote clients can serialize those same contracts through an admitted
-transport. Credentials and authority are checked on the serving node.
+Extract each one only once its application interface is real, rather than
+exporting the whole state to a cosmetic crate. These crates can still run in one
+binary and call each other directly, with no extra processes, network hops,
+message bus or repeated serialization.
 
-Keep render-only work outside the mutable-state lock where possible. Use borrowed
-views within a request and bounded owned snapshots when crossing a task/thread
-boundary; do not export `Arc<Mutex<State>>` as the public core API. Preserve the
-existing checkpoint ordering and result fences during extraction. Full transcript
-clones or a new event bus are not prerequisites for this separation.
+## Application interface
 
-`control-core` should contain durable run transitions, admission, resource
-ownership and lifecycle rules. It should not become a catch-all for provider
-protocols, web rendering, Discord delivery or tool implementations. Concrete
-process/container executors interpret effects; adapters present results. Provider
-selection and normalized events do not grant filesystem, network or tool access.
-Future direct model APIs and local endpoints should use explicit adapters, rather
-than pretending a Codex/Claude CLI harness is the same protocol as a model API.
+Expose typed commands and bounded queries: create, send and steer a
+conversation, request a project, cancel or inspect a run, and read conversation
+updates. Web, MCP and terminal clients invoke the same authorization and durable
+operations. Keep render-only work outside the state lock where possible: borrow
+within a request and pass bounded owned snapshots across threads. Do not export
+`Arc<Mutex<State>>` as a public API. See
+[state and effect boundaries](STATE-BOUNDARIES.md) for the operations already
+migrated.
 
-Keep these as incremental extractions with persistence/authorization regressions.
-Measure targeted rebuilds before claiming compile-time improvements. Avoid an
-umbrella plugin runtime, cyclic dependencies and a crate for every source file.
+`control-core` holds durable run transitions, admission, resource ownership and
+lifecycle rules. It is not a home for provider protocols, web rendering, Discord
+delivery or tool implementations. Process and container executors interpret its
+effects. Provider selection and normalized events do not grant filesystem,
+network or tool access. Model APIs and local endpoints use their own adapters
+rather than pretending to be a CLI harness.
 
-Persistent tools should drive the next core extraction: typed resource identity,
-ownership/generation, lease and lifecycle transitions, plus the narrow operations
-needed to start, inspect, attach and stop. Pure decisions return explicit effects;
-the application checkpoints intent and container adapters perform those effects.
-Keep engine inspection, network enforcement, clocks and storage outside core.
-Model attempts attach to a resource; they do not implicitly own its whole lifetime
-or gain writable access to another attempt's checkpoint.
+## Rules for new extractions
 
-Do not wait for the full web/TUI split to implement the first persistent tool.
-Reuse command-job and preview mechanisms where their contracts match, keeping
-attempt-bound jobs and independent services distinct. Extract a common executor
-only when actual shared behavior supports it; neither duplicate a second
-scheduler nor introduce a generic orchestration framework for the first service.
-Record warm targeted check/rebuild times, transcript render time, lock-held work
-and allocations/peak memory on fixed fixtures before and after each slice. A
-crate split alone does not improve scheduling capacity or establish remote-node
-ownership, authenticated transport, replay protection or distributed consistency.
-
-## Delivery reader measurement
-
-An ignored, credential-free benchmark compares the old full JSON-tree reader,
-a streaming typed reader, and the chosen typed slice decoder. Run:
-
-```sh
-nix develop --command cargo test --release --locked --lib \
-  discord::delivery::tests::profile_delivery_projection -- --ignored --exact --nocapture
-```
-
-On the development Mac, three fresh-process trials of ten decodes each on a
-10,253,422-byte synthetic ledger (250 runs, 750 attempts, 7,500 activities):
-
-| Reader | Median elapsed / 10 decodes | Peak process RSS |
-| --- | --- | --- |
-| Previous full JSON tree | 52.9 ms | 30,240 KiB |
-| Typed streaming | 222.1 ms | about 3,520 KiB |
-| Typed slice, size-reserved buffer | 29.7 ms | 13,488 KiB |
-
-The selected reader uses about 44% less decode time and 55% less peak RSS in this
-fixture. Its temporary byte buffer is released after decoding; only delivery
-fields, the latest attempt and its last relevant file change are retained.
-Unchanged polls reuse the cached projection. The validated file reader reserves
-the already-checked descriptor size once, avoiding repeated growth/copies.
-Streaming consumed less memory but cost substantially more parsing time here.
-These are warm-file synthetic cache-miss measurements, not end-to-end latency or
-a guarantee for every ledger. The benchmark remains available to check the tradeoff.
+- Extract incrementally, with persistence and authorization regressions.
+- Avoid an umbrella plugin runtime, cyclic dependencies and a crate per file.
+- Model attempts attach to resources; they do not own a resource's lifetime or
+  get write access to another attempt's checkpoint.
+- Extract a shared executor only when real shared behavior supports it.
+- Measure targeted rebuild time, render time, lock-held work and peak memory on
+  fixed fixtures before and after. A crate split alone does not add scheduling
+  capacity or remote-node guarantees.

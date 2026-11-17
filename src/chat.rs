@@ -864,7 +864,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
     let session=state.chats.iter().find(|c|c.id==id).ok_or("Chat not found.")?;
     identity::authorize(&session.actor,Action::Task)?;
     let runs=crate::conversation::Conversation::of(state,session);
-    let mut html = "<!doctype html><html lang='en'><head><meta charset='utf-8'><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'></head><body class='transcript'>".to_owned();
+    let mut html = "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'></head><body class='transcript'>".to_owned();
     let project_message=crate::projects::message_index(session);
     html.push_str(&crate::previews::links(state,id));
     html.push_str(&crate::github::panel(state,id));
@@ -1004,7 +1004,7 @@ pub fn requests(state: &State, id: &str) -> Result<String, &'static str> {
     let questions = crate::design::pending(state, id);
     let folders = state.chats.iter().filter(|c| c.actor==session.actor && within(state,&c.id,id) && c.project.as_ref().is_some_and(|p|p.pending || p.grant.is_none())).collect::<Vec<_>>();
     let count = questions.len() + folders.len() + crate::ports::pending_for_chat(state,id).len() + crate::bots::pending_count(state,id);
-    let mut html = format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'></head><body class='requests-panel' data-request-count='{count}'>");
+    let mut html = format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'></head><body class='requests-panel' data-request-count='{count}'>");
     if count == 0 { html.push_str("<p class='message-status'>No pending requests</p>"); }
     for folder in folders { html.push_str(&crate::projects::panel(state,&folder.id)); }
     for run in questions {
