@@ -1,56 +1,84 @@
 # Bounded execution
 
-The node runs up to three model attempts at once, across independent chats. Each
-chat has one writer and FIFO turn ordering. `/spawn` and `/btw` use independent
-chats and writable workspaces. A parent waiting for a delegated child or a design
-answer releases its model slot while reserving its own chat.
+The node runs up to three model attempts at once (`max_parallel_runs`), across
+independent chats. Each chat has one writer and runs its turns in FIFO order.
+`/spawn` and `/btw` use separate chats and writable workspaces. A run waiting for
+a delegated child or a design answer gives up its model slot but keeps its chat
+reserved.
 
-Delegated and spawned agents run in a background lane. Queued conversation turns,
-including root-chat continuations, start before queued background agents, and
-background agents use at most all but one slot. A message sent while agents work
-therefore starts at once instead of waiting for them. Turns within one chat keep
-FIFO order regardless of lane. With one slot, agents still run, behind any queued
-conversation turn; sustained conversation traffic can delay queued agents.
+## Lanes
 
-Set a node limit in `~/.config/control/execution.json` (mode `0600`), then restart:
+Delegated and spawned agents and automatic bot turns run in a background lane.
+Queued conversation turns, including root-chat continuations, start before queued
+background work, and background work uses at most all but one slot. A message
+sent while agents are busy therefore starts at once. Turns within one chat keep
+FIFO order whatever their lane. With a single slot, agents still run but wait
+behind any queued conversation turn, so sustained conversation can delay them.
+
+The queue admits at most 32 pending runs, including paused and cancelling work.
+
+## Configuration
+
+Node limits live in `execution.json` in the config directory
+(`~/.config/control/execution.json` by default). The file must be private (mode
+`0600`); omitted fields keep their defaults. Restart the node after editing it.
+Invalid configuration stops startup and fails `control doctor`. Limits are never
+taken from saved run state, model output or tool arguments.
 
 ```json
 {"max_parallel_runs": 3}
 ```
 
-The supported range is 1–8; 1 restores serial execution. The startup environment
-variable `CONTROL_MAX_PARALLEL_RUNS` overrides the file. Invalid configuration
-stops startup and fails `control doctor`. The setting is not taken from the
-saved run ledger, model output or tool arguments. The queue still admits at most
-32 pending runs, including paused and cancelling work.
+`CONTROL_MAX_PARALLEL_RUNS` in the startup environment overrides
+`max_parallel_runs`.
+
+| Key | Default | Range | Meaning |
+| --- | --- | --- | --- |
+| `max_parallel_runs` | 3 | 1–8 | Concurrent model attempts; 1 is serial. |
+| `max_agents_per_root` | 64 | 1–65,536 | Agents one root task may spawn or delegate ([delegation](DELEGATION.md)). |
+| `max_pending_agent_intents` | 256 | 1–65,536 | Node-wide backlog of accepted, not yet started agents. |
+| `max_advisors_per_root` | 1 | 0–8 | [Team advisors](LENSES.md#team-advisor) per root task; 0 disables. |
+| `advisor_failure_streak` | 3 | 2–64 | Consecutive failed or blocked turns of one member before its advisor hears. |
+| `advisor_stall_turns` | 24 | 4–4,096 | Settled team turns with no claim advancing before a stall fact. |
+| `advisor_bottleneck_members` | 2 | 2–64 | Members waiting on one claim before a bottleneck fact. |
+| `bot_recovery_continues` | 2 | 0–16 | Immediate recovery turns for a bot whose handoff was rejected ([recovery](TURN-CONTINUITY.md#recovery-streaks)). |
+| `bot_recovery_recheck_seconds` | 300 | 30–86,400 | First backoff recheck after that; doubles per failed turn, up to one day. |
+| `steering_turn_seconds` | 240 | 30–86,400 | Turn time in a steering chat before tool results suggest delegating ([steering notes](TURN-CONTINUITY.md#deadline-and-steering-notes)). |
+| `steering_exec_calls` | 6 | 1–1,024 | Command executions in such a turn before the same suggestion. |
+| `peer_digest_seconds` | 600 | 30–86,400 | How long a non-urgent agent message waits before a digest turn ([room notifications](ROOM-NOTIFICATIONS.md)). |
+| `observation_max_bytes` | 2,048 | 256–16,384 | Size of a chat's [fresh observation](WATCHES.md#fresh-observations). |
+| `local_agent_steps` | 64 | 16–1,024 | Model steps per [local-model turn](LOCAL-MODELS.md#local-agent-turns). |
+
+## Supervisor
 
 Admission saves the attempt's identity and captured inputs before starting its
-execution thread. Enqueue and completion wake the supervisor through a bounded,
-coalescing channel; a periodic reconciliation handles recovery. Execution threads
-are bounded and joined on shutdown. A panicked thread stops the node and retains
-the attempt intent for restart inspection. Cancelling one chat does not cancel
-unrelated chats. Overlapping results commit under the state lock; a failed save
-rolls back only that run and its chat, preserving other committed results.
+thread. Enqueue and completion wake the supervisor through a bounded, coalescing
+channel; periodic reconciliation handles recovery. Execution threads are bounded
+and joined on shutdown. A panicked thread stops the node and keeps the attempt
+intent for inspection after restart. Cancelling one chat does not affect others.
+Results commit under the state lock; a failed save rolls back only that run and
+its chat. Recovery marks unfinished attempts interrupted and keeps their
+workspaces; it never silently replays model requests.
 
-Existing container CPU, memory and process limits apply to each attempt and its
-tools. This slot limit bounds model fan-out, not total disk consumption or a
-node-wide CPU/memory reservation. Hard writable storage quotas remain open; size
-the limit for the machine and workloads. Recovery interrupts unfinished attempts
-and retains their workspaces; it does not silently replay model requests.
+## Resource scope
 
-Model attempts and tool services have separate lifetimes. [Persistent offline
-services](PERSISTENT-TOOLS.md) have independent identities, private tmpfs, resource
-limits and leases; model completion does not stop them. Attempt-bound command
-jobs still stop before checkpoints. Immutable Nix bases remain unchanged.
+Container CPU, memory and process limits apply to each attempt and its tools. The
+slot limit bounds model fan-out, not disk use or a node-wide CPU or memory
+reservation. There is no hard quota on live workspace storage yet; size the limit
+for the machine and workload.
 
-[Nonblocking agent batches](DELEGATION.md) reserve a configurable root budget
-(default 64) and node pending-intent capacity (default 256). The existing queue
-materializes tasks as space frees, while model slots independently bound how many
-execute. A large accepted batch is not a request to run that many model calls at
-once. Batch status/cancel and receipt recovery use the same durable scheduler.
+Model attempts and tool services have separate lifetimes:
+[persistent services](PERSISTENT-TOOLS.md) keep running after a model turn ends,
+while [workspace command jobs](COMMAND-JOBS.md) stop before each checkpoint.
 
-The isolated supervisor test exercises real admission, saves and commits with
-controlled workers, without provider calls. Run it alone because it requests
+[Spawn batches](DELEGATION.md) reserve root and node budgets when accepted. Tasks
+materialize as queue space frees, and model slots separately bound how many run.
+A large accepted batch does not start that many model calls at once.
+
+## Tests
+
+The isolated supervisor tests exercise real admission, saves and commits with
+controlled workers and no provider calls. Run each alone, because they request
 process-wide shutdown:
 
 ```sh
@@ -61,9 +89,10 @@ env -u CONTROL_WORKER_IMAGE CONTROL_CONFIG_DIR="$qa/config" CONTROL_STATE_DIR="$
   worker::tests::isolated_supervisor_overlaps_cancels_orders_and_joins -- --ignored --exact
 ```
 
-Local validation also ran
-`worker::tests::isolated_supervisor_retains_intent_after_worker_panic` alone and
+The same pattern runs
+`worker::tests::isolated_supervisor_retains_intent_after_worker_panic`.
 `worker::tests::live_parallel_workers_cancel_independently_and_shutdown_cleanly`
-against isolated Codex and Claude nodes. The live check uses MCP to start two
-shell commands, proves overlap, cancels one without stopping the other, then
-verifies graceful shutdown, retained diagnostics and the queued follow-up.
+is an ignored live check against an isolated, authenticated Codex or Claude node
+(pinned images, `CONTROL_QA_URL` and `CONTROL_QA_SERVER_BIN`): it starts two shell
+commands over MCP, proves they overlap, cancels one without stopping the other,
+then checks graceful shutdown, retained diagnostics and the queued follow-up.

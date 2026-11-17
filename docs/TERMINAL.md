@@ -1,57 +1,65 @@
 # Developing Control from the terminal
 
-The TUI is a client of the same server used by the website. It does not need a
-second agent loop or terminal-specific tools. Start the server and connect with
-`control tui`; use `/improve REQUEST` to develop Control. Improvement authority,
-the source root, provider and tool containers must already be configured on the
-node. `/open /absolute/path` requests another project folder and `/trust`
-approves the exact displayed request; agents work in isolated workspaces.
+The TUI is a client of the same server the website uses. It has no separate agent
+loop or terminal-only tools. Start the server, then run `control tui`. Use
+`/improve REQUEST` to ask agents to develop Control; the node must already have
+improvement authority, a source root, a provider and tool containers configured.
+`/open /absolute/path` requests another project folder and `/trust` approves the
+exact request shown. Agents work in isolated [workspaces](WORKSPACES.md).
 
-Type `/` for command suggestions. Recognized commands and prefixes such as
-`/con` are purple. Use ↑/↓ to select and Tab to complete; completion never sends
-or executes the command. Enter sends the completed draft. `/help` opens a
-scrollable command reference; Esc or `/chat` returns to the conversation.
-Shared chat commands come from the existing command definitions, with local
-terminal actions added in the client. Completion makes no server/model calls.
+## Composer
 
-Existing agent tools cover workspace command execution and background jobs,
-subagents and messages, persistent services and watches, web search/fetch,
+Type `/` for suggestions. Known commands and prefixes such as `/con` are shown in
+purple. Use ↑/↓ to choose and Tab to complete; completion never sends or runs the
+command, and makes no server or model call. Enter sends; Alt+Enter inserts a
+newline. `/help` opens a scrollable reference of commands and shortcuts; Esc or
+`/chat` returns to the conversation. Shared chat commands (`/improve`, `/spawn`,
+`/answer`, `/open`, …) come from `crates/context/src/commands.rs`; terminal-only
+actions such as `/activity`, `/lenses`, `/context`, `/trust`, `/port` and `/bot`
+are added in `src/terminal/command_menu.rs`.
+
+## Agent tools
+
+Agents use the server's existing tools: workspace commands and background jobs,
+subagents and messages, persistent services and watches, web search and fetch,
 offline HTML screenshots, artifacts, knowledge proposals, and scoped draft-PR
-publication for completed improvements. `rg`, Git, builds and tests can run in
-the configured tool environment; their presence and dependencies are environment
-capabilities, not guaranteed host tools. See [GitHub publication](GITHUB.md) for
-the clean-baseline, configured-repository and text-output limits. `/github PR`
-reads that repository's PR overview; add `files`, `comments`, `reviews`,
-`review-comments`, `checks` or `statuses` and an optional page number for bounded
-evidence. `/github PR comment|title|body TEXT` sends an explicit comment/edit;
-`/github PR merge HEAD_SHA [squash|merge|rebase]` requests an exact-head merge
-only when enabled by the operator's GitHub binding. These commands make no model
-call or chat post. Checks and legacy statuses are
-separate views of the captured PR head, with no claim that empty results pass CI.
+publication. `rg`, Git, builds and tests run in the configured tool environment;
+what is available depends on that image, not the host.
 
-The remaining work for an end-to-end terminal development loop is:
+## GitHub
+
+`/github` works on the repository configured for [GitHub publication](GITHUB.md)
+and makes no model call or chat post:
+
+```text
+/github PR [overview|files|comments|reviews|review-comments|checks|statuses] [PAGE]
+/github PR comment|title|body TEXT
+/github PR merge HEAD_SHA [squash|merge|rebase]
+```
+
+Merge requires the exact head SHA and is available only when the operator's
+GitHub binding was configured with `--allow-merge`. Checks and legacy statuses are
+separate views of the captured PR head; an empty result does not mean CI passed.
+
+## Not yet available
+
+An end-to-end terminal development loop still needs:
 
 - **Review and permissions:** terminal views for workspace diffs, artifact files,
-  tool schemas, active jobs/services and all pending requests, including browser
-  origins. Reuse typed server queries and existing approval operations. Folder,
-  port, bot and design-question decisions already have terminal commands; they
-  do not establish parity with every web management view.
-- **GitHub follow-up:** complete diff/workflow-log inspection and publishing new
-  source revisions to an existing PR after feedback. Comments, title/body edits
-  and explicitly authorized merges have typed tools; deployment remains separate.
-- **Interactive execution and browser verification:** durable interactive
-  process handles and bounded browser navigation/input against approved
-  previews. Background commands and offline screenshots exist; a screenshot
-  alone cannot exercise the running app's interactions.
-- **Development environments:** reproducible dependency/cache/network grants,
-  resource shapes, and build/test/profile artifacts. Use service/tool adapters
-  and the existing resource roadmap, not a privileged shell in the supervisor.
-- **Composer ergonomics:** cursor/word editing, paste handling, draft/history
-  navigation and argument completion for known chats, lenses and request IDs.
-  Command-name completion is the first increment, not a full terminal editor.
+  tool schemas, active jobs and services, and every pending request type
+  (including browser origins). Folder, port, bot and design-question (`/answer`)
+  decisions already have commands.
+- **GitHub follow-up:** full diff and workflow-log inspection, and pushing new
+  revisions to an existing PR after review.
+- **Interactive execution and browser checks:** durable interactive process
+  handles and bounded browser navigation/input against approved previews.
+- **Development environments:** reproducible dependency, cache and network grants,
+  resource shapes, and build/test/profile artifacts, delivered as tool adapters
+  rather than a privileged shell in the supervisor.
+- **Composer editing:** cursor/word editing, paste handling, draft history and
+  argument completion for chats, lenses and request IDs.
 
-These belong in tools/configuration and client projections over the application
-interfaces. Keep secrets in the planned Vault broker, outside prompts and shell
-environments. Acceptance should run an isolated terminal-driven edit, build,
-test, review and draft-PR cycle with a durable approval wait, restart and
-failure recovery; no website should be required for that supported workflow.
+These belong in tools, configuration and client views over the existing
+interfaces. Secrets stay outside prompts and shell environments. The acceptance
+test is an isolated terminal-driven edit, build, test, review and draft-PR cycle,
+with a durable approval wait, restart and failure recovery, and no website.

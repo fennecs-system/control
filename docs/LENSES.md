@@ -13,9 +13,10 @@ fields, tool names and APIs (`/lenses`, `control.chat.lenses`,
 agent is shown as a **DM** (distinct from **Rooms**), while URLs and APIs stay
 `/chat/...` and `control.chat.*`.
 
-Use **DNA** to create/edit genes and inspect their effective instructions.
-Select them in a DM's gene picker, or use terminal and Discord commands
-(`!genes`/`!use` with the default Discord prefix):
+Use **DNA** to create and edit genes and to inspect their effective
+instructions. Select genes in a DM's gene picker, through `control.chat.lenses`,
+or with terminal and Discord commands (`!genes`/`!use` with the default Discord
+prefix):
 
 ```text
 /genes
@@ -25,319 +26,257 @@ Select them in a DM's gene picker, or use terminal and Discord commands
 
 `/genes` lists the library; `/lenses` remains an alias.
 
-The same selection is available through `control.chat.lenses`. Changes affect
-future operator messages; queued runs, spawned workers and automatic continuations
-retain their captured revisions. Editing the library never changes an active
-attempt's instructions. `/use none` clears the selection for future messages.
+A selection applies to future operator messages. Queued runs, spawned workers and
+automatic continuations keep the revisions they captured, so editing the library
+never changes an active attempt. `/use none` clears the selection. The browser
+preference only sets the starting selection for a new DM. Gene (lens)
+instructions are limited to 4,000 characters.
 
-Built-in lenses are versioned. On load, a node adds missing built-ins and appends
-a newer built-in revision when its current copy is still the built-in revision it
-last installed. A local edit is a newer local revision, so it is never replaced;
-earlier revisions stay available to captured runs. When changing a built-in, add its
-previous shipped definition to `crates/context/src/builtin-lens-history.json`, so
-unedited copies from older nodes are recognised and upgraded.
-The browser preference only chooses the starting selection for a new chat.
+Built-in lenses are versioned. On load, a node adds missing built-ins (when
+library capacity permits) and appends a newer built-in revision when its current
+copy is still the built-in revision it last installed. A local edit is a newer
+local revision and is never replaced. Earlier revisions stay available to captured
+runs. Adding a built-in never selects it for existing chats. When changing a
+built-in, add its previous shipped definition to
+`crates/context/src/builtin-lens-history.json`, so unedited copies on older nodes
+are recognised and upgraded.
 
 ## Guidance on demand and role scoping
 
-Guidance is looked up when needed, not forced into every turn. A lens with a
-one-line **summary** is guidance on demand: each prompt carries the summary as
-one index line and the agent reads the full text with the read-only
-`control_guidance` tool (`topic` is a lens ID or name; no topic lists the
-topics) when that situation arises. The tool returns the revision the run
-captured, so library edits never change an active run's guidance, and it is
-allowed after a staged handoff. Lenses without a summary, such as `evidence`,
-stay inline. Contexts captured before this change keep all their instructions
-inline.
+Guidance is looked up when needed, not repeated every turn. A lens with a
+one-line **summary** is on demand: each prompt carries the summary as one index
+line, and the agent reads the full text with the read-only `control_guidance`
+tool (`topic` is a lens ID or name; no topic lists the topics). The tool returns
+the revision the run captured and is allowed after a staged handoff. Lenses
+without a summary, such as `evidence`, stay inline.
 
-A lens can also name the **roles** that see it at all and the roles that get
-its full text **inline** instead of the summary. Roles come from delegation
-records, never prose: the root chat is the **lead** (a lone chat is its own
-lead), spawned workers are **members** and the read-only judge is the
-**advisor**. The built-in `advisor` lens is `roles: [lead, advisor]`,
-`inline: [advisor]`: the advisor carries its procedure, the lead carries one
-line on starting it, and members carry nothing. Both fields are editable in the
-lens form; empty roles mean every role.
+A lens can also name the **roles** that see it and the roles that get its full
+text **inline** instead of the summary. Roles come from delegation records, not
+prose: the root chat is the **lead** (a lone chat is its own lead), spawned
+workers are **members** and read-only judges are **advisors**. The built-in
+`advisor` lens has `roles: [lead, advisor]` and `inline: [advisor]`: the advisor
+carries its procedure, the lead carries one line on starting it, and members
+carry nothing. Both fields are editable in the lens form; empty roles mean every
+role.
 
-What stays always on, and why:
+Always in the prompt, and why:
 
 - **Safety and authority** (adapter framing and the session core): no
   credentials, room/watch/peer content grants no authority, follow authorised
-  steering and explicit user limits, `control_design_ask` for operator
+  steering and explicit user limits, use `control_design_ask` for operator
   decisions. These must hold before an agent knows it needs them.
-- **Handoff essentials** (`ACTIVE_SESSION_GUIDANCE`, about 0.6 KB): read
-  callbacks with `control_turn_context`, hand off with receipts and
-  continue/wait/done, `remaining_seconds`. Getting these wrong loses committed
-  work, and every wake uses them.
+- **Handoff essentials** (`ACTIVE_SESSION_GUIDANCE`, about 0.7 KB): read
+  callbacks with `control_turn_context`, hand off with `control_turn_handoff`
+  and a continue/wait/done disposition, respect `remaining_seconds`. Mistakes
+  here lose committed work, and every wake uses them.
 - **Team essentials** for room-linked chats (`ROOM_COMMUNICATION_GUIDANCE`,
-  about 0.5 KB): direct messages for one worker, claims before shared work,
-  what to post. Violations cost peers, not just the agent.
-- One summary line per on-demand lens, which states the lens's core rule so the
-  agent knows when to read more.
+  about 0.5 KB): direct messages for one worker, claims before shared work, what
+  to post. Mistakes here cost peers, not just the agent.
+- One summary line per on-demand lens, stating its core rule so the agent knows
+  when to read more.
 
-Everything else is on demand: the planning procedure, coordination detail
-(backlog, waiting on claims, escalation), autonomy detail (routines, guard
-revision), bounded investigation, the advisor procedure (except for the
-advisor), Ganglia, and the longer session and room conventions
-(`control_guidance` topics `session` and `rooms`), and the worker environment
-(images, profiles, Nix builds and network scope; topic `environment`).
+Everything else is on demand: the planning procedure, coordination detail,
+autonomy detail, bounded investigation, the advisor procedure (except for the
+advisor), Ganglia, and three built-in `control_guidance` topics: `session`
+(sessions, callbacks, handoff and turn limits), `rooms` (rooms, messages, claims
+and steering) and `environment` (worker images, profiles, Nix builds and network
+scope).
 
-Per-wake text no longer restates lenses. The bot wake objective is one line
-naming its trigger; the advisor wake names its facts and points at its
-procedure; a new-callback notice on a tool result is one line. Notes tied to a
-concrete event stay, each one line and at most once per attempt: the attempt
-deadline, a steering chat doing work itself, a turn stopped at its time limit,
-and a rejected or missing handoff.
+Per-wake text does not restate lenses. The bot wake objective is one line naming
+its trigger; the advisor wake names its facts and points at its procedure; a
+new-callback notice on a tool result is one line. Notes tied to a concrete event
+are one line each, at most once per attempt: the attempt deadline, a steering
+chat doing work itself, a turn stopped at its time limit, and a rejected or
+missing handoff.
 
 ## Task autonomy
 
-The optional `autonomy` lens asks the agent to own its outcome, balance progress
-against task-specific risk, and prefer reversible steps with a recovery path,
-verifying in proportion to risk. A task-local guard can embody an incorrect assumption; investigate
-its rationale rather than treating every guard rejection as a reason to wait
-forever. Host-enforced permissions, mandatory safety constraints, cancellation
-and explicit user limits remain binding. The lens does not authorize broader
-access or consequential actions beyond the task's mandate. Long-lived workloads
-need a current job and a path to the next authorized job, rather than only a
-connection or health monitor. A finished job means notify and take the next one,
-not exit; a setback means recover, not quit. Test their notification path before waiting, then
-notify on completion, actionable blockers or transitions that open useful work.
-Include the job ID and outcome; deduplicate repeated outcomes
-and keep routine diagnostics out of notifications. Use the workload's existing
-interface to assign work without restarting a healthy persistent process for
-every action.
+The optional `autonomy` lens asks the agent to own its outcome and to weigh risk
+by reversibility: a recoverable failure usually costs less than idle time, though
+recoverable does not mean harmless, especially for shared assets. Prefer
+reversible steps with a recovery path. Verify in proportion to risk: check once,
+by the cheapest direct observation, at milestones or risky, irreversible or
+disputed steps. Never claim an unobserved outcome. Uncertainty alone calls for
+investigation with existing tools, not stopping.
 
-Autonomy revision 7 moves repeated actions on an external system into such a
-workload: a bounded routine that works toward a target on its own (for example,
-process N items, deliver them and notify). The routine reacts: it sequences
-steps, retries and handles events itself, escalating only milestones, failures
-and situations it cannot handle. The model decides what to do, when and by whom,
-and changes plans from those escalations. A run that issued one
-small job per tool call and then polled its status managed about one action per
-minute, each costing two or three model round trips.
+Guards bound damage (stop, back off or roll back at a stated limit); they should
+not prevent an attempt. A self-authored guard is a hypothesis about risk:
+investigate its rationale instead of treating every rejection as a reason to wait.
+Host-enforced permissions, mandatory safety constraints, cancellation and explicit
+user limits stay binding. The lens grants no broader access and no consequential
+action beyond the task's mandate.
 
-Autonomy revision 8 also asks for only the tooling the current goal needs: tools
-serve milestones, so when tooling work stops advancing the goal, stop and use what
-exists.
+Repeated actions on an external system belong in a long-lived workload: a bounded
+routine that works toward a target on its own (for example, process N items,
+deliver them and notify). The routine sequences steps, retries and handles events,
+escalating only milestones, failures and situations it cannot handle. The model
+decides what to do, when and by whom, and re-plans from those escalations. This
+matters because one job per tool call plus status polling runs at about one action
+per model round trip or slower.
 
-Weigh risk by reversibility: a recoverable failure usually costs less than idle
-time, though recoverable does not mean harmless, especially for shared assets.
-Guards bound damage (stop, back off or roll back at a stated limit) rather than
-preventing an attempt, and an idle precautionary cycle is lost time. Uncertainty
-alone calls for investigation with existing observations and tools, rather than stopping.
+A workload needs a current job and a path to the next authorized job, not only a
+connection or health monitor. A finished job means notify and take the next one;
+a setback means recover, not quit. Test the notification path before waiting.
+Notify on completion, actionable blockers or transitions that open useful work,
+with the job ID and outcome; deduplicate and keep routine diagnostics out. Assign
+work through the workload's existing interface instead of restarting a healthy
+process per action. Build only the tooling the current goal needs.
 
-A quiet healthy download, calculation, service or genuine dependency wait needs
-no periodic model wake or invented deadline. Workload-specific idle diagnostics
-are optional and must be actionable, rather than repeated no-change polling.
+Repeated unchanged cycles are not progress: after two routine cycles without
+milestone progress, report the blocker, take unblocked work or ask for a new
+assignment. A quiet healthy download, calculation, service or dependency wait
+needs no periodic model wake or invented deadline.
 
-## Reusable planning procedure
+## Planning procedure
 
-Select **Planning procedure** (`/use planning`) for a broad outcome, or select
-**Swarm** (`/use swarm`) to combine it with coordination, autonomy and investigation.
-The existing lens library is the versioned procedure mechanism: there is no new
-planner API, task queue, scheduler or provider-specific skill loader. The same
-procedure is available in the web picker, TUI and `control.chat.lenses`.
+Select **Planning procedure** (`/use planning`) for a broad outcome, or **Swarm**
+(`/use swarm`) to combine it with coordination, autonomy and investigation. The
+lens library is the procedure mechanism: there is no separate planner API, task
+queue, scheduler or provider-specific skill loader.
 
-Keep a short rolling backlog of milestones in the task's normal notes or shared
-room. Reference it instead of mirroring it in every message. Give each milestone a
-done-condition that is an observable outcome cheap to check, such as a count, size
-or state, and check it once when claiming the milestone done rather than producing
-proof artefacts every cycle. For each active milestone record its done-condition,
-owner, actual prerequisites and next action or release signal. Add, split, re-prioritise or drop milestones as evidence
-changes. Build the smallest tool the claimed milestone needs, test it by reaching
-that done-condition rather than a separate diagnostic proof, and extend it only
-when the next milestone needs more. Start with a useful end-to-end result and
-reliable reusable capabilities, then expand. For example, a team building an
-integration might first deliver one working request, then error handling and
-recovery, then additional operations. Connection health alone is not the feature.
+Keep a short rolling backlog of milestones in the task's notes or shared room,
+and reference it instead of repeating it. Give each milestone a done-condition
+that is an observable outcome cheap to check (a count, size or state), and check
+it once when claiming the milestone done. For each active milestone record its
+done-condition, owner, real prerequisites and next action or release signal. Add,
+split, re-prioritise or drop milestones as evidence changes.
 
-Use existing room claims for overlapping shared work, not every local action. A
-workload may chain its remaining authorized jobs
-itself, or notify its owner to assign the next job. Before yielding, retain the
-current job, remaining work and the callback or claim release that enables the
-next action in the existing handoff. Simple local tasks need no team plan.
+Build the smallest tool the current milestone needs, test it by reaching the
+done-condition, and extend it only when the next milestone needs more. Start with
+a useful end-to-end result, then expand: for an integration, first one working
+request, then error handling and recovery, then more operations. Connection
+health alone is not the feature. Simple local tasks need no team plan.
 
-## Coordination and planning
+## Coordination
 
-Planning has no single point of failure: the team plans like a hivemind rather
-than waiting on its lead. Whoever steers a team first posts the milestone backlog
-in the shared room, before spawning or briefing workers, and briefs each worker
-with the shared goal and its first milestone from that backlog rather than a
-permanent role or area. Specialization may emerge from what workers repeatedly
-claim. The backlog is shared team state, so any member may revise it. A worker
-that finishes a milestone claims the next one; if the backlog is empty or stale,
-or the steering chat is quiet with no shared next step, the worker proposes the
-next milestone towards the goal in the room and claims it. Claims, rather than
-permission or a central planner, keep two workers off the same milestone. Claim
-shared deliverables, not personal roles. When you observe a condition a dependent
-is waiting on, tell it.
+The optional `coordination` lens (which includes `planning`) helps a team turn a
+shared outcome into small, verifiable deliverables with accountable owners.
+Planning has no single point of failure:
 
-The optional `coordination` lens helps a team turn a shared outcome into small,
-verifiable deliverables with accountable owners. Roles can change as work changes.
-It asks agents to minimize dependencies, distinguish prerequisites from optional
-precautions, and retain a blocker's producer and release signal in existing notes
-and handoffs. A worker should check for circular waits and pursue independent
-authorized work while another dependency is pending.
+- Whoever steers a team posts the milestone backlog in the shared room before
+  spawning or briefing workers, and briefs each worker with the shared goal and
+  its first milestone, not a permanent role. A team whose lead posted only a role
+  split, with no backlog, had nothing to claim.
+- The backlog is shared state; any member may revise it. A worker that finishes
+  a milestone claims the next. If the backlog is empty or stale, or the steering
+  chat is quiet, the worker proposes the next milestone in the room and claims it.
+- Claims, not permission or a central planner, keep two workers off the same
+  milestone. Claim shared deliverables, not personal roles. Claims are advisory
+  (see [Room notifications](ROOM-NOTIFICATIONS.md#claims)) and only help when
+  agents check them.
 
-Agents coordinate directly with affected peers, share useful evidence and
-dependency releases in the team room, and keep routine relaying and repeated
-no-change messages out of the steering chat. Changed evidence or repeated lack
-of useful results calls for revisiting the plan. Healthy long-running work can
-still wait on callbacks without a new deadline or forced intervention.
+Dependencies:
 
-Roles and claims own shared deliverables, not exclusive rights to routine inputs.
-Wait on a claim only for an output you cannot reasonably produce yourself. If an
-input is quick to make, such as a small command, script, file or basic material
-you could produce in about the time it takes to ask, make it yourself and keep
-the claim for the shared deliverable. Coordinate only over consumable or exclusive
-resources, those used up or held by one member at a time; shared access paths,
-read-only checks and routine independent work need no claim, turn, token or peer
-permission, so agents do not invent locks for them. Check that a dependency's producer
-can act and is not waiting on you. If it cannot act, coordinate a handoff of
-ownership or do independent authorized work; elapsed time alone does not justify
-duplicating healthy work. When nobody can unblock the goal, or a worker needs the
-operator's approval to proceed, ask through the decision path
-(`control_design_ask`) with options and apply standing guidance to similar
-authorized steps. A room post or note awaiting direction is not a question, and
-nobody will answer it. Coordination revision 9 added that distinction after a
-worker announced a team-disrupting shared-server restart in the room as "pending
-direction" and waited: nothing reached the operator, and its claim still read
-working, so no blocked or advisor signal fired. Assign
-ongoing shared services to workers that peers can contact directly, rather than
-making the steering chat an operational dependency.
+- Minimise dependencies and distinguish prerequisites from optional precautions.
+  Record a blocker's producer and release signal in notes and handoffs, check for
+  circular waits, and do independent authorized work while waiting.
+- Wait on a claim only for an output you cannot reasonably produce yourself. If
+  an input takes about as long to make as to ask for, make it.
+- Coordinate only over consumable or exclusive resources. Shared access paths,
+  read-only checks and routine independent work need no claim, turn, token or
+  permission; Control services accept concurrent commands. Teams that invented
+  token-passing for a shared path spent most of their messages on the token.
+- Check that a dependency's producer can act and is not waiting on you. If it
+  cannot, hand over ownership or work around it; elapsed time alone does not
+  justify duplicating healthy work. When you observe a condition a dependent is
+  waiting on, tell it.
+- When nobody can unblock the goal, or a step needs operator approval, ask with
+  `control_design_ask` and options, and apply standing guidance to similar
+  steps. A room post or note "awaiting direction" is not a question: nothing
+  reaches the operator, and a claim still marked working fires no blocked or
+  advisor signal.
 
-Coordination revision 10 and autonomy revision 5 favour progress over proof. Post
-to the room only what others need (a milestone advanced, a handoff, a blocker
-raised or resolved, a reusable finding), briefly and citing evidence; routine
-outcomes stay in the agent's notes. A repeating routine is not progress: after
-two routine cycles without milestone progress, report the blocker, take unblocked
-work or ask for a new assignment. When several members report one blocker or
-milestones stall, whoever steers re-plans or reassigns around it and escalates
-once; an operator question opens with what is blocked, the impact and the
-requested decision. An overnight team run showed why: every member fell back to
-a safe repeating routine behind one host blocker, posting a verbose record each
-cycle, while the lead only refreshed the backlog.
+Communication:
 
-Coordination revision 11, planning revision 4 and autonomy revision 6 favour
-parallel attempts over ceremony. In one run members invented a pass-the-token
-protocol for a shared access path, serialising the team while most messages
-requested or released the token; done-conditions demanding durable proof files
-made members spend turns proving rather than doing; and jobs aborted on
-self-imposed guards before starting. Control services also accept many
-concurrent commands, so non-exclusive work need not take turns.
+- Coordinate directly with affected peers. Post to the room only what others
+  need (a milestone advanced, a handoff, a blocker raised or resolved, a reusable
+  finding), briefly, stating the outcome without evidence paths. Routine outcomes
+  stay in the agent's notes.
+- When several members report one blocker or milestones stall, whoever steers
+  re-plans or reassigns around it and escalates once. An operator question opens
+  with what is blocked, the impact and the requested decision.
+- The steering chat stays responsive: it assigns goals, resolves consequential
+  choices and unblocks, keeping turns short, and delegates implementation, long
+  work and ongoing services to members peers can contact directly. A lead that
+  does long work itself can hit its attempt time limit, lose unpublished work and
+  leave the team unsteered. The host backs this with advisory notes on tool
+  results (see [turn continuity](TURN-CONTINUITY.md#deadline-and-steering-notes))
+  and a `timed_out` advisor fact.
+- Check existing task tools and peer findings before reimplementing a common
+  capability. Share a working implementation with its invocation and version
+  through existing artifacts or an explicitly shared service. Reuse does not
+  require sharing a process or mutable state, and existing access controls still
+  apply.
 
-Coordination revision 12 keeps the steering chat responsive: whoever steers a
-team assigns goals, resolves consequential choices and unblocks, keeping its
-turns short, and delegates implementation, long work and ongoing infrastructure
-to members, spawned or assigned. It merges the earlier steering-chat and
-infrastructure sentences and shortens others to stay within the 4,000-character
-lens limit. In
-one run a lead bot spent a whole turn writing and testing a library itself, hit
-its 600-second attempt limit, lost the unpublished work and left its team
-without steering for ten minutes. The host backs this with advisory notes on
-tool results (see [turn continuity](TURN-CONTINUITY.md#deadline-and-steering-notes))
-and a `timed_out` advisor fact.
-
-Coordination revision 13 and autonomy revision 8 make verification proportional.
-Agents check an outcome once, by the cheapest direct observation, at milestones
-or for risky, irreversible or disputed steps; routine steps need no evidence
-files, read-backs or proof records, and room posts state the outcome without
-evidence paths or measurements. Agents still claim only outcomes they observed.
-In run -128, members wrote a "verified" evidence file for every routine step,
-read it back and posted a record citing it, spending one or two extra tool calls
-per step proving rather than doing. The bot wake text and room post and claim
-tool descriptions were softened to match.
-
-Inspect existing task tools and peer findings before implementing common
-capabilities again. Share a working reusable implementation with its invocation
-and version through existing artifacts or an explicitly shared service.
-Reusing code does not require sharing one process or every worker's mutable
-state. Existing access controls still apply; this creates no shared-storage or
-service-grant mechanism.
-
-Select **Coordination & planning** in the gene picker, or use `/use coordination`.
-For a team, select **Swarm** (`/use swarm`), which includes `planning`,
-`coordination`, `autonomy` and `investigation`. Swarm revision 2 includes
-`planning` directly; a run whose lead posted only a role split and no milestone
-backlog showed why the backlog must come first. The first run with coordination alone showed
-agents sleeping behind self-imposed safety guards. This is versioned guidance over existing tools, not a central
-planner, permission grant or guarantee against deadlock. Its ownership and
-blocker advice uses advisory room claims (see
-[Room notifications](ROOM-NOTIFICATIONS.md#claims)); claims only help when
-agents check them. Existing
-chats and running workers are not opted in when the preset is added. Select it
-before launching the team; spawned work and continuations keep captured revisions.
-Evaluate useful actions, dependency releases, repeated messages and interventions
-in a separate opt-in run before claiming an improvement.
+**Swarm** (`/use swarm`) includes `planning`, `coordination`, `autonomy` and
+`investigation`. Select it before launching a team: existing chats and running
+workers are not opted in when a preset is added, and spawned work keeps captured
+revisions. This is versioned guidance over existing tools, not a planner,
+permission grant or guarantee against deadlock. Evaluate an improvement in a
+separate opt-in run (useful actions, dependency releases, repeated messages,
+interventions) before claiming it.
 
 ## Bounded investigation
 
-The optional `investigation` lens includes Evidence and supplies a procedure over
-existing tools. It does not add a scheduler, experiment executor or new tool API.
-When an assumption or repeated failed action blocks a plan:
+The optional `investigation` lens includes `evidence` and supplies a procedure
+over existing tools. It adds no scheduler, experiment executor or tool API. When
+an assumption or repeated failed action blocks a plan:
 
 1. Read prior task notes and state the blocker with evidence references.
 2. Form a hypothesis and choose the smallest authorized probe, recording the
    expected observation and what would disconfirm it.
-3. Run the probe with existing inspect/execute tools; record the result and next
-   decision. Repeating an unchanged rejected action is not a new experiment.
-4. Use at most three distinct probes for one approach unless the operator
-   specifies another allowance. At that checkpoint stop repeating the approach
-   and compare established alternatives. A materially different adapter, proxy or
-   tool starts a fresh allowance; record why it addresses the failure. Renaming
-   the investigation, changing a minor parameter or assigning another worker does
-   not reset the same approach's allowance. Overall effort/resource/model budgets
-   still apply across approaches. Do not present this default as an operator-imposed
-   effort limit.
-5. Check known alternatives and peer findings before escalating. Continue an
-   authorized, reversible alternative that preserves the requested outcome;
-   reaching three probes alone does not require operator permission. Use the
-   existing design-question path when no justified authorized alternative remains
-   and operator input is needed, or before changing the goal, broadening access,
-   exceeding the user's budget or taking a consequential action outside the mandate.
-   Otherwise pursue independent useful work or yield on a real dependency.
+3. Run the probe with existing tools; record the result and next decision.
+   Repeating an unchanged rejected action is not a new experiment.
+4. Use at most three distinct probes per approach unless the operator sets
+   another allowance, then stop repeating it and compare established
+   alternatives. A materially different adapter, proxy or tool starts a fresh
+   allowance; record why it addresses the failure. Renaming the investigation,
+   changing a minor parameter or handing it to another worker does not.
+   Overall effort, resource and model budgets apply across approaches. Do not
+   present this default as an operator-imposed limit.
+5. Check known alternatives and peer findings before escalating. Reaching three
+   probes alone does not require operator permission: continue an authorized,
+   reversible alternative that preserves the requested outcome. Use the
+   design-question path when no justified alternative remains, or before
+   changing the goal, broadening access, exceeding the user's budget or taking a
+   consequential action outside the mandate. Otherwise do independent useful
+   work or wait on a real dependency.
 
-Keep the record in the task's normal notes and working-state handoff/checkpoint:
-blocker, hypothesis, probe, expected/actual evidence and next decision. On restart,
-inspect uncertain outcomes before retrying. A quiet healthy download or calculation
-does not itself call for investigation or a new deadline. Verified reusable
-findings can be proposed for knowledge review; they are not admitted automatically.
-
-Investigation revision 2 scopes the allowance to an approach rather than the
-whole blocker. The allowance is prompt guidance, not a host-enforced counter;
-it grants no new authority. Existing captured contexts retain their revision.
-This change does not establish that a model follows it or improves at every workload;
-measure repeated actions, useful outcomes and operator interventions in opt-in trials.
+Keep the record (blocker, hypothesis, probe, expected and actual evidence, next
+decision) in the task's notes and handoff. On restart, inspect uncertain outcomes
+before retrying. Verified reusable findings can be proposed for knowledge review;
+they are not admitted automatically. The allowance is prompt guidance, not a
+host-enforced counter, and grants no authority. Whether it helps a given model or
+workload should be measured in opt-in trials.
 
 ## Team advisor
 
-The team advisor helps the lead steer, like a subagent catching gaps the lead
-could miss. It is not a supervisor, planner, relay or churn monitor, and it
-holds no authority.
+The team advisor helps the lead steer by catching gaps the lead could miss. It is
+not a supervisor, planner, relay or churn monitor, and it holds no authority.
 
 **Strictly opt-in.** Select **Team advisor** on the root chat (tick it, or
-`/use advisor`), usually alongside `swarm`. The `swarm` preset does not include
-it. The lens offers the `team.advisor` tool; unless the root chat's lenses offer
-it, no advisor can be spawned or requested, and Control does not compute the
-team's lifecycle topic at all. This is an availability gate, not authority:
-selecting the lens only makes the option exist for that task tree. The
-operator's bot approval still decides whether an advisor runs, and host checks
-still bound what it can do. Unticking the lens stops its facts.
+`/use advisor`), usually alongside `swarm`, which does not include it. The lens
+offers the `team.advisor` tool hint; unless the root chat's lenses offer it, no
+advisor can be spawned or requested and Control does not compute the team's
+lifecycle topic. This is an availability gate, not authority: the operator's bot
+approval still decides whether an advisor runs, and host checks bound what it can
+do. Unticking the lens stops its facts.
 
-The advisor is an existing persona, not a new role: a read-only **judge**
-(see [delegation](DELEGATION.md)). The lens is its procedure and voice; policy
-comes from the judge role and the operator's bot approval.
+The advisor is a read-only **judge** (see [delegation](DELEGATION.md)). The lens
+is its procedure and voice; policy comes from the judge role and the operator's
+bot approval.
 
-1. The lead starts it with `control_agent_spawn` and `role: "judge"`, one
+1. The lead starts it with `control_agent_spawn` and `role: "judge"`, with one
    objective naming the shared outcome. It gets no resources. It uses the root
-   task's advisor allowance (`max_advisors_per_root`, default 1), which is
-   separate from the root's one blocking judge review, so a team can have both.
-2. The lead asks for it with `control_bot_request` (no interval). The operator
+   task's advisor allowance (`max_advisors_per_root` in `execution.json`,
+   default 1, range 0–8), which is separate from the root's one blocking judge
+   review.
+2. The lead requests it with `control_bot_request` (no interval). The operator
    approves it like any bot, or types `/bot on` in its chat. The lens or a
    request alone runs nothing.
 3. The approved judge sleeps on its task tree's lifecycle topic,
-   `task:<root chat>`. Control offers host facts there, edge-triggered from records
-   reconciliation already reads. Facts are gaps, not churn:
+   `task:<root chat>`. Control publishes host facts there, edge-triggered from
+   records reconciliation already reads. Facts are gaps, not churn:
    - the team went quiet, with no member turn running or queued;
    - a member's latest turns failed or were blocked several times in a row
      (`advisor_failure_streak`, default 3; interrupted and cancelled turns
@@ -346,188 +285,161 @@ comes from the judge role and the operator's bot approval.
    - a claim was abandoned by a lost owner;
    - a member's claim became blocked. The fact names the claim it is blocked on
      (`blocked_on`) with that claim's owner and status (`working`, `blocked`,
-     `done`, `abandoned`, `released` or `unclaimed`). Members blocked on the same
-     claim are summarised in one entry, so several members waiting on one
-     producer read as one bottleneck. A blocked state is reported once per claim
-     incarnation; updates that stay blocked on the same claim do not repeat it,
-     and becoming blocked again after working is a new fact;
-   - two or more members report a similar blocker: blocked claims' notes and
-     the latest result of members on a failure streak are compared as
-     lower-cased word sets (words with digits, such as IDs, ports and times,
-     are ignored; Jaccard ≥ 0.6, no embeddings). One entry lists the members
-     and one reported reason. A group is reported when a member joins it;
-     unchanged reasons are not compared again;
+     `done`, `abandoned`, `released` or `unclaimed`). Members blocked on the
+     same claim are summarised in one entry. A blocked state is reported once
+     per claim incarnation; becoming blocked again after working is a new fact;
+   - two or more members report a similar blocker. Blocked claims' notes and the
+     latest result of members on a failure streak are compared as sets of
+     lower-cased words of three or more letters (words with digits, such as IDs,
+     ports and times, are ignored; at least two shared words and Jaccard ≥ 0.6;
+     no embeddings). One entry lists the members and one reason. A group is
+     reported when a member joins it;
    - the team is busy but stalled: `advisor_stall_turns` (default 24) member
      turns settled while members held working or blocked claims and none
      advanced. A claim advances when it becomes done or resumes working after
-     being blocked (the host records `advanced_at` on the claim); acquiring,
-     re-reporting or posting is not progress. A stall is reported once; an
-     advance, or open claims appearing or clearing, restarts the window. The
-     window counts turns, not elapsed time. Teams that do not use claims never
-     stall;
+     being blocked (the host records `advanced_at`); acquiring, re-reporting or
+     posting is not progress. A stall is reported once; an advance, or open
+     claims appearing or clearing, restarts the window. The window counts turns,
+     not time. Teams that do not use claims never stall;
    - a bottleneck: one live (working or blocked) claim that the claims of
      `advisor_bottleneck_members` (default 2) or more members other than its
      owner wait on, directly or transitively through `blocked_on`. The fact
-     names the claim, its owner and status, what it is itself blocked on, a
-     circular wait if its dependents lead back to it, its age in claim updates
-     since it was acquired and since it last advanced, and the waiting members
-     and claims. It is derived from claim state alone and reported once per
-     claim incarnation and dependent set; it is reported again when that set
-     changes. The dependency graph is walked only when a member claim changes;
+     names the claim, its owner and status, what it is blocked on, any circular
+     wait, its age in claim updates since acquired and since last advanced, and
+     the waiting members and claims. It is reported once per claim incarnation
+     and dependent set, and again when that set changes. The dependency graph is
+     walked only when a member claim changes;
    - a member cannot checkpoint: more than `bot_recovery_continues` (default 2)
-     of its turns ended without an accepted handoff since its last published
-     one. The fact names the member, the count and the host's last handoff
-     rejection, if any; it is reported once per streak;
-   - a turn timed out: a member's latest turn, or the lead's, reached its
-     attempt time limit and was stopped before it checkpointed (`timed_out`,
-     naming the lead as the lead). It is reported once until that chat's
-     next turn settles otherwise. The advisor suggests splitting the work, or
-     for the lead, delegating it to a member.
+     of its turns ended without an accepted handoff since its last accepted one.
+     The fact names the member, the count and the host's last handoff rejection,
+     if any; it is reported once per streak;
+   - a turn timed out: a member's or the lead's latest turn reached its attempt
+     time limit and was stopped before it checkpointed (`timed_out`). It is
+     reported once until that chat's next turn settles otherwise. The advisor
+     suggests splitting the work or, for the lead, delegating it.
 
    Apart from a timeout, a single failed, interrupted or cancelled turn
-   (provider errors included) and a single failed watch exit are never facts. Facts coalesce into one
-   reason under the bot's existing 30-second cooldown and 60 turns per hour.
-   There is no clock rule: a quiet team is reported once per settled change,
-   and elapsed time is never a fact.
+   (provider errors included) and a single failed watch exit are never facts.
+   Facts coalesce into one wake under the bot's 30-second cooldown and 60 turns
+   per hour. There is no clock rule: elapsed time is never a fact.
 4. On waking, the advisor reads the facts and `control_room_read` (participants,
    posts and claims with `owner_idle`/`abandoned` flags). If there is a gap, it
    sends the lead's steering chat one concise note with `control_agent_message`:
-   the evidence and a suggested steering step. For blocked members it checks
-   whether the input is one they could quickly make themselves, or several wait
-   on one producer, and suggests an unblocking step: produce the input
-   themselves, reassign the blocking claim, or an alternative. For a bottleneck
-   it suggests putting more members on it, splitting it, or re-routing
-   dependents around it. It sends nothing
-   when evidence is unchanged.
+   the evidence and a suggested step. For blocked members it checks whether
+   they could quickly make the input themselves or several wait on one
+   producer, and suggests producing it, reassigning the blocking claim or an
+   alternative. For a bottleneck it suggests adding members, splitting it or
+   re-routing dependents. It sends nothing when evidence is unchanged.
 
-The advisor only steers. A note goes only to the lead's steering chat, as
-retained peer evidence with source `advisor-note`, shown as "Advisor note from …"
-in its own box. An active lead gets one callback hint at its next tool
-response; a lead running as an approved bot wakes within its own budget;
-otherwise the lead sees it at its next turn. The lead decides what, if
-anything, reaches the team, for example by revising the backlog or messaging a
-worker. The advisor never messages members and never posts to rooms.
+The advisor only steers the lead. A note is retained peer evidence with source
+`advisor-note`, shown as "Advisor note from …" in its own box. An active lead
+gets one callback hint at its next tool response; a lead running as an approved
+bot wakes within its own budget; otherwise the lead sees it at its next turn. The
+lead decides what reaches the team. The advisor never messages members or posts
+to rooms.
 
 The host refuses notes from judges that are not approved advisors, notes to any
-chat but the advised team's steering chat (members, judges, other advisors),
-notes that share services, and a note identical to one already delivered. A
-note to a lead whose latest turn failed or was cancelled is refused by the
-existing peer rule that messages cannot restart stopped work. The exception is
-a lead that is itself an approved persistent bot, not stopped, whose turn
-failed or was interrupted: the note then waits for its next supervised wake.
+chat but the advised team's steering chat, notes that share services, and a note
+identical to one already delivered. A note to a lead whose latest turn failed or
+was cancelled is refused by the peer rule that messages cannot restart stopped
+work, unless the lead is itself an approved persistent bot whose turn failed or
+was interrupted: the note then waits for its next supervised wake.
 
-Loop safety is structural. Judge turns, retained notes (runs without an
-attempt) and turns woken only by advisor notes, including the lead's, are not
-team activity, so the advisor cannot re-trigger itself through the team it
-advises. Stopping the advisor (`/bot off`) drops its team snapshot; a later
-advisor reports only facts after its own subscription. Nodes without an
+Loop safety is structural. Judge turns, retained notes and turns woken only by
+advisor notes (the lead's included) are not team activity, so the advisor cannot
+re-trigger itself. Stopping the advisor (`/bot off`) drops its team snapshot; a
+later advisor reports only facts after its own subscription. Nodes without an
 opted-in advisor do no lifecycle work.
 
 ## Ganglia
 
 **Ganglia** (`/use ganglia`): reflexes and routines run locally; turns are
-strategy. An octopus's arms act through local ganglia while its brain decides
+strategy, as an octopus's arms act through local ganglia while its brain chooses
 where to go. Use it for long-running work on systems that change faster than a
-turn, not one-off tasks or ordinary coding, which the autonomy routine rule
-covers. Examples: a game agent or a robot (reflexes keep it safe, skills move or
-build), a long scrape (reflexes back off on rate limits and rotate on errors,
-skills crawl a section), price monitoring (reflexes retry and alert on outages,
-skills watch a basket and report thresholds), or a live service (reflexes
-restart and shed load, skills run maintenance).
+turn, not one-off tasks or ordinary coding (the autonomy routine rule covers
+those). Examples: a game agent or robot (reflexes keep it safe, skills move or
+build), a long scrape (reflexes back off on rate limits, skills crawl a section),
+price monitoring (reflexes retry and alert on outages, skills watch a basket), or
+a live service (reflexes restart and shed load, skills run maintenance). The lens
+text itself is domain-independent.
 
-The lens text itself is domain-independent; examples like these live only in
-documentation. Revision 2 changed its stance from "build one shared reflex
-layer first" to **reuse first**: when an admitted or available
-[tool package](TOOL-PACKAGES.md) already provides reflexes or skills, use it and
-read its README and notification contract; build or extend a layer only for a
-gap a run has demonstrated; keep every layer minimal. Reflexes commit, skills
-are bounded routines toward a target (including timed sequences the model
-parameterises) that escalate only what they cannot handle, and turns set goals
-and re-plan. New or extended layers live in one folder ready to save as a tool
-package. It turns the operator's repeated steering in runs -121 and -128, which
-drove a system one tool call per action, into standing procedure, and adds no
-tool or authority. It is guidance on demand: prompts carry its summary line.
+Reuse first: when an admitted or available [tool package](TOOL-PACKAGES.md)
+already provides reflexes or skills, use it and read its README and notification
+contract. Build or extend a layer only for a gap a run has demonstrated, keep
+every layer minimal, and keep new layers in one folder ready to save as a tool
+package. Reflexes commit; skills are bounded routines toward a target (including
+timed sequences the model parameterises) that escalate only what they cannot
+handle; turns set goals and re-plan. The lens adds no tool or authority.
 
-Revisions: r1 (build a shared reflex layer early, then skills; game-flavoured
-wording such as threats and manoeuvres), r2 (domain-independent wording, reuse
-an existing package first, build only for a demonstrated gap, on-demand
-summary).
+Two failure modes shaped the text:
 
-**Pitfall: jitter.** In run -128 the shared reflex layer thrashed: a player
-surrounded by hostiles walked a few metres, stopped, swung once and re-planned.
-Every 500 ms tick re-decided on the nearest threat alone, any threat in a wide
-radius cancelled the routine (forcing a fresh path search), each reaction acted
-once, and the mode flipped at a health threshold. Reflexes must commit: hold
-until the trigger stays clear, act continuously, weigh every threat, preempt
-only for imminent ones, and pause rather than cancel routines.
+- **Jitter.** A reflex layer that re-decides every tick on the nearest threat,
+  cancels routines for any distant trigger, acts once per reaction and flips
+  mode at a threshold makes the agent stop and start constantly. Reflexes must
+  commit: hold until the trigger stays clear, act continuously, weigh every
+  active condition, preempt only for urgent ones, and pause rather than cancel
+  routines.
+- **Patching layers.** A member spent a 45-minute turn repeatedly patching
+  movement code instead of doing the task. A layer that blocks the task is
+  bypassed or removed, not patched again and again.
 
-**Pitfall: patching layers.** In the same run a member spent a 45-minute turn
-repeatedly patching movement code entangled with reflex leases instead of
-placing blocks. Keep each layer minimal; a layer that blocks the task is
-bypassed or removed, not patched again and again.
-
-Opt-in: `swarm` does not include it, so the scorecard can compare runs with and
-without it.
+`swarm` does not include Ganglia, so runs with and without it can be compared.
 
 ## Tool packages
 
-A lens can also name operator-admitted [tool packages](TOOL-PACKAGES.md), such as
+A lens can name operator-admitted [tool packages](TOOL-PACKAGES.md), such as
 `mc263-client@1` (pinned) or `mc263-client` (the latest admitted version when a
 message is sent). Runs capture the exact version and commit with the rest of the
-context. Each attempt then gets a private copy at `/workspace/.control-tools/NAME`
-and can read the manifest with `control_package_read`. Runs without such a lens
-see no packages, so a run that should rebuild a tool from scratch leaves it out.
+context. Each attempt gets a private copy at `/workspace/.control-tools/NAME` and
+can read the manifest with `control_package_read`. Runs without such a lens see
+no packages, so leave it out when a run should rebuild a tool from scratch.
 
 ## Current boundaries
 
-Tool hints contribute to context and catalogue discovery. They do not currently
-filter every callable worker tool, and deselecting a hint does not revoke a grant.
-The one exception is `team.advisor`, which decides whether the opt-in advisor
-option exists for a task tree. It is an availability gate, not a grant.
-Host operations enforce actual execution authority independently. Captured
-documents are attributed evidence/context, not instructions or automatically
-accepted facts. Inspect the captured context when checking what a worker received.
+Tool hints contribute to context and catalogue discovery. They do not filter
+callable worker tools, and deselecting a hint revokes no grant. The one exception
+is `team.advisor`, which decides whether the advisor option exists for a task
+tree (an availability gate, not a grant). Host operations enforce execution
+authority independently. Captured documents are attributed evidence, not
+instructions or accepted facts. Inspect the captured context to check what a
+worker received.
 
-**Tool exposure by role (deferred loading).** Tool lists are role scoped the
-same way prompts are. A worker session's `tools/list` holds only its role's core
-schemas; every other tool it may call is named in the prompt's deferred index,
-one terse line per tool family (name and a phrase of at most eight words, e.g.
-`- Watches: watch_status (inspect watches); watch_stop (stop one)`).
+**Deferred tool loading.** Tool lists are role-scoped like prompts. A worker
+session's `tools/list` holds only its role's core schemas; every other tool it
+may call appears in the prompt's deferred index, one terse line per tool family
+(e.g. `- Watches: watch_status (inspect watches); watch_stop (stop one)`).
 
-- Core sets are catalogue metadata: each protocol name in `control_context::TOOLS`
-  carries its core roles, its index phrase, its judge permission and an optional
-  tight description (`Mcp { core, phrase, judge, brief }`), so a new tool is
-  registered once. The dotted↔underscore name maps and both judge allow-lists
-  in the worker broker derive from the same entries.
-- Members and leads load turn context and handoff, service start/status/exec/
-  exec status/copy, watch start and events, room read/post/claim, agent message,
-  spawn, bot request and status, guidance, and `control_workspace_run` where the
-  backend has Control's shell. Leads add `control_room_plan` and
-  `control_design_ask`. A judge loads guidance, room read, workspace start and
-  status, child results and the shell; an approved advisor adds agent message.
-- Always-loaded schemas use the catalogue's tight description, drop nested
-  property descriptions, string bounds and annotations, and reduce a large
-  optional property (the handoff payload, watch salience) to its type with a
-  pointer to the search. The host validates every argument either way. Every role
-  lists less than 10 KB of schemas.
-- `control_tool_search {names | query}` returns full schemas (at most 16 named or
-  5 ranked, 32 KB) of tools this session may call; without arguments it lists the
-  deferred tools. It is a read for every role, including after a staged handoff.
+- Core sets are catalogue metadata: each protocol name in
+  `control_context::TOOLS` carries its core roles, index phrase (at most eight
+  words), judge permission and optional tight description (`Mcp { core, phrase,
+  judge, brief }`), so a new tool is registered once. The dotted/underscore name
+  maps and judge allow-lists in the worker broker derive from the same entries.
+- Members and leads load turn context and handoff; service start, status, exec,
+  exec status and copy; watch start and events; room read, post and claim; agent
+  message and spawn; bot request and status; guidance; and
+  `control_workspace_run` where the backend uses Control's shell (Claude and
+  local models). Leads add `control_room_plan` and `control_design_ask`. A judge
+  loads guidance, room read, workspace start and status, child results and the
+  shell; only an approved advisor may also call agent message.
+- Always-loaded schemas (except a judge's) use the catalogue's tight
+  description. All drop nested property descriptions and annotations and reduce
+  a large optional property (such as the handoff payload or watch salience) to
+  its type with a pointer to the search. The host validates every argument
+  either way. Each role's listing is under 10 KB.
+- `control_tool_search {names | query}` returns full schemas (at most 16 named
+  or 5 ranked, 32 KB) of tools this session may call; without arguments it lists
+  the deferred tools. It is a read for every role, including after a staged
+  handoff.
 - Codex and Claude call a deferred tool with `control_call {tool, arguments}`.
   The broker rewrites it into the direct call before any check, so authority,
   judge policy, the staged-handoff fence, design and delegation pauses, nudges,
-  callable fixes and idempotency nonces are identical, and activity records the
-  called tool's name. An unknown or operator-only name is refused with a search
-  to run instead. Local turns load schemas natively
-  ([LOCAL-MODELS.md](LOCAL-MODELS.md)).
+  fixes and idempotency nonces are identical, and activity records the called
+  tool's name. An unknown or operator-only name is refused with a search to run
+  instead. Local turns load schemas natively ([LOCAL-MODELS.md](LOCAL-MODELS.md)).
 - MCP `notifications/tools/list_changed` is not used: the room-mcp bridge only
-  answers requests and cannot deliver server-initiated messages, and Codex's
-  `enabled_tools` and Claude's `--allowedTools` are fixed at launch (both list
-  every catalogued worker name, so deferred tools stay callable).
+  answers requests, and Codex's `enabled_tools` and Claude's `--allowedTools`
+  are fixed at launch. Both list every catalogued worker name, so deferred tools
+  stay callable.
 
 Hiding a schema grants or revokes nothing: a deferred tool called directly by
-name is dispatched exactly as before.
-
-New built-ins are added to older libraries at startup when library capacity
-permits, without replacing a local definition of the same ID or selecting a lens
-for existing chats. No experiment runs merely because a preset becomes available.
+name is dispatched exactly as a loaded one.
