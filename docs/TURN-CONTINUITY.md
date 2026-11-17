@@ -71,7 +71,7 @@ worker's finish transaction records `continuity.interrupted`: the generation,
 cause, whether the workspace was captured as a recovery candidate, elapsed
 time, any staged draft's progress, and the last 8 tool calls with outcomes
 (200 characters per field), all from host records with no model call. A local
-model's turn adds its latest step's reasoning, verbatim (the last 1 500
+model's turn adds its latest step's reasoning, verbatim (the last 1500
 characters), and the next turn is told to continue that plan rather than
 re-plan ([Thinking](LOCAL-MODELS.md#thinking)). The next
 turn's working notes render it with the exact restore call,
