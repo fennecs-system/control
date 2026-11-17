@@ -751,8 +751,10 @@ fn browser_fixture(long_messages_only: bool) {
         false,
         "Child agents start collapsed under their parent"
     );
-    b.element(".sidebar a[href='/chats/history'][aria-current='page']");
-    b.element("nav[aria-label='History'] a[href='/chats/history'][aria-current='page']");
+    // The old URL redirects to the Bots history sub-page.
+    b.element(".sidebar a[href='/?view=agents'][aria-current='page']");
+    b.element("nav[aria-label='Bots'] a[href='/bots/history'][aria-current='page']");
+    b.element("nav[aria-label='History'] a[href='/bots/history'][aria-current='page']");
     let branch = b.element(".conversation-history .conversation-branch > summary");
     b.post(&format!("/element/{branch}/value"), json!({"text":" "}));
     assert_eq!(

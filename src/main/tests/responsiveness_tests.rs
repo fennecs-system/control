@@ -60,7 +60,8 @@ fn legacy_session_view_redirects_to_the_canonical_chat_page() {
         Some("/chats")
     );
     assert_eq!(location("view=session").as_deref(), Some("/chats"));
-    assert_eq!(location(&format!("view=runs&channel={id}")), None);
+    assert_eq!(location(&format!("view=runs&channel={id}")).as_deref(), Some("/bots/history/runs"), "run history moved under Bots");
+    assert_eq!(location(&format!("view=agents&channel={id}")), None);
     assert_eq!(location(""), None);
 }
 #[test]

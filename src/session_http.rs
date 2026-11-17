@@ -265,9 +265,23 @@ pub fn handle(
         return true;
     }
     if path=="/chats/history" && method=="GET" {
+        // History moved under Bots; saved links keep their page.
+        let location=crate::navigation::history_location("/bots/history",&crate::fields(query));
+        respond(stream,"303 See Other","text/plain","",&format!("Location: {location}\r\n"));
+        return true;
+    }
+    if (path=="/bots/history" || path=="/bots/history/runs") && method=="GET" {
         let query=crate::fields(query);
-        let html=crate::navigation::history(state,query.get("older").map(String::as_str),query.get("newer").map(String::as_str));
+        let (older,newer)=(query.get("older").map(String::as_str),query.get("newer").map(String::as_str));
+        let html=if path=="/bots/history" {crate::navigation::history(state,older,newer)} else {state.runtime.runs_page(older,newer)};
         respond(stream,"200 OK","text/html; charset=utf-8",&crate::render(state,"history",lens,&html),"");
+        return true;
+    }
+    if path=="/bots/graveyard" && method=="GET" {
+        // The scroll loader's next page: rows only, no page shell.
+        let query=crate::graveyard::Query::from(&crate::fields(query));
+        let graves=crate::graveyard::dead(state,&query.search);
+        respond(stream,"200 OK","text/html; charset=utf-8",&crate::graveyard::rows(&graves,&query),"");
         return true;
     }
     if path == "/chats" && method == "GET" {
