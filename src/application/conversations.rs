@@ -85,7 +85,7 @@ pub struct Session {
     /// Operator decisions on requests made by those runs never resume it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cancelled_through: Option<u64>,
-    /// The operator's MemoryTree edits: versioned summary revisions, pinned
+    /// The operator's Memory Tree edits: versioned summary revisions, pinned
     /// entries and ranges dropped from the agent's view. Absent until edited.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory: Option<Box<crate::compaction::Edits>>,

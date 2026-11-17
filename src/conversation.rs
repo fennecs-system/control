@@ -94,7 +94,7 @@ impl<'a> Entry<'a> {
 
 impl<'a> Conversation<'a> {
     pub fn id(&self) -> &str { &self.session.id }
-    /// The operator's MemoryTree edits (pins, dropped ranges, revisions).
+    /// The operator's Memory Tree edits (pins, dropped ranges, revisions).
     pub fn edits(&self) -> Option<&'a crate::compaction::Edits> { self.session.memory.as_deref() }
     /// An entry the operator removed from the agent's view.
     pub fn dropped(&self, index: usize) -> bool { self.edits().is_some_and(|e| e.dropped(index as u64)) }

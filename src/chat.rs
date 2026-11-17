@@ -847,7 +847,7 @@ pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
         .map(|r| format!(" · <a href='/?view=rooms&channel={r}'>#{r} ↗</a>"))
         .unwrap_or_default();
     let lenses = selected_lenses(session);
-    let room = format!("{room}<a href='{}'>MemoryTree ↗</a>", crate::compaction::memory_url(id));
+    let room = format!("{room}<a href='{}'>Memory Tree ↗</a>", crate::compaction::memory_url(id));
     let room = format!("{room}{}", session.parent_chat.as_deref().filter(|parent| valid_id(parent)).map(|parent| format!("<a href='/dm/{parent}'>Parent DM ↗</a>")).unwrap_or_default());
     let mode = if session.improve_mode {
         "<span class='chat-command active-command' title='Use /improve off to return to regular chat'>/improve</span>"

@@ -1,4 +1,4 @@
-//! Operator edits to a DM's MemoryTree: regenerate a block's summary with an
+//! Operator edits to a DM's Memory Tree: regenerate a block's summary with an
 //! emphasis, pin entries verbatim, or drop a range from the agent's view.
 //!
 //! Edits are data saved on the session. They are append-only and versioned: a
@@ -169,14 +169,14 @@ impl Edits {
     }
     fn record(&mut self, action: &str, detail: String) -> Result<(), &'static str> {
         if self.log.len() >= MAX_LOG {
-            return Err("This DM's MemoryTree edit log is full");
+            return Err("This DM's Memory Tree edit log is full");
         }
         self.log.push(Event { at: now(), action: action.into(), detail });
         Ok(())
     }
 }
 
-/// One operator change to a DM's MemoryTree.
+/// One operator change to a DM's Memory Tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Op {
     Pin(u64),
@@ -189,7 +189,7 @@ pub enum Op {
 /// Only the local operator performs surgery; agents and remote principals
 /// cannot, whatever chat they own.
 pub(crate) fn operator(actor: &Actor) -> Result<(), &'static str> {
-    if *actor == Actor::LocalOperator { Ok(()) } else { Err("MemoryTree edits are operator-only") }
+    if *actor == Actor::LocalOperator { Ok(()) } else { Err("Memory Tree edits are operator-only") }
 }
 
 /// Apply one edit and tell the compactor to rebuild what it changed. The
@@ -377,7 +377,7 @@ pub(crate) fn commit(state: &mut State, plan: Regeneration, base: String, respon
 }
 
 /// Start a regeneration on a background thread; the HTTP request returns at
-/// once and the MemoryTree shows it pending until the revision lands.
+/// once and the Memory Tree shows it pending until the revision lands.
 pub fn regenerate(state: &Arc<Mutex<State>>, chat: &str, actor: &Actor, block: Block, text: &str) -> Result<(), &'static str> {
     let plan = {
         let mut s = state.lock().map_err(|_| "State unavailable")?;

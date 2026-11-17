@@ -56,7 +56,7 @@ keep `recent`. The `lens` compactor has no summary source yet (its `Summaries`
 hook is `NoSummaries`), so it currently omits older blocks. Chats selected for
 model-summarized [history compaction](LOCAL-MODELS.md) use that summary view
 instead, falling back to the node compactor when no valid view exists.
-Whichever view serves a chat, the operator's [MemoryTree edits](LOCAL-MODELS.md#editing-the-memorytree)
+Whichever view serves a chat, the operator's [Memory Tree edits](LOCAL-MODELS.md#editing-the-memorytree)
 (selected summary revisions, pinned entries, dropped ranges) apply on top. They
 are data saved with the chat; the journal is never rewritten.
 

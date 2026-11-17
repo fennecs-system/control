@@ -180,7 +180,7 @@ pub(super) fn links(base: &str, listing: &Value) -> String {
     }
     out
 }
-/// The MemoryTree section for `session`'s recent local turns: their step
+/// The Memory Tree section for `session`'s recent local turns: their step
 /// trees' roots, from memory only (no disk reads), each linked to the
 /// evidence reader that expands it.
 pub(crate) fn section(state: &State, session: &crate::chat::Session) -> String {
