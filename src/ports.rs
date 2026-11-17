@@ -4,6 +4,8 @@ mod decisions;
 mod guidance;
 pub(crate) use guidance::{egress_hint, wait_topic};
 mod multiplex;
+mod proxy;
+pub(crate) use proxy::{env as proxy_env, exports as proxy_exports};
 #[path = "../tools/tcp-relay/multiplex.rs"]
 mod multiplex_transport;
 #[path = "../tools/tcp-relay/protocol.rs"]
@@ -344,6 +346,9 @@ fn admit(
     }
     if let Some(target) = &input.target {
         target.url()?;
+    }
+    if input.service_port == proxy::PROXY_PORT {
+        return Err(fail(format!("Service port {} is reserved for Control's egress proxy (HTTPS_PROXY); choose another", proxy::PROXY_PORT)));
     }
     let service = state
         .services
@@ -805,9 +810,7 @@ fn handshake(
     child: &mut Child,
     expected: &'static [u8],
     wait: Duration,
-    shared: &Arc<Mutex<State>>,
-    port: &Port,
-    cancel: &AtomicBool,
+    alive: &dyn Fn() -> bool,
 ) -> io::Result<ChildStdout> {
     let mut stdout = child
         .stdout
@@ -834,7 +837,7 @@ fn handshake(
             }
             Err(_) => {}
         }
-        if started.elapsed() >= wait || live_service(shared, port, cancel).is_err() {
+        if started.elapsed() >= wait || !alive() {
             break Err(fail("Relay handshake expired or was revoked"));
         }
     };
@@ -1104,9 +1107,7 @@ fn connect_relay(
         &mut child,
         b"CONTROL_RELAY_V2_READY\n",
         Duration::from_secs(3),
-        shared,
-        port,
-        cancel,
+        &|| live_service(shared, port, cancel).is_ok(),
     )?;
     Ok((child, output))
 }
@@ -1210,12 +1211,13 @@ pub fn supervise(shared: Arc<Mutex<State>>) -> JoinHandle<()> {
             return;
         };
         let mut active: HashMap<ResourceId, Active> = HashMap::new();
+        let mut proxies = proxy::Proxies::default();
         let changes = crate::storage::changes().clone();
         let shutdown = crate::shutdown::token();
         while !crate::shutdown::requested() {
             // Saves made during this pass, including its own, cause one more pass.
             let seen = changes.generation();
-            let (mut start, mut stop) = (Vec::new(), Vec::new());
+            let (mut start, mut stop, mut proxied) = (Vec::new(), Vec::new(), Vec::new());
             {
                 let Ok(mut state) = shared.lock() else { break };
                 let _ = decisions::advance(&mut state, crate::storage::save);
@@ -1223,6 +1225,10 @@ pub fn supervise(shared: Arc<Mutex<State>>) -> JoinHandle<()> {
                 for port in state.ports.iter().filter(|p| p.status != Status::Stopped) {
                     match intent(&state, port, &node, time) {
                         Intent::Serve => {
+                            let key = proxy::Key::of(port);
+                            if port.direction == Direction::Egress && port.target.is_some() && !proxied.contains(&key) {
+                                proxied.push(key);
+                            }
                             if active.get(&port.id).is_none_or(|a| a.handle.is_finished()) {
                                 start.push(port.clone());
                             }
@@ -1263,10 +1269,12 @@ pub fn supervise(shared: Arc<Mutex<State>>) -> JoinHandle<()> {
                     active.insert(id, Active { cancel, handle });
                 }
             }
+            proxies.sync(&shared, &proxied);
             // Approvals, revocations and service changes are saved and wake this
             // loop at once; the bound covers time-based expiry and relay restarts.
             let _ = changes.wait_newer(seen, Some(Instant::now() + Duration::from_secs(1)), &shutdown);
         }
+        proxies.stop();
         for (_, a) in active {
             a.cancel.store(true, Ordering::Release);
             let _ = a.handle.join();

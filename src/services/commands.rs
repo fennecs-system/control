@@ -1023,7 +1023,9 @@ fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
             return Err(fail("Service is no longer running"));
         }
         let user = format!("{}:{}", service.uid, service.gid);
-        let marker = [(MARKER, execution.id.as_str())];
+        // Approved egress also brings the service's HTTPS_PROXY settings.
+        let proxy = shared.lock().map(|state| crate::ports::proxy_env(&state, &service)).unwrap_or_default();
+        let marker = [(MARKER, execution.id.as_str())].into_iter().chain(proxy.iter().copied()).collect::<Vec<_>>();
         // Both run as the service user under the same marker, so a copy that
         // outlives its client is reaped exactly like a command.
         let (command, feed) = match &copy {

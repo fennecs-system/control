@@ -20,7 +20,7 @@ impl Port {
                     80 => format!("http://{host}/…"),
                     _ => format!("https://{host}:{port}/…"),
                 };
-                format!("The service has no DNS or direct network: connect to {local} inside it and the relay forwards to {host}:{port}, e.g. curl --connect-to {host}:{port}:{local} {url}")
+                format!("The service has no DNS or direct network: connect to {local} inside it and the relay forwards to {host}:{port}, e.g. curl --connect-to {host}:{port}:{local} {url}. {}", super::proxy::usage())
             }
             None => format!("Connect to {local} inside the service; the relay forwards to the peer ingress."),
         })

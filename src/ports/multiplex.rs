@@ -1,5 +1,5 @@
 //! One verified container listener, with independent bounded TCP sessions.
-use super::multiplex_transport::Transport;
+use super::multiplex_transport::{Incoming, Transport};
 use super::*;
 const _: () = assert!(MAX_CONNECTIONS == super::multiplex_transport::CONNECTIONS);
 
@@ -22,23 +22,19 @@ impl Drop for Process {
         }
     }
 }
-fn listen(shared: &Arc<Mutex<State>>, port: &Port, cancel: &Arc<AtomicBool>) -> io::Result<()> {
-    let service = live_service(shared, port, cancel)?;
-    let binding = crate::services::port_binding(&service, &port.container)?;
-    live_service(shared, port, cancel)?;
-    let mut child = binding.spawn(
-        RelayMode::Multiplex,
-        port.service_port,
-        port.approval.as_ref().unwrap().expires,
-    )?;
-    let output = handshake(
-        &mut child,
-        b"CONTROL_RELAY_V3_READY\n",
-        Duration::from_secs(3),
-        shared,
-        port,
-        cancel,
-    )?;
+/// Runs one `listen-multi` relay on `service_port` inside the verified
+/// container until it fails or `alive` turns false, handing every stream the
+/// service opens to `session` on its own thread. Returns once all sessions end.
+pub(super) fn serve(
+    binding: crate::services::PortBinding,
+    service_port: NonZeroU16,
+    expires: u64,
+    alive: &dyn Fn() -> bool,
+    ready: &dyn Fn(),
+    session: impl Fn(Incoming, Arc<Transport>) + Clone + Send + 'static,
+) -> io::Result<()> {
+    let mut child = binding.spawn(RelayMode::Multiplex, service_port, expires)?;
+    let output = handshake(&mut child, b"CONTROL_RELAY_V3_READY\n", Duration::from_secs(3), alive)?;
     let Some(input) = child.stdin.take() else {
         let _ = child.kill();
         let _ = child.wait();
@@ -61,46 +57,14 @@ fn listen(shared: &Arc<Mutex<State>>, port: &Port, cancel: &Arc<AtomicBool>) -> 
         reader: Some(reader),
         heartbeat: Some(heartbeat),
     };
-    receipt(shared, port, true, "");
+    ready();
     let mut sessions: Vec<JoinHandle<()>> = Vec::new();
-    while process.transport.alive() && live_service(shared, port, cancel).is_ok() {
+    while process.transport.alive() && alive() {
         sessions.retain(|task| !task.is_finished());
         match incoming.recv_timeout(Duration::from_millis(50)) {
             Ok(connection) => {
-                let shared = shared.clone();
-                let port = port.clone();
-                let cancel = cancel.clone();
-                let link = process.transport.clone();
-                sessions.push(thread::spawn(move || {
-                    // Every stream receives the same exact endpoint and live
-                    // generation/grant checks; no client-provided target exists.
-                    let socket = (|| {
-                        live_service(&shared, &port, &cancel)?;
-                        if !shared
-                            .lock()
-                            .is_ok_and(|state| peer_listening(&state, &port))
-                        {
-                            return Err(fail("Peer ingress is not listening"));
-                        }
-                        let target = port
-                            .approval
-                            .as_ref()
-                            .and_then(|approval| approval.pinned)
-                            .ok_or_else(|| fail("Missing pinned target"))?;
-                        let socket = TcpStream::connect_timeout(&target, Duration::from_secs(2))?;
-                        live_service(&shared, &port, &cancel)?;
-                        Ok(socket)
-                    })();
-                    match socket {
-                        Ok(socket) => {
-                            let _ = link.attach(connection, socket);
-                        }
-                        Err(error) => {
-                            link.reject(connection);
-                            receipt(&shared, &port, true, &error.to_string());
-                        }
-                    }
-                }));
+                let (session, link) = (session.clone(), process.transport.clone());
+                sessions.push(thread::spawn(move || session(connection, link)));
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(_) => break,
@@ -111,6 +75,50 @@ fn listen(shared: &Arc<Mutex<State>>, port: &Port, cancel: &Arc<AtomicBool>) -> 
         let _ = task.join();
     }
     Err(fail("Relay stopped or lost its host connection"))
+}
+fn listen(shared: &Arc<Mutex<State>>, port: &Port, cancel: &Arc<AtomicBool>) -> io::Result<()> {
+    let service = live_service(shared, port, cancel)?;
+    let binding = crate::services::port_binding(&service, &port.container)?;
+    live_service(shared, port, cancel)?;
+    let (owner, route, stop) = (shared.clone(), port.clone(), cancel.clone());
+    serve(
+        binding,
+        port.service_port,
+        port.approval.as_ref().unwrap().expires,
+        &|| live_service(shared, port, cancel).is_ok(),
+        &|| receipt(shared, port, true, ""),
+        move |connection, link| {
+            let (shared, port, cancel) = (&owner, &route, &stop);
+            // Every stream receives the same exact endpoint and live
+            // generation/grant checks; no client-provided target exists.
+            let socket = (|| {
+                live_service(shared, port, cancel)?;
+                if !shared
+                    .lock()
+                    .is_ok_and(|state| peer_listening(&state, port))
+                {
+                    return Err(fail("Peer ingress is not listening"));
+                }
+                let target = port
+                    .approval
+                    .as_ref()
+                    .and_then(|approval| approval.pinned)
+                    .ok_or_else(|| fail("Missing pinned target"))?;
+                let socket = TcpStream::connect_timeout(&target, Duration::from_secs(2))?;
+                live_service(shared, port, cancel)?;
+                Ok(socket)
+            })();
+            match socket {
+                Ok(socket) => {
+                    let _ = link.attach(connection, socket);
+                }
+                Err(error) => {
+                    link.reject(connection);
+                    receipt(shared, port, true, &error.to_string());
+                }
+            }
+        },
+    )
 }
 pub(super) fn egress(
     shared: Arc<Mutex<State>>,
