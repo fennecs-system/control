@@ -264,17 +264,19 @@ pub fn handle(
         );
         return true;
     }
-    if path=="/chats/history" && method=="GET" {
-        // History moved under Bots; saved links keep their page.
-        let location=crate::navigation::history_location("/bots/history",&crate::fields(query));
-        respond(stream,"303 See Other","text/plain","",&format!("Location: {location}\r\n"));
+    if path==crate::history_view::PATH && method=="GET" {
+        // Older history URLs redirect here (`url_names::history`). The client
+        // loads a DM's turns when its row opens.
+        let html=crate::history_view::page(state,&crate::history_view::Filter::from(&crate::fields(query)));
+        let page=crate::web_assets::with_client(&crate::render(state,"history",lens,&html));
+        let _=control_http::respond(stream,"200 OK","text/html; charset=utf-8",page.as_bytes(),"",control_http::Policy::Client);
         return true;
     }
-    if (path=="/bots/history" || path=="/bots/history/runs") && method=="GET" {
-        let query=crate::fields(query);
-        let (older,newer)=(query.get("older").map(String::as_str),query.get("newer").map(String::as_str));
-        let html=if path=="/bots/history" {crate::navigation::history(state,older,newer)} else {state.runtime.runs_page(older,newer)};
-        respond(stream,"200 OK","text/html; charset=utf-8",&crate::render(state,"history",lens,&html),"");
+    if path=="/bots/history/turns" && method=="GET" {
+        match crate::history_view::turns(state,&crate::history_view::Filter::from(&crate::fields(query))) {
+            Ok(html)=>respond(stream,"200 OK","text/html; charset=utf-8",&html,""),
+            Err(message)=>respond(stream,"404 Not Found","text/plain",message,""),
+        }
         return true;
     }
     if path=="/bots/graveyard" && method=="GET" {

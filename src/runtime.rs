@@ -238,7 +238,7 @@ impl Runtime {
         if path == "/retry-run" {
             if let Err(message) = crate::scheduler::admit(self) {
                 self.notice = message.into();
-                return "/bots/history/runs";
+                return crate::history_view::AFTER_ACTION;
             }
             let id = field(f, "id");
             let order = self
@@ -254,14 +254,14 @@ impl Runtime {
             }) {
                 if let Err(message) = identity::authorize(&run.actor, run.action) {
                     self.notice = message.into();
-                    return "/bots/history/runs";
+                    return crate::history_view::AFTER_ACTION;
                 }
                 run.status = "queued".into();
                 run.queue_order = order;
                 run.result.clear();
             }
         }
-        "/bots/history/runs"
+        crate::history_view::AFTER_ACTION
     }
     pub fn render(&self, view: &str, _lens: &str) -> Option<String> {
         match view {
@@ -299,28 +299,14 @@ impl Runtime {
                 }
                 Some(h)
             }
-            "runs" => {
-                Some(self.runs_page(None,None))
-            }
             "integrations" => Some(integrations()),
             _ => None,
         }
     }
-    pub fn runs_page(&self, older:Option<&str>, newer:Option<&str>)->String {
-        let find=|id:Option<&str>|id.and_then(|id|self.runs.iter().rev().position(|run|run.id==id));
-        let range=crate::pagination::window(self.runs.len(),find(older),find(newer));
-        let mut html=crate::navigation::history_tabs(true);
-        if !self.notice.is_empty(){html.push_str(&format!("<p role='status'>{}</p>",escape(&self.notice)));}
-        if self.runs.is_empty(){html.push_str("<div class='empty'>No runs yet.</div>");}
-        for run in self.runs.iter().rev().skip(range.start).take(range.len()){html.push_str(&run_record(run));}
-        let id=|index:usize|self.runs.get(self.runs.len().checked_sub(index+1)?).map(|run|run.id.as_str());
-        html.push_str(&crate::pagination::controls("/bots/history/runs",(range.start>0).then(||id(range.start)).flatten(),(range.end<self.runs.len()).then(||id(range.end-1)).flatten()));
-        html
-    }
 }
 
 /// Attempts and provider-reported tokens for one run, when any were measured.
-fn usage(run: &Run) -> String {
+pub(crate) fn usage(run: &Run) -> String {
     let (input, cached, output, measured) = run.attempts.iter().filter_map(|attempt| attempt.tokens).fold((0, 0, 0, 0), |(i, c, o, n), t| (i + t.input_tokens, c + t.cached_input_tokens, o + t.output_tokens, n + 1));
     let running = run.attempts.last().is_some_and(crate::usage::Attempt::running);
     let partial = run.attempts.iter().any(|attempt| attempt.accounting == crate::usage::Accounting::Partial);

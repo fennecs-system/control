@@ -69,40 +69,19 @@ pub fn heading(view: &str) -> String {
     }
     String::new()
 }
-pub fn conversations(state: &crate::State, active: &str) -> String {
-    conversation_window(state,active,None,None,true)
-}
-pub fn history(state:&crate::State,older:Option<&str>,newer:Option<&str>)->String {
-    format!("{}<section class='conversation-history'>{}</section>",history_tabs(false),conversation_window(state,"",older,newer,false))
-}
-/// History is a Bots sub-page: the live page and the record share one heading.
-pub fn history_tabs(runs: bool) -> String {
-    let current = |selected| if selected {" aria-current='page'"} else {""};
-    format!("<div class='section-heading'><h2>Bots<span class='slash' aria-hidden='true'>/</span>History</h2><a href='/dms?new=1'>+ New chat</a></div>{}<nav class='tabs' aria-label='History'><a href='/bots/history'{}>Conversations</a><a href='/bots/history/runs'{}>Runs</a></nav>",bots_tabs(true),current(!runs),current(runs))
-}
 /// Tabs between the live Bots page and its History sub-page.
 pub fn bots_tabs(history: bool) -> String {
     let current = |selected| if selected {" aria-current='page'"} else {""};
     format!("<nav class='tabs' aria-label='Bots'><a href='/?view=agents'{}>Live</a><a href='/bots/history'{}>History</a></nav>",current(!history),current(history))
 }
-/// `target` with the history page cursor (`older`/`newer`) carried over from
-/// a pre-move URL, so saved links land on the same page.
-pub fn history_location(target: &str, query: &std::collections::HashMap<String, String>) -> String {
-    let mut url = reqwest::Url::parse("http://localhost").unwrap().join(target).unwrap();
-    for key in ["older", "newer"] {
-        if let Some(id) = query.get(key).filter(|id| crate::chat::valid_id(id)) {
-            url.query_pairs_mut().append_pair(key, id);
-        }
-    }
-    url.query().map_or_else(|| url.path().to_owned(), |query| format!("{}?{query}", url.path()))
-}
-fn conversation_window(state:&crate::State,active:&str,older:Option<&str>,newer:Option<&str>,picker:bool)->String {
+/// The DM picker: the newest ten threads and the active one's thread. All DMs
+/// are on Bots / History (`crate::history_view`).
+pub fn conversations(state: &crate::State, active: &str) -> String {
     use std::collections::{HashMap,HashSet};
     let entries=crate::conversations::ordered(state);
     let callsigns=crate::callsigns::all(&state.chats);
     let roots=entries.iter().enumerate().filter(|(_,entry)|entry.depth==0).map(|(index,_)|index).collect::<Vec<_>>();
-    let find=|id:Option<&str>|id.and_then(|id|roots.iter().position(|index|entries[*index].session.id==id));
-    let range=crate::pagination::window(roots.len(),find(older),find(newer));
+    let range=crate::pagination::window(roots.len(),None,None);
     let start=roots.get(range.start).copied().unwrap_or(entries.len());
     let end=roots.get(range.end).copied().unwrap_or(entries.len());
     let mut selected=entries[start..end].iter().collect::<Vec<_>>();
@@ -112,7 +91,7 @@ fn conversation_window(state:&crate::State,active:&str,older:Option<&str>,newer:
         if !expanded.insert(id) {break;}
         ancestor=parents.get(id).copied().flatten();
     }
-    if picker && let Some(index)=entries.iter().position(|entry|entry.session.id==active) {
+    if let Some(index)=entries.iter().position(|entry|entry.session.id==active) {
         let root=(0..=index).rev().find(|index|entries[*index].depth==0).unwrap();
         if root<start || root>=end {
             // Keep the active thread reachable without letting it reorder the
@@ -123,18 +102,7 @@ fn conversation_window(state:&crate::State,active:&str,older:Option<&str>,newer:
         }
     }
     let current=if active.is_empty() {" aria-current='page'"}else{""};
-    let mut links=if picker {format!("<a href='/dms?new=1'{current}>+ New DM</a>")} else {String::new()};
-    // One borrowed projection for the page, rather than scanning run history per chat.
-    let mut latest=HashMap::new();
-    if !picker {
-        let selected_ids=selected.iter().map(|entry|entry.session.id.as_str()).collect::<HashSet<_>>();
-        for run in state.runtime.runs.iter().rev() {
-            if let Some(chat)=run.chat_id.as_deref().filter(|chat|selected_ids.contains(chat)) {
-                latest.entry(chat).or_insert(run);
-                if latest.len()==selected_ids.len() {break;}
-            }
-        }
-    }
+    let mut links=format!("<a href='/dms?new=1'{current}>+ New DM</a>");
     let mut branches=Vec::new();
     for (position,entry) in selected.iter().enumerate() {
         while branches.last().is_some_and(|depth| *depth>=entry.depth) {links.push_str("</div></details>");branches.pop();}
@@ -143,25 +111,15 @@ fn conversation_window(state:&crate::State,active:&str,older:Option<&str>,newer:
         let depth=entry.depth.min(8);
         let title=crate::escape(&crate::callsigns::label(chat,callsigns[entry.position]));
         let current=if chat.id==active {" aria-current='page'"}else{""};
-        let metadata=latest.get(chat.id.as_str()).map(|run| {
-            let model=run.model.as_deref().map(|model|format!(" · {}",crate::escape(model))).unwrap_or_default();
-            format!("<span class='conversation-meta'>{} · {}{model}</span>",crate::escape(&run.status),crate::escape(run.backend.label()))
-        }).unwrap_or_default();
-        let link=format!("<a class='conversation-link' href='/dm/{}' title='{title}' data-conversation-depth='{depth}'{current}><span class='conversation-title'>{title}</span>{metadata}</a>",chat.id);
+        let link=format!("<a class='conversation-link' href='/dm/{}' title='{title}' data-conversation-depth='{depth}'{current}><span class='conversation-title'>{title}</span></a>",chat.id);
         if selected.get(position+1).is_some_and(|next|next.depth>entry.depth) {
             links.push_str(&format!("<details class='conversation-branch' data-chat-branch='{}'{}><summary data-conversation-depth='{depth}'>{link}</summary><div class='conversation-children'>",chat.id,if expanded.contains(chat.id.as_str()) {" open"}else{""}));
             branches.push(entry.depth);
         }else{links.push_str(&link);}
     }
     for _ in branches {links.push_str("</div></details>");}
-    if !picker && selected.is_empty() {links.push_str("<p class='muted'>No conversations yet.</p>");}
-    let controls=if picker {
-        if roots.len()>crate::pagination::SIZE {"<a class='conversation-history-link' href='/bots/history'>All DMs ↗</a>".into()}else{String::new()}
-    }else{
-        crate::pagination::controls("/bots/history",(range.start>0).then(||entries[roots[range.start]].session.id.as_str()),(range.end<roots.len()).then(||entries[roots[range.end-1]].session.id.as_str()))
-    };
-    let heading=if picker {"<h2>DMs</h2>"}else{""};
-    format!("<aside class='section-navigation conversation-navigation'>{heading}<nav aria-label='DMs'>{links}</nav>{controls}</aside>")
+    let controls=if roots.len()>crate::pagination::SIZE {"<a class='conversation-history-link' href='/bots/history'>All DMs ↗</a>"}else{""};
+    format!("<aside class='section-navigation conversation-navigation'><h2>DMs</h2><nav aria-label='DMs'>{links}</nav>{controls}</aside>")
 }
 #[cfg(test)]
 mod tests;

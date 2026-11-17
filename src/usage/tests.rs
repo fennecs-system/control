@@ -170,9 +170,9 @@ fn aggregates_retries_preserves_legacy_runs_and_escapes_content() {
     assert!(html.contains("2/2"));
     assert!(
         !html.contains("script&gt;bad") && !html.contains("<script>bad"),
-        "run objectives stay in run history"
+        "run objectives stay in History"
     );
-    assert!(html.contains("href='/bots/history/runs'"));
+    assert!(html.contains("href='/bots/history?expand=1'"));
     if let Ok(directory) = std::env::var("CONTROL_PREVIEW_DIR") {
         std::fs::create_dir_all(&directory).unwrap();
         for (view, file) in [

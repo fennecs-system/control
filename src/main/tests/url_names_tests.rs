@@ -84,9 +84,17 @@ fn legacy_urls_redirect_permanently_with_tail_and_query() {
         let response = request(&state, "POST", &old, "message=hello");
         assert_eq!(status_and_location(&response), ("308 Permanent Redirect", Some(new.as_str())), "POST {old}");
     }
-    // `/chats/history` keeps its existing redirect to Bots history.
-    let response = request(&state, "GET", "/chats/history", "");
-    assert_eq!(status_and_location(&response).1, Some("/bots/history"));
+    // Earlier history pages open the one History page with an equivalent filter.
+    for (old, new) in [
+        ("/chats/history".to_owned(), "/bots/history".to_owned()),
+        (format!("/chats/history?older={id}&x=1"), format!("/bots/history?older={id}")),
+        ("/bots/history/runs".to_owned(), "/bots/history?expand=1".to_owned()),
+        ("/bots/history/runs?older=r-1".to_owned(), "/bots/history?expand=1".to_owned()),
+    ] {
+        let response = request(&state, "GET", &old, "");
+        assert_eq!(status_and_location(&response), ("301 Moved Permanently", Some(new.as_str())), "GET {old}");
+    }
+    assert_eq!(status_and_location(&request(&state, "GET", "/?view=runs", "")).1, Some("/bots/history?expand=1"));
     // The old gene-library view goes to its page.
     assert_eq!(status_and_location(&request(&state, "GET", "/?view=lenses", "")).1, Some("/dna"));
 }
@@ -122,7 +130,7 @@ fn current_names_serve_and_pages_link_only_to_current_names() {
         for link in links {
             let path = link.split(['?', '#']).next().unwrap();
             assert_eq!(url_names::renamed(path), None, "{page} links to legacy {link}");
-            assert!(path != "/chats/history", "{page} links to legacy {link}");
+            assert!(url_names::history(path, "").is_none(), "{page} links to legacy {link}");
         }
     }
     let dm = request(&state, "GET", &format!("/dm/{id}"), "");

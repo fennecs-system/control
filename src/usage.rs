@@ -299,7 +299,7 @@ pub fn render(runtime: &Runtime) -> String {
     html.push_str(&table("By person", &people));
     html.push_str(&table("By provider / requested model", &models));
     html.push_str(&table("By day (UTC)", &days));
-    html.push_str("<p class='muted'>Per-run attempts and tokens are in <a href='/bots/history/runs'>Run history ↗</a>.</p>");
+    html.push_str("<p class='muted'>Per-turn attempts and tokens are in <a href='/bots/history?expand=1'>History ↗</a>.</p>");
     html
 }
 

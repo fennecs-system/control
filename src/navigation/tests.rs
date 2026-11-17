@@ -1,6 +1,6 @@
 
 #[test]
-fn conversation_pages_keep_threads_whole_and_cursors_stable() {
+fn picker_keeps_the_active_thread_and_links_to_history() {
     let mut state = crate::State::default();
     let mut ids = Vec::new();
     for _ in 0..25 {
@@ -26,124 +26,8 @@ fn conversation_pages_keep_threads_whole_and_cursors_stable() {
             .contains(&format!("data-chat-branch='{}' open", ids[0])),
         "The active parent's children must remain reachable"
     );
-    let page = super::history(&state, Some(&roots[9]), None);
-    assert_eq!(page.matches("href='/dm/").count(), 10);
-    for id in &roots[10..20] {
-        assert!(page.contains(&format!("href='/dm/{id}'")));
-    }
-    assert!(!page.contains(&format!("href='/dm/{child}'")));
-    crate::chat::create(&mut state);
-    assert_eq!(
-        super::history(&state, Some(&roots[9]), None),
-        page,
-        "New chats must not shift an older cursor boundary"
-    );
-    let last = super::history(&state, Some(&roots[19]), None);
-    assert_eq!(
-        last.matches("href='/dm/").count(),
-        6,
-        "The oldest root retains its nested child on the final page"
-    );
-    assert!(!last.contains("Older →"));
-    assert!(last.contains("← Newer"));
-    assert_eq!(super::history(&state, None, Some(&roots[20])), page);
-    let mut response = Vec::new();
-    assert!(crate::session_http::handle(
-        &mut response,
-        &mut state,
-        "GET",
-        &format!("/bots/history?older={}", roots[9]),
-        "none",
-        "",
-        &[]
-    ));
-    let response = String::from_utf8(response).unwrap();
-    assert!(response.starts_with("HTTP/1.1 200 OK"));
-    assert!(response.contains(&page));
-    assert!(response.contains("href='/?view=agents' aria-current='page'"), "History is a Bots sub-page");
-    assert!(response.contains("href='/bots/history' aria-current='page'>History</a>"));
-    assert!(response.contains("href='/bots/history' aria-current='page'>Conversations</a>"));
-    assert!(!response.contains("<span>History</span>"), "The main navigation has no History item");
-    let mut redirect = Vec::new();
-    assert!(crate::session_http::handle(&mut redirect, &mut state, "GET", &format!("/chats/history?older={}", roots[9]), "none", "", &[]));
-    let redirect = String::from_utf8(redirect).unwrap();
-    assert!(redirect.starts_with("HTTP/1.1 303 See Other"), "{redirect}");
-    assert!(redirect.contains(&format!("location: /bots/history?older={}\r\n", roots[9])), "{redirect}");
-    assert!(
-        !response.contains("body-grid chat-workspace"),
-        "History must use the normal page layout, not the live chat shell"
-    );
-}
-#[test]
-fn history_shows_latest_model_per_chat_and_keeps_threads_collapsible() {
-    let mut state = crate::State::default();
-    let parent = crate::chat::create(&mut state);
-    let child = crate::chat::create(&mut state);
-    state.chats.last_mut().unwrap().parent_chat = Some(parent.clone());
-    for (chat, model) in [
-        (&parent, "obsolete"),
-        (&child, "child-model"),
-        (&parent, "<latest>"),
-    ] {
-        state
-            .runtime
-            .enqueue("Task".into(), crate::runtime::RunKind::Chat, "test");
-        let run = state.runtime.runs.last_mut().unwrap();
-        run.chat_id = Some(chat.clone());
-        run.model = Some(model.into());
-        run.status = "completed".into();
-    }
-    let html = super::history(&state, None, None);
-    assert!(html.contains("&lt;latest&gt;") && html.contains("child-model"));
-    assert!(!html.contains("obsolete") && !html.contains("<latest>"));
-    assert!(html.contains(&format!("data-chat-branch='{parent}'><summary data-conversation-depth='0'><a class='conversation-link'")));
-    assert_eq!(html.matches("class='conversation-meta'").count(), 2);
-    assert!(
-        !super::conversations(&state, &parent).contains("class='conversation-meta'"),
-        "The compact picker does not need per-turn metadata"
-    );
-}
-#[test]
-fn run_pages_render_only_ten_records_and_keep_cursor_boundaries() {
-    let mut state = crate::State::default();
-    for index in 0..25 {
-        state.runtime.enqueue(
-            format!("task-{index}"),
-            crate::runtime::RunKind::Chat,
-            "test",
-        );
-        state.runtime.runs.last_mut().unwrap().status = "completed".into();
-    }
-    let newest = state.runtime.runs_page(None, None);
-    assert_eq!(newest.matches("<article class='record'>").count(), 10);
-    assert!(newest.contains("<h3>task-24</h3>"));
-    assert!(!newest.contains("<h3>task-14</h3>"));
-    assert!(!newest.contains("← Newer"));
-    let cursor = state.runtime.runs[15].id.clone();
-    let middle = state.runtime.runs_page(Some(&cursor), None);
-    assert_eq!(middle.matches("<article class='record'>").count(), 10);
-    assert!(middle.contains("<h3>task-14</h3>"));
-    assert!(middle.contains("<h3>task-5</h3>"));
-    state
-        .runtime
-        .enqueue("new task".into(), crate::runtime::RunKind::Chat, "test");
-    assert_eq!(state.runtime.runs_page(Some(&cursor), None), middle);
-    let mut response = Vec::new();
-    assert!(crate::session_http::handle(&mut response, &mut state, "GET", &format!("/bots/history/runs?older={cursor}"), "none", "", &[]));
-    let html = String::from_utf8(response).unwrap();
-    assert!(html.contains(&middle));
-    assert!(html.contains("href='/?view=agents' aria-current='page'"), "Runs are part of Bots");
-    assert!(middle.contains("href='/bots/history/runs?older="));
-    assert_eq!(
-        crate::legacy_session_location(&state, &crate::fields(&format!("view=runs&older={cursor}"))).as_deref(),
-        Some(format!("/bots/history/runs?older={cursor}").as_str()),
-        "Saved run-history links keep their page"
-    );
-    assert_eq!(crate::legacy_session_location(&state, &crate::fields("view=runs")).as_deref(), Some("/bots/history/runs"));
-    let last_cursor = state.runtime.runs[5].id.clone();
-    let last = state.runtime.runs_page(Some(&last_cursor), None);
-    assert_eq!(last.matches("<article class='record'>").count(), 5);
-    assert!(!last.contains("Older →"));
+    assert_eq!(roots.len(), 25, "The child is nested, not a root");
+    assert!(!picker.contains("conversation-meta"), "The compact picker does not need per-turn metadata");
 }
 #[test]
 fn manage_routes_preserve_section_navigation_and_global_context() {
