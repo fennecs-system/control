@@ -253,9 +253,11 @@ impl App {
             "/compact" => {
                 if self.active.is_empty() { return Err(failure("Open a conversation first")); }
                 self.set_detail(hive.tool("control.chat.read", json!({"id":self.active}))?);
-                self.inspector = Some(("Memory Tree".into(), serde_json::to_string_pretty(&self.detail["compaction"]).map_err(failure)?));
+                let compaction = &self.detail["compaction"];
+                let summary = compaction["summary"].as_str().unwrap_or_default();
+                self.inspector = Some(("Memory Tree".into(), format!("{summary}\n\n{}", serde_json::to_string_pretty(compaction).map_err(failure)?)));
                 self.scroll = 0; self.follow = false;
-                self.status = "Compaction is independent of the chat model · /chat returns".into();
+                self.status = "/memory on [MODEL] or /memory off changes it · /chat returns".into();
             }
             _ if text.starts_with("/port ") => {
                 let shown=operator::pending(&self.detail);

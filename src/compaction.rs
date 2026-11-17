@@ -12,6 +12,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+pub(crate) mod command;
 mod recall;
 mod source;
 mod surgery;
@@ -58,11 +59,16 @@ pub struct Settings {
     pub recent_entries: u64,
     pub leaf_entries: u64,
     pub history_bytes: usize,
+    /// DMs opted out with `/memory off`: never compacted, overriding the
+    /// local-model default. Disjoint from `chats`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub opted_out: Vec<String>,
 }
 impl Default for Settings {
     fn default() -> Self {
         Self {
             enabled: false,
+            opted_out: Vec::new(),
             chats: Vec::new(),
             model: None,
             recent_entries: 8,
@@ -79,6 +85,10 @@ impl Settings {
                 .iter()
                 .enumerate()
                 .any(|(i, id)| !crate::application::valid_id(id) || self.chats[..i].contains(id))
+            || self.opted_out.len() > 256
+            || self.opted_out.iter().enumerate().any(|(i, id)| {
+                !crate::application::valid_id(id) || self.opted_out[..i].contains(id) || self.chats.contains(id)
+            })
             || !(1..=128).contains(&self.recent_entries)
             || !(1..=64).contains(&self.leaf_entries)
             || !self.leaf_entries.is_power_of_two()
@@ -197,14 +207,33 @@ fn hash(bytes: &[u8]) -> String {
 /// listed under automatic summaries) wins. Otherwise a chat whose selected agent
 /// model is a local endpoint compacts on that same endpoint by default, so its
 /// history is never sent to a hosted summarizer without an operator choice.
+/// An explicit opt-out (`/memory off`) overrides both.
 pub(crate) fn compactor_for<'a>(
     state: &'a State,
     session: &crate::chat::Session,
 ) -> Option<&'a crate::model_calls::Endpoint> {
+    policy(state, session).0
+}
+/// The compactor serving a chat and why (see `compactor_for`).
+pub(crate) fn policy<'a>(
+    state: &'a State,
+    session: &crate::chat::Session,
+) -> (Option<&'a crate::model_calls::Endpoint>, &'static str) {
     let memory = &state.runtime.compaction;
-    if memory.settings.enabled && memory.settings.chats.contains(&session.id) {
-        return memory.models.iter().find(|m| Some(&m.id) == memory.settings.model.as_ref());
+    if memory.settings.opted_out.contains(&session.id) {
+        return (None, "opted out");
     }
+    if memory.settings.enabled && memory.settings.chats.contains(&session.id) {
+        let model = memory.models.iter().find(|m| Some(&m.id) == memory.settings.model.as_ref());
+        return (model, if model.is_some() { "operator opt-in" } else { "opted in, but no configured compactor model" });
+    }
+    match local_endpoint(state, session) {
+        Some(model) => (Some(model), "local chat model default"),
+        None => (None, "off"),
+    }
+}
+/// The local endpoint a chat's selected agent model runs on, if any.
+fn local_endpoint<'a>(state: &'a State, session: &crate::chat::Session) -> Option<&'a crate::model_calls::Endpoint> {
     let model = session.model.as_ref().filter(|m| m.backend == crate::backend::Backend::Local)?;
     crate::providers::endpoint(&state.runtime, &model.model)
 }
@@ -748,10 +777,9 @@ pub fn status(state: &State, chat: &str) -> serde_json::Value {
     let memory = &state.runtime.compaction;
     let view = memory.views.get(chat);
     let session = state.chats.iter().find(|c| c.id == chat);
-    let model = session.and_then(|s| compactor_for(state, s));
-    let explicit = memory.settings.enabled && memory.settings.chats.iter().any(|id| id == chat);
-    serde_json::json!({"settings":memory.settings,"enabled_for_chat":model.is_some(),
-        "policy":if explicit {"operator opt-in"} else if model.is_some() {"local chat model default"} else {"off"},
+    let (model, policy) = session.map_or((None, "off"), |s| policy(state, s));
+    serde_json::json!({"summary":session.map(|s|command::summary(state,s)),"settings":memory.settings,"enabled_for_chat":model.is_some(),
+        "policy":policy,
         "model":model,
         "pending":memory.pending.as_ref().is_some_and(|(id,_,_,_)|id==chat),
         "source_entries":view.map(|v|v.count),"source_revision":view.map(|v|v.revision),

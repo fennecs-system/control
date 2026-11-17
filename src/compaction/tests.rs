@@ -497,3 +497,73 @@ fn selection_profile() {
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
+
+#[test]
+fn memory_command_reports_why_and_opts_a_dm_in_or_out() {
+    use command::{command_with, summary};
+    let (mut state, _) = fixture();
+    let chat = state.chats[0].id.clone();
+    let saved = std::cell::Cell::new(0);
+    let save = |_: &State| { saved.set(saved.get() + 1); Ok(()) };
+    let run = |state: &mut State, option: &str| command_with(state, &chat, option, |s| save(s));
+    // Explicit opt-in from the fixture.
+    let line = run(&mut state, "").unwrap();
+    assert!(line.starts_with("Memory Tree on for this DM: compactor local-qwen (operator opt-in). 32 entries verbatim, 0 folded"), "{line}");
+    assert!(line.ends_with(&memory_url(&chat)));
+    // Off: listed nowhere and not local.
+    state.runtime.compaction.settings = Settings { recent_entries: 2, ..Default::default() };
+    assert!(run(&mut state, "").unwrap().starts_with("Memory Tree off for this DM (off): 32 entries, none folded"));
+    // Local-model default, overridden by an explicit opt-out.
+    state.runtime.compaction.models[0].tools = true;
+    state.chats[0].model = Some(crate::providers::Model::captured(crate::backend::Backend::Local, "local-qwen".into()));
+    assert!(run(&mut state, "").unwrap().contains("compactor local-qwen (local chat model default)"));
+    let line = run(&mut state, "off").unwrap();
+    assert!(line.starts_with("Memory Tree off for this DM (opted out)"), "{line}");
+    assert_eq!(state.runtime.compaction.settings.opted_out, std::slice::from_ref(&chat));
+    assert!(compactor_for(&state, &state.chats[0]).is_none() && prepare(&state).is_none());
+    assert_eq!(status(&state, &chat)["policy"], "opted out");
+    // Off again changes nothing and saves nothing.
+    run(&mut state, "off").unwrap();
+    assert_eq!(saved.get(), 1);
+    // On without MODEL uses the DM's local model and clears the opt-out.
+    let line = run(&mut state, "on").unwrap();
+    assert!(line.contains("compactor local-qwen (operator opt-in)"), "{line}");
+    let settings = &state.runtime.compaction.settings;
+    assert!(settings.enabled && settings.chats == [chat.clone()] && settings.opted_out.is_empty());
+    assert_eq!(settings.model.as_deref(), Some("local-qwen"));
+    // Folded entries come from the published view.
+    let job = hydrate(&state, prepare(&state).unwrap());
+    let dir = scratch();
+    let view = execute(&job, &dir, |_, _, _| Ok(control_ai::model::Response { text: "summary".into(), tokens: None })).unwrap();
+    state.runtime.compaction.views.insert(chat.clone(), view);
+    assert!(summary(&state, &state.chats[0]).contains("2 entries verbatim, 30 folded into summaries"));
+    std::fs::remove_dir_all(dir).unwrap();
+    // Unknown models and stray arguments are refused without saving.
+    let before = state.runtime.compaction.settings.clone();
+    assert_eq!(run(&mut state, "on gpt-nonexistent"), Err("Unknown text model. Use /memory on MODEL with a text model configured in Manage → Models."));
+    assert_eq!(run(&mut state, "maybe"), Err(command::USAGE));
+    assert_eq!(run(&mut state, "off now"), Err(command::USAGE));
+    assert_eq!(state.runtime.compaction.settings, before);
+    // A hosted DM with no configured compactor must name one.
+    state.chats[0].model = None;
+    state.runtime.compaction.settings = Settings::default();
+    assert!(run(&mut state, "on").unwrap_err().starts_with("No Memory Tree model is configured"));
+    assert!(run(&mut state, "on local-qwen").unwrap().contains("compactor local-qwen (operator opt-in)"));
+    // A failed save keeps the previous settings.
+    assert!(command_with(&mut state, &chat, "off", |_| Err(io::Error::other("disk"))).is_err());
+    assert_eq!(state.runtime.compaction.settings.chats, std::slice::from_ref(&chat));
+}
+
+#[test]
+fn memory_and_compact_are_answered_in_the_dm_and_kept_out_of_history() {
+    let (mut state, _) = fixture();
+    let chat = state.chats[0].id.clone();
+    for text in ["/compact", "/memory"] {
+        crate::chat::send(&mut state, &chat, text, "web").unwrap();
+        let message = state.chats[0].messages.last().unwrap();
+        assert!(message.reply.starts_with("Memory Tree on for this DM"), "{}", message.reply);
+        assert!(crate::conversation::Entry::source(message, None).render().is_empty());
+    }
+    assert_eq!(crate::chat::send(&mut state, &chat, "/compact now", "web"), Err(command::USAGE));
+    assert!(status(&state, &chat)["summary"].as_str().unwrap().starts_with("Memory Tree on"));
+}

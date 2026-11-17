@@ -14,6 +14,10 @@ pub enum Kind {
     Room,
     Model,
     Rename,
+    /// `/memory [on [MODEL] | off]`: this DM's Memory Tree status or opt-in.
+    Memory,
+    /// `/compact`: the older spelling of a bare `/memory`.
+    Compact,
 }
 
 pub struct Definition {
@@ -80,6 +84,9 @@ pub const DEFINITIONS: &[Definition] = &[
     Definition { id:"cancel-all", text:"/cancel all", description:"Stop runs and bots in this DM and every DM it spawned", architect:false },
     Definition {id:"model",text:"/model",description:"List or select this DM's model",architect:false},
     Definition { id:"rename", text:"/rename", description:"Rename this DM", architect:false },
+    Definition { id:"memory", text:"/memory", description:"Show this DM's Memory Tree status (alias /compact)", architect:false },
+    Definition { id:"memory-on", text:"/memory on", description:"Opt this DM into the Memory Tree (operator)", architect:false },
+    Definition { id:"memory-off", text:"/memory off", description:"Opt this DM out of the Memory Tree (operator)", architect:false },
 ];
 
 #[derive(Debug, PartialEq, Eq)]
@@ -105,10 +112,12 @@ pub fn parse(text: &str) -> Option<Parsed<'_>> {
         "/room" => Kind::Room,
         "/model" => Kind::Model,
         "/rename" => Kind::Rename,
+        "/memory" => Kind::Memory,
+        "/compact" => Kind::Compact,
         _ => return None,
     };
     let tail = &trimmed[end..];
-    let suffix = if kind == Kind::Improve {
+    let suffix = if matches!(kind, Kind::Improve | Kind::Memory) {
         [" off", " on"]
             .into_iter()
             .find(|suffix| {
