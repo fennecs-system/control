@@ -2185,14 +2185,21 @@ fn a_local_turn_stopped_at_its_step_cap_leaves_a_host_checkpoint() {
     attempt.activity.clear();
     // Set by the local loop at its cap; the worker's finish keeps it.
     attempt.termination = Some(Termination::StepLimit);
+    // The latest reasoning, carried verbatim (its tail) into the checkpoint.
+    attempt.interrupted_reasoning = Some(format!("{}\nNext: request egress for files.example, then   retry the download.", "Earlier planning. ".repeat(200)));
     let capped = Err(("failed", "Local agent reached its 64-step limit".into()));
     commit(&mut state, &id, Action::Task, attempt, capped, false, |_| Ok(())).unwrap();
     assert!(crate::attempt_control::cut_off(&state.runtime.runs[0]));
+    assert!(state.runtime.runs[0].attempts[0].interrupted_reasoning.is_none(), "only the checkpoint keeps it");
     let note = state.chats[0].continuity.as_ref().unwrap().interrupted.clone().unwrap();
     assert_eq!(note.cause, Termination::StepLimit);
+    let reasoning = note.reasoning.clone().unwrap();
+    assert_eq!(reasoning.chars().count(), crate::turn_context::REASONING_CHARS);
+    assert!(reasoning.starts_with('…') && reasoning.ends_with("Next: request egress for files.example, then retry the download."), "{reasoning}");
     crate::chat::send(&mut state, &chat, "Continue", "test").unwrap();
     let next = checkpoint_next(&mut state, |_| Ok(())).unwrap();
     let input = crate::turn_context::input(state.runtime.runs[next].attempts.last().unwrap()).unwrap().unwrap();
     assert!(input.contains("your previous turn used all its model steps"), "{input}");
     assert!(input.contains("Could not resolve host: files.example"), "{input}");
+    assert!(input.contains("Your reasoning when it stopped, verbatim: <<…") && input.contains("continue that plan"), "{input}");
 }

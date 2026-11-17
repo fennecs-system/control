@@ -6,7 +6,7 @@
 //! publication rules included), and decides when the turn ends. The endpoint only
 //! generates. Provider state never outlives the attempt; recovery starts fresh.
 use control_ai::{
-    model::{decode_step, tool_request, Limits},
+    model::{decode_step, think, tool_request, Limits, Thinking},
     Tokens,
 };
 use serde_json::{json, Value};
@@ -44,6 +44,7 @@ const NOTE_PERCENT: u32 = 80;
 const STEP_NOTE_LEFT: usize = 8;
 
 mod context;
+mod thinking;
 
 pub(crate) struct Policy {
     /// Model steps before the turn stops with a host checkpoint
@@ -55,10 +56,18 @@ pub(crate) struct Policy {
     /// The newest steps every request carries verbatim; older steps are seen
     /// through the lens (shrunk, then folded only when over the threshold).
     pub verbatim_steps: usize,
+    /// Older steps shrink in batches of this many, so the request prefix stays
+    /// byte-identical across the steps between batches (prefix-cache reuse).
+    pub shrink_batch: usize,
+    /// The model entry's base thinking level; each step adapts around it.
+    pub thinking: Thinking,
+    /// The turn resumes a cut-off one (host checkpoint or retried attempt):
+    /// minimal thinking until its first tool call.
+    pub resumed: bool,
 }
 impl Default for Policy {
     fn default() -> Self {
-        Self { max_steps: 64, max_repairs: 3, verbatim_steps: 4 }
+        Self { max_steps: 64, max_repairs: 3, verbatim_steps: 4, shrink_batch: 4, thinking: Thinking::default(), resumed: false }
     }
 }
 /// The in-turn compactor's limits: its input budget in bytes (system prompt
@@ -97,6 +106,9 @@ pub(crate) trait Host {
     fn observation(&mut self, _first: bool) -> Option<String> {
         None
     }
+    /// The reasoning of the step just answered, kept by the host only to
+    /// carry into a host checkpoint if the turn is cut off; never transcript.
+    fn reasoned(&mut self, _reasoning: &str) {}
 }
 
 /// Per-call usage summed over the turn. Every call counts, including one that
@@ -108,6 +120,9 @@ pub(crate) struct Meter {
     pub calls: usize,
     /// Calls whose response reported usage.
     pub reported: usize,
+    /// Reasoning tokens within the output tokens: as reported, else estimated
+    /// from the returned reasoning text.
+    pub reasoning: u64,
 }
 impl Meter {
     fn add(&mut self, tokens: Option<Tokens>) {
@@ -230,8 +245,9 @@ pub(crate) fn run(
         .collect();
     let mut tool_tokens = tokens(size(&tools));
     let budget = limits.context_tokens.saturating_sub(limits.output_tokens);
+    let system = if policy.thinking == Thinking::Off { SYSTEM.to_owned() } else { format!("{SYSTEM}{}", thinking::NOTE) };
     let mut messages = vec![
-        json!({"role":"system","content":SYSTEM}),
+        json!({"role":"system","content":system}),
         json!({"role":"user","content":prompt}),
     ];
     // Admission: the mandatory input must fit before any model call.
@@ -244,6 +260,9 @@ pub(crate) fn run(
     let (mut steps, mut repairs, mut compactions) = (0usize, 0usize, 0usize);
     let (mut noted, mut step_noted) = (false, false);
     let mut lens = context::Lens::default();
+    let mut adaptive = thinking::Adaptive::new(policy.thinking, policy.resumed);
+    // A `/think` request already granted for the step being re-sent.
+    let mut granted = false;
     loop {
         match host.poll() {
             Poll::Continue => {}
@@ -268,7 +287,7 @@ pub(crate) fn run(
         let used = |view: &[Value]| fixed.saturating_add(tokens(size(view)));
         let percent = |view: &[Value]| u32::try_from(u64::from(used(view)) * 100 / u64::from(budget.max(1))).unwrap_or(u32::MAX);
         let count = context::steps(&messages).len();
-        let mut verbatim = policy.verbatim_steps.min(count);
+        let mut verbatim = context::window(count, policy.verbatim_steps, policy.shrink_batch);
         let mut shrink_all = false;
         let mut view = lens.view(&messages, verbatim, false);
         let reached = percent(&view);
@@ -327,7 +346,11 @@ pub(crate) fn run(
             view = lens.view(&messages, verbatim, shrink_all);
         }
         view.extend(observation);
-        let body = tool_request(model, &view, &tools, limits).map_err(|e| failed(e.to_string()))?;
+        let mut body = tool_request(model, &view, &tools, limits).map_err(|e| failed(e.to_string()))?;
+        // Thinking shares `max_tokens` with the answer: the budget is at most
+        // half of it, so a tool call always has the other half.
+        let level = adaptive.level(folded);
+        think(&mut body, level.budget(limits.output_tokens));
         meter.calls += 1;
         let value = match host.model(&body) {
             Ok(value) => value,
@@ -340,9 +363,19 @@ pub(crate) fn run(
             }
         };
         meter.add(control_ai::model::usage(&value));
+        let decoded = decode_step(&value, limits);
+        let reasoning = decoded.as_ref().ok().and_then(|s| s.reasoning.as_deref());
+        meter.reasoning += control_ai::model::reasoning_tokens(&value).unwrap_or_else(|| reasoning.map_or(0, |r| u64::from(tokens(r.len()))));
         host.metered(&meter);
-        let step = decode_step(&value, limits).map_err(|e| failed(format!("Local model returned an unusable response: {e}")))?;
+        if let Some(reasoning) = reasoning {
+            host.reasoned(reasoning);
+        }
+        let step = decoded.map_err(|e| failed(format!("Local model returned an unusable response: {e}")))?;
         steps += 1;
+        let asked_more = step.calls.is_empty() && step.text.as_deref().is_some_and(thinking::asks_more);
+        if !asked_more {
+            granted = false;
+        }
         let repair = |repairs: &mut usize, messages: &mut Vec<Value>, note: String| -> Result<(), Failure> {
             *repairs += 1;
             if *repairs > policy.max_repairs {
@@ -352,7 +385,20 @@ pub(crate) fn run(
             Ok(())
         };
         if step.truncated {
+            // The answer gets the room next time.
+            adaptive.after(thinking::Cue::Cut);
             repair(&mut repairs, &mut messages, format!("it reached the {}-token output limit and was discarded. Reply more briefly, or make one tool call.", limits.output_tokens))?;
+            continue;
+        }
+        if asked_more {
+            // `/think` alone: re-send the same step with more thinking, once.
+            // The transcript is unchanged, so the whole prefix is reused.
+            if !granted && level < Thinking::High && adaptive.switch("/think").is_some() {
+                granted = true;
+                continue;
+            }
+            adaptive.after(thinking::Cue::Trouble);
+            repair(&mut repairs, &mut messages, "it asked to think longer, but this step already had the most thinking it can get. Call a tool or give your final report.".into())?;
             continue;
         }
         if step.calls.is_empty() {
@@ -362,6 +408,7 @@ pub(crate) fn run(
                     return Ok(Outcome { text, tokens: meter.tokens, steps, compactions, elapsed: started.elapsed() });
                 }
                 None => {
+                    adaptive.after(thinking::Cue::Trouble);
                     repair(&mut repairs, &mut messages, "it contained neither text nor a tool call. Call a tool or give your final report.".into())?;
                     continue;
                 }
@@ -370,6 +417,8 @@ pub(crate) fn run(
         if let Some(text) = &step.text {
             host.record("message", &format!("local-step-{steps}"), text, "", "completed");
         }
+        // Only the reply and its calls enter the transcript, never the reasoning.
+        let mut trouble = false;
         let calls: Vec<_> = step.calls.into_iter().enumerate().map(|(i, c)| {
             let id = c.id.clone().unwrap_or_else(|| format!("call-{steps}-{i}"));
             (id, c)
@@ -407,6 +456,8 @@ pub(crate) fn run(
                         }
                         let (text, error) = result_text(&result);
                         host.record("mcp_tool_call", &format!("local-{nonce}"), &call.name, &text, if error { "failed" } else { "completed" });
+                        adaptive.acted();
+                        trouble |= error;
                         context::without_repeats(text, arguments)
                     }
                 }
@@ -415,6 +466,13 @@ pub(crate) fn run(
         }
         // Loaded schemas stay offered for the rest of the turn and count against its context.
         tool_tokens = tokens(size(&tools));
+        // A failed call (a refused handoff included) or a malformed one earns
+        // more thinking next step; a routine success less. A soft switch in
+        // the reply overrides that for the next step.
+        adaptive.after(if trouble || malformed.is_some() { thinking::Cue::Trouble } else { thinking::Cue::Routine });
+        if let Some(text) = &step.text {
+            adaptive.switch(text);
+        }
         match malformed {
             Some(note) => repair(&mut repairs, &mut messages, note)?,
             None => repairs = 0,
@@ -446,6 +504,9 @@ struct Live<'a> {
     meter: Meter,
     /// Attempt start in nanoseconds; prefixes request nonces.
     stamp: u128,
+    /// The latest step's reasoning, carried into a host checkpoint if the turn
+    /// is cut off.
+    reasoning: Option<String>,
 }
 impl Live<'_> {
     fn bridge(&self) -> Option<(&Arc<Mutex<State>>, &str)> {
@@ -520,6 +581,9 @@ impl Host for Live<'_> {
     fn observation(&mut self, first: bool) -> Option<String> {
         crate::observe::step(self.shared, self.run, first)
     }
+    fn reasoned(&mut self, reasoning: &str) {
+        self.reasoning = Some(crate::turn_context::carried_reasoning(reasoning));
+    }
     fn metered(&mut self, meter: &Meter) {
         self.meter = *meter;
         // Live totals: one in-memory update per model call, never a save.
@@ -539,7 +603,7 @@ pub(crate) fn execute(
     prompt: &str,
 ) -> Result<String, Failure> {
     let (shared, run) = bridge.ok_or(("blocked", "Local agent turns need a live Control node.".to_owned()))?;
-    let (endpoint, compactor, managed) = {
+    let (endpoint, compactor, managed, resumed) = {
         let state = shared.lock().map_err(|_| ("failed", "Control state unavailable".to_owned()))?;
         let model = crate::providers::Model::captured(crate::backend::Backend::Local, attempt.model.clone());
         if !crate::providers::agent_capable(&state.runtime, &model) {
@@ -547,13 +611,17 @@ pub(crate) fn execute(
         }
         let endpoint = crate::providers::endpoint(&state.runtime, &attempt.model).cloned()
             .ok_or(("blocked", "The selected local endpoint is no longer configured; no fallback was used.".to_owned()))?;
-        let session = state.runtime.runs.iter().find(|r| r.id == run)
-            .and_then(|r| r.chat_id.as_ref()).and_then(|chat| state.chats.iter().find(|c| &c.id == chat));
+        let current = state.runtime.runs.iter().find(|r| r.id == run);
+        let session = current.and_then(|r| r.chat_id.as_ref()).and_then(|chat| state.chats.iter().find(|c| &c.id == chat));
+        // Resuming a cut-off turn: the chat holds a host checkpoint, or this
+        // run already had an attempt (the live one is its last).
+        let resumed = session.and_then(|s| s.continuity.as_ref()).is_some_and(|c| c.interrupted.is_some())
+            || current.is_some_and(|r| r.attempts.len() > 1);
         // A local chat compacts on its own endpoint unless the operator chose otherwise.
         let compactor = session.and_then(|s| crate::compaction::compactor_for(&state, s)).cloned().unwrap_or_else(|| endpoint.clone());
         // Same transport choice as the CLI mailboxes: managed turns get nudges.
         let managed = attempt.context_trace.is_some();
-        (endpoint, compactor, managed)
+        (endpoint, compactor, managed, resumed)
     };
     let generation = attempt.workspace_id.clone().ok_or(("failed", "Missing attempt identity".to_owned()))?;
     let admitted = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
@@ -567,13 +635,21 @@ pub(crate) fn execute(
         shared, run, generation, workspace, managed, attempt, endpoint, compactor,
         started: Instant::now(), admitted, served: None, timed_out: false, meter: Meter::default(),
         stamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos(),
+        reasoning: None,
     };
-    let model = live.endpoint.model.clone();
-    let result = run_loop(&mut live, &model, &limits, budget, prompt);
+    let (model, thinking) = (live.endpoint.model.clone(), live.endpoint.thinking);
+    let result = run_loop(&mut live, &model, &limits, budget, prompt, thinking, resumed);
     let (meter, reported_model) = (live.meter, live.reported_model());
     let served = live.served.take().unwrap_or_default();
     let provenance = live.endpoint.provenance(&served);
+    let reasoning = live.reasoning.take();
     let attempt = live.attempt;
+    // Cut off (time limit, step cap, provider failure): the latest reasoning
+    // goes into the host checkpoint the worker writes for such a failure, so
+    // the next turn continues that plan. The worker drops it otherwise.
+    if result.is_err() {
+        attempt.interrupted_reasoning = reasoning;
+    }
     // Whatever the ending, keep what the calls reported: exact when every sent
     // call reported (also after a failure or a cancel between steps), a lower
     // bound when one did not (cancelled in flight, no usage). No call sent
@@ -585,7 +661,8 @@ pub(crate) fn execute(
         {
             let seconds = outcome.elapsed.as_secs_f64().max(0.001);
             let summary = format!("{} · {} model steps · {} compactions · {:.1} s{}", provenance, outcome.steps, outcome.compactions, seconds,
-                outcome.tokens.map(|t| format!(" · {} in ({} cached) / {} out tokens · {:.1} output tokens/s end-to-end", t.input_tokens, t.cached_input_tokens, t.output_tokens, t.output_tokens as f64 / seconds)).unwrap_or_else(|| " · usage not reported".into()));
+                outcome.tokens.map(|t| format!(" · {} in ({} cached) / {} out tokens{} · {:.1} output tokens/s end-to-end", t.input_tokens, t.cached_input_tokens, t.output_tokens,
+                    if meter.reasoning > 0 { format!(" ({} reasoning)", meter.reasoning) } else { String::new() }, t.output_tokens as f64 / seconds)).unwrap_or_else(|| " · usage not reported".into()));
             if let Ok(mut state) = shared.lock() {
                 let generation = attempt.workspace_id.clone().unwrap_or_default();
                 crate::worker::record_activity_for(&mut state, run, &generation, crate::usage::Activity {
@@ -599,9 +676,9 @@ pub(crate) fn execute(
     crate::attempt_control::stop(Some((shared, run)), attempt).map_err(|m| ("interrupted", m.to_owned()))?;
     result.map(|outcome| outcome.text)
 }
-fn run_loop(live: &mut Live<'_>, model: &str, limits: &Limits, budget: Compactor, prompt: &str) -> Result<Outcome, Failure> {
+fn run_loop(live: &mut Live<'_>, model: &str, limits: &Limits, budget: Compactor, prompt: &str, thinking: Thinking, resumed: bool) -> Result<Outcome, Failure> {
     let max_steps = live.shared.lock().map_or(Policy::default().max_steps, |state| state.runtime.execution.local_agent_steps);
-    run(live, model, limits, budget, prompt, &Policy { max_steps, ..Policy::default() })
+    run(live, model, limits, budget, prompt, &Policy { max_steps, thinking, resumed, ..Policy::default() })
 }
 
 #[cfg(test)]

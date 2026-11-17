@@ -410,6 +410,12 @@ fn text_fields(model: Option<&crate::model_calls::Endpoint>) -> String {
         value(|m| m.limits.input_bytes.to_string(), "28000"), value(|m| m.limits.output_bytes.to_string(), "8192"), value(|m| m.timeout_seconds.to_string(), "1800")));
     if endpoint {
         html.push_str(&format!("<label class='summary-toggle'><input name='tools' type='checkbox'{}><span><strong>Serves tool calls</strong><small>Local endpoint only. Declares OpenAI-style tool calls (llama.cpp <code>--jinja</code>) so chats and agents may select <code>local:NAME</code> for agent turns.</small></span></label>", if model.is_some_and(|m| m.tools) { " checked" } else { "" }));
+        let current = model.map(|m| m.thinking).unwrap_or_default();
+        html.push_str("<div class='provider-fields'><label>Thinking in agent turns<select name='thinking'>");
+        for level in control_ai::model::Thinking::ALL {
+            html.push_str(&format!("<option value='{0}'{1}>{0}</option>", level.name(), if level == current { " selected" } else { "" }));
+        }
+        html.push_str("</select><small>For reasoning models (Qwen3 family). Control adapts it per step around this level; at most half the output reserve goes to thinking. Summaries never think.</small></label></div>");
     }
     html
 }
@@ -448,7 +454,8 @@ fn save_text(state: &mut crate::State, fields: &HashMap<String,String>, save: im
         limits:control_ai::model::Limits{context_tokens:get("context_tokens").parse().map_err(|_|"Invalid context size")?,output_tokens:get("output_tokens").parse().map_err(|_|"Invalid output size")?,
             input_bytes:get("input_bytes").parse().map_err(|_|"Invalid input byte ceiling")?,output_bytes:get("output_bytes").parse().map_err(|_|"Invalid output byte ceiling")?},
         timeout_seconds:get("timeout_seconds").parse().map_err(|_|"Invalid request timeout")?,
-        tools:fields.contains_key("tools") }) };
+        tools:fields.contains_key("tools"),
+        thinking:match get("thinking") { "" => Default::default(), name => control_ai::model::Thinking::parse(name).ok_or("Unknown thinking level")? } }) };
     match get("action") {
         "text-add" => {
             let cli = match get("adapter") {""|"endpoint"=>None,"codex"=>Some(crate::backend::Backend::Codex),"claude"=>Some(crate::backend::Backend::Claude),_=>return Err("Unknown text adapter")};

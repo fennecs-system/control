@@ -192,8 +192,10 @@ automates it, adds CUDA/Vulkan image variants, and uses Metal on Apple Silicon.
 On Apple Silicon, select the Linux output explicitly:
 `nix build .#packages.aarch64-linux.inference-image -o /tmp/control-inference-image`.
 Choose hardware and quantization before downloading weights, verify their hash,
-and keep them outside the checkout. Non-thinking summaries avoid spending the
-output allowance on private reasoning.
+and keep them outside the checkout. Control asks for summaries and generation
+without thinking on every request (`enable_thinking: false`, a reasoning budget
+of 0), so no private reasoning spends their output allowance whatever the
+server default; `--reasoning-budget 0` above only covers other clients.
 
 The [llama.cpp server documentation](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)
 describes the API and flags. The maintainers publish a
@@ -278,8 +280,14 @@ container command and changes nothing. `--status` and `--stop` cover every model
 or one with `--alias NAME`. A start refuses a port another model's record holds.
 
 Every start uses `--jinja` (tool calls through the model's chat template),
-`--reasoning-budget 0`, and `--metrics --slots` for the read-only statistics
-below. The script hashes the GGUF once and writes the backend,
+`--reasoning-format deepseek` (a reasoning model's thinking arrives as
+`reasoning_content`, apart from the answer), and `--metrics --slots` for the
+read-only statistics below. There is no server-wide reasoning budget: Control
+sets thinking per request (see [Thinking](#thinking)). Services started by
+earlier releases run with `--reasoning-budget 0`, which only sets the default for
+requests without a budget; restart the service (`nix run .#inference -- --model
+… --alias …` again) to pick up the new flags. A restart drops the KV cache and
+interrupts a request in flight, so do it between turns. The script hashes the GGUF once and writes the backend,
 model path, SHA256, alias, port and a ready-to-paste revision string to
 `inference/ALIAS.json` in the Control configuration directory; that model's saved
 backend is reused when `--backend` is omitted. A service started by an earlier
@@ -514,6 +522,18 @@ A result that repeats a long argument of its own call cites it instead of carryi
 it twice. In a mock long setup turn this cut growth per step past the window from
 about 2 390 to 380 tokens.
 
+Older steps shrink in batches of four rather than one per step: the verbatim
+window holds four to seven steps, and steps 1–4 shrink together at step 8, 5–8
+at step 12, and so on. Between batches every request is the previous request
+plus the new step, byte for byte, so llama.cpp's prefix cache reuses all of it;
+shrinking one step per step changed the step just leaving the window every time
+and re-prefilled the four verbatim steps after it (a live Qwen run reused only
+64 % of prompt tokens). In the mock 24-step setup turn
+(`local_agent::tests::shrinking_in_batches_keeps_the_prefix_stable_between_batches`)
+the prompt bytes reused from the previous request rose from 31.9 % to 72.4 %
+(the first, cold request included; the mock's two tool schemas are far smaller
+than a real role's). The cost is up to three more verbatim steps between batches.
+
 Only when a request reaches 75% of the input budget is the oldest block folded
 into a summary on the chat's compactor (never the request, never a call separated
 from its results). A block whose steps do not fit the compactor is built from its
@@ -545,7 +565,8 @@ reports the policy (`local chat model default`, `operator opt-in` or `off`).
 **Usage and provenance.** Per-step usage is summed into the attempt's token
 counts. A `local_model` activity records the configured name, alias, declared
 revision, the server-reported model and build fingerprint, the number of steps and
-compactions, elapsed time and token totals.
+compactions, elapsed time and token totals, with the reasoning share of the
+output tokens when the model thought.
 
 What is not covered: tool calls run sequentially even when the model emits several
 in parallel. Token estimates are conservative byte counts, not a tokenizer. Image
@@ -553,6 +574,49 @@ inputs are not sent. The core schemas are about 3.2–3.4 k tokens of a 32k cont
 for members and leads (1.2 k for an advisor), down from about 13.9 k for every
 callable tool; long single turns still rely on in-turn compaction, and schemas a
 turn loads are not unloaded until it ends.
+
+### Thinking
+
+A reasoning model (Qwen3 family) thinks before each step unless told not to.
+Each text-model entry has a **Thinking in agent turns** level (`thinking` in
+`model.json`): `off`, `minimal` (128 tokens), `low` (512), `medium` (1 536, the
+default) or `high` (4 096). Each agent step adapts around it
+(`src/local_agent/thinking.rs`):
+
+- one level higher on the turn's first step, after a failed or malformed tool
+  call (a refused handoff included) and after an in-turn compaction;
+- one level lower on a routine step after a successful action;
+- `minimal` after a reply cut at the output limit, so the answer gets the room;
+- `minimal` on a resumed turn (the chat holds a host checkpoint, or the run is
+  retrying) until its first tool call runs, as pi does: the plan is already in
+  the checkpoint;
+- Qwen's soft switches: a reply of just `/think` re-sends the same step once at
+  `high` (the transcript is unchanged, so the whole prefix is reused; asking
+  again is a malformed step), and `/think` or `/no_think` in a reply sets the
+  next step. The system note explains this while thinking is on.
+
+`off` never thinks. Each request carries llama.cpp's per-request controls
+(server b11669, `tools/server/server-common.cpp`):
+`chat_template_kwargs: {"enable_thinking": true|false}`,
+`reasoning_budget_tokens: N` (the server forces the end-of-thinking tag when the
+budget runs out; 0 ends it at once) and `reasoning_format: "deepseek"`.
+Thinking shares `max_tokens` with the answer, so the budget is at most half the
+entry's output reserve: with the default reserve of 1 024 every level above
+`low` gets 512, and a tool call always keeps the other half. Raise the output
+reserve to give thinking more room. Summaries and `control_model_generate`
+never think.
+
+Reasoning never enters the step transcript or the attempt's activity: only the
+reply text and tool calls are sent back on later steps, so thinking costs no
+context (an inline `<think>…</think>` block in `content` is taken out too).
+Reasoning tokens are part of the output tokens; the `local_model` activity line
+shows them, as the server reports them
+(`usage.completion_tokens_details.reasoning_tokens`) or else estimated from the
+returned text. When a turn is cut off (time limit, step cap or provider failure),
+the latest step's reasoning (its last 1 500 characters, whitespace collapsed) goes
+into the host checkpoint verbatim, and the next turn is told to continue that plan
+and act at once. Steps are not streamed, so reasoning of a step still in flight
+when the turn stops is lost; the previous step's is carried.
 
 ### Prefix caching
 
@@ -578,8 +642,12 @@ request up to it is a prefix of the next
 
 The prefix still breaks when the history window slides (the default keeps the
 newest 20 000 characters, so once full the oldest entry drops at a wake), when
-a compaction summary changes, or when a deferred tool's schema loads mid-turn
-(chat templates render tools in the system block). Use one slot per
+a compaction summary changes, when a local turn shrinks its next batch of older
+steps, or when a deferred tool's schema loads mid-turn
+(chat templates render tools in the system block). Within a local turn the
+slot holds the newest step's generated thinking, which the next request leaves
+out, so reuse ends at that step's assistant message: only the newest step is
+prefilled again. Use one slot per
 concurrently active chat (`-np`) so wakes of different chats do not evict
 each other's prefix; llama-server routes a request to the slot whose cached
 prompt matches best. Hosted backends cache in the same order: OpenAI caches

@@ -881,6 +881,8 @@ fn commit(
         if status == "failed" {
             interrupted = crate::turn_context::HostCheckpoint::of(&attempt, &attempt.activity);
         }
+        // Carried by the checkpoint; the attempt record keeps none of it.
+        attempt.interrupted_reasoning = None;
         std::mem::replace(last, attempt)
     });
     // A finished run's text and last attempt's activity move to its chat's

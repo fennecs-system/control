@@ -301,6 +301,17 @@ fn text_models_are_edited_in_place_and_validated_like_new_entries() {
     assert_eq!(state.runtime.compaction.settings.model.as_deref(), Some("local-qwen"));
     let local = Model::captured(crate::backend::Backend::Local, "local-qwen".into());
     assert!(agent_capable(&state.runtime, &local));
+    // The thinking level: medium by default and then left out of model.json.
+    use control_ai::model::Thinking;
+    assert_eq!(edited.thinking, Thinking::Medium);
+    assert!(!serde_json::to_string(edited).unwrap().contains("thinking"), "existing identities are unchanged");
+    fields.push(("thinking", "low"));
+    save_with(&mut state, &form(&fields), |_| Ok(())).unwrap();
+    assert_eq!(state.runtime.compaction.models[0].thinking, Thinking::Low);
+    assert!(serde_json::to_string(&state.runtime.compaction.models[0]).unwrap().contains(r#""thinking":"low""#));
+    assert!(render_text(&state.runtime).contains("<option value='low' selected>low</option>"));
+    *fields.last_mut().unwrap() = ("thinking", "maximal");
+    assert!(save_with(&mut state, &form(&fields), |_| panic!("an unknown level must not persist")).is_err());
     // Unticking the box makes it text-only again, without a re-add.
     save_with(&mut state, &form(&edit_fields("local-qwen", "http://127.0.0.1:8081/v1")), |_| Ok(())).unwrap();
     assert!(!agent_capable(&state.runtime, &local));

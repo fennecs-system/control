@@ -66,6 +66,10 @@ pub struct Attempt {
     /// Advisory notes already appended to this attempt's tool results.
     #[serde(skip_serializing_if = "crate::worker_tools::nudges::Nudges::is_clear")]
     pub nudges: crate::worker_tools::nudges::Nudges,
+    /// A local turn's latest reasoning when it was cut off, bounded, for the
+    /// host checkpoint the worker builds next. Never saved with the attempt.
+    #[serde(skip)]
+    pub interrupted_reasoning: Option<String>,
 }
 impl Attempt {
     /// Records what the provider reported, whatever the attempt's outcome.

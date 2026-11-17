@@ -170,6 +170,16 @@ pub(super) fn steps(messages: &[Value]) -> Vec<Range<usize>> {
     steps
 }
 
+/// How many of `count` steps a request carries verbatim: at least `keep`, with
+/// the shrunk older steps growing only in whole batches of `batch`. Between
+/// batches the rendered prefix is byte-identical from step to step, so a
+/// server's prefix cache reuses it; at a batch boundary `batch` steps shrink
+/// together, at most `batch - 1` extra steps stay verbatim meanwhile.
+pub(super) fn window(count: usize, keep: usize, batch: usize) -> usize {
+    let batch = batch.max(1);
+    count - count.saturating_sub(keep) / batch * batch
+}
+
 struct Node {
     text: String,
     digest: bool,

@@ -31,6 +31,14 @@ fn the_lens_keeps_recent_steps_whole_and_shrinks_older_ones() {
     assert!(shrunk[9]["content"].as_str().unwrap().contains("more bytes of this earlier result"));
 }
 #[test]
+fn the_verbatim_window_shrinks_older_steps_in_whole_batches() {
+    let windows: Vec<usize> = (0..14).map(|count| window(count, 4, 4)).collect();
+    assert_eq!(windows, [0, 1, 2, 3, 4, 5, 6, 7, 4, 5, 6, 7, 4, 5]);
+    assert_eq!((0..6).map(|count| window(count, 4, 1)).collect::<Vec<_>>(), [0, 1, 2, 3, 4, 4], "batches of one: the old rolling window");
+    assert_eq!(window(9, usize::MAX, 4), 9);
+    assert_eq!(window(9, 2, 0), 2, "a zero batch is one");
+}
+#[test]
 fn a_result_never_repeats_a_long_argument() {
     let script = "printf 'configure the server'\n".repeat(20);
     let content = format!("$ {script}\nexit 0");

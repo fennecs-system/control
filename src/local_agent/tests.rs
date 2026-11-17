@@ -30,6 +30,8 @@ struct Mock {
     /// Observations returned to successive steps, and each step's `first` flag.
     observations: VecDeque<String>,
     firsts: Vec<bool>,
+    /// Reasoning the loop handed over, step by step.
+    reasoned: Vec<String>,
 }
 impl Host for Mock {
     fn tools(&mut self) -> io::Result<Vec<Value>> {
@@ -43,7 +45,13 @@ impl Host for Mock {
         if name == "control_turn_handoff" {
             self.polls.push_back(Poll::Finish("handed off".into()));
         }
+        if arguments["message"] == "fail" {
+            return json!({"content":[{"type":"text","text":"refused"}],"isError":true});
+        }
         json!({"content":[{"type":"text","text":if self.tool_text.is_empty() {"ok".to_owned()} else {self.tool_text.clone()}}],"isError":false})
+    }
+    fn reasoned(&mut self, reasoning: &str) {
+        self.reasoned.push(reasoning.into());
     }
     fn poll(&mut self) -> Poll {
         self.polls.pop_front().unwrap_or(Poll::Continue)
@@ -277,7 +285,7 @@ fn a_lean_transcript_grows_slowly_and_carries_nothing_twice() {
     // A large context, so neither run compacts: only the rolling window differs.
     let wide = Limits { context_tokens: 131072, output_tokens: 1024, input_bytes: 28000, output_bytes: 8192 };
     let (_, _, full) = setup_turn(&wide, &Policy { verbatim_steps: usize::MAX, ..Policy::default() }, 12);
-    let (host, outcome, lean) = setup_turn(&wide, &Policy::default(), 12);
+    let (host, outcome, lean) = setup_turn(&wide, &Policy { shrink_batch: 1, ..Policy::default() }, 12);
     assert_eq!(outcome.unwrap().compactions, 0);
     let growth = |used: &[u32]| used.windows(2).map(|w| w[1] - w[0]).collect::<Vec<_>>();
     println!("input tokens per request, whole transcript: {full:?}\n  growth per step: {:?}", growth(&full));
@@ -455,8 +463,8 @@ fn usage_is_metered_after_every_model_call_with_cached_prompt_tokens() {
     ]);
     let outcome = go(&mut host).unwrap();
     assert_eq!(host.meters.len(), 2, "one live update per model call");
-    assert_eq!(host.meters[0], Meter { tokens: Some(tokens(1000, 0, 20)), calls: 1, reported: 1 });
-    assert_eq!(host.meters[1], Meter { tokens: Some(tokens(2100, 990, 25)), calls: 2, reported: 2 });
+    assert_eq!(host.meters[0], Meter { tokens: Some(tokens(1000, 0, 20)), calls: 1, reported: 1, reasoning: 0 });
+    assert_eq!(host.meters[1], Meter { tokens: Some(tokens(2100, 990, 25)), calls: 2, reported: 2, reasoning: 0 });
     assert_eq!(outcome.tokens, Some(tokens(2100, 990, 25)));
     // While running the totals are a lower bound; once over, all calls reported.
     let mut running = crate::usage::Attempt::default();
@@ -569,4 +577,151 @@ fn measure_observation_tokens_per_step() {
         }
         println!("local {label}: observation ≈{observation} tokens; request tokens per step {total:?}; uncached tokens per step {fresh:?}");
     }
+}
+
+fn thought(content: Option<&str>, reasoning: &str, calls: Value, finish: &str) -> Value {
+    let mut value = reply(content, calls, finish);
+    value["choices"][0]["message"]["reasoning_content"] = json!(reasoning);
+    value
+}
+fn budgets(host: &Mock) -> Vec<u64> {
+    host.requests.iter().map(|r| r["reasoning_budget_tokens"].as_u64().unwrap()).collect()
+}
+fn post(message: &str) -> Value {
+    call("control_room_post", &json!({"message":message}).to_string())
+}
+#[test]
+fn reasoning_never_enters_the_transcript_and_is_metered_as_output() {
+    let mut host = mock(vec![
+        thought(Some("Posting."), "SECRET-PLAN: post first, then report.", post("hello"), "tool_calls"),
+        thought(Some("<think>INLINE-PLAN</think>Posted."), "", json!(null), "stop"),
+    ]);
+    let outcome = go(&mut host).unwrap();
+    assert_eq!(outcome.text, "Posted.", "an inline think block is not the report");
+    let sent = serde_json::to_string(&host.requests).unwrap();
+    assert!(!sent.contains("SECRET-PLAN") && !sent.contains("reasoning_content"), "{sent}");
+    let second = host.requests[1]["messages"].as_array().unwrap();
+    assert_eq!(second[2], json!({"role":"assistant","content":"Posting.","tool_calls":[{"id":"id-control_room_post","type":"function",
+        "function":{"name":"control_room_post","arguments":"{\"message\":\"hello\"}"}}]}));
+    assert!(host.records.iter().all(|(_, text)| !text.contains("PLAN")), "not recorded as activity");
+    assert_eq!(host.reasoned, ["SECRET-PLAN: post first, then report.", "INLINE-PLAN"]);
+    // Reasoning is part of the output tokens; estimated when not reported.
+    let meter = host.meters.last().unwrap();
+    assert_eq!(meter.tokens.unwrap().output_tokens, 20);
+    assert_eq!(meter.reasoning, u64::from(tokens(37) + tokens(11)));
+    // Reported reasoning tokens win over the estimate.
+    let mut reported = thought(Some("Done."), "x", json!(null), "stop");
+    reported["usage"]["completion_tokens_details"] = json!({"reasoning_tokens":7});
+    let mut host = mock(vec![reported]);
+    go(&mut host).unwrap();
+    assert_eq!(host.meters[0].reasoning, 7);
+}
+#[test]
+fn thinking_budgets_follow_the_turn_and_always_leave_room_to_answer() {
+    let wide = Limits { context_tokens: 32768, output_tokens: 8192, input_bytes: 28000, output_bytes: 8192 };
+    let mut host = mock(vec![
+        reply(None, post("a"), "tool_calls"),                       // first step: high
+        reply(None, post("fail"), "tool_calls"),                    // routine: low
+        reply(Some("cut"), json!(null), "length"),                  // after a failure: high
+        reply(Some("/think"), json!(null), "stop"),                 // after a cut: minimal
+        reply(Some("Posting. /no_think"), post("b"), "tool_calls"), // re-sent with high
+        reply(None, post("c"), "tool_calls"),                       // /no_think: off once
+        reply(Some("/think"), json!(null), "stop"),                 // routine: low
+        reply(Some("/think"), json!(null), "stop"),                 // granted: high
+        reply(Some("Done."), json!(null), "stop"),                  // asked twice: a repair, routine level
+    ]);
+    let outcome = run(&mut host, "m", &wide, compactor(20000), "p", &Policy::default()).unwrap();
+    assert_eq!(outcome.text, "Done.");
+    assert_eq!(budgets(&host), [4096, 512, 4096, 128, 4096, 0, 512, 4096, 4096]);
+    // `/think` alone re-sends the same step: nothing enters the transcript.
+    assert_eq!(host.requests[3]["messages"], host.requests[4]["messages"]);
+    assert_eq!(host.requests[6]["messages"], host.requests[7]["messages"]);
+    assert!(host.requests[8].to_string().contains("asked to think longer"));
+    for request in &host.requests {
+        let budget = request["reasoning_budget_tokens"].as_u64().unwrap();
+        assert_eq!(request["max_tokens"], 8192);
+        assert!(budget * 2 <= 8192, "thinking leaves at least half the output for the answer");
+        assert_eq!(request["chat_template_kwargs"]["enable_thinking"], budget > 0);
+        assert_eq!(request["reasoning_format"], "deepseek");
+    }
+    assert!(host.requests[0]["messages"][0]["content"].as_str().unwrap().contains("/think"), "the switch is explained");
+    // A small output reserve caps every level at half of it.
+    let mut host = mock(vec![reply(None, post("a"), "tool_calls"), reply(Some("Done."), json!(null), "stop")]);
+    go(&mut host).unwrap();
+    assert_eq!(budgets(&host), [512, 512]);
+    // An entry set to off never thinks, whatever the model asks.
+    let mut host = mock(vec![reply(Some("/think"), json!(null), "stop"), reply(Some("Done."), json!(null), "stop")]);
+    let off = Policy { thinking: Thinking::Off, ..Policy::default() };
+    assert_eq!(run(&mut host, "m", &wide, compactor(20000), "p", &off).unwrap().text, "Done.");
+    assert_eq!(budgets(&host), [0, 0]);
+    assert!(host.requests.iter().all(|r| r["chat_template_kwargs"]["enable_thinking"] == false));
+    assert!(!host.requests[0]["messages"][0]["content"].as_str().unwrap().contains("/think"));
+}
+#[test]
+fn a_resumed_turn_thinks_minimally_until_its_first_tool_call() {
+    let wide = Limits { context_tokens: 32768, output_tokens: 8192, input_bytes: 28000, output_bytes: 8192 };
+    let mut host = mock(vec![
+        reply(None, call("control_unknown", "{}"), "tool_calls"), // nothing ran: still resuming
+        reply(None, post("fail"), "tool_calls"),                  // ran (and failed): acting again
+        reply(None, post("a"), "tool_calls"),
+        reply(Some("Done."), json!(null), "stop"),
+    ]);
+    let resumed = Policy { resumed: true, ..Policy::default() };
+    run(&mut host, "m", &wide, compactor(20000), "p", &resumed).unwrap();
+    assert_eq!(budgets(&host), [128, 128, 4096, 512]);
+}
+#[test]
+fn a_cut_off_turn_hands_over_its_latest_reasoning() {
+    let mut host = mock((0..3).map(|i| thought(None, &format!("plan step {i}"), post("x"), "tool_calls")).collect());
+    let failure = run(&mut host, "m", &limits(), compactor(20000), "p", &Policy { max_steps: 2, ..Policy::default() }).err().unwrap();
+    assert!(failure.1.contains("2-step limit") && host.step_limited);
+    assert_eq!(host.reasoned.last().unwrap(), "plan step 1", "the worker carries the latest into the host checkpoint");
+}
+
+/// Serialized like a chat template renders them: schemas, then messages.
+fn rendered(request: &Value) -> String {
+    let mut text = request["tools"].to_string();
+    for message in request["messages"].as_array().unwrap() {
+        text.push_str(&message.to_string());
+    }
+    text
+}
+/// Share of prompt bytes a prefix cache reuses from each previous request.
+fn prefix_reuse(requests: &[Value]) -> (usize, usize) {
+    let texts: Vec<String> = requests.iter().map(rendered).collect();
+    let total = texts.iter().map(String::len).sum();
+    let shared = texts.windows(2).map(|pair| pair[0].bytes().zip(pair[1].bytes()).take_while(|(a, b)| a == b).count()).sum();
+    (shared, total)
+}
+#[test]
+fn shrinking_in_batches_keeps_the_prefix_stable_between_batches() {
+    let wide = Limits { context_tokens: 131072, output_tokens: 1024, input_bytes: 28000, output_bytes: 8192 };
+    let steps = 24;
+    let (host, outcome, _) = setup_turn(&wide, &Policy::default(), steps);
+    assert_eq!(outcome.unwrap().compactions, 0);
+    let messages: Vec<&Vec<Value>> = host.requests.iter().map(|r| r["messages"].as_array().unwrap()).collect();
+    let shrunk = |step: usize| step.saturating_sub(4) / 4 * 4;
+    let mut breaks = 0;
+    for (step, pair) in messages.windows(2).enumerate() {
+        let prefix = pair[1].len() >= pair[0].len() && pair[1][..pair[0].len()] == pair[0][..];
+        if shrunk(step) == shrunk(step + 1) {
+            assert!(prefix, "request {} is not a byte-identical prefix of request {}", step, step + 1);
+        } else {
+            breaks += !prefix as usize;
+        }
+    }
+    assert_eq!(breaks, (steps - 4) / 4, "the prefix breaks only once per batch");
+    // Never fewer than four steps verbatim, never more than seven.
+    for request in &messages {
+        let whole = request.iter().filter(|m| m["role"] == "tool" && !m["content"].as_str().unwrap().contains("more bytes of this earlier result")).count();
+        let count = request.iter().filter(|m| m["role"] == "tool").count();
+        assert!(whole == count || (4..=7).contains(&whole), "{whole} of {count}");
+    }
+    // The measured reuse against shrinking one step per step.
+    let (single, _, _) = setup_turn(&wide, &Policy { shrink_batch: 1, ..Policy::default() }, steps);
+    let (a, total_a) = prefix_reuse(&single.requests);
+    let (b, total_b) = prefix_reuse(&host.requests);
+    let (one, four) = (a as f64 * 100.0 / total_a as f64, b as f64 * 100.0 / total_b as f64);
+    println!("prefix reuse over a {steps}-step turn: one step per step {one:.1}% of {total_a} prompt bytes; batches of 4 {four:.1}% of {total_b}");
+    assert!(four > one + 10.0, "batched {four:.1}% against {one:.1}%");
 }

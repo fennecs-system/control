@@ -127,3 +127,34 @@ fn tool_steps_decode_calls_and_keep_malformed_arguments_as_errors() {
     let request = tool_request("qwen", &[json!({"role":"user","content":"hi"})], &[json!({"type":"function"})], &limits()).unwrap();
     assert_eq!((request["tool_choice"].clone(), request["max_tokens"].clone()), (json!("auto"), json!(512)));
 }
+#[test]
+fn reasoning_is_kept_apart_from_the_answer_and_budgets_leave_room_to_answer() {
+    // llama.cpp with reasoning_format=deepseek: a separate field.
+    let value = json!({"choices":[{"finish_reason":"tool_calls","message":{"content":"Posting.","reasoning_content":"  The room needs an update.  ",
+        "tool_calls":[{"id":"a","type":"function","function":{"name":"control_room_post","arguments":"{}"}}]}}],
+        "usage":{"prompt_tokens":10,"completion_tokens":30,"completion_tokens_details":{"reasoning_tokens":21}}});
+    let step = decode_step(&value, &limits()).unwrap();
+    assert_eq!((step.text.as_deref(), step.reasoning.as_deref()), (Some("Posting."), Some("The room needs an update.")));
+    assert_eq!(reasoning_tokens(&value), Some(21));
+    // A server that leaves the think block inline: taken out of the text.
+    let inline = json!({"choices":[{"finish_reason":"stop","message":{"content":"<think>\nplan it\n</think>\n\nDone."}}]});
+    let step = decode_step(&inline, &limits()).unwrap();
+    assert_eq!((step.text.as_deref(), step.reasoning.as_deref()), (Some("Done."), Some("plan it")));
+    assert_eq!(decode(inline, &limits()).unwrap().text, "Done.");
+    let thought_only = json!({"choices":[{"finish_reason":"stop","message":{"content":"<think>only thoughts</think>"}}]});
+    assert_eq!(decode_step(&thought_only, &limits()).unwrap().text, None);
+    // Budgets: per level, at most half the output allowance, off when tiny.
+    assert_eq!(Thinking::default(), Thinking::Medium);
+    assert_eq!([Thinking::Off, Thinking::Minimal, Thinking::Medium, Thinking::High].map(|t| t.budget(16384)), [0, 128, 1536, 4096]);
+    assert_eq!(Thinking::High.budget(4096), 2048);
+    assert_eq!(Thinking::Minimal.budget(100), 0);
+    assert_eq!((Thinking::Medium.up(), Thinking::Medium.down(), Thinking::Minimal.down(), Thinking::Off.up()),
+        (Thinking::High, Thinking::Low, Thinking::Minimal, Thinking::Off));
+    assert_eq!(Thinking::ALL.map(|t| Thinking::parse(t.name())), Thinking::ALL.map(Some));
+    assert_eq!(serde_json::to_value(Thinking::Low).unwrap(), json!("low"));
+    let mut body = json!({"model":"qwen"});
+    think(&mut body, 1536);
+    assert_eq!(body, json!({"model":"qwen","chat_template_kwargs":{"enable_thinking":true},"reasoning_format":"deepseek","reasoning_budget_tokens":1536}));
+    think(&mut body, 0);
+    assert_eq!((body["chat_template_kwargs"]["enable_thinking"].clone(), body["reasoning_budget_tokens"].clone()), (json!(false), json!(0)));
+}
