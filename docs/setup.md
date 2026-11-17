@@ -1,129 +1,120 @@
 # Setup and configuration
 
 Start with the [README quick start](../README.md). This guide covers the Linux
-builder, manual builds, credential paths, configuration and optional Discord.
-For Linux/NixOS, use the [local NixOS deployment guide](NIXOS.md).
+builder, manual builds, credentials, configuration, background services and
+Discord. On Linux/NixOS, use the [NixOS guide](NIXOS.md).
 
 ## Prerequisites
 
-The current target is macOS with Nix flakes, Git, a running Linux
-Docker-compatible engine and a Linux Nix builder. Match the image architecture:
-`aarch64-linux` for Apple Silicon or `x86_64-linux` for Intel. A Linux host can
-build its matching images locally; the invited setup currently targets macOS.
+On macOS you need Nix with flakes, Git, a running Docker-compatible Linux engine
+and a Linux Nix builder of the matching architecture: `aarch64-linux` for Apple
+Silicon, `x86_64-linux` for Intel. A Linux host builds its own images.
 
-`nix run .#setup` builds the native Nix package with its embedded Rust/WASM UI and
-the Codex worker image. It loads the image and saves its immutable ID. Add `--claude`
-or `--browser` after `--` for optional images. Add `--build-environment` for the
-[offline Rust/WASM build tool](BUILD-ENVIRONMENTS.md) used by self-improvement, and
-`--solver` for the [optimisation and constraint solvers](SOLVERS.md) (HiGHS, Z3, CP-SAT):
+`nix run .#setup` builds the Nix package (with the embedded Rust/WASM UI) and the
+Codex worker image, loads the image and saves its immutable ID. Optional flags
+after `--`:
+
+| Flag | Adds |
+| --- | --- |
+| `--claude` | Claude Code image; selects Claude `sonnet` on a fresh node ([Claude](CLAUDE.md)). |
+| `--full` | Nix, Node/npm, JDK, Python and curl in worker images ([worker profiles](WORKER-PROFILES.md)). |
+| `--browser` | Offline Firefox capture image ([web access](WEB-ACCESS.md)). |
+| `--build-environment` | [Offline Rust/WASM build image](BUILD-ENVIRONMENTS.md) for self-improvement. |
+| `--solver` | [HiGHS, Z3 and CP-SAT solvers](SOLVERS.md). |
 
 ```sh
 nix run .#setup -- --claude --browser
 ```
 
-Existing configuration, state and model choices are preserved. Image pins change
-only after every requested image builds and loads. Setup does not sign in, call
-a model or start services. Repeat it after pulling source changes. Named output
-links under `${XDG_DATA_HOME:-$HOME/.local/share}/control/` retain the package and
-images against garbage collection; `package/bin/control` there is the stable
-executable. Setup also copies it to `target/release/control` for checkout commands.
+Setup preserves existing configuration, state and model choices. Image pins
+change only after every requested image builds and loads. It does not sign in,
+call a model or start services. Rerun it after pulling changes.
 
-On a fresh node, `--claude` selects Claude `sonnet`; otherwise setup selects
-Codex. Setup also registers this checkout for explicit `/improve` requests.
+Output links under `${XDG_DATA_HOME:-$HOME/.local/share}/control/` protect the
+package and images from garbage collection; `package/bin/control` there is the
+stable executable. Setup also copies it to `target/release/control` and registers
+the checkout as the source root for `/improve`.
 
 ## Linux builder on macOS
 
-Keep using an existing compatible Linux Nix builder if you have one. Otherwise:
+Keep an existing compatible Linux Nix builder if you have one. Otherwise run:
 
 ```sh
 nix run .#builder
 ```
 
-This starts the pinned Nixpkgs VM bootstrap. Its upstream installer requests
-`sudo` for builder SSH credentials. Follow the
+This starts the pinned Nixpkgs builder VM. Its installer asks for `sudo` to create
+builder SSH credentials. Follow the
 [Nix builder instructions](https://nixos.org/manual/nixpkgs/stable/#sec-darwin-builder)
 to configure the daemon's trusted user, builder and SSH connection, then restart
-the daemon. Keep the VM running in its terminal and run setup in another.
+the daemon. Keep the VM running in one terminal and run setup in another.
 
-The builder does not provide a Docker engine. Control's setup command does not
-modify system configuration or silently provision a VM.
+The builder does not provide a Docker engine. Setup never changes system
+configuration or provisions a VM.
 
 ## Codex login
-
-The pinned Codex CLI supports file-based credential storage:
 
 ```sh
 nix run .#codex -- -c 'cli_auth_credentials_store="file"' login
 ```
 
-You can also use your own installed Codex with file-based storage configured.
-The source is `$CODEX_HOME/auth.json` or `~/.codex/auth.json` by default;
-`CONTROL_CODEX_AUTH_FILE` can select another absolute path. It must be a private
-regular file owned by a non-root user. Symlinks and group/world permissions are
-rejected. Never print, paste or commit it.
+Your own Codex install also works if it uses file-based credential storage.
+Control reads `$CODEX_HOME/auth.json`, else `~/.codex/auth.json`;
+`CONTROL_CODEX_AUTH_FILE` selects another absolute path. The file must be a
+private regular file owned by a non-root user; symlinks and group/world
+permissions are rejected. Never print, paste or commit it.
 
-Workers mount only that file read-only. It is not copied into images/workspaces
-or injected through environment variables. The host checks metadata; the trusted
-container adapter consumes the login. If authentication expires or needs a write
-to refresh, repeat the supported login and submit a new run. The mount stays
-read-only. Use your own account according to your provider's terms.
+Workers mount only that file, read-only. It is never copied into images or
+workspaces or passed through environment variables. If the login expires, repeat
+the login and submit a new run.
 
-`control --check-worker` performs a small authenticated model/tool check and uses
-model usage. `control doctor` instead runs offline prerequisites and isolation
-probes without mounting real credentials or calling a model.
-
-See [Claude setup](CLAUDE.md) to run Claude inside Control or connect your own
-Claude Code to Control's MCP tools. The README also has the Codex MCP command.
+`control doctor` runs offline prerequisite and isolation checks without real
+credentials or model calls. `control --check-worker` runs one authenticated
+model/tool check and uses model quota.
 
 ## Private configuration
 
-`control config init` creates private configuration from the placeholder
-template without overwriting existing files. `control config path` prints the
-resolved directory. In this guide, `control` means the built
-`./target/release/control` or an installed copy.
-
-For manual builds or older nodes missing the improvement source path, run
-`control config init --source-root "$(pwd -P)"` from the Control checkout.
-`--provider claude` can initialize a fresh model library with `sonnet`.
-These options preserve existing source and model choices.
+`control` below means `./target/release/control` or an installed copy.
+`control config init` creates private configuration from a template without
+overwriting existing files; `control config path` prints the directory.
+`--source-root PATH` sets the improvement source and `--provider codex|claude`
+initializes a fresh model library; both preserve existing choices.
 
 | Location or setting | Purpose |
 | --- | --- |
-| `~/.config/control/` | Default private configuration directory. |
+| `~/.config/control/` | Default configuration directory. |
 | `~/.local/state/control/` | Default chats, notes, run ledger and outputs. |
-| `state.json` + `state.log` | The node state: a snapshot plus one JSON line per save since it ([inspect with jq](HISTORY.md#inspecting-the-state)). Back up or copy both, or stop Control first (a clean stop folds the log into `state.json`). |
-| `CONTROL_CONFIG_DIR` | Absolute configuration-directory override. |
-| `CONTROL_STATE_DIR` | Absolute state-directory override. |
-| `worker-image-id` | Immutable Codex worker image ID. |
-| `claude-image-id` / `browser-image-id` | Optional image IDs. |
-| `build-image-id` / `CONTROL_BUILD_IMAGE` | Optional immutable offline build-tool image. |
-| `model.json` | Saved models and default; managed by the web UI. |
-| `source-root` / `CONTROL_SOURCE_ROOT` | Absolute source path for explicit improvements. |
-| `worker-timeout-secs` / `CONTROL_WORKER_TIMEOUT_SECS` | Explicit attempt deadline, captured at admission and clamped to 60 s–24 h. Takes priority for every attempt. When unset, attempts on a local model use `local-turn-timeout-secs`, other approved persistent bots use `bot-turn-timeout-secs`, and other attempts default to 600 s. Approval during an active attempt switches only its implicit default, never an explicit limit. |
-| `bot-turn-timeout-secs` / `CONTROL_BOT_TURN_TIMEOUT_SECS` | Turn limit for approved persistent bots when no explicit worker limit is set, captured at admission; default 1200, clamped to 60 s–24 h; `0` or `none` means unlimited. Bots continue across turns through handoffs, and the deadline warning asks them to checkpoint first. Bots on a local model use `local-turn-timeout-secs` instead. |
-| `local-turn-timeout-secs` / `CONTROL_LOCAL_TURN_TIMEOUT_SECS` | Turn limit for every attempt on a local model (`local:NAME` chats, spawns and bots) when no explicit worker limit is set, captured at admission; default 3600, clamped to 60 s–24 h; `0` or `none` means unlimited. Local steps run about ten times slower than hosted ones. The deadline warning and host checkpoint use this limit. See [LOCAL-MODELS.md](LOCAL-MODELS.md#local-agent-turns). |
-| `service-memory-gib` | Service pool memory budget, a strict sum of service limits; default 20, 1–4096. |
+| `state.json` + `state.log` | Node state: a snapshot plus one JSON line per save ([inspect with jq](HISTORY.md#inspecting-the-state)). Copy both, or stop Control first (a clean stop folds the log into `state.json`). |
+| `CONTROL_CONFIG_DIR` / `CONTROL_STATE_DIR` | Absolute directory overrides. |
+| `worker-image-id` | Codex worker image ID. |
+| `claude-image-id`, `browser-image-id`, `solver-image-id` | Optional image IDs. |
+| `build-image-id` / `CONTROL_BUILD_IMAGE` | Optional offline build-tool image. |
+| `model.json` | Saved models and default; managed in the web UI. |
+| `source-root` / `CONTROL_SOURCE_ROOT` | Absolute source path for `/improve`. |
+| `worker-timeout-secs` / `CONTROL_WORKER_TIMEOUT_SECS` | Explicit attempt limit for every attempt, 60 s–24 h. When unset, see the two settings below; other attempts stop at 600 s. |
+| `bot-turn-timeout-secs` / `CONTROL_BOT_TURN_TIMEOUT_SECS` | Turn limit for approved persistent bots; default 1200, 60 s–24 h, `0` or `none` for unlimited. |
+| `local-turn-timeout-secs` / `CONTROL_LOCAL_TURN_TIMEOUT_SECS` | Turn limit for any attempt on a local model; default 3600, 60 s–24 h, `0` or `none` for unlimited. See [local agent turns](LOCAL-MODELS.md#local-agent-turns). |
+| `service-memory-gib` | Service pool memory (sum of service limits); default 20, 1–4096. |
 | `service-cpus` | Service pool CPUs; default 8, 1–1024. |
-| `service-cpu-oversubscription` | Factor applied to `service-cpus` when admitting CPU limits; default 2, 1–8. Containers keep their hard CPU caps. |
-| `service-pids-per-gib` | Service process (pids) limit per GiB of a service's RAM limit, captured at admission and never below the image default (Lite 64, Full 128); default 64, 1–4096. |
-| `service-pids-max` | Ceiling on that per-service process limit; default 1024, 128–65536. |
-| `service-commands-max` | Safety ceiling on concurrent `control_service_exec` commands per service; a service also never admits more than its process limit. Read at each admission; default 64, 1–1024. A copy still takes the service exclusively. |
+| `service-cpu-oversubscription` | Multiplier on `service-cpus` for admission; default 2, 1–8. Containers keep hard CPU caps. |
+| `service-pids-per-gib` | Process limit per GiB of a service's memory, never below the image default (Lite 64, Full 128); default 64, 1–4096. |
+| `service-pids-max` | Ceiling on a service's process limit; default 1024, 128–65536. |
+| `service-commands-max` | Concurrent `control_service_exec` commands per service, also bounded by its process limit; default 64, 1–1024. |
 | `CONTROL_ADDR` | Loopback bind address; default `127.0.0.1:8080`. |
 
-Without explicit directory overrides, `XDG_CONFIG_HOME/control` and
-`XDG_STATE_HOME/control` take precedence over the default home paths. Paths are
-independent of the launch directory. Configuration directories use mode 0700;
-private files use mode 0600. Repository-local `.env` and configuration are not loaded.
+Timeout limits are captured when an attempt is admitted. An explicit
+`worker-timeout-secs` wins; otherwise local-model attempts use the local limit and
+approved persistent bots use the bot limit. Bots continue across turns through
+handoffs.
 
-For an old checkout-local node, stop both services before migrating. Move
-`.control/discord-access.json` to the configuration directory and `.env` to
-`discord.env` there, without printing their contents. Move remaining state to
-the state directory; never overwrite an existing destination. Preserve bindings.
-The old `codex_owner_id` is accepted for migration but no longer grants access.
+Without directory overrides, `XDG_CONFIG_HOME/control` and `XDG_STATE_HOME/control`
+take precedence over the home defaults. Paths do not depend on the launch
+directory. Directories use mode 0700 and private files 0600. Repository-local
+`.env` and configuration files are never loaded.
 
 ## Manual build and installation
 
-From the checkout, as an alternative to the setup helper:
+An alternative to `nix run .#setup`, from the checkout:
 
 ```sh
 nix develop
@@ -135,164 +126,109 @@ umask 077
 docker image inspect control-worker:nix --format '{{.Id}}' > "$(./target/release/control config path)/worker-image-id"
 ```
 
-Use `x86_64-linux` for Intel. The binary embeds the UI and security profile.
-To put it in a stable location:
-
-```sh
-mkdir -p "$HOME/.local/bin"
-install -m 755 target/release/control "$HOME/.local/bin/control"
-```
-
-Use `~/.local/bin/control`, or add that directory to your shell's PATH. Reinstall
-the binary after rebuilding. For development checks, see
+Use `x86_64-linux` on Intel. The binary embeds the UI and security profile. To
+install it, `install -m 755 target/release/control "$HOME/.local/bin/control"`
+and reinstall after each rebuild. Development checks are in
 [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 `control --version --json` identifies the installed binary; `GET /health/build`
-identifies the serving binary with the same typed fields (`version`, `revision`,
-`dirty`, `arch`, `os`). The existing `/health` liveness response is unchanged.
-Nix flake packages capture the source revision and whether it was modified.
-Plain Cargo/source-export builds report `revision: null` unless the builder
-explicitly supplies `CONTROL_BUILD_REVISION=<full-sha>` (or `<full-sha>-dirty`).
-Unknown or dirty builds must not count as verification of an exact merged
-revision. These fields are build identification, not signed provenance, and
-grant no deployment or restart authority.
+identifies the running one with the same fields (`version`, `revision`, `dirty`,
+`arch`, `os`). Nix builds record the source revision and whether it was modified.
+Plain Cargo builds report `revision: null` unless `CONTROL_BUILD_REVISION=<full-sha>`
+(or `<full-sha>-dirty`) is set. An unknown or dirty build does not verify an exact
+merged revision. These fields identify a build; they are not signed provenance.
 
 ## Terminal chat
 
-Run `control tui`; it starts a fresh chat without resuming or creating a saved
-conversation until you send a message. It works from any directory. Use Enter to send, Alt+Enter for
-a newline, Ctrl+N or `/new` for a new chat, Ctrl+Up/Down to switch chats, and
-Ctrl+Q to quit. PageUp/PageDown scroll; End follows new replies.
+`control tui` opens a fresh chat from any directory; nothing is saved until you
+send a message. Enter sends, Alt+Enter adds a newline, Ctrl+N or `/new` starts a
+chat, Ctrl+Up/Down switches chats, PageUp/PageDown scroll, End follows replies and
+Ctrl+Q quits. Type `/` for command suggestions and `/help` for the full list.
 
-Your messages use muted grey cards with purple accents; replies remain on the
-black background. Routine tool output is folded by default. `/activity full`
-expands it, `/activity compact` folds it, and `/activity` toggles. Failures remain
-visible and the underlying logs are retained. `/model` lists or selects configured
-models without making a model call; `/compact` inspects the compaction tree.
-
-`/chats` opens the DM picker. `/genes` (alias `/lenses`) opens a gene picker with Space to
-toggle selections and Enter to apply. `/use engineering evidence` sets the DM's DNA;
-`/use none` clears them. `/context` previews the next-message context, `/chat`
-returns to the transcript, and Esc closes a picker. `/resume` opens the conversation
-picker; `/resume ID` or `tui --resume ID` opens a conversation (`--session ID` is
-also supported). `tui --check` verifies the connection without creating a chat.
-`--server` accepts a loopback HTTP origin; its default follows `CONTROL_ADDR`.
+`/resume ID` or `tui --resume ID` (also `--session ID`) opens a conversation.
+`tui --check` verifies the connection without creating a chat. `--server` takes a
+loopback HTTP origin and defaults to `CONTROL_ADDR`. See
+[TERMINAL.md](TERMINAL.md) for development workflows.
 
 ## Background services
 
 The [web](../hosting/dev.control.web.plist) and
 [Discord](../hosting/dev.control.discord.plist) launchd files are templates.
 Replace every `@…@` placeholder with your own paths and username before loading
-them as user services. They contain no provider or Discord credential.
+them as user services. They contain no credentials. For systemd, see
+[NixOS](NIXOS.md#optional-systemd-user-service).
 
-The website requires a local operator session. Run `control open` to open a
-single-use sign-in link. Use `control open --link` to print the link and paste it
-into a browser of your choice; the link works once. Discord access does not grant that session. Only
-loopback binding is supported. Tailscale/remote publishing is not configured.
+The website needs a local operator session. `control open` opens a single-use
+sign-in link; `control open --link` prints it instead. Discord access does not
+grant that session. Only loopback binding is supported.
 
 ## Discord
 
-Use a bot for this node. Configure `discord-access.json` with display labels,
-numeric Discord user IDs, and `user` or `architect` roles. Labels alone grant
-nothing. Unknown or duplicate identities are denied; keep `channel_id` null.
-User-role identities can run tasks without source improvement or website
-operator access. Multiple identities may belong to one person.
+Use a dedicated bot for this node. List identities in `discord-access.json` with
+display labels, numeric Discord user IDs and a `user` or `architect` role. Labels
+alone grant nothing; unknown or duplicate identities are denied. Keep
+`channel_id` null. The `user` role can run tasks but cannot request source
+improvements or use the website. One person may have several identities.
 
-Store the token as `DISCORD_TOKEN="…"` in the private configuration directory's
-`discord.env`; use mode 0600. Never put it in source or a service definition.
-Only the explicitly activated bridge loads that file.
+Store the token as `DISCORD_TOKEN="…"` in `discord.env` in the configuration
+directory, mode 0600. Never put it in source or a service file. Only the
+activated bridge loads it.
 
 ```sh
-./target/release/control --bind-discord LABEL USER_ID
-./target/release/control discord --check
-./target/release/control discord --enable
+control --bind-discord LABEL USER_ID
+control discord --check
+control discord --enable
 ```
 
-Binding expects an existing configured label. `--check` verifies the bot and
-provisions recipient channels without sending messages. `--enable` listens for
-DMs and replies with links to the local chat. Server-channel messages are never
-requested or processed. The bot and user may need a shared server and compatible
-Discord privacy settings for DMs to work.
+Binding needs an existing label. `--check` verifies the bot and prepares DM
+channels without sending messages. `--enable` listens for DMs and replies with
+links to the local chat. Server-channel messages are never requested or read. DMs
+may need a shared server and compatible privacy settings.
 
-### Messaging channels: operator requests and steering
+### Operator requests and steering
 
-Discord is the first operator messaging channel; other services (Telegram,
-WhatsApp, Slack) can be added as adapters over the same core
-(`client::channel`). The core reaches Control only through the operator
-interface `control tui` uses.
+Discord is the first adapter over the generic channel core (`client::channel`),
+which reaches Control only through the same operator interface as `control tui`.
 
-Request forwarding is **off by default**. Turn it on, and set the command prefix, on
-the web Connections page (`/?view=integrations`). The page saves the
-configuration directory's `channels.json`, which adapters re-read on every
-poll; `control tui` shows the state under `/help`:
+Forwarding operator requests is **off by default**. Enable it and set the command
+prefix on the web Connections page (`/?view=integrations`). It saves
+`channels.json` in the configuration directory, which adapters re-read on every
+poll:
 
 ```json
 {"discord":{"enabled":true,"kinds":["question","bot","port"],"chats":[],"prefix":"!"}}
 ```
 
-`chats` lists top-level chat IDs to forward (empty forwards all), `kinds`
-narrows what is forwarded. The prefix defaults to `!` because Discord reserves
-`/` for its own commands; a service with native `/` commands can keep `/`.
-Type `!help` in a DM for the command list, generated from the same tables as
-the TUI and the server. Commands and steering work for architects whether or
-not forwarding is on; the toggle only controls forwarding operator requests.
+`kinds` limits what is forwarded; `chats` lists top-level chat IDs (empty means
+all). The prefix defaults to `!` because Discord reserves `/`. Send `!help` for
+the command list.
 
-When enabled, architect identities (the role the local operator holds) receive
-agent design questions, bot requests and port approvals from every chat on the
-node. Reply to a request's message (an option number or direction for a
-question, `allow`/`deny` for a bot, `allow`/`allow --loopback`/`deny` for a
-port), or send the command it shows (`!answer …`, `!bot allow …`). Decisions
-use this node's local operator session for exactly the commands the TUI sends,
-so the server rechecks that the request is still pending and refuses a
-duplicate reply. User-role identities keep the DM-only behaviour.
+When forwarding is on, architects receive design questions, bot requests and
+port approvals from every chat. Reply to the request message (an option number
+or text for a question, `allow`/`deny` for a bot, `allow`/`allow --loopback`/`deny`
+for a port), send the command it shows, or press its buttons. Every path runs the
+same decision through the local operator session, so the server rechecks that
+the request is still pending and rejects duplicates. A decided message turns
+green or grey and loses its buttons; an expired or already decided request shows
+"No longer pending".
 
-On Discord a request arrives as an embed coloured by severity (blue question,
-amber approval, red loopback port) with its chat, target and other details as
-fields, and buttons: **Approve**/**Allow**/**Allow loopback**, **Deny**, one
-button per question option, **Answer…** (opens a text box) and **Open chat**.
-A press runs exactly the reply it stands for (`allow`, `deny`,
-`allow --loopback`, an option number or the typed answer) through the same
-decision path as a text reply. The message then turns green or grey with
-"Allowed by you", "Denied by you" or "Answered by you" and drops its decision
-buttons; a request decided elsewhere or expired shows "No longer pending".
-Typing a reply or the command in the footer still works. Buttons are matched
-to requests through the routing table by the pressed message, only for the
-operator's own DM and this node's messages; a stale or already decided
-request is refused with a short note.
+Buttons use a gateway connection opened by `control discord --enable`, with no
+privileged intents. Leave the application's **Interactions Endpoint URL** empty
+in the Discord developer portal, or presses go there instead. If the gateway is
+down, typed replies still work.
 
-Buttons need a gateway connection, which `control discord --enable` opens
-alongside REST polling. It requests no privileged intents. In the Discord
-developer portal, leave the application's **Interactions Endpoint URL**
-empty: when it is set, Discord sends presses there instead of the gateway.
-If the gateway is unavailable, buttons fail visibly and replies still work.
+Architects can steer any chat whether or not forwarding is on: `!chats` lists
+recent DMs, `!resume ID` selects one, `!new` starts one, `!genes` lists genes and
+`!use GENE…` sets the DM's DNA (`!use none` clears). Messages then go to the selected DM, and `!steer`,
+`!cancel`, `!btw` and the other chat commands work as in the TUI. Replies are
+relayed back. `!resume` with the DM's own chat ID returns to it. Routing state is
+kept in `channels/NAME.json` in the state directory.
 
-The structured form is generic (`client::channel::request`): a title, a
-body, fields, a severity and actions, each action being a reply the
-operator could type. Adapters that report `buttons` render it
-(`Transport::post_request`) and route presses to `Channel::press`; others
-post the plain text. Telegram inline keyboards or WhatsApp reply buttons can
-implement the same model; they are not implemented yet.
-
-Architects can steer any chat, with forwarding on or off: `!chats` lists the most recently active
-chats, `!resume ID` selects one, `!new` starts one and `!use LENS…` sets lenses
-for the selected chat (`!use none` clears). While a chat is selected, messages
-go to it, so `!steer`, `!cancel`, `!btw` and the other chat commands behave as
-on the web and in the TUI. Finished replies are relayed back; replying to one
-continues that chat. `!resume` with the DM's own chat ID (shown by `!chats`)
-returns to the DM chat.
-
-Each channel's routing table (which message stands for which request or chat,
-and each conversation's selected chat) is `channels/NAME.json` in the state
-directory. Requests and selected chats are re-read only when the server's
-change hints move their revisions in `control.chats.list`, as in the TUI.
-
-If delivery fails, run `control discord --diagnose`. To inspect server role and
-channel permissions without reading messages, use
+If delivery fails, run `control discord --diagnose`. To inspect server roles and
+channel permissions without reading messages, run
 `control discord --audit-server-permissions`. A zero-permission invite can still
-inherit @everyone permissions: deny View Channel for the bot where needed and
-remove Administrator. A disabled Message Content intent alone is not an access
-boundary.
+inherit @everyone permissions: deny View Channel where needed and remove
+Administrator. Disabling the Message Content intent is not an access boundary.
 
-Making a personal model subscription available to other people may violate
-provider terms and risk suspension. Operators are responsible for compliant
-configuration; Control roles do not establish contractual permission.
+Sharing a personal model subscription with other people may violate provider
+terms. Control roles do not establish contractual permission.

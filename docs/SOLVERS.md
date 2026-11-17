@@ -27,7 +27,6 @@ rather than a plausible guess. Typical cases:
 Write the model, call the tool, and report the solver's status with the result.
 An `optimal` status is a proof for the model as written; `feasible` and `timeout`
 results with `has_solution: true` are valid but possibly improvable assignments.
-Reasoning through the same search in tokens is slower and unverifiable.
 
 ## Calling it
 
@@ -180,13 +179,11 @@ directory. `CONTROL_SOLVER_IMAGE` overrides that pin with an image ID or digest.
 `control doctor` reports the pinned image and the solvers it provides. Without a
 pin, the tool returns an error naming the setup command.
 
-The image contains the solver command-line programs, Bash and coreutils. The
-or-tools package also installs Python bindings, and MiniZinc normally links
-Gecode's Qt visualiser; the declaration keeps only the CP-SAT FlatZinc executable
-and its libraries, and builds MiniZinc without Gecode, so neither Python nor a
-GUI stack enters the image. The first build compiles MiniZinc (a few minutes);
-the rest comes from the binary cache. The compressed image is about 170 MB
-(about 510 MB loaded).
+The image contains the solver command-line programs, Bash and coreutils. It keeps
+only the CP-SAT FlatZinc executable from or-tools (not its Python bindings) and
+builds MiniZinc without Gecode's Qt visualiser, so neither Python nor a GUI stack
+enters the image. The first build compiles MiniZinc; the rest comes from the
+binary cache.
 
 ## Adding a solver
 

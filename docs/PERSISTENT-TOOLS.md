@@ -470,4 +470,4 @@ improvement over a previous persistent-service implementation.
 Next: a pinned tool-runtime request contract and cooperating agents using their
 own tools. Operator-approved TCP access is described in [scoped ports](PORTS.md).
 Durable storage, service restart policy, bot callbacks and broader attachment
-are separate increments. See the [roadmap](../roadmap.md) for demonstration goals.
+are separate increments. See [demonstrations](DEMONSTRATIONS.md) for demonstration goals.

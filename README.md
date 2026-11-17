@@ -162,6 +162,6 @@ These chat commands work on the web, in the TUI and in authorized Discord DMs:
 This is an early local preview. API/self-hosted adapters, live federation and
 artifact editing are still planned; live workspaces do not yet have hard disk
 quotas. See [about Control](docs/about.md), the [architecture](docs/ARCHITECTURE.md)
-and the [roadmap](roadmap.md) for current boundaries and direction.
+and the [roadmap](docs/SWARM-ROADMAP.md) for current boundaries and direction.
 
 For development checks and the PR workflow, see [CONTRIBUTING.md](CONTRIBUTING.md).
