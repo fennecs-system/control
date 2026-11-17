@@ -62,6 +62,7 @@ non-Rust runtimes stay inside explicitly configured tool/agent containers.
 | P2 | [M1 follow-ups](#m1-model-follow-ups) | Hosted API adapters; local parallel tools; multi-model review turns. |
 | P2 | [L1 personas](#l1-versioned-personas-and-soulmd); [L2/L3 self-improvement](#l2l3-a-reviewed-self-improvement-loop) | Captured revisions, scoped tools, evaluation and admission. |
 | P2 | [H1 layered control](#h1-layered-control) | Fewer model turns per milestone in a paired trial. |
+| P2 | [I1 immune system](#i1-immune-system--antibodies-and-intel): antibodies, pathology facts, intel briefs | First slice in review; next a Google Workspace `Transport` and a paired trial of antibody notes. |
 | Later | [X1 execution backends](#x1-pluggable-execution-backends), [deferred items](#deferred) | Demonstrated local need. |
 
 ## P0: reliability backlog
@@ -416,6 +417,67 @@ score probes are described in [watches](WATCHES.md); the
 First exit: agents build a shared reflex loop and skills, run them as watches and
 complete milestones with markedly fewer model turns per claim than the
 joystick-style baseline, in a paired trial.
+
+## I1: immune system — antibodies and intel
+
+People are productive because whole systems support them: immune systems,
+institutions, counter-intelligence. A swarm needs the same: cheap, plentiful
+observers that notice when work goes off the rails and recruit the response,
+plus intelligence that tells the operator what happened. Observers stay
+read-only by design; they tag and report, they never do the work or take over.
+
+| Layer | Role | Built from |
+| --- | --- | --- |
+| Cortex (lead) | Strategy: goals, plans, who does what | Model turns of the steering chat |
+| Ganglia (routines) | Reflexes and skills that act without deliberating | Watches, services, tool packages ([H1](#h1-layered-control)) |
+| Immune (antibodies, advisors) | Patrol for pathologies; note the lead; escalate to the operator | Read-only judge bots woken by host facts |
+| Intel (analysts) | Daily brief: goals, progress, cost, pathologies, open requests | Read-only summary tool, channel delivery |
+
+**Pathology catalogue.** Host facts derived cheaply from records Control already
+keeps, edge-triggered and fingerprinted: harness churn (file/tool building while
+claims and scores do not advance: building a generic harness instead of placing
+the stone wall), repetition loops (the same command failing again and again),
+polling (status-only commands instead of a routine), cost burn (tokens since the
+last advance), plus the advisor's stalls, shared blockers, bottlenecks, timeouts,
+failure streaks and members that cannot checkpoint. Thresholds use
+`execution.json`. Candidates for later: repeated identical posts, a backlog that
+no longer matches the goal, claim churn without done, package versions without
+use, score regressions.
+
+**Escalation paths.** Facts wake the team's advisor (team scope) or an antibody
+(node scope). An observer notes the lead's steering chat, which decides what
+reaches the team; if the lead does not fix it, or the operator is needed, a
+rate-limited operator notice goes to the operator's channels. Observers never
+message members, post to rooms, claim work or start services.
+
+**Cheap and plentiful.** An observer turn is a bounded read and at most one note,
+a good fit for local models ([M1](#m1-model-follow-ups)); the host does the
+counting and only wakes a model on a new fact. Many observers per node should
+cost little more than one; their own turns are not team activity, so they cannot
+wake themselves.
+
+**Report sinks.** Briefs and notices go through the generic channel
+`Transport` (Discord DMs today). A Google Workspace adapter (append a Docs
+section, send a Gmail digest) is one more `Transport` implementation, configured
+in `channels.json`, not a special case in the core.
+
+The first slice (antibody lens, pathology facts, `control_intel_brief` /
+`control.intel.brief`, `control_operator_notify`, daily channel brief) is
+described in [lenses](LENSES.md#antibodies). Remaining:
+
+- **Google Workspace sink:** a `Transport` adapter for Docs/Gmail with its own
+  credential handling outside the checkout.
+- **More analysts:** per-team briefs on demand from a chat; weekly trend briefs
+  over the scorecard metrics (execs or turns per done claim, joystick ratio,
+  operator and host-blocked time).
+- **Observer evaluation:** a paired trial showing antibodies reduce wasted turns
+  or tokens per milestone without noise; tune thresholds from it.
+- **Local-model observers:** default antibody runs on a local model once
+  [M1](#m1-model-follow-ups) tool-using local turns are reliable.
+
+First exit: on a run that drifts into harness building or a failing loop, the
+lead receives one antibody note and, when it does not correct course, the
+operator receives one notice, with no repeats and no effect on healthy teams.
 
 ## X1: pluggable execution backends
 

@@ -203,6 +203,19 @@ poll:
 all). The prefix defaults to `!` because Discord reserves `/`. Send `!help` for
 the command list.
 
+`kinds` also accepts `notice`: short operator notices from opted-in agents (an
+[antibody](LENSES.md#antibodies) or a lead), forwarded once; reply to steer the
+team that sent it. Add `"brief":true` (and optionally `"brief_hour":8`, UTC) to
+receive the node's daily intel brief once a day; it is also saved under the state
+directory as `intel/brief-DATE.md`. Edit `channels.json` directly for these.
+
+A channel adapter implements `Transport` in `src/client/channel.rs`: `post`
+(text with an idempotency key), and optionally `edit`, `post_request` and
+`settle`, with `capabilities` such as `max_text`. Briefs and notices use only
+`post`, so a report sink such as a Google Workspace adapter (append to a Doc,
+send a Gmail digest) needs no core change: implement `Transport`, add it to
+`ADAPTERS` and configure it by name in `channels.json`.
+
 When forwarding is on, architects receive design questions, bot requests and
 port approvals from every chat. Reply to the request message (an option number
 or text for a question, `allow`/`deny` for a bot, `allow`/`allow --loopback`/`deny`

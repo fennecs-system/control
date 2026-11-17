@@ -16,7 +16,7 @@
 //!   repeat of a shown notice.
 //!
 //! Channels deliver both through the generic `Transport`: see
-//! `client::channel` and [docs/CHANNELS.md](../docs/CHANNELS.md).
+//! `client::channel` and docs/setup.md (messaging channels).
 use crate::{
     State,
     tool_registry::{AttemptCall, AttemptRef, AttemptTools, LocalHost},
@@ -36,7 +36,7 @@ pub const NOTICE_SECONDS: u64 = 86_400;
 const NOTICE_CHARS: usize = 600;
 pub(crate) const NOTIFY_TOOL: &str = "operator.notify";
 
-/// One operator notice: no decision is requested; a reply goes to `chat`.
+/// One operator notice: no decision is requested; a reply steers the top-level chat of `chat`'s tree.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Notice {
     pub id: String,
@@ -306,7 +306,7 @@ impl AttemptTools for Tools {
     fn definitions(&self) -> Vec<Value> {
         vec![
             json!({"name":"control_intel_brief","description":"Read a Markdown intel brief for the last 24 hours: per team its goal, progress (claims and score probe changes), cost in tokens, pathologies observed by the host (stalls, repeated failures, repetition loops, polling, harness churn, cost burn) and requests waiting on the operator. Without chat_id it covers your own team; an approved antibody may name any chat to read that team, or omit chat_id to read the whole node. Read-only.","inputSchema":{"type":"object","properties":{"chat_id":{"type":"string"}},"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
-            json!({"name":"control_operator_notify","description":"Send the operator one short notice through their messaging channels (for example a Discord DM). No decision is requested; their reply steers this chat. Use it only for what a team's lead is not fixing or what needs the operator: a team working against its goal, cost burn, a stuck team or a request waiting on the operator. team names the top-level chat it concerns. Opt-in (the root chat's lenses must offer operator.notify) and rate-limited per node; an identical notice is refused.","inputSchema":{"type":"object","properties":{"text":{"type":"string","minLength":1,"maxLength":NOTICE_CHARS},"team":{"type":"string"}},"required":["text"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":true}}),
+            json!({"name":"control_operator_notify","description":"Send the operator one short notice through their messaging channels (for example a Discord DM). No decision is requested; a reply goes to your task tree's steering chat. Use it only for what a team's lead is not fixing or what needs the operator: a team working against its goal, cost burn, a stuck team or a request waiting on the operator. team names the top-level chat it concerns. Opt-in (the root chat's lenses must offer operator.notify) and rate-limited per node; an identical notice is refused.","inputSchema":{"type":"object","properties":{"text":{"type":"string","minLength":1,"maxLength":NOTICE_CHARS},"team":{"type":"string"}},"required":["text"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":true}}),
         ]
     }
     fn known(&self, name: &str) -> bool {
@@ -371,7 +371,7 @@ fn execute(host: &LocalHost<'_>, attempt: &AttemptRef<'_>, name: &str, args: &Va
                 state.bots.notices = previous;
                 return Err(error);
             }
-            Ok(json!({"notice_id":notice.id,"status":"recorded","note":"Recorded. The operator's channels forward it once; their reply comes back to this chat."}))
+            Ok(json!({"notice_id":notice.id,"status":"recorded","note":"Recorded. The operator's channels forward it once; a reply goes to your task tree's steering chat."}))
         }
         _ => Err(fail("Unknown intel tool")),
     }
