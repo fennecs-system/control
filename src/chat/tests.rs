@@ -329,7 +329,7 @@ fn explicit_spawn_inherits_snapshot_without_workspace_authority_or_recursion() {
             .unwrap()
             .contains("target='_top'>Agent conversation")
     );
-    assert!(render(&state, &child.id).unwrap().contains("Parent chat"));
+    assert!(render(&state, &child.id).unwrap().contains("Parent DM"));
     let restored: State = serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
     assert_eq!(restored.chats[1].parent_chat, child.parent_chat);
     assert_eq!(restored.chats[1].fork_context, child.fork_context);
@@ -1085,7 +1085,7 @@ fn chats_show_callsigns_and_every_client_sees_the_same_rename() {
     let runs = state.runtime.runs.len();
     send(&mut state, &chat, "/rename player1", "test").unwrap();
     assert_eq!(state.runtime.runs.len(), runs, "renaming starts no run");
-    assert_eq!(state.chats[0].messages.last().unwrap().reply, "Renamed this chat to player1.");
+    assert_eq!(state.chats[0].messages.last().unwrap().reply, "Renamed this DM to player1.");
     let rows = list(&state);
     let rows = control::client::chats::entries(rows.as_array().unwrap());
     assert_eq!(rows[0].title, "player1");

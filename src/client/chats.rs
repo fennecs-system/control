@@ -1,6 +1,7 @@
 //! Chat navigation as every operator client offers it, over `control.chats.list`
 //! and `control.chat.read`. `/chats` lists, `/resume ID` switches and `/new`
-//! starts a chat and `/use LENS…` sets lenses; anything else is sent to the active chat with
+//! starts a chat, `/genes` lists lenses (shown as genes) and `/use GENE…` sets
+//! a chat's lenses (its DNA); anything else is sent to the active chat with
 //! `control.chat.send`, where the server interprets chat commands (/steer,
 //! /cancel, /answer …) the same way for the web, TUI and Discord.
 use serde_json::Value;
@@ -13,16 +14,19 @@ pub enum Navigation {
     /// `/use LENS…` for future messages; `/use none` clears. `None` when it
     /// names no lens: a no-op on every client.
     Use(Option<Vec<String>>),
+    /// `/genes` (or `/lenses`) lists the genes (lens definitions) `/use` selects from.
+    Genes,
     /// `/rename NAME` names the active chat in every client (`control.chat.rename`).
     /// The server validates the name; an empty one returns its usage.
     Rename(String),
 }
 /// Client navigation commands, for help text and menus.
 pub const COMMANDS: &[(&str, &str)] = &[
-    ("/chats", "List recent chats"),
-    ("/resume ID", "Talk to a chat"),
-    ("/new", "Start a chat"),
-    ("/use LENS…", "Compose future messages with lenses; /use none clears"),
+    ("/chats", "List recent DMs"),
+    ("/resume ID", "Talk to a DM"),
+    ("/new", "Start a DM"),
+    ("/genes", "List the genes /use can select"),
+    ("/use GENE…", "Set this DM's DNA for future messages; /use none clears"),
 ];
 pub fn navigation(text: &str) -> Option<Navigation> {
     let text = text.trim();
@@ -35,6 +39,7 @@ pub fn navigation(text: &str) -> Option<Navigation> {
     match text {
         "/chats" | "/resume" => Some(Navigation::List),
         "/new" => Some(Navigation::New),
+        "/genes" | "/lenses" => Some(Navigation::Genes),
         text => text.strip_prefix("/resume ").map(str::trim).filter(|id| !id.is_empty() && !id.contains(char::is_whitespace)).map(|id| Navigation::Open(id.into())),
     }
 }
@@ -83,7 +88,7 @@ pub fn check_lenses(hive: &mut super::Hive, lenses: &[impl AsRef<str>]) -> std::
     let names = lenses.iter().map(AsRef::as_ref).collect::<Vec<_>>();
     let missing = unknown(&names, |id| ids.contains(id));
     if !missing.is_empty() {
-        return Err(std::io::Error::other(format!("Unknown {}: {}. Nothing changed; /lenses lists the library.", if missing.len() == 1 { "lens" } else { "lenses" }, missing.join(", "))));
+        return Err(std::io::Error::other(format!("Unknown {}: {}. Nothing changed; /genes lists them.", if missing.len() == 1 { "gene" } else { "genes" }, missing.join(", "))));
     }
     hive.tool("control.lenses.resolve", serde_json::json!({"lenses":names}))?;
     Ok(library)
@@ -130,6 +135,18 @@ pub fn recent<'a>(entries: &[Entry<'a>], limit: usize) -> Vec<Entry<'a>> {
 /// Each chat with the command that opens it.
 pub fn resume_list(entries: &[Entry<'_>]) -> String {
     entries.iter().map(|entry| format!("{}\n  /resume {}", entry.title, entry.id)).collect::<Vec<_>>().join("\n\n")
+}
+/// `/genes`: each gene in a `control.lenses.list` view with its version and
+/// the genes it includes, after how to select them.
+pub fn gene_list(library: &Value) -> String {
+    let mut lines = vec!["Genes. Set a DM's DNA with /use engineering evidence; clear with /use none.".to_owned()];
+    for gene in library.as_array().into_iter().flatten() {
+        lines.push(format!("{} · {} · v{}", gene["id"].as_str().unwrap_or("?"), gene["name"].as_str().unwrap_or("?"), gene["revision"].as_u64().unwrap_or(0)));
+        if let Some(includes) = gene["includes"].as_array().filter(|a| !a.is_empty()) {
+            lines.push(format!("  includes {}", includes.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" + ")));
+        }
+    }
+    lines.join("\n")
 }
 
 /// Statuses whose message is still in progress.

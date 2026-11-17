@@ -66,7 +66,7 @@ pub fn design_topic(value: &str) -> Option<(&'static str, &'static str)> {
         "runs" => ("runs", "Runs"),
         "agents" => ("agents", "Bots"),
         "rooms" => ("rooms", "Rooms"),
-        "lenses" | "lens-page" => ("lenses", "Lenses"),
+        "lenses" | "lens-page" => ("lenses", "DNA"),
         "monitor" => ("monitor", "Usage"),
         "tools" | "browser" | "tool-page" => ("tools", "Tools"),
         "nodes" => ("nodes", "Nodes"),
@@ -109,7 +109,7 @@ pub fn landing_mode(state: &State, lens: &str, topic: Option<&str>, improve: boo
         draft = format!("/improve {draft}");
     }
     let mut html = format!(
-        "<section class='conversation'><div class='conversation-heading'>{}<h2>New chat</h2></div>",
+        "<section class='conversation'><div class='conversation-heading'>{}<h2>New DM</h2></div>",
         crate::navigation::conversation_button(state, "")
     );
     let selected = if state.lens_library.get(lens).is_some() {
@@ -467,7 +467,7 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
     if let Some(name)=commands::tail(text.trim(),Kind::Rename) {
         let name=rename(state,id,name)?;
         let session=state.chats.iter_mut().find(|session|session.id==id).unwrap();
-        session.messages.push(Message { speaker: Default::default(), text:text.trim().into(),run_id:None,reply:format!("Renamed this chat to {name}.")});
+        session.messages.push(Message { speaker: Default::default(), text:text.trim().into(),run_id:None,reply:format!("Renamed this DM to {name}.")});
         return Ok(());
     }
     if let Some(option)=commands::tail(text.trim(),Kind::Room) {
@@ -619,7 +619,7 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
     identity::authorize(&actor, action)?;
     let context = crate::lens_library::resolve(state, &selected_lenses(&state.chats[index]))
         .map_err(|_| {
-            "Selected context cannot be resolved. Check the lens library before sending."
+            "Selected context cannot be resolved. Check its DNA before sending."
         })?;
     let native = if requested == Action::Task && !literal && steering.is_none() {
         discord::native_reply(&actor, objective)
@@ -845,7 +845,7 @@ pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
         .map(|r| format!(" · <a href='/?view=rooms&channel={r}'>#{r} ↗</a>"))
         .unwrap_or_default();
     let lenses = selected_lenses(session);
-    let room = format!("{room}{}", session.parent_chat.as_deref().filter(|parent| valid_id(parent)).map(|parent| format!("<a href='/chat/{parent}'>Parent chat ↗</a>")).unwrap_or_default());
+    let room = format!("{room}{}", session.parent_chat.as_deref().filter(|parent| valid_id(parent)).map(|parent| format!("<a href='/chat/{parent}'>Parent DM ↗</a>")).unwrap_or_default());
     let room = format!("{room}<a href='/chat/{id}/compaction'>Compaction tree ↗</a>");
     let mode = if session.improve_mode {
         "<span class='chat-command active-command' title='Use /improve off to return to regular chat'>/improve</span>"

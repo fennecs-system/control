@@ -140,7 +140,7 @@ A lens names the packages a run may use, next to its tools and documents:
 ```
 
 `mc263-client@1` pins version 1; `mc263-client` means the latest admitted version
-when a message is sent. The **Lenses** page lists admitted packages as
+when a message is sent. The **DNA** page lists admitted packages as
 checkboxes, and each checkbox pins the version shown.
 
 A lens is the right place for this choice because it is the existing,

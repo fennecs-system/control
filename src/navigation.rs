@@ -1,12 +1,12 @@
 //! Global navigation stays independent of the selected chat context.
 const PRIMARY: &[(&str, &str, &str, &str)] = &[
     ("hub", "/", "▦", "Overview"),
-    ("session", "/chats", "⌁", "Chat"),
+    ("session", "/chats", "⌁", "DMs"),
     ("agents", "/?view=agents", "⌁", "Bots"),
     ("history", "/chats/history", "⌁", "History"),
     ("knowledge", "/knowledge", "▤", "Knowledge"),
     ("rooms", "/?view=rooms", "#", "Rooms"),
-    ("lenses", "/lenses", "◈", "Lenses"),
+    ("lenses", "/lenses", "◈", "DNA"),
     ("tools", "/?view=tools", "⊞", "Tools"),
     ("monitor", "/?view=monitor", "▥", "Usage"),
     ("manage", "/?view=manage", "⚙", "Manage"),
@@ -61,7 +61,7 @@ pub fn secondary(view: &str) -> String {
     format!("<aside class='section-navigation'><h2>Manage</h2><nav aria-label='Manage'>{links}</nav></aside>")
 }
 pub fn conversation_button(state: &crate::State, active: &str) -> String {
-    format!("<details class='conversation-toggle'><summary aria-label='Conversations' title='Conversations'>☰ <span>Conversations</span></summary>{}</details>",conversations(state,active))
+    format!("<details class='conversation-toggle'><summary aria-label='DMs' title='DMs'>☰ <span>DMs</span></summary>{}</details>",conversations(state,active))
 }
 pub fn heading(view: &str) -> String {
     if let Some((_, label)) = MANAGE.iter().find(|(id, _)| *id == view) {
@@ -106,7 +106,7 @@ fn conversation_window(state:&crate::State,active:&str,older:Option<&str>,newer:
         }
     }
     let current=if active.is_empty() {" aria-current='page'"}else{""};
-    let mut links=if picker {format!("<a href='/chats?new=1'{current}>+ New chat</a>")} else {String::new()};
+    let mut links=if picker {format!("<a href='/chats?new=1'{current}>+ New DM</a>")} else {String::new()};
     // One borrowed projection for the page, rather than scanning run history per chat.
     let mut latest=HashMap::new();
     if !picker {
@@ -139,12 +139,12 @@ fn conversation_window(state:&crate::State,active:&str,older:Option<&str>,newer:
     for _ in branches {links.push_str("</div></details>");}
     if !picker && selected.is_empty() {links.push_str("<p class='muted'>No conversations yet.</p>");}
     let controls=if picker {
-        if roots.len()>crate::pagination::SIZE {"<a class='conversation-history-link' href='/chats/history'>All conversations ↗</a>".into()}else{String::new()}
+        if roots.len()>crate::pagination::SIZE {"<a class='conversation-history-link' href='/chats/history'>All DMs ↗</a>".into()}else{String::new()}
     }else{
         crate::pagination::controls("/chats/history",(range.start>0).then(||entries[roots[range.start]].session.id.as_str()),(range.end<roots.len()).then(||entries[roots[range.end-1]].session.id.as_str()))
     };
-    let heading=if picker {"<h2>Conversations</h2>"}else{""};
-    format!("<aside class='section-navigation conversation-navigation'>{heading}<nav aria-label='Conversations'>{links}</nav>{controls}</aside>")
+    let heading=if picker {"<h2>DMs</h2>"}else{""};
+    format!("<aside class='section-navigation conversation-navigation'>{heading}<nav aria-label='DMs'>{links}</nav>{controls}</aside>")
 }
 #[cfg(test)]
 mod tests;

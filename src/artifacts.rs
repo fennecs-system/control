@@ -544,7 +544,7 @@ pub fn render(
         .get("artifact")
         .map(String::as_str)
         .or_else(|| outputs.last().map(|output| output.id.as_str()));
-    let mut html = format!("<section class='artifacts'><div class='section-heading'><h2>Artifacts</h2><a href='/chat/{chat}'>Back to chat ↗</a></div>");
+    let mut html = format!("<section class='artifacts'><div class='section-heading'><h2>Artifacts</h2><a href='/chat/{chat}'>Back to DM ↗</a></div>");
     let Some(id) = selected.filter(|id| ids.contains(id)) else {
         html.push_str("<p class='muted'>No published files yet.</p></section>");
         return Ok(html);

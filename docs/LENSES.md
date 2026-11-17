@@ -2,13 +2,28 @@
 
 A lens is versioned context: instructions, captured knowledge documents,
 descriptive tool hints and other lenses. It is not an agent identity or a grant.
-Use **Lenses** to create/edit definitions and inspect their effective instructions.
-Select them in a chat's lens picker, or use terminal commands:
+
+**User-facing names.** The UI calls the library **DNA** and each lens a
+**gene**: genes include other genes, a DM's selected set is its DNA (genome),
+and revisions are versions. Users experience a lens as a bundle of tools,
+documents and instructions that spawned workers inherit, not as a view into
+something. Internally lenses remain pure lens transforms, and code, state
+fields, tool names and APIs (`/lenses`, `control.chat.lenses`,
+`control.lenses.*`) keep the `lens` name. Likewise a 1:1 conversation with an
+agent is shown as a **DM** (distinct from **Rooms**), while URLs and APIs stay
+`/chat/...` and `control.chat.*`.
+
+Use **DNA** to create/edit genes and inspect their effective instructions.
+Select them in a DM's gene picker, or use terminal and Discord commands
+(`!genes`/`!use` with the default Discord prefix):
 
 ```text
+/genes
 /use engineering swarm
 /context
 ```
+
+`/genes` lists the library; `/lenses` remains an alias.
 
 The same selection is available through `control.chat.lenses`. Changes affect
 future operator messages; queued runs, spawned workers and automatic continuations
@@ -240,7 +255,7 @@ Reusing code does not require sharing one process or every worker's mutable
 state. Existing access controls still apply; this creates no shared-storage or
 service-grant mechanism.
 
-Select **Coordination & planning** in the lens picker, or use `/use coordination`.
+Select **Coordination & planning** in the gene picker, or use `/use coordination`.
 For a team, select **Swarm** (`/use swarm`), which includes `planning`,
 `coordination`, `autonomy` and `investigation`. Swarm revision 2 includes
 `planning` directly; a run whose lead posted only a role split and no milestone

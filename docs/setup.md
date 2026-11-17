@@ -170,8 +170,8 @@ expands it, `/activity compact` folds it, and `/activity` toggles. Failures rema
 visible and the underlying logs are retained. `/model` lists or selects configured
 models without making a model call; `/compact` inspects the compaction tree.
 
-`/chats` opens the conversation picker. `/lenses` opens a picker with Space to
-toggle selections and Enter to apply. `/use engineering evidence` composes lenses;
+`/chats` opens the DM picker. `/genes` (alias `/lenses`) opens a gene picker with Space to
+toggle selections and Enter to apply. `/use engineering evidence` sets the DM's DNA;
 `/use none` clears them. `/context` previews the next-message context, `/chat`
 returns to the transcript, and Esc closes a picker. `/resume` opens the conversation
 picker; `/resume ID` or `tui --resume ID` opens a conversation (`--session ID` is

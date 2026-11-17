@@ -947,7 +947,7 @@ fn browser_fixture(long_messages_only: bool) {
     }
     let toggle = b.element(".conversation-toggle > summary");
     b.post(&format!("/element/{toggle}/click"), json!({}));
-    let newest = b.element("nav[aria-label=Conversations] > a[href^='/chat/']");
+    let newest = b.element("nav[aria-label=DMs] > a[href^='/chat/']");
     assert_eq!(
         b.get(&format!("/element/{newest}/text")),
         "Live recent thread",

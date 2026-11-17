@@ -161,3 +161,13 @@ fn manage_routes_preserve_section_navigation_and_global_context() {
     assert!(chat.contains("chat-workspace"));
     assert!(super::primary("session-list").contains("href='/chats' aria-current='page'"));
 }
+#[test]
+fn navigation_shows_dna_and_dms_at_their_existing_urls() {
+    let nav = super::primary("session");
+    assert!(nav.contains("<a href='/chats' aria-current='page'><span aria-hidden='true'>⌁</span><span>DMs</span></a>"));
+    assert!(nav.contains("<a href='/lenses'><span aria-hidden='true'>◈</span><span>DNA</span></a>"));
+    assert!(super::primary("lens-page").contains("<a href='/lenses' aria-current='page'><span aria-hidden='true'>◈</span><span>DNA</span></a>"));
+    assert!(!nav.contains("<span>Lenses</span>") && !nav.contains("<span>Chat</span>"));
+    let page = crate::render(&crate::State::default(), "lens-page", "none", &crate::lens_library::render(&crate::State::default(), "", None, None, false));
+    assert!(page.contains("<h2>DNA</h2>") && page.contains("＋ New gene"));
+}

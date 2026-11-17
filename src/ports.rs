@@ -685,7 +685,7 @@ pub(crate) fn http_with_save(
             "tool-page",
             "none",
             &format!(
-                "<h2>TCP ports</h2>{ports}<p class='muted'>Request a named service port from chat. Access remains limited to this service and lease.</p>"
+                "<h2>TCP ports</h2>{ports}<p class='muted'>Request a named service port from a DM. Access remains limited to this service and lease.</p>"
             ),
         ))
     })();

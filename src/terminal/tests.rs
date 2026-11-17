@@ -1589,7 +1589,7 @@ fn terminal_control_injection_is_rejected_and_lenses_remain_readable() {
         lens_label(&json!({"lenses":["engineering","evidence"],"lens":null})),
         "engineering + evidence"
     );
-    assert_eq!(lens_label(&json!({"lenses":[]})), "No lenses");
+    assert_eq!(lens_label(&json!({"lenses":[]})), "No genes");
     assert_eq!(lens_label(&json!({"lens":"research"})), "research");
 }
 #[test]
@@ -1601,12 +1601,12 @@ fn live_tui_lens_commands() {
         input: "/use engineering, missing-lens".into(),
         ..App::default()
     };
-    assert!(app.submit(&mut hive).unwrap_err().to_string().contains("Unknown lens: missing-lens."));
+    assert!(app.submit(&mut hive).unwrap_err().to_string().contains("Unknown gene: missing-lens."));
     assert!(app.active.is_empty());
     app.input = "/use engineering, evidence".into();
     app.submit(&mut hive).unwrap();
     assert_eq!(app.detail["lenses"], json!(["engineering", "evidence"]));
-    app.input = "/lenses".into();
+    app.input = "/genes".into();
     app.submit(&mut hive).unwrap();
     assert!(
         app.inspector
@@ -1965,7 +1965,7 @@ fn live_room_tools_connect_worker_chat_and_ui() {
             .text()
             .unwrap();
         if path.contains("lenses") {
-            assert!(page.contains("Compose lenses"));
+            assert!(page.contains("Include genes"));
         } else {
             assert!(page.contains(expected));
         }

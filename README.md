@@ -118,21 +118,21 @@ These chat commands work on the web, in the TUI and in authorized Discord DMs:
 | `/spawn task` | Start a linked agent conversation. |
 | `/listen` / `/listen off` | Enable or stop room-triggered turns in a linked chat. |
 | `/open /absolute/path` | Add an approved folder at `/workspace/<name>`; use `--as NAME` for duplicate names. [Workspaces →](docs/WORKSPACES.md) |
-| `/cancel` | Stop the active or oldest queued task in this chat. |
-| `/rename NAME` | Name this chat (up to 32 characters). Chats are otherwise shown by a callsign such as Bravo or Indigo. |
+| `/cancel` | Stop the active or oldest queued task in this DM. |
+| `/rename NAME` | Name this DM (up to 32 characters). DMs are otherwise shown by a callsign such as Bravo or Indigo. |
 | `/answer QUESTION_ID answer` | Answer an agent's pending design question. |
 | `/port allow ID` / `/port deny ID` | TUI port approval; add `--loopback` to allow an exact loopback target. Web requests appear inline. |
 | `/improve` / `/improve off` | Enter or leave architect-only Control improvement mode. |
 
 ## Features
 
-- **Chat and artifacts.** Persistent conversations, live command activity. 
+- **DMs and artifacts.** Persistent one-to-one conversations with an agent (DMs), live command activity.
 - **Bots and runs.** See active tasks, the queue and execution history. Cancel
   work, retry an interrupted attempt, or spawn background tasks with queued completion updates.
   Approved bots keep useful sessions active; durable handoffs continue runnable
   work or wait for relevant events while their services keep running.
-- **Lenses.** Compose knowledge, instructions and descriptive tool context per chat.
-  Engineering and Research are built from smaller reusable lenses. Optional
+- **DNA.** Each gene bundles knowledge, instructions and descriptive tool context; a DM's selected genes are its DNA, inherited by the workers it spawns.
+  Engineering and Research are built from smaller reusable genes. Optional
   [task autonomy and bounded investigation](docs/LENSES.md) guide recovery from
   blocked plans without changing host permissions.
 - **Knowledge.** Write Markdown notes, connect them with `[[links]]`, explore the

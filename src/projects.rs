@@ -147,12 +147,12 @@ pub fn panel(state: &State, id: &str) -> String {
         ));
         if let Some(import) = &running {
             // An earlier attempt's error gives way to this attempt's outcome.
-            html.push_str(&format!("<p role='status'>Approved · copying into <code>/workspace/{}</code> · {} {} copied · {} s</p><p class='muted'>The folder opens in this chat when the copy finishes. You can return to the chat; the import continues.</p>",
+            html.push_str(&format!("<p role='status'>Approved · copying into <code>/workspace/{}</code> · {} {} copied · {} s</p><p class='muted'>The folder opens in this DM when the copy finishes. You can return to the DM; the import continues.</p>",
                 crate::escape(&project.name), import.entries, if import.entries == 1 {"entry"} else {"entries"}, import.elapsed.as_secs()));
         } else if let Some(error)=&project.error {html.push_str(&format!("<p role='alert'>{}</p>",crate::escape(error)));}
         if running.is_some() {
         } else if !project.needs_approval() {
-            html.push_str("<p class='muted'>Changes stay in this chat’s worktree. The original folder is unchanged.</p>");
+            html.push_str("<p class='muted'>Changes stay in this DM’s worktree. The original folder is unchanged.</p>");
             if let Some(workspace) = project
                 .head
                 .as_deref()
@@ -164,7 +164,7 @@ pub fn panel(state: &State, id: &str) -> String {
                 ));
             }
         } else {
-            html.push_str(&format!("<p>Open as <code>/workspace/{}</code></p><form class='decision-form' method='post' action='/chat/{id}/project' target='_top'><input type='hidden' name='request' value='{}'><p>Trust this folder’s code for this chat and allow local previews? Control will copy its files into an isolated worktree. Credentials, generated directories and symlinks are excluded. The original folder stays unchanged.</p><button name='approve' value='yes'>Trust folder and open</button><p role='alert' hidden></p></form><form method='post' action='/chat/{id}/project' target='_top'><label>Folder on this node<input name='path' value='{}' required></label><label>Workspace name<input name='name' value='{}' required></label><button>Change folder</button></form>",crate::escape(&project.name),crate::escape(&project.request),crate::escape(&project.path),crate::escape(&project.name)));
+            html.push_str(&format!("<p>Open as <code>/workspace/{}</code></p><form class='decision-form' method='post' action='/chat/{id}/project' target='_top'><input type='hidden' name='request' value='{}'><p>Trust this folder’s code for this DM and allow local previews? Control will copy its files into an isolated worktree. Credentials, generated directories and symlinks are excluded. The original folder stays unchanged.</p><button name='approve' value='yes'>Trust folder and open</button><p role='alert' hidden></p></form><form method='post' action='/chat/{id}/project' target='_top'><label>Folder on this node<input name='path' value='{}' required></label><label>Workspace name<input name='name' value='{}' required></label><button>Change folder</button></form>",crate::escape(&project.name),crate::escape(&project.request),crate::escape(&project.path),crate::escape(&project.name)));
         }
     } else {
         html.push_str(&format!("<form method='post' action='/chat/{id}/project' target='_top'><label>Folder on this node<input name='path' value='{}' placeholder='/absolute/path' required></label><button>Continue</button></form>",crate::escape(path)));
@@ -843,12 +843,12 @@ fn http_in(
             let running = chat.project.as_ref().filter(|p| importing(id).is_some_and(|import| import.request == p.request));
             if let Some(project) = running {
                 // Meta refresh needs no script; it returns to the chat once attached.
-                return Ok(Reply::Page(format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta http-equiv='refresh' content='1;url=/chat/{id}/project?importing={}'><title>Importing folder</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/workspace.css'></head><body><main>{}<a href='/chat/{id}'>Back to chat</a></main></body></html>", crate::escape(&project.request), panel(&state, id))));
+                return Ok(Reply::Page(format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta http-equiv='refresh' content='1;url=/chat/{id}/project?importing={}'><title>Importing folder</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/workspace.css'></head><body><main>{}<a href='/chat/{id}'>Back to DM</a></main></body></html>", crate::escape(&project.request), panel(&state, id))));
             }
             if let Some(request) = watched && chat.project.as_ref().is_some_and(|p| p.request == request && !p.needs_approval()) {
                 return Ok(Reply::Redirect(format!("/chat/{id}")));
             }
-            return Ok(Reply::Page(format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><title>Open project</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/workspace.css'></head><body><main>{}<a href='/chat/{id}'>Back to chat</a></main></body></html>",panel(&state,id))));
+            return Ok(Reply::Page(format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><title>Open project</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/workspace.css'></head><body><main>{}<a href='/chat/{id}'>Back to DM</a></main></body></html>",panel(&state,id))));
         }
         if method != "POST" {
             return Err(fail("Use GET or POST"));
