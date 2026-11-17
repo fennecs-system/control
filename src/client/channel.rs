@@ -108,10 +108,14 @@ pub struct Settings {
     /// What starts a command in this service. `!` avoids clashing with
     /// Discord's own slash commands; a service with native `/` keeps it.
     pub prefix: String,
+    /// Deliver the node's daily intel brief (`control.intel.brief`) here.
+    pub brief: bool,
+    /// UTC hour (0–23) after which each day's brief is delivered.
+    pub brief_hour: u8,
 }
 impl Default for Settings {
     fn default() -> Self {
-        Self { enabled: false, kinds: Kind::ALL.to_vec(), chats: Vec::new(), prefix: "!".into() }
+        Self { enabled: false, kinds: Kind::ALL.to_vec(), chats: Vec::new(), prefix: "!".into(), brief: false, brief_hour: 8 }
     }
 }
 impl Settings {
@@ -185,10 +189,50 @@ pub fn save_settings(name: &str, settings: Settings) -> Result<(), &'static str>
     if !Settings::valid_prefix(&settings.prefix) {
         return Err("Use a command prefix of 1–3 punctuation characters, such as !");
     }
+    if settings.brief_hour > 23 {
+        return Err("Use a brief hour from 0 to 23 (UTC).");
+    }
     let mut all = all_settings();
     all.insert(name.into(), settings);
     let bytes = serde_json::to_vec_pretty(&all).map_err(|_| "Could not encode channel settings.")?;
     crate::config::write_private("channels.json", &bytes).map_err(|_| "Could not save channel settings.")
+}
+/// The UTC date whose brief is due now, if `settings` asks for briefs, the
+/// day's hour has come and that day was not yet delivered.
+pub fn brief_due(settings: &Settings, briefed: &str, now: u64) -> Option<String> {
+    let today = utc_date(now);
+    (settings.brief && (now % 86_400) / 3600 >= u64::from(settings.brief_hour) && briefed != today).then_some(today)
+}
+/// `YYYY-MM-DD` (UTC) for a unix time (civil-from-days).
+pub fn utc_date(unix: u64) -> String {
+    let days = (unix / 86_400) as i64 + 719_468;
+    let era = days.div_euclid(146_097);
+    let doe = days.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+/// Splits Markdown into messages of at most `max` characters, at line breaks
+/// where possible.
+pub fn split(text: &str, max: usize) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    for line in text.lines() {
+        let line = line.chars().take(max).collect::<String>();
+        if current.chars().count() + line.chars().count() + 1 > max && !current.is_empty() {
+            parts.push(std::mem::take(&mut current));
+        }
+        current.push_str(&line);
+        current.push('\n');
+    }
+    if !current.trim().is_empty() {
+        parts.push(current);
+    }
+    parts
 }
 /// The adapters this build provides; each is configured by name in `channels.json`.
 pub const ADAPTERS: &[(&str, &str)] = &[("discord", "Discord · direct messages")];
@@ -262,6 +306,9 @@ pub struct Ledger {
     pub notices: Vec<Notice>,
     pub active: Vec<Active>,
     pub relayed: Vec<Relayed>,
+    /// The UTC date (`YYYY-MM-DD`) of the last intel brief delivered.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub briefed: String,
 }
 fn mine<'a>(to: &'a Recipient) -> impl Fn(&str, &str) -> bool + 'a {
     move |person, conversation| person == to.person && conversation == to.conversation
@@ -418,7 +465,7 @@ impl Channel {
         self.hive = None;
     }
     fn link(chat: &str) -> String {
-        format!("{}/chat/{chat}", crate::config::server_url())
+        format!("{}/dm/{chat}", crate::config::server_url())
     }
 
     /// Whether the core handles this message; the adapter consumes it before
@@ -574,11 +621,20 @@ impl Channel {
     /// changed and forwarding is on, and a selected chat when its revision
     /// changed (relayed whether or not requests are forwarded).
     pub fn follow(&mut self, transport: &impl Transport, settings: &Settings, recipients: &[Recipient]) -> Result<(), &'static str> {
-        if recipients.is_empty() || (!settings.enabled && self.ledger.active.is_empty()) {
+        if recipients.is_empty() || (!settings.enabled && !settings.brief && self.ledger.active.is_empty()) {
             self.hive = None;
             return Ok(());
         }
         self.hive()?;
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |elapsed| elapsed.as_secs());
+        if let Some(today) = brief_due(settings, &self.ledger.briefed, now)
+            && let Some((hive, _)) = self.hive.as_mut()
+            && let Ok(brief) = hive.tool("control.intel.brief", json!({"save":true}))
+            && self.brief(transport, recipients, &today, brief["markdown"].as_str().unwrap_or(""))
+        {
+            self.ledger.briefed = today;
+            self.save();
+        }
         let stale = self.refreshed.is_none_or(|at| at.elapsed() >= Duration::from_secs(10));
         let first = self.refreshed.is_none();
         let Some((hive, updates)) = self.hive.as_mut() else { return Ok(()) };
@@ -621,6 +677,25 @@ impl Channel {
             self.refreshed = None;
         }
         Ok(())
+    }
+    /// Posts one day's intel brief to every recipient, split to the service's
+    /// longest message. Returns whether every part was sent; a failed day is
+    /// retried on the next pass, and the per-day key lets services drop
+    /// duplicates.
+    pub fn brief(&mut self, transport: &impl Transport, recipients: &[Recipient], day: &str, markdown: &str) -> bool {
+        let parts = split(markdown, transport.capabilities().max_text.max(200));
+        let mut sent = true;
+        for to in recipients {
+            for (index, part) in parts.iter().enumerate() {
+                let key = format!("{}:brief:{}:{}:{day}:{index}", self.name, to.person, to.conversation);
+                match transport.post(to, part, None, &key) {
+                    Posted::Sent(_) => {}
+                    Posted::Retry => { sent = false; break; }
+                    Posted::Refused => { eprintln!("A channel refused the intel brief."); break; }
+                }
+            }
+        }
+        sent
     }
     /// Sends each forwarded pending request in `groups` (`control.requests.list`)
     /// once per recipient. Returns whether a send should be retried.

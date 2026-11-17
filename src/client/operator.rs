@@ -15,14 +15,18 @@ pub enum Kind {
     Question,
     Bot,
     Port,
+    /// A notice from an opted-in agent (an antibody or a lead): no decision
+    /// is requested; a reply steers the chat it came from.
+    Notice,
 }
 impl Kind {
-    pub const ALL: [Kind; 3] = [Kind::Question, Kind::Bot, Kind::Port];
+    pub const ALL: [Kind; 4] = [Kind::Question, Kind::Bot, Kind::Port, Kind::Notice];
     pub fn as_str(self) -> &'static str {
         match self {
             Kind::Question => "question",
             Kind::Bot => "bot",
             Kind::Port => "port",
+            Kind::Notice => "notice",
         }
     }
 }
@@ -99,6 +103,16 @@ pub fn pending(view: &Value) -> Vec<Pending<'_>> {
             loopback: false,
         });
     }
+    for notice in list("pending_notices") {
+        items.push(Pending {
+            kind: Kind::Notice,
+            id: text(&notice["notice_id"]),
+            heading: Cow::Owned(format!("Notice · {}", Clean(text(&notice["chat_id"])))),
+            body: text(&notice["text"]),
+            usage: Some("Reply to steer the team that sent it; no decision is needed.".into()),
+            loopback: false,
+        });
+    }
     items
 }
 
@@ -162,6 +176,8 @@ pub fn reply(pending: &Pending<'_>, text: &str) -> Result<Command, &'static str>
         match pending.kind {
             Kind::Question if !text.is_empty() && !text.starts_with('/') => format!("/answer {id} {text}"),
             Kind::Question => return Err("Reply with an option number or your direction."),
+            Kind::Notice if !text.is_empty() && !text.starts_with('/') => text.to_owned(),
+            Kind::Notice => return Err("Reply with a message for the team that sent the notice."),
             _ if verdict.is_empty() || (words.len() > 1 && !loopback) => return Err("Reply allow or deny."),
             Kind::Bot => format!("/bot {verdict} {id}"),
             Kind::Port => format!("/port {verdict} {id}{}", if loopback { " --loopback" } else { "" }),

@@ -115,7 +115,7 @@ pub fn render(state: &State, room: &str) -> String {
             escape(post["text"].as_str().unwrap())
         ));
         if let Some(id) = post["chat"].as_str() {
-            html.push_str(&format!("<a href='/chat/{}'>Open DM ↗</a>", escape(id)));
+            html.push_str(&format!("<a href='/dm/{}'>Open DM ↗</a>", escape(id)));
         }
         html.push_str("</article>");
     }
@@ -131,7 +131,7 @@ pub fn render(state: &State, room: &str) -> String {
         let status = activity.get(chat.id.as_str()).copied().or_else(|| listening(state, &chat.id).then_some("listening"));
         if let Some(status) = status {
             active.insert(chat.id.as_str());
-            html.push_str(&format!("<li><a href='/chat/{}'><span class='dot' aria-hidden='true'></span><span>{}<small>{status}</small></span></a></li>", escape(&chat.id), escape(&crate::callsigns::name_or_id(&state.chats, &chat.id))));
+            html.push_str(&format!("<li><a href='/dm/{}'><span class='dot' aria-hidden='true'></span><span>{}<small>{status}</small></span></a></li>", escape(&chat.id), escape(&crate::callsigns::name_or_id(&state.chats, &chat.id))));
         }
     }
     if active.is_empty() {
@@ -143,7 +143,7 @@ pub fn render(state: &State, room: &str) -> String {
         let id = chat["id"].as_str().unwrap();
         if !active.contains(id) {
             linked += 1;
-            html.push_str(&format!("<a href='/chat/{}'>{} ↗</a>", escape(id), escape(chat["title"].as_str().unwrap())));
+            html.push_str(&format!("<a href='/dm/{}'>{} ↗</a>", escape(id), escape(chat["title"].as_str().unwrap())));
         }
     }
     if linked == 0 {
@@ -151,7 +151,7 @@ pub fn render(state: &State, room: &str) -> String {
     }
     html.push_str("</nav>");
     html.push_str(&claims::render(state, room));
-    html.push_str(&format!("<form class='room-new-chat' method='post' action='/chats'><input type='hidden' name='room' value='{room}'><input type='hidden' name='lens' value='{}'><button>+ {}</button></form></aside></div>", if channel == "general" { "none" } else { channel }, if room == channel { format!("New task in #{channel}") } else { "New DM in this thread".into() }));
+    html.push_str(&format!("<form class='room-new-chat' method='post' action='/dms'><input type='hidden' name='room' value='{room}'><input type='hidden' name='lens' value='{}'><button>+ {}</button></form></aside></div>", if channel == "general" { "none" } else { channel }, if room == channel { format!("New task in #{channel}") } else { "New DM in this thread".into() }));
     html
 }
 

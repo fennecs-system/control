@@ -250,7 +250,7 @@ fn project_access_requires_operator_confirmation_and_survives_restart() {
         .unwrap()
         .to_owned();
     let created = client
-        .post(format!("{origin}/chats"))
+        .post(format!("{origin}/dms"))
         .header("Origin", &origin)
         .header("Cookie", &cookie)
         .form(&[("lens", "none")])
@@ -315,7 +315,7 @@ fn project_access_requires_operator_confirmation_and_survives_restart() {
     let accepted = approve(nonce);
     assert_eq!(accepted.status(), 303);
     let progress = format!("{project_url}?importing={nonce}");
-    assert_eq!(accepted.headers()["location"].to_str().unwrap(), progress.split_once("/chat/").map(|(_, path)| format!("/chat/{path}")).unwrap());
+    assert_eq!(accepted.headers()["location"].to_str().unwrap(), progress.split_once("/dm/").map(|(_, path)| format!("/dm/{path}")).unwrap());
     // Approval answers before the import; its page returns to the chat once attached.
     let started = std::time::Instant::now();
     loop {

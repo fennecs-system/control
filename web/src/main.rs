@@ -427,11 +427,11 @@ fn attach_port_approvals(frame:&web_sys::HtmlIFrameElement)->Result<(),JsValue> 
     submit.forget();Ok(())
 }
 /// Operator decisions posted without leaving the chat: port and bot requests,
-/// and folder approvals (`/chat/ID/project` with its approve button). Changing
+/// and folder approvals (`/dm/ID/project` with its approve button). Changing
 /// the requested folder stays a normal form submission.
 fn decision_action(action:&str,submitter:Option<&str>)->bool {
     matches!(action,"/tools/ports"|"/tools/bots")
-        || (submitter==Some("approve") && action.strip_prefix("/chat/").and_then(|rest|rest.strip_suffix("/project"))
+        || (submitter==Some("approve") && action.strip_prefix("/dm/").and_then(|rest|rest.strip_suffix("/project"))
             .is_some_and(|id|!id.is_empty() && !id.contains('/')))
 }
 fn restore_port_form(form:&web_sys::HtmlFormElement,controls:&[web_sys::Element],button:Option<&(web_sys::HtmlElement,String)>) {
@@ -579,7 +579,7 @@ fn attach_navigation(document:&web_sys::Document)->Result<(),JsValue> {
     let Some(frame)=document.query_selector("iframe.chat-transcript")? else{return Ok(());};
     let source=frame.get_attribute("src").unwrap_or_default();
     let Some(chat)=source.split('/').nth(2) else{return Ok(());};
-    let url=format!("/chat/{chat}/conversations");
+    let url=format!("/dm/{chat}/conversations");
     let busy=Rc::new(Cell::new(false));let previous=Rc::new(RefCell::new(String::new()));
     let pending=Rc::new(Cell::new(false));let parent=document.clone();
     let target=toggle.clone();
@@ -701,6 +701,65 @@ fn attach_live(document: &web_sys::Document) -> Result<bool, JsValue> {
     Ok(true)
 }
 
+/// Whether a next-page slot whose top is at `top` (viewport pixels) should
+/// load now: on screen, or within one screen of it.
+fn near_viewport(top: f64, viewport: f64) -> bool {
+    top < viewport * 2.0
+}
+
+/// Paged server lists end in a `[data-more]` slot that names the next page's
+/// fragment and holds a plain link to the same page. While the slot nears the
+/// viewport, or when its link is clicked, the fragment (rows followed by the
+/// following slot, if any) replaces it. One request at a time; without the
+/// client, the link loads the next page.
+fn attach_more(document: &web_sys::Document) -> Result<bool, JsValue> {
+    if document.query_selector("[data-more]")?.is_none() {
+        return Ok(false);
+    }
+    let busy = Rc::new(Cell::new(false));
+    let target = document.clone();
+    let load = Rc::new(move |forced: bool| {
+        if busy.get() { return; }
+        let Ok(Some(slot)) = target.query_selector("[data-more]") else { return; };
+        let viewport = web_sys::window().and_then(|window| window.inner_height().ok()).and_then(|height| height.as_f64()).unwrap_or(800.0);
+        if !forced && !near_viewport(slot.get_bounding_client_rect().top(), viewport) { return; }
+        let Some(url) = slot.get_attribute("data-more") else { return; };
+        let Ok(request) = web_sys::XmlHttpRequest::new() else { return; };
+        if request.open("GET", &url).is_err() { return; }
+        request.set_timeout(15_000);
+        busy.set(true);
+        let (response, done, page) = (request.clone(), busy.clone(), target.clone());
+        let finished = Closure::once_into_js(move |_: web_sys::Event| {
+            done.set(false);
+            if response.status().ok() != Some(200) { return; }
+            if let Some(text) = response.response_text().ok().flatten() {
+                slot.set_outer_html(&text);
+                // A tall screen may still show the next slot: check again.
+                if let Ok(event) = web_sys::Event::new("scroll") { let _ = page.dispatch_event(&event); }
+            }
+        });
+        request.set_onloadend(Some(finished.unchecked_ref()));
+        if request.send().is_err() { busy.set(false); }
+    });
+    let scrolled = load.clone();
+    let scroll = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| scrolled(false));
+    document.add_event_listener_with_callback("scroll", scroll.as_ref().unchecked_ref())?;
+    scroll.forget();
+    let clicked = load.clone();
+    let click = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
+        let inside = event.target().and_then(|node| node.dyn_into::<web_sys::Element>().ok())
+            .and_then(|element| element.closest("[data-more] a").ok().flatten()).is_some();
+        if inside {
+            event.prevent_default();
+            clicked(true);
+        }
+    });
+    document.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+    click.forget();
+    load(false);
+    Ok(true)
+}
+
 fn main() -> Result<(), JsValue> {
     let document = web_sys::window()
         .and_then(|w| w.document())
@@ -708,7 +767,8 @@ fn main() -> Result<(), JsValue> {
     if attach_live(&document)? {
         return Ok(());
     }
-    if canvas::attach(&document)? {
+    let paged = attach_more(&document)?;
+    if canvas::attach(&document)? || paged {
         return Ok(());
     }
     if let Some(input) = document.query_selector(".conversation-composer textarea[name=message]")? {

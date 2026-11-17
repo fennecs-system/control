@@ -58,7 +58,7 @@ fn fifteen_turn_conversations_workload() {
                 &mut out,
                 &mut state,
                 "POST",
-                &format!("/chat/{id}/messages"),
+                &format!("/dm/{id}/messages"),
                 "engineering",
                 "Accept: application/json\r\n",
                 body.as_bytes()
@@ -89,9 +89,9 @@ fn fifteen_turn_conversations_workload() {
             for (stage, page) in ["transcript", ""].into_iter().enumerate() {
                 out.clear();
                 let target = if page.is_empty() {
-                    format!("/chat/{id}")
+                    format!("/dm/{id}")
                 } else {
-                    format!("/chat/{id}/{page}")
+                    format!("/dm/{id}/{page}")
                 };
                 assert!(measure(&mut stages[stage + 3], || super::handle(
                     &mut out,
@@ -126,6 +126,25 @@ fn fifteen_turn_conversations_workload() {
     );
 }
 #[test]
+fn memory_tree_has_one_address_and_the_old_ones_are_renamed() {
+    let mut state = crate::State::default();
+    let id = crate::chat::create(&mut state);
+    let get = |state: &mut crate::State, path: &str| {
+        let mut response = Vec::new();
+        handle(&mut response, state, "GET", path, "none", "", &[]);
+        String::from_utf8(response).unwrap()
+    };
+    for old in [format!("/chat/{id}/compaction"), format!("/dm/{id}/compaction")] {
+        assert_eq!(crate::url_names::renamed(&old), Some(crate::compaction::memory_url(&id)));
+    }
+    assert_eq!(crate::compaction::memory_url(&id), format!("/dm/{id}/memory"));
+    let page = get(&mut state, &crate::compaction::memory_url(&id));
+    assert!(page.starts_with("HTTP/1.1 200 OK"));
+    assert!(page.contains("<h2>MemoryTree</h2>") && page.contains("name='memory-detail'"));
+    assert!(!page.to_lowercase().contains("compaction tree"));
+    assert!(get(&mut state, &crate::url_names::dm(&id)).contains("MemoryTree ↗"));
+}
+#[test]
 fn returning_to_chat_remembers_only_an_existing_authorized_conversation() {
     let mut state = crate::State::default();
     let id = crate::chat::create(&mut state);
@@ -134,7 +153,7 @@ fn returning_to_chat_remembers_only_an_existing_authorized_conversation() {
         &mut response,
         &mut state,
         "GET",
-        &format!("/chat/{id}"),
+        &format!("/dm/{id}"),
         "none",
         "",
         &[],
@@ -153,7 +172,7 @@ fn returning_to_chat_remembers_only_an_existing_authorized_conversation() {
         &mut response,
         &mut state,
         "GET",
-        "/chats",
+        "/dms",
         "none",
         &cookie,
         &[],
@@ -162,9 +181,9 @@ fn returning_to_chat_remembers_only_an_existing_authorized_conversation() {
         String::from_utf8(response)
             .unwrap()
             .to_ascii_lowercase()
-            .contains(&format!("location: /chat/{id}"))
+            .contains(&format!("location: /dm/{id}"))
     );
-    for path in ["/chats?new=1", "/chats?discuss=tools", "/chats?improve=1"] {
+    for path in ["/dms?new=1", "/dms?discuss=tools", "/dms?improve=1"] {
         let mut response = Vec::new();
         handle(&mut response, &mut state, "GET", path, "none", &cookie, &[]);
         assert!(
@@ -178,7 +197,7 @@ fn returning_to_chat_remembers_only_an_existing_authorized_conversation() {
         &mut response,
         &mut state,
         "GET",
-        "/chats?new=1",
+        "/dms?new=1",
         "none",
         &cookie,
         &[],
@@ -202,7 +221,7 @@ fn returning_to_chat_remembers_only_an_existing_authorized_conversation() {
             &mut response,
             &mut state,
             "GET",
-            "/chats",
+            "/dms",
             "none",
             header,
             &[],
@@ -219,7 +238,7 @@ fn returning_to_chat_remembers_only_an_existing_authorized_conversation() {
 fn conversations_panel_is_rendered_from_the_remembered_cookie() {
     let mut state = State::default();
     let id = chat::create(&mut state);
-    for target in [format!("/chat/{id}"), "/chats?new=1".into()] {
+    for target in [format!("/dm/{id}"), "/dms?new=1".into()] {
         for (cookie, open) in [
             ("", false),
             ("Cookie: control_conversations=closed\r\n", false),
@@ -272,7 +291,7 @@ fn web_folder_picker_is_opt_in_and_bare_open_only_navigates() {
         &mut response,
         &mut state,
         "POST",
-        &format!("/chat/{id}/messages"),
+        &format!("/dm/{id}/messages"),
         "",
         "engineering",
         b"message=%2Fopen"
@@ -284,7 +303,7 @@ fn web_folder_picker_is_opt_in_and_bare_open_only_navigates() {
             .lines()
             .filter_map(|line| line.split_once(':'))
             .any(|(name, value)| name.eq_ignore_ascii_case("location")
-                && value.trim() == format!("/chat/{id}/project"))
+                && value.trim() == format!("/dm/{id}/project"))
     );
     assert_eq!(serde_json::to_vec(&state).unwrap(), before);
     // An explicit path produces an approval in the separate request panel.
@@ -430,7 +449,7 @@ fn browser_fixture(long_messages_only: bool) {
                 let _=stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
             } else if method == "POST" && path.ends_with("/messages") {
                 let id = path
-                    .trim_start_matches("/chat/")
+                    .trim_start_matches("/dm/")
                     .trim_end_matches("/messages");
                 let fields = crate::fields(&String::from_utf8_lossy(&body));
                 let mut state = served.lock().unwrap();
@@ -595,7 +614,7 @@ fn browser_fixture(long_messages_only: bool) {
     // for both composer tests, then exercise responsive sizes below.
     b.post("/window/rect", json!({"width":1280,"height":900}));
     if long_messages_only {
-        b.post("/url", json!({"url":format!("{server}/chat/{chat}")}));
+        b.post("/url", json!({"url":format!("{server}/dm/{chat}")}));
         let input = b.element("textarea[data-enter-sends=true]");
         let text = format!("{} END", "long instructions ".repeat(250));
         b.post(&format!("/element/{input}/value"), json!({"text":text}));
@@ -738,21 +757,23 @@ fn browser_fixture(long_messages_only: bool) {
     assert_eq!(
         b.post(
             "/elements",
-            json!({"using":"css selector","value":".conversation-history nav a[href^='/chat/']"})
+            json!({"using":"css selector","value":".conversation-history nav a[href^='/dm/']"})
         )
         .as_array()
         .unwrap()
         .len(),
         11
     );
-    let nested = b.element(&format!("a[href='/chat/{child}']"));
+    let nested = b.element(&format!("a[href='/dm/{child}']"));
     assert_eq!(
         b.get(&format!("/element/{nested}/displayed")),
         false,
         "Child agents start collapsed under their parent"
     );
-    b.element(".sidebar a[href='/chats/history'][aria-current='page']");
-    b.element("nav[aria-label='History'] a[href='/chats/history'][aria-current='page']");
+    // The old URL redirects to the Bots history sub-page.
+    b.element(".sidebar a[href='/?view=agents'][aria-current='page']");
+    b.element("nav[aria-label='Bots'] a[href='/bots/history'][aria-current='page']");
+    b.element("nav[aria-label='History'] a[href='/bots/history'][aria-current='page']");
     let branch = b.element(".conversation-history .conversation-branch > summary");
     b.post(&format!("/element/{branch}/value"), json!({"text":" "}));
     assert_eq!(
@@ -835,7 +856,7 @@ fn browser_fixture(long_messages_only: bool) {
         }
         parent
     };
-    b.post("/url", json!({"url":format!("{server}/chat/{child}")}));
+    b.post("/url", json!({"url":format!("{server}/dm/{child}")}));
     let menu = b.element(".conversation-toggle");
     assert_eq!(
         b.get(&format!("/element/{menu}/property/open")),
@@ -875,7 +896,7 @@ fn browser_fixture(long_messages_only: bool) {
                     .unwrap(),
             "The team list must scroll instead of squeezing controls"
         );
-        let row = b.element(&format!(".conversation-navigation a[href='/chat/{child}']"));
+        let row = b.element(&format!(".conversation-navigation a[href='/dm/{child}']"));
         let row = b.get(&format!("/element/{row}/rect"));
         let nav = b.get(&format!("/element/{nav}/rect"));
         assert_eq!(
@@ -897,7 +918,7 @@ fn browser_fixture(long_messages_only: bool) {
         "Refreshing the disclosed picker must not reload chat"
     );
     for id in [&parent, &child] {
-        let link = b.element(&format!(".conversation-navigation a[href='/chat/{id}']"));
+        let link = b.element(&format!(".conversation-navigation a[href='/dm/{id}']"));
         b.post(&format!("/element/{link}/click"), json!({}));
         b.element("textarea[data-enter-sends=true]");
         let menu = b.element(".conversation-toggle");
@@ -907,7 +928,7 @@ fn browser_fixture(long_messages_only: bool) {
             "Following parent/child links must preserve the open picker"
         );
     }
-    let new_chat = b.element(".conversation-navigation nav > a[href='/chats?new=1']");
+    let new_chat = b.element(".conversation-navigation nav > a[href='/dms?new=1']");
     b.post(&format!("/element/{new_chat}/click"), json!({}));
     b.element("textarea[data-enter-sends=true]");
     let menu = b.element(".conversation-toggle");
@@ -942,18 +963,18 @@ fn browser_fixture(long_messages_only: bool) {
         session.parent_chat = Some(chat.clone());
         session.title = format!("Late background child {late}");
     }
-    for path in ["/?view=tools", "/?view=runs", "/chats"] {
+    for path in ["/?view=tools", "/?view=runs", "/dms"] {
         b.post("/url", json!({"url":format!("{server}{path}")}));
     }
     let toggle = b.element(".conversation-toggle > summary");
     b.post(&format!("/element/{toggle}/click"), json!({}));
-    let newest = b.element("nav[aria-label=DMs] > a[href^='/chat/']");
+    let newest = b.element("nav[aria-label=DMs] > a[href^='/dm/']");
     assert_eq!(
         b.get(&format!("/element/{newest}/text")),
         "Live recent thread",
         "Returning through Tools, Runs and Chat must not promote an older background playtest"
     );
-    b.post("/url", json!({"url":format!("{server}/chat/{chat}")}));
+    b.post("/url", json!({"url":format!("{server}/dm/{chat}")}));
     let input = b.element("textarea[data-enter-sends=true]");
     b.post(&format!("/element/{input}/value"), json!({"text":"/op"}));
     let option = b.element("#command-open");
@@ -1176,7 +1197,7 @@ fn browser_fixture(long_messages_only: bool) {
     );
     // Fifteen real form submissions through the WASM client and HTTP command;
     // deterministic worker results isolate browser costs from model latency.
-    b.post("/url", json!({"url":format!("{server}/chat/{port_chat}")}));
+    b.post("/url", json!({"url":format!("{server}/dm/{port_chat}")}));
     let port_page = b.element("body");
     let draft = b.element("textarea[data-enter-sends=true]");
     b.post(
@@ -1248,7 +1269,7 @@ fn browser_fixture(long_messages_only: bool) {
         b.get(&format!("/element/{draft}/property/value")),
         "Keep this draft while denying a port"
     );
-    b.post("/url", json!({"url":format!("{server}/chat/{long_chat}")}));
+    b.post("/url", json!({"url":format!("{server}/dm/{long_chat}")}));
     let page = b.element("body");
     let input = b.element("textarea[data-enter-sends=true]");
     let frame = b.element("iframe.chat-transcript");
@@ -1477,7 +1498,7 @@ fn asynchronous_send_commits_before_ack_and_preserves_native_navigation() {
         String::from_utf8(response)
             .unwrap()
             .to_ascii_lowercase()
-            .contains(&format!("location: /chat/{id}/project"))
+            .contains(&format!("location: /dm/{id}/project"))
     );
     let mut response = Vec::new();
     send_message(
@@ -1587,7 +1608,7 @@ fn rejected_first_message_creates_no_chat_and_keeps_the_escaped_draft() {
         &mut response,
         &mut state,
         "POST",
-        "/chats",
+        "/dms",
         "none",
         "",
         b"message=%2Fanswer+%3Cb%3Edraft"

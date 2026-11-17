@@ -71,7 +71,7 @@
 .conversation-navigation nav a{border:0;border-radius:0;padding:4px 10px;line-height:1.5}
 .conversation-navigation nav a:hover,.conversation-navigation nav a:focus-visible{color:var(--purple);background:#b5a0ff0d;border-color:transparent}
 .conversation-navigation nav a[aria-current]{color:var(--purple);background:#b5a0ff18;border-color:transparent}
-.conversation-navigation nav>a[href='/chats?new=1']{min-height:32px;margin-bottom:6px;color:var(--purple)}
+.conversation-navigation nav>a[href='/dms?new=1']{min-height:32px;margin-bottom:6px;color:var(--purple)}
 .conversation-navigation [data-conversation-depth='1']{--conversation-depth:1}
 .conversation-navigation [data-conversation-depth='2']{--conversation-depth:2}
 .conversation-navigation [data-conversation-depth='3']{--conversation-depth:3}

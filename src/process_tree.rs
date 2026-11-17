@@ -187,8 +187,13 @@ impl Tree {
     }
 }
 
-fn latest_status<'a>(state: &'a State, chat: &str) -> Option<&'a str> {
-    state.runtime.runs.iter().rev().find(|run| run.chat_id.as_deref() == Some(chat)).map(|run| run.status.as_str())
+/// The latest run status of every chat that has run, in one pass over runs,
+/// so the page costs O(chats + runs) rather than a run scan per chat.
+type Latest<'a> = std::collections::HashMap<&'a str, &'a str>;
+fn latest_statuses(state: &State) -> Latest<'_> {
+    state.runtime.runs.iter()
+        .filter_map(|run| Some((run.chat_id.as_deref()?, run.status.as_str())))
+        .collect()
 }
 fn busy(status: Option<&str>) -> bool {
     matches!(status, Some("queued" | "running" | "waiting" | "cancelling"))
@@ -197,18 +202,20 @@ fn busy(status: Option<&str>) -> bool {
 /// Task trees with something to show: a bot, a live service or an active turn
 /// anywhere below the steering chat. Most recent first.
 fn forest(state: &State) -> Vec<Tree> {
-    let mut kids: std::collections::HashMap<&str, Vec<&str>> = std::collections::HashMap::new();
+    let ids: std::collections::HashSet<&str> = state.chats.iter().map(|chat| chat.id.as_str()).collect();
+    let owners: std::collections::HashSet<&str> = state.services.iter().filter(|s| s.live()).map(|s| s.resource.owner.chat.as_str()).collect();
+    let mut graph = Index { kids: std::collections::HashMap::new(), latest: latest_statuses(state) };
     for chat in &state.chats {
-        if let Some(parent) = chat.parent_chat.as_deref().filter(|parent| state.chats.iter().any(|c| c.id == *parent)) {
-            kids.entry(parent).or_default().push(chat.id.as_str());
+        if let Some(parent) = chat.parent_chat.as_deref().filter(|parent| ids.contains(parent)) {
+            graph.kids.entry(parent).or_default().push(chat.id.as_str());
         }
     }
+    let (kids, latest) = (&graph.kids, &graph.latest);
     let relevant = |chat: &str| {
-        crate::bots::defined(state, chat) || busy(latest_status(state, chat))
-            || state.services.iter().any(|s| s.live() && s.resource.owner.chat.as_str() == chat)
+        crate::bots::defined(state, chat) || busy(latest.get(chat).copied()) || owners.contains(chat)
     };
     let roots = state.chats.iter().rev()
-        .filter(|chat| chat.parent_chat.as_deref().is_none_or(|parent| !state.chats.iter().any(|c| c.id == parent)))
+        .filter(|chat| chat.parent_chat.as_deref().is_none_or(|parent| !ids.contains(parent)))
         .map(|chat| chat.id.as_str());
     // Shown names, derived once a tree has something to show.
     let mut names: Option<Names<'_>> = None;
@@ -228,7 +235,7 @@ fn forest(state: &State) -> Vec<Tree> {
         let mut tree = Tree { nodes: Vec::new(), children: Vec::new() };
         let names = names.get_or_insert_with(|| state.chats.iter().zip(crate::callsigns::all(&state.chats))
             .map(|(chat, callsign)| (chat.id.as_str(), crate::callsigns::label(chat, callsign))).collect());
-        add_chat(state, &kids, names, &mut tree, None, root, 0);
+        add_chat(state, &graph, names, &mut tree, None, root, 0);
         trees.push(tree);
         if trees.len() == MAX_TREES {
             break;
@@ -237,8 +244,14 @@ fn forest(state: &State) -> Vec<Tree> {
     trees
 }
 type Names<'a> = std::collections::HashMap<&'a str, std::borrow::Cow<'a, str>>;
-fn add_chat(state: &State, kids: &std::collections::HashMap<&str, Vec<&str>>, names: &Names<'_>, tree: &mut Tree, parent: Option<usize>, chat: &str, depth: usize) {
-    let status = latest_status(state, chat);
+/// What every node of a page's trees reads: children and latest statuses by chat.
+struct Index<'a> {
+    kids: std::collections::HashMap<&'a str, Vec<&'a str>>,
+    latest: Latest<'a>,
+}
+fn add_chat(state: &State, index: &Index<'_>, names: &Names<'_>, tree: &mut Tree, parent: Option<usize>, chat: &str, depth: usize) {
+    let kids = &index.kids;
+    let status = index.latest.get(chat).copied();
     let bot = crate::bots::status(state, chat);
     let kind = if parent.is_none() { Kind::Steering } else if bot.is_some() { Kind::Bot } else { Kind::Agent };
     let detail = bot.unwrap_or_else(|| status.map_or("no turns".into(), |status| format!("turn {status}")));
@@ -246,7 +259,7 @@ fn add_chat(state: &State, kids: &std::collections::HashMap<&str, Vec<&str>>, na
         kind,
         title: names.get(chat).map_or(chat, |name| name.as_ref()).to_owned(),
         detail,
-        href: crate::chat::valid_id(chat).then(|| format!("/chat/{chat}")),
+        href: crate::chat::valid_id(chat).then(|| format!("/dm/{chat}")),
         active: busy(status),
     });
     if depth >= MAX_DEPTH {
@@ -254,7 +267,7 @@ fn add_chat(state: &State, kids: &std::collections::HashMap<&str, Vec<&str>>, na
     }
     let children = kids.get(chat).cloned().unwrap_or_default();
     for child in children {
-        add_chat(state, kids, names, tree, Some(node), child, depth + 1);
+        add_chat(state, index, names, tree, Some(node), child, depth + 1);
     }
     for service in state.services.iter().filter(|s| s.live() && s.resource.owner.chat.as_str() == chat) {
         let id = service.resource.id.as_str();

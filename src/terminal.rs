@@ -253,7 +253,7 @@ impl App {
             "/compact" => {
                 if self.active.is_empty() { return Err(failure("Open a conversation first")); }
                 self.set_detail(hive.tool("control.chat.read", json!({"id":self.active}))?);
-                self.inspector = Some(("Compaction tree".into(), serde_json::to_string_pretty(&self.detail["compaction"]).map_err(failure)?));
+                self.inspector = Some(("MemoryTree".into(), serde_json::to_string_pretty(&self.detail["compaction"]).map_err(failure)?));
                 self.scroll = 0; self.follow = false;
                 self.status = "Compaction is independent of the chat model · /chat returns".into();
             }
@@ -452,7 +452,7 @@ impl App {
                 }
                 let folder_reply = (message["run_id"].is_null()
                     && commands::tail(message["text"].as_str().unwrap_or("").trim(), commands::Kind::Open).is_some()
-                    && message["reply"].as_str().and_then(|reply|reply.strip_prefix("Review and approve folder access: /chat/")).and_then(|path|path.strip_suffix("/project"))==Some(self.active.as_str())).then(|| {
+                    && message["reply"].as_str().and_then(|reply|reply.strip_prefix("Review and approve folder access: ")).and_then(crate::url_names::dm_route).and_then(|path|path.strip_suffix("/project"))==Some(self.active.as_str())).then(|| {
                     if let Some(mount)=self.detail["project"]["mounts"].as_array().and_then(|mounts|mounts.iter().find(|mount|mount["message_index"].as_u64()==Some(position as u64))) {
                         format!("Opened /workspace/{}",clean(mount["name"].as_str().unwrap_or("")))
                     } else if pending_project(&self.detail).is_some_and(|project|project["message_index"].as_u64()==Some(position as u64)) {

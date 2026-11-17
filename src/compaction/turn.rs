@@ -166,6 +166,30 @@ pub(super) fn listing(state: &State, chat: &str, actor: &crate::identity::Actor)
         "roots":t.roots.iter().map(|r| json!({"key":r.key,"start":r.start,"end":r.start + (1u64 << r.level),"level":r.level})).collect::<Vec<_>>()}))
         .collect::<Vec<_>>().into()
 }
+/// HTML list items linking each step-tree root of a `listing` to the
+/// evidence reader at `base`.
+pub(super) fn links(base: &str, listing: &Value) -> String {
+    let mut out = String::new();
+    for turn in listing.as_array().into_iter().flatten() {
+        for root in turn["roots"].as_array().into_iter().flatten() {
+            let (start, end) = (root["start"].as_u64().unwrap_or(0), root["end"].as_u64().unwrap_or(0));
+            let what = if end - start == 1 { format!("step {}", start + 1) } else { format!("steps {}–{} (summary, level {})", start + 1, end, root["level"]) };
+            out.push_str(&format!("<li><a href='{base}?root={}'>Local turn {}: {what}</a></li>",
+                crate::escape(root["key"].as_str().unwrap_or("")), crate::escape(turn["attempt"].as_str().unwrap_or(""))));
+        }
+    }
+    out
+}
+/// The MemoryTree section for `session`'s recent local turns: their step
+/// trees' roots, from memory only (no disk reads), each linked to the
+/// evidence reader that expands it.
+pub(crate) fn section(state: &State, session: &crate::chat::Session) -> String {
+    let items = links(&evidence_url(&session.id), &listing(state, &session.id, &session.actor));
+    if items.is_empty() {
+        return String::new();
+    }
+    format!("<div class='mt-turns'><h3>Local turn step trees</h3><p class='mt-hint'>Steps of this DM's recent local-model turns that left the verbatim window, as the same tree: single steps keep their original messages, folded blocks a summary over their children. The agent searches them with control_history_read query.</p><ul>{items}</ul></div>")
+}
 /// The attempt holding root `key` of `chat`, with the root.
 pub(super) fn locate(state: &State, chat: &str, actor: &crate::identity::Actor, key: &str) -> Option<(String, Root)> {
     turns(state, chat, actor).find_map(|t| t.roots.iter().find(|r| r.key == key).map(|r| (t.generation.clone(), r.clone())))

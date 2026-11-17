@@ -72,6 +72,9 @@ fn reconcile_profile() {
     // the lifecycle topic is not computed.
     // `blocked`: as `1`, with a quarter of the claims blocked on another claim
     // with similar free-text notes, so the advisor compares blocker reasons.
+    // `antibody`: no advisor; an operator observer tree runs one antibody that
+    // observes every team, with 8 services of 16 retained member commands
+    // each (failing repeats, status reads and builds) from recent turns.
     let mode = std::env::var("CONTROL_PROFILE_ADVISOR").unwrap_or_default();
     let (advised, lens_off) = (matches!(mode.as_str(), "1" | "off" | "blocked"), mode == "off");
     for (chats, runs) in [(64, 16), (512, 16)] {
@@ -85,6 +88,19 @@ fn reconcile_profile() {
                     claim.note = format!("Host error {index}: the shared service refused connections at 10.0.0.{index}, falling back to routine work");
                 }
             }
+            let immune = mode == "antibody";
+            if immune {
+                for (service, helper) in helpers.iter().enumerate().take(8) {
+                    let commands = (0..16).map(|index| match index % 4 {
+                        0 => ("./place-wall.sh 10 64", 1), 1 => ("tail -n 20 /tmp/bot.log", 0), 2 => ("cat > lib.js <<EOF\nx\nEOF", 0), _ => ("./run.sh", 0),
+                    }).collect::<Vec<_>>();
+                    let run = format!("bench-{service}-{}", runs - 1);
+                    super::antibody::service(&mut state, helper, &run, &commands);
+                }
+                let judge = super::antibody::observer(&mut state).1;
+                command_at(&mut state, &judge, "on", Now(0)).unwrap();
+                reconcile_at(&mut state, 1, |_| Ok(())).unwrap();
+            }
             if advised {
                 super::advisor::advisor(&mut state, &root);
                 reconcile_at(&mut state, 1, |_| Ok(())).unwrap();
@@ -93,6 +109,7 @@ fn reconcile_profile() {
                 }
             }
             let label = match (offered, advised, lens_off) {
+                (false, false, _) if immune => "idle_antibody", (true, false, _) if immune => "offered_antibody",
                 (false, false, _) => "idle", (true, false, _) => "offered",
                 (false, true, false) => "idle_advised", (true, true, false) => "offered_advised",
                 (false, true, true) => "idle_lens_off", (true, true, true) => "offered_lens_off",

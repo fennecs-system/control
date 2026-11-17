@@ -82,7 +82,7 @@ impl Mcp {
     }
 }
 use roles::{ALL, JUDGE, LEAD, WORKERS};
-pub const TOOLS: [Tool; 31] = [
+pub const TOOLS: [Tool; 34] = [
     Tool {
         name: "tools.search", title: "Tool search", description: "Deferred worker tools · schemas on demand",
         href: None, aliases: "tool search schema deferred index call dispatch",
@@ -189,6 +189,29 @@ pub const TOOLS: [Tool; 31] = [
         name: "team.advisor", title: "Team advisor", description: "Opt-in read-only judge that notes the lead · operator approval",
         href: None, aliases: "advisor judge steer stall gaps lead swarm",
         mcp_names: &[], execution: "Rust lifecycle facts / judge bot", surface: "control_agent_spawn role=judge · control_bot_request", available: true,
+    },
+    // Offered only by the `antibody` lens. Selecting it on an operator-owned root
+    // chat makes a node-wide antibody option exist; bot approval still decides.
+    Tool {
+        name: "node.antibody", title: "Antibodies", description: "Opt-in read-only observers that tag pathologies in any team and notify its lead or the operator · operator approval",
+        href: None, aliases: "antibody watcher immune counter-intel sentinel observer patrol pathology loop polling churn cost burn",
+        mcp_names: &[], execution: "Rust lifecycle and pathology facts / judge bot", surface: "control_agent_spawn role=judge · control_bot_request", available: true,
+    },
+    Tool {
+        name: "intel.brief", title: "Intel brief", description: "Read-only team and node summary: goals, progress, cost, pathologies, open requests",
+        href: None, aliases: "intel brief daily report summary progress cost tokens pathology",
+        mcp_names: &[
+            op("control.intel.brief"),
+            w("control_intel_brief", "team or node progress, cost, pathologies").judge()
+                .brief("Read-only Markdown summary of your team (an antibody: any team or the node): goals, progress, tokens, pathologies, open operator requests."),
+        ],
+        execution: "pure Rust over node state", surface: "operator MCP / worker MCP / channels", available: true,
+    },
+    Tool {
+        name: "operator.notify", title: "Operator notice", description: "Rate-limited notice to the operator's channels; no decision requested",
+        href: None, aliases: "notify alert operator discord escalate notice",
+        mcp_names: &[w("control_operator_notify", "notify the operator (rate-limited)").advisor()],
+        execution: "local Rust / channel adapters", surface: "worker MCP / channels", available: true,
     },
     Tool {
         name: "workspace.commands", title: "Workspace commands", description: "Offline jobs · live output",
@@ -432,7 +455,7 @@ pub const TOOLS: [Tool; 31] = [
         name: "chats.manage",
         title: "DMs",
         description: "Direct conversations with agents · operator MCP",
-        href: Some("/chats"),
+        href: Some("/dms"),
         aliases: "sessions messages agents",
         mcp_names: &[
             op("control.chats.list"),
@@ -451,7 +474,7 @@ pub const TOOLS: [Tool; 31] = [
         name: "lenses.resolve",
         title: "DNA",
         description: "Genes · compose context and tool selections",
-        href: Some("/lenses"),
+        href: Some("/dna"),
         aliases: "context composition guidance on demand",
         mcp_names: &[
             op("control.lenses.list"),

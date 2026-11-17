@@ -94,11 +94,15 @@ impl<'a> Entry<'a> {
 
 impl<'a> Conversation<'a> {
     pub fn id(&self) -> &str { &self.session.id }
+    /// The operator's MemoryTree edits (pins, dropped ranges, revisions).
+    pub fn edits(&self) -> Option<&'a crate::compaction::Edits> { self.session.memory.as_deref() }
+    /// An entry the operator removed from the agent's view.
+    pub fn dropped(&self, index: usize) -> bool { self.edits().is_some_and(|e| e.dropped(index as u64)) }
     pub fn carry(&self, current: usize, window: &Window) -> Carry<'a> {
         let automatic = self.entry(current).and_then(|entry| entry.run).is_some_and(|run| run.kind.speaker() == control_context::agent_policy::MessageSpeaker::Control || run.continuation.is_some());
         let instructions = if automatic {
             let kept = window.items.iter().filter_map(|item| match item { Item::Entry(index) => Some(*index), _ => None }).collect::<std::collections::HashSet<_>>();
-            (0..current).filter(|index| !kept.contains(index)).filter_map(|index| {
+            (0..current).filter(|index| !kept.contains(index) && !self.dropped(*index)).filter_map(|index| {
                 let entry = self.entry(index)?;
                 (entry.run?.kind.speaker() == control_context::agent_policy::MessageSpeaker::User).then_some(entry.message.text.as_str())
             }).collect()

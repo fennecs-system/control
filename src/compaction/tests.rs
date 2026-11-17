@@ -26,7 +26,7 @@ pub(super) fn fixture() -> (State, Job) {
     assert_eq!(job.chat, chat);
     (state, job)
 }
-fn hydrate(state: &State, mut job: Job) -> Job {
+pub(super) fn hydrate(state: &State, mut job: Job) -> Job {
     let mut entries = Vec::new();
     while entries.len() < job.entries.len() {
         entries.extend(

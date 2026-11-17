@@ -104,8 +104,8 @@ fn folder_prompt_stays_at_the_live_tail_and_tracks_replaced_requests() {
             "project":{"request":"p-current","path":"/node/current","name":"current","pending":true,"grant":"previous-grant","message_index":2,"mounts":[{"name":"approved","message_index":0}]},
             "messages":[
                 {"text":"/open /node/approved","reply":"Review and approve folder access: /chat/c-fixture/project"},
-                {"text":"/open /node/replaced","reply":"Review and approve folder access: /chat/c-fixture/project"},
-                {"text":"/open /node/current","reply":"Review and approve folder access: /chat/c-fixture/project"},
+                {"text":"/open /node/replaced","reply":"Review and approve folder access: /dm/c-fixture/project"},
+                {"text":"/open /node/current","reply":"Review and approve folder access: /dm/c-fixture/project"},
                 {"text":"A later message","reply":"Latest response"},
                 {"text":"/open /node/invalid","reply":"The folder could not be read"}
             ]
@@ -124,7 +124,7 @@ fn folder_prompt_stays_at_the_live_tail_and_tracks_replaced_requests() {
                 .find("Folder access requested · /node/current")
                 .unwrap()
     );
-    assert!(!transcript.contains("/chat/c-fixture/project"));
+    assert!(!transcript.contains("/dm/c-fixture/project") && !transcript.contains("/chat/c-fixture/project"));
     app.detail["project"]["pending"] = json!(false);
     assert!(!app.transcript().to_string().contains("/trust"));
 }
@@ -164,7 +164,7 @@ fn terminal_folder_approval_uses_displayed_identity_and_retains_errors_without_a
             let mut bytes = vec![0; length];
             reader.read_exact(&mut bytes).unwrap();
             if index == 0 || index == 2 {
-                assert_eq!(path, "/chat/c-fixture/project");
+                assert_eq!(path, "/dm/c-fixture/project");
                 assert_eq!(origin, format!("http://{addr}"));
                 let fields: std::collections::HashMap<_, _> = Url::parse(&format!(
                     "http://fixture/?{}",
@@ -182,7 +182,7 @@ fn terminal_folder_approval_uses_displayed_identity_and_retains_errors_without_a
                     "303 See Other",
                     "text/plain",
                     b"",
-                    "Location: /chat/c-fixture\r\n",
+                    "Location: /dm/c-fixture\r\n",
                     control_http::Policy::Embedded,
                 )
                 .unwrap();
@@ -817,7 +817,7 @@ fn live_workspace_diff_tracks_real_edits_and_persists() {
     assert!(output.contains("edit-demo.txt") && output.contains(" alpha\n-beta\n+gamma\n"));
     let page = hive
         .http()
-        .get(format!("{server}/chat/{id}/transcript"))
+        .get(format!("{server}/dm/{id}/transcript"))
         .send()
         .unwrap()
         .text()
@@ -874,7 +874,7 @@ fn live_design_question_pauses_and_resumes_checkpoint() {
     assert_eq!(before["text"], "design-before");
     let page = hive
         .http()
-        .get(format!("{server}/chat/{id}/transcript"))
+        .get(format!("{server}/dm/{id}/transcript"))
         .send()
         .unwrap()
         .text()
@@ -887,7 +887,7 @@ fn live_design_question_pauses_and_resumes_checkpoint() {
     let question_id = paused["messages"][0]["question"]["id"].as_str().unwrap();
     let response = hive
         .http()
-        .post(format!("{server}/chat/{id}/messages"))
+        .post(format!("{server}/dm/{id}/messages"))
         .header("Origin", &server)
         .form(&[("message", format!("/answer {question_id} 2"))])
         .send()
@@ -953,7 +953,7 @@ fn live_harness_commands_create_children_and_cancel_without_losing_history() {
         let child = message["reply"]
             .as_str()
             .unwrap()
-            .strip_prefix("Agent conversation: /chat/")
+            .strip_prefix("Agent conversation: /dm/")
             .unwrap();
         let child = hive.tool("control.chat.read", json!({"id":child})).unwrap();
         assert_eq!(child["parent_chat"], parent);
@@ -1057,7 +1057,7 @@ fn live_chat_enter_sends_and_shift_enter_adds_newline() {
         .strip_prefix("control_operator=")
         .unwrap();
     browser.post("/cookie", json!({"cookie":{"name":"control_operator","value":cookie,"path":"/","httpOnly":true,"sameSite":"Strict"}}));
-    browser.post("/url", json!({"url":format!("{server}/chats")}));
+    browser.post("/url", json!({"url":format!("{server}/dms")}));
     let before = hive.tool("control.chats.list", json!({})).unwrap();
     let input = browser.input();
     browser.post(&format!("/element/{input}/value"), json!({"text":"first"}));
@@ -1073,7 +1073,7 @@ fn live_chat_enter_sends_and_shift_enter_adds_newline() {
     let chat_id = loop {
         let url = browser.get("/url");
         let path = Url::parse(url.as_str().unwrap()).unwrap().path().to_owned();
-        if let Some(id) = path.strip_prefix("/chat/c-") {
+        if let Some(id) = path.strip_prefix("/dm/c-") {
             break format!("c-{id}");
         }
         assert!(
@@ -1088,7 +1088,7 @@ fn live_chat_enter_sends_and_shift_enter_adds_newline() {
     assert_eq!(chat["messages"][0]["text"], "first\r\nsecond");
     let transcript = hive
         .http()
-        .get(format!("{server}/chat/{chat_id}/transcript"))
+        .get(format!("{server}/dm/{chat_id}/transcript"))
         .send()
         .unwrap();
     assert!(
@@ -1118,7 +1118,7 @@ fn live_chat_enter_sends_and_shift_enter_adds_newline() {
         );
         std::thread::sleep(Duration::from_millis(100));
     }
-    browser.post("/url", json!({"url":format!("{server}/chat/{chat_id}")}));
+    browser.post("/url", json!({"url":format!("{server}/dm/{chat_id}")}));
     let input = browser.input();
     browser.post(
         &format!("/element/{input}/value"),
@@ -1177,7 +1177,7 @@ fn live_chat_enter_sends_and_shift_enter_adds_newline() {
         );
         std::thread::sleep(Duration::from_millis(100));
     }
-    browser.post("/url", json!({"url":format!("{server}/chat/{chat_id}")}));
+    browser.post("/url", json!({"url":format!("{server}/dm/{chat_id}")}));
     let input = browser.input();
     // Tab completes an off command, and mouse completion remains available.
     browser.post(
@@ -1205,7 +1205,7 @@ fn live_chat_enter_sends_and_shift_enter_adds_newline() {
         );
         std::thread::sleep(Duration::from_millis(100));
     }
-    browser.post("/url", json!({"url":format!("{server}/chat/{chat_id}")}));
+    browser.post("/url", json!({"url":format!("{server}/dm/{chat_id}")}));
     let input = browser.input();
     browser.post(&format!("/element/{input}/value"), json!({"text":"/"}));
     let off = browser.post("/element", json!({"using":"css selector","value":"#chat-commands:not([hidden]) [data-command='/improve off']"}))["element-6066-11e4-a52e-4f735466cecf"].as_str().unwrap().to_owned();
@@ -1220,7 +1220,7 @@ fn live_chat_enter_sends_and_shift_enter_adds_newline() {
         ("/ste", "/steer"),
         ("/ans", "/answer"),
     ] {
-        browser.post("/url", json!({"url":format!("{server}/chat/{chat_id}")}));
+        browser.post("/url", json!({"url":format!("{server}/dm/{chat_id}")}));
         let input = browser.input();
         browser.post(&format!("/element/{input}/value"), json!({"text":draft}));
         let option = browser.post("/element", json!({"using":"css selector","value":format!("#chat-commands:not([hidden]) [data-command='{command}']")}))["element-6066-11e4-a52e-4f735466cecf"].as_str().unwrap().to_owned();
@@ -1249,7 +1249,7 @@ fn live_chat_enter_sends_and_shift_enter_adds_newline() {
         let diff_chat = fs::read_to_string(crate::config::state("diff-qa-chat").unwrap()).unwrap();
         browser.post(
             "/url",
-            json!({"url":format!("{server}/chat/{diff_chat}/transcript")}),
+            json!({"url":format!("{server}/dm/{diff_chat}/transcript")}),
         );
         for (selector, color) in [
             (".edit-diff[open] .diff-add", "rgb(181, 160, 255)"),
@@ -1686,7 +1686,7 @@ fn live_declarative_lens_library() {
     ];
     let saved = hive
         .http()
-        .post(format!("{server}/lenses/save"))
+        .post(format!("{server}/dna/save"))
         .form(&fields)
         .send()
         .unwrap();
@@ -1712,7 +1712,7 @@ fn live_declarative_lens_library() {
     assert_eq!(chat["lenses"], json!([lens_id]));
     let page = hive
         .http()
-        .get(format!("{server}/chat/{}", chat["id"].as_str().unwrap()))
+        .get(format!("{server}/dm/{}", chat["id"].as_str().unwrap()))
         .send()
         .unwrap()
         .text()
@@ -1723,21 +1723,21 @@ fn live_declarative_lens_library() {
     fields.iter_mut().find(|(k, _)| k == "revision").unwrap().1 = "1".into();
     let saved = hive
         .http()
-        .post(format!("{server}/lenses/save"))
+        .post(format!("{server}/dna/save"))
         .form(&fields)
         .send()
         .unwrap();
     assert_eq!(saved.status().as_u16(), 303);
     let stale = hive
         .http()
-        .post(format!("{server}/lenses/save"))
+        .post(format!("{server}/dna/save"))
         .form(&fields)
         .send()
         .unwrap();
     assert_eq!(stale.status().as_u16(), 409);
     let exported: Value = hive
         .http()
-        .get(format!("{server}/lenses/export"))
+        .get(format!("{server}/dna/export"))
         .send()
         .unwrap()
         .json()
@@ -1760,7 +1760,7 @@ fn live_chat_composition_and_design_entry() {
     let before = hive.tool("control.chats.list", json!({})).unwrap();
     let response = hive
         .http()
-        .get(format!("{server}/chats?discuss=knowledge"))
+        .get(format!("{server}/dms?discuss=knowledge"))
         .send()
         .unwrap();
     assert_eq!(response.headers()["referrer-policy"], "same-origin");
@@ -1771,7 +1771,7 @@ fn live_chat_composition_and_design_entry() {
     for origin in ["null", "https://foreign.example"] {
         let rejected = hive
             .http()
-            .post(format!("{server}/chats"))
+            .post(format!("{server}/dms"))
             .header("origin", origin)
             .form(&[("composition", "1")])
             .send()
@@ -1781,7 +1781,7 @@ fn live_chat_composition_and_design_entry() {
     assert_eq!(hive.tool("control.chats.list", json!({})).unwrap(), before);
     let result = hive
         .http()
-        .post(format!("{server}/chats"))
+        .post(format!("{server}/dms"))
         .header("origin", &server)
         .form(&[
             ("composition", "1"),
@@ -1793,12 +1793,12 @@ fn live_chat_composition_and_design_entry() {
         .unwrap();
     assert_eq!(result.status().as_u16(), 303);
     let path = result.headers()["location"].to_str().unwrap();
-    let id = path.strip_prefix("/chat/").unwrap();
+    let id = path.strip_prefix("/dm/").unwrap();
     let page = hive.http().get(format!("{server}{path}")).send().unwrap();
     assert_eq!(page.headers()["referrer-policy"], "same-origin");
     let invalid = hive
         .http()
-        .post(format!("{server}/chat/{id}/messages"))
+        .post(format!("{server}/dm/{id}/messages"))
         .header("origin", &server)
         .form(&[("message", "")])
         .send()
@@ -1810,7 +1810,7 @@ fn live_chat_composition_and_design_entry() {
     assert!(detail["messages"].as_array().unwrap().is_empty());
     let result = hive
         .http()
-        .post(format!("{server}/chat/{id}/lenses"))
+        .post(format!("{server}/dm/{id}/dna"))
         .header("origin", &server)
         .form(&[("composition", "1")])
         .send()
@@ -1828,7 +1828,7 @@ fn live_chat_composition_and_design_entry() {
         .text()
         .unwrap();
     assert!(!page.contains("right-panel"));
-    assert!(page.contains("/chats?discuss=knowledge"));
+    assert!(page.contains("/dms?discuss=knowledge"));
 }
 #[test]
 #[ignore = "requires an isolated local Control server; no model calls"]
@@ -2072,7 +2072,7 @@ fn live_shared_chat_keeps_context_and_web_transcript() {
             }
         }
     }
-    let url = format!("{}/chat/{id}", server.trim_end_matches('/'));
+    let url = format!("{}/dm/{id}", server.trim_end_matches('/'));
     let page = hive.http().get(&url).send().unwrap();
     assert!(page.status().is_success());
     assert!(page.text().unwrap().contains("chat-transcript"));
@@ -2179,7 +2179,7 @@ fn live_artifacts_preserve_project_files_and_viewer_after_restart() {
         let response = hive
             .http()
             .get(format!(
-                "{server}/chat/{chat}/artifacts?artifact={artifact}&file=preview.txt"
+                "{server}/dm/{chat}/artifacts?artifact={artifact}&file=preview.txt"
             ))
             .send()
             .unwrap();
@@ -2194,7 +2194,7 @@ fn live_artifacts_preserve_project_files_and_viewer_after_restart() {
         assert!(page.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
         assert!(!page.contains("<script>alert(1)</script>"));
         let unauthenticated =
-            reqwest::blocking::get(format!("{server}/chat/{chat}/artifacts")).unwrap();
+            reqwest::blocking::get(format!("{server}/dm/{chat}/artifacts")).unwrap();
         assert_eq!(unauthenticated.status().as_u16(), 401);
     }
 }

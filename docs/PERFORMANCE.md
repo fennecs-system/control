@@ -53,7 +53,7 @@ Fixtures by subsystem:
 | Rooms and messages | `rooms::notifications::tests::profile_room_publication`, `rooms::notifications::tests::profile_idle_and_waiting_room_reconciliation`, `agent_message::profile::routing_profile` |
 | Scheduling and cancellation | `scheduler::qa::scheduling_profile`, `chat::tests::profile_continuation_admission`, `lifecycle::tests::reconcile_profile`, `worker::tests::cancel_profile` |
 | Services and watches | `services::commands::tests::dispatch_profile`, `services::commands::tests::live_latency`, `watches::tests::profile` |
-| Web and HTTP | `performance::hot_paths`, `performance::ownership_snapshots`, `performance::history_reads`, `performance::chat_lists`, `session_http::tests::fifteen_turn_conversations_workload` |
+| Web and HTTP | `performance::hot_paths`, `performance::ownership_snapshots`, `performance::history_reads`, `performance::chat_lists`, `performance::bots_page`, `session_http::tests::fifteen_turn_conversations_workload` |
 | Terminal (`--lib`) | `terminal::profiling` |
 | Tools | `graph_search::tests::profile`, `compaction::tests::selection_profile`, `scores::tests::due_profile` |
 
@@ -254,7 +254,26 @@ cargo test --release --locked --bin control bots::tests::reconcile_profile -- --
 ```
 
 Set `CONTROL_PROFILE_ADVISOR=1` for the advisor cases, `blocked` for the
-blocked-claims case and `off` for a defined advisor with its lens unticked.
+blocked-claims case, `off` for a defined advisor with its lens unticked and
+`antibody` for one [antibody](LENSES.md#antibodies) observing the node, with 8
+services of 16 retained member commands from recent turns.
+
+**Pathology facts and antibodies (2026-11-17).** Alternating base (`f4f8a23`) and
+head runs, three each, medians in µs; the laptop was under heavy concurrent
+load, so read these as ranges:
+
+| Case | Base, none | Head, none | Base, advisor | Head, advisor | Head, antibody |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| idle, 64 chats | 29.5 | 28.9 | 49.0 | 50.2 | 61.7 |
+| offered, 64 chats | 37.3 | 37.8 | 57.1 | 58.8 | 68.4 |
+| idle, 512 chats | 223.4 | 225.7 | 386.9 | 388.8 | 416.9 |
+| offered, 512 chats | 228.2 | 236.5 | 398.9 | 400.9 | 422.3 |
+
+Nodes without an observer are unchanged. Pathology inputs add a probe per run
+only until every retained command's run is resolved (newest first), command
+classification only when a team's retained set changes, and a token re-sum only
+when a team's settled-turn count changes; summing tokens on every pass cost
+about 20 µs at 9,217 runs and was dropped.
 
 **Bounded recovery.** Checkpoint recovery is bounded per streak (see
 [TURN-CONTINUITY.md](TURN-CONTINUITY.md)). The `bots::tests::recovery` replay
@@ -407,7 +426,28 @@ Normal tests compare rendered HTML against SHA-256 fingerprints.
 one chat read for 10, 100 and 1,000 chats. At 1,000 chats: list about 2.0 ms,
 tree about 0.14 ms, one chat read about 14 µs.
 
+**Bots page and graveyard.** The graveyard (stopped bots and finished spawned
+agents) is projected in one pass over runs and chats, sorted by stop time, and
+only one page of 50 rows is formatted; later pages come from
+`GET /bots/graveyard?older=ID[&q=…]` as the WASM client scrolls, and search
+filters the same pass. The process tree indexes latest run statuses, chat ids
+and service owners once per render; it used to scan runs and chats per chat,
+which made the page quadratic. `performance::bots_page` holds 10, 1,000 or
+10,000 dead bots (one turn each) and one live agent. Release, Apple Silicon,
+`CONTROL_TIMING_ROUNDS=51`, three alternating runs against the previous
+revision with the same fixture, medians:
+
+| Workload | 10 | 1,000 | 10,000 dead bots |
+| --- | ---: | ---: | ---: |
+| Bots page, before (no graveyard) | 9.7 µs | 0.77 ms | 90.7 ms |
+| Bots page, after | 28.2 µs | 0.40 ms | 4.09 ms |
+| Next graveyard page | 1.5 µs | 0.23 ms | 2.17 ms |
+| Graveyard search | 4.2 µs | 0.28 ms | 2.45 ms |
+
+The page stays under 39 KB however many bots have died.
+
 ```sh
+CONTROL_TIMING_ROUNDS=51 cargo test --release --locked --bin control performance::bots_page -- --ignored --exact --nocapture
 cargo test --locked --release --bin control performance::hot_paths -- --ignored --exact --nocapture
 cargo test --locked --release --bin control performance::ownership_snapshots -- --ignored --exact --nocapture
 CONTROL_TIMING_ROUNDS=300 cargo test --release --locked --bin control performance::chat_lists -- --ignored --exact --nocapture

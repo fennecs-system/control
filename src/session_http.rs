@@ -72,7 +72,7 @@ fn send_message(
         name.eq_ignore_ascii_case("accept") && value.split(',').any(|mime|mime.trim()=="application/json")));
     if fields.get("message").is_some_and(|message|message.trim()=="/open") {
         match chat::detail(state,id) {
-            Ok(_) => respond(stream,"303 See Other","text/plain","",&format!("Location: /chat/{id}/project\r\n")),
+            Ok(_) => respond(stream,"303 See Other","text/plain","",&format!("Location: /dm/{id}/project\r\n")),
             Err(message) => respond_chat_status(stream,"400 Bad Request",&chat_page(state,lens,id,message,"/open",header)),
         }
         return;
@@ -91,7 +91,7 @@ fn send_message(
         respond(stream,status,"application/json",&value.to_string(),"");
     } else {
         match result {
-            Ok(_) => respond(stream,"303 See Other","text/plain","",&format!("Location: /chat/{id}\r\n")),
+            Ok(_) => respond(stream,"303 See Other","text/plain","",&format!("Location: /dm/{id}\r\n")),
             Err(message) => respond_chat_status(stream,"400 Bad Request",&chat_page(state,lens,id,message,fields.get("message").map(String::as_str).unwrap_or(""),header)),
         }
     }
@@ -199,7 +199,7 @@ pub fn handle(
             "303 See Other",
             "text/plain",
             "",
-            "Location: /chats?improve=1\r\n",
+            "Location: /dms?improve=1\r\n",
         );
         return true;
     }
@@ -265,17 +265,31 @@ pub fn handle(
         return true;
     }
     if path=="/chats/history" && method=="GET" {
+        // History moved under Bots; saved links keep their page.
+        let location=crate::navigation::history_location("/bots/history",&crate::fields(query));
+        respond(stream,"303 See Other","text/plain","",&format!("Location: {location}\r\n"));
+        return true;
+    }
+    if (path=="/bots/history" || path=="/bots/history/runs") && method=="GET" {
         let query=crate::fields(query);
-        let html=crate::navigation::history(state,query.get("older").map(String::as_str),query.get("newer").map(String::as_str));
+        let (older,newer)=(query.get("older").map(String::as_str),query.get("newer").map(String::as_str));
+        let html=if path=="/bots/history" {crate::navigation::history(state,older,newer)} else {state.runtime.runs_page(older,newer)};
         respond(stream,"200 OK","text/html; charset=utf-8",&crate::render(state,"history",lens,&html),"");
         return true;
     }
-    if path == "/chats" && method == "GET" {
+    if path=="/bots/graveyard" && method=="GET" {
+        // The scroll loader's next page: rows only, no page shell.
+        let query=crate::graveyard::Query::from(&crate::fields(query));
+        let graves=crate::graveyard::dead(state,&query.search);
+        respond(stream,"200 OK","text/html; charset=utf-8",&crate::graveyard::rows(&graves,&query),"");
+        return true;
+    }
+    if path == "/dms" && method == "GET" {
         let query = crate::fields(query);
         if !query.contains_key("new") && !query.contains_key("discuss") && !query.contains_key("improve") {
             let recent=cookie(header,"control_recent_chat").filter(|id|chat::valid_id(id));
             if let Some(id)=recent.filter(|id|chat::detail(state,id).is_ok()) {
-                respond(stream,"303 See Other","text/plain","",&format!("Location: /chat/{id}\r\n"));
+                respond(stream,"303 See Other","text/plain","",&format!("Location: /dm/{id}\r\n"));
                 return true;
             }
         }
@@ -288,7 +302,7 @@ pub fn handle(
         respond_chat(stream, &session_page(&crate::render(state, "session-list", lens, &html), header));
         return true;
     }
-    if ["/chats", "/chat", "/improve"].contains(&path) && method == "POST" {
+    if ["/dms", "/improve"].contains(&path) && method == "POST" {
         let fields = crate::fields(&String::from_utf8_lossy(body));
         let chosen = fields.get("lens").map(String::as_str).unwrap_or(lens);
         let arguments = json!({"lenses":chat::form_lenses(&fields,lens),"room":fields.get("room").filter(|room|!room.is_empty()),"design_context":fields.get("design_context"),"mode":if path == "/improve" {json!("improve")} else {Value::Null}});
@@ -309,7 +323,7 @@ pub fn handle(
                 "303 See Other",
                 "text/plain",
                 "",
-                &format!("Location: /chat/{}\r\n{}", value["id"].as_str().unwrap(), crate::lens_ui::cookie(chosen)),
+                &format!("Location: /dm/{}\r\n{}", value["id"].as_str().unwrap(), crate::lens_ui::cookie(chosen)),
             ),
             Err(message) => {
                 let html = chat::rejected(&chat::landing_mode(state, lens, fields.get("design_context").map(String::as_str), false), message, text.map(String::as_str).unwrap_or(""));
@@ -318,7 +332,7 @@ pub fn handle(
         }
         return true;
     }
-    let Some(route) = path.strip_prefix("/chat/") else {
+    let Some(route) = path.strip_prefix("/dm/") else {
         return false;
     };
     let (id, operation) = route.split_once('/').unwrap_or((route, ""));
@@ -338,7 +352,7 @@ pub fn handle(
                 "303 See Other",
                 "text/plain",
                 "",
-                &format!("Location: /chat/{id}\r\n"),
+                &format!("Location: /dm/{id}\r\n"),
             ),
             Err(message) => respond_chat_status(stream, "400 Bad Request", &chat_page(state, lens, id, message, "", header)),
         }
@@ -363,8 +377,8 @@ pub fn handle(
             ),
             Err(message) => respond(stream, "404 Not Found", "text/plain", message, ""),
         }
-    } else if method == "GET" && operation == "compaction" {
-        match crate::compaction::render(state,id) {
+    } else if method == "GET" && operation == "memory" {
+        match crate::compaction::render(state,id,query) {
             Ok(html)=>respond(stream,"200 OK","text/html; charset=utf-8",&crate::render(state,"artifact-page",lens,&html),""),
             Err(error)=>respond(stream,"404 Not Found","text/plain",error,""),
         }

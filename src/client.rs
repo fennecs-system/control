@@ -98,7 +98,7 @@ impl Hive {
         let endpoint = Url::parse(&self.endpoint).map_err(failure)?;
         let mut target = endpoint.join("/").map_err(failure)?;
         target.path_segments_mut().map_err(|_| failure("Invalid server URL"))?
-            .pop_if_empty().extend(["chat", chat, "project"]);
+            .pop_if_empty().extend(["dm", chat, "project"]);
         let response = self.client.post(target).timeout(Duration::from_secs(15))
             .header("Origin", endpoint.origin().ascii_serialization())
             .form(&[("approve", "yes"), ("request", request)]).send()

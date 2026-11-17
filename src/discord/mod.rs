@@ -42,7 +42,7 @@ pub fn chat_link(actor: &crate::identity::Actor) -> Option<String> {
             user_id,
             channel_id,
         } => Some(format!(
-            "{}/chat/{}",
+            "{}/dm/{}",
             crate::config::server_url(),
             chat_id(*user_id, *channel_id)
         )),
@@ -52,7 +52,7 @@ pub fn chat_link(actor: &crate::identity::Actor) -> Option<String> {
 pub fn session_link(actor: &crate::identity::Actor, id: Option<&str>) -> Option<String> {
     let fallback = chat_link(actor)?;
     Some(id.filter(|id| !id.is_empty() && id.len() <= 100 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))
-        .map(|id| format!("{}/chat/{id}", crate::config::server_url()))
+        .map(|id| format!("{}/dm/{id}", crate::config::server_url()))
         .unwrap_or(fallback))
 }
 pub fn native_reply(actor: &crate::identity::Actor, content: &str) -> Option<String> {

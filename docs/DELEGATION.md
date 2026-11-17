@@ -44,7 +44,7 @@ the first ten handles. Keep the identifiers apart:
 | --- | --- |
 | `batch` | `control_agent_spawn_status` and `control_agent_spawn_cancel` |
 | Child `run_id` | the `child` argument of `control_agent_result` |
-| Child `chat_id` | the child's conversation at `/chat/<chat_id>` |
+| Child `chat_id` | the child's conversation at `/dm/<chat_id>` |
 
 A chat ID or batch ID is not a child run ID; passing one gives a
 descendant-access error.
