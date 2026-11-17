@@ -53,7 +53,7 @@ Fixtures by subsystem:
 | Rooms and messages | `rooms::notifications::tests::profile_room_publication`, `rooms::notifications::tests::profile_idle_and_waiting_room_reconciliation`, `agent_message::profile::routing_profile` |
 | Scheduling and cancellation | `scheduler::qa::scheduling_profile`, `chat::tests::profile_continuation_admission`, `lifecycle::tests::reconcile_profile`, `worker::tests::cancel_profile` |
 | Services and watches | `services::commands::tests::dispatch_profile`, `services::commands::tests::live_latency`, `watches::tests::profile` |
-| Web and HTTP | `performance::hot_paths`, `performance::ownership_snapshots`, `performance::history_reads`, `performance::chat_lists`, `session_http::tests::fifteen_turn_conversations_workload` |
+| Web and HTTP | `performance::hot_paths`, `performance::ownership_snapshots`, `performance::history_reads`, `performance::chat_lists`, `performance::bots_page`, `session_http::tests::fifteen_turn_conversations_workload` |
 | Terminal (`--lib`) | `terminal::profiling` |
 | Tools | `graph_search::tests::profile`, `compaction::tests::selection_profile`, `scores::tests::due_profile` |
 
@@ -407,7 +407,28 @@ Normal tests compare rendered HTML against SHA-256 fingerprints.
 one chat read for 10, 100 and 1,000 chats. At 1,000 chats: list about 2.0 ms,
 tree about 0.14 ms, one chat read about 14 µs.
 
+**Bots page and graveyard.** The graveyard (stopped bots and finished spawned
+agents) is projected in one pass over runs and chats, sorted by stop time, and
+only one page of 50 rows is formatted; later pages come from
+`GET /bots/graveyard?older=ID[&q=…]` as the WASM client scrolls, and search
+filters the same pass. The process tree indexes latest run statuses, chat ids
+and service owners once per render; it used to scan runs and chats per chat,
+which made the page quadratic. `performance::bots_page` holds 10, 1,000 or
+10,000 dead bots (one turn each) and one live agent. Release, Apple Silicon,
+`CONTROL_TIMING_ROUNDS=51`, three alternating runs against the previous
+revision with the same fixture, medians:
+
+| Workload | 10 | 1,000 | 10,000 dead bots |
+| --- | ---: | ---: | ---: |
+| Bots page, before (no graveyard) | 9.7 µs | 0.77 ms | 90.7 ms |
+| Bots page, after | 28.2 µs | 0.40 ms | 4.09 ms |
+| Next graveyard page | 1.5 µs | 0.23 ms | 2.17 ms |
+| Graveyard search | 4.2 µs | 0.28 ms | 2.45 ms |
+
+The page stays under 39 KB however many bots have died.
+
 ```sh
+CONTROL_TIMING_ROUNDS=51 cargo test --release --locked --bin control performance::bots_page -- --ignored --exact --nocapture
 cargo test --locked --release --bin control performance::hot_paths -- --ignored --exact --nocapture
 cargo test --locked --release --bin control performance::ownership_snapshots -- --ignored --exact --nocapture
 CONTROL_TIMING_ROUNDS=300 cargo test --release --locked --bin control performance::chat_lists -- --ignored --exact --nocapture
