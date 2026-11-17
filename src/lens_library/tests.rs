@@ -1,7 +1,7 @@
 
 use super::*;
 #[test]
-fn resolved_view_exposes_composed_guidance_and_keeps_documents_distinct() {
+fn gene_editor_shows_its_own_selections_and_resolves_composed_guidance() {
     let mut state = State::default();
     state.lens_library.definitions.push(Definition {
         id: "local".into(),
@@ -12,7 +12,7 @@ fn resolved_view_exposes_composed_guidance_and_keeps_documents_distinct() {
         ..Default::default()
     });
     let html = render(&state, "local", None, None, false);
-    assert!(html.contains("Effective instructions") && html.contains("three distinct probes"));
+    assert!(html.contains("name='include_investigation' checked") && !html.contains("Effective instructions"), "the form is the view; no merged preview");
     assert!(html.contains("Keep &lt;shared&gt; assets intact"));
     assert!(html.contains("not an execution allowlist"));
     let mut resolved = resolve(&state, &["local".into()]).unwrap();
@@ -110,16 +110,22 @@ fn dna_page_lists_genes_compactly_and_keeps_every_editor_capability() {
         "href='/dna?new=1'", "href='/dna/export'", "action='/dna/save'", "name='revision' value='4'",
         "name='name'", "name='id'", "readonly", "name='summary'", "name='instructions'",
         "name='include_gene-0002' checked", "name='tool_", "name='document_castle' checked",
-        "No packages admitted", "name='role_lead'", "name='inline_lead'", "Save gene",
-        "<summary>Resolved context</summary>", "Effective instructions", "Resolved data",
-        "not an execution allowlist",
+        "No packages admitted", "name='role_lead'", "name='inline_lead'", "Visible to", "Full text for", "Save gene",
+                "not an execution allowlist",
     ] {
         assert!(html.contains(capability), "{capability}");
     }
-    assert!(html.contains("<summary>Includes <span class='dna-count'>1</span></summary>"));
+    assert!(html.contains("<summary>Include genes <span class='dna-count'>1</span></summary>"));
     assert!(html.contains("<summary>Knowledge documents <span class='dna-count'>1</span></summary>"));
     assert!(!html.contains("name='include_gene-0003'"), "a gene cannot include itself");
     let new = render(&state, "", None, None, false);
     assert!(new.contains("<h3>New gene</h3>") && !new.contains("readonly") && !new.contains("aria-current"));
-    assert!(!new.contains("Resolved context"));
+}
+
+#[test]
+fn editor_choices_sit_in_compact_rows() {
+    // `.dna-editor label` spaces form fields; choice chips must not inherit it.
+    let css = include_str!("../../assets/workspace.css");
+    assert!(css.contains(".dna-editor label{margin:14px 0}"));
+    assert!(css.contains(".dna-editor .library-choice{margin:0;"), "chips override the field margin");
 }

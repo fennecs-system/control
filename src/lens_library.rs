@@ -256,7 +256,7 @@ pub fn render(
     let includes = current.iter().filter(|other| other.id != definition.id)
         .map(|other| checkbox("include", &other.id, &other.name, definition.includes.contains(&other.id)))
         .collect::<String>();
-    html.push_str(&group("Includes", definition.includes.len(), "", &includes));
+    html.push_str(&group("Include genes", definition.includes.len(), "", &includes));
     let tools = control_context::TOOLS.iter().map(|tool| checkbox(
         "tool",
         tool.name,
@@ -287,64 +287,11 @@ pub fn render(
     }
     html.push_str(&group("Tool packages", definition.packages.len(), "Opt runs into operator-admitted packages. Each choice pins one version; runs get a private copy at /workspace/.control-tools/NAME.", &packages));
     let visible = Audience::ALL.into_iter().map(|role| checkbox("role", role.as_str(), role.as_str(), definition.roles.contains(&role))).collect::<String>();
-    let inline = Audience::ALL.into_iter().map(|role| checkbox("inline", role.as_str(), &format!("{} inline", role.as_str()), definition.inline.contains(&role))).collect::<String>();
-    html.push_str(&group("Role scoping", definition.roles.len() + definition.inline.len(), "Who sees this gene; none checked means every role. With a summary, prompts carry only that line and agents read the instructions on demand, except for roles marked inline.", &format!("{visible}</div><div class='library-choices'>{inline}")));
+    let inline = Audience::ALL.into_iter().map(|role| checkbox("inline", role.as_str(), role.as_str(), definition.inline.contains(&role))).collect::<String>();
+    html.push_str(&group("Role scoping", definition.roles.len() + definition.inline.len(), "Who sees this gene; none checked means every role. With a summary, prompts carry only that line and agents read the instructions on demand; roles under Full text for get the instructions in every prompt.", &format!("<span class='dna-row-label'>Visible to</span>{visible}</div><div class='library-choices'><span class='dna-row-label'>Full text for</span>{inline}")));
     html.push_str("<button class='primary'>Save gene ↗</button></form>");
-    if !definition.id.is_empty() && submitted.is_none() {
-        html.push_str("<details class='dna-group resolved-context'><summary>Resolved context</summary>");
-        match resolve(state, std::slice::from_ref(&definition.id)) {
-            Ok(resolved) => {
-                html.push_str("<div class='resolved-tags'>");
-                for lens in &resolved.lenses {
-                    html.push_str(&format!(
-                        "<a href='/dna?id={}'>{} <small>v{}</small></a>",
-                        escape(&lens.id),
-                        escape(&lens.name),
-                        lens.revision
-                    ));
-                }
-                html.push_str("</div><h3>Effective instructions</h3>");
-                if resolved.instructions.is_empty() && resolved.guidance.is_empty() {
-                    html.push_str("<p class='muted'>No gene instructions.</p>");
-                }
-                for instruction in &resolved.instructions {
-                    html.push_str(&format!("<pre class='manifest'>{}</pre>", escape(instruction)));
-                }
-                for guidance in &resolved.guidance {
-                    let roles = if guidance.roles.is_empty() { "every role".to_owned() } else { guidance.roles.iter().map(|r| r.as_str()).collect::<Vec<_>>().join(", ") };
-                    let summary = if guidance.summary.is_empty() { String::new() } else { format!(" · on demand: {}", escape(&guidance.summary)) };
-                    html.push_str(&format!("<p class='muted'>{} ({roles}){summary}</p><pre class='manifest'>{}</pre>", escape(&guidance.name), escape(&guidance.text)));
-                }
-                html.push_str("<h3>Tool context</h3><ul class='knowledge'>");
-                for tool in &resolved.tools {
-                    html.push_str(&format!("<li>{}</li>", escape(tool)));
-                }
-                html.push_str("</ul><h3>Documents</h3>");
-                for doc in &resolved.documents {
-                    html.push_str(&format!(
-                        "<p><a href='/knowledge?doc={}'>{} · revision {}</a></p>",
-                        escape(&doc.id),
-                        escape(&doc.title),
-                        doc.revision
-                    ));
-                }
-                if resolved.documents.is_empty() {
-                    html.push_str("<p class='muted'>No documents selected.</p>");
-                }
-                if !resolved.packages.is_empty() {
-                    html.push_str("<h3>Tool packages</h3><ul class='knowledge'>");
-                    for package in &resolved.packages {
-                        html.push_str(&format!("<li>{} v{} · <code>{}</code></li>", escape(&package.name), package.version, escape(&package.commit)));
-                    }
-                    html.push_str("</ul>");
-                }
-                html.push_str("<p class='muted'>Selections do not grant capabilities. Documents are context, not automatically accepted facts.</p><details><summary>Resolved data</summary><pre class='manifest'>");
-                html.push_str(&escape(&serde_json::to_string_pretty(&resolved).unwrap()));
-                html.push_str("</pre></details>");
-            }
-            Err(error) => html.push_str(&format!("<p class='save-error'>{}</p>", escape(&error))),
-        }
-        html.push_str("</details>");
+    if !definition.id.is_empty() && submitted.is_none() && let Err(error) = resolve(state, std::slice::from_ref(&definition.id)) {
+        html.push_str(&format!("<p class='save-error'>{}</p>", escape(&error)));
     }
     html.push_str("</section></div>");
     html

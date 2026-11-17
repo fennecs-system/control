@@ -137,7 +137,6 @@
 .dna-group>summary{cursor:pointer;font-size:13px;color:#b3abc8}.dna-group>summary:hover{color:var(--purple)}
 .dna-group[open]>summary{margin-bottom:10px}.dna-group>p.muted{font-size:12px;margin:0 0 10px}.dna-group .library-choices+.library-choices{margin-top:8px}
 .dna-count{display:inline-block;min-width:18px;margin-left:6px;padding:0 6px;border-radius:9px;background:#b5a0ff1c;color:var(--purple);font-size:11px;text-align:center}
-.dna-editor .library-choice{padding:5px 9px;font-size:12px;border-color:#24242c}
+.dna-editor .library-choice{margin:0;padding:5px 9px;font-size:12px;border-color:#24242c}.dna-row-label{align-self:center;min-width:104px;font-size:11px;color:var(--muted)}
 .dna-editor>.primary{margin-top:18px}
-.dna-detail .resolved-context{margin-top:22px}
 @media(max-width:1000px){.dna-layout{grid-template-columns:1fr}.dna-genes{position:static;max-height:300px}}
