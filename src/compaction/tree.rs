@@ -107,7 +107,7 @@ pub(super) fn svg(chat: &str, cells: &[Cell], len: usize, edits: &Edits, model: 
     let weight = |c: &Cell| match c.kind {
         Kind::Summary | Kind::Pending => 2.0 + 0.6 * c.level as f64,
         Kind::Entries => 2.0,
-        Kind::Entry => 1.0,
+        Kind::Entry => 1.8,
     };
     let gap = if cells.len() > 40 { 2.0 } else { 5.0 };
     let total: f64 = cells.iter().map(weight).sum();
@@ -124,6 +124,7 @@ pub(super) fn svg(chat: &str, cells: &[Cell], len: usize, edits: &Edits, model: 
         let dropped = edits.overlaps_drop(cell.start, cell.end);
         let pinned = edits.pins.iter().filter(|p| (cell.start..cell.end).contains(p)).count();
         let class = match cell.kind {
+            Kind::Summary if dropped => "mt-sum mt-has-drop",
             Kind::Summary if revised.is_some() => "mt-sum mt-rev",
             Kind::Summary => "mt-sum",
             Kind::Pending => "mt-pending",
@@ -133,7 +134,7 @@ pub(super) fn svg(chat: &str, cells: &[Cell], len: usize, edits: &Edits, model: 
         };
         let fan = if matches!(cell.kind, Kind::Summary | Kind::Pending) { "mt-fan" } else { "mt-fan mt-fan-entry" };
         let _ = write!(out, "<path class='{fan}' d='M{x:.1} 104 L{:.1} 104 L{r1:.1} 166 L{r0:.1} 166 Z'/>", x + w);
-        let range = if cell.end - cell.start == 1 { format!("#{}", cell.start) } else { format!("{}–{}", cell.start, cell.end) };
+        let range = if cell.end - cell.start == 1 { cell.start.to_string() } else { format!("{}–{}", cell.start, cell.end) };
         let mut title = match cell.kind {
             Kind::Summary => format!("Summary of entries {range} · level {} · {} entries", cell.level, cell.end - cell.start),
             Kind::Pending => format!("Entries {range} · level {} · not summarised yet", cell.level),

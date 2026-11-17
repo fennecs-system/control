@@ -133,16 +133,18 @@ The detail reads one root-to-block path of node files outside the state lock.
 Inspection makes no model calls.
 
 Measured on an Apple M-series laptop (release build, 200 renders each, every
-cut block summarised):
+cut block summarised; `memory_tree_render_benchmark` in
+`src/compaction/tree/tests.rs`, run with `--release -- --ignored --nocapture`):
 
 | entries | cells drawn | page bytes | overview render |
 |---|---|---|---|
-| 100 | {{B100}} |
-| 1,000 | {{B1K}} |
-| 10,000 | {{B10K}} |
-| 100,000 | {{B100K}} |
+| 100 | 17 | 15.5 KB | 65 µs |
+| 1,000 | 21 | 19.1 KB | 69 µs |
+| 10,000 | 25 | 22.2 KB | 85 µs |
+| 100,000 | 30 | 27.1 KB | 99 µs |
 
-A block detail page (two node levels, four node files) takes {{DETAIL}}.
+A block detail page (summary, two children, versions; four node files read
+outside the lock) takes about 83 µs.
 
 ### Editing the MemoryTree
 

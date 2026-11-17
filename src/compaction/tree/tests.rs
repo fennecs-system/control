@@ -354,6 +354,55 @@ fn edits_survive_a_state_round_trip_and_old_state_has_none() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A self-contained scratch render (inline styles, detail frame as srcdoc)
+/// for `control browser capture`:
+/// `MEMORY_TREE_PREVIEW=/abs/preview.html cargo test memory_tree_preview -- --ignored`
+#[test]
+#[ignore = "writes a preview file"]
+fn memory_tree_preview() {
+    let target = std::env::var("MEMORY_TREE_PREVIEW").expect("MEMORY_TREE_PREVIEW=/absolute/preview.html");
+    let (mut state, _) = fixture();
+    let message = |i: usize| crate::chat::Message { speaker: Default::default(), text: format!("Entry {i}: castle wall at ({}, 64, {}) via relay port {}", i * 3, i * 7, 25565 + i % 4), run_id: None, reply: "Placed blocks and verified the route".into() };
+    state.chats[0].messages = (0..213).map(message).collect();
+    state.runtime.compaction.settings.recent_entries = 6;
+    let chat = state.chats[0].id.clone();
+    let dir = scratch();
+    let job = hydrate(&state, prepare(&state).unwrap());
+    let view = execute(&job, &dir, |_, _, input| {
+        Ok(control_ai::model::Response {
+            text: format!("Built the castle's outer wall and gatehouse; relay on port 25565 forwards to the lobby. ({} input bytes summarised.)", input.len()),
+            tokens: Some(control_ai::Tokens { input_tokens: input.len() as u64, cached_input_tokens: 0, output_tokens: 40 + input.len() as u64 % 90 }),
+        })
+    })
+    .unwrap();
+    state.runtime.compaction.views.insert(chat.clone(), view);
+    let operator = crate::identity::Actor::LocalOperator;
+    let focus = Block { start: 64, level: 6 };
+    let plan = surgery::plan(&state, &chat, &operator, focus, "focus on the castle layout decisions").unwrap();
+    let (base, response) = surgery::run(&plan, &dir, summarise("Castle layout: keep at (384, 64, 896); four towers; gatehouse faces the relay spawn; moat deferred.")).unwrap();
+    surgery::commit(&mut state, plan, base, response).unwrap();
+    edit(&mut state, &chat, &operator, Op::Pin(37)).unwrap();
+    edit(&mut state, &chat, &operator, Op::Pin(150)).unwrap();
+    edit(&mut state, &chat, &operator, Op::Select { block: focus, revision: 1 }).unwrap();
+    let drops = state.runtime.compaction.views.remove(&chat);
+    edit(&mut state, &chat, &operator, Op::Drop { start: 196, end: 199 }).unwrap();
+    state.runtime.compaction.views.insert(chat.clone(), drops.unwrap());
+    let query = format!("block={}.{}", focus.start, focus.level);
+    let detail = plan_detail(&state, &chat, &query);
+    let detail = detail_page(&detail, load_nodes(&detail, &dir));
+    let styles = format!("{}{}", include_str!("../../../assets/style.css"), include_str!("../../../assets/runtime.css"));
+    let detail = detail.replace("<link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'>", &format!("<style>{styles}</style>"));
+    let overview = render(&state, &chat, &query).unwrap();
+    let src = format!("src='{}'", crate::escape(&format!("{}/node?{query}", memory_url(&chat))));
+    assert!(overview.contains(&src));
+    let overview = overview.replace(&src, &format!("srcdoc='{}'", crate::escape(&detail)));
+    std::fs::write(&target, format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><title>MemoryTree preview</title><style>{styles}</style></head><body><main>{overview}</main></body></html>")).unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+fn plan_detail(state: &State, chat: &str, query: &str) -> Detail {
+    plan(state, chat, &crate::fields(query)).unwrap()
+}
+
 #[test]
 fn civil_time_is_utc() {
     assert_eq!(when(0), "1970-01-01 00:00 UTC");
