@@ -323,7 +323,9 @@ bot approval.
    - a turn timed out: a member's or the lead's latest turn reached its attempt
      time limit and was stopped before it checkpointed (`timed_out`). It is
      reported once until that chat's next turn settles otherwise. The advisor
-     suggests splitting the work or, for the lead, delegating it.
+     suggests splitting the work or, for the lead, delegating it;
+   - a pathology (see [antibodies](#antibodies)): harness churn, a repetition
+     loop, polling or cost burn.
 
    Apart from a timeout, a single failed, interrupted or cancelled turn
    (provider errors included) and a single failed watch exit are never facts.
@@ -356,7 +358,82 @@ Loop safety is structural. Judge turns, retained notes and turns woken only by
 advisor notes (the lead's included) are not team activity, so the advisor cannot
 re-trigger itself. Stopping the advisor (`/bot off`) drops its team snapshot; a
 later advisor reports only facts after its own subscription. Nodes without an
-opted-in advisor do no lifecycle work.
+opted-in advisor or antibody do no lifecycle work.
+
+## Antibodies
+
+Antibodies are the node's immune system: opt-in read-only observers that patrol
+every team on the node (counter-intel duty), tag pathologies and recruit the
+response from the team's lead or the operator. They never do the work, take
+over, message members, post to rooms, claim work or start services. Where an
+advisor serves one team, an antibody watches all of them.
+
+**Strictly opt-in, operator-owned.** Select the **Antibodies** gene
+(`/use antibody`) on a root chat the local operator owns. The lens offers `node.antibody`,
+`intel.brief` and `operator.notify`; without it nothing is computed. As with
+the advisor, the lead spawns a judge (`control_agent_spawn` with `role:
+"judge"`, from the root's advisor allowance) and asks for it with
+`control_bot_request`; the operator's approval (or `/bot on` in its chat) runs
+it. An antibody may take a patrol timer (`every_minutes`); an advisor may not.
+A root owned by a Discord user cannot run one, because an antibody reads every
+team on the node.
+
+**What wakes it.** The approved judge sleeps on the node topic. Each reconcile
+pass observes every team (a root chat with spawned members, except antibody
+trees) in the same single pass the advisor uses, and offers one coalesced event
+of the facts that suggest a team is off course: repeated failures, retired
+restart loops, stalls, shared blockers, bottlenecks, timeouts, members that
+cannot checkpoint, and four pathologies:
+
+- **harness churn**: `pathology_churn_commands` (default 12) file- or
+  tool-building commands (redirects into files, `tee`, in-place edits,
+  `chmod +x`, patch application, builders and package managers) since the
+  team's claims last advanced or a score probe last rose. Building a generic
+  harness instead of placing the stone wall looks like this;
+- **repetition loop**: one member's same command (whitespace collapsed, digits
+  folded) failed `pathology_repeat_failures` (default 3) times among its
+  retained commands;
+- **polling**: `pathology_poll_commands` (default 6) of one member's retained
+  commands only read status (the same classifier as the polling nudge); a
+  routine (`control_watch_start`) should report instead;
+- **cost burn**: `pathology_burn_tokens` (default 2,000,000) tokens spent by the
+  team's turns since its claims last advanced or a score last rose.
+
+Inputs are records the host already keeps: each service's retained finished
+commands (up to 16 per service), run token counts, claims and score probe
+samples. Commands are classified only when a team's retained set changes. Each
+fact is reported once and again only after it clears; history before the
+antibody's subscription is not reported. Quiet teams, single blocked claims and
+abandoned claims are ordinary coordination for the lead or advisor and do not
+wake an antibody. Stopping the last antibody drops the snapshots of teams no
+advisor watches.
+
+**What it does.** It reads the facts and `control_intel_brief` (one team with
+`chat_id`, or the whole node), decides whether a team is working against its
+goal, and sends that team's lead one note with `control_agent_message`. Notes
+are allowed only to another team's steering chat (a top-level chat with
+members), never to members or its own tree, carry no services, and arrive as an
+"Antibody note" that the lead verifies like advisor evidence. If the lead is not
+fixing it, or the operator is needed, it sends one `control_operator_notify`.
+
+**Operator notices.** `control_operator_notify` is a small generic tool: an
+approved antibody, or the lead of a tree whose lenses offer `operator.notify`,
+records a short notice (at most 600 characters, optionally naming a team). It
+is rate-limited node-wide (`operator_notices_per_hour`, default 4; 0 disables
+notices) and an identical notice is refused for a day. Notices appear for a day
+as `pending_notices` in `control.requests.list`, so channels forward each once
+(Discord DMs, kind `notice`); replying steers the tree that sent it. No decision
+is requested.
+
+**Intel briefs.** `control_intel_brief` (worker) and `control.intel.brief`
+(operator) render a Markdown brief of the last 24 hours: per active team its
+goal, members, model turns, claims done and open, score probe changes, tokens,
+observed pathologies (from the advisor/antibody snapshots, or "not observed")
+and requests waiting on the operator. Untrusted text is made Markdown-inert. A
+worker reads its own team; an approved antibody reads any team or the node.
+`save: true` on the operator call writes `intel/brief-DATE.md` under the state
+directory. Channels with `"brief": true` deliver the node brief once a day after
+`brief_hour` (UTC); see [setup](setup.md).
 
 ## Ganglia
 
@@ -404,9 +481,10 @@ no packages, so leave it out when a run should rebuild a tool from scratch.
 ## Current boundaries
 
 Tool hints contribute to context and catalogue discovery. They do not filter
-callable worker tools, and deselecting a hint revokes no grant. The one exception
-is `team.advisor`, which decides whether the advisor option exists for a task
-tree (an availability gate, not a grant). Host operations enforce execution
+callable worker tools, and deselecting a hint revokes no grant. The exceptions
+are `team.advisor` and `node.antibody`, which decide whether the advisor or
+antibody option exists for a task tree, and `operator.notify`, which a lead needs
+to send operator notices (availability gates, not grants). Host operations enforce execution
 authority independently. Captured documents are attributed evidence, not
 instructions or accepted facts. Inspect the captured context to check what a
 worker received.

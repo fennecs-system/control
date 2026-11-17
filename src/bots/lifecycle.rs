@@ -12,6 +12,7 @@
 //! itself through the team it advises. The model interprets; the host only
 //! observes.
 use super::{Message, Reason};
+use super::pathology::{self, Burn, Churn, Loop, Polling};
 use crate::State;
 use crate::rooms::claims::{self, Claim, Status};
 use control_effect::machine::Machine;
@@ -66,6 +67,19 @@ pub struct Facts {
     /// candidate.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub timed_out: Vec<String>,
+    /// Pathology: file- or tool-building commands kept running while the
+    /// team's claims and score probes did not advance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub churn: Option<Churn>,
+    /// Pathology: a member's same command failed again and again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub loops: Vec<Loop>,
+    /// Pathology: a member keeps issuing status-only commands.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub polling: Vec<Polling>,
+    /// Pathology: many tokens spent since the team last advanced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub burn: Option<Burn>,
     /// Chats the facts concern, newest first and bounded.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub chats: Vec<String>,
@@ -311,6 +325,22 @@ impl Facts {
         for chat in &newer.timed_out {
             self.timed_out(chat);
         }
+        self.churn = newer.churn.clone().or(self.churn.take());
+        self.burn = newer.burn.or(self.burn);
+        for found in &newer.loops {
+            if let Some(held) = self.loops.iter_mut().find(|held| held.chat == found.chat && held.command == found.command) {
+                held.clone_from(found);
+            } else if self.loops.len() < CHATS {
+                self.loops.push(found.clone());
+            }
+        }
+        for found in &newer.polling {
+            if let Some(held) = self.polling.iter_mut().find(|held| held.chat == found.chat) {
+                held.clone_from(found);
+            } else if self.polling.len() < CHATS {
+                self.polling.push(found.clone());
+            }
+        }
         for chat in &newer.chats {
             self.concern(chat);
         }
@@ -371,7 +401,14 @@ impl Facts {
     fn is_empty(&self) -> bool {
         self.repeated == 0 && self.retired == 0 && self.abandoned == 0 && self.blocked.is_empty() && !self.quiescent
             && self.stalled.is_none() && self.shared.is_empty() && self.bottlenecks.is_empty() && self.uncheckpointed.is_empty()
-            && self.timed_out.is_empty()
+            && self.timed_out.is_empty() && self.churn.is_none() && self.loops.is_empty() && self.polling.is_empty() && self.burn.is_none()
+    }
+    /// The facts an antibody hears: gaps that suggest a team is off course.
+    /// Quiet teams, single blocked claims and abandoned claims are ordinary
+    /// coordination its lead or advisor handles.
+    pub(super) fn pathological(&self) -> Self {
+        let facts = Self { quiescent: false, blocked: Vec::new(), abandoned: 0, ..self.clone() };
+        if facts.is_empty() { Self::default() } else { facts }
     }
     pub(super) fn describe(&self, root: &str) -> String {
         let mut parts = Vec::new();
@@ -407,6 +444,18 @@ impl Facts {
         for chat in &self.timed_out {
             let role = if chat == root { "the lead" } else { "member" };
             parts.push(format!("{role} {chat}'s turn reached its time limit and was stopped before it checkpointed"));
+        }
+        if let Some(churn) = &self.churn {
+            parts.push(format!("harness churn: {} file- or tool-building command(s) ran while no claim advanced and no score rose (members: {})", churn.commands, churn.members.join(", ")));
+        }
+        for found in &self.loops {
+            parts.push(format!("repetition loop: member {} ran the same command {} times and it failed each time: \"{}\"", found.chat, found.failures, found.command));
+        }
+        for found in &self.polling {
+            parts.push(format!("polling: {} of member {}'s recent commands only read status; a routine (control_watch_start) could report instead", found.commands, found.chat));
+        }
+        if let Some(burn) = self.burn {
+            parts.push(format!("cost burn: {} tokens spent since a claim last advanced or a score last rose", burn.tokens));
         }
         if self.quiescent { parts.push("the team went quiet: no member turn is running or queued".into()); }
         let chats = if self.chats.is_empty() { String::new() } else { format!(" (chats: {})", self.chats.join(", ")) };
@@ -462,6 +511,29 @@ pub(super) struct Team {
     /// otherwise.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) timed: Vec<String>,
+    /// Pathology observations (`pathology`).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub(super) pathology: pathology::Snapshot,
+}
+impl Team {
+    /// What currently holds for this team, one phrase each, for briefs.
+    pub(super) fn conditions(&self) -> Vec<String> {
+        let mut found = Vec::new();
+        if !self.failing.is_empty() { found.push(format!("{} member(s) on a failure streak", self.failing.len())); }
+        if !self.sharing.is_empty() { found.push(format!("{} member(s) report a similar blocker", self.sharing.len())); }
+        if !self.necks.is_empty() { found.push(format!("{} bottleneck claim(s)", self.necks.len())); }
+        if self.stalled { found.push("busy but stalled".into()); }
+        if !self.timed.is_empty() { found.push(format!("{} member(s) whose latest turn timed out", self.timed.len())); }
+        let sick = &self.pathology;
+        if !sick.loops.is_empty() { found.push(format!("{} repetition loop(s)", sick.loops.len())); }
+        if !sick.polling.is_empty() { found.push(format!("polling: {}", sick.polling.join(", "))); }
+        if sick.churned { found.push(format!("harness churn ({} building commands without progress)", sick.churn)); }
+        if sick.burned { found.push("cost burn without progress".into()); }
+        found
+    }
+}
+fn is_default(value: &pathology::Snapshot) -> bool {
+    *value == pathology::Snapshot::default()
 }
 fn is_zero_count(value: &usize) -> bool {
     *value == 0
@@ -512,15 +584,14 @@ fn echo(run: &crate::runtime::Run) -> bool {
 /// advised team, with the snapshot to record. Read-only; one pass over chats,
 /// runs and claims, and only when an advisor exists.
 pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
-    let roots = advised(state);
-    if roots.is_empty() {
+    let mut roots = advised(state);
+    let immune = super::antibodies_active(state);
+    if roots.is_empty() && !immune {
         return Vec::new();
     }
     let index = state.chats.iter().enumerate().map(|(i, chat)| (chat.id.as_str(), i)).collect::<Fast<_, _>>();
-    // Member chat → its position in `state.chats`; `team_at` gives its team.
-    let mut member: Fast<&str, usize> = Fast::default();
-    let mut team_at = vec![usize::MAX; state.chats.len()];
-    for (position, chat) in state.chats.iter().enumerate() {
+    // Each chat's top-level chat, as a position in `state.chats`.
+    let tops = state.chats.iter().map(|chat| {
         let mut session = chat;
         for _ in 0..64 {
             match session.parent_chat.as_deref().and_then(|parent| index.get(parent)) {
@@ -528,11 +599,35 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
                 None => break,
             }
         }
-        if session.parent_chat.is_none() && let Ok(team) = roots.binary_search(&session.id.as_str()) {
+        session.parent_chat.is_none().then(|| index[session.id.as_str()])
+    }).collect::<Vec<_>>();
+    if immune {
+        // An antibody observes every team (a root with spawned members),
+        // except trees that run antibodies themselves.
+        let mut teams = tops.iter().enumerate().filter_map(|(position, top)| top.filter(|top| *top != position)).collect::<Vec<_>>();
+        teams.sort_unstable();
+        teams.dedup();
+        roots.extend(teams.into_iter().map(|top| state.chats[top].id.as_str()).filter(|root| !super::antibody_offered(state, root)));
+        roots.sort_unstable();
+        roots.dedup();
+    }
+    if roots.is_empty() {
+        return Vec::new();
+    }
+    // Member chat → its position in `state.chats`; `team_at` gives its team.
+    let mut member: Fast<&str, usize> = Fast::default();
+    let mut team_at = vec![usize::MAX; state.chats.len()];
+    for (position, chat) in state.chats.iter().enumerate() {
+        if let Some(top) = tops[position] && let Ok(team) = roots.binary_search(&state.chats[top].id.as_str()) {
             member.insert(chat.id.as_str(), position);
             team_at[position] = team;
         }
     }
+    // Retained finished commands, by the run that requested them; the run
+    // pass below resolves runs to members.
+    let finished = crate::services::finished_commands(state).collect::<Vec<_>>();
+    let mut by_run: Fast<&str, usize> = finished.iter().map(|command| (command.run, usize::MAX)).collect();
+    let mut unresolved = by_run.len();
     let threshold = state.runtime.execution.advisor_failure_streak.max(2);
     // Per member, newest first: consecutive failed or blocked turns, until a
     // turn that settled otherwise. Interrupted and cancelled turns neither
@@ -548,6 +643,12 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
         let Some(&position) = run.chat_id.as_deref().and_then(|chat| member.get(chat)) else { continue };
         if crate::delegation::is_judge(run) {
             continue;
+        }
+        // Commands come from recent runs; the newest-first walk stops looking
+        // once every one is resolved.
+        if unresolved > 0 && let Some(slot) = by_run.get_mut(run.id.as_str()).filter(|slot| **slot == usize::MAX) {
+            *slot = position;
+            unresolved -= 1;
         }
         let scan = &mut scans[team_at[position]];
         match run.status.as_str() {
@@ -612,9 +713,41 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
             timing[team_at[position]].push(state.chats[position].id.as_str());
         }
     }
+    // Per team: pathology inputs (member commands, tokens, score advances).
+    // Token totals change only as turns settle, so a team's runs are summed
+    // again only when its settled count changed; otherwise the last total holds.
+    let mut sick = roots.iter().zip(&scans).map(|(root, scan)| {
+        let known = state.bots.teams.get(*root).map(|team| &team.pathology).filter(|known| known.turns == scan.settled);
+        pathology::Scan { tokens: known.map_or(u64::MAX, |known| known.spent), turns: scan.settled, ..Default::default() }
+    }).collect::<Vec<_>>();
+    if sick.iter().any(|scan| scan.tokens == u64::MAX) {
+        for scan in sick.iter_mut().filter(|scan| scan.tokens == u64::MAX) {
+            scan.tokens = 0;
+            scan.recount = true;
+        }
+        for run in &state.runtime.runs {
+            let Some(&position) = run.chat_id.as_deref().and_then(|chat| member.get(chat)) else { continue };
+            let scan = &mut sick[team_at[position]];
+            if scan.recount && !crate::delegation::is_judge(run) {
+                scan.tokens += run.attempts.iter().filter_map(|attempt| attempt.tokens).map(|t| t.input_tokens.saturating_add(t.output_tokens)).sum::<u64>();
+            }
+        }
+    }
+    for command in &finished {
+        if let Some(&position) = by_run.get(command.run).filter(|position| **position != usize::MAX) {
+            sick[team_at[position]].commands.push((state.chats[position].id.as_str(), command.id, command.command, command.failed));
+        }
+    }
+    for probe in &state.scores {
+        if let Some(&position) = member.get(probe.chat.as_str()) {
+            let scan = &mut sick[team_at[position]];
+            scan.score = scan.score.max(pathology::raised(&probe.samples));
+        }
+    }
+    let limits = pathology::Limits::of(&state.runtime.execution);
     let window = state.runtime.execution.advisor_stall_turns.max(4);
     let crowd = state.runtime.execution.advisor_bottleneck_members.max(2);
-    roots.into_iter().zip(scans).zip(failing).zip(held).zip(timing).enumerate().filter_map(|(slot, ((((root, scan), failing), held), timing))| {
+    roots.into_iter().zip(scans).zip(failing).zip(held).zip(timing).zip(sick).enumerate().filter_map(|(slot, (((((root, scan), failing), held), timing), sick))| {
         let Claims { blocked, open, progress, reasons, revisions } = held;
         let newest = blocked.iter().map(|claim| claim.blocked_at).max().unwrap_or(0);
         // Reasons are compared only when two members could share one and the
@@ -646,10 +779,20 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
             let sharing = sharing.into_iter().map(str::to_owned).collect();
             let necks = identities(necks.as_deref().unwrap_or_default());
             let timed = timing.into_iter().map(str::to_owned).collect();
-            return Some((root.to_owned(), Team { cursor: 0, failing, settled: scan.settled, blocked: newest, progress, since: scan.settled, open: open > 0, stalled: false, sharing, reasons: fingerprint, claims: revisions, necks, timed }, Facts::default()));
+            let (pathology, _) = pathology::fold(None, &sick, false, limits);
+            return Some((root.to_owned(), Team { cursor: 0, failing, settled: scan.settled, blocked: newest, progress, since: scan.settled, open: open > 0, stalled: false, sharing, reasons: fingerprint, claims: revisions, necks, timed, pathology }, Facts::default()));
         };
         let mut team = known.clone();
         let mut facts = Facts::default();
+        let (pathology, found) = pathology::fold(Some(&known.pathology), &sick, progress > known.progress, limits);
+        team.pathology = pathology;
+        for found in &found.loops {
+            facts.concern(&found.chat);
+        }
+        for found in &found.polling {
+            facts.concern(&found.chat);
+        }
+        (facts.churn, facts.loops, facts.polling, facts.burn) = (found.churn, found.loops, found.polling, found.burn);
         for chat in failing.iter().filter(|chat| !known.failing.iter().any(|known| known == *chat)) {
             facts.repeated += 1;
             facts.concern(chat);
@@ -716,7 +859,7 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
 /// Teams without a recorded snapshot have not started their subscription.
 pub(super) fn concern(state: &State, pending: &mut BTreeMap<String, Facts>, chat: &str, add: impl FnOnce(&mut Facts)) {
     let Some(root) = super::root(state, chat) else { return };
-    if !state.bots.teams.contains_key(root) || !super::advisor_offered(state, root) {
+    if !state.bots.teams.contains_key(root) || !(super::advisor_offered(state, root) || super::antibodies_active(state)) {
         return;
     }
     let facts = pending.entry(root.to_owned()).or_default();
@@ -724,21 +867,56 @@ pub(super) fn concern(state: &State, pending: &mut BTreeMap<String, Facts>, chat
     facts.concern(chat);
 }
 
-/// Offers each team's coalesced facts once, at its next cursor.
+/// Offers each team's coalesced facts once, at its next cursor, to its
+/// advisor; and the pathological ones of every team, as one node event, to
+/// antibodies.
 pub(super) fn offer(state: &mut State, pending: BTreeMap<String, Facts>, now: control_effect::machine::Now) -> Vec<control_effect::machine::Planned<control_bot::BotId, super::Effect>> {
     let mut effects = Vec::new();
+    let immune = super::antibodies_active(state);
+    let mut node = BTreeMap::new();
     for (root, facts) in pending {
         let Some(team) = state.bots.teams.get_mut(&root).filter(|_| !facts.is_empty()) else { continue };
         team.cursor += 1;
         let cursor = team.cursor;
-        effects.extend(state.bots.supervisor.step(control_bot::Event::Info { topic: topic(&root), cursor, from: None, info: Message::Lifecycle(facts) }, now));
+        if immune {
+            let sick = facts.pathological();
+            if !sick.is_empty() && node.len() < NODE_TEAMS {
+                node.insert(root.clone(), sick);
+            }
+        }
+        effects.extend(state.bots.supervisor.step(control_bot::Event::Info { topic: topic(&root), cursor, from: None, info: Message::Lifecycle(Box::new(facts)) }, now));
+    }
+    if !node.is_empty() {
+        state.bots.node_cursor += 1;
+        let cursor = state.bots.node_cursor;
+        effects.extend(state.bots.supervisor.step(control_bot::Event::Info { topic: node_topic(), cursor, from: None, info: Message::Node(node) }, now));
     }
     effects
+}
+/// Teams named in one node event; an antibody reads the rest with its brief.
+pub(super) const NODE_TEAMS: usize = 16;
+/// The node topic antibodies subscribe to.
+pub(super) const NODE_KIND: &str = "node";
+pub(super) fn node_topic() -> Topic {
+    Topic::new(NODE_KIND, "teams")
+}
+pub(super) fn node_source() -> Source {
+    Source::Topic(node_topic())
+}
+/// Whether a definition is an antibody's: it hears the node topic.
+pub(super) fn immune(definition: &control_bot::Definition) -> bool {
+    definition.sources.contains(&node_source())
 }
 
 /// A stopped advisor's snapshot is dropped, so a later advisor for the same
 /// team starts from its own subscription rather than an old observation.
 pub(super) fn forget(state: &mut State, chat: &str) {
+    // The last antibody's snapshots of teams no advisor watches go with it.
+    let last = state.bots.supervisor.definitions().filter(|definition| immune(definition)).all(|definition| definition.chat.0 == chat);
+    if last && state.bots.supervisor.definitions().any(|definition| definition.chat.0 == chat && immune(definition)) {
+        let advised = advised(state).into_iter().map(str::to_owned).collect::<Vec<_>>();
+        state.bots.teams.retain(|root, _| advised.contains(root));
+    }
     let roots = state.bots.supervisor.definitions().filter(|definition| definition.chat.0 == chat)
         .flat_map(|definition| &definition.sources).filter_map(|source| match source {
             Source::Topic(topic) if topic.kind == KIND => Some(topic.name.clone()),

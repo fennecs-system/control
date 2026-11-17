@@ -11,6 +11,7 @@ mod tools;
 mod workspace;
 pub use tools::{ServiceCall, ServiceOps, Tools};
 pub(crate) use commands::activity as command_activity;
+pub(crate) use commands::finished as finished_commands;
 pub(crate) use commands::{ProbeOutput, probe, probe_target};
 #[cfg(test)]
 pub(crate) use commands::enqueue_test as enqueue_test_command;

@@ -66,6 +66,7 @@ mod rust_bench;
 mod solver;
 mod scheduler;
 mod scores;
+mod intel;
 mod services;
 mod spawning;
 mod session_http;

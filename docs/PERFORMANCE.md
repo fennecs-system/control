@@ -254,7 +254,26 @@ cargo test --release --locked --bin control bots::tests::reconcile_profile -- --
 ```
 
 Set `CONTROL_PROFILE_ADVISOR=1` for the advisor cases, `blocked` for the
-blocked-claims case and `off` for a defined advisor with its lens unticked.
+blocked-claims case, `off` for a defined advisor with its lens unticked and
+`antibody` for one [antibody](LENSES.md#antibodies) observing the node, with 8
+services of 16 retained member commands from recent turns.
+
+**Pathology facts and antibodies (2026-11-17).** Alternating base (`f4f8a23`) and
+head runs, three each, medians in µs; the laptop was under heavy concurrent
+load, so read these as ranges:
+
+| Case | Base, none | Head, none | Base, advisor | Head, advisor | Head, antibody |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| idle, 64 chats | 29.5 | 28.9 | 49.0 | 50.2 | 61.7 |
+| offered, 64 chats | 37.3 | 37.8 | 57.1 | 58.8 | 68.4 |
+| idle, 512 chats | 223.4 | 225.7 | 386.9 | 388.8 | 416.9 |
+| offered, 512 chats | 228.2 | 236.5 | 398.9 | 400.9 | 422.3 |
+
+Nodes without an observer are unchanged. Pathology inputs add a probe per run
+only until every retained command's run is resolved (newest first), command
+classification only when a team's retained set changes, and a token re-sum only
+when a team's settled-turn count changes; summing tokens on every pass cost
+about 20 µs at 9,217 runs and was dropped.
 
 **Bounded recovery.** Checkpoint recovery is bounded per streak (see
 [TURN-CONTINUITY.md](TURN-CONTINUITY.md)). The `bots::tests::recovery` replay

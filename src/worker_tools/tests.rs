@@ -1093,3 +1093,58 @@ fn tool_results_carry_the_observation_for_text_and_structured_clients() {
     });
     assert_eq!(state.runtime.runs[0].attempts[0].activity.last().unwrap().output, "posted");
 }
+#[test]
+fn an_approved_antibody_reads_every_team_notes_other_leads_and_notifies_the_operator() {
+    let mut s = State::default();
+    // A team on the node, with its lead and one member.
+    let lead = crate::chat::create(&mut s);
+    crate::chat::send(&mut s, &lead, "Build the wall", "test").unwrap();
+    s.runtime.runs[0].status = "completed".into();
+    let member = crate::chat::create(&mut s);
+    s.chats.iter_mut().find(|c| c.id == member).unwrap().parent_chat = Some(lead.clone());
+    crate::chat::send(&mut s, &member, "Place blocks", "test").unwrap();
+    s.runtime.runs.last_mut().unwrap().status = "completed".into();
+    s.runtime.runs.last_mut().unwrap().attempts = vec![crate::usage::Attempt { started_unix: crate::bots::now_ms() / 1000, ..Default::default() }];
+    // The operator's observer tree: the antibody lens and a judge child.
+    let observer = crate::chat::create(&mut s);
+    s.chats.iter_mut().find(|c| c.id == observer).unwrap().lenses = Some(vec!["antibody".into()]);
+    crate::chat::send(&mut s, &observer, "Watch the node", "test").unwrap();
+    s.runtime.runs.last_mut().unwrap().status = "completed".into();
+    let chat = crate::chat::create(&mut s);
+    let session = s.chats.iter_mut().find(|c| c.id == chat).unwrap();
+    (session.parent_chat, session.room) = (Some(observer.clone()), Some("general".into()));
+    crate::chat::send(&mut s, &chat, "Tag pathologies", "test").unwrap();
+    let run = s.runtime.runs.last_mut().unwrap();
+    let id = run.id.clone();
+    run.status = "running".into();
+    run.persona = Some(crate::delegation::Persona { role: crate::delegation::Role::Judge, root: "root".into(), depth: 1, parent: None });
+    run.attempts = vec![crate::usage::Attempt { review_only: true, workspace_id: Some("gen-1".into()), ..Default::default() }];
+    let shared = Arc::new(Mutex::new(s));
+    let call = |nonce: &str, name: &str, arguments: Value| rpc(&shared, &id, &json!({"nonce":nonce,"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":arguments}}}));
+    let failure = |value: Value| crate::toolbox::failure_text(&value).unwrap_or_default().to_owned();
+    // Before approval it is an ordinary judge: no notes or notices.
+    assert!(failure(call("n0", "control_operator_notify", json!({"text":"x"}))).contains("Judge policy"));
+    crate::bots::command(&mut shared.lock().unwrap(), &chat, "on").unwrap();
+    assert!(shared.lock().unwrap().bots.antibody(&chat));
+    // Read-only over the whole node.
+    let brief = call("n1", "control_intel_brief", json!({}));
+    assert_eq!(brief["result"]["isError"], false, "{brief}");
+    let markdown = brief["result"]["structuredContent"]["data"]["markdown"].as_str().unwrap().to_owned();
+    assert!(markdown.contains(&format!("({lead})")) && !markdown.contains(&format!("({observer})")), "{markdown}");
+    assert!(failure(call("n2", "control_room_post", json!({"message":"Team is looping"}))).contains("does not post to rooms"));
+    for name in ["control_agent_spawn", "control_service_exec", "control_room_claim", "control_design_ask"] {
+        assert!(failure(call("n3", name, json!({}))).contains("Judge policy"), "{name}");
+    }
+    // Notes go only to another team's steering chat.
+    assert!(failure(call("n4", "control_agent_message", json!({"chat_id":member,"text":"Stop looping"}))).contains("another team's steering chat"));
+    assert!(failure(call("n5", "control_agent_message", json!({"chat_id":observer,"text":"Hello"}))).contains("another team's steering chat"));
+    let note = call("n6", "control_agent_message", json!({"chat_id":lead,"text":"Member keeps re-running the same failing command"}));
+    assert_eq!(note["result"]["isError"], false, "{note}");
+    // Operator notices: recorded once, forwarded by channels, never repeated.
+    let notice = call("n7", "control_operator_notify", json!({"text":"Team is looping on one command","team":lead}));
+    assert_eq!(notice["result"]["isError"], false, "{notice}");
+    assert!(failure(call("n8", "control_operator_notify", json!({"text":"Team is looping on one command"}))).contains("never repeated"));
+    let state = shared.lock().unwrap();
+    assert_eq!(state.bots.notices.len(), 1);
+    assert!(state.collective.posts.is_empty() && state.services.is_empty());
+}

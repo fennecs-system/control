@@ -2323,6 +2323,8 @@ fn node_wide_requests_route_a_descendant_bot_request_to_its_top_level_chat() {
 mod reconcile_profile;
 #[path = "tests/advisor.rs"]
 mod advisor;
+#[path = "tests/antibody.rs"]
+mod antibody;
 #[path = "tests/recovery.rs"]
 mod recovery;
 #[path = "tests/timeout.rs"]

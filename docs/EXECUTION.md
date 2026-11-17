@@ -48,6 +48,11 @@ taken from saved run state, model output or tool arguments.
 | `peer_digest_seconds` | 600 | 30–86,400 | How long a non-urgent agent message waits before a digest turn ([room notifications](ROOM-NOTIFICATIONS.md)). |
 | `observation_max_bytes` | 2,048 | 256–16,384 | Size of a chat's [fresh observation](WATCHES.md#fresh-observations). |
 | `local_agent_steps` | 64 | 16–1,024 | Model steps per [local-model turn](LOCAL-MODELS.md#local-agent-turns). |
+| `pathology_churn_commands` | 12 | 2–1,024 | File- or tool-building commands without progress before a harness-churn fact ([antibodies](LENSES.md#antibodies)). |
+| `pathology_repeat_failures` | 3 | 2–16 | Failures of one member's same command before a repetition-loop fact. |
+| `pathology_poll_commands` | 6 | 2–16 | Status-only commands of one member before a polling fact. |
+| `pathology_burn_tokens` | 2,000,000 | 10,000–1,000,000,000 | Team tokens without progress before a cost-burn fact. |
+| `operator_notices_per_hour` | 4 | 0–60 | Operator notices the node forwards per hour; 0 disables them. |
 
 ## Supervisor
 
