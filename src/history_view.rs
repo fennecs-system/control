@@ -222,12 +222,12 @@ impl std::hash::Hasher for Words {
         self.0
     }
     fn write(&mut self, bytes: &[u8]) {
-        let mut chunks = bytes.chunks_exact(8);
-        for chunk in &mut chunks {
-            self.mix(u64::from_le_bytes(chunk.try_into().expect("eight bytes")));
+        let (words, rest) = bytes.as_chunks::<8>();
+        for word in words {
+            self.mix(u64::from_le_bytes(*word));
         }
         let mut tail = [0; 8];
-        tail[..chunks.remainder().len()].copy_from_slice(chunks.remainder());
+        tail[..rest.len()].copy_from_slice(rest);
         self.mix(u64::from_le_bytes(tail) ^ bytes.len() as u64);
     }
 }
