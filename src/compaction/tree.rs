@@ -373,36 +373,28 @@ fn subtree(chat: &str, block: Block, children: &[(Block, Option<&Node>)], edits:
     out
 }
 
+/// Nothing selected: a hint plus the active pins/drops and the edit log,
+/// compactly. Pin, drop and regenerate forms live in a selection's detail.
 fn edits_panel(d: &Detail) -> String {
     let chat = d.chat.as_str();
-    let mut out = String::from("<h3>Operator edits</h3><p class='mt-note'>Edits are operator-only and versioned: nothing is deleted. The agent's next turn uses them.</p>");
-    out.push_str("<div class='mt-forms'>");
-    let _ = write!(out, "<form method='post' action='{}' target='_top' class='mt-form'><input type='hidden' name='action' value='pin'><label>Pin entry verbatim (#)<input name='at' type='number' min='0' max='{}' required></label><button>Pin</button></form>", memory_url(chat), d.len.saturating_sub(1));
-    let _ = write!(out, "<form method='post' action='{}' target='_top' class='mt-form'><input type='hidden' name='action' value='drop'><label>Drop range from agent view: start<input name='start' type='number' min='0' max='{}' required></label><label>end (exclusive)<input name='end' type='number' min='1' max='{}' required></label><button>Drop range</button></form></div>", memory_url(chat), d.len.saturating_sub(1), d.len);
-    if !d.edits.pins.is_empty() {
-        out.push_str("<h3>Pinned entries</h3><ul class='mt-list'>");
+    let mut out = String::from("<p class='mt-empty'>Select a block to regenerate, pin or drop.</p>");
+    let drops = d.edits.drops.iter().filter(|drop| drop.restored_unix.is_none()).collect::<Vec<_>>();
+    if !d.edits.pins.is_empty() || !drops.is_empty() {
+        out.push_str("<ul class='mt-active'>");
         for pin in &d.edits.pins {
-            let _ = write!(out, "<li><a href='{}/node?entry={pin}'>#{pin}</a> {}</li>", memory_url(chat), button(chat, "unpin", &[("at", pin.to_string())], "Unpin", ""));
+            let _ = write!(out, "<li>Pinned <a href='{}/node?entry={pin}'>#{pin}</a> {}</li>", memory_url(chat), button(chat, "unpin", &[("at", pin.to_string())], "Unpin", "mt-link"));
         }
-        out.push_str("</ul>");
-    }
-    if !d.edits.drops.is_empty() {
-        out.push_str("<h3>Dropped ranges</h3><ul class='mt-list'>");
-        for drop in d.edits.drops.iter().rev() {
-            let state = match drop.restored_unix {
-                Some(at) => format!("restored {}", when(at)),
-                None => button(chat, "restore", &[("id", drop.id.to_string())], "Restore", ""),
-            };
-            let _ = write!(out, "<li>d{} · entries {}–{} · dropped {} {state}</li>", drop.id, drop.start, drop.end, when(drop.created_unix));
+        for drop in drops.iter().rev() {
+            let _ = write!(out, "<li>Dropped {}–{} <span class='muted'>d{} · {}</span> {}</li>", drop.start, drop.end, drop.id, when(drop.created_unix), button(chat, "restore", &[("id", drop.id.to_string())], "Restore", "mt-link"));
         }
         out.push_str("</ul>");
     }
     if !d.edits.log.is_empty() {
-        out.push_str("<h3>Edit log</h3><ol class='mt-list mt-log' reversed>");
+        let _ = write!(out, "<details class='mt-log-panel' open><summary>Edit log · {}</summary><ol class='mt-log' reversed>", d.edits.log.len());
         for event in d.edits.log.iter().rev().take(50) {
             let _ = write!(out, "<li><span class='muted'>{}</span> {} · {}</li>", when(event.at), esc(&event.action), esc(&event.detail));
         }
-        out.push_str("</ol>");
+        out.push_str("</ol></details>");
     }
     out
 }
@@ -413,12 +405,11 @@ fn detail_page(d: &Detail, nodes: io::Result<Loaded>) -> String {
     let chat = d.chat.as_str();
     let base = memory_url(chat);
     let mut body = String::new();
-    let _ = write!(body, "<p class='mt-links'><a href='{base}/node'>All edits</a> · <a href='{}' target='_top'>Overview</a></p>", base);
+    if !matches!(d.target, Target::Overview) {
+        let _ = write!(body, "<p class='mt-links'><a href='{base}/node'>All edits</a> · <a href='{}' target='_top'>Overview</a></p>", base);
+    }
     match &d.target {
-        Target::Overview => {
-            body.push_str("<h2>Select a block</h2><p class='mt-note'>Choose a block or entry in the diagram above to expand it.</p>");
-            body.push_str(&edits_panel(d));
-        }
+        Target::Overview => body.push_str(&edits_panel(d)),
         Target::Entry(at, text) => {
             let at = *at;
             let pinned = d.edits.pinned(at);
@@ -500,6 +491,8 @@ fn detail_page(d: &Detail, nodes: io::Result<Loaded>) -> String {
                 body.push_str(&button(chat, "drop", &[("start", block.start.to_string()), ("end", block.end().to_string())], &format!("Drop entries {}–{} from agent view", block.start, block.end()), ""));
             }
             body.push_str("</div>");
+            // Any other range, prefilled with this block's (end-exclusive).
+            let _ = write!(body, "<details class='mt-more'><summary>Drop a different range…</summary><form method='post' action='{base}' target='_top' class='mt-form mt-range'><input type='hidden' name='action' value='drop'><label>Start<input name='start' type='number' min='0' max='{}' value='{}' required></label><label>End (exclusive)<input name='end' type='number' min='1' max='{}' value='{}' required></label><button>Drop range</button></form></details>", d.len.saturating_sub(1), block.start, d.len, block.end().min(d.len as u64));
         }
     }
     format!(

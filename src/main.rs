@@ -185,7 +185,7 @@ fn render_with_content(state: &State, view: &str, lens: &str, channel: &str, sup
         .replace("{{section_navigation}}", &navigation::secondary(view))
         .replace("{{layout_class}}", if chat_navigation { "chat-workspace" } else if view == "rooms" { "rooms-workspace" } else if navigation::managed(view) { "with-section-nav" } else { "" })
         .replace("{{page_title}}", &navigation::heading(view));
-    let content = supplied.or_else(|| if view == "monitor" { Some(usage::render(&state.runtime)) } else if view == "agents" { Some(bots::page(state, &graveyard::Query::default())) } else { state.runtime.render(view,lens) }).or_else(|| state.collective.render(view, channel)).unwrap_or_else(|| match view {
+    let content = supplied.or_else(|| if view == "monitor" { Some(usage::render(state)) } else if view == "agents" { Some(bots::page(state, &graveyard::Query::default())) } else { state.runtime.render(view,lens) }).or_else(|| state.collective.render(view, channel)).unwrap_or_else(|| match view {
         "providers" => providers::render(&state.runtime),
         "tools" => tool_catalog::render(state, if channel == "general" { "" } else { channel }),
         "session" => chat::render(state,channel).unwrap_or_else(escape),
@@ -199,16 +199,17 @@ fn render_with_content(state: &State, view: &str, lens: &str, channel: &str, sup
         "personas" => personas::render(state, "lead", None, None),
         "agents" => format!("<div class='section-heading'><div><span class='eyebrow'>EXECUTION / SIMULATED</span><h2>Agent sessions</h2></div></div><p class='muted'>Spawn a local demonstration session. Remote execution is not connected.</p>{}<form method='post' action='/spawn'><label>Session objective<input required name='objective' placeholder='Map the knowledge graph…' maxlength='300'></label><label>Provider<select name='provider'><option>Anthropic</option><option>OpenAI</option><option>Self-hosted</option></select></label><button class='primary'>＋ Spawn demo agent</button></form>", state.agents.iter().enumerate().map(|(i,a)| format!("<div class='session'><span class='dot'></span><div><strong>agent / {:03}</strong><p>{}</p></div><span class='tag'>simulated</span></div>", i+1, escape(a))).collect::<String>()),
         "nodes" => "<span class='eyebrow'>NODES · PLANNED</span><h2>Nodes</h2><p class='muted'>Remote nodes are not connected.</p><div class='node-grid'><article><span class='node-icon'>⌘</span><h3>control.local</h3><p>This laptop</p><span class='tag'>local</span></article><article><span class='node-icon'>◇</span><h3>forge.tailnet</h3><p>Development · planned</p><span class='tag'>not connected</span></article><article><span class='node-icon'>◈</span><h3>archive.tailnet</h3><p>Knowledge · planned</p><span class='tag'>not connected</span></article></div>".into(),
-        _ => lens_ui::overview(state,lens),
+        // Unknown views (including the retired Overview) show the Usage page.
+        _ => usage::render(state),
     });
     page = page.replace("{{content}}", &content);
     page
 }
 /// Views whose `channel` is trusted, pre-rendered HTML from internal routes only.
 const INTERNAL_VIEWS: [&str; 8] = ["session-list", "history", "artifact-page", "browser", "tool-page", "knowledge-page", "lens-page", "persona-page"];
-/// `GET /`: query values are untrusted, so internal HTML-carrying views fall back to the hub.
+/// `GET /?view=…`: query values are untrusted, so internal HTML-carrying views fall back to Usage.
 fn public_render(state: &State, query: &HashMap<String, String>, lens: &str) -> String {
-    let view = query.get("view").map(String::as_str).filter(|v| !INTERNAL_VIEWS.contains(v)).unwrap_or("hub");
+    let view = query.get("view").map(String::as_str).filter(|v| !INTERNAL_VIEWS.contains(v)).unwrap_or("monitor");
     let channel = query.get(if view == "tools" { "q" } else { "channel" }).map(String::as_str).unwrap_or("general");
     if view=="agents" {
         return render_with_content(state,view,lens,channel,Some(bots::page(state,&graveyard::Query::from(query))));
@@ -229,8 +230,11 @@ fn public_page(state: &State, query: &HashMap<String, String>, lens: &str) -> (S
 /// `/?view=session` predates `/dm/{id}`; send it to the page that renders chat state.
 /// `/?view=runs` predates Bots / History and opens it with every DM's turns.
 /// `/?view=lenses` predates the DNA page at `/dna`.
+/// `/` lands on a new DM; the retired Overview (`/?view=hub`) moved to Usage.
 fn legacy_session_location(state: &State, query: &HashMap<String, String>) -> Option<String> {
-    match query.get("view")?.as_str() {
+    let Some(view) = query.get("view") else { return Some("/dms?new=1".to_owned()) };
+    match view.as_str() {
+        "hub" | "overview" => Some("/?view=monitor".to_owned()),
         "runs" => url_names::history("/bots/history/runs", ""),
         "lenses" => Some("/dna".to_owned()),
         "personas" => Some("/personas".to_owned()),
@@ -765,3 +769,7 @@ mod responsiveness_tests;
 #[cfg(test)]
 #[path = "main/tests/url_names_tests.rs"]
 mod url_names_tests;
+
+#[cfg(test)]
+#[path = "main/tests/ui_previews.rs"]
+mod ui_previews;

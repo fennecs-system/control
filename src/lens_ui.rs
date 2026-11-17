@@ -48,22 +48,5 @@ pub fn return_to(value: &str) -> &str {
         "/"
     }
 }
-pub fn overview(state: &crate::State, lens: &str) -> String {
-    format!("<h2>Overview</h2><div class='metrics'><div><b>{}</b><span>DMS</span></div><div><b>{}</b><span>RUNS</span></div><div><b>{}</b><span>GENES</span></div></div><div class='section-heading compact'><h3>DNA</h3><a href='/dna'>Open DNA ↗</a></div>{}",state.chats.len(),state.runtime.runs.len(),state.lens_library.current().len(),library(state,lens))
-}
-pub fn library(state: &crate::State, lens: &str) -> String {
-    let mut html = String::from("<div class='lens-grid'>");
-    for definition in state
-        .lens_library
-        .current()
-        .into_iter()
-        .filter(|d| !d.includes.is_empty() || !d.instructions.trim().is_empty())
-    {
-        let resolved = crate::lens_library::resolve(state, std::slice::from_ref(&definition.id));
-        html.push_str(&format!("<a class='lens-card {}' href='/dna?id={}'><span class='card-symbol'>◈</span><h3>{}</h3><p>{} included genes · v{}</p><footer>{} <span>↗</span></footer></a>",if definition.id==lens{"selected"}else{""},crate::escape(&definition.id),crate::escape(&definition.name),definition.includes.len(),definition.revision,resolved.map(|r|format!("{} tools · {} documents",r.tools.len(),r.documents.len())).unwrap_or_else(|_|"Needs attention".into())));
-    }
-    html.push_str("</div>");
-    html
-}
 #[cfg(test)]
 mod tests;

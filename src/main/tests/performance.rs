@@ -237,6 +237,28 @@ fn operator_views() {
         }
     }
 }
+/// The DNA page (gene list, editor and resolved context) as the library grows.
+#[test]
+#[ignore = "explicit release-mode synthetic timing; no credentials, models or source execution"]
+fn dna_page() {
+    let rounds = std::env::var("CONTROL_TIMING_ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(9);
+    for genes in [10, 100, 1000] {
+        let mut state = State::default();
+        crate::ui_previews::genes(&mut state, genes);
+        let selected = format!("gene-{:04}", genes / 2);
+        let mut samples = Vec::new();
+        for _ in 0..rounds {
+            let start = Instant::now();
+            for _ in 0..10 {
+                black_box(crate::lens_library::render(black_box(&state), &selected, None, None, false));
+            }
+            samples.push(start.elapsed().as_nanos() / 10);
+        }
+        samples.sort_unstable();
+        let bytes = crate::lens_library::render(&state, &selected, None, None, false).len();
+        println!("{}", serde_json::json!({"workload":"web_dna_page","genes":genes,"median_ns":samples[samples.len() / 2],"min_ns":samples[0],"bytes":bytes}));
+    }
+}
 /// The chat list/tree every client renders: `control.chats.list` (TUI picker,
 /// Discord `!chats`), the web conversation tree and one chat's heading, over
 /// task trees of eight chats.

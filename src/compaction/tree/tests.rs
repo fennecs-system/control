@@ -316,6 +316,24 @@ fn surgery_is_operator_only() {
 }
 
 #[test]
+fn empty_selection_shows_only_a_hint_and_forms_live_in_a_selection() {
+    let (state, chat, dir) = published();
+    let detail = plan_detail(&state, &chat, "");
+    let empty = detail_page(&detail, load_nodes(&detail, &dir));
+    let body = empty.split_once("<main>").unwrap().1;
+    assert_eq!(body, "<p class='mt-empty'>Select a block to regenerate, pin or drop.</p></main></body></html>", "no edits: the hint alone");
+    let detail = plan_detail(&state, &chat, "block=0.4");
+    let block = detail_page(&detail, load_nodes(&detail, &dir));
+    assert!(block.contains("value='regenerate'") || detail.model.is_none());
+    assert!(block.contains("Drop entries 0–16 from agent view"));
+    assert!(block.contains("<summary>Drop a different range…</summary>") && block.contains("name='start' type='number' min='0' max='31' value='0'") && block.contains("value='16' required"));
+    let detail = plan_detail(&state, &chat, "entry=4");
+    let entry = detail_page(&detail, load_nodes(&detail, &dir));
+    assert!(entry.contains("Pin verbatim") && entry.contains("Drop from agent view"));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn operator_forms_edit_and_redirect_to_the_memory_tree() {
     let (state, chat, dir) = published();
     let shared = Arc::new(Mutex::new(state));
@@ -328,7 +346,11 @@ fn operator_forms_edit_and_redirect_to_the_memory_tree() {
     let mut out = Vec::new();
     assert!(http(&mut out, &shared, "GET", &format!("{}/node", memory_url(&chat)), "", b""));
     let page = String::from_utf8_lossy(&out);
-    assert!(page.contains("Pinned entries") && page.contains("Edit log"));
+    assert!(page.contains("<p class='mt-empty'>Select a block to regenerate, pin or drop.</p>"));
+    assert!(page.contains(&format!("<li>Pinned <a href='{}/node?entry=2'>#2</a>", memory_url(&chat))) && page.contains("value='unpin'"));
+    assert!(page.contains("<summary>Edit log · 1</summary>"));
+    assert!(!page.contains("type='number'") && !page.contains("value='pin'") && !page.contains("value='drop'"), "no pin/drop forms without a selection");
+    assert!(!page.contains("All edits"), "the empty view does not link to itself");
     assert!(page.contains("frame-ancestors 'self'"), "detail pages load only in Control's frame");
     let mut out = Vec::new();
     http(&mut out, &shared, "POST", &memory_url(&chat), "", b"action=unknown");
@@ -387,13 +409,15 @@ fn memory_tree_preview() {
     let drops = state.runtime.compaction.views.remove(&chat);
     edit(&mut state, &chat, &operator, Op::Drop { start: 196, end: 199 }).unwrap();
     state.runtime.compaction.views.insert(chat.clone(), drops.unwrap());
-    let query = format!("block={}.{}", focus.start, focus.level);
+    // `MEMORY_TREE_PREVIEW_QUERY=` (empty) previews the page with nothing selected.
+    let query = std::env::var("MEMORY_TREE_PREVIEW_QUERY").unwrap_or_else(|_| format!("block={}.{}", focus.start, focus.level));
     let detail = plan_detail(&state, &chat, &query);
     let detail = detail_page(&detail, load_nodes(&detail, &dir));
     let styles = format!("{}{}", include_str!("../../../assets/style.css"), include_str!("../../../assets/runtime.css"));
     let detail = detail.replace("<link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'>", &format!("<style>{styles}</style>"));
     let overview = render(&state, &chat, &query).unwrap();
-    let src = format!("src='{}'", crate::escape(&format!("{}/node?{query}", memory_url(&chat))));
+    let node = if query.is_empty() { format!("{}/node", memory_url(&chat)) } else { format!("{}/node?{query}", memory_url(&chat)) };
+    let src = format!("src='{}'", crate::escape(&node));
     assert!(overview.contains(&src));
     let overview = overview.replace(&src, &format!("srcdoc='{}'", crate::escape(&detail)));
     std::fs::write(&target, format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><title>Memory Tree preview</title><style>{styles}</style></head><body><main>{overview}</main></body></html>")).unwrap();

@@ -26,9 +26,6 @@ fn custom_defaults_and_instruction_only_lenses_reach_the_chat_composer() {
         "none"
     );
     assert!(cookie("bad\r\nInjected").starts_with("Set-Cookie: control_lens=none;"));
-    let cards = library(&state, "field-work");
-    assert!(cards.contains("Field &lt;work&gt;") && cards.contains("id=autonomy"));
-    assert!(cards.contains("Coordination &amp; planning") && cards.contains("id=coordination"));
     let page = crate::chat::landing(&state, "field-work", None);
     assert!(page.contains("value='field-work' form='chat-list-new' checked"));
     assert_eq!(
@@ -75,6 +72,5 @@ fn navigation_is_global_while_the_new_chat_context_stays_selected() {
         assert!(!html.contains("lens-label"));
         assert!(!html.contains("<h2>Engineering"));
     }
-    assert!(overview(&state, "research").contains("<h2>Overview</h2>"));
-    assert!(overview(&state, "engineering").contains("<b>1</b><span>RUNS</span>"));
+    assert!(crate::usage::render(&state).contains("<b>1</b><span>RUNS</span>"), "Overview totals live on Usage");
 }

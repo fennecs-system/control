@@ -261,7 +261,9 @@ fn running(runtime: &Runtime) -> String {
     format!("<details class='record' open><summary>Running now</summary><div class='usage-scroll'><table class='usage-table'><thead><tr><th>Run</th><th>Provider / model</th><th>Input</th><th>Cached</th><th>Output</th><th>Usage</th></tr></thead><tbody>{rows}</tbody></table></div><p class='muted'>Live totals reported so far: after every model call on local endpoints and Claude; Codex reports at the end of its turn.</p></details>")
 }
 
-pub fn render(runtime: &Runtime) -> String {
+/// The Usage page: node totals (DMs, runs, genes) above model usage.
+pub fn render(state: &crate::State) -> String {
+    let runtime = &state.runtime;
     let mut overall = Summary::default();
     let mut people = BTreeMap::<String, Summary>::new();
     let mut models = BTreeMap::<String, Summary>::new();
@@ -290,7 +292,7 @@ pub fn render(runtime: &Runtime) -> String {
             }
         }
     }
-    let mut html = String::from("<h2>Usage</h2>");
+    let mut html = format!("<h2>Usage</h2><div class='metrics usage-summary' aria-label='Node summary'><div><b>{}</b><span>DMS</span></div><div><b>{}</b><span>RUNS</span></div><div><b>{}</b><span>GENES</span></div></div>", state.chats.len(), runtime.runs.len(), state.lens_library.current().len());
     let today = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() / 86400);
     html.push_str(&heatmap(&daily, today));
     html.push_str(&running(runtime));

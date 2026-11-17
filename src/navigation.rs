@@ -1,13 +1,12 @@
 //! Global navigation stays independent of the selected chat context.
 const PRIMARY: &[(&str, &str, &str, &str)] = &[
-    ("hub", "/", "▦", "Overview"),
     ("session", "/dms", "⌁", "DMs"),
     ("agents", "/?view=agents", "⌁", "Bots"),
     ("knowledge", "/knowledge", "▤", "Knowledge"),
     ("rooms", "/?view=rooms", "#", "Rooms"),
+    ("tools", "/?view=tools", "⊞", "Tools"),
     ("lenses", "/dna", "◈", "DNA"),
     ("personas", "/personas", "◇", "Personas"),
-    ("tools", "/?view=tools", "⊞", "Tools"),
     ("monitor", "/?view=monitor", "▥", "Usage"),
     ("manage", "/?view=manage", "⚙", "Manage"),
 ];
@@ -32,7 +31,6 @@ pub fn primary(view: &str) -> String {
             "lens-page" => "lenses",
             "persona-page" => "personas",
             "browser" | "tool-page" => "tools",
-            "hub" => "hub",
             other => other,
         }
     };
