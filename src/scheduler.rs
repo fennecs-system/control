@@ -47,6 +47,22 @@ pub struct Limits {
     pub local_agent_steps: usize,
     /// Bytes of a declared observation placed at the top of each turn.
     pub observation_max_bytes: usize,
+    /// Pathology facts (for advisors and antibodies): file- or tool-building
+    /// commands a team runs while its claims and score probes do not advance
+    /// before it is reported as harness churn.
+    pub pathology_churn_commands: usize,
+    /// Failures of one member's same command (digits folded) among its
+    /// retained commands before it is reported as a repetition loop.
+    pub pathology_repeat_failures: usize,
+    /// Status-only commands of one member among its retained commands before
+    /// it is reported as polling.
+    pub pathology_poll_commands: usize,
+    /// Tokens a team spends while its claims and score probes do not advance
+    /// before it is reported as cost burn.
+    pub pathology_burn_tokens: u64,
+    /// Operator notices (`control_operator_notify`) the node forwards per
+    /// hour; further notices are refused until the hour passes. 0 disables them.
+    pub operator_notices_per_hour: usize,
 }
 impl Default for Limits {
     fn default() -> Self {
@@ -65,6 +81,11 @@ impl Default for Limits {
             peer_digest_seconds: 600,
             observation_max_bytes: 2048,
             local_agent_steps: 64,
+            pathology_churn_commands: 12,
+            pathology_repeat_failures: 3,
+            pathology_poll_commands: 6,
+            pathology_burn_tokens: 2_000_000,
+            operator_notices_per_hour: 4,
         }
     }
 }
@@ -94,6 +115,11 @@ impl Limits {
         }
         if !(16..=1024).contains(&self.local_agent_steps) {
             return Err(io::Error::other("local_agent_steps must be 16–1024"));
+        }
+        if !(2..=1024).contains(&self.pathology_churn_commands) || !(2..=16).contains(&self.pathology_repeat_failures)
+            || !(2..=16).contains(&self.pathology_poll_commands) || !(10_000..=1_000_000_000).contains(&self.pathology_burn_tokens)
+            || self.operator_notices_per_hour > 60 {
+            return Err(io::Error::other("pathology_churn_commands must be 2–1024, pathology_repeat_failures and pathology_poll_commands 2–16, pathology_burn_tokens 10000–1000000000 and operator_notices_per_hour 0–60"));
         }
         Ok(self)
     }

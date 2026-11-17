@@ -140,7 +140,7 @@ impl Ledger {
             return Err(Refusal::Settled);
         }
         let reply = match (action, text.map(str::trim)) {
-            ("answer", Some(text)) if notice.kind == Kind::Question && !text.is_empty() => text.to_owned(),
+            ("answer", Some(text)) if matches!(notice.kind, Kind::Question | Kind::Notice) && !text.is_empty() => text.to_owned(),
             (action, None) => reply(notice.kind, action).ok_or(Refusal::Invalid)?.to_owned(),
             _ => return Err(Refusal::Invalid),
         };
@@ -165,6 +165,7 @@ fn item<'a>(view: &'a Value, pending: &Pending<'_>) -> &'a Value {
         Kind::Question => ("pending_questions", "/question/id"),
         Kind::Bot => ("pending_bots", "/request_id"),
         Kind::Port => ("pending_ports", "/port_id"),
+        Kind::Notice => ("pending_notices", "/notice_id"),
     };
     view[list].as_array().into_iter().flatten()
         .find(|item| item.pointer(key).and_then(Value::as_str) == Some(pending.id))
@@ -262,6 +263,20 @@ pub fn request(settings: &Settings, title: &str, link: &str, pending: &Pending<'
             actions.push(decide("deny", "Deny", Style::Secondary));
             actions.push(open);
             Request { title: "Port request".into(), body: body.into(), fields, severity, actions, link: link.into(), hint }
+        }
+        Kind::Notice => {
+            if let Some(team) = item["team"].as_str() {
+                fields.push(("Team", clean(team, 100, false)));
+            }
+            Request {
+                title: "Notice".into(),
+                body: clean(pending.body, 1500, true),
+                fields,
+                severity: Severity::Attention,
+                actions: vec![Action { id: "answer", label: "Reply…".into(), style: Style::Primary, act: Act::Prompt }, open],
+                link: link.into(),
+                hint: "No decision is needed; reply to steer the team that sent it.".into(),
+            }
         }
     };
     Request { body: settings.present(&request.body), hint: settings.present(&request.hint), ..request }

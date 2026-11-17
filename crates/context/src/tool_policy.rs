@@ -19,7 +19,7 @@ pub fn after_handoff(name:&str)->bool {
         "control_service_status"|"control_service_exec_status"|
         "control_port_status"|"control_bot_status"|
         "control_workspace_status"|"control_watch_status"|"control_watch_events"|
-        "control_room_list"|"control_room_read"|"control_room_plan"|"control_room_notifications"|
+        "control_room_list"|"control_room_read"|"control_room_plan"|"control_room_notifications"|"control_intel_brief"|
         "control_search_path"|
         "control_knowledge_read"|"control_knowledge_search"|
         "control_packages_search"|"control_package_read"|
@@ -66,6 +66,7 @@ policies! {
     "control.chat.read" => (Chat,false,Read,true),
     "control.requests.list" => (Chat,false,Hidden,true),
     "control.run.scores" => (Chat,false,Read,true),
+    "control.intel.brief" => (Chat,false,Read,true),
     "control.chat.send" => (Chat,true,Hidden,true),
     "control.lenses.list" => (Lens,false,Read,true),
     "control.lens.read" => (Lens,false,Read,true),

@@ -823,7 +823,7 @@ pub fn pending_requests(state: &State) -> Value {
     let waiting = state.runtime.runs.iter()
         .filter(|run| run.status == "waiting" && run.question.as_ref().is_some_and(|q| q.answer.is_none()))
         .filter_map(|run| run.chat_id.as_deref());
-    let chats = waiting.chain(crate::bots::pending_chats(state)).chain(crate::ports::pending_chats(state));
+    let chats = waiting.chain(crate::bots::pending_chats(state)).chain(crate::ports::pending_chats(state)).chain(crate::intel::pending_chats(state));
     let mut roots = Vec::new();
     for chat in chats {
         let root = lineage(state, chat).last().unwrap_or(chat);
@@ -833,8 +833,8 @@ pub fn pending_requests(state: &State) -> Value {
     json!(roots.into_iter().filter_map(|id| {
         let session = state.chats.iter().find(|s| s.id == id && valid_id(&s.id))?;
         authorize(&session.actor, Action::Task).ok()?;
-        let entry = json!({"chat_id":id,"title":crate::callsigns::name_or_id(&state.chats,id),"pending_questions":crate::design::pending_json(state,id),"pending_bots":crate::bots::pending_json(state,id),"pending_ports":crate::ports::pending_json(state,id)});
-        ["pending_questions","pending_bots","pending_ports"].iter().any(|k| entry[k].as_array().is_some_and(|a| !a.is_empty())).then_some(entry)
+        let entry = json!({"chat_id":id,"title":crate::callsigns::name_or_id(&state.chats,id),"pending_questions":crate::design::pending_json(state,id),"pending_bots":crate::bots::pending_json(state,id),"pending_ports":crate::ports::pending_json(state,id),"pending_notices":crate::intel::pending_json_tree(state,id)});
+        ["pending_questions","pending_bots","pending_ports","pending_notices"].iter().any(|k| entry[k].as_array().is_some_and(|a| !a.is_empty())).then_some(entry)
     }).collect::<Vec<_>>())
 }
 pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
@@ -1029,6 +1029,7 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
         "control.requests.list" => Ok(pending_requests(state)),
         "control.chat.read" => detail(state, id()?),
         "control.run.scores" => crate::scores::read(state, id()?),
+        "control.intel.brief" => crate::intel::tool(state, arguments),
         "control.chat.rename" => {
             let id = id()?;
             rename(state, id, arguments["name"].as_str().unwrap_or(""))?;
