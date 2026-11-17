@@ -19,7 +19,7 @@ fn conversation_pages_keep_threads_whole_and_cursors_stable() {
         11,
         "Ten parent threads plus their nested child"
     );
-    assert!(picker.contains("/chats/history"));
+    assert!(picker.contains("href='/bots/history'"));
     assert!(picker.contains(&format!("data-chat-branch='{}' open", ids[0])));
     assert!(
         super::conversations(&state, &ids[0])
@@ -52,7 +52,7 @@ fn conversation_pages_keep_threads_whole_and_cursors_stable() {
         &mut response,
         &mut state,
         "GET",
-        &format!("/chats/history?older={}", roots[9]),
+        &format!("/bots/history?older={}", roots[9]),
         "none",
         "",
         &[]
@@ -60,7 +60,15 @@ fn conversation_pages_keep_threads_whole_and_cursors_stable() {
     let response = String::from_utf8(response).unwrap();
     assert!(response.starts_with("HTTP/1.1 200 OK"));
     assert!(response.contains(&page));
-    assert!(response.contains("href='/chats/history' aria-current='page'"));
+    assert!(response.contains("href='/?view=agents' aria-current='page'"), "History is a Bots sub-page");
+    assert!(response.contains("href='/bots/history' aria-current='page'>History</a>"));
+    assert!(response.contains("href='/bots/history' aria-current='page'>Conversations</a>"));
+    assert!(!response.contains("<span>History</span>"), "The main navigation has no History item");
+    let mut redirect = Vec::new();
+    assert!(crate::session_http::handle(&mut redirect, &mut state, "GET", &format!("/chats/history?older={}", roots[9]), "none", "", &[]));
+    let redirect = String::from_utf8(redirect).unwrap();
+    assert!(redirect.starts_with("HTTP/1.1 303 See Other"), "{redirect}");
+    assert!(redirect.contains(&format!("location: /bots/history?older={}\r\n", roots[9])), "{redirect}");
     assert!(
         !response.contains("body-grid chat-workspace"),
         "History must use the normal page layout, not the live chat shell"
@@ -120,13 +128,18 @@ fn run_pages_render_only_ten_records_and_keep_cursor_boundaries() {
         .runtime
         .enqueue("new task".into(), crate::runtime::RunKind::Chat, "test");
     assert_eq!(state.runtime.runs_page(Some(&cursor), None), middle);
-    let html = crate::public_render(
-        &state,
-        &crate::fields(&format!("view=runs&older={cursor}")),
-        "none",
-    );
+    let mut response = Vec::new();
+    assert!(crate::session_http::handle(&mut response, &mut state, "GET", &format!("/bots/history/runs?older={cursor}"), "none", "", &[]));
+    let html = String::from_utf8(response).unwrap();
     assert!(html.contains(&middle));
-    assert!(super::primary("runs").contains("href='/chats/history' aria-current='page'"));
+    assert!(html.contains("href='/?view=agents' aria-current='page'"), "Runs are part of Bots");
+    assert!(middle.contains("href='/bots/history/runs?older="));
+    assert_eq!(
+        crate::legacy_session_location(&state, &crate::fields(&format!("view=runs&older={cursor}"))).as_deref(),
+        Some(format!("/bots/history/runs?older={cursor}").as_str()),
+        "Saved run-history links keep their page"
+    );
+    assert_eq!(crate::legacy_session_location(&state, &crate::fields("view=runs")).as_deref(), Some("/bots/history/runs"));
     let last_cursor = state.runtime.runs[5].id.clone();
     let last = state.runtime.runs_page(Some(&last_cursor), None);
     assert_eq!(last.matches("<article class='record'>").count(), 5);

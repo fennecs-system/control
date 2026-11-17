@@ -37,3 +37,10 @@ fn folder_approval_uses_the_in_chat_decision_path_but_folder_changes_navigate() 
     assert!(!decision_action("/chat/a/b/project", Some("approve")));
     assert!(!decision_action("/chat/c-1/preview/stop", Some("approve")));
 }
+#[test]
+fn paged_lists_load_the_next_page_within_a_screen_of_view() {
+    assert!(near_viewport(0.0, 800.0));
+    assert!(near_viewport(1599.0, 800.0));
+    assert!(!near_viewport(1600.0, 800.0));
+    assert!(near_viewport(-200.0, 800.0), "a slot scrolled past still loads");
+}

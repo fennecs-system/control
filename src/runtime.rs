@@ -238,7 +238,7 @@ impl Runtime {
         if path == "/retry-run" {
             if let Err(message) = crate::scheduler::admit(self) {
                 self.notice = message.into();
-                return "/?view=runs";
+                return "/bots/history/runs";
             }
             let id = field(f, "id");
             let order = self
@@ -254,14 +254,14 @@ impl Runtime {
             }) {
                 if let Err(message) = identity::authorize(&run.actor, run.action) {
                     self.notice = message.into();
-                    return "/?view=runs";
+                    return "/bots/history/runs";
                 }
                 run.status = "queued".into();
                 run.queue_order = order;
                 run.result.clear();
             }
         }
-        "/?view=runs"
+        "/bots/history/runs"
     }
     pub fn render(&self, view: &str, _lens: &str) -> Option<String> {
         match view {
@@ -314,7 +314,7 @@ impl Runtime {
         if self.runs.is_empty(){html.push_str("<div class='empty'>No runs yet.</div>");}
         for run in self.runs.iter().rev().skip(range.start).take(range.len()){html.push_str(&run_record(run));}
         let id=|index:usize|self.runs.get(self.runs.len().checked_sub(index+1)?).map(|run|run.id.as_str());
-        html.push_str(&crate::pagination::controls("/?view=runs",(range.start>0).then(||id(range.start)).flatten(),(range.end<self.runs.len()).then(||id(range.end-1)).flatten()));
+        html.push_str(&crate::pagination::controls("/bots/history/runs",(range.start>0).then(||id(range.start)).flatten(),(range.end<self.runs.len()).then(||id(range.end-1)).flatten()));
         html
     }
 }

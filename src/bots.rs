@@ -393,11 +393,19 @@ pub(crate) fn background_allowed(state: &State, chat: &str) -> bool {
 
 /// Task trees with their bots, agents, services and processes, for the Bots page.
 pub(crate) fn overview(state: &State) -> String {
-    let mut html = "<div class='section-heading'><h2>Bots</h2><a href='/?view=runs'>Run history ↗</a></div>".to_owned();
+    let mut html = format!("<div class='section-heading'><h2>Bots</h2></div>{}", crate::navigation::bots_tabs(false));
     match crate::process_tree::render(state) {
         Some(tree) => html.push_str(&tree),
         None => html.push_str("<div class='empty'>No bots, services or active agents. Use /bot on in a DM or approve a bot request.</div>"),
     }
+    html
+}
+/// The whole Bots page: live task trees, queued turns, then the graveyard page
+/// selected by `graveyard`.
+pub(crate) fn page(state: &State, graveyard: &crate::graveyard::Query) -> String {
+    let mut html = overview(state);
+    html.push_str(&state.runtime.render("agents", "").unwrap_or_default());
+    html.push_str(&crate::graveyard::render(state, graveyard));
     html
 }
 

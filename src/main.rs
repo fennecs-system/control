@@ -37,6 +37,7 @@ mod engine;
 mod federation;
 mod github;
 mod graph_search;
+mod graveyard;
 mod knowledge;
 mod knowledge_tools;
 mod guidance;
@@ -180,7 +181,7 @@ fn render_with_content(state: &State, view: &str, lens: &str, channel: &str, sup
         .replace("{{section_navigation}}", &navigation::secondary(view))
         .replace("{{layout_class}}", if chat_navigation { "chat-workspace" } else if view == "rooms" { "rooms-workspace" } else if navigation::managed(view) { "with-section-nav" } else { "" })
         .replace("{{page_title}}", &navigation::heading(view));
-    let content = supplied.or_else(|| if view == "monitor" { Some(usage::render(&state.runtime)) } else if view == "agents" { state.runtime.render(view,lens).map(|runs| bots::overview(state) + &runs) } else { state.runtime.render(view,lens) }).or_else(|| state.collective.render(view, channel)).unwrap_or_else(|| match view {
+    let content = supplied.or_else(|| if view == "monitor" { Some(usage::render(&state.runtime)) } else if view == "agents" { Some(bots::page(state, &graveyard::Query::default())) } else { state.runtime.render(view,lens) }).or_else(|| state.collective.render(view, channel)).unwrap_or_else(|| match view {
         "providers" => providers::render(&state.runtime),
         "tools" => tool_catalog::render(state, if channel == "general" { "" } else { channel }),
         "session" => chat::render(state,channel).unwrap_or_else(escape),
@@ -203,8 +204,8 @@ const INTERNAL_VIEWS: [&str; 7] = ["session-list", "history", "artifact-page", "
 fn public_render(state: &State, query: &HashMap<String, String>, lens: &str) -> String {
     let view = query.get("view").map(String::as_str).filter(|v| !INTERNAL_VIEWS.contains(v)).unwrap_or("hub");
     let channel = query.get(if view == "tools" { "q" } else { "channel" }).map(String::as_str).unwrap_or("general");
-    if view=="runs" {
-        return render_with_content(state,view,lens,channel,Some(state.runtime.runs_page(query.get("older").map(String::as_str),query.get("newer").map(String::as_str))));
+    if view=="agents" {
+        return render_with_content(state,view,lens,channel,Some(bots::page(state,&graveyard::Query::from(query))));
     }
     render(state, view, lens, channel)
 }
@@ -220,7 +221,11 @@ fn public_page(state: &State, query: &HashMap<String, String>, lens: &str) -> (S
     }
 }
 /// `/?view=session` predates `/chat/{id}`; send it to the page that renders chat state.
+/// `/?view=runs` predates the Bots history sub-page and keeps its page cursor.
 fn legacy_session_location(state: &State, query: &HashMap<String, String>) -> Option<String> {
+    if query.get("view")? == "runs" {
+        return Some(navigation::history_location("/bots/history/runs", query));
+    }
     (query.get("view")? == "session").then(|| {
         query.get("channel")
             .filter(|id| chat::valid_id(id) && chat::detail(state, id).is_ok())
