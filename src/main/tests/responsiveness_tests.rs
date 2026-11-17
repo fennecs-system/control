@@ -152,3 +152,39 @@ fn only_the_bots_page_loads_the_client_for_its_canvas() {
         assert!(!page.contains("<script"), "{query}");
     }
 }
+
+/// Pages are dark before any stylesheet arrives, and dark-mode extensions are
+/// told so instead of restyling borders and colours on every navigation.
+const DARK_HEAD: &str = "<meta name='color-scheme' content='dark'><meta name='darkreader-lock'>";
+
+fn assert_dark_head(page: &str, label: &str) {
+    let page = page.replace('"', "'");
+    let head = page.split_once("</head>").map_or(page.as_str(), |(head, _)| head);
+    let declared = head.find(DARK_HEAD).unwrap_or_else(|| panic!("{label}: no dark scheme declaration"));
+    for later in ["<link rel='stylesheet'", "<script", "<style"] {
+        assert!(head.find(later).is_none_or(|at| at > declared), "{label}: {later} precedes the dark scheme");
+    }
+}
+
+#[test]
+fn every_document_declares_its_dark_scheme_before_styles_load() {
+    let state = State::default();
+    for query in ["", "view=rooms", "view=tools", "view=monitor", "view=providers", "view=agents", "view=nodes"] {
+        assert_dark_head(&public_page(&state, &fields(query), "none").0, query);
+    }
+    assert_dark_head(&error_page("x", "/"), "error page");
+    // Every hand-written document head in the server carries the same declaration.
+    for (file, source) in [
+        ("access.rs", include_str!("../../access.rs")),
+        ("chat.rs", include_str!("../../chat.rs")),
+        ("main.rs", include_str!("../../main.rs")),
+        ("projects.rs", include_str!("../../projects.rs")),
+        ("session_http.rs", include_str!("../../session_http.rs")),
+        ("compaction/recall.rs", include_str!("../../compaction/recall.rs")),
+    ] {
+        assert!(source.contains("<!doctype html>"), "{file}");
+        for document in source.split("<!doctype html>").skip(1) {
+            assert_dark_head(document, file);
+        }
+    }
+}

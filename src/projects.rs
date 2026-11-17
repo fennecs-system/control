@@ -843,12 +843,12 @@ fn http_in(
             let running = chat.project.as_ref().filter(|p| importing(id).is_some_and(|import| import.request == p.request));
             if let Some(project) = running {
                 // Meta refresh needs no script; it returns to the chat once attached.
-                return Ok(Reply::Page(format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta http-equiv='refresh' content='1;url=/chat/{id}/project?importing={}'><title>Importing folder</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/workspace.css'></head><body><main>{}<a href='/chat/{id}'>Back to chat</a></main></body></html>", crate::escape(&project.request), panel(&state, id))));
+                return Ok(Reply::Page(format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><meta http-equiv='refresh' content='1;url=/chat/{id}/project?importing={}'><title>Importing folder</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/workspace.css'></head><body><main>{}<a href='/chat/{id}'>Back to chat</a></main></body></html>", crate::escape(&project.request), panel(&state, id))));
             }
             if let Some(request) = watched && chat.project.as_ref().is_some_and(|p| p.request == request && !p.needs_approval()) {
                 return Ok(Reply::Redirect(format!("/chat/{id}")));
             }
-            return Ok(Reply::Page(format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><title>Open project</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/workspace.css'></head><body><main>{}<a href='/chat/{id}'>Back to chat</a></main></body></html>",panel(&state,id))));
+            return Ok(Reply::Page(format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><title>Open project</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/workspace.css'></head><body><main>{}<a href='/chat/{id}'>Back to chat</a></main></body></html>",panel(&state,id))));
         }
         if method != "POST" {
             return Err(fail("Use GET or POST"));
