@@ -7,8 +7,10 @@
 //! turns as a page (`?dm=ID`). Turn filters (status, kind, model, or "show
 //! turns") list the matching turns grouped under their DMs, at most [`INLINE`]
 //! per DM with a link to the rest. Turns outside any DM are grouped under one
-//! "Outside DMs" row. A request costs one pass over runs, one over chats and a
-//! sort; only one page is formatted and every fragment is bounded.
+//! "Outside DMs" row. A page costs one pass over chats and a sort, then one
+//! pass over runs that adds up only the listed DMs' turns (a turn filter adds
+//! one more); only one page is formatted and every fragment is bounded. The
+//! benchmark is `performance::history_page` (docs/PERFORMANCE.md).
 use crate::application::runs::status;
 use crate::runtime::{Run, RunKind};
 use crate::{escape, State};
@@ -27,8 +29,9 @@ pub const TURNS: usize = 50;
 pub const INLINE: usize = 5;
 /// Longest accepted search text, in characters.
 pub const QUERY_CHARS: usize = 100;
-/// Distinct models offered by the model filter.
+/// Distinct models offered by the model filter, from the newest turns.
 const MODELS: usize = 64;
+const MODEL_TURNS: usize = 2_000;
 /// The `dm` value naming turns that ran outside any DM.
 pub const OUTSIDE: &str = "-";
 
@@ -207,7 +210,27 @@ impl Filter {
     }
 }
 
-/// What one DM's turns add up to.
+/// FNV-1a for the short chat IDs keyed per run: a page touches every run, and
+/// SipHash's DoS resistance buys nothing for IDs Control generated.
+struct Fnv(u64);
+impl Default for Fnv {
+    fn default() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+}
+impl std::hash::Hasher for Fnv {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 = (self.0 ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+}
+type ByDm<'a, V> = HashMap<&'a str, V, std::hash::BuildHasherDefault<Fnv>>;
+
+/// What one listed DM's turns add up to.
 #[derive(Default)]
 struct Summary<'a> {
     turns: usize,
@@ -216,10 +239,12 @@ struct Summary<'a> {
     tokens: u64,
     measured: bool,
     latest: Option<&'a Run>,
-    /// Unix seconds its latest turn ended or started.
-    last: Option<u64>,
-    matched: usize,
-    /// The newest matching turns, oldest first, when rows list them.
+}
+/// A DM's turns that match a turn filter: how many, and the newest
+/// [`INLINE`] of them, oldest first.
+#[derive(Default)]
+struct Matches<'a> {
+    count: usize,
     recent: VecDeque<&'a Run>,
 }
 /// Tokens a turn's attempts reported, input plus output, when any did.
@@ -245,38 +270,23 @@ struct Row<'a> {
     chat: Option<(&'a crate::chat::Session, crate::callsigns::Callsign)>,
 }
 
-/// Everything one request shows, from one pass over runs and one over chats.
-struct Projection<'a> {
+/// The rows a request lists, newest activity first, and with a turn filter the
+/// matching turns of each. One pass over chats, plus one over runs when
+/// filtering turns.
+struct Rows<'a> {
     rows: Vec<Row<'a>>,
-    summaries: HashMap<&'a str, Summary<'a>>,
-    models: BTreeSet<&'a str>,
+    matches: Option<ByDm<'a, Matches<'a>>>,
 }
-fn project<'a>(state: &'a State, filter: &Filter) -> Projection<'a> {
-    let grouped = filter.grouped();
-    let mut summaries: HashMap<&str, Summary> = HashMap::new();
-    let mut models = BTreeSet::new();
-    for run in state.runtime.runs.iter() {
-        let summary = summaries.entry(key(run)).or_default();
-        summary.turns += 1;
-        summary.failed += usize::from(failed(run));
-        summary.active += usize::from(status::active(&run.status));
-        if let Some(tokens) = tokens(run) {
-            summary.tokens = summary.tokens.saturating_add(tokens);
-            summary.measured = true;
-        }
-        summary.latest = Some(run);
-        summary.last = summary.last.max(ended(run));
-        if filter.matches(run) {
-            summary.matched += 1;
-            if grouped {
-                if summary.recent.len() == INLINE {
-                    summary.recent.pop_front();
-                }
-                summary.recent.push_back(run);
+fn rows<'a>(state: &'a State, filter: &Filter) -> Rows<'a> {
+    let mut matches = filter.grouped().then(ByDm::<Matches>::default);
+    if let Some(matches) = &mut matches {
+        for run in state.runtime.runs.iter().filter(|run| filter.matches(run)) {
+            let found = matches.entry(key(run)).or_default();
+            found.count += 1;
+            if found.recent.len() == INLINE {
+                found.recent.pop_front();
             }
-        }
-        if let Some(model) = run.model.as_deref().filter(|_| models.len() < MODELS) {
-            models.insert(model);
+            found.recent.push_back(run);
         }
     }
     let needle = filter.search.to_lowercase();
@@ -286,7 +296,7 @@ fn project<'a>(state: &'a State, filter: &Filter) -> Projection<'a> {
         if !crate::chat::valid_id(&chat.id) || filter.dm.as_deref().is_some_and(|dm| dm != chat.id) {
             continue;
         }
-        if grouped && summaries.get(chat.id.as_str()).is_none_or(|summary| summary.matched == 0) {
+        if matches.as_ref().is_some_and(|matches| !matches.contains_key(chat.id.as_str())) {
             continue;
         }
         if !needle.is_empty() && !crate::callsigns::label(chat, callsign).to_lowercase().contains(&needle) && !chat.title.to_lowercase().contains(&needle) {
@@ -298,47 +308,90 @@ fn project<'a>(state: &'a State, filter: &Filter) -> Projection<'a> {
         rows.push((std::cmp::Reverse((chat.activity_order, index)), Row { id: &chat.id, chat: Some((chat, callsign)) }));
     }
     rows.sort_unstable_by_key(|(order, _)| *order);
-    let mut rows: Vec<_> = rows.into_iter().map(|(_, row)| row).collect();
-    // Turns outside DMs lead the first page; a name search never matches them.
-    let outside = filter.search.is_empty()
-        && filter.dm.as_deref().is_none_or(|dm| dm == OUTSIDE)
-        && summaries.get(OUTSIDE).is_some_and(|summary| summary.matched > 0);
-    if outside {
-        rows.insert(0, Row { id: OUTSIDE, chat: None });
+    Rows { rows: rows.into_iter().map(|(_, row)| row).collect(), matches }
+}
+/// Summaries of the listed DMs, from one pass over runs that only adds up
+/// turns of those DMs.
+fn summaries<'a>(state: &'a State, listed: &[&Row<'a>]) -> ByDm<'a, Summary<'a>> {
+    let mut summaries: ByDm<Summary> = listed.iter().map(|row| (row.id, Summary::default())).collect();
+    let outside = summaries.contains_key(OUTSIDE);
+    for run in state.runtime.runs.iter() {
+        if let Some(summary) = run.chat_id.as_deref().and_then(|id| summaries.get_mut(id)) {
+            add(summary, run);
+        } else if outside && key(run) == OUTSIDE {
+            add(summaries.get_mut(OUTSIDE).expect("listed"), run);
+        }
     }
-    Projection { rows, summaries, models }
+    summaries
+}
+fn add<'a>(summary: &mut Summary<'a>, run: &'a Run) {
+    summary.turns += 1;
+    summary.failed += usize::from(failed(run));
+    summary.active += usize::from(status::active(&run.status));
+    if let Some(tokens) = tokens(run) {
+        summary.tokens = summary.tokens.saturating_add(tokens);
+        summary.measured = true;
+    }
+    summary.latest = Some(run);
+}
+/// Models of the newest turns, for the model filter.
+fn models(state: &State) -> BTreeSet<&str> {
+    let mut models = BTreeSet::new();
+    for model in state.runtime.runs.iter().rev().take(MODEL_TURNS).filter_map(|run| run.model.as_deref()) {
+        if models.len() == MODELS {
+            break;
+        }
+        models.insert(model);
+    }
+    models
 }
 
 /// The page: heading, filters, one page of DM rows and its cursors.
 pub fn page(state: &State, filter: &Filter) -> String {
-    let projection = project(state, filter);
-    let rows = &projection.rows;
+    let Rows { rows, matches } = rows(state, filter);
     let find = |id: Option<&str>| id.and_then(|id| rows.iter().position(|row| row.id == id));
     let range = crate::pagination::sized(rows.len(), find(filter.older.as_deref()), find(filter.newer.as_deref()), PAGE);
+    let mut listed: Vec<&Row> = rows[range.clone()].iter().collect();
+    // Turns outside DMs lead the newest page; a name search never matches them.
+    let outside = Row { id: OUTSIDE, chat: None };
+    if range.start == 0 && filter.search.is_empty() && filter.dm.as_deref().is_none_or(|dm| dm == OUTSIDE)
+        && matches.as_ref().is_none_or(|matches| matches.contains_key(OUTSIDE)) {
+        listed.insert(0, &outside);
+    }
+    let summaries = summaries(state, &listed);
+    if summaries.get(OUTSIDE).is_some_and(|summary| summary.turns == 0) {
+        listed.remove(0);
+    }
     let mut html = format!("<div class='section-heading'><h2>Bots<span class='slash' aria-hidden='true'>/</span>History</h2><a href='/dms?new=1'>+ New DM</a></div>{}", crate::navigation::bots_tabs(true));
     if !state.runtime.notice.is_empty() {
         html.push_str(&format!("<p role='status'>{}</p>", escape(&state.runtime.notice)));
     }
-    html.push_str(&form(filter, &projection.models));
-    let turns: usize = rows.iter().filter_map(|row| projection.summaries.get(row.id)).map(|summary| summary.matched).sum();
+    html.push_str(&form(filter, &models(state)));
     let dms = rows.iter().filter(|row| row.chat.is_some()).count();
-    let found = if filter.narrows() { format!("{} with {}", plural(dms, "DM"), plural(turns, "matching turn")) } else { format!("{} · {}", plural(dms, "DM"), plural(turns, "turn")) };
+    let found = match &matches {
+        Some(matches) if filter.narrows() => {
+            let outside = listed.first().filter(|row| row.chat.is_none()).map(|row| row.id);
+            let turns: usize = rows.iter().map(|row| row.id).chain(outside).filter_map(|id| matches.get(id)).map(|found| found.count).sum();
+            format!("{} with {}", plural(dms, "DM"), plural(turns, "matching turn"))
+        }
+        _ => plural(dms, "DM"),
+    };
     html.push_str(&format!("<p class='history-found muted tiny'>{found}</p>"));
     if let Some(dm) = &filter.dm {
         html.push_str(&format!("<p class='history-back tiny'><a href='{}'>← All DMs</a></p>", escape(&Filter { dm: None, before: None, ..filter.clone() }.href(&[]))));
-        if rows.is_empty() {
+        if listed.is_empty() {
             html.push_str(&format!("<div class='empty'>No turns match these filters in {}.</div>", if dm == OUTSIDE { "turns outside DMs".to_owned() } else { format!("DM {}", escape(dm)) }));
             return html;
         }
     }
-    if rows.is_empty() {
+    if listed.is_empty() {
         html.push_str(&format!("<div class='empty'>{}</div>", if *filter == Filter::default() { "No DMs yet." } else { "No DMs match these filters." }));
         return html;
     }
     html.push_str("<div class='history-dms' role='list'><div class='history-head' aria-hidden='true'><span>DM</span><span>Persona · model</span><span>Last activity</span><span>Turns</span><span>Tokens</span><span></span></div>");
-    for row in &rows[range.clone()] {
-        let summary = projection.summaries.get(row.id);
-        html.push_str(&dm_row(state, row, summary, filter));
+    for row in listed {
+        let found = matches.as_ref().and_then(|matches| matches.get(row.id));
+        html.push_str(&dm_row(state, row, summaries.get(row.id), found, filter));
     }
     html.push_str("</div>");
     if filter.dm.is_none() {
@@ -372,7 +425,7 @@ fn plural(n: usize, word: &str) -> String {
     format!("{n} {word}{}", if n == 1 { "" } else { "s" })
 }
 
-fn dm_row(state: &State, row: &Row, summary: Option<&Summary>, filter: &Filter) -> String {
+fn dm_row(state: &State, row: &Row, summary: Option<&Summary>, found: Option<&Matches>, filter: &Filter) -> String {
     let empty = Summary::default();
     let summary = summary.unwrap_or(&empty);
     let (name, open_dm, who) = match row.chat {
@@ -391,7 +444,7 @@ fn dm_row(state: &State, row: &Row, summary: Option<&Summary>, filter: &Filter) 
         counts.push_str(&format!(" · {} active", summary.active));
     }
     let tokens = if summary.measured { compact(summary.tokens) } else { "—".to_owned() };
-    let when = summary.last.map(when).unwrap_or_else(|| "—".to_owned());
+    let when = summary.latest.and_then(ended).map(when).unwrap_or_else(|| "—".to_owned());
     let title = row.chat.map(|(chat, _)| chat.title.as_str()).filter(|title| !title.is_empty()).map(|title| format!(" title='{}'", escape(&clip(title, 300)))).unwrap_or_default();
     let summary_html = format!(
         "<summary><span class='dm-name'{title}>{}</span><span class='dm-who'>{}</span><span class='dm-when'>{when}</span><span class='dm-count'>{counts}</span><span class='dm-tokens'>{tokens}</span>{open_dm}</summary>",
@@ -401,12 +454,12 @@ fn dm_row(state: &State, row: &Row, summary: Option<&Summary>, filter: &Filter) 
     let single = filter.dm.is_some();
     let (attributes, body) = if single {
         (" open".to_owned(), dm_turns(state, row.id, filter))
-    } else if filter.grouped() {
-        let mut body = turn_list(summary.recent.iter().rev().copied());
-        if summary.matched > summary.recent.len() {
+    } else if let Some(found) = found {
+        let mut body = turn_list(found.recent.iter().rev().copied());
+        if found.count > found.recent.len() {
             let link = filter.href(&[("dm", row.id)]);
             let what = if filter.narrows() { "matching turns" } else { "turns" };
-            body.push_str(&format!("<a class='turn-more' href='{}'>All {} {what} →</a>", escape(&link), summary.matched));
+            body.push_str(&format!("<a class='turn-more' href='{}'>All {} {what} →</a>", escape(&link), found.count));
         }
         (" open".to_owned(), body)
     } else {

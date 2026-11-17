@@ -54,7 +54,7 @@ fn one_view_lists_dms_newest_first_with_summaries_and_lazy_turns() {
     assert!(html.contains(&format!("data-turns='/bots/history/turns?dm={old}'")));
     assert!(html.contains(&format!("href='/bots/history?dm={old}'>Show turns</a>")), "Without the client a row links to its turns");
     assert_eq!(turn_rows(&html), 0, "Turns load when a row opens");
-    assert!(html.contains("2 DMs · 4 turns"));
+    assert!(html.contains("<p class='history-found muted tiny'>2 DMs</p>"));
     for word in ["DM", "Turns"] {
         assert!(html.contains(&format!("<span>{word}</span>")), "{word}");
     }
@@ -201,4 +201,84 @@ fn pages_and_fragments_are_bounded_and_cursors_stable() {
     assert_eq!(rows(&expanded), PAGE);
     assert!(turn_rows(&expanded) <= PAGE * INLINE);
     assert!(expanded.contains("expand=1&amp;older="), "Cursors keep the filters");
+}
+
+/// With `CONTROL_PREVIEW_DIR`, writes self-contained pages for screenshots:
+/// the default view with one DM opened and the failed-turn filter.
+#[test]
+fn preview_pages() {
+    let Ok(directory) = std::env::var("CONTROL_PREVIEW_DIR") else { return };
+    let mut state = State::default();
+    let mut opened = String::new();
+    let models = ["gpt-5.1-codex", "claude-opus", "qwen3-coder-30b"];
+    let kinds = [RunKind::Chat, RunKind::BotWake, RunKind::PortDecision, RunKind::Spawned, RunKind::AgentMessage];
+    let dms = [
+        ("ore-survey", "Survey tunnel 9 and report ore counts"),
+        ("mc263 farm bot", "Keep the wheat farm running"),
+        ("Release notes", "Draft the 0.9 release notes"),
+        ("nebula", "Benchmark the scheduler"),
+        ("Docs review", "Review docs/HISTORY.md"),
+        ("relay", "Watch the build port"),
+        ("atlas", "Map the caves"),
+    ];
+    let objectives = [
+        "Check the furnace output and restock coal",
+        "Wake: port 25565 reported a disconnect",
+        "Decide whether to open port 8080 for the preview",
+        "Spawned worker: sweep tunnel 4",
+        "Reply to the room about the schedule",
+    ];
+    for (index, (name, title)) in dms.into_iter().enumerate() {
+        let id = dm(&mut state, name, title);
+        if index == 1 {
+            state.chats.last_mut().unwrap().persona = Some("miner".into());
+        }
+        for turn_index in 0..(3 + index * 2) {
+            let status = match (index + turn_index) % 9 {
+                0 => "failed",
+                4 => "cancelled",
+                _ => "completed",
+            };
+            let run = turn(&mut state, Some(&id), kinds[(index + turn_index) % kinds.len()], status, models[index % models.len()]);
+            *run.objective = objectives[turn_index % objectives.len()].into();
+            let termination = (status == "failed" && turn_index % 2 == 1).then_some(crate::attempt_control::Termination::TimedOut);
+            run.attempts.push(Attempt {
+                elapsed_ms: 4_000 + (turn_index as u64 * 37_000) % 400_000,
+                tokens: Some(Tokens { input_tokens: 8_000 + turn_index as u64 * 1_300, cached_input_tokens: 6_000, output_tokens: 600 }),
+                termination,
+                context_trace: Some(Box::new(crate::turn_context::TraceRef { generation: "g".into(), at: 0, sha256: String::new(), bytes: 0, version: 1 })),
+                ..Default::default()
+            });
+        }
+        if index == 4 {
+            opened = id;
+        }
+    }
+    turn(&mut state, Some(&opened), RunKind::BotWake, "running", "claude-opus");
+    turn(&mut state, None, RunKind::Task, "completed", "gpt-5.1-codex");
+    let inline = |html: String| {
+        let mut page = crate::render(&state, "history", "none", &html);
+        for (link, css) in [
+            ("<link rel=\"stylesheet\" href=\"/style.css\">", include_str!("../../assets/style.css")),
+            ("<link rel='stylesheet' href='/collective.css'>", include_str!("../../assets/collective.css")),
+            ("<link rel='stylesheet' href='/runtime.css'>", include_str!("../../assets/runtime.css")),
+            ("<link rel='stylesheet' href='/workspace.css'>", include_str!("../../assets/workspace.css")),
+            ("<link rel='stylesheet' href='/navigation.css'>", include_str!("../../assets/navigation.css")),
+        ] {
+            page = page.replace(link, &format!("<style>{css}</style>"));
+        }
+        page
+    };
+    // The default view as it looks once the client has opened one DM.
+    let fragment = turns(&state, &filter(&format!("dm={opened}"))).unwrap();
+    let default = page(&state, &Filter::default());
+    let marker = format!("data-dm='{opened}' data-turns='/bots/history/turns?dm={opened}'>");
+    let (head, tail) = default.split_once(&marker).unwrap();
+    let (summary, rest) = tail.split_once("<div class='turn-slot'").unwrap();
+    let rest = rest.split_once("</div>").unwrap().1;
+    let default = format!("{head}data-dm='{opened}' open>{summary}{fragment}{rest}");
+    let directory = std::path::Path::new(&directory);
+    std::fs::create_dir_all(directory).unwrap();
+    std::fs::write(directory.join("history.html"), inline(default)).unwrap();
+    std::fs::write(directory.join("history-failed.html"), inline(page(&state, &filter("status=failed")))).unwrap();
 }
