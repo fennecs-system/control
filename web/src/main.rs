@@ -760,6 +760,42 @@ fn attach_more(document: &web_sys::Document) -> Result<bool, JsValue> {
     Ok(true)
 }
 
+/// History rows are `<details data-turns=URL>` holding a `[data-turns-slot]`
+/// with a plain link to the same turns as a page. The first time a row opens,
+/// the fragment at URL replaces the slot; a failed read leaves the link and
+/// tries again on the next opening. One request per row at a time.
+fn attach_disclosures(document: &web_sys::Document) -> Result<bool, JsValue> {
+    if document.query_selector("details[data-turns]")?.is_none() {
+        return Ok(false);
+    }
+    let toggled = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
+        let Some(row) = event.target().and_then(|node| node.dyn_into::<web_sys::HtmlDetailsElement>().ok()) else { return; };
+        if !row.open() { return; }
+        let Some(url) = row.get_attribute("data-turns") else { return; };
+        let Ok(Some(slot)) = row.query_selector("[data-turns-slot]") else { return; };
+        let Ok(request) = web_sys::XmlHttpRequest::new() else { return; };
+        if request.open("GET", &url).is_err() { return; }
+        request.set_timeout(15_000);
+        // Loading: a second toggle must not ask again.
+        let _ = row.remove_attribute("data-turns");
+        let (response, retry, again) = (request.clone(), row.clone(), url.clone());
+        let finished = Closure::once_into_js(move |_: web_sys::Event| {
+            match (response.status().ok() == Some(200)).then(|| response.response_text().ok().flatten()).flatten() {
+                Some(text) => slot.set_outer_html(&text),
+                None => { let _ = retry.set_attribute("data-turns", &again); }
+            }
+        });
+        request.set_onloadend(Some(finished.unchecked_ref()));
+        if request.send().is_err() {
+            let _ = row.set_attribute("data-turns", &url);
+        }
+    });
+    // `toggle` does not bubble; listen while it is captured.
+    document.add_event_listener_with_callback_and_bool("toggle", toggled.as_ref().unchecked_ref(), true)?;
+    toggled.forget();
+    Ok(true)
+}
+
 fn main() -> Result<(), JsValue> {
     let document = web_sys::window()
         .and_then(|w| w.document())
@@ -767,8 +803,9 @@ fn main() -> Result<(), JsValue> {
     if attach_live(&document)? {
         return Ok(());
     }
+    let disclosed = attach_disclosures(&document)?;
     let paged = attach_more(&document)?;
-    if canvas::attach(&document)? || paged {
+    if canvas::attach(&document)? || paged || disclosed {
         return Ok(());
     }
     if let Some(input) = document.query_selector(".conversation-composer textarea[name=message]")? {

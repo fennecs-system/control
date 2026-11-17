@@ -53,7 +53,7 @@ Fixtures by subsystem:
 | Rooms and messages | `rooms::notifications::tests::profile_room_publication`, `rooms::notifications::tests::profile_idle_and_waiting_room_reconciliation`, `agent_message::profile::routing_profile` |
 | Scheduling and cancellation | `scheduler::qa::scheduling_profile`, `chat::tests::profile_continuation_admission`, `lifecycle::tests::reconcile_profile`, `worker::tests::cancel_profile` |
 | Services and watches | `services::commands::tests::dispatch_profile`, `services::commands::tests::live_latency`, `watches::tests::profile` |
-| Web and HTTP | `performance::hot_paths`, `performance::ownership_snapshots`, `performance::history_reads`, `performance::chat_lists`, `performance::bots_page`, `session_http::tests::fifteen_turn_conversations_workload` |
+| Web and HTTP | `performance::hot_paths`, `performance::ownership_snapshots`, `performance::history_reads`, `performance::chat_lists`, `performance::bots_page`, `performance::history_page`, `session_http::tests::fifteen_turn_conversations_workload` |
 | Terminal (`--lib`) | `terminal::profiling` |
 | Tools | `graph_search::tests::profile`, `compaction::tests::selection_profile`, `scores::tests::due_profile` |
 
@@ -450,7 +450,37 @@ alternating runs against the previous revision with the same fixture, medians:
 The page stays under 38 KB however many bots have died (39 KB as a list); a
 50-stone scroll page is about 31 KB.
 
+**Bots / History.** One view lists DMs, newest activity first, 50 per page
+(`history_view`). Sorting needs one pass over chats; the listed rows' turn
+count, failures, active turns, tokens and latest model need one pass over runs
+that only adds up turns of those rows (a word-at-a-time hash keys the run's DM).
+A row's turns arrive on demand from `GET /bots/history/turns?dm=ID`, 50 at a
+time; a status, kind or model filter adds one pass that keeps at most five
+matching turns per DM, and "Show turns" keeps five in the summary pass. Each
+page lists the models of the newest 2,000 turns only. `performance::history_page`
+requests each target through the HTTP handler with 10, 1,000 or 10,000 DMs
+sharing 100,000 turns (one in twenty failed). Release, Apple Silicon,
+`CONTROL_TIMING_ROUNDS=21`, three alternating runs against the previous
+revision with the same fixture, median of the run medians (bytes in brackets):
+
+| Workload | 10 | 1,000 | 10,000 DMs |
+| --- | ---: | ---: | ---: |
+| Before: Conversations tab (10 DMs, latest status) | 14 µs | 0.10 ms | 1.11 ms |
+| Before: Runs tab (10 runs) | 22 µs | 21 µs | 20 µs |
+| History page | 4.2 ms [11 KB] | 4.4 ms [34 KB] | 5.2 ms [34 KB] |
+| Failed turns only | 2.5 ms [9 KB] | 4.4 ms [224 KB] | 5.3 ms [224 KB] |
+| Show turns | 5.0 ms [42 KB] | 5.6 ms [192 KB] | 7.3 ms [193 KB] |
+| Name search | 0.96 ms | 1.6 ms | 2.9 ms |
+| One DM's turns (fragment) | 0.12 ms [35 KB] | 1.6 ms [38 KB] | 3.3 ms [8 KB] |
+
+The old tabs were cheaper because they summarised nothing: Conversations
+showed ten names with the latest status and stopped scanning runs once it had
+found them, and Runs showed ten runs. The one view adds up every listed DM's
+turns, so its cost follows the number of turns (about 40–50 ns each), not the
+number of DMs. Individual runs varied by up to 2× on a busy machine.
+
 ```sh
+CONTROL_TIMING_ROUNDS=21 cargo test --release --locked --bin control performance::history_page -- --ignored --exact --nocapture
 CONTROL_TIMING_ROUNDS=51 cargo test --release --locked --bin control performance::bots_page -- --ignored --exact --nocapture
 cargo test --locked --release --bin control performance::hot_paths -- --ignored --exact --nocapture
 cargo test --locked --release --bin control performance::ownership_snapshots -- --ignored --exact --nocapture

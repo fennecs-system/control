@@ -29,6 +29,7 @@ mod design;
 mod delegation;
 mod delegated_results;
 mod history;
+mod history_view;
 use control::config;
 use control::{discord, identity, url_names};
 use control::discord::bridge as discord_bridge;
@@ -226,11 +227,11 @@ fn public_page(state: &State, query: &HashMap<String, String>, lens: &str) -> (S
     }
 }
 /// `/?view=session` predates `/dm/{id}`; send it to the page that renders chat state.
-/// `/?view=runs` predates the Bots history sub-page and keeps its page cursor.
+/// `/?view=runs` predates Bots / History and opens it with every DM's turns.
 /// `/?view=lenses` predates the DNA page at `/dna`.
 fn legacy_session_location(state: &State, query: &HashMap<String, String>) -> Option<String> {
     match query.get("view")?.as_str() {
-        "runs" => Some(navigation::history_location("/bots/history/runs", query)),
+        "runs" => url_names::history("/bots/history/runs", ""),
         "lenses" => Some("/dna".to_owned()),
         "personas" => Some("/personas".to_owned()),
         "session" => Some(query.get("channel")

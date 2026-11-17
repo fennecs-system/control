@@ -720,95 +720,45 @@ fn browser_fixture(long_messages_only: bool) {
         );
         return;
     }
-    let child = {
+    let (child, newest) = {
         let mut state = state.lock().unwrap();
         let mut parent = String::new();
-        for index in 0..25 {
+        for index in 0..55 {
             parent = crate::chat::create(&mut state);
-            state.chats.last_mut().unwrap().title = format!("History thread {index}");
+            state.chats.last_mut().unwrap().name = Some(format!("History thread {index}"));
             state
                 .runtime
                 .enqueue(format!("History run {index}"), RunKind::Chat, "test");
-            state.runtime.runs.last_mut().unwrap().status = "completed".into();
+            let run = state.runtime.runs.last_mut().unwrap();
+            run.status = "completed".into();
+            run.chat_id = Some(parent.clone());
         }
         let child = crate::chat::create(&mut state);
         let session = state.chats.last_mut().unwrap();
-        session.parent_chat = Some(parent);
+        session.parent_chat = Some(parent.clone());
         session.title = "Nested history agent".into();
-        child
+        (child, parent)
     };
-    b.post("/url", json!({"url":format!("{server}/?view=runs")}));
-    assert_eq!(
-        b.post(
-            "/elements",
-            json!({"using":"css selector","value":"article.record"})
-        )
-        .as_array()
-        .unwrap()
-        .len(),
-        10
-    );
-    b.wait("History run 24");
-    let older = b.element(".history-controls a[href*='older=']");
-    b.post(&format!("/element/{older}/click"), json!({}));
-    b.wait("History run 14");
-    assert!(!b.text("body").contains("History run 24"));
-    b.post("/url", json!({"url":format!("{server}/chats/history")}));
-    assert_eq!(
-        b.post(
-            "/elements",
-            json!({"using":"css selector","value":".conversation-history nav a[href^='/dm/']"})
-        )
-        .as_array()
-        .unwrap()
-        .len(),
-        11
-    );
-    let nested = b.element(&format!("a[href='/dm/{child}']"));
-    assert_eq!(
-        b.get(&format!("/element/{nested}/displayed")),
-        false,
-        "Child agents start collapsed under their parent"
-    );
-    // The old URL redirects to the Bots history sub-page.
+    let count = |b: &Browser, selector: &str| b.post("/elements", json!({"using":"css selector","value":selector})).as_array().unwrap().len();
+    // "Show turns", where the old run history redirects (the fixture server
+    // does not redirect; `url_names` tests cover that), lists every DM's turns.
+    b.post("/url", json!({"url":format!("{server}/bots/history?expand=1")}));
+    b.wait("History run 54");
+    assert_eq!(count(&b, "details.history-dm[open]"), 50, "One page of DMs, every row open");
+    assert_eq!(count(&b, ".history-turn"), 49, "The newest DM, the child, has no turns");
+    // Without filters, rows load their turns when opened.
+    b.post("/url", json!({"url":format!("{server}/bots/history")}));
     b.element(".sidebar a[href='/?view=agents'][aria-current='page']");
     b.element("nav[aria-label='Bots'] a[href='/bots/history'][aria-current='page']");
-    b.element("nav[aria-label='History'] a[href='/bots/history'][aria-current='page']");
-    let branch = b.element(".conversation-history .conversation-branch > summary");
-    b.post(&format!("/element/{branch}/value"), json!({"text":" "}));
-    assert_eq!(
-        b.get(&format!("/element/{nested}/displayed")),
-        true,
-        "The arrow must disclose nested conversations"
-    );
-    let parent_row = b.get(&format!("/element/{branch}/rect"));
-    let nested_row = b.get(&format!("/element/{nested}/rect"));
-    assert_eq!(
-        parent_row["x"], nested_row["x"],
-        "Nested highlights must start at the same edge as their parent"
-    );
-    assert_eq!(
-        parent_row["width"], nested_row["width"],
-        "Indentation must not narrow the highlighted row"
-    );
-    assert!(
-        b.get(&format!("/element/{nested}/css/padding-left"))
-            .as_str()
-            .unwrap()
-            .trim_end_matches("px")
-            .parse::<f64>()
-            .unwrap()
-            > 26.0,
-        "Child labels remain indented inside their full-width rows"
-    );
-    assert!(
-        (nested_row["y"].as_f64().unwrap()
-            - parent_row["y"].as_f64().unwrap()
-            - parent_row["height"].as_f64().unwrap())
-        .abs()
-            < 1.0,
-        "Expanded rows must meet without a vertical gap"
-    );
+    assert_eq!(count(&b, "nav[aria-label='History']"), 0, "One view, no tabs");
+    assert_eq!(count(&b, "details.history-dm"), 50);
+    assert_eq!(count(&b, ".history-turn"), 0, "Turns load on demand");
+    b.element(&format!("details.history-dm[data-dm='{child}']"));
+    let row = b.element(&format!("details[data-dm='{newest}'] > summary"));
+    b.post(&format!("/element/{row}/click"), json!({}));
+    b.wait("History run 54");
+    assert_eq!(count(&b, &format!("details[data-dm='{newest}'] .history-turn")), 1);
+    assert_eq!(count(&b, &format!("details[data-dm='{newest}'] [data-turns-slot]")), 0, "The fragment replaced the link");
     if let Ok(path) = std::env::var("CONTROL_QA_HISTORY_SCREENSHOT") {
         use base64::Engine;
         let screenshot = b.get("/screenshot");
@@ -836,8 +786,8 @@ fn browser_fixture(long_messages_only: bool) {
     b.post("/window/rect", json!({"width":1280,"height":900}));
     let older = b.element(".history-controls a[href*='older=']");
     b.post(&format!("/element/{older}/click"), json!({}));
-    b.wait("History thread 14");
-    assert!(!b.text("body").contains("History thread 24"));
+    b.wait("History thread 0");
+    assert!(!b.text("body").contains("History thread 54"));
     let parent = {
         let mut state = state.lock().unwrap();
         let parent = state
@@ -963,7 +913,7 @@ fn browser_fixture(long_messages_only: bool) {
         session.parent_chat = Some(chat.clone());
         session.title = format!("Late background child {late}");
     }
-    for path in ["/?view=tools", "/?view=runs", "/dms"] {
+    for path in ["/?view=tools", "/bots/history", "/dms"] {
         b.post("/url", json!({"url":format!("{server}{path}")}));
     }
     let toggle = b.element(".conversation-toggle > summary");

@@ -341,3 +341,74 @@ fn bots_page() {
         }
     }
 }
+/// A node with `dms` DMs sharing `turns` turns (one in twenty failed), for
+/// Bots / History. Built directly: no callbacks, saves or model calls.
+pub(crate) fn history_fixture(dms: usize, turns: usize) -> State {
+    let mut state = State::default();
+    chat::create(&mut state);
+    let template = state.chats.pop().unwrap();
+    state.runtime.enqueue("Turn".into(), RunKind::Chat, "test");
+    let run = state.runtime.runs.pop().unwrap();
+    let id = |index: usize| format!("c-{:x}-{index}", 0x1870_0000_0000_u64 + index as u64 * 7919);
+    for index in 0..dms {
+        let mut chat = template.clone();
+        chat.id = id(index);
+        chat.title = format!("Survey tunnel {index} and report ore counts");
+        chat.activity_order = index as u64 + 1;
+        state.chats.push(chat);
+    }
+    for index in 0..turns {
+        let mut turn = run.clone();
+        turn.id = format!("{:x}-{index}", 0x1790_0000_0000_0000_u64 + index as u64 * 1_000_000_000);
+        turn.chat_id = Some(id(index % dms));
+        turn.kind = [RunKind::Chat, RunKind::BotWake, RunKind::PortDecision][index % 3];
+        turn.status = if index % 20 == 0 { "failed" } else { "completed" }.into();
+        turn.model = Some(["gpt-5", "claude"][index % 2].into());
+        *turn.objective = format!("Turn {index}: check the ore counts <&>");
+        turn.attempts.push(Attempt {
+            started_unix: 1_700_000_000 + index as u64 * 13,
+            elapsed_ms: 30_000,
+            tokens: Some(crate::usage::Tokens { input_tokens: 9_000, cached_input_tokens: 6_000, output_tokens: 700 }),
+            ..Default::default()
+        });
+        state.runtime.runs.push(turn);
+    }
+    state
+}
+/// Bots / History requests through the HTTP handler at 10, 1,000 and 10,000
+/// DMs with 100,000 turns. Targets a revision does not serve report 0 bytes.
+#[test]
+#[ignore = "explicit release-mode synthetic timing; no credentials, models or source execution"]
+fn history_page() {
+    let rounds = std::env::var("CONTROL_TIMING_ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(9);
+    let turns = std::env::var("CONTROL_HISTORY_TURNS").ok().and_then(|v| v.parse().ok()).unwrap_or(100_000);
+    for dms in [10, 1000, 10_000] {
+        let mut state = history_fixture(dms, turns);
+        let dm = state.chats[0].id.clone();
+        let targets = [
+            ("history_page", "/bots/history".to_owned()),
+            ("history_runs", "/bots/history/runs".to_owned()),
+            ("history_failed", "/bots/history?status=failed".to_owned()),
+            ("history_expand", "/bots/history?expand=1".to_owned()),
+            ("history_search", "/bots/history?q=tunnel+9".to_owned()),
+            ("history_turns", format!("/bots/history/turns?dm={dm}")),
+        ];
+        for (name, target) in targets {
+            let request = |state: &mut State| {
+                let mut response = Vec::new();
+                crate::session_http::handle(&mut response, state, "GET", &target, "none", "", &[]);
+                response.len()
+            };
+            let mut samples = Vec::new();
+            for _ in 0..rounds {
+                let start = Instant::now();
+                for _ in 0..5 {
+                    black_box(request(black_box(&mut state)));
+                }
+                samples.push(start.elapsed().as_nanos() / 5);
+            }
+            samples.sort_unstable();
+            println!("{}", serde_json::json!({"workload":name,"dms":dms,"turns":turns,"median_ns":samples[samples.len() / 2],"min_ns":samples[0],"max_ns":samples[samples.len() - 1],"bytes":request(&mut state)}));
+        }
+    }
+}

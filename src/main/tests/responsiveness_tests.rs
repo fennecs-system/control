@@ -60,7 +60,7 @@ fn legacy_session_view_redirects_to_the_canonical_chat_page() {
         Some("/dms")
     );
     assert_eq!(location("view=session").as_deref(), Some("/dms"));
-    assert_eq!(location(&format!("view=runs&channel={id}")).as_deref(), Some("/bots/history/runs"), "run history moved under Bots");
+    assert_eq!(location(&format!("view=runs&channel={id}")).as_deref(), Some("/bots/history?expand=1"), "run history is Bots / History with turns listed");
     assert_eq!(location(&format!("view=agents&channel={id}")), None);
     assert_eq!(location("view=lenses").as_deref(), Some("/dna"), "the gene library is the DNA page");
     assert_eq!(location(""), None);

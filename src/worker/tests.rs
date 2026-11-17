@@ -259,7 +259,7 @@ fn running_usage_is_live_in_state_and_rendered_until_the_attempt_finishes() {
     assert!(monitor.contains("Running now"), "{monitor}");
     assert!(monitor.contains("local:qwen-local (served: qwen3-coder-30b)</td><td>12000</td><td>11000</td><td>300</td><td>so far"), "{monitor}");
     assert!(monitor.contains("running (totals so far): 1 · unknown attempts: 0 · partial (stopped mid-turn, lower bound): 0"), "{monitor}");
-    assert!(state.runtime.runs_page(None, None).contains("12000 input (11000 cached) · 300 output tokens so far"));
+    assert!(crate::history_view::page(&state, &crate::history_view::Filter { expand: true, ..Default::default() }).contains("1 attempt(s) · 12000 input (11000 cached) · 300 output tokens so far"));
     let transcript = crate::chat::transcript(&state, &chat).unwrap();
     assert!(transcript.contains(">↑ 12,000 in (11,000 cached)</span> · <span title='300 output tokens so far; the attempt is still running'>↓ 300 out…</span>"), "{transcript}");
 

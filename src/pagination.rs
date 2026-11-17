@@ -2,16 +2,20 @@
 //! pages so newly appended history does not shift an older page's boundary.
 pub const SIZE: usize = 10;
 pub fn window(total: usize, older: Option<usize>, newer: Option<usize>) -> std::ops::Range<usize> {
+    sized(total, older, newer, SIZE)
+}
+/// [`window`] with `size` items per page.
+pub fn sized(total: usize, older: Option<usize>, newer: Option<usize>, size: usize) -> std::ops::Range<usize> {
     let range = if let Some(index) = older.filter(|index| *index < total) {
         let start = index + 1;
-        start..start.saturating_add(SIZE).min(total)
+        start..start.saturating_add(size).min(total)
     } else if let Some(index) = newer.filter(|index| *index < total) {
-        index.saturating_sub(SIZE)..index
+        index.saturating_sub(size)..index
     } else {
-        0..SIZE.min(total)
+        0..size.min(total)
     };
     if range.is_empty() {
-        0..SIZE.min(total)
+        0..size.min(total)
     } else {
         range
     }

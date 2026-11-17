@@ -43,6 +43,21 @@ fn redirects_keep_the_query_and_preserve_non_get_methods() {
 }
 
 #[test]
+fn history_pages_redirect_to_one_view_with_an_equivalent_filter() {
+    assert_eq!(history("/chats/history", ""), Some("/bots/history".to_owned()));
+    assert_eq!(history("/chats/history", "older=c-1&newer=c-2"), Some("/bots/history?older=c-1&newer=c-2".to_owned()));
+    // Only DM cursors that are still DM IDs carry over.
+    assert_eq!(history("/chats/history", "older=%3Cx%3E&q=a&newer="), Some("/bots/history".to_owned()));
+    // Run cursors do not name a DM: every DM opens with its latest turns.
+    assert_eq!(history("/bots/history/runs", "older=1a-2"), Some("/bots/history?expand=1".to_owned()));
+    for path in ["/bots/history", "/bots/history/turns", "/chats", "/bots/history/runs/x"] {
+        assert_eq!(history(path, ""), None, "{path}");
+    }
+    assert_eq!(redirect("GET", "/bots/history/runs", ""), Some(("301 Moved Permanently", "/bots/history?expand=1".to_owned())));
+    assert_eq!(redirect("GET", "/chats/history", "older=c-9"), Some(("301 Moved Permanently", "/bots/history?older=c-9".to_owned())));
+}
+
+#[test]
 fn dm_routes_accept_stored_legacy_paths() {
     assert_eq!(dm_route("/dm/c1/project"), Some("c1/project"));
     assert_eq!(dm_route("/chat/c1"), Some("c1"));
