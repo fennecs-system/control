@@ -178,7 +178,9 @@ fn the_prefix_maps_to_control_commands_both_ways() {
     assert!(matches!(channel.route(&bang, &me(), inbound(None, "!bot deny bot-1")), Some(Routed::Decide(n)) if n.id == "bot-1"));
     assert_eq!(channel.route(&bang, &me(), inbound(None, "!use swarm, review")), Some(Routed::Navigate(Navigation::Use(Some(vec!["swarm".into(), "review".into()])))));
     assert_eq!(channel.route(&bang, &me(), inbound(None, "!rename Farm lead")), Some(Routed::Navigate(Navigation::Rename("Farm lead".into()))));
-    assert!(bang.help().contains("!rename — Rename this chat"));
+    assert!(bang.help().contains("!rename — Rename this DM"));
+    assert_eq!(channel.route(&bang, &me(), inbound(None, "!genes")), Some(Routed::Navigate(Navigation::Genes)));
+    assert!(bang.help().contains("!genes — List the genes !use can select"));
 }
 
 #[test]
@@ -202,13 +204,13 @@ fn commands_work_with_forwarding_off_and_only_decisions_need_it() {
     assert_eq!(channel.route(&off, &me(), inbound(None, "!help")), Some(Routed::Help));
     // `run` answers Help with `help()` (not called here: it saves channel state).
     let help = off.help();
-    assert!(help.starts_with("Commands (anything else goes to the selected chat):") && help.contains("!chats"));
+    assert!(help.starts_with("Commands (anything else goes to the selected DM):") && help.contains("!chats"));
     // Navigation routes too, and `!chats` lists the recent chats.
     assert_eq!(channel.route(&off, &me(), inbound(None, "!chats")), Some(Routed::Navigate(Navigation::List)));
     assert_eq!(channel.route(&off, &me(), inbound(None, "!new")), Some(Routed::Navigate(Navigation::New)));
     let list = json!([{"id":"c-lead","title":"Swarm lead","revision":1},{"id":"c-two","title":"Second","revision":2}]);
     let listed = off.present(&chat_list(&me(), &list));
-    assert!(listed.starts_with("Recent chats. Reply !resume ID") && listed.contains("c-lead") && listed.contains("Second"));
+    assert!(listed.starts_with("Recent DMs. Reply !resume ID") && listed.contains("c-lead") && listed.contains("Second"));
     assert!(listed.contains("!resume home-chat"));
     // A selected chat is steered with forwarding off.
     channel.ledger.select(&me(), Some(("c-lead".into(), 0)));

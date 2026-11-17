@@ -155,7 +155,7 @@ fn lens_label(detail: &Value) -> String {
         .map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>())
         .unwrap_or_else(|| detail["lens"].as_str().into_iter().collect());
     if lenses.is_empty() {
-        "No lenses".into()
+        "No genes".into()
     } else {
         clean(&lenses.join(" + "))
     }
@@ -295,7 +295,7 @@ impl App {
                     self.inspector=None;self.status=format!("Future messages: {}",lens_label(&self.detail));self.follow=true;
                 }
                 Navigation::Rename(name) => {
-                    if self.active.is_empty() {return Err(failure("Start or resume a chat before renaming it."));}
+                    if self.active.is_empty() {return Err(failure("Start or resume a DM before renaming it."));}
                     self.set_detail(chats::rename(hive,&self.active,&name)?);
                     self.refresh(hive)?;
                     self.status=format!("Renamed to {}",self.detail["title"].as_str().unwrap_or(&name));
@@ -304,7 +304,14 @@ impl App {
                     self.refresh(hive)?;
                     let entries=chats::entries(&self.chats);
                     self.menu=Some(Menu {entries:entries.iter().zip(&self.chats).map(|(e,c)| (format!("{}{}", "  ".repeat(e.depth),e.title),c["lenses"].as_array().map(|a|a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" + ")).unwrap_or_default(),e.id.into())).collect(),selected:0,multiple:false,checked:Vec::new()});
-                    self.inspector=Some(("Conversations".into(),chats::resume_list(&entries)));self.scroll=0;self.follow=false;self.status="↑ ↓ choose · Enter open · Esc back".into();
+                    self.inspector=Some(("DMs".into(),chats::resume_list(&entries)));self.scroll=0;self.follow=false;self.status="↑ ↓ choose · Enter open · Esc back".into();
+                }
+                Navigation::Genes => {
+                    let definitions=hive.tool("control.lenses.list",json!({}))?;
+                    let entries=definitions.as_array().ok_or_else(||failure("Invalid DNA library response."))?.iter().map(|d| (d["name"].as_str().unwrap_or("Gene").into(), d["includes"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" + ")).unwrap_or_default(), d["id"].as_str().unwrap_or("").into())).collect();
+                    let checked=self.detail["lenses"].as_array().map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default();
+                    self.menu=Some(Menu{entries,selected:0,multiple:true,checked});
+                    self.inspector=Some(("DNA".into(),format!("{}\nReturn with /chat.",chats::gene_list(&definitions))));self.scroll=0;self.follow=false;self.status="↑ ↓ choose · Space toggle · Enter apply · Esc back".into();
                 }
             },
             "/help" => {
@@ -316,18 +323,6 @@ impl App {
                 self.scroll = 0;
                 self.follow = false;
                 self.status = "PageUp / PageDown scroll · Esc or /chat returns".into();
-            }
-            "/lenses"=>{
-                let definitions=hive.tool("control.lenses.list",json!({}))?;
-                let entries=definitions.as_array().ok_or_else(||failure("Invalid lens library response."))?.iter().map(|d| (d["name"].as_str().unwrap_or("Lens").into(), d["includes"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" + ")).unwrap_or_default(), d["id"].as_str().unwrap_or("").into())).collect();
-                let checked=self.detail["lenses"].as_array().map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default();
-                self.menu=Some(Menu{entries,selected:0,multiple:true,checked});
-                let mut lines=vec!["Compose with /use engineering evidence; clear with /use none. Return with /chat.\n".to_owned()];
-                for d in definitions.as_array().ok_or_else(||failure("Invalid lens library response."))? {
-                    lines.push(format!("{} · {} · v{}",d["id"].as_str().unwrap_or("?"),d["name"].as_str().unwrap_or("?"),d["revision"].as_u64().unwrap_or(0)));
-                    if let Some(includes)=d["includes"].as_array().filter(|a|!a.is_empty()) {lines.push(format!("  includes {}",includes.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" + ")));}
-                }
-                self.inspector=Some(("Lens library".into(),lines.join("\n")));self.scroll=0;self.follow=false;self.status="↑ ↓ choose · Space toggle · Enter apply · Esc back".into();
             }
             "/context"=>{
                 let lenses=self.detail.get("lenses").cloned().unwrap_or_else(||json!([]));
@@ -568,7 +563,7 @@ fn resume_selection(args:&[String])->io::Result<Option<&str>> {
 pub fn run() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|s| s == "--help") {
-        println!("control tui [--server {}] [--resume ID] [--directory PATH] [--check]\nAlso available as control-harness. Starts a fresh chat; --resume ID (or --session ID) explicitly resumes one. CONTROL_ADDR sets the default server.\n\n/resume · /open /absolute/path · /trust [REQUEST] · /port allow|deny ID · /answer QUESTION_ID choice · /lenses · /use ID ID · /use none · /context · /chat · /help", crate::config::server_url());
+        println!("control tui [--server {}] [--resume ID] [--directory PATH] [--check]\nAlso available as control-harness. Starts a fresh DM; --resume ID (or --session ID) explicitly resumes one. CONTROL_ADDR sets the default server.\n\n/resume · /open /absolute/path · /trust [REQUEST] · /port allow|deny ID · /answer QUESTION_ID choice · /genes · /use GENE GENE · /use none · /context · /chat · /help", crate::config::server_url());
         return Ok(());
     }
     let option = |name: &str| {
@@ -595,7 +590,7 @@ pub fn run() -> io::Result<()> {
     }
     if args.iter().any(|s| s == "--check") {
         println!(
-            "Connected to Control MCP. {} chats available.",
+            "Connected to Control MCP. {} DMs available.",
             app.chats.len()
         );
         return Ok(());

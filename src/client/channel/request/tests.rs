@@ -58,7 +58,7 @@ fn rich_requests_carry_fields_severity_and_actions_in_the_channel_spelling() {
     assert_eq!((question.title.as_str(), question.severity), ("Decision requested", Severity::Attention));
     assert!(question.body.starts_with("Which cache?") && question.body.contains("**2.** Files (recommended)"));
     assert!(question.hint.contains("!answer q-1"), "commands use the channel prefix: {}", question.hint);
-    assert!(question.fields.contains(&("Chat", "Swarm lead".into())) && question.fields.contains(&("Recommended", "Option 2".into())));
+    assert!(question.fields.contains(&("DM", "Swarm lead".into())) && question.fields.contains(&("Recommended", "Option 2".into())));
     let ids = question.actions.iter().map(|a| a.id).collect::<Vec<_>>();
     assert_eq!(ids, ["o1", "o2", "answer", "open"]);
     assert_eq!(question.actions[1].style, Style::Primary, "the recommended option stands out");
@@ -76,7 +76,7 @@ fn rich_requests_carry_fields_severity_and_actions_in_the_channel_spelling() {
     let bot = render(2);
     assert_eq!((bot.title.as_str(), bot.severity), ("Bot request", Severity::Warning));
     assert!(bot.fields.contains(&("Wakes", "every 15 min".into())));
-    assert_eq!(bot.actions.iter().map(|a| (a.id, a.label.as_str())).collect::<Vec<_>>(), [("allow", "Approve"), ("deny", "Deny"), ("open", "Open chat")]);
+    assert_eq!(bot.actions.iter().map(|a| (a.id, a.label.as_str())).collect::<Vec<_>>(), [("allow", "Approve"), ("deny", "Deny"), ("open", "Open DM")]);
     // A view without the details still renders from the pending summary.
     let bare = json!({"chat_id":"c","pending_questions":[{"question":{"id":"q-2"},"summary":"Pick one\u{7}"}]});
     let pending = operator::pending(&bare);

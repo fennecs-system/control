@@ -115,7 +115,7 @@ pub fn render(state: &State, room: &str) -> String {
             escape(post["text"].as_str().unwrap())
         ));
         if let Some(id) = post["chat"].as_str() {
-            html.push_str(&format!("<a href='/chat/{}'>Open chat ↗</a>", escape(id)));
+            html.push_str(&format!("<a href='/chat/{}'>Open DM ↗</a>", escape(id)));
         }
         html.push_str("</article>");
     }
@@ -137,7 +137,7 @@ pub fn render(state: &State, room: &str) -> String {
     if active.is_empty() {
         html.push_str("<li class='muted'>No active participants.</li>");
     }
-    html.push_str("</ul><h2>Linked chats</h2><nav class='room-links' aria-label='Linked chats'>");
+    html.push_str("</ul><h2>Linked DMs</h2><nav class='room-links' aria-label='Linked DMs'>");
     let mut linked = 0;
     for chat in data["chats"].as_array().unwrap() {
         let id = chat["id"].as_str().unwrap();
@@ -147,11 +147,11 @@ pub fn render(state: &State, room: &str) -> String {
         }
     }
     if linked == 0 {
-        html.push_str("<p class='muted'>No other linked chats.</p>");
+        html.push_str("<p class='muted'>No other linked DMs.</p>");
     }
     html.push_str("</nav>");
     html.push_str(&claims::render(state, room));
-    html.push_str(&format!("<form class='room-new-chat' method='post' action='/chats'><input type='hidden' name='room' value='{room}'><input type='hidden' name='lens' value='{}'><button>+ {}</button></form></aside></div>", if channel == "general" { "none" } else { channel }, if room == channel { format!("New task in #{channel}") } else { "New chat in this thread".into() }));
+    html.push_str(&format!("<form class='room-new-chat' method='post' action='/chats'><input type='hidden' name='room' value='{room}'><input type='hidden' name='lens' value='{}'><button>+ {}</button></form></aside></div>", if channel == "general" { "none" } else { channel }, if room == channel { format!("New task in #{channel}") } else { "New DM in this thread".into() }));
     html
 }
 

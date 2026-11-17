@@ -2,20 +2,35 @@
 
 A lens is versioned context: instructions, captured knowledge documents,
 descriptive tool hints and other lenses. It is not an agent identity or a grant.
-Use **Lenses** to create and edit definitions and to inspect their effective
-instructions. Select lenses in a chat's lens picker, through
-`control.chat.lenses`, or with terminal commands:
+
+**User-facing names.** The UI calls the library **DNA** and each lens a
+**gene**: genes include other genes, a DM's selected set is its DNA (genome),
+and revisions are versions. Users experience a lens as a bundle of tools,
+documents and instructions that spawned workers inherit, not as a view into
+something. Internally lenses remain pure lens transforms, and code, state
+fields, tool names and APIs (`/lenses`, `control.chat.lenses`,
+`control.lenses.*`) keep the `lens` name. Likewise a 1:1 conversation with an
+agent is shown as a **DM** (distinct from **Rooms**), while URLs and APIs stay
+`/chat/...` and `control.chat.*`.
+
+Use **DNA** to create and edit genes and to inspect their effective
+instructions. Select genes in a DM's gene picker, through `control.chat.lenses`,
+or with terminal and Discord commands (`!genes`/`!use` with the default Discord
+prefix):
 
 ```text
+/genes
 /use engineering swarm
 /context
 ```
 
+`/genes` lists the library; `/lenses` remains an alias.
+
 A selection applies to future operator messages. Queued runs, spawned workers and
 automatic continuations keep the revisions they captured, so editing the library
 never changes an active attempt. `/use none` clears the selection. The browser
-preference only sets the starting selection for a new chat. Lens instructions are
-limited to 4,000 characters.
+preference only sets the starting selection for a new DM. Gene (lens)
+instructions are limited to 4,000 characters.
 
 Built-in lenses are versioned. On load, a node adds missing built-ins (when
 library capacity permits) and appends a newer built-in revision when its current

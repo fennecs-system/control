@@ -79,3 +79,17 @@ fn the_shared_use_grammar_parses_lists_clears_and_ignores_empty_selections() {
     assert_eq!(unknown(&lenses(" zeta alpha typo, zeta").unwrap(), library), vec!["zeta", "typo"]);
     assert!(unknown(&lenses(" alpha,beta").unwrap(), library).is_empty());
 }
+
+#[test]
+fn genes_lists_the_library_and_lenses_stays_an_alias() {
+    assert_eq!(navigation("/genes"), Some(Navigation::Genes));
+    assert_eq!(navigation(" /lenses "), Some(Navigation::Genes));
+    assert_eq!(navigation("/genes swarm"), None);
+    let list = gene_list(&json!([
+        {"id":"swarm","name":"Swarm","revision":3,"includes":["planning","autonomy"]},
+        {"id":"evidence","name":"Evidence","revision":1,"includes":[]},
+    ]));
+    assert!(list.starts_with("Genes. Set a DM's DNA with /use"));
+    assert!(list.contains("swarm · Swarm · v3\n  includes planning + autonomy\nevidence · Evidence · v1"));
+    assert!(COMMANDS.iter().any(|(usage, _)| *usage == "/genes"));
+}

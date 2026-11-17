@@ -176,8 +176,8 @@ fn item<'a>(view: &'a Value, pending: &Pending<'_>) -> &'a Value {
 pub fn request(settings: &Settings, title: &str, link: &str, pending: &Pending<'_>, view: &Value) -> Request {
     let item = item(view, pending);
     let id = clean(pending.id, 100, false);
-    let mut fields = vec![("Chat", clean(title, 100, false))];
-    let open = Action { id: "open", label: "Open chat".into(), style: Style::Secondary, act: Act::Open(link.into()) };
+    let mut fields = vec![("DM", clean(title, 100, false))];
+    let open = Action { id: "open", label: "Open DM".into(), style: Style::Secondary, act: Act::Open(link.into()) };
     let decide = |id: &'static str, label: &str, style| Action { id, label: label.into(), style, act: Act::Reply };
     let request = match pending.kind {
         Kind::Question => {
