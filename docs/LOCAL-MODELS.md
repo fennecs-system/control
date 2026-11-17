@@ -43,7 +43,7 @@ In **Manage → Models & providers → Text models**, add one entry per model:
 
 Each entry lists its capabilities (summaries and text generation, plus agent
 turns when it serves tool calls). Roles refer to entries by name: the compactor
-under **History compaction**, `control_model_generate` by `model`, and agent turns
+under **MemoryTree model**, `control_model_generate` by `model`, and agent turns
 by `/model local:NAME`. **Edit** changes everything except the name and adapter,
 with the same validation as adding. Older settings that had two entries for the
 same endpoint and model are merged on start; the tool-capable entry's name is
@@ -56,7 +56,7 @@ directory.
 `control models test MODEL_ID` sends one small request and reports response size
 and usage, without history or setting changes.
 
-## History compaction
+## MemoryTree model
 
 Compaction is opt-in and off by default. Choose a compactor, list the exact chat
 IDs to process and enable **Automatic summaries**; an empty list processes
@@ -319,7 +319,7 @@ nix run .#inference -- --status
 
 1. Add `qwen-27b` (`http://127.0.0.1:8081/v1`) with **Serves tool calls**, and
    `qwen-7b` (`http://127.0.0.1:8082/v1`) without it.
-2. Set **History compaction → Summary model** to `qwen-7b`.
+2. Set **MemoryTree model → Summary model** to `qwen-7b`.
 3. Use `/model local:qwen-27b` in a chat, or `model: "local:qwen-27b"` when
    spawning.
 
