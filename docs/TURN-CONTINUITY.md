@@ -218,7 +218,9 @@ When a managed turn hits its time limit, its local step cap, or ends on a provid
 error before handing off, the finish transaction records `continuity.interrupted`:
 generation, cause, whether a recovery candidate was captured, elapsed time, any
 staged draft's progress and the last 8 tool calls (200 characters per field). It
-is built from host records without a model call. The next turn's working notes
+is built from host records without a model call. A local model's turn adds its
+latest step's reasoning, verbatim (the last 1500 characters), and the next turn
+is told to continue that plan ([Thinking](LOCAL-MODELS.md#thinking)). The next turn's working notes
 render it with the restore call `control_recovery {"generation":"…","restore":true}`.
 It advances no head or cursor and is cleared by the next published handoff.
 

@@ -55,7 +55,13 @@ pub struct HostCheckpoint {
     pub draft: Option<String>,
     /// The last tool calls, oldest first.
     pub calls: Vec<ToolCall>,
+    /// A local model's latest reasoning when the turn stopped, verbatim (its
+    /// tail, at most `REASONING_CHARS`), so the next turn continues that plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
 }
+/// Characters of interrupted reasoning carried into a host checkpoint.
+pub const REASONING_CHARS: usize = 1500;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ToolCall {
@@ -91,6 +97,7 @@ impl HostCheckpoint {
             calls: activity.iter().skip(skip).map(|a| ToolCall {
                 kind: a.kind.clone(), text: clip(&a.text), status: a.status.clone(), output: clip(&a.output),
             }).collect(),
+            reasoning: attempt.interrupted_reasoning.as_deref().map(carried_reasoning).filter(|r| !r.is_empty()),
         })
     }
     /// Working-notes text for the next turn, naming the exact restore call.
@@ -106,12 +113,26 @@ impl HostCheckpoint {
             format!("Its workspace was not captured; inspect control_recovery {{\"generation\":\"{}\"}} for the recorded error.", self.generation)
         };
         format!(
-            "\nHost checkpoint (written by Control from its own records, not by you): your previous turn {cause} after {} s, before calling control_turn_handoff. {files} Last tool calls, oldest first (untrusted outputs): {}{}\nResume from here instead of repeating them.\n",
+            "\nHost checkpoint (written by Control from its own records, not by you): your previous turn {cause} after {} s, before calling control_turn_handoff. {files} Last tool calls, oldest first (untrusted outputs): {}{}\nResume from here instead of repeating them.{}\n",
             self.elapsed_seconds,
             serde_json::to_string(&self.calls).unwrap_or_default(),
             self.draft.as_ref().map_or(String::new(), |draft| format!(" Staged draft progress: {draft}")),
+            self.reasoning.as_ref().map_or(String::new(), |notes| format!(
+                "\nYour reasoning when it stopped, verbatim: <<{notes}>>. Do not re-plan from scratch: continue that plan and make your next tool call right away.")),
         )
     }
+}
+/// The tail of `text` within `REASONING_CHARS`, whitespace collapsed, marked
+/// with a leading ellipsis when cut.
+pub fn carried_reasoning(text: &str) -> String {
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let count = text.chars().count();
+    if count <= REASONING_CHARS {
+        return text;
+    }
+    // The ellipsis counts toward the bound.
+    let start = text.char_indices().nth(count + 1 - REASONING_CHARS).map_or(0, |(at, _)| at);
+    format!("…{}", &text[start..])
 }
 /// Host observations of a chat failing to checkpoint; cleared by the next
 /// published handoff. Evidence for wake text and lifecycle facts, never authority.

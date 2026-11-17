@@ -204,7 +204,12 @@ with no Python or Node.
 
 The CUDA and Vulkan image variants evaluate but have not been run. A start refuses
 a port held by another model's record. Every start passes `--jinja` (tool calls
-through the chat template), `--reasoning-budget 0` and `--metrics --slots`. The
+through the chat template), `--reasoning-format deepseek` (thinking arrives as
+`reasoning_content`, apart from the answer) and `--metrics --slots`. There is no
+server-wide reasoning budget: Control sets thinking per request (see
+[Thinking](#thinking)). Services started by earlier releases ran with
+`--reasoning-budget 0`; restart the service (run the start command again)
+between turns to pick up the new flags. The
 script writes `inference/ALIAS.json` in the configuration directory (backend,
 model path, SHA256, alias, port and a revision string) and prints the values for
 **Manage → Models & providers → + New text model**: adapter *Local endpoint*, the
@@ -290,7 +295,9 @@ docker run --rm --name control-compactor --read-only \
   --ctx-size 32768 --threads 4 --reasoning-budget 0
 ```
 
-Resource limits are operator choices. Any private OpenAI-compatible
+Control asks for summaries and generation without thinking on every request, so
+`--reasoning-budget 0` here only covers other clients. Resource limits are
+operator choices. Any private OpenAI-compatible
 `/v1/chat/completions` server also works; see the
 [llama.cpp server documentation](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md).
 
@@ -385,6 +392,15 @@ complete. Older steps are shrunk without a model call: tool results keep a
 while staying valid JSON. A result that repeats a long argument of its own call
 cites it instead.
 
+Older steps shrink in batches of four, not one per step: the verbatim window
+holds four to seven steps, and steps 1–4 shrink together at step 8, 5–8 at step
+12, and so on. Between batches each request is the previous one plus the new
+step, byte for byte, so the prefix cache reuses all of it. Shrinking one step per
+step re-prefilled the four verbatim steps every time (a live Qwen run reused only
+64% of prompt tokens). In a mock 24-step turn
+(`local_agent::tests::shrinking_in_batches_keeps_the_prefix_stable_between_batches`)
+prompt bytes reused from the previous request rose from 31.9% to 72.4%.
+
 When a request reaches 75% of the input budget, the oldest block is folded into a
 summary on the chat's compactor (never splitting a call from its results). A
 block too large for the compactor is built from its children's summaries, and a
@@ -409,12 +425,47 @@ another model overrides this. `/chat/ID/compaction` reports the policy
 
 **Usage and provenance.** Step usage is summed into the attempt's token counts.
 A `local_model` activity records the name, alias, declared revision, server
-model and build fingerprint, step and compaction counts, elapsed time and tokens.
+model and build fingerprint, step and compaction counts, elapsed time and tokens,
+with the reasoning share of output tokens when the model thought.
 
 **Limits.** Tool calls run sequentially even when the model emits several. Token
 estimates are byte counts, not a tokenizer. Images are not sent. Core schemas use
 about 3.2–3.4k tokens for members and leads; schemas loaded during a turn stay
 loaded until it ends.
+
+### Thinking
+
+Each text-model entry has a **Thinking in agent turns** level (`thinking` in
+`model.json`): `off`, `minimal` (128 tokens), `low` (512), `medium` (1536, the
+default) or `high` (4096). Each step adapts around it
+(`src/local_agent/thinking.rs`):
+
+- one level higher on the first step, after a failed or malformed tool call (a
+  refused handoff included) and after an in-turn compaction;
+- one level lower on a routine step after a successful action;
+- `minimal` after a reply cut at the output limit;
+- `minimal` on a resumed turn (host checkpoint or retried run) until its first
+  tool call runs;
+- Qwen's soft switches: a reply of only `/think` re-sends the same step once at
+  `high` (asking again is a malformed step), and `/think` or `/no_think` in a
+  reply sets the next step.
+
+`off` never thinks. Requests carry llama.cpp's per-request controls (b11669,
+`tools/server/server-common.cpp`): `chat_template_kwargs.enable_thinking`,
+`reasoning_budget_tokens` (0 ends thinking at once; the server forces the end tag
+when the budget runs out) and `reasoning_format: "deepseek"`. Thinking shares
+`max_tokens` with the answer, so the budget is at most half the output reserve and
+a tool call always keeps the other half; raise the reserve to give thinking more
+room. Summaries and `control_model_generate` never think.
+
+Reasoning never enters the step transcript or the attempt's activity (an inline
+`<think>…</think>` block is taken out too), so it costs no context. Its tokens
+count as output: as reported (`completion_tokens_details.reasoning_tokens`),
+else estimated. A turn cut off by its time limit, step cap or a provider failure
+carries its latest step's reasoning (the last 1500 characters, verbatim) into the
+host checkpoint, and the next turn is told to continue that plan. Steps are not
+streamed, so a step still in flight when the turn stops loses its reasoning; the
+previous step's is carried.
 
 ### Prefix caching
 
@@ -433,8 +484,11 @@ local turn, the observation is the request's last message and is not stored, so
 each request is a prefix of the next.
 
 The prefix still breaks when the history window slides (once full, the oldest
-entry drops at a wake), when a compaction summary changes, or when a deferred
-tool's schema loads mid-turn (chat templates render tools in the system block).
+entry drops at a wake), when a compaction summary changes, when a local turn
+shrinks its next batch of older steps, or when a deferred tool's schema loads
+mid-turn (chat templates render tools in the system block). The slot also holds
+the newest step's generated thinking, which the next request leaves out, so reuse
+ends at that step's assistant message and only the newest step is prefilled again.
 Use one slot per concurrently active chat (`-np`) so different chats do not evict
 each other's prefix; llama-server routes each request to the best-matching slot.
 Hosted backends benefit from the same order: OpenAI caches prompt prefixes of

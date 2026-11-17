@@ -22,6 +22,7 @@ pub(crate) fn endpoint() -> Endpoint {
         timeout_seconds: 30,
         cli: None,
         tools: false,
+        thinking: Default::default(),
     }
 }
 /// A one-request mock endpoint. The handler receives the parsed body.
@@ -87,6 +88,8 @@ fn a_local_server_receives_one_bounded_text_request() {
         assert_eq!(body["model"], "qwen-compactor");
         assert_eq!(body["max_tokens"], 1024);
         assert!(body.get("tools").is_none());
+        // Summaries never think, whatever the server's default.
+        assert_eq!((body["chat_template_kwargs"]["enable_thinking"].clone(), body["reasoning_budget_tokens"].clone()), (serde_json::json!(false), serde_json::json!(0)));
         reply(stream, "200 OK", r#"{"choices":[{"finish_reason":"stop","message":{"content":"keep the original constraint"}}],"usage":{"prompt_tokens":20,"completion_tokens":6}}"#);
     });
     let output = call(&e, "Summarize evidence", "Original constraint").unwrap();

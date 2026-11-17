@@ -23,6 +23,11 @@ pub struct Endpoint {
     /// Omitted when false, so existing summary cache identities are unchanged.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub tools: bool,
+    /// How much a reasoning model thinks during agent turns (the local loop
+    /// adapts it per step around this level); summaries and generation never
+    /// think. Omitted at the default (medium), so existing identities are unchanged.
+    #[serde(default, skip_serializing_if = "control_ai::model::Thinking::is_default")]
+    pub thinking: control_ai::model::Thinking,
 }
 impl Endpoint {
     pub fn validate(&self) -> io::Result<Target> {
@@ -127,6 +132,10 @@ pub fn generate(
         limits: &limits,
     }
     .chat_completions()?;
+    // Summaries and generation answer directly: no reasoning spends the
+    // output allowance, whatever the server's default.
+    let mut body = body;
+    control_ai::model::think(&mut body, 0);
     let body = serde_json::to_vec(&body).map_err(io::Error::other)?;
     let bytes = transport::post(&url, &body, Duration::from_secs(endpoint.timeout_seconds), cancel)?;
     let value: serde_json::Value =
