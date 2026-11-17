@@ -1,11 +1,11 @@
 //! Global navigation stays independent of the selected chat context.
 const PRIMARY: &[(&str, &str, &str, &str)] = &[
     ("hub", "/", "▦", "Overview"),
-    ("session", "/chats", "⌁", "DMs"),
+    ("session", "/dms", "⌁", "DMs"),
     ("agents", "/?view=agents", "⌁", "Bots"),
     ("knowledge", "/knowledge", "▤", "Knowledge"),
     ("rooms", "/?view=rooms", "#", "Rooms"),
-    ("lenses", "/lenses", "◈", "DNA"),
+    ("lenses", "/dna", "◈", "DNA"),
     ("tools", "/?view=tools", "⊞", "Tools"),
     ("monitor", "/?view=monitor", "▥", "Usage"),
     ("manage", "/?view=manage", "⚙", "Manage"),
@@ -77,7 +77,7 @@ pub fn history(state:&crate::State,older:Option<&str>,newer:Option<&str>)->Strin
 /// History is a Bots sub-page: the live page and the record share one heading.
 pub fn history_tabs(runs: bool) -> String {
     let current = |selected| if selected {" aria-current='page'"} else {""};
-    format!("<div class='section-heading'><h2>Bots<span class='slash' aria-hidden='true'>/</span>History</h2><a href='/chats?new=1'>+ New chat</a></div>{}<nav class='tabs' aria-label='History'><a href='/bots/history'{}>Conversations</a><a href='/bots/history/runs'{}>Runs</a></nav>",bots_tabs(true),current(!runs),current(runs))
+    format!("<div class='section-heading'><h2>Bots<span class='slash' aria-hidden='true'>/</span>History</h2><a href='/dms?new=1'>+ New chat</a></div>{}<nav class='tabs' aria-label='History'><a href='/bots/history'{}>Conversations</a><a href='/bots/history/runs'{}>Runs</a></nav>",bots_tabs(true),current(!runs),current(runs))
 }
 /// Tabs between the live Bots page and its History sub-page.
 pub fn bots_tabs(history: bool) -> String {
@@ -122,7 +122,7 @@ fn conversation_window(state:&crate::State,active:&str,older:Option<&str>,newer:
         }
     }
     let current=if active.is_empty() {" aria-current='page'"}else{""};
-    let mut links=if picker {format!("<a href='/chats?new=1'{current}>+ New DM</a>")} else {String::new()};
+    let mut links=if picker {format!("<a href='/dms?new=1'{current}>+ New DM</a>")} else {String::new()};
     // One borrowed projection for the page, rather than scanning run history per chat.
     let mut latest=HashMap::new();
     if !picker {
@@ -146,7 +146,7 @@ fn conversation_window(state:&crate::State,active:&str,older:Option<&str>,newer:
             let model=run.model.as_deref().map(|model|format!(" · {}",crate::escape(model))).unwrap_or_default();
             format!("<span class='conversation-meta'>{} · {}{model}</span>",crate::escape(&run.status),crate::escape(run.backend.label()))
         }).unwrap_or_default();
-        let link=format!("<a class='conversation-link' href='/chat/{}' title='{title}' data-conversation-depth='{depth}'{current}><span class='conversation-title'>{title}</span>{metadata}</a>",chat.id);
+        let link=format!("<a class='conversation-link' href='/dm/{}' title='{title}' data-conversation-depth='{depth}'{current}><span class='conversation-title'>{title}</span>{metadata}</a>",chat.id);
         if selected.get(position+1).is_some_and(|next|next.depth>entry.depth) {
             links.push_str(&format!("<details class='conversation-branch' data-chat-branch='{}'{}><summary data-conversation-depth='{depth}'>{link}</summary><div class='conversation-children'>",chat.id,if expanded.contains(chat.id.as_str()) {" open"}else{""}));
             branches.push(entry.depth);

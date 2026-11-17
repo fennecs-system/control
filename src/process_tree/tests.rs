@@ -95,7 +95,7 @@ fn the_tree_shows_bots_services_and_processes_of_active_task_trees() {
     let html = render(&state).unwrap();
     assert!(html.contains("<svg") && html.contains("pt-steering") && html.contains("pt-agent"));
     assert!(html.contains("Run a &lt;civilisation&gt;") && !html.contains("<civilisation>"));
-    assert!(html.contains(&format!("href='/chat/{worker}'")));
+    assert!(html.contains(&format!("href='/dm/{worker}'")));
     // A canvas the client pans and zooms: the viewBox is the drawing's bounds
     // (a parent over one child, plus the stroke margin) and nothing fixes its size.
     assert!(html.contains("<div class='process-tree' role='region' aria-label='Process tree' tabindex='0' data-canvas>"));

@@ -139,7 +139,7 @@ pub(super) fn reconcile(
         let leaf = delegation::leaf(state, &child.id)?;
         follow_up.grant(crate::services::grants(state, leaf));
         summaries.push(format!(
-            "{} · {} · /chat/{}\n{}",
+            "{} · {} · /dm/{}\n{}",
             child.id,
             leaf.status,
             child.chat_id.as_deref().unwrap_or(""),

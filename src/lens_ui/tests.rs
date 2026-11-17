@@ -71,7 +71,7 @@ fn navigation_is_global_while_the_new_chat_context_stays_selected() {
         let html = crate::render(&state, view, "research", "general");
         assert!(!html.contains("class=\"right-panel\""));
         assert!(!html.contains("id=\"new-chat\""));
-        assert!(html.contains("/chats?discuss="));
+        assert!(html.contains("/dms?discuss="));
         assert!(!html.contains("lens-label"));
         assert!(!html.contains("<h2>Engineering"));
     }

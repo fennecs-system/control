@@ -53,7 +53,7 @@ fn groups() -> Value {
 fn rich_requests_carry_fields_severity_and_actions_in_the_channel_spelling() {
     let groups = groups();
     let pending = operator::pending(&groups[0]);
-    let render = |n: usize| request(&on(), "Swarm lead", "http://x/chat/c-lead", &pending[n], &groups[0]);
+    let render = |n: usize| request(&on(), "Swarm lead", "http://x/dm/c-lead", &pending[n], &groups[0]);
     let question = render(0);
     assert_eq!((question.title.as_str(), question.severity), ("Decision requested", Severity::Attention));
     assert!(question.body.starts_with("Which cache?") && question.body.contains("**2.** Files (recommended)"));
@@ -62,7 +62,7 @@ fn rich_requests_carry_fields_severity_and_actions_in_the_channel_spelling() {
     let ids = question.actions.iter().map(|a| a.id).collect::<Vec<_>>();
     assert_eq!(ids, ["o1", "o2", "answer", "open"]);
     assert_eq!(question.actions[1].style, Style::Primary, "the recommended option stands out");
-    assert_eq!(question.actions[3].act, Act::Open("http://x/chat/c-lead".into()));
+    assert_eq!(question.actions[3].act, Act::Open("http://x/dm/c-lead".into()));
     // Ports in this order: the loopback request, then a plain one.
     let port = render(1);
     assert_eq!((port.title.as_str(), port.severity), ("Port request", Severity::Danger));

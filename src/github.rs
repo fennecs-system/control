@@ -861,7 +861,7 @@ pub fn panel(state: &State, chat: &str) -> String {
             .iter()
             .any(|p| p.run == run.id && p.url.is_some())
         {
-            html.push_str(&format!("<details class='project-picker' data-transcript-key='github-publication'><summary>Open pull request</summary><form method='post' target='_top' action='/chat/{chat}/github'><input type='hidden' name='run_id' value='{}'><label>Title<input name='title' value='{}' maxlength='200' required></label><label>Description<textarea name='body' maxlength='16000'></textarea></label><button>Open draft pull request</button></form></details>",crate::escape(&run.id),crate::escape(&run.objective.chars().take(160).collect::<String>())));
+            html.push_str(&format!("<details class='project-picker' data-transcript-key='github-publication'><summary>Open pull request</summary><form method='post' target='_top' action='/dm/{chat}/github'><input type='hidden' name='run_id' value='{}'><label>Title<input name='title' value='{}' maxlength='200' required></label><label>Description<textarea name='body' maxlength='16000'></textarea></label><button>Open draft pull request</button></form></details>",crate::escape(&run.id),crate::escape(&run.objective.chars().take(160).collect::<String>())));
         }
     html
 }
@@ -914,7 +914,7 @@ pub fn http(
         return true;
     }
     let Some(chat) = path
-        .strip_prefix("/chat/")
+        .strip_prefix("/dm/")
         .and_then(|s| s.strip_suffix("/github"))
         .filter(|s| crate::chat::valid_id(s))
     else {
@@ -936,10 +936,10 @@ pub fn http(
     };
     match result {
         Ok(_) => {
-            let _ = control_http::respond(stream, "303 See Other", "text/plain", b"", &format!("Location: /chat/{chat}\r\n"), control_http::Policy::Restricted);
+            let _ = control_http::respond(stream, "303 See Other", "text/plain", b"", &format!("Location: /dm/{chat}\r\n"), control_http::Policy::Restricted);
         }
         Err(error) => {
-            let body = crate::error_page(&error.to_string(), &format!("/chat/{chat}"));
+            let body = crate::error_page(&error.to_string(), &format!("/dm/{chat}"));
             let _ = control_http::respond(stream, "400 Bad Request", "text/html; charset=utf-8", body.as_bytes(), "", control_http::Policy::Restricted);
         }
     }

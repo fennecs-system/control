@@ -53,6 +53,11 @@ impl Access {
         }
         Ok(Self { session })
     }
+    /// A fixed operator session for request tests that drive the whole handler.
+    #[cfg(test)]
+    pub fn for_tests(session: &str) -> Self {
+        Self { session: session.to_owned() }
+    }
     fn authorized(&self, header: &str) -> bool {
         header
             .lines()

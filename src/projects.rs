@@ -109,7 +109,7 @@ pub fn request_named(state: &mut State, id: &str, path: &str, name:Option<&str>)
         named:chat.project.as_ref().is_some_and(|p|p.named),
         ..Project::default()
     };
-    let result = json!({"approval_required":true,"request":project.request,"path":project.path,"mount":format!("/workspace/{}",project.name),"url":format!("/chat/{id}/project")});
+    let result = json!({"approval_required":true,"request":project.request,"path":project.path,"mount":format!("/workspace/{}",project.name),"url":format!("/dm/{id}/project")});
     let chat = state.chats.iter_mut().find(|c| c.id == id).unwrap();
     if chat.messages.is_empty() {
         chat.title = Path::new(path)
@@ -164,10 +164,10 @@ pub fn panel(state: &State, id: &str) -> String {
                 ));
             }
         } else {
-            html.push_str(&format!("<p>Open as <code>/workspace/{}</code></p><form class='decision-form' method='post' action='/chat/{id}/project' target='_top'><input type='hidden' name='request' value='{}'><p>Trust this folder’s code for this chat and allow local previews? Control will copy its files into an isolated worktree. Credentials, generated directories and symlinks are excluded. The original folder stays unchanged.</p><button name='approve' value='yes'>Trust folder and open</button><p role='alert' hidden></p></form><form method='post' action='/chat/{id}/project' target='_top'><label>Folder on this node<input name='path' value='{}' required></label><label>Workspace name<input name='name' value='{}' required></label><button>Change folder</button></form>",crate::escape(&project.name),crate::escape(&project.request),crate::escape(&project.path),crate::escape(&project.name)));
+            html.push_str(&format!("<p>Open as <code>/workspace/{}</code></p><form class='decision-form' method='post' action='/dm/{id}/project' target='_top'><input type='hidden' name='request' value='{}'><p>Trust this folder’s code for this chat and allow local previews? Control will copy its files into an isolated worktree. Credentials, generated directories and symlinks are excluded. The original folder stays unchanged.</p><button name='approve' value='yes'>Trust folder and open</button><p role='alert' hidden></p></form><form method='post' action='/dm/{id}/project' target='_top'><label>Folder on this node<input name='path' value='{}' required></label><label>Workspace name<input name='name' value='{}' required></label><button>Change folder</button></form>",crate::escape(&project.name),crate::escape(&project.request),crate::escape(&project.path),crate::escape(&project.name)));
         }
     } else {
-        html.push_str(&format!("<form method='post' action='/chat/{id}/project' target='_top'><label>Folder on this node<input name='path' value='{}' placeholder='/absolute/path' required></label><button>Continue</button></form>",crate::escape(path)));
+        html.push_str(&format!("<form method='post' action='/dm/{id}/project' target='_top'><label>Folder on this node<input name='path' value='{}' placeholder='/absolute/path' required></label><button>Continue</button></form>",crate::escape(path)));
     }
     html.push_str("</details>");
     html
@@ -802,7 +802,7 @@ fn http_in(
     save: Save,
 ) -> bool {
     if let Some(id) = path
-        .strip_prefix("/chat/")
+        .strip_prefix("/dm/")
         .and_then(|p| p.strip_suffix("/preview/stop"))
         .filter(|id| crate::chat::valid_id(id))
     {
@@ -820,11 +820,11 @@ fn http_in(
             Ok(()) => ("303 See Other", String::new()),
             Err(error) => ("400 Bad Request", crate::escape(&error.to_string())),
         };
-        let _ = control_http::respond(stream, status, "text/plain", text.as_bytes(), &format!("Location: /chat/{id}\r\n"), control_http::Policy::Restricted);
+        let _ = control_http::respond(stream, status, "text/plain", text.as_bytes(), &format!("Location: /dm/{id}\r\n"), control_http::Policy::Restricted);
         return true;
     }
     let Some(id) = path
-        .strip_prefix("/chat/")
+        .strip_prefix("/dm/")
         .and_then(|p| p.strip_suffix("/project"))
         .filter(|id| crate::chat::valid_id(id))
     else {
@@ -843,12 +843,12 @@ fn http_in(
             let running = chat.project.as_ref().filter(|p| importing(id).is_some_and(|import| import.request == p.request));
             if let Some(project) = running {
                 // Meta refresh needs no script; it returns to the chat once attached.
-                return Ok(Reply::Page(format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><meta http-equiv='refresh' content='1;url=/chat/{id}/project?importing={}'><title>Importing folder</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/workspace.css'></head><body><main>{}<a href='/chat/{id}'>Back to DM</a></main></body></html>", crate::escape(&project.request), panel(&state, id))));
+                return Ok(Reply::Page(format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><meta http-equiv='refresh' content='1;url=/dm/{id}/project?importing={}'><title>Importing folder</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/workspace.css'></head><body><main>{}<a href='/dm/{id}'>Back to DM</a></main></body></html>", crate::escape(&project.request), panel(&state, id))));
             }
             if let Some(request) = watched && chat.project.as_ref().is_some_and(|p| p.request == request && !p.needs_approval()) {
-                return Ok(Reply::Redirect(format!("/chat/{id}")));
+                return Ok(Reply::Redirect(format!("/dm/{id}")));
             }
-            return Ok(Reply::Page(format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><title>Open project</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/workspace.css'></head><body><main>{}<a href='/chat/{id}'>Back to DM</a></main></body></html>",panel(&state,id))));
+            return Ok(Reply::Page(format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><title>Open project</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/workspace.css'></head><body><main>{}<a href='/dm/{id}'>Back to DM</a></main></body></html>",panel(&state,id))));
         }
         if method != "POST" {
             return Err(fail("Use GET or POST"));
@@ -872,7 +872,7 @@ fn http_in(
                 };
             }
             let current = current.map(|p| p.request.clone()).unwrap_or_default();
-            return Ok(Reply::Redirect(format!("/chat/{id}/project?importing={}", crate::escape(&current))));
+            return Ok(Reply::Redirect(format!("/dm/{id}/project?importing={}", crate::escape(&current))));
         } else {
             let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
             let index = state.chats.iter().position(|c| c.id == id).ok_or_else(|| fail("Chat not found"))?;
@@ -894,7 +894,7 @@ fn http_in(
                 return Err(fail("Could not save project request"));
             }
         }
-        Ok(Reply::Redirect(format!("/chat/{id}")))
+        Ok(Reply::Redirect(format!("/dm/{id}")))
     })();
     if asynchronous && method == "POST" {
         let (status, value) = match result {
@@ -913,7 +913,7 @@ fn http_in(
             let _ = control_http::respond(stream, "303 See Other", "text/plain", b"", &format!("Location: {location}\r\n"), control_http::Policy::Restricted);
         }
         Err(error) => {
-            let body = crate::error_page(&error.to_string(), &format!("/chat/{id}/project"));
+            let body = crate::error_page(&error.to_string(), &format!("/dm/{id}/project"));
             let _ = control_http::respond(stream, "400 Bad Request", "text/html; charset=utf-8", body.as_bytes(), "", control_http::Policy::Restricted);
         }
     }

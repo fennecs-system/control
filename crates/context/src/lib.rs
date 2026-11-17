@@ -432,7 +432,7 @@ pub const TOOLS: [Tool; 31] = [
         name: "chats.manage",
         title: "DMs",
         description: "Direct conversations with agents · operator MCP",
-        href: Some("/chats"),
+        href: Some("/dms"),
         aliases: "sessions messages agents",
         mcp_names: &[
             op("control.chats.list"),
@@ -451,7 +451,7 @@ pub const TOOLS: [Tool; 31] = [
         name: "lenses.resolve",
         title: "DNA",
         description: "Genes · compose context and tool selections",
-        href: Some("/lenses"),
+        href: Some("/dna"),
         aliases: "context composition guidance on demand",
         mcp_names: &[
             op("control.lenses.list"),

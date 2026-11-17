@@ -54,7 +54,7 @@ fn dead_bots_are_listed_newest_first_with_why_they_stopped() {
     assert!(rows[1].contains("Map the caves") && rows[1].contains("<b>cancelled</b>"));
     assert!(rows[2].contains("<b>timeout</b>") && rows[3].contains("<b>failed</b>") && rows[4].contains("<b>stopped</b>"));
     assert!(rows[1].contains("1970-01-01 01:06 UTC"), "stop time is its last attempt's end");
-    assert!(rows[1].contains(&format!("class='grave-revive' href='/chat/{cancelled}' title='Open its DM. Typing there revives it")));
+    assert!(rows[1].contains(&format!("class='grave-revive' href='/dm/{cancelled}' title='Open its DM. Typing there revives it")));
     assert!(html.contains("href='/bots/history'>Full history"));
     assert!(html.contains("5 dead bots · newest first"));
     // Stopping a live bot moves it to the graveyard at once.
@@ -77,7 +77,7 @@ fn pages_are_bounded_and_cursors_and_search_select_rows() {
     assert!(first.contains(&format!("data-more='/bots/graveyard?older={}'", chats[PAGE - 1])));
     assert!(first.contains(&format!("href='/?view=agents&amp;older={}#graveyard'>Show {PAGE} more", chats[PAGE - 1])));
     let second = rows(&graves, &Query { older: Some(chats[PAGE - 1].clone()), ..Default::default() });
-    assert!(second.contains(&format!("/chat/{}'", chats[PAGE])) && !second.contains(&format!("/chat/{}'", chats[PAGE - 1])));
+    assert!(second.contains(&format!("/dm/{}'", chats[PAGE])) && !second.contains(&format!("/dm/{}'", chats[PAGE - 1])));
     assert!(second.contains("Show 7 more"));
     let last = rows(&graves, &Query { older: Some(chats[2 * PAGE - 1].clone()), ..Default::default() });
     assert_eq!(last.matches("<li class='grave'").count(), 7);
@@ -123,7 +123,7 @@ fn bots_page_routes_serve_the_graveyard_and_its_next_pages() {
     assert_eq!(page.matches("<li class='grave'").count(), PAGE, "only the first page renders server-side");
     assert!(page.contains("<nav class='tabs' aria-label='Bots'><a href='/?view=agents' aria-current='page'>Live</a><a href='/bots/history'>History</a>"));
     assert!(!page.contains("<span>History</span>"), "History is not a main navigation item");
-    assert!(page.find(&format!("/chat/{newest}'")) < page.find("Job 3<"), "newest first");
+    assert!(page.find(&format!("/dm/{newest}'")) < page.find("Job 3<"), "newest first");
     assert!(!page.contains("Job 2<"), "older rows wait for the next page");
     let searched = crate::public_render(&state, &crate::fields("view=agents&q=job+5"), "none");
     assert!(searched.contains("value='job 5'"));

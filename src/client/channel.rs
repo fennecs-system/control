@@ -418,7 +418,7 @@ impl Channel {
         self.hive = None;
     }
     fn link(chat: &str) -> String {
-        format!("{}/chat/{chat}", crate::config::server_url())
+        format!("{}/dm/{chat}", crate::config::server_url())
     }
 
     /// Whether the core handles this message; the adapter consumes it before

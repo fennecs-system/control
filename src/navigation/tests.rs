@@ -15,7 +15,7 @@ fn conversation_pages_keep_threads_whole_and_cursors_stable() {
         .collect::<Vec<_>>();
     let picker = super::conversations(&state, &child);
     assert_eq!(
-        picker.matches("href='/chat/").count(),
+        picker.matches("href='/dm/").count(),
         11,
         "Ten parent threads plus their nested child"
     );
@@ -27,11 +27,11 @@ fn conversation_pages_keep_threads_whole_and_cursors_stable() {
         "The active parent's children must remain reachable"
     );
     let page = super::history(&state, Some(&roots[9]), None);
-    assert_eq!(page.matches("href='/chat/").count(), 10);
+    assert_eq!(page.matches("href='/dm/").count(), 10);
     for id in &roots[10..20] {
-        assert!(page.contains(&format!("href='/chat/{id}'")));
+        assert!(page.contains(&format!("href='/dm/{id}'")));
     }
-    assert!(!page.contains(&format!("href='/chat/{child}'")));
+    assert!(!page.contains(&format!("href='/dm/{child}'")));
     crate::chat::create(&mut state);
     assert_eq!(
         super::history(&state, Some(&roots[9]), None),
@@ -40,7 +40,7 @@ fn conversation_pages_keep_threads_whole_and_cursors_stable() {
     );
     let last = super::history(&state, Some(&roots[19]), None);
     assert_eq!(
-        last.matches("href='/chat/").count(),
+        last.matches("href='/dm/").count(),
         6,
         "The oldest root retains its nested child on the final page"
     );
@@ -170,16 +170,16 @@ fn manage_routes_preserve_section_navigation_and_global_context() {
     let landing = crate::chat::landing(&state, "none", None);
     assert!(landing.contains("<details class='conversation-toggle'>"));
     assert!(!landing.contains("conversation-toggle' open"));
-    assert!(landing.contains("href='/chats?new=1' aria-current='page'"));
+    assert!(landing.contains("href='/dms?new=1' aria-current='page'"));
     assert!(chat.contains("chat-workspace"));
-    assert!(super::primary("session-list").contains("href='/chats' aria-current='page'"));
+    assert!(super::primary("session-list").contains("href='/dms' aria-current='page'"));
 }
 #[test]
 fn navigation_shows_dna_and_dms_at_their_existing_urls() {
     let nav = super::primary("session");
-    assert!(nav.contains("<a href='/chats' aria-current='page'><span aria-hidden='true'>⌁</span><span>DMs</span></a>"));
-    assert!(nav.contains("<a href='/lenses'><span aria-hidden='true'>◈</span><span>DNA</span></a>"));
-    assert!(super::primary("lens-page").contains("<a href='/lenses' aria-current='page'><span aria-hidden='true'>◈</span><span>DNA</span></a>"));
+    assert!(nav.contains("<a href='/dms' aria-current='page'><span aria-hidden='true'>⌁</span><span>DMs</span></a>"));
+    assert!(nav.contains("<a href='/dna'><span aria-hidden='true'>◈</span><span>DNA</span></a>"));
+    assert!(super::primary("lens-page").contains("<a href='/dna' aria-current='page'><span aria-hidden='true'>◈</span><span>DNA</span></a>"));
     assert!(!nav.contains("<span>Lenses</span>") && !nav.contains("<span>Chat</span>"));
     let page = crate::render(&crate::State::default(), "lens-page", "none", &crate::lens_library::render(&crate::State::default(), "", None, None, false));
     assert!(page.contains("<h2>DNA</h2>") && page.contains("＋ New gene"));

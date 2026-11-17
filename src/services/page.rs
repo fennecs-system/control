@@ -22,7 +22,7 @@ pub fn http(stream: &mut TcpStream, shared: &Arc<Mutex<State>>, method: &str, pa
     }
     let fields = crate::fields(&String::from_utf8_lossy(body));
     let return_chat = fields.get("return_chat").filter(|id| crate::chat::valid_id(id));
-    let back = return_chat.map_or("/tools/services".to_owned(), |chat| format!("/chat/{chat}"));
+    let back = return_chat.map_or("/tools/services".to_owned(), |chat| format!("/dm/{chat}"));
     // Per-card actions return to their card, not the top of the page.
     let place = match (method, return_chat, fields.get("id")) {
         ("POST", None, Some(id)) => shared.lock().map(|state| nearby(&state, id)).unwrap_or_default(),
@@ -278,7 +278,7 @@ fn card(service: &Service) -> String {
     };
     if matches!(service.storage, Storage::Workspace { .. }) { storage.push_str(" · /workspace retained for this chat"); }
     let chat = resource.owner.chat.as_str();
-    let conversation = if crate::chat::valid_id(chat) { format!("<a href='/chat/{chat}'>Conversation</a> · ") } else { String::new() };
+    let conversation = if crate::chat::valid_id(chat) { format!("<a href='/dm/{chat}'>Conversation</a> · ") } else { String::new() };
     let container = resource.phase.container().map(|id| format!("container {} · ", crate::escape(&id.as_str().chars().take(12).collect::<String>()))).unwrap_or_default();
     let image = resource.image.as_str().trim_start_matches("sha256:").chars().take(12).collect::<String>();
     let live = if matches!(resource.phase, Phase::Running(_)) { format!("<div class='service-live' data-live='{}'><p class='muted'>Live usage loading…</p></div>", crate::escape(resource.id.as_str())) } else { String::new() };
