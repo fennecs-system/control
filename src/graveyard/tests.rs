@@ -175,16 +175,28 @@ fn headstones_form_a_grid_sharing_one_fennec_skull() {
 fn the_fennec_skull_is_angular_earless_jawless_and_toothed() {
     let symbol = SKULL_SYMBOL.split("<symbol").nth(1).unwrap();
     let paths = symbol.split(" d='").skip(1).map(|path| path.split('\'').next().unwrap()).collect::<Vec<_>>();
-    assert_eq!(paths.len(), 3, "outline, sockets and teeth only: no facet lines or lower jaw");
+    assert_eq!(paths.len(), 2, "one closed outline with the teeth, and the sockets: no facet lines or lower jaw");
     for path in &paths {
         assert!(!path.contains(|c: char| "CcSsQqTtAa".contains(c)), "straight facets only, no curves: {path}");
     }
     // The outline stays within the cranium: nothing rises above it as ears would.
     let tops = paths.iter().flat_map(|path| path.split(|c: char| c.is_ascii_alphabetic()).filter_map(|pair| pair.split_whitespace().nth(1)?.parse::<f64>().ok()));
     assert!(tops.fold(f64::INFINITY, f64::min) >= 5.0, "no ears above the crown");
-    // A row of pointed teeth: one zigzag path that turns at least eight times.
-    let teeth = paths.iter().find(|path| path.starts_with("M24 42")).expect("a tooth row hanging from the snout");
-    assert!(teeth.matches('L').count() >= 8 && !teeth.contains('Z'), "{teeth}");
+    // A low, flat-topped cranium no wider than the cheekbones: the outline's
+    // top is one horizontal edge at y 14 and its widest points are the cheeks.
+    let outline = paths[0];
+    assert!(outline.starts_with("M20 14H44L"), "a flat top: {outline}");
+    let points = outline.split(|c: char| c.is_ascii_alphabetic()).filter_map(|pair| { let mut xy = pair.split_whitespace().map(|v| v.parse::<f64>()); Some((xy.next()?.ok()?, xy.next()?.ok()?)) }).collect::<Vec<_>>();
+    assert!(points.iter().all(|(_, y)| *y >= 14.0), "nothing rises above the flat top");
+    let (left, right) = (points.iter().map(|p| p.0).fold(f64::INFINITY, f64::min), points.iter().map(|p| p.0).fold(0.0, f64::max));
+    assert!(points.iter().filter(|(x, _)| *x == left || *x == right).all(|(_, y)| *y == 28.0), "widest at the cheekbones, not above the eyes");
+    // A row of pointed teeth drawn in the same closed stroke as the outline:
+    // the snout edge runs straight into the zigzag and out again, with one
+    // stroke width and join for the whole skull and no filled shapes.
+    assert!(outline.contains("L42 36L40 42L38.2 48L36.5 42.5L35 46L33.5 42.5L32 46L30.5 42.5L29 46L27.5 42.5L25.8 48L24 42L22 36L"), "{outline}");
+    assert!(outline.ends_with('Z') && outline.matches('M').count() == 1, "one closed subpath");
+    assert_eq!(SKULL_SYMBOL.matches("stroke-width").count(), 1, "one stroke width");
+    assert!(SKULL_SYMBOL.contains("fill='none'") && !SKULL_SYMBOL.contains("<polygon") && !SKULL_SYMBOL.contains("<rect"));
     // A short snout: the teeth hang from y 42 and nothing is drawn below them.
     let bottom = paths.iter().flat_map(|path| path.split(|c: char| c.is_ascii_alphabetic()).filter_map(|pair| pair.split_whitespace().nth(1)?.parse::<f64>().ok()));
     assert!(bottom.fold(0.0, f64::max) <= 48.0, "no jaw below the teeth");
@@ -257,9 +269,34 @@ fn headstones_are_small_low_poly_stones_in_staggered_rows() {
     assert!(bands[8].starts_with("width>=1020px)") && bands[1].starts_with("320px<=width<420px)"));
     assert!(graveyard.contains(".graveyard-grid{list-style:none;padding:0 4px;margin:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));"));
     assert!(graveyard.contains(".grave{grid-column:span 2;") && graveyard.contains(".graveyard-more{grid-column:1/-1;"));
-    // A low-poly silhouette: a flat-topped trapezoid cap with chamfered
-    // shoulders overhanging a rectangular body. No rounded corners.
-    assert!(graveyard.contains("clip-path:polygon(24% 0,76% 0,96% 17%,90% 17%,90% 100%,10% 100%,10% 17%,4% 17%)"));
+    // A low-poly silhouette in one unbroken outline: the body's straight
+    // sides rise into chamfered shoulders and a flat top, with no overhang,
+    // step or seam. One six-point polygon; the inner layer repeats it.
+    let shape = "clip-path:polygon(26% 0,74% 0,92% 16%,92% 100%,8% 100%,8% 16%)";
+    assert!(graveyard.contains(&format!(".grave:before,.grave:after{{content:'';position:absolute;z-index:-1;{shape};")));
+    assert_eq!(graveyard.matches("clip-path").count(), 1, "one shape for both layers");
+    let points = shape.trim_start_matches("clip-path:polygon(").trim_end_matches(')').split(',').map(|point| {
+        let (x, y) = point.split_once(' ').unwrap();
+        (x.trim_end_matches('%').parse::<f64>().unwrap(), y.trim_end_matches('%').parse::<f64>().unwrap())
+    }).collect::<Vec<_>>();
+    assert_eq!(points.len(), 6);
+    assert!(points[0].1 == 0.0 && points[1].1 == 0.0 && points[0].0 > points[5].0 && points[1].0 < points[2].0, "a flat top narrower than the body");
+    assert!(points[2].0 == points[3].0 && points[4].0 == points[5].0, "straight vertical sides from shoulder to base");
+    assert!(points.iter().map(|p| p.0).fold(0.0, f64::max) == points[2].0, "nothing overhangs the body");
+    // Quiet at rest: a dim outline and fill, muted skull, name and date; the
+    // status stays readable. Hover or keyboard focus inside a stone brings it
+    // back up within about 120ms, without motion when reduced motion is asked.
+    assert!(graveyard.contains(".grave:before{inset:0;background:#8f81ac4d;transition:background-color .12s}"));
+    assert!(graveyard.contains(".grave-name,.grave-when{opacity:.6;") && graveyard.contains(".grave-reason{opacity:.9;"));
+    for rule in [
+        ".grave:hover:before,.grave:focus-within:before{background:#8f81ac8c}",
+        ".grave:hover .grave-skull,.grave:focus-within .grave-skull{opacity:1;color:var(--purple)}",
+        ".grave:hover :is(.grave-name,.grave-when,.grave-reason),.grave:focus-within :is(.grave-name,.grave-when,.grave-reason){opacity:1}",
+        ".grave:hover .grave-revive,.grave:focus-within .grave-revive{opacity:1}",
+        "@media(prefers-reduced-motion:reduce){.grave:before,.grave:after,.grave-skull,.grave-name,.grave-when,.grave-reason,.grave-revive{transition:none}}",
+    ] {
+        assert!(graveyard.contains(rule), "{rule}");
+    }
     let stone = graveyard.split(".grave{").nth(1).unwrap().split('}').next().unwrap();
     assert!(!stone.contains("border-radius") && !graveyard.contains("50% 50%"));
     assert!(graveyard.contains(".grave-skull{width:26px;height:26px;"), "smaller than the 48px skulls before");

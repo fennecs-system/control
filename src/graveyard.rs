@@ -197,10 +197,12 @@ pub fn rows(graves: &[Grave<'_>], query: &Query) -> String {
 const SKULL: &str = "fennec-skull";
 
 /// A stylised fennec fox skull, front view, in a 64-unit square, drawn only
-/// in straight segments: an angular cranium with wide cheekbones, mean eye
+/// in straight segments: a low cranium with a flat top and gently tapering
+/// sides, never wider than the cheekbones (no dome above the eyes), mean eye
 /// slits (flat tops and bottoms, slanting in towards the nose), a large nasal
-/// cavity and a short snout ending in a row of pointed teeth, canines longest.
-const SKULL_SYMBOL: &str = "<svg class='svg-defs' aria-hidden='true' focusable='false'><symbol id='fennec-skull' viewBox='0 0 64 64'><g fill='none' stroke='currentColor' stroke-width='1.8' stroke-linejoin='miter' stroke-linecap='square'><path d='M32 8L44 11L52 19L54 28L48 34L42 36L40 42H24L22 36L16 34L10 28L12 19L20 11Z'/><path d='M15 25H25L29 28L26 31H19ZM49 25H39L35 28L38 31H45ZM32 32L35.5 36L33.5 40H30.5L28.5 36Z'/><path d='M24 42L25.8 48L27.5 42.5L29 46L30.5 42.5L32 46L33.5 42.5L35 46L36.5 42.5L38.2 48L40 42' stroke-width='1.2'/></g></symbol></svg>";
+/// cavity and a short snout whose edge runs straight into a row of pointed
+/// teeth (canines longest): outline and teeth are one closed stroke.
+const SKULL_SYMBOL: &str = "<svg class='svg-defs' aria-hidden='true' focusable='false'><symbol id='fennec-skull' viewBox='0 0 64 64'><g fill='none' stroke='currentColor' stroke-width='1.8' stroke-linejoin='miter' stroke-linecap='square'><path d='M20 14H44L50 18L53 28L48 34L42 36L40 42L38.2 48L36.5 42.5L35 46L33.5 42.5L32 46L30.5 42.5L29 46L27.5 42.5L25.8 48L24 42L22 36L16 34L11 28L14 18Z'/><path d='M15 25H25L29 28L26 31H19ZM49 25H39L35 28L38 31H45ZM32 32L35.5 36L33.5 40H30.5L28.5 36Z'/></g></symbol></svg>";
 
 /// The graveyard: the ground beneath the live task trees on the Bots page,
 /// with the dead bots' headstones (the page selected by `query`, whose search
