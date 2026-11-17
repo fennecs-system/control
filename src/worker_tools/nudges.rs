@@ -48,22 +48,28 @@ pub(super) fn now() -> u64 {
 pub(crate) fn deadline_threshold(limit: u64) -> u64 {
     (limit.saturating_mul(DEADLINE_SHARE_PERCENT) / 100).max(DEADLINE_FLOOR_SECONDS.min(limit / 2))
 }
+/// What a checkpoint must carry so findings outlive the turn and its compaction:
+/// the working notes are `control_turn_handoff`'s payload, and an omitted
+/// payload keeps the older notes.
+pub(crate) const NOTES: &str = "Record your key findings (facts, diagnoses) and current plan in its working notes, payload.findings and payload.next, so they survive compaction; an omitted payload keeps the older notes.";
+/// How a turn without a handoff keeps findings through in-turn compaction.
+pub(crate) const MARKS: &str = "Write key facts on lines starting Finding: and choices on lines starting Decision:; Control keeps those lines when it summarizes older steps.";
 pub(crate) fn deadline_text(remaining: u64) -> String {
-    format!("{remaining} s left in this turn: publish your checkpoint (control_turn_handoff) now and continue in a routine or the next turn.")
+    format!("{remaining} s left in this turn: publish your checkpoint (control_turn_handoff) now and continue in a routine or the next turn. {NOTES}")
 }
 /// The once-per-turn note when a turn's context passes its threshold (local
 /// endpoints, where Control owns the transcript and measures its size).
 pub(crate) fn context_text(percent: u32, handoff: bool) -> String {
     if handoff {
-        format!("Context {percent}% full: publish your checkpoint (control_turn_handoff) and continue in the next turn.")
+        format!("Context {percent}% full: publish your checkpoint (control_turn_handoff) and continue in the next turn. {NOTES} {MARKS}")
     } else {
-        format!("Context {percent}% full: finish with a brief final report soon.")
+        format!("Context {percent}% full: finish with a brief final report soon. {MARKS}")
     }
 }
 /// The once-per-turn note when a local-model turn nears its model-step cap.
 pub(crate) fn steps_text(left: usize, handoff: bool) -> String {
     if handoff {
-        format!("{left} model steps left in this turn: publish your checkpoint (control_turn_handoff) and continue next turn.")
+        format!("{left} model steps left in this turn: publish your checkpoint (control_turn_handoff) and continue next turn. {NOTES}")
     } else {
         format!("{left} model steps left in this turn: finish with a brief final report now.")
     }

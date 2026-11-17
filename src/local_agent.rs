@@ -31,7 +31,7 @@ pub(crate) const OVERHEAD_TOKENS: u32 = CORE_TOKENS + LOADED_TOKENS + 1024;
 const CORE_TOKENS: u32 = 4096;
 /// Schemas a turn loads on demand; the loop still re-checks the actual size every step.
 const LOADED_TOKENS: u32 = 2048;
-pub(crate) const SYSTEM: &str = "You are an agent running inside Control on a local model. Act only through the provided tools; there is no other way to read files, run commands or reach rooms. Use control_workspace_run for short shell commands in /workspace. Call tools with arguments that are a JSON object matching the schema. Tools in the prompt's \"More tools\" index are callable by their full control_ name; Control loads the schema on first use. When the request is complete or you are waiting on someone, call control_turn_handoff if it is offered; otherwise reply with a brief plain-text final report and no tool call.";
+pub(crate) const SYSTEM: &str = "You are an agent running inside Control on a local model. Act only through the provided tools; there is no other way to read files, run commands or reach rooms. Use control_workspace_run for short shell commands in /workspace. Call tools with arguments that are a JSON object matching the schema. Tools in the prompt's \"More tools\" index are callable by their full control_ name; Control loads the schema on first use. When the request is complete or you are waiting on someone, call control_turn_handoff if it is offered; otherwise reply with a brief plain-text final report and no tool call. Write each key fact or diagnosis you establish on its own line starting Finding: and each choice on a line starting Decision:; Control keeps those lines verbatim when it summarizes older steps, and control_history_read with a query searches the original older steps.";
 const RESULT_BYTES: usize = 12000;
 const CALLS_PER_STEP: usize = 8;
 /// Share of the input budget at which a turn compacts by summary, before it is
@@ -109,6 +109,14 @@ pub(crate) trait Host {
     /// The reasoning of the step just answered, kept by the host only to
     /// carry into a host checkpoint if the turn is cut off; never transcript.
     fn reasoned(&mut self, _reasoning: &str) {}
+    /// Keep a block of this turn's steps as a node of the conversation's
+    /// summary tree, so `control_history_read` can read and search it:
+    /// `text` is its summary (a leaf step's shrunk rendering), and a node has
+    /// either two retained `children` or one original source per step.
+    /// Returns the node's key; `None` when it was not kept.
+    fn retain(&mut self, _block: control_comonad::Block, _text: &str, _children: Option<[String; 2]>, _sources: Vec<String>) -> Option<String> {
+        None
+    }
 }
 
 /// Per-call usage summed over the turn. Every call counts, including one that
@@ -345,6 +353,8 @@ pub(crate) fn run(
             append_note(&mut messages, &note);
             view = lens.view(&messages, verbatim, shrink_all);
         }
+        // Steps no longer seen verbatim join the summary tree, for recall.
+        lens.retain_shrunk(host, &messages, if shrink_all { count } else { count - verbatim });
         view.extend(observation);
         let mut body = tool_request(model, &view, &tools, limits).map_err(|e| failed(e.to_string()))?;
         // Thinking shares `max_tokens` with the answer: the budget is at most
@@ -426,6 +436,10 @@ pub(crate) fn run(
         messages.push(json!({"role":"assistant","content":step.text,
             "tool_calls":calls.iter().map(|(id,c)|json!({"id":id,"type":"function","function":{"name":c.name,
                 "arguments":c.arguments.as_ref().map_or_else(|_|"{}".to_owned(),|a|a.to_string())}})).collect::<Vec<_>>()}));
+        // Marked lines of the reasoning outlive it: compaction carries them.
+        if let Some(reasoning) = step.reasoning.as_deref() {
+            lens.reasoned(context::steps(&messages).len() - 1, reasoning);
+        }
         let mut malformed = None;
         for (index, (id, call)) in calls.iter().enumerate() {
             // A deferred tool called by name loads its schema first, through
@@ -583,6 +597,17 @@ impl Host for Live<'_> {
     }
     fn reasoned(&mut self, reasoning: &str) {
         self.reasoning = Some(crate::turn_context::carried_reasoning(reasoning));
+    }
+    fn retain(&mut self, block: control_comonad::Block, text: &str, children: Option<[String; 2]>, sources: Vec<String>) -> Option<String> {
+        // Recall is best effort: a failed write leaves the step unsearchable,
+        // never the turn failed; the record says so.
+        match crate::compaction::turn::retain(self.shared, self.run, &self.generation, &self.compactor, block, text, children, sources) {
+            Ok(key) => Some(key),
+            Err(error) => {
+                self.record("compaction", "local-recall", &format!("Could not keep steps {}–{} for recall: {error}", block.start + 1, block.end()), "", "failed");
+                None
+            }
+        }
     }
     fn metered(&mut self, meter: &Meter) {
         self.meter = *meter;

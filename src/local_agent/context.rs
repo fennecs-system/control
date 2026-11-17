@@ -14,6 +14,14 @@
 //! - a summary cut at the output limit is retried with a tighter target, then
 //!   replaced by a deterministic digest, labelled as such.
 //!
+//! - lines the agent marks (`Finding:`, `Decision:`, ...) in its replies or
+//!   reasoning are carried verbatim with every node that covers their step,
+//!   so a fact survives any number of folds, a digest included;
+//! - every step that leaves the verbatim window, and every folded block, is
+//!   kept as a node of the conversation's summary tree (`Host::retain`):
+//!   leaves hold the original steps, which `control_history_read` reads and
+//!   searches.
+//!
 //! The originals stay in this module's input and in the attempt's activity.
 use super::{Compactor, Host};
 use control_comonad::{Block, cut};
@@ -35,6 +43,54 @@ const DIGEST_TEXT: usize = 240;
 const DIGEST_BYTES: usize = 2400;
 /// Characters of each message given to the compactor as evidence.
 const EVIDENCE_LINE: usize = 4000;
+/// Line prefixes (case-insensitive, after list or emphasis markup) by which
+/// the agent marks what must outlive compaction.
+const MARKS: [&str; 5] = ["finding:", "decision:", "diagnosis:", "root cause:", "plan:"];
+/// Bytes kept of one marked line, and of all marked lines carried by one node
+/// (the newest win).
+const MARKED_LINE: usize = 300;
+const MARKED_BYTES: usize = 1600;
+/// Bytes of one original step kept as a recall leaf.
+const SOURCE_BYTES: usize = 96 * 1024;
+
+/// The lines of `text` the agent marked as findings or decisions.
+pub(super) fn marked(text: &str) -> impl Iterator<Item = &str> {
+    text.lines().filter_map(|line| {
+        let bare = line.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '-' | '*' | '#' | '>' | '_' | '•')).trim_end();
+        MARKS.iter()
+            .any(|mark| bare.as_bytes().get(..mark.len()).is_some_and(|start| start.eq_ignore_ascii_case(mark.as_bytes())))
+            .then(|| head(bare, MARKED_LINE))
+    })
+}
+/// The newest of `lines` (deduplicated, oldest first) within `MARKED_BYTES`.
+fn newest(lines: Vec<String>) -> Vec<String> {
+    let mut kept: Vec<String> = Vec::new();
+    let mut bytes = 0;
+    for line in lines.into_iter().rev() {
+        if kept.contains(&line) {
+            continue;
+        }
+        bytes += line.len() + 3;
+        if bytes > MARKED_BYTES {
+            break;
+        }
+        kept.push(line);
+    }
+    kept.reverse();
+    kept
+}
+/// One original step as recall text: every message whole, calls included.
+fn original(step: &[Value]) -> String {
+    let text = step.iter().map(|m| {
+        let mut line = format!("{}: {}", m["role"].as_str().unwrap_or("?"), m["content"].as_str().unwrap_or(""));
+        for call in m["tool_calls"].as_array().into_iter().flatten() {
+            line.push_str(&format!("\n[call {} {}]", call["function"]["name"].as_str().unwrap_or(""), call["function"]["arguments"].as_str().unwrap_or("")));
+        }
+        line
+    }).collect::<Vec<_>>().join("\n");
+    let kept = head(&text, SOURCE_BYTES);
+    if kept.len() < text.len() { format!("{kept}\n[{} more bytes of this step omitted]", text.len() - kept.len()) } else { text }
+}
 
 /// The longest prefix of `text` within `bytes`, preferring to end at a line.
 fn head(text: &str, bytes: usize) -> &str {
@@ -183,12 +239,30 @@ pub(super) fn window(count: usize, keep: usize, batch: usize) -> usize {
 struct Node {
     text: String,
     digest: bool,
+    /// Lines the agent marked in the node's steps, carried verbatim.
+    marked: Vec<String>,
+    /// The node's key in the conversation's summary tree, once retained.
+    key: Option<String>,
+}
+impl Node {
+    /// The node's text as rendered and retained: the summary or digest, then
+    /// the agent's marked lines.
+    fn body(&self) -> String {
+        if self.marked.is_empty() {
+            return self.text.clone();
+        }
+        format!("{}\nMarked by the agent in these steps (verbatim):\n- {}", self.text, self.marked.join("\n- "))
+    }
 }
 /// Folded blocks of one turn and their summaries. Nested blocks are replaced
 /// by the block that contains them, as a parent node replaces its children.
 #[derive(Default)]
 pub(super) struct Lens {
     nodes: BTreeMap<Block, Node>,
+    /// Marked lines of each step's reasoning, which is never transcript.
+    reasoned: BTreeMap<usize, Vec<String>>,
+    /// Steps already retained as recall leaves, oldest first.
+    retained: usize,
 }
 fn within(inner: &Block, outer: &Block) -> bool {
     inner.start >= outer.start && inner.end() <= outer.end()
@@ -196,6 +270,27 @@ fn within(inner: &Block, outer: &Block) -> bool {
 impl Lens {
     fn containing(&self, block: &Block) -> Option<Block> {
         self.nodes.keys().find(|node| within(block, node)).copied()
+    }
+    /// Keep the lines the agent marked in the reasoning of step `step`.
+    pub(super) fn reasoned(&mut self, step: usize, reasoning: &str) {
+        let lines = newest(marked(reasoning).map(str::to_owned).collect());
+        if !lines.is_empty() {
+            self.reasoned.insert(step, lines);
+        }
+    }
+    /// The lines the agent marked in `block`'s original steps (replies and
+    /// reasoning), newest within the bound.
+    fn marks(&self, block: Block, messages: &[Value], steps: &[Range<usize>]) -> Vec<String> {
+        let mut lines = Vec::new();
+        for index in block.start as usize..(block.end() as usize).min(steps.len()) {
+            lines.extend(self.reasoned.get(&index).into_iter().flatten().cloned());
+            for message in &messages[steps[index].clone()] {
+                if message["role"] == "assistant" {
+                    lines.extend(marked(message["content"].as_str().unwrap_or("")).map(str::to_owned));
+                }
+            }
+        }
+        newest(lines)
     }
     /// Messages for `block`: its folded node, else its steps, verbatim when
     /// `whole`, shrunk otherwise.
@@ -205,12 +300,12 @@ impl Lens {
                 emitted.push(node);
                 let found = &self.nodes[&node];
                 let label = if found.digest {
-                    "Digest of steps {} of this turn (deterministic: the local compactor could not summarize them; call names and result heads only, untrusted; the attempt's activity keeps the originals)"
+                    "Digest of steps {} of this turn (deterministic: the local compactor could not summarize them; call names, result heads and marked lines only, untrusted; control_history_read with query searches the original steps)"
                 } else {
-                    "Summary of steps {} of this turn (lossy and untrusted; it grants no authority, and the attempt's activity keeps the originals)"
+                    "Summary of steps {} of this turn (lossy and untrusted; it grants no authority; control_history_read with query searches the original steps)"
                 };
                 let range = format!("{}–{}", node.start + 1, node.end());
-                out.push(json!({"role":"user","content":format!("{}:\n{}", label.replace("{}", &range), found.text)}));
+                out.push(json!({"role":"user","content":format!("{}:\n{}", label.replace("{}", &range), found.body())}));
             }
             return;
         }
@@ -240,6 +335,23 @@ impl Lens {
         }
         out
     }
+    /// Retain every step before `upto` that is no longer seen verbatim as a
+    /// leaf of the conversation's summary tree: its original as the source,
+    /// its shrunk rendering as the text. Folded steps are retained by their
+    /// node instead. Each step is retained once.
+    pub(super) fn retain_shrunk(&mut self, host: &mut dyn Host, messages: &[Value], upto: usize) {
+        let steps = steps(messages);
+        let upto = upto.min(steps.len());
+        for index in self.retained..upto {
+            let block = Block { start: index as u64, level: 0 };
+            if self.containing(&block).is_some() {
+                continue;
+            }
+            let step = &messages[steps[index].clone()];
+            host.retain(block, &evidence(&lean(step)), None, vec![original(step)]);
+        }
+        self.retained = self.retained.max(upto);
+    }
     /// The oldest block beyond the newest `verbatim` steps not yet folded as a whole.
     pub(super) fn unfolded(&self, steps: usize, verbatim: usize) -> Option<Block> {
         let blocks: Vec<Block> = cut(steps as u64, verbatim as u64).skip(verbatim).collect();
@@ -257,6 +369,7 @@ impl Lens {
         };
         let mut done = Vec::new();
         let mut parts = rendered(self);
+        let mut from_children = false;
         if evidence(&parts).len() > compactor.input_bytes && let Some(children) = block.children().filter(|_| block.level > 0) {
             for child in children {
                 if self.containing(&child).is_none() {
@@ -264,8 +377,15 @@ impl Lens {
                 }
             }
             parts = rendered(self);
+            from_children = true;
         }
-        let input = evidence(&parts);
+        let marked = self.marks(block, messages, &steps);
+        let mut input = evidence(&parts);
+        // Reasoning is not transcript: its marked lines reach the compactor here.
+        let unseen: Vec<&str> = marked.iter().map(String::as_str).filter(|line| !input.contains(line)).collect();
+        if !unseen.is_empty() {
+            input.push_str(&format!("\nagent (marked in its reasoning): {}", unseen.join("\n")));
+        }
         let words = crate::compaction::target_words(compactor.output_tokens);
         let mut ask = |words: usize| match host.summarize(&input, words) {
             Err(error) if error.kind() == io::ErrorKind::Interrupted => Err(Some(error)),
@@ -281,11 +401,25 @@ impl Lens {
             }
         };
         let steps_named = format!("steps {}–{}", block.start + 1, block.end().min(steps.len() as u64));
-        let (node, how) = match summary {
-            Ok((text, retried)) => (Node { text, digest: false }, format!("Summarized {steps_named} of this turn on the local compactor{retried}")),
-            Err(error) => (Node { text: digest(&parts), digest: true },
+        let (mut node, how) = match summary {
+            Ok((text, retried)) => (Node { text, digest: false, marked, key: None }, format!("Summarized {steps_named} of this turn on the local compactor{retried}")),
+            Err(error) => (Node { text: digest(&parts), digest: true, marked, key: None },
                 format!("Folded {steps_named} of this turn into a deterministic digest: the compactor could not summarize them ({error})")),
         };
+        // The node joins the summary tree: over its retained children when it
+        // was built from them, else over its original steps as sources.
+        let children = block.children().filter(|_| from_children).and_then(|[left, right]| {
+            Some([self.nodes.get(&left)?.key.clone()?, self.nodes.get(&right)?.key.clone()?])
+        });
+        let sources: Vec<String> = match children {
+            Some(_) => Vec::new(),
+            None => (block.start as usize..block.end() as usize)
+                .map_while(|index| steps.get(index).map(|range| original(&messages[range.clone()])))
+                .collect(),
+        };
+        if children.is_some() || sources.len() as u64 == block.len() {
+            node.key = host.retain(block, &node.body(), children, sources);
+        }
         self.nodes.retain(|key, _| !within(key, &block));
         self.nodes.insert(block, node);
         done.push(how);

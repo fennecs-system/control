@@ -289,7 +289,12 @@ which were sent (`nudges`).
 - **Deadline:** when the remaining time is at most 15% of the limit or 90 s,
   whichever is larger (half the limit for limits under 180 s):
   `N s left in this turn: publish your checkpoint (control_turn_handoff) now and
-  continue in a routine or the next turn.` Unlimited attempts get none.
+  continue in a routine or the next turn.`, followed by the request to record key
+  findings and the current plan in the working notes (`payload.findings`,
+  `payload.next`), since an omitted payload keeps the older notes. The local
+  loop's context and step-cap notes ask the same
+  ([local agent turns](LOCAL-MODELS.md#local-agent-turns)). Unlimited attempts
+  get none.
 - **Steering:** when the chat steers active members (chats spawned from it,
   directly or through members, with a turn queued, running or waiting, or
   approved as persistent bots) and its turn has run `steering_turn_seconds`

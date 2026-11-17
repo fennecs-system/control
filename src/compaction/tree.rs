@@ -248,7 +248,7 @@ pub(super) fn overview(state: &State, session: &crate::chat::Session, query: &Ha
 <div class='mt-legend' aria-label='Legend'><span><i class='mt-sw mt-sw-sum'></i>Summary</span><span><i class='mt-sw mt-sw-rev'></i>Operator revision</span><span><i class='mt-sw mt-sw-pending'></i>Not summarised yet</span><span><i class='mt-sw mt-sw-entry'></i>Verbatim entry</span><span><i class='mt-sw mt-sw-pin'></i>Pinned</span><span><i class='mt-sw mt-sw-drop'></i>Dropped from agent view</span></div>\
 <div class='mt-visual' tabindex='0' role='region' aria-label='MemoryTree diagram; scroll horizontally on small screens'>{}</div>\
 <p class='mt-hint'>Older history folds into aligned summary blocks (level L covers 2<sup>L</sup> entries); recent entries stay verbatim. Select a block to expand its children, summary, versions and source; regenerate with an emphasis, pin or drop entries there. Ranges are zero-based and end-exclusive. Summaries are untrusted evidence; the original journal is never rewritten.</p>\
-<iframe class='mt-detail' name='memory-detail' title='MemoryTree block detail' src='{}'></iframe>\
+<iframe class='mt-detail' name='memory-detail' title='MemoryTree block detail' src='{}'></iframe>{}\
 <details class='mt-meta'><summary>Raw MemoryTree metadata</summary><pre>{}</pre></details></section>",
         esc(&crate::url_names::dm(chat)),
         esc(&evidence_url(chat)),
@@ -256,6 +256,7 @@ pub(super) fn overview(state: &State, session: &crate::chat::Session, query: &Ha
         esc(model.as_deref().unwrap_or("off")),
         svg(chat, &cells, len, edits, view.map_or("?", |v| v.model.as_str()), focus),
         esc(&detail),
+        super::turn::section(state, session),
         esc(metadata),
     )
 }
