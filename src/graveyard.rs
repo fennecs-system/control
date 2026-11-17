@@ -158,19 +158,25 @@ fn clip(text: &str, limit: usize) -> String {
 
 const REVIVE: &str = "Open its DM. Typing there revives it: your message starts a new turn with its full history (/bot on keeps it running).";
 
+/// One tombstone: the shared fennec skull, the name linking to its DM, why it
+/// stopped, the day it stopped and a revive link. The objective, kind and
+/// exact stop time are tooltips, so every stone keeps the same height.
 fn row(grave: &Grave<'_>) -> String {
     let id = escape(&grave.chat.id);
     let name = escape(&grave.name);
     let objective = clip(&grave.chat.title, 120);
-    let what = if objective.is_empty() { "<span class='muted'>no objective recorded</span>".to_owned() } else { escape(&objective) };
-    let when = grave.stopped.map_or_else(|| "never ran".to_owned(), |seconds| format!("<time datetime='{seconds}'>{}</time>", when(seconds)));
+    let kind = if grave.bot { "bot" } else { "agent" };
+    let about = if objective.is_empty() { format!("{name} ({kind}) · no objective recorded") } else { format!("{name} ({kind}) · {}", escape(&objective)) };
+    let date = grave.stopped.map_or_else(|| "<span class='grave-when'>never ran</span>".to_owned(),
+        |seconds| format!("<time class='grave-when' datetime='{seconds}' title='{}'>{}</time>", when(seconds), crate::usage::day_label(seconds)));
     let reason = grave.reason.label();
-    format!("<li class='grave' data-reason='{reason}'><span class='grave-x' aria-hidden='true'>[x]</span><a class='grave-name' href='/dm/{id}' title='{name}'>{name}</a><span class='grave-kind'>{}</span><span class='grave-what' title='{}'>{what}</span><span class='grave-when'>{when} · <b>{reason}</b></span><a class='grave-revive' href='/dm/{id}' title='{REVIVE}'>revive ↗</a></li>",
-        if grave.bot { "bot" } else { "agent" }, escape(&objective))
+    format!("<li class='grave' data-reason='{reason}'><svg class='grave-skull' viewBox='0 0 64 64' aria-hidden='true'><use href='#{SKULL}'/></svg><a class='grave-name' href='/dm/{id}' title='{about}'>{name}</a><span class='grave-reason'>{reason}</span>{date}<a class='grave-revive' href='/dm/{id}' title='{REVIVE}'>revive ↗</a></li>")
 }
 
-/// The page's rows followed by the next-page slot, if any: the fragment the
-/// scroll loader swaps in for the previous slot.
+/// The page's stones followed by the next-page slot, if any: the fragment the
+/// scroll loader swaps in for the previous slot. Stones reference the skull
+/// symbol [`render`] defined, and the CSS stagger depends only on a stone's
+/// position in the list, so appended pages continue the layout.
 pub fn rows(graves: &[Grave<'_>], query: &Query) -> String {
     let (rows, next) = page(graves, query);
     let mut html = String::with_capacity(rows.len() * 420 + 200);
@@ -185,9 +191,17 @@ pub fn rows(graves: &[Grave<'_>], query: &Query) -> String {
     html
 }
 
-/// An outline tombstone with a skull and an [X] cross, drawn in the page's
-/// purple line style. Inline so the page loads no images.
-const TOMBSTONE: &str = "<svg class='tombstone' viewBox='0 0 132 156' role='img' aria-label='Tombstone with a skull and a crossed-out mark'><path class='ts-stone' d='M18 144V58C18 31 39 10 66 10s48 21 48 48v86'/><path class='ts-inner' d='M27 144V60c0-22 17-40 39-40s39 18 39 40v84'/><path class='ts-skull' d='M50 64c0-10 7-18 16-18s16 8 16 18c0 6-2 9-5 11v7H55v-7c-3-2-5-5-5-11z'/><path class='ts-skull' d='M56 60h7v6h-7zM69 60h7v6h-7zM64 71l2-3 2 3zM60 76v6M64 76v6M68 76v6M72 76v6'/><text class='ts-text' x='66' y='106'>[X]</text><text class='ts-small' x='66' y='126'>EOL</text><path class='ts-ground' d='M4 144h124M14 150h104'/></svg>";
+/// The fennec fox skull's symbol id. [`render`] defines it once per page;
+/// every stone, including rows a scroll fetch adds later, reuses it.
+const SKULL: &str = "fennec-skull";
+
+/// A stylised fennec fox skull in outline: huge ears, wide cheekbones, a
+/// slender snout and big eye sockets, in a 64-unit square.
+const SKULL_SYMBOL: &str = "<svg class='svg-defs' aria-hidden='true' focusable='false'><symbol id='fennec-skull' viewBox='0 0 64 64'><g fill='none' stroke='currentColor' stroke-width='1.6' stroke-linejoin='round' stroke-linecap='round'><path d='M20 27C14 19 8 10 4 2c9 3 18 7 24.5 13.4M44 27c6-8 12-17 16-25-9 3-18 7-24.5 13.4'/><path d='M18.5 21L9 6.5l14 8M45.5 21L55 6.5l-14 8' opacity='.55'/><path d='M20 27c-1-8 5-12 12-12s13 4 12 12c4 3 5 7 1 10-4 3-7 7-8 13-1 5-3 8-5 8s-4-3-5-8c-1-6-4-10-8-13-4-3-3-7 1-10z'/><path d='M20.5 31c0-4.5 4.5-5.5 9-3 2 2 1 6.5-2.5 7.5-4.5 1-6.5-1.5-6.5-4.5zM43.5 31c0-4.5-4.5-5.5-9-3-2 2-1 6.5 2.5 7.5 4.5 1 6.5-1.5 6.5-4.5z'/><path d='M32 37v7M30.5 50l1.5-3 1.5 3-1.5 3zM29.5 55l1 2.5M34.5 55l-1 2.5' opacity='.8'/></g></symbol></svg>";
+
+/// An outline tombstone with the fennec skull and an [X] cross, drawn in the
+/// page's purple line style. Inline so the page loads no images.
+const TOMBSTONE: &str = "<svg class='tombstone' viewBox='0 0 132 156' role='img' aria-label='Tombstone with a fennec fox skull and a crossed-out mark'><path class='ts-stone' d='M18 144V58C18 31 39 10 66 10s48 21 48 48v86'/><path class='ts-inner' d='M27 144V60c0-22 17-40 39-40s39 18 39 40v84'/><use class='ts-skull' href='#fennec-skull' x='42' y='30' width='48' height='48'/><text class='ts-text' x='66' y='106'>[X]</text><text class='ts-small' x='66' y='126'>EOL</text><path class='ts-ground' d='M4 144h124M14 150h104'/></svg>";
 
 /// The graveyard section, closing the Bots page.
 pub fn render(state: &State, query: &Query) -> String {
@@ -201,10 +215,10 @@ pub fn render(state: &State, query: &Query) -> String {
     let list = if graves.is_empty() {
         format!("<p class='empty'>{}</p>", if query.search.is_empty() { "No dead bots. Stopped bots and finished agents rest here." } else { "No dead bots match that search." })
     } else {
-        format!("<ol class='graveyard-rows'>{}</ol>", rows(&graves, query))
+        format!("<ol class='graveyard-grid'>{}</ol>", rows(&graves, query))
     };
     let clear = if query.search.is_empty() { String::new() } else { "<a href='/?view=agents#graveyard'>Clear</a>".into() };
-    format!("<section class='graveyard' id='graveyard' aria-labelledby='graveyard-title'><div class='graveyard-header'>{TOMBSTONE}<div class='graveyard-title'><span class='eyebrow'>// TERMINATED PROCESSES</span><h2 id='graveyard-title'>Graveyard</h2><p class='muted tiny'>{found}. <span title='{REVIVE}'>Typing in a dead bot's DM revives it.</span></p><a href='/bots/history'>Full history ↗</a></div></div><form class='graveyard-search' method='get' action='/#graveyard' role='search'><input type='hidden' name='view' value='agents'><input type='search' name='q' value='{}' maxlength='{QUERY_CHARS}' placeholder='Search by name or objective' aria-label='Search dead bots by name or objective'><button>Search</button>{clear}</form>{list}</section>",
+    format!("<section class='graveyard' id='graveyard' aria-labelledby='graveyard-title'>{SKULL_SYMBOL}<div class='graveyard-header'>{TOMBSTONE}<div class='graveyard-title'><span class='eyebrow'>// TERMINATED PROCESSES</span><h2 id='graveyard-title'>Graveyard</h2><p class='muted tiny'>{found}. <span title='{REVIVE}'>Typing in a dead bot's DM revives it.</span></p><a href='/bots/history'>Full history ↗</a></div></div><form class='graveyard-search' method='get' action='/#graveyard' role='search'><input type='hidden' name='view' value='agents'><input type='search' name='q' value='{}' maxlength='{QUERY_CHARS}' placeholder='Search by name or objective' aria-label='Search dead bots by name or objective'><button>Search</button>{clear}</form>{list}</section>",
         escape(&query.search))
 }
 
