@@ -227,6 +227,8 @@ fn the_fennec_skull_is_proportioned_earless_toothed_and_clear_at_26px() {
     let stroke = 1.8;
     let outline = paths[0];
     assert!(outline.ends_with('Z') && outline.matches('M').count() == 1, "one closed subpath");
+    // The approved outline and teeth (v5) are frozen: only the sockets move.
+    assert_eq!(outline, "M24 10H40L51 18L51 28L47 36L43 40L41 45.5L39.5 50L38 46L36.5 48.5L35 46L33.5 48.5L32 46L30.5 48.5L29 46L27.5 48.5L26 46L24.5 50L23 45.5L21 40L17 36L13 28L13 18Z");
     let head = polygons(outline).remove(0);
     let sockets = polygons(paths[1]);
     assert_eq!(sockets.len(), 3, "two eyes and a nose");
@@ -247,25 +249,36 @@ fn the_fennec_skull_is_proportioned_earless_toothed_and_clear_at_26px() {
     let widest = head.iter().map(|p| p.0).fold(f64::MIN, f64::max) - head.iter().map(|p| p.0).fold(f64::MAX, f64::min);
     assert!(widest <= 1.15 * shoulders, "widest {widest} against shoulders of {shoulders}");
 
-    // Large mean eyes: each slit has horizontal top and bottom edges, slants
-    // in towards the nose, and spans close to a third of the head's width.
+    // Large, evil eyes: each socket is an angular pentagon whose top edge
+    // scowls (slopes slightly down towards the nose), with a flat bottom, a
+    // sharp inner point aimed at the nose, and a span close to a third of the
+    // head's width.
     for eye in [left_eye, right_eye] {
         assert_eq!(eye.len(), 5);
-        assert!(eye[0].1 == eye[1].1 && eye[3].1 == eye[4].1, "flat top and bottom: {eye:?}");
+        let (rise, run) = (eye[1].1 - eye[0].1, (eye[1].0 - eye[0].0).abs());
+        assert!(rise > 0.0 && rise / run <= 15_f64.to_radians().tan(), "a slight scowl down towards the nose: {eye:?}");
+        assert!(eye[3].1 == eye[4].1, "flat bottom: {eye:?}");
         let span = eye.iter().map(|p| p.0).fold(f64::MIN, f64::max) - eye.iter().map(|p| p.0).fold(f64::MAX, f64::min);
         assert!(span >= 0.3 * widest, "eye span {span} of a {widest}-wide head");
     }
     assert!(left_eye[2].0 > left_eye[1].0 && right_eye[2].0 < right_eye[1].0, "inner points aim at the nose");
-    assert!(paths[1].contains("M32 29L35.5 33L33.5 37H30.5L28.5 33Z"), "the nose keeps its shape");
+    // The nose keeps its pentagon shape: a point on top, a flat bottom, and
+    // the proportions of the original 7 × 8 cavity, scaled up.
+    assert_eq!(nose.len(), 5);
+    let (nose_width, nose_height) = (nose[1].0 - nose[4].0, nose[2].1 - nose[0].1);
+    assert!(nose[2].1 == nose[3].1 && (nose_width / nose_height - 7.0 / 8.0).abs() < 0.01, "{nose:?}");
+    assert!(nose_height > 8.0, "a larger nose than before");
 
-    // Proportions: most of the height is below the eyes. The cranium above the
-    // eyes is at most half the muzzle and jaw below them, and the muzzle is
-    // at least four eye-band heights tall.
+    // Proportions: the eyes and nose sit low in the head. Over 12 units of
+    // cranium stand above the eyes, the eyes are tall (at least 7 units), and
+    // under the nose only a short muzzle (at most 10 units) reaches the chin.
     let (eye_top, eye_bottom) = (left_eye[0].1, left_eye[3].1);
     let chin = head.iter().map(|p| p.1).fold(f64::MIN, f64::max);
-    let (cranium, muzzle) = (eye_top - 10.0, chin - eye_bottom);
-    assert!(cranium <= 0.5 * muzzle, "cranium {cranium} above the eyes against a muzzle of {muzzle}");
-    assert!(muzzle >= 4.0 * (eye_bottom - eye_top), "muzzle {muzzle} against an eye band of {}", eye_bottom - eye_top);
+    let (cranium, eye_band, below_nose) = (eye_top - 10.0, eye_bottom - eye_top, chin - nose[2].1);
+    assert!(cranium >= 12.0, "cranium {cranium} above the eyes");
+    assert!(eye_band >= 7.0, "eye band {eye_band}");
+    assert!(below_nose <= 10.0, "muzzle {below_nose} below the nose");
+    assert!(chin - eye_bottom >= 2.5 * eye_band, "the muzzle under the eyes is still the larger part");
 
     // Teeth: six, in one zigzag in the outline's own stroke, below the jaw.
     // Each is three units wide; incisors are shallow so the row reads at 26px.
@@ -281,9 +294,9 @@ fn the_fennec_skull_is_proportioned_earless_toothed_and_clear_at_26px() {
     let eyes = [segments(left_eye), segments(right_eye)];
     for eye in &eyes {
         let gap = clearance(eye, &edges) - stroke;
-        assert!(gap >= stroke + 0.5, "eye to outline gap {gap}");
+        assert!(gap >= 1.2 * stroke, "eye to outline gap {gap}");
         let gap = clearance(eye, &segments(nose)) - stroke;
-        assert!(gap >= stroke + 0.5, "eye to nose gap {gap}");
+        assert!(gap >= 1.5 * stroke, "eye to nose gap {gap}");
     }
     assert!(clearance(&eyes[0], &eyes[1]) - stroke >= stroke, "the two eyes stay apart");
     // A 45° valley's miter reaches half a stroke / sin(22.5°) past its corner.
