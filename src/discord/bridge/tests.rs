@@ -34,11 +34,11 @@ fn delivery_reserves_space_for_actual_changes_without_greening_or_losing_link() 
     let message = delivery_message(
         Some(&change),
         "completed",
-        "http://localhost/chat/test",
+        "http://localhost/dm/test",
         &"reply ".repeat(1000),
     );
     assert!(message.chars().count() <= 1800);
-    assert!(message.contains("http://localhost/chat/test") && message.contains("```text\n"));
+    assert!(message.contains("http://localhost/dm/test") && message.contains("```text\n"));
     assert!(message.contains("-old\n+new") && message.ends_with("```"));
     assert!(!delivery_message(Some(&change), "waiting", "link", "Question").contains("```"));
 }

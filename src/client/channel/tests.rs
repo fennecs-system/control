@@ -140,7 +140,7 @@ fn routing_state_is_bounded_and_platform_neutral() {
     let text = serde_json::to_string(&ledger).unwrap();
     assert_eq!(serde_json::from_str::<Ledger>(&text).unwrap(), ledger);
     assert!(serde_json::from_str::<Ledger>(r#"{"notices":[]}"#).is_ok());
-    let long = reply_text("Lead", "completed", "http://x/chat/c", &"x".repeat(1000), 300);
+    let long = reply_text("Lead", "completed", "http://x/dm/c", &"x".repeat(1000), 300);
     assert!(long.chars().count() <= 300 && long.ends_with("Full reply in chat."));
 }
 
@@ -167,7 +167,7 @@ fn the_prefix_maps_to_control_commands_both_ways() {
     assert_eq!(bang.command("!!"), "!!", "only a command word follows the prefix");
     assert_eq!(bang.command("/chats"), "/chats", "Control's own spelling still works");
     assert_eq!(bang.present("Reply /answer q-1 YOUR_ANSWER or /bot allow b"), "Reply !answer q-1 YOUR_ANSWER or !bot allow b");
-    assert_eq!(bang.present("see /usr/bin and http://x/chat/c and a/answer"), "see /usr/bin and http://x/chat/c and a/answer");
+    assert_eq!(bang.present("see /usr/bin and http://x/dm/c and a/answer"), "see /usr/bin and http://x/dm/c and a/answer");
     let slash = Settings { prefix: "/".into(), ..on() };
     assert_eq!(slash.present("/answer q"), "/answer q");
     // Routing understands the prefix, including help and decisions.

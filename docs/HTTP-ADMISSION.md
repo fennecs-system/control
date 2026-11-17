@@ -19,9 +19,10 @@ Admitted requests have:
 - a 10-second overall deadline for reading the header and body;
 - 3-second limits on each individual read and write;
 - a 64 KiB header limit;
-- per-route body limits: 512 KiB for `/save`, `/lenses/save` and
-  `/knowledge/save`; 256 KiB for `/chats`, `/mcp` and chat messages; 32 KiB
-  otherwise.
+- per-route body limits: 512 KiB for `/save`, `/dna/save` and
+  `/knowledge/save`; 256 KiB for `/dms`, `/mcp` and DM messages; 32 KiB
+  otherwise. Legacy paths (`/lenses/save`, `/chats`, `/chat/ID/messages`) get
+  their new name's limit before being answered with a 308 redirect.
 
 Reads check for shutdown between chunks, so a client trickling bytes cannot delay
 cancellation. Live updates send a heartbeat every 15 seconds and stop on

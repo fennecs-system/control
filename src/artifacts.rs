@@ -544,7 +544,7 @@ pub fn render(
         .get("artifact")
         .map(String::as_str)
         .or_else(|| outputs.last().map(|output| output.id.as_str()));
-    let mut html = format!("<section class='artifacts'><div class='section-heading'><h2>Artifacts</h2><a href='/chat/{chat}'>Back to DM ↗</a></div>");
+    let mut html = format!("<section class='artifacts'><div class='section-heading'><h2>Artifacts</h2><a href='/dm/{chat}'>Back to DM ↗</a></div>");
     let Some(id) = selected.filter(|id| ids.contains(id)) else {
         html.push_str("<p class='muted'>No published files yet.</p></section>");
         return Ok(html);
@@ -554,7 +554,7 @@ pub fn render(
     for (index, output) in outputs.iter().enumerate().rev().take(16) {
         let version = output.id.as_str();
         html.push_str(&format!(
-            "<a href='/chat/{chat}/artifacts?artifact={version}'{}>Output {}</a>",
+            "<a href='/dm/{chat}/artifacts?artifact={version}'{}>Output {}</a>",
             if version == id {
                 " aria-current='page'"
             } else {
@@ -567,7 +567,7 @@ pub fn render(
     let file = args.get("file").map(String::as_str);
     for entry in &manifest.files {
         html.push_str(&format!(
-            "<a href='/chat/{chat}/artifacts?artifact={id}&amp;file={}'{}>{}</a>",
+            "<a href='/dm/{chat}/artifacts?artifact={id}&amp;file={}'{}>{}</a>",
             encode(&entry.path),
             if file == Some(entry.path.as_str()) {
                 " aria-current='page'"

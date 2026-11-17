@@ -427,11 +427,11 @@ fn attach_port_approvals(frame:&web_sys::HtmlIFrameElement)->Result<(),JsValue> 
     submit.forget();Ok(())
 }
 /// Operator decisions posted without leaving the chat: port and bot requests,
-/// and folder approvals (`/chat/ID/project` with its approve button). Changing
+/// and folder approvals (`/dm/ID/project` with its approve button). Changing
 /// the requested folder stays a normal form submission.
 fn decision_action(action:&str,submitter:Option<&str>)->bool {
     matches!(action,"/tools/ports"|"/tools/bots")
-        || (submitter==Some("approve") && action.strip_prefix("/chat/").and_then(|rest|rest.strip_suffix("/project"))
+        || (submitter==Some("approve") && action.strip_prefix("/dm/").and_then(|rest|rest.strip_suffix("/project"))
             .is_some_and(|id|!id.is_empty() && !id.contains('/')))
 }
 fn restore_port_form(form:&web_sys::HtmlFormElement,controls:&[web_sys::Element],button:Option<&(web_sys::HtmlElement,String)>) {
@@ -579,7 +579,7 @@ fn attach_navigation(document:&web_sys::Document)->Result<(),JsValue> {
     let Some(frame)=document.query_selector("iframe.chat-transcript")? else{return Ok(());};
     let source=frame.get_attribute("src").unwrap_or_default();
     let Some(chat)=source.split('/').nth(2) else{return Ok(());};
-    let url=format!("/chat/{chat}/conversations");
+    let url=format!("/dm/{chat}/conversations");
     let busy=Rc::new(Cell::new(false));let previous=Rc::new(RefCell::new(String::new()));
     let pending=Rc::new(Cell::new(false));let parent=document.clone();
     let target=toggle.clone();

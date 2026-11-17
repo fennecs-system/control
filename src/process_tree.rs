@@ -259,7 +259,7 @@ fn add_chat(state: &State, index: &Index<'_>, names: &Names<'_>, tree: &mut Tree
         kind,
         title: names.get(chat).map_or(chat, |name| name.as_ref()).to_owned(),
         detail,
-        href: crate::chat::valid_id(chat).then(|| format!("/chat/{chat}")),
+        href: crate::chat::valid_id(chat).then(|| format!("/dm/{chat}")),
         active: busy(status),
     });
     if depth >= MAX_DEPTH {

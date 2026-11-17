@@ -31,11 +31,11 @@ fn completion_and_highlighting_keep_arguments_and_regular_chat_distinct() {
 fn folder_approval_uses_the_in_chat_decision_path_but_folder_changes_navigate() {
     assert!(decision_action("/tools/ports", None));
     assert!(decision_action("/tools/bots", Some("deny")));
-    assert!(decision_action("/chat/c-18e8804178ab23f0-135/project", Some("approve")));
-    assert!(!decision_action("/chat/c-18e8804178ab23f0-135/project", None), "Change folder stays a page submission");
-    assert!(!decision_action("/chat//project", Some("approve")));
-    assert!(!decision_action("/chat/a/b/project", Some("approve")));
-    assert!(!decision_action("/chat/c-1/preview/stop", Some("approve")));
+    assert!(decision_action("/dm/c-18e8804178ab23f0-135/project", Some("approve")));
+    assert!(!decision_action("/dm/c-18e8804178ab23f0-135/project", None), "Change folder stays a page submission");
+    assert!(!decision_action("/dm//project", Some("approve")));
+    assert!(!decision_action("/dm/a/b/project", Some("approve")));
+    assert!(!decision_action("/dm/c-1/preview/stop", Some("approve")));
 }
 #[test]
 fn paged_lists_load_the_next_page_within_a_screen_of_view() {

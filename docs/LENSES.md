@@ -8,10 +8,17 @@ descriptive tool hints and other lenses. It is not an agent identity or a grant.
 and revisions are versions. Users experience a lens as a bundle of tools,
 documents and instructions that spawned workers inherit, not as a view into
 something. Internally lenses remain pure lens transforms, and code, state
-fields, tool names and APIs (`/lenses`, `control.chat.lenses`,
-`control.lenses.*`) keep the `lens` name. Likewise a 1:1 conversation with an
-agent is shown as a **DM** (distinct from **Rooms**), while URLs and APIs stay
-`/chat/...` and `control.chat.*`.
+fields, tool names and APIs (`control.chat.lenses`, `control.lenses.*`) keep
+the `lens` name. Likewise a 1:1 conversation with an agent is shown as a **DM**
+(distinct from **Rooms**), while APIs stay `control.chat.*`.
+
+User-facing URLs follow the visible names: the library is at `/dna`, the DM
+list at `/dms` and a DM at `/dm/ID` (with sub-pages such as
+`/dm/ID/transcript`, `/dm/ID/project` and `/dm/ID/compaction`). The earlier
+`/lenses[/...]`, `/chats[/...]`, `/chat` and `/chat/ID[/...]` paths, and
+`/?view=lenses`, keep working: reads get a 301 and other methods a 308 to the
+new path with the same tail and query, so bookmarks, sent Discord links and
+forms rendered before the rename still work.
 
 Use **DNA** to create and edit genes and to inspect their effective
 instructions. Select genes in a DM's gene picker, through `control.chat.lenses`,

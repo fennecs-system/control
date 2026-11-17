@@ -343,7 +343,7 @@ fn run_record(run: &Run) -> String {
         ));
     }
     if let Some(chat) = run.chat_id.as_ref().filter(|id| crate::chat::valid_id(id)) {
-        html.push_str(&format!("<a href='/chat/{}'>Open DM ↗</a>", escape(chat)));
+        html.push_str(&format!("<a href='/dm/{}'>Open DM ↗</a>", escape(chat)));
     }
     if ["queued", "running", "waiting"].contains(&run.status.as_str()) {
         html.push_str(&format!("<form class='decision-form' method='post' action='/cancel-run'><input type='hidden' name='id' value='{}'><button>Cancel</button></form>",escape(&run.id)));

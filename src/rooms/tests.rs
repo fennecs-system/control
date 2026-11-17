@@ -219,13 +219,13 @@ fn room_sidebar_scopes_activity_and_keeps_message_chat_links() {
     assert!(page.contains("body-grid rooms-workspace"));
     assert!(page.contains("channel=research' aria-current='page'"));
     assert!(page.contains("An update &lt;script&gt;"));
-    assert!(page.contains(&format!("href='/chat/{active}'>Open DM ↗")));
+    assert!(page.contains(&format!("href='/dm/{active}'>Open DM ↗")));
     assert!(participants.contains("Investigate &lt;sources&gt;"));
     assert!(participants.contains("<small>running</small>"));
-    assert!(!participants.contains(&format!("href='/chat/{idle}'")));
-    assert!(links.contains(&format!("href='/chat/{idle}'")));
-    assert!(!links.contains(&format!("href='/chat/{active}'")));
-    assert!(!sidebar.contains(&format!("href='/chat/{other}'")));
+    assert!(!participants.contains(&format!("href='/dm/{idle}'")));
+    assert!(links.contains(&format!("href='/dm/{idle}'")));
+    assert!(!links.contains(&format!("href='/dm/{active}'")));
+    assert!(!sidebar.contains(&format!("href='/dm/{other}'")));
     let empty = render(&state, "unknown");
     assert!(empty.contains("aria-label='#general'"));
     assert!(empty.contains("No active participants."));

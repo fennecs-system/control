@@ -36,7 +36,7 @@ fn socket_writes_release_state_even_when_the_client_stalls_or_disconnects() {
         &state,
         |response, state| {
             state.runtime.notice = "committed".into();
-            session_http::handle(response, state, "GET", "/chats", "none", "", b"");
+            session_http::handle(response, state, "GET", "/dms", "none", "", b"");
         },
     );
     assert_eq!(state.lock().unwrap().runtime.notice, "committed");
@@ -49,19 +49,20 @@ fn legacy_session_view_redirects_to_the_canonical_chat_page() {
     let location = |query: &str| legacy_session_location(&state, &fields(query));
     assert_eq!(
         location(&format!("view=session&channel={id}")),
-        Some(format!("/chat/{id}"))
+        Some(format!("/dm/{id}"))
     );
     assert_eq!(
         location("view=session&channel=c-missing").as_deref(),
-        Some("/chats")
+        Some("/dms")
     );
     assert_eq!(
         location("view=session&channel=..%2F..%2Ftools%0D%0ASet-Cookie%3A%20x").as_deref(),
-        Some("/chats")
+        Some("/dms")
     );
-    assert_eq!(location("view=session").as_deref(), Some("/chats"));
+    assert_eq!(location("view=session").as_deref(), Some("/dms"));
     assert_eq!(location(&format!("view=runs&channel={id}")).as_deref(), Some("/bots/history/runs"), "run history moved under Bots");
     assert_eq!(location(&format!("view=agents&channel={id}")), None);
+    assert_eq!(location("view=lenses").as_deref(), Some("/dna"), "the gene library is the DNA page");
     assert_eq!(location(""), None);
 }
 #[test]
@@ -129,7 +130,8 @@ fn encoded_maximum_chat_messages_fit_their_transport_limits() {
         "%F0%9F%A6%8A".repeat(control_context::limits::CHAT_MESSAGE_CHARS)
     );
     assert_eq!(fields(&form)["message"], text);
-    for target in ["/chats", "/chats?new=1", "/chat/c-test/messages"] {
+    // Legacy names are admitted like their new names so their 308 can carry the body.
+    for target in ["/dms", "/dms?new=1", "/dm/c-test/messages", "/chats", "/chat/c-test/messages"] {
         assert!(form.len() < body_limit(target));
     }
     let request = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control.chat.send","arguments":{"id":"c-test","message":text}}}).to_string();
@@ -138,8 +140,9 @@ fn encoded_maximum_chat_messages_fit_their_transport_limits() {
     assert_eq!(body_limit("/rooms/general"), 32768);
     assert_eq!(body_limit("/knowledge/save"), 512 * 1024);
     assert_eq!(body_limit("/save"), 512 * 1024);
+    assert_eq!(body_limit("/dna/save"), 512 * 1024);
     assert_eq!(body_limit("/lenses/save"), 512 * 1024);
-    assert_eq!(body_limit("/chat/invalid/path/messages"), 32768);
+    assert_eq!(body_limit("/dm/invalid/path/messages"), 32768);
 }
 #[test]
 fn only_the_bots_page_loads_the_client_for_its_canvas() {

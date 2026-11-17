@@ -431,7 +431,7 @@ fn side_question_captures_context_without_reusing_parent_workspace_or_authority(
     assert!(
         transcript(&state, &parent)
             .unwrap()
-            .contains(&format!("href='/chat/{}'", child.id))
+            .contains(&format!("href='/dm/{}'", child.id))
     );
     let captured = child.fork_context.clone();
     state.runtime.runs[0].result = "Later result".into();
@@ -648,7 +648,7 @@ fn preview_library_and_chat() {
     let session = crate::render(&state, "session", "none", &id)
         .replace("<body>", "<body class='session-view'>")
         .replace(
-            &format!("src='/chat/{id}/transcript#latest'"),
+            &format!("src='/dm/{id}/transcript#latest'"),
             &format!(
                 "srcdoc='{}'",
                 escape(&inline(transcript(&state, &id).unwrap()))

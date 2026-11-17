@@ -30,7 +30,7 @@ mod delegation;
 mod delegated_results;
 mod history;
 use control::config;
-use control::{discord, identity};
+use control::{discord, identity, url_names};
 use control::discord::bridge as discord_bridge;
 mod doctor;
 mod engine;
@@ -220,25 +220,30 @@ fn public_page(state: &State, query: &HashMap<String, String>, lens: &str) -> (S
         (page, control_http::Policy::Page)
     }
 }
-/// `/?view=session` predates `/chat/{id}`; send it to the page that renders chat state.
+/// `/?view=session` predates `/dm/{id}`; send it to the page that renders chat state.
 /// `/?view=runs` predates the Bots history sub-page and keeps its page cursor.
+/// `/?view=lenses` predates the DNA page at `/dna`.
 fn legacy_session_location(state: &State, query: &HashMap<String, String>) -> Option<String> {
-    if query.get("view")? == "runs" {
-        return Some(navigation::history_location("/bots/history/runs", query));
-    }
-    (query.get("view")? == "session").then(|| {
-        query.get("channel")
+    match query.get("view")?.as_str() {
+        "runs" => Some(navigation::history_location("/bots/history/runs", query)),
+        "lenses" => Some("/dna".to_owned()),
+        "session" => Some(query.get("channel")
             .filter(|id| chat::valid_id(id) && chat::detail(state, id).is_ok())
-            .map_or_else(|| "/chats".to_owned(), |id| format!("/chat/{id}"))
-    })
+            .map_or_else(|| "/dms".to_owned(), |id| url_names::dm(id))),
+        _ => None,
+    }
 }
 const MAX_HEADER: usize = 65536;
+/// Limits follow the current path, so a legacy path redirected with its body
+/// (`/chat/ID/messages` → `/dm/ID/messages`) is admitted like its new name.
 fn body_limit(target: &str) -> usize {
     let path = target.split('?').next().unwrap_or(target);
-    if ["/knowledge/save", "/save", "/lenses/save"].contains(&path) {
+    let renamed = url_names::renamed(path);
+    let path = renamed.as_deref().unwrap_or(path);
+    if ["/knowledge/save", "/save", "/dna/save"].contains(&path) {
         512 * 1024
-    } else if ["/chats", "/mcp"].contains(&path)
-        || path.strip_prefix("/chat/").and_then(|p| p.strip_suffix("/messages"))
+    } else if ["/dms", "/mcp"].contains(&path)
+        || path.strip_prefix("/dm/").and_then(|p| p.strip_suffix("/messages"))
             .is_some_and(chat::valid_id)
     {
         control_context::limits::CHAT_REQUEST_BYTES
@@ -340,6 +345,10 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         return;
     }
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    if let Some((status, location)) = url_names::redirect(method, path, query) {
+        let _ = control_http::respond(&mut stream, status, "text/plain", b"", &format!("Location: {location}\r\n"), control_http::Policy::Page);
+        return;
+    }
     if compaction::http(&mut stream,&state,method,path,query){return;}
     if providers::live_http(&mut stream, &state, method, path) { return; }
     if ports::http(&mut stream, &state, method, path, &data[header_end..header_end + length]) { return; }
@@ -742,3 +751,7 @@ fn main() -> std::io::Result<()> {
 #[cfg(test)]
 #[path = "main/tests/responsiveness_tests.rs"]
 mod responsiveness_tests;
+
+#[cfg(test)]
+#[path = "main/tests/url_names_tests.rs"]
+mod url_names_tests;

@@ -173,7 +173,7 @@ pub fn choices(state: &State, selected: &[String], form: &str) -> String {
     for lens in state.lens_library.current() {
         html.push_str(&format!("<label class='lens-option lens-tag'><input type='checkbox' name='lens_{}' value='{}' form='{form}'{}><span>{}</span></label>",escape(&lens.id),escape(&lens.id),if selected.contains(&lens.id){" checked"}else{""},escape(&lens.name)));
     }
-    html.push_str("</div><a class='lens-library-shortcut' href='/lenses' aria-label='Open DNA library'>↗</a></div>");
+    html.push_str("</div><a class='lens-library-shortcut' href='/dna' aria-label='Open DNA library'>↗</a></div>");
     html
 }
 fn checkbox(prefix: &str, id: &str, name: &str, checked: bool) -> String {
@@ -191,10 +191,10 @@ pub fn render(
     let definition = submitted
         .or_else(|| state.lens_library.get(id))
         .unwrap_or(&blank);
-    let mut html=String::from("<div class='section-heading'><h2>DNA</h2><a class='primary' href='/lenses?new=1'>＋ New gene</a></div><p class='muted'>Each gene bundles knowledge, tools, instructions and other genes; spawned workers inherit a DM's DNA.</p><div class='knowledge-workspace lens-workspace'><aside class='note-files' aria-label='Genes'>");
+    let mut html=String::from("<div class='section-heading'><h2>DNA</h2><a class='primary' href='/dna?new=1'>＋ New gene</a></div><p class='muted'>Each gene bundles knowledge, tools, instructions and other genes; spawned workers inherit a DM's DNA.</p><div class='knowledge-workspace lens-workspace'><aside class='note-files' aria-label='Genes'>");
     for lens in current {
         html.push_str(&format!(
-            "<a href='/lenses?id={}'{}>{} <small>v{}</small></a>",
+            "<a href='/dna?id={}'{}>{} <small>v{}</small></a>",
             escape(&lens.id),
             if lens.id == definition.id {
                 " aria-current='page'"
@@ -205,7 +205,7 @@ pub fn render(
             lens.revision
         ));
     }
-    html.push_str("<a class='lens-export' href='/lenses/export'>Export genes ↓</a></aside><section class='knowledge-content'>");
+    html.push_str("<a class='lens-export' href='/dna/export'>Export genes ↓</a></aside><section class='knowledge-content'>");
     if let Some(message) = notice {
         html.push_str(&format!(
             "<p class='{}' role='{}'>{}</p>",
@@ -218,7 +218,7 @@ pub fn render(
             escape(message)
         ));
     }
-    html.push_str(&format!("<form class='lens-definition' method='post' action='/lenses/save'><input type='hidden' name='revision' value='{}'><div class='lens-name-row'><label>Name<input name='name' required maxlength='80' value='{}' placeholder='Project context'></label><label>Identifier<input name='id' required maxlength='64' pattern='[a-z0-9-]+' value='{}' placeholder='project-context'{}></label></div><fieldset><legend>Include genes</legend><div class='library-choices'>",definition.revision,escape(&definition.name),escape(&definition.id),if state.lens_library.get(&definition.id).is_some(){" readonly"}else{""}));
+    html.push_str(&format!("<form class='lens-definition' method='post' action='/dna/save'><input type='hidden' name='revision' value='{}'><div class='lens-name-row'><label>Name<input name='name' required maxlength='80' value='{}' placeholder='Project context'></label><label>Identifier<input name='id' required maxlength='64' pattern='[a-z0-9-]+' value='{}' placeholder='project-context'{}></label></div><fieldset><legend>Include genes</legend><div class='library-choices'>",definition.revision,escape(&definition.name),escape(&definition.id),if state.lens_library.get(&definition.id).is_some(){" readonly"}else{""}));
     for other in state.lens_library.current() {
         if other.id != definition.id {
             html.push_str(&checkbox(
@@ -288,7 +288,7 @@ pub fn render(
                 html.push_str("<div class='resolved-tags'>");
                 for lens in &resolved.lenses {
                     html.push_str(&format!(
-                        "<a href='/lenses?id={}'>{} <small>v{}</small></a>",
+                        "<a href='/dna?id={}'>{} <small>v{}</small></a>",
                         escape(&lens.id),
                         escape(&lens.name),
                         lens.revision
@@ -352,7 +352,7 @@ pub fn handle(
     lens: &str,
     body: &[u8],
 ) -> bool {
-    if path == "/lenses/export" && method == "GET" {
+    if path == "/dna/export" && method == "GET" {
         response(
             stream,
             "200 OK",
@@ -362,7 +362,7 @@ pub fn handle(
         );
         return true;
     }
-    if path == "/lenses" && method == "GET" {
+    if path == "/dna" && method == "GET" {
         let id = if query.contains_key("new") {
             ""
         } else {
@@ -392,14 +392,14 @@ pub fn handle(
         );
         return true;
     }
-    if path == "/lenses/save" && method == "POST" {
+    if path == "/dna/save" && method == "POST" {
         let draft = draft(&crate::fields(&String::from_utf8_lossy(body)));
         match save_with(state, draft.clone(), crate::storage::save) {
             Ok(d) => response(
                 stream,
                 "303 See Other",
                 "",
-                &format!("Location: /lenses?id={}&saved={}\r\n", d.id, d.revision),
+                &format!("Location: /dna?id={}&saved={}\r\n", d.id, d.revision),
                 "text/plain",
             ),
             Err(error) => {

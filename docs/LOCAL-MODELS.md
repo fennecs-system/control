@@ -118,7 +118,7 @@ applies.
 
 ### Inspect and recall
 
-**Compaction tree** in a chat, `/chat/ID/compaction`, or `/compact` in the TUI
+**Compaction tree** in a chat, `/dm/ID/compaction`, or `/compact` in the TUI
 shows model limits, the current cut, tree ranges, source counts, input and
 summary sizes, usage, pending work and failures. Links expand binary children
 down to a leaf's original evidence. Inspection makes no model calls.
@@ -404,7 +404,7 @@ Claude manage their own in-session context.
 **Compaction.** A chat on a local model is compacted by the same endpoint through
 the summary tree by default, without being listed under automatic summaries;
 in-turn summaries use it too. Listing the chat under **Automatic summaries** with
-another model overrides this. `/chat/ID/compaction` reports the policy
+another model overrides this. `/dm/ID/compaction` reports the policy
 (`local chat model default`, `operator opt-in` or `off`).
 
 **Usage and provenance.** Step usage is summed into the attempt's token counts.

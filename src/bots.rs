@@ -1402,9 +1402,9 @@ fn http_with_save(stream: &mut impl io::Write, shared: &Arc<Mutex<State>>, metho
             let (status, value) = match result { Ok(()) => ("200 OK", json!({"ok":true})), Err(error) => ("400 Bad Request", json!({"error":error})) };
             control_http::respond(stream, status, "application/json", value.to_string().as_bytes(), "", control_http::Policy::Page)
         }
-        (Ok(()), Some(chat)) => control_http::respond(stream, "303 See Other", "text/plain", b"", &format!("Location: /chat/{chat}\r\n"), control_http::Policy::Page),
+        (Ok(()), Some(chat)) => control_http::respond(stream, "303 See Other", "text/plain", b"", &format!("Location: /dm/{chat}\r\n"), control_http::Policy::Page),
         (Ok(()), None) => control_http::respond(stream, "204 No Content", "text/plain", b"", "", control_http::Policy::Page),
-        (Err(error), back) => control_http::respond(stream, "400 Bad Request", "text/html; charset=utf-8", crate::error_page(error, &back.map_or("/".to_owned(), |chat| format!("/chat/{chat}"))).as_bytes(), "", control_http::Policy::Page),
+        (Err(error), back) => control_http::respond(stream, "400 Bad Request", "text/html; charset=utf-8", crate::error_page(error, &back.map_or("/".to_owned(), |chat| format!("/dm/{chat}"))).as_bytes(), "", control_http::Policy::Page),
     };
     true
 }

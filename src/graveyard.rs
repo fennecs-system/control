@@ -165,7 +165,7 @@ fn row(grave: &Grave<'_>) -> String {
     let what = if objective.is_empty() { "<span class='muted'>no objective recorded</span>".to_owned() } else { escape(&objective) };
     let when = grave.stopped.map_or_else(|| "never ran".to_owned(), |seconds| format!("<time datetime='{seconds}'>{}</time>", when(seconds)));
     let reason = grave.reason.label();
-    format!("<li class='grave' data-reason='{reason}'><span class='grave-x' aria-hidden='true'>[x]</span><a class='grave-name' href='/chat/{id}' title='{name}'>{name}</a><span class='grave-kind'>{}</span><span class='grave-what' title='{}'>{what}</span><span class='grave-when'>{when} · <b>{reason}</b></span><a class='grave-revive' href='/chat/{id}' title='{REVIVE}'>revive ↗</a></li>",
+    format!("<li class='grave' data-reason='{reason}'><span class='grave-x' aria-hidden='true'>[x]</span><a class='grave-name' href='/dm/{id}' title='{name}'>{name}</a><span class='grave-kind'>{}</span><span class='grave-what' title='{}'>{what}</span><span class='grave-when'>{when} · <b>{reason}</b></span><a class='grave-revive' href='/dm/{id}' title='{REVIVE}'>revive ↗</a></li>",
         if grave.bot { "bot" } else { "agent" }, escape(&objective))
 }
 

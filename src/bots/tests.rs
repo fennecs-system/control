@@ -2045,7 +2045,7 @@ fn the_bots_page_lists_sleeping_bots() {
     command_at(&mut state, &chat, "on every 10", Now(0)).unwrap();
     let page = overview(&state);
     assert!(
-        page.contains("sleeping") && page.contains(&format!("/chat/{chat}")),
+        page.contains("sleeping") && page.contains(&format!("/dm/{chat}")),
         "{page}"
     );
 }

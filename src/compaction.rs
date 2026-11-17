@@ -704,12 +704,12 @@ pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
     let metadata = serde_json::to_string_pretty(&status(state, id))
         .map_err(|_| "Cannot render compaction metadata")?;
     let metadata = format!(
-        "<p><a href='/chat/{}/compaction/read'>Expand summaries and read original evidence</a></p><pre>{}</pre>",
+        "<p><a href='/dm/{}/compaction/read'>Expand summaries and read original evidence</a></p><pre>{}</pre>",
         crate::escape(id),
         crate::escape(&metadata)
     );
     Ok(format!(
-        "<h2>Compaction tree</h2><p><a href='/chat/{}'>Return to DM</a> · <a href='/?view=providers'>Model and window settings</a></p><p>Ranges are zero-based, end-exclusive conversation positions. Leaf size is a maximum: smaller contexts split leaves further. Parent requests combine two child summaries. Token counts are reported by the endpoint; byte budgets are conservative estimates, not tokenization. Summaries are untrusted evidence; the original journal remains intact.</p>{}",
+        "<h2>Compaction tree</h2><p><a href='/dm/{}'>Return to DM</a> · <a href='/?view=providers'>Model and window settings</a></p><p>Ranges are zero-based, end-exclusive conversation positions. Leaf size is a maximum: smaller contexts split leaves further. Parent requests combine two child summaries. Token counts are reported by the endpoint; byte budgets are conservative estimates, not tokenization. Summaries are untrusted evidence; the original journal remains intact.</p>{}",
         crate::escape(id),
         metadata
     ))

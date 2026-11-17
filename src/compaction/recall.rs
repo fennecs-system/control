@@ -213,7 +213,7 @@ pub(crate) fn http(
     query: &str,
 ) -> bool {
     let Some(chat) = path
-        .strip_prefix("/chat/")
+        .strip_prefix("/dm/")
         .and_then(|p| p.strip_suffix("/compaction/read"))
     else {
         return false;
@@ -277,7 +277,7 @@ pub(crate) fn http(
 
 fn page(chat: &str, value: &Value) -> String {
     let mut links = String::new();
-    let base = format!("/chat/{}/compaction/read", crate::escape(chat));
+    let base = format!("/dm/{}/compaction/read", crate::escape(chat));
     if let Some(roots) = value["roots"].as_array() {
         for root in roots {
             links.push_str(&format!(
@@ -315,7 +315,7 @@ fn page(chat: &str, value: &Value) -> String {
     }
     let metadata = crate::escape(&serde_json::to_string_pretty(value).unwrap());
     format!(
-        "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><title>Control · retained evidence</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'></head><body><main><h2>Retained evidence</h2><p><a href='/chat/{}'>DM</a> · <a href='{base}'>Summary roots</a></p><ul>{links}</ul><pre class='tool-output'>{metadata}</pre></main></body></html>",
+        "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><title>Control · retained evidence</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'></head><body><main><h2>Retained evidence</h2><p><a href='/dm/{}'>DM</a> · <a href='{base}'>Summary roots</a></p><ul>{links}</ul><pre class='tool-output'>{metadata}</pre></main></body></html>",
         crate::escape(chat)
     )
 }

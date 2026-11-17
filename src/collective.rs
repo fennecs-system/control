@@ -172,7 +172,7 @@ impl Collective {
                 for (id, p) in self.proposals.iter().enumerate() {
                     h.push_str(&format!("<article class='record'><span class='tag'>{}</span><h3>{}</h3><dl><dt>Evidence</dt><dd>{}</dd><dt>Scope</dt><dd>{}</dd><dt>Recheck when</dt><dd>{}</dd></dl>", escape(&p.status), escape(&p.claim), escape(&p.evidence), escape(&p.scope), escape(&p.validity)));
                     if let Some(source) = &p.source {
-                        h.push_str(&format!("<p class='muted'>From <a href='/chat/{}'>chat</a> · run {}</p>",escape(&source.chat),escape(source.run.as_deref().unwrap_or("local operator"))));
+                        h.push_str(&format!("<p class='muted'>From <a href='/dm/{}'>chat</a> · run {}</p>",escape(&source.chat),escape(source.run.as_deref().unwrap_or("local operator"))));
                     }
                     if p.status == "pending" {
                         h.push_str(&format!("<form method='post' action='/review' class='actions'><input type='hidden' name='id' value='{id}'><button class='primary' name='decision' value='accepted'>Accept entry</button><button name='decision' value='rejected'>Reject</button></form>"));

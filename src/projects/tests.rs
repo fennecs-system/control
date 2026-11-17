@@ -551,13 +551,13 @@ fn live_folder_approval_errors_and_multiple_named_worktrees() {
             &mut response,
             &shared,
             "POST",
-            &format!("/chat/{id}/project"),
+            &format!("/dm/{id}/project"),
             "",
             format!("request={request}&approve=yes").as_bytes()
         ));
         let response = String::from_utf8(response).unwrap();
         assert!(response.starts_with("HTTP/1.1 303"), "{response}");
-        assert!(response.contains(&format!("location: /chat/{id}/project?importing={request}\r\n")));
+        assert!(response.contains(&format!("location: /dm/{id}/project?importing={request}\r\n")));
         wait_for_import(&id);
     };
     open(&fixture.0.join("missing").display().to_string(), None);
@@ -703,12 +703,12 @@ fn approval_responds_at_once_imports_in_the_background_and_returns_to_the_chat()
     let id = crate::chat::create(&mut initial);
     crate::chat::send(&mut initial, &id, &format!("/open {}", first.display()), "test").unwrap();
     let shared = Arc::new(Mutex::new(initial));
-    let page = format!("/chat/{id}/project");
+    let page = format!("/dm/{id}/project");
     let request = pending_request(&shared);
     // The attachment is held open, yet approval answers immediately.
     let response = exchange(&shared, "POST", &page, "", &format!("request={request}&approve=yes"), gated_save);
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
-    assert!(response.contains(&format!("location: /chat/{id}/project?importing={request}\r\n")), "{response}");
+    assert!(response.contains(&format!("location: /dm/{id}/project?importing={request}\r\n")), "{response}");
     assert_eq!(importing(&id).unwrap().request, request);
     // A repeated click neither fails nor starts another copy.
     let repeated = exchange(&shared, "POST", &page, "", &format!("request={request}&approve=yes"), gated_save);
@@ -717,7 +717,7 @@ fn approval_responds_at_once_imports_in_the_background_and_returns_to_the_chat()
     let progress = exchange(&shared, "GET", &page, &format!("importing={request}"), "", no_save);
     assert!(progress.starts_with("HTTP/1.1 200"), "{progress}");
     assert!(progress.contains("Importing folder…") && progress.contains("role='status'"), "{progress}");
-    assert!(progress.contains(&format!("http-equiv='refresh' content='1;url=/chat/{id}/project?importing={request}'")));
+    assert!(progress.contains(&format!("http-equiv='refresh' content='1;url=/dm/{id}/project?importing={request}'")));
     assert!(!progress.contains("Trust folder and open"), "no second approval while importing");
     {
         let mut state = shared.lock().unwrap();
@@ -730,7 +730,7 @@ fn approval_responds_at_once_imports_in_the_background_and_returns_to_the_chat()
     wait_for_import(&id);
     let done = exchange(&shared, "GET", &page, &format!("importing={request}"), "", no_save);
     assert!(done.starts_with("HTTP/1.1 303"), "{done}");
-    assert!(done.contains(&format!("location: /chat/{id}\r\n")), "{done}");
+    assert!(done.contains(&format!("location: /dm/{id}\r\n")), "{done}");
     let grant = {
         let state = shared.lock().unwrap();
         let project = state.chats[0].project.as_ref().unwrap();
@@ -742,10 +742,10 @@ fn approval_responds_at_once_imports_in_the_background_and_returns_to_the_chat()
     crate::chat::send(&mut shared.lock().unwrap(), &id, &format!("/open {}", second.display()), "test").unwrap();
     let request = pending_request(&shared);
     let response = exchange(&shared, "POST", &page, "", &format!("request={request}&approve=yes"), gated_save);
-    assert!(response.contains(&format!("location: /chat/{id}/project?importing={request}\r\n")), "{response}");
+    assert!(response.contains(&format!("location: /dm/{id}/project?importing={request}\r\n")), "{response}");
     wait_for_import(&id);
     let done = exchange(&shared, "GET", &page, &format!("importing={request}"), "", no_save);
-    assert!(done.contains(&format!("location: /chat/{id}\r\n")), "{done}");
+    assert!(done.contains(&format!("location: /dm/{id}\r\n")), "{done}");
     let state = shared.lock().unwrap();
     let project = state.chats[0].project.as_ref().unwrap();
     assert_eq!(project.mounts.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["mc263-client", "mc-pi-skills"]);
@@ -763,7 +763,7 @@ fn in_chat_folder_decisions_answer_like_port_decisions() {
     let id = crate::chat::create(&mut initial);
     crate::chat::send(&mut initial, &id, &format!("/open {}", folder.display()), "test").unwrap();
     let shared = Arc::new(Mutex::new(initial));
-    let page = format!("/chat/{id}/project");
+    let page = format!("/dm/{id}/project");
     {
         let panel = crate::chat::requests(&shared.lock().unwrap(), &id).unwrap();
         assert!(panel.contains(&format!("<form class='decision-form' method='post' action='{page}'")), "{panel}");
@@ -792,10 +792,10 @@ fn background_import_errors_appear_beside_the_request_for_retry() {
     let missing = fixture.0.join("missing");
     crate::chat::send(&mut initial, &id, &format!("/open {}", missing.display()), "test").unwrap();
     let shared = Arc::new(Mutex::new(initial));
-    let page = format!("/chat/{id}/project");
+    let page = format!("/dm/{id}/project");
     let request = pending_request(&shared);
     let response = exchange(&shared, "POST", &page, "", &format!("request={request}&approve=yes"), no_save);
-    assert!(response.contains(&format!("location: /chat/{id}/project?importing={request}\r\n")), "{response}");
+    assert!(response.contains(&format!("location: /dm/{id}/project?importing={request}\r\n")), "{response}");
     wait_for_import(&id);
     let shown = exchange(&shared, "GET", &page, &format!("importing={request}"), "", no_save);
     assert!(shown.starts_with("HTTP/1.1 200"), "{shown}");
