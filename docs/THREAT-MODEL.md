@@ -111,7 +111,8 @@ arbitrary downloaded code safe.
   Timeout or uncertain execution requests service stop, and restart never replays
   an in-flight command. Bounded final logs are saved before service removal.
   Evidence: [service commands](../src/services/commands.rs),
-  `restart_never_replays_uncertain_execution_and_save_failure_rolls_back`,
+  `restart_never_replays_uncertain_execution_and_save_failure_rolls_back`;
+  [ports](../src/ports.rs),
   `live_service_commands_download_and_connect_two_private_services`.
   Copies into a service reuse that lane and its receipts. They read only the
   caller's active attempt workspace through no-follow descriptor walks, skip
@@ -159,22 +160,21 @@ not universal secret detection, and independent judges do not prove correctness.
 ## Verification and remaining gaps
 
 Test names above identify regression coverage, not proof against sandbox escapes.
-`live_*` tests are explicit local checks, generally ignored in normal CI. Run the
-pinned native and relevant container checks on supported architectures. Linux ARM
-exposed incorrect numeric no-follow flags: native `libc` flags and
-[platform-flags.rs](../tools/platform-flags.rs) now replace those constants.
-The direct regression is `native_flags_reject_a_symlink_and_accept_its_regular_target`.
-Related regressions include `publication_is_bounded_sorted_and_never_promotes_symlinks_or_private_files`
+`live_*` tests are explicit local checks, ignored in normal CI. Run the pinned
+native and relevant container checks on each supported architecture: no-follow
+flags differ by platform, so passing macOS tests alone does not cover Linux.
+Control uses native `libc` flags via
+[platform-flags.rs](../tools/platform-flags.rs)
+(`native_flags_reject_a_symlink_and_accept_its_regular_target`); related
+regressions are `publication_is_bounded_sorted_and_never_promotes_symlinks_or_private_files`
 in [artifacts.rs](../src/artifacts.rs) and
 `input_reader_rejects_symlinks_and_nonregular_files` in
-[the browser tool](../tools/browser/main.rs). Passing macOS tests alone was
-insufficient evidence for that boundary.
+[the browser tool](../tools/browser/main.rs).
 
-Before claiming complete web self-development readiness, verify the combined path:
-real improvement snapshot → declared build job → delegation/judge → retained
-results → draft publication/recovery. Component checks or a standalone source
-archive build do not establish that this integrated path works. Record completed
-live checks in the PR; this document is not a live-test completion report.
+Component checks do not show that the whole self-development path works:
+improvement snapshot → build job → delegation/judge → retained results → draft
+publication and recovery. Verify that path end to end before claiming it, and
+record live checks in the PR.
 
 Remaining gaps are aggregate disk quotas/retention for workspaces and judge build
 targets; server-side operator-session expiry/rotation (the browser cookie lifetime

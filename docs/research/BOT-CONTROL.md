@@ -19,7 +19,7 @@ not introduce a second scheduler or become a prerequisite for gameplay.
 
 ## Fit with the current repository
 
-`roadmap.md` already has the right sequence in “Next: persistent worker/tool
+The roadmap at the time had the right sequence in “Next: persistent worker/tool
 environments”: durable resource identity and leases; enforced scoped egress;
 small peer teams with resource budgets separate from model slots; knowledge
 admission and room notifications; pinned game tool with a Rust adapter. “Later:

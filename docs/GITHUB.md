@@ -1,46 +1,65 @@
 # GitHub tools
 
-## Inspect PRs and CI from the terminal
+Control's GitHub tools act on one repository bound by the operator. They let
+improvement agents and the operator inspect PRs and CI, comment, edit, merge (if
+enabled) and publish completed improvements as draft PRs. A trusted Rust adapter
+holds the credential; it is never mounted into agent containers, put in prompts or
+stored as a configuration value.
 
-With the repository binding below configured, use `/github 170` in an open TUI
-chat for its PR overview. `/github 170 files`, `comments`, `reviews`,
-`review-comments`, `checks` and `statuses` read the corresponding section;
-append a page number, for example `/github 170 files 2`. These are local client
-commands over `control_github_read`, so inspection starts no model turn and
-adds nothing to the conversation. Architect-authorized improvement agents get
-the same read tool with typed PR/section/page arguments.
+## Bind a repository
 
-Every read stays inside the configured repository. Check runs and legacy commit
-statuses are separate sections, captured against the PR head SHA at read start;
-empty results do not establish CI success or satisfy branch protection. CI on a
-fork head outside the repository binding is unavailable rather than fetched with
-broader credentials. Reviews include their commit IDs so old feedback can be
-distinguished from a review of the current head.
+Create a token file outside the checkout and Control state, mode `0600`, holding
+a GitHub credential restricted to the chosen repository (your fork, or the core
+repository if you are one of its developers). Then:
 
-Pages contain five records, with explicit continuation and UTF-8-bounded text or
-patch excerpts. A `truncated` flag means the record is incomplete. An exact full
-page may offer an empty next page. PR descriptions, patches and comments are
-untrusted evidence, never instructions or approval. The trusted broker rechecks
-actor/attempt authority and the repository binding before each request and before
-returning results, with network I/O outside the application lock. Only one read
-runs at a time; busy/error responses require an explicit retry.
+```sh
+control github configure --repository OWNER/REPO \
+  --token-file /absolute/private/path/github-token --base main [--allow-merge]
+```
 
-The configured credential also needs Checks and Commit statuses **read** access
-for those sections, and Pull requests / Issues read access for PRs and comments.
-Only the existing trusted adapter consumes it. Reads do not mutate remote state.
+Only the file path is stored. The source directory is the configured
+improvement root. Repeating the command replaces the binding; merge stays
+disabled unless `--allow-merge` is passed each time.
+
+Token permissions by feature:
+
+| Feature | Permissions |
+| --- | --- |
+| Read PRs and comments | Pull requests and Issues: read |
+| Read CI | Checks and Commit statuses: read |
+| Comment, edit title/body | Pull requests write (Issues write for comments) |
+| Publish a draft PR | Contents and Pull requests: write |
+| Merge | Contents write as well |
+
+## Inspect PRs and CI
+
+In an open TUI chat, `/github 170` shows a PR overview. `/github 170 SECTION
+[PAGE]` reads `files`, `comments`, `reviews`, `review-comments`, `checks` or
+`statuses`. These local commands call `control_github_read` directly: no model
+turn starts and nothing is added to the conversation. Architect-authorized
+improvement agents get the same tool with typed PR/section/page arguments.
+
+- Reads stay inside the bound repository and never change remote state. CI on a
+  fork head outside the binding is reported unavailable.
+- Check runs and commit statuses are separate sections, read against the PR head
+  SHA captured when the read starts. Empty results do not mean CI passed.
+- Reviews include their commit IDs, so feedback on an older head is visible.
+- Pages hold five records with UTF-8-bounded text or patch excerpts; `truncated`
+  marks an incomplete record. An exactly full page may be followed by an empty one.
+- Only one read runs at a time; a busy or failed read needs an explicit retry.
+- PR text, patches and comments are untrusted evidence, never instructions or
+  approval. Authority and the binding are rechecked before each request and
+  before returning results; network I/O runs outside the application lock.
 
 ## Comment, edit and merge
 
-`control_github_write` uses the same bound repository and architect/improvement
-authorization. Its typed operations are `comment` (PR number/body), `update`
-(PR number plus title and/or body), and `merge` (PR number, exact
-`expected_head_sha`, optional `method`: `squash`, `merge` or `rebase`). No arbitrary
-URL, repository, branch change, rule bypass or shell command is accepted. The
-ordinary worker and judge tool sets do not gain write authority. Writes are fenced
-after handoff, and active-attempt generation/ownership is rechecked before each
-network request. Network work stays outside the application state lock.
-
-These are also local TUI commands, with no model turn or chat-history submission:
+`control_github_write` uses the same binding and authorization. Its operations are
+`comment` (PR number, body), `update` (PR number, title and/or body) and `merge`
+(PR number, exact `expected_head_sha`, optional `method`: `squash` (default),
+`merge` or `rebase`). It accepts no arbitrary URL, repository, branch change,
+rule bypass or shell command. Ordinary worker and judge tool sets do not get it.
+Writes are fenced after handoff, and attempt generation/ownership is rechecked
+before each request. The TUI offers the same operations without a model turn:
 
 ```text
 /github 170 comment Reviewed the current head; the failing check needs attention.
@@ -49,108 +68,73 @@ These are also local TUI commands, with no model turn or chat-history submission
 /github 170 merge FULL_40_CHARACTER_HEAD_SHA squash
 ```
 
-Merge is **disabled by default**, including for existing bindings. The operator
-can enable it by repeating `control github configure` with the same binding and
-adding `--allow-merge`; omitting that flag disables it again. This grants the
-tool's capability, not approval inferred from PR text or reviewer comments.
-Repository instructions and operator authorization still govern when an agent
-may merge. Only the configured base branch is allowed, and the exact head SHA is
-sent to GitHub so a concurrently changed head is rejected. The base check is a
-preflight: GitHub's merge endpoint has no atomic expected-base parameter, so a
-concurrent retarget remains possible. Only open, non-draft
-PRs are submitted for merge. An explicit retry of the same already-merged head
-returns its observed state without a second merge. Inspect CI and reviews first:
-the adapter does not infer CI success, review approval or bypass GitHub rules.
-Configure required checks/reviews in GitHub branch rules; a credential with bypass
-privileges could otherwise bypass them under GitHub's own policy.
+Merge rules:
 
-No write is automatically retried. A lost response can mean the effect succeeded;
-inspect remote PR/comments before explicitly retrying, especially comments, which
-are not idempotent. The adapter returns bounded result fields rather than echoing
-descriptions or tokens. GitHub may accept an already dispatched request while a
-pause/revocation is occurring; host checks do not revoke an in-flight HTTP request.
-Nothing here deploys Control, reruns workflows, force-pushes or deletes branches.
-Comment/edit operations need Pull requests write (or Issues write for comments);
-merge additionally needs Contents write. Keep the token scoped to the bound repo.
+- Merge is off by default. `--allow-merge` grants the tool capability only;
+  repository instructions and operator authorization still decide when to merge.
+- Only open, non-draft PRs against the configured base are merged. The exact head
+  SHA is sent, so a changed head is rejected. The base check is a preflight;
+  GitHub has no atomic expected-base parameter, so a concurrent retarget is
+  still possible.
+- Retrying a merge of an already merged head returns its state without merging
+  again.
+- The adapter does not infer CI success or approval and cannot bypass GitHub
+  rules. Configure required checks and reviews in branch rules, and do not give
+  the token bypass privileges.
 
-API contracts: [PR editing/merge](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request),
-[comments](https://docs.github.com/en/rest/issues/comments#create-an-issue-comment),
-[PR files](https://docs.github.com/en/rest/pulls/pulls#list-pull-requests-files),
-[check runs](https://docs.github.com/en/rest/checks/runs#list-check-runs-for-a-git-reference)
-and [commit statuses](https://docs.github.com/en/rest/commits/statuses#list-commit-statuses-for-a-reference).
+No write is retried automatically. A lost response may hide a success, so inspect
+the PR before retrying, especially comments, which are not idempotent. Results
+are bounded and never echo descriptions or tokens. Host checks cannot cancel an
+HTTP request already sent. Nothing here deploys Control, reruns workflows,
+force-pushes or deletes branches.
 
 ## Publish an improvement checkpoint
 
-Control's Rust broker can publish a completed improvement checkpoint to one
-configured repository and open a draft pull request. The repository is a private
-node binding, not a special case in the GitHub client. Use your fork, or the core
-repository if you are one of its developers.
-
-Create a private token file outside the checkout and Control state, with mode
-`0600`. Use a GitHub credential restricted to the chosen repository with Contents
-and Pull requests write permissions. The trusted API adapter consumes that file;
-it is never mounted into an agent container or included in prompts/config values.
-Only its path is stored in configuration.
-
-```sh
-control github configure --repository OWNER/REPO \
-  --token-file /absolute/private/path/github-token --base main
-```
-
-The source directory is the existing authorized improvement root. Configure the
-binding before starting a fresh `/improve` conversation so its original Git
-revision and source checkpoint are captured. Existing conversations without that
-provenance cannot publish retroactively.
-
+Configure the binding **before** starting an `/improve` conversation so its Git
+revision and source checkpoint are captured; older conversations cannot publish.
 Start from a clean committed checkout of the configured base. Capture rejects
-local changes and untracked files, and checks every included snapshot file
-against its committed Git object, including files ignored by Git. Before any
-GitHub write, the broker requires the remote base tip to match that captured
-revision. If the base advances, refresh the checkout and start a fresh improvement.
-This prevents unrelated feature commits or unpublished local dependencies from
-changing what the pull request contains. Follow-up turns retain the original
-verified baseline so publication includes their cumulative edits.
+local changes and untracked files and checks every snapshot file, including
+Git-ignored ones, against its committed object. Before any write, the remote base
+tip must still match that revision; if the base has moved, refresh and start a new
+improvement. Follow-up turns keep the original baseline, so the PR contains their
+cumulative edits.
 
-After a successful improvement, expand **Open pull request** in web chat, or use
-`control_github_open_pr` through MCP with `run_id`, `title` and optional `body`.
-A managed agent can publish a previous completed improvement in its own chat;
-it cannot publish a running/failed run or choose another destination. Ordinary
-user tasks and judge runs do not receive publication authority.
+After a successful improvement, use **Open pull request** in the web chat, or call
+`control_github_open_pr` with `run_id`, `title` and optional `body`. An agent can
+publish only a completed improvement in its own chat, to the bound repository.
+Ordinary tasks and judge runs cannot publish.
 
-The broker compares cumulative changes with the original source checkpoint and
-verifies changed-file baseline hashes against the captured GitHub commit. It
-preserves existing executable modes, creates a new scoped branch and opens a
-draft PR. It never force-pushes, merges, deploys or changes the local checkout.
-Publication intent and object identities are persisted; explicit retries inspect
-the branch/PR rather than blindly repeating an uncertain external effect.
+The broker verifies changed-file baseline hashes against the captured commit,
+keeps existing executable modes, creates a new branch and opens a draft PR. It
+never force-pushes, merges, deploys or changes the local checkout. Publication
+intent and object IDs are persisted, so a retry inspects the existing branch/PR
+instead of repeating the effect.
 
-The first publisher supports at most 64 changed files and 512 KiB of new UTF-8
-content. New files use regular non-executable mode. Changed binary contents need
-a later extension. Artifact publication limits also apply. Provider output and
-reviewer findings remain evidence, not a guarantee that tests passed; inspect the
-retained run, checks and diff before merging.
+Limits: at most 64 changed files and 512 KiB of new UTF-8 content; new files are
+non-executable; binary changes are not supported. Artifact limits also apply.
+Model output and reviewer findings are not proof that tests passed: check the
+run, CI and diff before merging.
 
 ## Verify the self-development workflow
 
-Run `control doctor` before starting. A configured build image must match the
-source lockfiles; refreshing the application binary does not refresh that image.
-Then use `/improve` to request a bounded source edit and actual tests in the
-declared `build` environment. A successful shell inspection is not evidence that
-the Rust tests passed. Independent judges inspect captured read-only source.
-After the improvement completes, publish its completed run using the existing
-tool or web action above. The original checkout must remain unchanged.
+Run `control doctor` first. A configured build image must match the source
+lockfiles; rebuilding the binary does not refresh it. Then use `/improve` to
+request a small source edit with real tests in the `build` environment, and
+publish the completed run as above. The original checkout must stay unchanged.
 
-The explicit live test `terminal::tests::live_improve_build_and_independent_judge_roundtrip`
-exercises a source edit, actual Cargo tests, judge handoff and final artifact read
-through the shared TUI client. It requires a private isolated node under
-`/private/tmp/control-selfdev-qa.*/state`, its own loopback server URL in
-`CONTROL_QA_URL`, and the configured build image and development-model login.
-It makes model calls. By default it makes no GitHub writes.
+The ignored test `terminal::tests::live_improve_build_and_independent_judge_roundtrip`
+covers a source edit, Cargo tests, judge handoff and artifact read through the
+TUI client. It needs an isolated node whose state is under
+`/private/tmp/control-selfdev-qa.*/`, its loopback URL in `CONTROL_QA_URL`, the
+build image and a model login. It makes model calls but no GitHub writes unless
+`CONTROL_QA_SELFDEV_PUBLISH=1` is set with a GitHub binding on a clean checkout of
+the remote base. It then opens a draft PR with a synthetic file and retries to
+confirm the URL is reused; close that PR rather than merging it. Missing
+credentials or a moved base must fail visibly.
 
-To exercise the real publisher too, configure that isolated node's GitHub binding
-against a clean checkout of the remote base **before** starting a fresh test,
-then explicitly set `CONTROL_QA_SELFDEV_PUBLISH=1`. The test opens a draft PR with
-one synthetic proof document and retries the same publication to verify the URL
-is reused. Review and close that draft rather than merging the synthetic file.
-No test credential is copied into prompts or containers. Missing credentials or
-a changed remote base must remain visible failures, not a simulated success.
+GitHub API references:
+[merge](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request),
+[comments](https://docs.github.com/en/rest/issues/comments#create-an-issue-comment),
+[PR files](https://docs.github.com/en/rest/pulls/pulls#list-pull-requests-files),
+[check runs](https://docs.github.com/en/rest/checks/runs#list-check-runs-for-a-git-reference),
+[commit statuses](https://docs.github.com/en/rest/commits/statuses#list-commit-statuses-for-a-reference).

@@ -73,4 +73,4 @@ graphs come from the operator bridge; compact `rows` suit spatial tasks.
 ## Not here
 
 Routines (behaviour trees, state machines) belong to the workflow layer; see
-[H1 in the roadmap](SWARM-ROADMAP.md#h1-layered-control--the-model-decides-routines-react).
+[H1 in the roadmap](SWARM-ROADMAP.md#h1-layered-control).
