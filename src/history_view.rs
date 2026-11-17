@@ -210,25 +210,31 @@ impl Filter {
     }
 }
 
-/// FNV-1a for the short chat IDs keyed per run: a page touches every run, and
-/// SipHash's DoS resistance buys nothing for IDs Control generated.
-struct Fnv(u64);
-impl Default for Fnv {
-    fn default() -> Self {
-        Self(0xcbf2_9ce4_8422_2325)
+/// A word-at-a-time multiplicative hash (as in rustc's FxHash) for the short
+/// chat IDs looked up once per run: a page touches every run, and SipHash's
+/// DoS resistance buys nothing for IDs Control generated.
+#[derive(Default)]
+struct Words(u64);
+impl Words {
+    fn mix(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(0x517c_c1b7_2722_0a95);
     }
 }
-impl std::hash::Hasher for Fnv {
+impl std::hash::Hasher for Words {
     fn finish(&self) -> u64 {
         self.0
     }
     fn write(&mut self, bytes: &[u8]) {
-        for byte in bytes {
-            self.0 = (self.0 ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3);
+        let mut chunks = bytes.chunks_exact(8);
+        for chunk in &mut chunks {
+            self.mix(u64::from_le_bytes(chunk.try_into().expect("eight bytes")));
         }
+        let mut tail = [0; 8];
+        tail[..chunks.remainder().len()].copy_from_slice(chunks.remainder());
+        self.mix(u64::from_le_bytes(tail) ^ bytes.len() as u64);
     }
 }
-type ByDm<'a, V> = HashMap<&'a str, V, std::hash::BuildHasherDefault<Fnv>>;
+type ByDm<'a, V> = HashMap<&'a str, V, std::hash::BuildHasherDefault<Words>>;
 
 /// What one listed DM's turns add up to.
 #[derive(Default)]
