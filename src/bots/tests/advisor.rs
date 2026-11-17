@@ -38,7 +38,7 @@ fn advisor_runs<'a>(state: &'a State, chat: &str) -> Vec<&'a crate::runtime::Run
 }
 fn facts(run: &crate::runtime::Run) -> Vec<Facts> {
     run.bot_turn.as_ref().unwrap().reasons.iter().filter_map(|reason| match reason {
-        Reason::Info { info: Message::Lifecycle(facts), .. } => Some(facts.clone()),
+        Reason::Info { info: Message::Lifecycle(facts), .. } => Some((**facts).clone()),
         _ => None,
     }).collect()
 }

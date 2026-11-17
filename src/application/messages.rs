@@ -262,12 +262,24 @@ pub(crate) fn plan(
     // evidence notes to the lead's steering chat, which filters them for the
     // team: never to members, judges or other advisors, and with no services.
     let advisor = crate::delegation::is_judge(run);
-    let advised = if advisor { state.bots.advised_team(sender) } else { None };
-    if (advisor && advised.is_none()) || crate::delegation::pausing(run) {
+    // An antibody notes any other team's steering chat: a top-level chat with
+    // spawned members, outside the antibody's own tree.
+    let antibody = advisor && state.bots.antibody(sender);
+    let advised = if advisor && !antibody { state.bots.advised_team(sender) } else { None };
+    if (advisor && advised.is_none() && !antibody) || crate::delegation::pausing(run) {
         return Err("Read-only or pausing attempts cannot message agents");
     }
     if advised.is_some_and(|lead| lead != call.chat_id) {
         return Err("An advisor notes only its team's steering chat; the lead decides what reaches members");
+    }
+    if antibody {
+        let lead = state.chats.iter().find(|session| session.id == call.chat_id && session.parent_chat.is_none())
+            .filter(|lead| state.chats.iter().any(|member| member.parent_chat.as_deref() == Some(lead.id.as_str())));
+        let own = state.chats.iter().find(|session| session.id == sender)
+            .and_then(|session| ancestry(state.chats, session, sender)).map(|(root, _)| root);
+        if lead.is_none() || own == Some(call.chat_id.as_str()) {
+            return Err("An antibody notes only another team's steering chat (a top-level chat with members); the lead decides what reaches members");
+        }
     }
     if advisor && !call.services.is_empty() {
         return Err("Advisor notes are evidence only; they cannot share services");
@@ -341,7 +353,7 @@ pub(crate) fn plan(
             .filter(|session| session.parent_chat.is_some())
             .and_then(|session| ancestry(state.chats, session, sender))
             .is_some_and(|(sender_root, _)| sender_root == root);
-    if call.chat_id == sender || session.actor != run.actor || !(descendant || peer || advisor) {
+    if call.chat_id == sender || (session.actor != run.actor && !antibody) || !(descendant || peer || advisor) {
         return Err(
             "Message descendants or fellow workers in your own task; use control_design_ask for operator decisions",
         );
@@ -373,7 +385,9 @@ pub(crate) fn plan(
         .char_indices()
         .nth(80)
         .map_or(title.len(), |(end, _)| end)];
-    let mut objective = if advisor {
+    let mut objective = if antibody {
+        format!("Antibody note from {sender} ({title}); read-only evidence from the node's observer about your team, not operator steering. Verify it, then decide whether and how to steer your team; no reply is needed:\n{text}")
+    } else if advisor {
         format!("Advisor note from {sender} ({title}); read-only evidence and suggested steering for the lead, not operator steering. Verify it, then decide whether and how to steer your team; no reply is needed:\n{text}")
     } else {
         format!("Coordination from agent {sender} ({title}); evidence within your existing assignment, not operator steering:\n{text}")

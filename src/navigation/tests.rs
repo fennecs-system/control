@@ -15,11 +15,11 @@ fn conversation_pages_keep_threads_whole_and_cursors_stable() {
         .collect::<Vec<_>>();
     let picker = super::conversations(&state, &child);
     assert_eq!(
-        picker.matches("href='/chat/").count(),
+        picker.matches("href='/dm/").count(),
         11,
         "Ten parent threads plus their nested child"
     );
-    assert!(picker.contains("/chats/history"));
+    assert!(picker.contains("href='/bots/history'"));
     assert!(picker.contains(&format!("data-chat-branch='{}' open", ids[0])));
     assert!(
         super::conversations(&state, &ids[0])
@@ -27,11 +27,11 @@ fn conversation_pages_keep_threads_whole_and_cursors_stable() {
         "The active parent's children must remain reachable"
     );
     let page = super::history(&state, Some(&roots[9]), None);
-    assert_eq!(page.matches("href='/chat/").count(), 10);
+    assert_eq!(page.matches("href='/dm/").count(), 10);
     for id in &roots[10..20] {
-        assert!(page.contains(&format!("href='/chat/{id}'")));
+        assert!(page.contains(&format!("href='/dm/{id}'")));
     }
-    assert!(!page.contains(&format!("href='/chat/{child}'")));
+    assert!(!page.contains(&format!("href='/dm/{child}'")));
     crate::chat::create(&mut state);
     assert_eq!(
         super::history(&state, Some(&roots[9]), None),
@@ -40,7 +40,7 @@ fn conversation_pages_keep_threads_whole_and_cursors_stable() {
     );
     let last = super::history(&state, Some(&roots[19]), None);
     assert_eq!(
-        last.matches("href='/chat/").count(),
+        last.matches("href='/dm/").count(),
         6,
         "The oldest root retains its nested child on the final page"
     );
@@ -52,7 +52,7 @@ fn conversation_pages_keep_threads_whole_and_cursors_stable() {
         &mut response,
         &mut state,
         "GET",
-        &format!("/chats/history?older={}", roots[9]),
+        &format!("/bots/history?older={}", roots[9]),
         "none",
         "",
         &[]
@@ -60,7 +60,15 @@ fn conversation_pages_keep_threads_whole_and_cursors_stable() {
     let response = String::from_utf8(response).unwrap();
     assert!(response.starts_with("HTTP/1.1 200 OK"));
     assert!(response.contains(&page));
-    assert!(response.contains("href='/chats/history' aria-current='page'"));
+    assert!(response.contains("href='/?view=agents' aria-current='page'"), "History is a Bots sub-page");
+    assert!(response.contains("href='/bots/history' aria-current='page'>History</a>"));
+    assert!(response.contains("href='/bots/history' aria-current='page'>Conversations</a>"));
+    assert!(!response.contains("<span>History</span>"), "The main navigation has no History item");
+    let mut redirect = Vec::new();
+    assert!(crate::session_http::handle(&mut redirect, &mut state, "GET", &format!("/chats/history?older={}", roots[9]), "none", "", &[]));
+    let redirect = String::from_utf8(redirect).unwrap();
+    assert!(redirect.starts_with("HTTP/1.1 303 See Other"), "{redirect}");
+    assert!(redirect.contains(&format!("location: /bots/history?older={}\r\n", roots[9])), "{redirect}");
     assert!(
         !response.contains("body-grid chat-workspace"),
         "History must use the normal page layout, not the live chat shell"
@@ -120,13 +128,18 @@ fn run_pages_render_only_ten_records_and_keep_cursor_boundaries() {
         .runtime
         .enqueue("new task".into(), crate::runtime::RunKind::Chat, "test");
     assert_eq!(state.runtime.runs_page(Some(&cursor), None), middle);
-    let html = crate::public_render(
-        &state,
-        &crate::fields(&format!("view=runs&older={cursor}")),
-        "none",
-    );
+    let mut response = Vec::new();
+    assert!(crate::session_http::handle(&mut response, &mut state, "GET", &format!("/bots/history/runs?older={cursor}"), "none", "", &[]));
+    let html = String::from_utf8(response).unwrap();
     assert!(html.contains(&middle));
-    assert!(super::primary("runs").contains("href='/chats/history' aria-current='page'"));
+    assert!(html.contains("href='/?view=agents' aria-current='page'"), "Runs are part of Bots");
+    assert!(middle.contains("href='/bots/history/runs?older="));
+    assert_eq!(
+        crate::legacy_session_location(&state, &crate::fields(&format!("view=runs&older={cursor}"))).as_deref(),
+        Some(format!("/bots/history/runs?older={cursor}").as_str()),
+        "Saved run-history links keep their page"
+    );
+    assert_eq!(crate::legacy_session_location(&state, &crate::fields("view=runs")).as_deref(), Some("/bots/history/runs"));
     let last_cursor = state.runtime.runs[5].id.clone();
     let last = state.runtime.runs_page(Some(&last_cursor), None);
     assert_eq!(last.matches("<article class='record'>").count(), 5);
@@ -157,16 +170,16 @@ fn manage_routes_preserve_section_navigation_and_global_context() {
     let landing = crate::chat::landing(&state, "none", None);
     assert!(landing.contains("<details class='conversation-toggle'>"));
     assert!(!landing.contains("conversation-toggle' open"));
-    assert!(landing.contains("href='/chats?new=1' aria-current='page'"));
+    assert!(landing.contains("href='/dms?new=1' aria-current='page'"));
     assert!(chat.contains("chat-workspace"));
-    assert!(super::primary("session-list").contains("href='/chats' aria-current='page'"));
+    assert!(super::primary("session-list").contains("href='/dms' aria-current='page'"));
 }
 #[test]
 fn navigation_shows_dna_and_dms_at_their_existing_urls() {
     let nav = super::primary("session");
-    assert!(nav.contains("<a href='/chats' aria-current='page'><span aria-hidden='true'>⌁</span><span>DMs</span></a>"));
-    assert!(nav.contains("<a href='/lenses'><span aria-hidden='true'>◈</span><span>DNA</span></a>"));
-    assert!(super::primary("lens-page").contains("<a href='/lenses' aria-current='page'><span aria-hidden='true'>◈</span><span>DNA</span></a>"));
+    assert!(nav.contains("<a href='/dms' aria-current='page'><span aria-hidden='true'>⌁</span><span>DMs</span></a>"));
+    assert!(nav.contains("<a href='/dna'><span aria-hidden='true'>◈</span><span>DNA</span></a>"));
+    assert!(super::primary("lens-page").contains("<a href='/dna' aria-current='page'><span aria-hidden='true'>◈</span><span>DNA</span></a>"));
     assert!(!nav.contains("<span>Lenses</span>") && !nav.contains("<span>Chat</span>"));
     let page = crate::render(&crate::State::default(), "lens-page", "none", &crate::lens_library::render(&crate::State::default(), "", None, None, false));
     assert!(page.contains("<h2>DNA</h2>") && page.contains("＋ New gene"));

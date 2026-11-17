@@ -243,13 +243,15 @@ pub(super) fn overview(state: &State, session: &crate::chat::Session, query: &Ha
     };
     format!(
         "<section class='memory-tree'><span class='eyebrow'>DM / MEMORYTREE</span><h2>MemoryTree</h2>\
-<p class='mt-links'><a href='/chat/{chat}'>Return to DM</a> · <a href='/?view=providers'>MemoryTree model and window settings</a> · <a href='/chat/{chat}/compaction/read'>Read retained evidence</a></p>\
+<p class='mt-links'><a href='{}'>Return to DM</a> · <a href='/?view=providers'>MemoryTree model and window settings</a> · <a href='{}'>Read retained evidence</a></p>\
 <p class='mt-stats'>{len} entries · {summaries} summary block{} · {pending} pending · {verbatim} verbatim · compactor {} {status}{edited}</p>{surgery}\
 <div class='mt-legend' aria-label='Legend'><span><i class='mt-sw mt-sw-sum'></i>Summary</span><span><i class='mt-sw mt-sw-rev'></i>Operator revision</span><span><i class='mt-sw mt-sw-pending'></i>Not summarised yet</span><span><i class='mt-sw mt-sw-entry'></i>Verbatim entry</span><span><i class='mt-sw mt-sw-pin'></i>Pinned</span><span><i class='mt-sw mt-sw-drop'></i>Dropped from agent view</span></div>\
 <div class='mt-visual' tabindex='0' role='region' aria-label='MemoryTree diagram; scroll horizontally on small screens'>{}</div>\
 <p class='mt-hint'>Older history folds into aligned summary blocks (level L covers 2<sup>L</sup> entries); recent entries stay verbatim. Select a block to expand its children, summary, versions and source; regenerate with an emphasis, pin or drop entries there. Ranges are zero-based and end-exclusive. Summaries are untrusted evidence; the original journal is never rewritten.</p>\
 <iframe class='mt-detail' name='memory-detail' title='MemoryTree block detail' src='{}'></iframe>\
 <details class='mt-meta'><summary>Raw MemoryTree metadata</summary><pre>{}</pre></details></section>",
+        esc(&crate::url_names::dm(chat)),
+        esc(&evidence_url(chat)),
         if summaries == 1 { "" } else { "s" },
         esc(model.as_deref().unwrap_or("off")),
         svg(chat, &cells, len, edits, view.map_or("?", |v| v.model.as_str()), focus),
@@ -483,7 +485,7 @@ fn detail_page(d: &Detail, nodes: io::Result<Loaded>) -> String {
                         let _ = write!(body, "<details class='mt-version'><summary>automatic summary</summary><pre class='mt-text-block'>{}</pre></details>", esc(text));
                     }
                     if node.children.is_empty() {
-                        let _ = write!(body, "<p class='mt-links'><a href='/chat/{chat}/compaction/read?root={}&amp;path={}&amp;source=true' target='_top'>Read original source entries</a></p>", esc(&d.tree.as_ref().map(|t| t.1.clone()).unwrap_or_default()), d.tree.as_ref().map(|t| t.2.iter().map(usize::to_string).collect::<Vec<_>>().join(".")).unwrap_or_default());
+                        let _ = write!(body, "<p class='mt-links'><a href='{}?root={}&amp;path={}&amp;source=true' target='_top'>Read original source entries</a></p>", esc(&evidence_url(chat)), esc(&d.tree.as_ref().map(|t| t.1.clone()).unwrap_or_default()), d.tree.as_ref().map(|t| t.2.iter().map(usize::to_string).collect::<Vec<_>>().join(".")).unwrap_or_default());
                     }
                     if let Some(busy) = d.regenerating {
                         let _ = write!(body, "<p class='mt-note'>Regenerating entries {}–{}… reload the overview to see the revision.</p>", busy.start, busy.end());
@@ -532,7 +534,7 @@ pub(crate) fn http(stream: &mut impl std::io::Write, state: &Arc<Mutex<State>>, 
     if recall::http(stream, state, method, path, query) {
         return true;
     }
-    let Some(rest) = path.strip_prefix("/chat/") else {
+    let Some(rest) = path.strip_prefix("/dm/") else {
         return false;
     };
     let Some((chat, operation)) = rest.split_once('/') else {

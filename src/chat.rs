@@ -85,7 +85,7 @@ pub fn discussion_link(view: &str) -> String {
     }
     design_topic(view)
         .map(|(topic, _)| {
-            format!("<a class='discuss-page' href='/chats?discuss={topic}'>Discuss design ↗</a>")
+            format!("<a class='discuss-page' href='/dms?discuss={topic}'>Discuss design ↗</a>")
         })
         .unwrap_or_default()
 }
@@ -117,7 +117,7 @@ pub fn landing_mode(state: &State, lens: &str, topic: Option<&str>, improve: boo
     } else {
         Vec::new()
     };
-    html.push_str(&format!("<div class='conversation-empty'><h1>What are we working on?</h1>{context}</div><form class='conversation-composer' id='chat-list-new' method='post' action='/chats'><textarea name='message' rows='3' aria-label='First message' placeholder='Message Control…'>{}</textarea>{}{}<div class='composer-footer'>{}<div class='room-tabs' role='radiogroup' aria-label='Room'><label class='room-tab'><input type='radio' name='room' value='' checked><span>No room</span></label>{rooms}</div><button class='send-message' aria-label='Send message'>↑</button></div></form></section>",escape(&draft),command_menu(&Actor::LocalOperator),discussion.map(|(key,_)|format!("<input type='hidden' name='design_context' value='{key}'>")).unwrap_or_default(),crate::lens_library::choices(state,&selected,"chat-list-new"),rooms=crate::rooms::NAMES.iter().map(|room|format!("<label class='room-tab'><input type='radio' name='room' value='{room}'><span>#{room}</span></label>")).collect::<String>()));
+    html.push_str(&format!("<div class='conversation-empty'><h1>What are we working on?</h1>{context}</div><form class='conversation-composer' id='chat-list-new' method='post' action='/dms'><textarea name='message' rows='3' aria-label='First message' placeholder='Message Control…'>{}</textarea>{}{}<div class='composer-footer'>{}<div class='room-tabs' role='radiogroup' aria-label='Room'><label class='room-tab'><input type='radio' name='room' value='' checked><span>No room</span></label>{rooms}</div><button class='send-message' aria-label='Send message'>↑</button></div></form></section>",escape(&draft),command_menu(&Actor::LocalOperator),discussion.map(|(key,_)|format!("<input type='hidden' name='design_context' value='{key}'>")).unwrap_or_default(),crate::lens_library::choices(state,&selected,"chat-list-new"),rooms=crate::rooms::NAMES.iter().map(|room|format!("<label class='room-tab'><input type='radio' name='room' value='{room}'><span>#{room}</span></label>")).collect::<String>()));
     html
 }
 /// Re-show a rejected composer submission: escaped error above the form and the draft restored.
@@ -485,7 +485,7 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
             crate::projects::request_named(state,id,path,Some(name))?;
         }else{crate::projects::request(state,id,path)?;}
         let session = state.chats.iter_mut().find(|s| s.id == id).unwrap();
-        session.messages.push(Message { speaker: Default::default(), text: text.trim().into(), run_id: None, reply: format!("Review and approve folder access: /chat/{id}/project") });
+        session.messages.push(Message { speaker: Default::default(), text: text.trim().into(), run_id: None, reply: format!("Review and approve folder access: /dm/{id}/project") });
         session.project.as_mut().unwrap().message_index=Some(session.messages.len()-1);
         return Ok(());
     }
@@ -544,14 +544,14 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
         }
         let child = fork(state, id, question.trim(), source)?;
         let session = state.chats.iter_mut().find(|s| s.id == id).unwrap();
-        session.messages.push(Message { speaker: Default::default(), text: text.trim().into(), run_id: None, reply: format!("Agent conversation: /chat/{child}") });
+        session.messages.push(Message { speaker: Default::default(), text: text.trim().into(), run_id: None, reply: format!("Agent conversation: /dm/{child}") });
         session.revision = session.revision.saturating_add(1);
         return Ok(());
     }
     if let Some(objective) = commands::tail(text.trim(), Kind::Spawn) {
         let child = fork(state, id, objective, source)?;
         let session = state.chats.iter_mut().find(|s| s.id == id).unwrap();
-        session.messages.push(Message { speaker: Default::default(), text: text.trim().into(), run_id: None, reply: format!("Agent conversation: /chat/{child}") });
+        session.messages.push(Message { speaker: Default::default(), text: text.trim().into(), run_id: None, reply: format!("Agent conversation: /dm/{child}") });
         session.revision = session.revision.saturating_add(1);
         return Ok(());
     }
@@ -825,7 +825,7 @@ pub fn pending_requests(state: &State) -> Value {
     let waiting = state.runtime.runs.iter()
         .filter(|run| run.status == "waiting" && run.question.as_ref().is_some_and(|q| q.answer.is_none()))
         .filter_map(|run| run.chat_id.as_deref());
-    let chats = waiting.chain(crate::bots::pending_chats(state)).chain(crate::ports::pending_chats(state));
+    let chats = waiting.chain(crate::bots::pending_chats(state)).chain(crate::ports::pending_chats(state)).chain(crate::intel::pending_chats(state));
     let mut roots = Vec::new();
     for chat in chats {
         let root = lineage(state, chat).last().unwrap_or(chat);
@@ -835,8 +835,8 @@ pub fn pending_requests(state: &State) -> Value {
     json!(roots.into_iter().filter_map(|id| {
         let session = state.chats.iter().find(|s| s.id == id && valid_id(&s.id))?;
         authorize(&session.actor, Action::Task).ok()?;
-        let entry = json!({"chat_id":id,"title":crate::callsigns::name_or_id(&state.chats,id),"pending_questions":crate::design::pending_json(state,id),"pending_bots":crate::bots::pending_json(state,id),"pending_ports":crate::ports::pending_json(state,id)});
-        ["pending_questions","pending_bots","pending_ports"].iter().any(|k| entry[k].as_array().is_some_and(|a| !a.is_empty())).then_some(entry)
+        let entry = json!({"chat_id":id,"title":crate::callsigns::name_or_id(&state.chats,id),"pending_questions":crate::design::pending_json(state,id),"pending_bots":crate::bots::pending_json(state,id),"pending_ports":crate::ports::pending_json(state,id),"pending_notices":crate::intel::pending_json_tree(state,id)});
+        ["pending_questions","pending_bots","pending_ports","pending_notices"].iter().any(|k| entry[k].as_array().is_some_and(|a| !a.is_empty())).then_some(entry)
     }).collect::<Vec<_>>())
 }
 pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
@@ -847,14 +847,14 @@ pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
         .map(|r| format!(" · <a href='/?view=rooms&channel={r}'>#{r} ↗</a>"))
         .unwrap_or_default();
     let lenses = selected_lenses(session);
-    let room = format!("{room}{}", session.parent_chat.as_deref().filter(|parent| valid_id(parent)).map(|parent| format!("<a href='/chat/{parent}'>Parent DM ↗</a>")).unwrap_or_default());
     let room = format!("{room}<a href='{}'>MemoryTree ↗</a>", crate::compaction::memory_url(id));
+    let room = format!("{room}{}", session.parent_chat.as_deref().filter(|parent| valid_id(parent)).map(|parent| format!("<a href='/dm/{parent}'>Parent DM ↗</a>")).unwrap_or_default());
     let mode = if session.improve_mode {
         "<span class='chat-command active-command' title='Use /improve off to return to regular chat'>/improve</span>"
     } else {
         ""
     };
-    Ok(format!("<section class='conversation'><div class='conversation-heading'>{}<h2>{}</h2>{mode}<span class='conversation-links'>{room}<a href='/chat/{id}/artifacts'>Artifacts ↗</a></span>{}<details class='chat-requests'><summary>Requests <span class='request-count' aria-live='polite'></span></summary><aside class='request-drawer' aria-label='Pending requests'><iframe class='chat-requests-frame' data-live-chat src='/chat/{id}/requests' title='Pending requests'></iframe></aside></details></div><div class='conversation-main'><iframe class='chat-transcript' data-live-chat src='/chat/{id}/transcript#latest' title='Conversation'></iframe><form class='conversation-composer' id='session-message' method='post' action='/chat/{id}/messages'><textarea name='message' required rows='3' aria-label='Message' placeholder='Message Control…'></textarea>{}<div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></div></section>",crate::navigation::conversation_button(state,id),escape(&crate::callsigns::name_or_id(&state.chats,id)),crate::scores::line(state,id),command_menu(&session.actor),crate::lens_library::choices(state,&lenses,"session-message")))
+    Ok(format!("<section class='conversation'><div class='conversation-heading'>{}<h2>{}</h2>{mode}<span class='conversation-links'>{room}<a href='/dm/{id}/artifacts'>Artifacts ↗</a></span>{}<details class='chat-requests'><summary>Requests <span class='request-count' aria-live='polite'></span></summary><aside class='request-drawer' aria-label='Pending requests'><iframe class='chat-requests-frame' data-live-chat src='/dm/{id}/requests' title='Pending requests'></iframe></aside></details></div><div class='conversation-main'><iframe class='chat-transcript' data-live-chat src='/dm/{id}/transcript#latest' title='Conversation'></iframe><form class='conversation-composer' id='session-message' method='post' action='/dm/{id}/messages'><textarea name='message' required rows='3' aria-label='Message' placeholder='Message Control…'></textarea>{}<div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></div></section>",crate::navigation::conversation_button(state,id),escape(&crate::callsigns::name_or_id(&state.chats,id)),crate::scores::line(state,id),command_menu(&session.actor),crate::lens_library::choices(state,&lenses,"session-message")))
 }
 fn command_text(text: &str) -> String {
     if let Some(command) = commands::parse(text) {
@@ -907,9 +907,9 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
         let opened=session.project.as_ref().and_then(|p|p.mounts.iter().find(|m|m.message_index==Some(position)));
         let folder_reply=folder_request.then(||opened.map(|m|format!("Opened /workspace/{}",m.name)).unwrap_or_else(||"Folder request replaced by a later request.".into()));
         let reply = folder_reply.as_deref().unwrap_or(run_reply);
-        let reply = reply.strip_prefix("Agent conversation: /chat/")
+        let reply = reply.strip_prefix("Agent conversation: ").and_then(crate::url_names::dm_route)
             .filter(|child| valid_id(child) && state.chats.iter().any(|c| c.id == *child && c.parent_chat.as_deref() == Some(id)))
-            .map(|child| format!("<a href='/chat/{child}' target='_top'>Agent conversation ↗</a>"))
+            .map(|child| format!("<a href='/dm/{child}' target='_top'>Agent conversation ↗</a>"))
             .unwrap_or_else(|| escape(reply));
         let question = run
             .filter(|r| ["running","waiting","continued"].contains(&r.status.as_str()))
@@ -936,13 +936,13 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
         if let Some(child)=run.and_then(|r|r.delegation.as_ref()).and_then(|d|d.child.as_deref())
             .and_then(|run_id|state.runtime.runs.iter().find(|r|r.id==run_id))
             .and_then(|r|r.chat_id.as_deref()).filter(|child|valid_id(child)) {
-            html.push_str(&format!("<p class='message-status'><a href='/chat/{}' target='_top'>Delegated conversation ↗</a></p>",escape(child)));
+            html.push_str(&format!("<p class='message-status'><a href='/dm/{}' target='_top'>Delegated conversation ↗</a></p>",escape(child)));
         }
         if let Some(attempts) = run.map(|r|&r.attempts) {
             for (index, attempt) in attempts.iter().enumerate() {
                 // One compact line per attempt; titles carry the full wording.
                 let parts=attempt.status(index);
-                let input=run.filter(|_|attempt.context_trace.is_some()).map(|run|format!("<a target='_top' href='/chat/{}/context?run={}&amp;attempt={}' title='Control input for attempt {}'>input ↗</a>",escape(id),escape(&run.id),index+1,index+1));
+                let input=run.filter(|_|attempt.context_trace.is_some()).map(|run|format!("<a target='_top' href='/dm/{}/context?run={}&amp;attempt={}' title='Control input for attempt {}'>input ↗</a>",escape(id),escape(&run.id),index+1,index+1));
                 if parts.len()>1 || input.is_some() {
                     let mut line=parts.iter().map(|p|format!("<span title='{}'>{}</span>",escape(&p.title),escape(&p.text))).collect::<Vec<_>>();
                     line.extend(input);
@@ -990,7 +990,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
         let agents = activity.iter().map(|entry| entry.chat).collect::<std::collections::HashSet<_>>().len();
         html.push_str(&format!("<details class='run-activity' data-transcript-key='agent-activity'><summary>Agent activity · {agents} active {}</summary>",if agents == 1 {"agent"} else {"agents"}));
         for entry in activity {
-            html.push_str(&format!("<p class='message-status'><a target='_top' href='/chat/{}'>View agent ↗</a></p>{}",escape(entry.chat),command_html(&entry.activity)));
+            html.push_str(&format!("<p class='message-status'><a target='_top' href='/dm/{}'>View agent ↗</a></p>{}",escape(entry.chat),command_html(&entry.activity)));
         }
         html.push_str("</details>");
     }
@@ -1011,7 +1011,7 @@ pub fn requests(state: &State, id: &str) -> Result<String, &'static str> {
     for folder in folders { html.push_str(&crate::projects::panel(state,&folder.id)); }
     for run in questions {
         let question = run.question.as_ref().unwrap();
-        html.push_str(&format!("<article class='assistant-message pending-decision' data-transcript-key='decision-{}'><p class='message-status'>Agent decision · <a target='_top' href='/chat/{}'>View agent ↗</a></p>{}</article>",escape(&question.id),escape(run.chat_id.as_deref().unwrap_or("")),crate::design::render(question,id,true)));
+        html.push_str(&format!("<article class='assistant-message pending-decision' data-transcript-key='decision-{}'><p class='message-status'>Agent decision · <a target='_top' href='/dm/{}'>View agent ↗</a></p>{}</article>",escape(&question.id),escape(run.chat_id.as_deref().unwrap_or("")),crate::design::render(question,id,true)));
     }
     html.push_str(&crate::ports::pending_panel(state,id));
     html.push_str(&crate::bots::pending_panel(state,id));
@@ -1031,6 +1031,7 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
         "control.requests.list" => Ok(pending_requests(state)),
         "control.chat.read" => detail(state, id()?),
         "control.run.scores" => crate::scores::read(state, id()?),
+        "control.intel.brief" => crate::intel::tool(state, arguments),
         "control.chat.rename" => {
             let id = id()?;
             rename(state, id, arguments["name"].as_str().unwrap_or(""))?;

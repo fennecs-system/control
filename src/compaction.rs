@@ -18,10 +18,14 @@ mod surgery;
 pub(crate) mod tree;
 pub use recall::Tools;
 pub use surgery::{Edits, Op, edit, regenerate};
-/// The MemoryTree page for a DM. One place builds it, so a route rename
-/// changes one line.
+/// The MemoryTree page for a DM (its earlier `compaction` address redirects
+/// here; see `url_names`).
 pub(crate) fn memory_url(chat: &str) -> String {
-    format!("/chat/{chat}/memory")
+    format!("{}/memory", crate::url_names::dm(chat))
+}
+/// The retained-evidence reader for a DM.
+pub(crate) fn evidence_url(chat: &str) -> String {
+    format!("{}/compaction/read", crate::url_names::dm(chat))
 }
 pub(crate) use tree::http;
 const NODE_BYTES: usize = 2_200_000;

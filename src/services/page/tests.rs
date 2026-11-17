@@ -31,7 +31,7 @@ fn cards_escape_commands_and_show_live_data_only_when_observed() {
     assert!(plain.contains("&lt;script&gt;alert(1)&lt;/script&gt;") && !plain.contains("<script>"));
     assert!(!plain.contains("second line"));
     assert!(
-        plain.contains("Requested") && plain.contains("until stopped") && plain.contains("/chat/")
+        plain.contains("Requested") && plain.contains("until stopped") && plain.contains("/dm/")
     );
     assert!(plain.contains("action='/tools/services'") && plain.contains("Stop service"));
     assert!(plain.contains("/workspace retained for this chat"));

@@ -118,8 +118,8 @@ applies.
 
 ### Inspect and recall
 
-**MemoryTree** in a DM (`/chat/ID/memory`; the older `/chat/ID/compaction`
-redirects there), or `/compact` in the TUI, shows the history the next turn
+**MemoryTree** in a DM (`/dm/ID/memory`; the older `/dm/ID/compaction` and
+`/chat/ID/compaction` redirect there), or `/compact` in the TUI, shows the history the next turn
 starts from as a diagram: older ranges folded into aligned summary blocks
 (level L covers 2^L entries) above the journal positions they cover, and the
 newest entries verbatim. Each block's tooltip gives its range, level, token
@@ -473,7 +473,7 @@ Claude manage their own in-session context.
 **Compaction.** A chat on a local model is compacted by the same endpoint through
 the summary tree by default, without being listed under automatic summaries;
 in-turn summaries use it too. Listing the chat under **Automatic summaries** with
-another model overrides this. The DM's MemoryTree (`/chat/ID/memory`) reports the policy
+another model overrides this. The DM's MemoryTree (`/dm/ID/memory`) reports the policy
 (`local chat model default`, `operator opt-in` or `off`).
 
 **Usage and provenance.** Step usage is summed into the attempt's token counts.

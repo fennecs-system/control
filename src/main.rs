@@ -30,13 +30,14 @@ mod delegation;
 mod delegated_results;
 mod history;
 use control::config;
-use control::{discord, identity};
+use control::{discord, identity, url_names};
 use control::discord::bridge as discord_bridge;
 mod doctor;
 mod engine;
 mod federation;
 mod github;
 mod graph_search;
+mod graveyard;
 mod knowledge;
 mod knowledge_tools;
 mod guidance;
@@ -65,6 +66,7 @@ mod rust_bench;
 mod solver;
 mod scheduler;
 mod scores;
+mod intel;
 mod services;
 mod spawning;
 mod session_http;
@@ -180,7 +182,7 @@ fn render_with_content(state: &State, view: &str, lens: &str, channel: &str, sup
         .replace("{{section_navigation}}", &navigation::secondary(view))
         .replace("{{layout_class}}", if chat_navigation { "chat-workspace" } else if view == "rooms" { "rooms-workspace" } else if navigation::managed(view) { "with-section-nav" } else { "" })
         .replace("{{page_title}}", &navigation::heading(view));
-    let content = supplied.or_else(|| if view == "monitor" { Some(usage::render(&state.runtime)) } else if view == "agents" { state.runtime.render(view,lens).map(|runs| bots::overview(state) + &runs) } else { state.runtime.render(view,lens) }).or_else(|| state.collective.render(view, channel)).unwrap_or_else(|| match view {
+    let content = supplied.or_else(|| if view == "monitor" { Some(usage::render(&state.runtime)) } else if view == "agents" { Some(bots::page(state, &graveyard::Query::default())) } else { state.runtime.render(view,lens) }).or_else(|| state.collective.render(view, channel)).unwrap_or_else(|| match view {
         "providers" => providers::render(&state.runtime),
         "tools" => tool_catalog::render(state, if channel == "general" { "" } else { channel }),
         "session" => chat::render(state,channel).unwrap_or_else(escape),
@@ -203,8 +205,8 @@ const INTERNAL_VIEWS: [&str; 7] = ["session-list", "history", "artifact-page", "
 fn public_render(state: &State, query: &HashMap<String, String>, lens: &str) -> String {
     let view = query.get("view").map(String::as_str).filter(|v| !INTERNAL_VIEWS.contains(v)).unwrap_or("hub");
     let channel = query.get(if view == "tools" { "q" } else { "channel" }).map(String::as_str).unwrap_or("general");
-    if view=="runs" {
-        return render_with_content(state,view,lens,channel,Some(state.runtime.runs_page(query.get("older").map(String::as_str),query.get("newer").map(String::as_str))));
+    if view=="agents" {
+        return render_with_content(state,view,lens,channel,Some(bots::page(state,&graveyard::Query::from(query))));
     }
     render(state, view, lens, channel)
 }
@@ -219,21 +221,30 @@ fn public_page(state: &State, query: &HashMap<String, String>, lens: &str) -> (S
         (page, control_http::Policy::Page)
     }
 }
-/// `/?view=session` predates `/chat/{id}`; send it to the page that renders chat state.
+/// `/?view=session` predates `/dm/{id}`; send it to the page that renders chat state.
+/// `/?view=runs` predates the Bots history sub-page and keeps its page cursor.
+/// `/?view=lenses` predates the DNA page at `/dna`.
 fn legacy_session_location(state: &State, query: &HashMap<String, String>) -> Option<String> {
-    (query.get("view")? == "session").then(|| {
-        query.get("channel")
+    match query.get("view")?.as_str() {
+        "runs" => Some(navigation::history_location("/bots/history/runs", query)),
+        "lenses" => Some("/dna".to_owned()),
+        "session" => Some(query.get("channel")
             .filter(|id| chat::valid_id(id) && chat::detail(state, id).is_ok())
-            .map_or_else(|| "/chats".to_owned(), |id| format!("/chat/{id}"))
-    })
+            .map_or_else(|| "/dms".to_owned(), |id| url_names::dm(id))),
+        _ => None,
+    }
 }
 const MAX_HEADER: usize = 65536;
+/// Limits follow the current path, so a legacy path redirected with its body
+/// (`/chat/ID/messages` → `/dm/ID/messages`) is admitted like its new name.
 fn body_limit(target: &str) -> usize {
     let path = target.split('?').next().unwrap_or(target);
-    if ["/knowledge/save", "/save", "/lenses/save"].contains(&path) {
+    let renamed = url_names::renamed(path);
+    let path = renamed.as_deref().unwrap_or(path);
+    if ["/knowledge/save", "/save", "/dna/save"].contains(&path) {
         512 * 1024
-    } else if ["/chats", "/mcp"].contains(&path)
-        || path.strip_prefix("/chat/").and_then(|p| p.strip_suffix("/messages"))
+    } else if ["/dms", "/mcp"].contains(&path)
+        || path.strip_prefix("/dm/").and_then(|p| p.strip_suffix("/messages"))
             .is_some_and(chat::valid_id)
     {
         control_context::limits::CHAT_REQUEST_BYTES
@@ -335,6 +346,10 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         return;
     }
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    if let Some((status, location)) = url_names::redirect(method, path, query) {
+        let _ = control_http::respond(&mut stream, status, "text/plain", b"", &format!("Location: {location}\r\n"), control_http::Policy::Page);
+        return;
+    }
     if compaction::http(&mut stream,&state,method,path,query,&data[header_end..header_end + length]){return;}
     if providers::live_http(&mut stream, &state, method, path) { return; }
     if ports::http(&mut stream, &state, method, path, &data[header_end..header_end + length]) { return; }
@@ -737,3 +752,7 @@ fn main() -> std::io::Result<()> {
 #[cfg(test)]
 #[path = "main/tests/responsiveness_tests.rs"]
 mod responsiveness_tests;
+
+#[cfg(test)]
+#[path = "main/tests/url_names_tests.rs"]
+mod url_names_tests;

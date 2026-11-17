@@ -1,12 +1,11 @@
 //! Global navigation stays independent of the selected chat context.
 const PRIMARY: &[(&str, &str, &str, &str)] = &[
     ("hub", "/", "▦", "Overview"),
-    ("session", "/chats", "⌁", "DMs"),
+    ("session", "/dms", "⌁", "DMs"),
     ("agents", "/?view=agents", "⌁", "Bots"),
-    ("history", "/chats/history", "⌁", "History"),
     ("knowledge", "/knowledge", "▤", "Knowledge"),
     ("rooms", "/?view=rooms", "#", "Rooms"),
-    ("lenses", "/lenses", "◈", "DNA"),
+    ("lenses", "/dna", "◈", "DNA"),
     ("tools", "/?view=tools", "⊞", "Tools"),
     ("monitor", "/?view=monitor", "▥", "Usage"),
     ("manage", "/?view=manage", "⚙", "Manage"),
@@ -27,7 +26,7 @@ pub fn primary(view: &str) -> String {
         "manage"
     } else {
         match view {
-            "runs" => "history",
+            "runs" | "history" => "agents",
             "session-list" | "artifact-page" => "session",
             "editor" | "knowledge-page" => "knowledge",
             "lens-page" => "lenses",
@@ -75,9 +74,26 @@ pub fn conversations(state: &crate::State, active: &str) -> String {
 pub fn history(state:&crate::State,older:Option<&str>,newer:Option<&str>)->String {
     format!("{}<section class='conversation-history'>{}</section>",history_tabs(false),conversation_window(state,"",older,newer,false))
 }
+/// History is a Bots sub-page: the live page and the record share one heading.
 pub fn history_tabs(runs: bool) -> String {
     let current = |selected| if selected {" aria-current='page'"} else {""};
-    format!("<div class='section-heading'><h2>History</h2><a href='/chats?new=1'>+ New chat</a></div><nav class='tabs' aria-label='History'><a href='/chats/history'{}>Conversations</a><a href='/?view=runs'{}>Runs</a></nav>",current(!runs),current(runs))
+    format!("<div class='section-heading'><h2>Bots<span class='slash' aria-hidden='true'>/</span>History</h2><a href='/dms?new=1'>+ New chat</a></div>{}<nav class='tabs' aria-label='History'><a href='/bots/history'{}>Conversations</a><a href='/bots/history/runs'{}>Runs</a></nav>",bots_tabs(true),current(!runs),current(runs))
+}
+/// Tabs between the live Bots page and its History sub-page.
+pub fn bots_tabs(history: bool) -> String {
+    let current = |selected| if selected {" aria-current='page'"} else {""};
+    format!("<nav class='tabs' aria-label='Bots'><a href='/?view=agents'{}>Live</a><a href='/bots/history'{}>History</a></nav>",current(!history),current(history))
+}
+/// `target` with the history page cursor (`older`/`newer`) carried over from
+/// a pre-move URL, so saved links land on the same page.
+pub fn history_location(target: &str, query: &std::collections::HashMap<String, String>) -> String {
+    let mut url = reqwest::Url::parse("http://localhost").unwrap().join(target).unwrap();
+    for key in ["older", "newer"] {
+        if let Some(id) = query.get(key).filter(|id| crate::chat::valid_id(id)) {
+            url.query_pairs_mut().append_pair(key, id);
+        }
+    }
+    url.query().map_or_else(|| url.path().to_owned(), |query| format!("{}?{query}", url.path()))
 }
 fn conversation_window(state:&crate::State,active:&str,older:Option<&str>,newer:Option<&str>,picker:bool)->String {
     use std::collections::{HashMap,HashSet};
@@ -106,7 +122,7 @@ fn conversation_window(state:&crate::State,active:&str,older:Option<&str>,newer:
         }
     }
     let current=if active.is_empty() {" aria-current='page'"}else{""};
-    let mut links=if picker {format!("<a href='/chats?new=1'{current}>+ New DM</a>")} else {String::new()};
+    let mut links=if picker {format!("<a href='/dms?new=1'{current}>+ New DM</a>")} else {String::new()};
     // One borrowed projection for the page, rather than scanning run history per chat.
     let mut latest=HashMap::new();
     if !picker {
@@ -130,7 +146,7 @@ fn conversation_window(state:&crate::State,active:&str,older:Option<&str>,newer:
             let model=run.model.as_deref().map(|model|format!(" · {}",crate::escape(model))).unwrap_or_default();
             format!("<span class='conversation-meta'>{} · {}{model}</span>",crate::escape(&run.status),crate::escape(run.backend.label()))
         }).unwrap_or_default();
-        let link=format!("<a class='conversation-link' href='/chat/{}' title='{title}' data-conversation-depth='{depth}'{current}><span class='conversation-title'>{title}</span>{metadata}</a>",chat.id);
+        let link=format!("<a class='conversation-link' href='/dm/{}' title='{title}' data-conversation-depth='{depth}'{current}><span class='conversation-title'>{title}</span>{metadata}</a>",chat.id);
         if selected.get(position+1).is_some_and(|next|next.depth>entry.depth) {
             links.push_str(&format!("<details class='conversation-branch' data-chat-branch='{}'{}><summary data-conversation-depth='{depth}'>{link}</summary><div class='conversation-children'>",chat.id,if expanded.contains(chat.id.as_str()) {" open"}else{""}));
             branches.push(entry.depth);
@@ -139,9 +155,9 @@ fn conversation_window(state:&crate::State,active:&str,older:Option<&str>,newer:
     for _ in branches {links.push_str("</div></details>");}
     if !picker && selected.is_empty() {links.push_str("<p class='muted'>No conversations yet.</p>");}
     let controls=if picker {
-        if roots.len()>crate::pagination::SIZE {"<a class='conversation-history-link' href='/chats/history'>All DMs ↗</a>".into()}else{String::new()}
+        if roots.len()>crate::pagination::SIZE {"<a class='conversation-history-link' href='/bots/history'>All DMs ↗</a>".into()}else{String::new()}
     }else{
-        crate::pagination::controls("/chats/history",(range.start>0).then(||entries[roots[range.start]].session.id.as_str()),(range.end<roots.len()).then(||entries[roots[range.end-1]].session.id.as_str()))
+        crate::pagination::controls("/bots/history",(range.start>0).then(||entries[roots[range.start]].session.id.as_str()),(range.end<roots.len()).then(||entries[roots[range.end-1]].session.id.as_str()))
     };
     let heading=if picker {"<h2>DMs</h2>"}else{""};
     format!("<aside class='section-navigation conversation-navigation'>{heading}<nav aria-label='DMs'>{links}</nav>{controls}</aside>")

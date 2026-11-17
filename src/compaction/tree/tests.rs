@@ -320,20 +320,20 @@ fn operator_forms_edit_and_redirect_to_the_memory_tree() {
     let (state, chat, dir) = published();
     let shared = Arc::new(Mutex::new(state));
     let mut out = Vec::new();
-    assert!(http(&mut out, &shared, "POST", &format!("/chat/{chat}/memory"), "", b"action=pin&at=2"));
+    assert!(http(&mut out, &shared, "POST", &memory_url(&chat), "", b"action=pin&at=2"));
     let response = String::from_utf8_lossy(&out);
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
-    assert!(response.to_lowercase().contains(&format!("location: /chat/{chat}/memory?entry=2")), "{response}");
+    assert!(response.to_lowercase().contains(&format!("location: {}?entry=2", memory_url(&chat))), "{response}");
     assert!(shared.lock().unwrap().chats[0].memory.as_ref().unwrap().pinned(2));
     let mut out = Vec::new();
-    assert!(http(&mut out, &shared, "GET", &format!("/chat/{chat}/memory/node"), "", b""));
+    assert!(http(&mut out, &shared, "GET", &format!("{}/node", memory_url(&chat)), "", b""));
     let page = String::from_utf8_lossy(&out);
     assert!(page.contains("Pinned entries") && page.contains("Edit log"));
     assert!(page.contains("frame-ancestors 'self'"), "detail pages load only in Control's frame");
     let mut out = Vec::new();
-    http(&mut out, &shared, "POST", &format!("/chat/{chat}/memory"), "", b"action=unknown");
+    http(&mut out, &shared, "POST", &memory_url(&chat), "", b"action=unknown");
     assert!(String::from_utf8_lossy(&out).starts_with("HTTP/1.1 400"));
-    assert!(!http(&mut Vec::new(), &shared, "GET", "/chat/../memory/node", "", b""));
+    assert!(!http(&mut Vec::new(), &shared, "GET", "/dm/../memory/node", "", b""));
     std::fs::remove_dir_all(dir).unwrap();
 }
 

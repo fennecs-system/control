@@ -76,7 +76,7 @@ fn malformed_parents_never_hide_chats_or_cross_identity_boundaries() {
             .is_none()
     );
     let html = crate::navigation::conversations(&state, &b);
-    assert!(!html.contains(&format!("/chat/{a}")));
+    assert!(!html.contains(&format!("/dm/{a}")));
 }
 #[test]
 fn legacy_activity_defaults_and_deep_lineages_remain_iterative() {

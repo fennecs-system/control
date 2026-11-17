@@ -8,7 +8,7 @@ fn commands_and_ids_are_bounded() {
     };
     assert_eq!(
         session_link(&actor, Some("c-child")).as_deref(),
-        Some(format!("{}/chat/c-child", crate::config::server_url()).as_str())
+        Some(format!("{}/dm/c-child", crate::config::server_url()).as_str())
     );
     assert_eq!(session_link(&actor, Some("../secret")), chat_link(&actor));
     assert!(session_link(&crate::identity::Actor::Unknown, Some("c-child")).is_none());

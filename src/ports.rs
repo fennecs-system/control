@@ -695,7 +695,7 @@ pub(crate) fn http_with_save(
         return true;
     }
     if result.is_ok() && method == "POST" && let Some(chat) = return_chat {
-        let _=control_http::respond(stream,"303 See Other","text/plain",b"",&format!("Location: /chat/{chat}\r\n"),control_http::Policy::Page);
+        let _=control_http::respond(stream,"303 See Other","text/plain",b"",&format!("Location: /dm/{chat}\r\n"),control_http::Policy::Page);
         return true;
     }
     let (status, page) = match result {

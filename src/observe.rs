@@ -349,7 +349,7 @@ const WRAPPERS: [&str; 7] = ["sudo", "env", "timeout", "nice", "watch", "command
 const PAUSES: [&str; 6] = ["sleep", "echo", "date", "true", "printf", "cd"];
 /// Whether `command` reads status only: every part of its pipeline is a
 /// reader or a pause, at least one reads, and nothing writes a file.
-fn status_style(command: &str) -> bool {
+pub(crate) fn status_style(command: &str) -> bool {
     if command.split('>').skip(1).any(|after| !after.trim_start_matches('&').trim_start().starts_with("/dev/null") && !after.starts_with('&')) {
         return false;
     }

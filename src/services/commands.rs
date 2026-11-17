@@ -251,6 +251,27 @@ fn default_timeout() -> u64 {
     120
 }
 
+/// One retained, finished command as pathology facts see it: who ran it, its
+/// stable ID, the command text and whether it failed. Copies are skipped.
+pub(crate) struct Finished<'a> {
+    pub(crate) run: &'a str,
+    pub(crate) id: &'a str,
+    pub(crate) command: &'a str,
+    pub(crate) failed: bool,
+}
+/// Every service's retained finished commands (at most `MAX_EXECUTIONS` per
+/// service), oldest first per service. No engine calls or log reads.
+pub(crate) fn finished(state: &State) -> impl Iterator<Item = Finished<'_>> {
+    state.services.iter().flat_map(|service| &service.executions)
+        .filter(|execution| execution.copy.is_none() && !execution.status.active())
+        .map(|execution| Finished {
+            run: &execution.run,
+            id: &execution.id,
+            command: &execution.command,
+            failed: !matches!(execution.status, Status::Completed) || execution.exit_code.is_some_and(|code| code != 0),
+        })
+}
+
 /// Project retained command evidence for one run; no engine calls or log reads.
 pub(crate) fn activity<'a>(
     state: &'a State,

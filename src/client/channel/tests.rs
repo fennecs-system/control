@@ -140,7 +140,7 @@ fn routing_state_is_bounded_and_platform_neutral() {
     let text = serde_json::to_string(&ledger).unwrap();
     assert_eq!(serde_json::from_str::<Ledger>(&text).unwrap(), ledger);
     assert!(serde_json::from_str::<Ledger>(r#"{"notices":[]}"#).is_ok());
-    let long = reply_text("Lead", "completed", "http://x/chat/c", &"x".repeat(1000), 300);
+    let long = reply_text("Lead", "completed", "http://x/dm/c", &"x".repeat(1000), 300);
     assert!(long.chars().count() <= 300 && long.ends_with("Full reply in chat."));
 }
 
@@ -167,7 +167,7 @@ fn the_prefix_maps_to_control_commands_both_ways() {
     assert_eq!(bang.command("!!"), "!!", "only a command word follows the prefix");
     assert_eq!(bang.command("/chats"), "/chats", "Control's own spelling still works");
     assert_eq!(bang.present("Reply /answer q-1 YOUR_ANSWER or /bot allow b"), "Reply !answer q-1 YOUR_ANSWER or !bot allow b");
-    assert_eq!(bang.present("see /usr/bin and http://x/chat/c and a/answer"), "see /usr/bin and http://x/chat/c and a/answer");
+    assert_eq!(bang.present("see /usr/bin and http://x/dm/c and a/answer"), "see /usr/bin and http://x/dm/c and a/answer");
     let slash = Settings { prefix: "/".into(), ..on() };
     assert_eq!(slash.present("/answer q"), "/answer q");
     // Routing understands the prefix, including help and decisions.
@@ -226,4 +226,47 @@ fn commands_work_with_forwarding_off_and_only_decisions_need_it() {
     // Turned off again, a reply to an old request is not a decision.
     assert_eq!(channel.route(&off, &me(), inbound(Some("m1"), "2")), None);
     assert_eq!(channel.route(&off, &me(), inbound(None, "!bot deny bot-1")), None);
+}
+
+#[test]
+fn notices_are_forwarded_once_and_a_reply_steers_their_team() {
+    let (fake, mut channel) = (Fake::default(), channel());
+    let notices = json!([{"chat_id":"c-observer","title":"Immune system",
+        "pending_notices":[{"notice_id":"notice-1","chat_id":"c-antibody","team":"c-lead","text":"Team c-lead keeps re-running a failing command"}]}]);
+    assert!(!channel.notify(&fake, &on(), &[me()], &notices));
+    assert!(!channel.notify(&fake, &on(), &[me()], &notices));
+    let posts = fake.posts.borrow().clone();
+    assert_eq!(posts.len(), 1, "forwarded once");
+    assert!(posts[0].1.contains("Notice · c-antibody") && posts[0].1.contains("keeps re-running"), "{}", posts[0].1);
+    let quiet = Settings { kinds: vec![Kind::Question], ..on() };
+    assert!(!channel.notify(&fake, &quiet, &[other()], &notices));
+    assert_eq!(fake.posts.borrow().len(), 1, "a channel may leave notices out");
+    let notice = channel.ledger.target(&me(), inbound(Some("m1"), "Pause that team")).unwrap().clone();
+    assert_eq!(reply(&notice.pending(), "Pause that team").unwrap(), Command::Send("Pause that team".into()));
+    assert!(reply(&notice.pending(), "").is_err());
+    let (pressed, text) = channel.ledger.press(&me(), "m1", "answer", Some("Look again")).unwrap();
+    assert_eq!((pressed.kind, text.as_str()), (Kind::Notice, "Look again"));
+}
+
+#[test]
+fn the_daily_brief_is_due_once_per_utc_day_after_its_hour_and_split_to_fit() {
+    let day = 1_795_000_000 - 1_795_000_000 % 86_400;
+    let settings = Settings { brief: true, brief_hour: 8, ..Default::default() };
+    assert_eq!(brief_due(&settings, "", day + 7 * 3600), None, "before the hour");
+    assert_eq!(brief_due(&settings, "", day + 8 * 3600).as_deref(), Some("2026-11-18"));
+    assert_eq!(brief_due(&settings, "2026-11-18", day + 23 * 3600), None, "delivered today");
+    assert_eq!(brief_due(&Settings::default(), "", day + 9 * 3600), None, "opt-in");
+    let markdown = (0..40).map(|n| format!("- line {n} of the brief")).collect::<Vec<_>>().join("\n");
+    let parts = split(&markdown, 200);
+    assert!(parts.len() > 1 && parts.iter().all(|part| part.chars().count() <= 200));
+    assert_eq!(parts.concat().lines().count(), 40);
+    let (fake, mut channel) = (Fake::default(), channel());
+    assert!(channel.brief(&fake, &[me(), other()], "2026-11-18", &markdown));
+    let sent = fake.posts.borrow().len();
+    assert_eq!(sent, split(&markdown, 400).len() * 2, "split to the service limit");
+    assert!(channel.brief(&fake, &[me()], "2026-11-18", &markdown), "a retry is dropped by the per-day key");
+    assert_eq!(fake.posts.borrow().len(), sent);
+    *fake.failing.borrow_mut() = Some(Posted::Retry);
+    assert!(!channel.brief(&fake, &[me()], "2026-11-19", &markdown), "a failed day is retried");
+    assert!(save_settings("fake", Settings { brief_hour: 24, ..Default::default() }).is_err());
 }

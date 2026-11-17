@@ -404,7 +404,7 @@ pub fn render(question: &Question, chat_id: &str, ready: bool) -> String {
     );
     if ready {
         for (i, option) in question.input.options.iter().enumerate() {
-            html.push_str(&format!("<form method='post' action='/chat/{chat_id}/messages' target='_top'><button name='message' value='/answer {} {}'>{}. {}{}</button></form>",crate::escape(&question.id),i+1,i+1,crate::escape(option),if question.input.recommended == Some(i) {" · recommended"} else {""}));
+            html.push_str(&format!("<form method='post' action='/dm/{chat_id}/messages' target='_top'><button name='message' value='/answer {} {}'>{}. {}{}</button></form>",crate::escape(&question.id),i+1,i+1,crate::escape(option),if question.input.recommended == Some(i) {" · recommended"} else {""}));
         }
         html.push_str("<small>Or reply with your own direction.</small>");
     } else if let Some(answer) = &question.answer {

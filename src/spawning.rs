@@ -91,7 +91,7 @@ impl Batch {
 fn advisor_allowance(state: &State, run: &crate::runtime::Run) -> Result<(), &'static str> {
     // Strictly opt-in: without the advisor lens on the root chat there is no
     // advisor option to use.
-    if !run.chat_id.as_deref().is_some_and(|chat| crate::bots::advisor_offered_for(state, chat)) {
+    if !run.chat_id.as_deref().is_some_and(|chat| crate::bots::advisor_offered_for(state, chat) || crate::bots::antibody_offered_for(state, chat)) {
         return Err(crate::bots::ADVISOR_OFF);
     }
     let root = delegation::lineage(run).root;

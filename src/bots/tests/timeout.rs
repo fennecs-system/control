@@ -17,7 +17,7 @@ fn lifecycle_facts(state: &State, advisor: &str) -> Vec<Facts> {
     bot_runs(state).into_iter().filter(|run| run.chat_id.as_deref() == Some(advisor))
         .flat_map(|run| run.bot_turn.as_ref().unwrap().reasons.iter())
         .filter_map(|reason| match reason {
-            Reason::Info { info: Message::Lifecycle(facts), .. } => Some(facts.clone()),
+            Reason::Info { info: Message::Lifecycle(facts), .. } => Some((**facts).clone()),
             _ => None,
         })
         .collect()

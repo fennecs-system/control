@@ -615,7 +615,7 @@ pub fn links(state: &State, chat: &str) -> String {
             .unwrap_or_else(|| {
                 format!("<span>Preview · {}</span>", crate::escape(&preview.status))
             });
-        html.push_str(&format!("<div class='preview-link'>{link}<form method='post' target='_top' action='/chat/{chat}/preview/stop'><input type='hidden' name='id' value='{}'><button>Stop</button></form></div>",crate::escape(&preview.id)));
+        html.push_str(&format!("<div class='preview-link'>{link}<form method='post' target='_top' action='/dm/{chat}/preview/stop'><input type='hidden' name='id' value='{}'><button>Stop</button></form></div>",crate::escape(&preview.id)));
     }
     html
 }
