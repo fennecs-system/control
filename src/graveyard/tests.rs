@@ -46,7 +46,6 @@ fn dead_bots_are_listed_newest_first_with_why_they_stopped() {
         assert!(!ids(&graves).contains(excluded), "plain chats, active turns and defined bots are not dead");
     }
     let html = render(&state, &Query::default());
-    assert!(html.contains("class='tombstone'") && html.contains("[X]"), "the header draws the tombstone inline");
     assert!(!html.contains("<img") && !html.contains("cyan"), "no images or cyan accents");
     let rows = html.split("<li class='grave'").skip(1).collect::<Vec<_>>();
     assert_eq!(rows.len(), 5);
@@ -94,9 +93,9 @@ fn pages_are_bounded_and_cursors_and_search_select_rows() {
     assert!(ids(&by_name).contains(&chats[3]), "and names");
     assert!(by_name.iter().all(|grave| grave.name.to_lowercase().contains(&name.to_lowercase())));
     let html = render(&state, &query);
-    assert!(html.contains("11 matches for “TUNNEL survey”"));
-    assert!(html.contains("value='TUNNEL survey'"));
-    assert!(html.contains("href='/?view=agents#graveyard'>Clear"));
+    assert!(html.contains("11 dead matches for “TUNNEL survey”"));
+    let page = crate::bots::page(&state, &query);
+    assert!(page.contains("value='TUNNEL survey'") && page.contains("href='/?view=agents'>Clear"), "the page search box keeps the query");
     let long = Query::from(&crate::fields(&format!("q={}&older=bad/id", "x".repeat(500))));
     assert_eq!(long.search.chars().count(), QUERY_CHARS);
     assert_eq!(long.older, None, "cursors must be chat ids");
@@ -138,7 +137,7 @@ fn bots_page_routes_serve_the_graveyard_and_its_next_pages() {
 }
 
 #[test]
-fn tombstones_form_a_grid_sharing_one_fennec_skull() {
+fn headstones_form_a_grid_sharing_one_fennec_skull() {
     let mut state = State::default();
     let mut newest = String::new();
     for index in 0..(PAGE + 5) {
@@ -147,15 +146,12 @@ fn tombstones_form_a_grid_sharing_one_fennec_skull() {
     let page = crate::public_render(&state, &crate::fields("view=agents"), "none");
     let html = render(&state, &Query::default());
     assert!(html.contains("<ol class='graveyard-grid'><li class='grave' data-reason='timeout'>"), "one grid of stones, not table rows");
-    assert!(!html.contains("graveyard-rows") && !html.contains("grave-x"));
-    // The search form stays above the stones.
-    assert!(html.find("class='graveyard-search'") < html.find("class='graveyard-grid'"));
-    // The skull is defined once and every stone (and the header) reuses it.
+    assert!(!html.contains("graveyard-rows") && !html.contains("grave-x") && !html.contains("tombstone"));
+    // The skull is defined once and every stone reuses it.
     assert_eq!(page.matches("<symbol").count(), 1);
     assert_eq!(page.matches("id='fennec-skull'").count(), 1);
-    assert_eq!(page.matches("href='#fennec-skull'").count(), PAGE + 1, "50 stones and the header tombstone");
-    assert!(!html.split("</symbol>").nth(1).unwrap().contains("<path d="), "stones and the header carry no skull paths");
-    assert!(html.contains("class='ts-skull' href='#fennec-skull'"), "the header tombstone shows the fennec skull too");
+    assert_eq!(page.matches("href='#fennec-skull'").count(), PAGE, "one use per stone");
+    assert!(!html.split("</symbol>").nth(1).unwrap().contains("<path d="), "stones carry no skull paths");
     // One stone: skull, name to its DM, why and when it stopped, revive.
     let stone = html.split("<li class='grave'").nth(1).unwrap().split("</li>").next().unwrap();
     let name = crate::callsigns::name(&state.chats, &newest).unwrap().into_owned();
@@ -163,6 +159,7 @@ fn tombstones_form_a_grid_sharing_one_fennec_skull() {
     assert!(stone.contains("<span class='grave-reason'>timeout</span>"));
     assert!(stone.contains("<time class='grave-when' datetime='31539240' title='1971-01-01 00:54 UTC'>1971-01-01</time>"), "a short date; the time is a tooltip");
     assert!(stone.ends_with(&format!("<a class='grave-revive' href='/dm/{newest}' title='{REVIVE}'>revive ↗</a>")));
+    assert!(stone.len() < 600, "a stone stays light: {} bytes", stone.len());
     // Scroll fetches append stones that reuse the page's symbol.
     let cursor = dead(&state, "")[PAGE - 1].chat.id.clone();
     let more = rows(&dead(&state, ""), &Query { older: Some(cursor), ..Default::default() });
@@ -172,27 +169,95 @@ fn tombstones_form_a_grid_sharing_one_fennec_skull() {
     // Search results use the same stones.
     let found = render(&state, &Query { search: "tunnel 7".into(), ..Default::default() });
     assert!(found.contains("<ol class='graveyard-grid'><li class='grave'") && found.matches("id='fennec-skull'").count() == 1);
-    let empty = render(&State::default(), &Query::default());
-    assert!(empty.contains("id='fennec-skull'"), "the header skull needs the symbol even with no stones");
 }
 
 #[test]
-fn stagger_continues_across_appended_pages() {
+fn the_fennec_skull_is_faceted_earless_and_toothed() {
+    let symbol = SKULL_SYMBOL.split("<symbol").nth(1).unwrap();
+    let paths = symbol.split(" d='").skip(1).map(|path| path.split('\'').next().unwrap()).collect::<Vec<_>>();
+    assert!(paths.len() >= 4);
+    for path in &paths {
+        assert!(!path.contains(|c: char| "CcSsQqTtAa".contains(c)), "straight facets only, no curves: {path}");
+    }
+    // The outline stays within the cranium: nothing rises above it as ears would.
+    let tops = paths.iter().flat_map(|path| path.split(|c: char| c.is_ascii_alphabetic()).filter_map(|pair| pair.split_whitespace().nth(1)?.parse::<f64>().ok()));
+    assert!(tops.fold(f64::INFINITY, f64::min) >= 5.0, "no ears above the crown");
+    // A row of pointed teeth: one zigzag path that turns at least eight times.
+    let teeth = paths.iter().find(|path| path.starts_with("M26 49")).expect("a tooth row");
+    assert!(teeth.matches('L').count() >= 8, "{teeth}");
+    assert!(SKULL_SYMBOL.contains("stroke-linejoin='miter'"), "angular joins");
+}
+
+#[test]
+fn one_search_filters_live_trees_and_graves() {
+    let mut state = State::default();
+    let tunnel_dead = grave(&mut state, "Dig the north tunnel", "completed", true, 1_000, None);
+    let other_dead = grave(&mut state, "Count sheep", "cancelled", true, 2_000, None);
+    let tunnel_live = grave(&mut state, "Guard the tunnel mouth", "completed", true, 3_000, None);
+    crate::bots::command(&mut state, &tunnel_live, "on every 10").unwrap();
+    let other_live = grave(&mut state, "Water the garden", "completed", true, 4_000, None);
+    crate::bots::command(&mut state, &other_live, "on every 10").unwrap();
+
+    let page = crate::public_render(&state, &crate::fields("view=agents"), "none");
+    assert_eq!(page.matches("role='search'").count(), 1, "one search box for the whole page");
+    assert!(!page.contains("graveyard-search"), "the graveyard has no search of its own");
+    let scene = page.split("<div class='bots-scene'>").nth(1).expect("one scene");
+    assert!(scene.find("class='process-tree'") < scene.find("class='graveyard'"), "the trees stand above the graveyard");
+    for chat in [&tunnel_dead, &other_dead, &tunnel_live, &other_live] {
+        assert!(page.contains(&format!("/dm/{chat}'")), "unfiltered, every bot shows");
+    }
+
+    let searched = crate::public_render(&state, &crate::fields("view=agents&q=TUNNEL"), "none");
+    assert!(searched.contains("value='TUNNEL'"));
+    assert!(searched.contains(&format!("href='/dm/{tunnel_live}'")) && searched.contains(&format!("href='/dm/{tunnel_dead}'")), "hits live and dead");
+    assert!(!searched.contains(&format!("/dm/{other_live}'")) && !searched.contains(&format!("/dm/{other_dead}'")));
+    assert!(searched.contains("<svg class='searching'") && searched.contains(" pt-match'"), "the live hit is marked");
+    assert!(searched.contains("1 dead match for “TUNNEL”"));
+    // A name search reaches live bots too.
+    let name = crate::callsigns::name(&state.chats, &other_live).unwrap().into_owned();
+    let by_name = crate::bots::page(&state, &Query { search: name.to_uppercase(), ..Default::default() });
+    assert!(by_name.contains(&format!("href='/dm/{other_live}'")));
+
+    // Empty states, per half of the scene.
+    let miss = crate::public_render(&state, &crate::fields("view=agents&q=zebra"), "none");
+    assert!(miss.contains("No live bots match that search.") && miss.contains("No dead bots match that search."));
+    assert!(miss.contains("href='/?view=agents'>Clear"));
+    let only_live = crate::bots::page(&state, &Query { search: "garden".into(), ..Default::default() });
+    assert!(only_live.contains("No dead bots match that search.") && !only_live.contains("No live bots match"));
+    let empty = crate::bots::page(&State::default(), &Query::default());
+    assert!(empty.contains("No bots, services or active agents") && empty.contains("No dead bots. Stopped bots and finished agents rest here."));
+    assert_eq!(empty.matches("id='fennec-skull'").count(), 1);
+    assert!(!empty.contains("Clear"));
+    for html in [&page, &searched, &miss, &empty] {
+        assert!(!html.contains("cyan") && !html.contains("8cdacb"), "greys and purples only");
+    }
+}
+
+#[test]
+fn headstones_are_small_flat_topped_trapezoids_in_staggered_rows() {
     // Odd rows hold one stone fewer and start half a stone in, so the first
     // stone of each odd row repeats every 2c-1 stones for c columns. The rule
     // depends only on a stone's position in the list, so stones the scroll
     // loader appends continue the pattern.
     let css = include_str!("../../assets/runtime.css");
-    let graveyard = css.lines().find(|line| line.starts_with(".graveyard{")).unwrap();
-    for (columns, query) in [(2, "width<420px"), (3, "420px<=width<560px"), (4, "560px<=width<700px"), (5, "700px<=width<840px"), (6, "840px<=width<980px"), (7, "width>=980px")] {
-        let block = graveyard.split(&format!("@container graveyard ({query}){{")).nth(1).unwrap_or_else(|| panic!("{columns} columns at {query}"));
-        let block = block.split("}}").next().unwrap();
-        assert!(block.contains(&format!(".grave:nth-child({}n+{}){{grid-column:2/span 2", 2 * columns - 1, columns + 1)), "{columns} columns");
-        if columns > 2 {
-            assert!(block.starts_with(&format!(".graveyard-grid{{grid-template-columns:repeat({},minmax(0,1fr))}}", 2 * columns)));
-        }
+    let graveyard = css.lines().find(|line| line.starts_with(".bots-search{")).unwrap();
+    let bands = graveyard.split("@container graveyard (").skip(1).collect::<Vec<_>>();
+    assert_eq!(bands.len(), 9);
+    for (band, columns) in bands.iter().zip(3..) {
+        assert!(band.contains(&format!("{{.graveyard-grid{{grid-template-columns:repeat({},minmax(0,1fr))}}.grave:nth-child({}n+{}){{grid-column:2/span 2}}}}", 2 * columns, 2 * columns - 1, columns + 1)), "{columns} columns: {band}");
     }
+    // Many stones per row: eleven on a wide screen, four on a phone.
+    assert!(bands[8].starts_with("width>=1020px)") && bands[1].starts_with("320px<=width<420px)"));
     assert!(graveyard.contains(".graveyard-grid{list-style:none;padding:0 4px;margin:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));"));
     assert!(graveyard.contains(".grave{grid-column:span 2;") && graveyard.contains(".graveyard-more{grid-column:1/-1;"));
+    // A trapezoid: flat top narrower than its base, no rounded corners.
+    assert!(graveyard.contains("clip-path:polygon(20% 0,80% 0,100% 100%,0 100%)"));
+    let stone = graveyard.split(".grave{").nth(1).unwrap().split('}').next().unwrap();
+    assert!(!stone.contains("border-radius") && !graveyard.contains("50% 50%"));
+    assert!(graveyard.contains(".grave-skull{width:26px;height:26px;"), "smaller than the 48px skulls before");
     assert!(!graveyard.contains("cyan") && !graveyard.contains("8cdacb"), "greys and purples only");
+    // One scene: no dot grid behind the trees, no card borders between halves.
+    let tree = css.lines().find(|line| line.starts_with(".process-tree{")).unwrap();
+    assert!(!tree.contains("radial-gradient") && !tree.contains("cyan") && !tree.contains("8cdacb"));
+    assert!(!graveyard.contains(".graveyard{margin-top:44px;padding-top:26px;border-top"));
 }

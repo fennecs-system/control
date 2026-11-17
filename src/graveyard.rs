@@ -12,8 +12,9 @@ pub const PAGE: usize = 50;
 /// Longest accepted search text, in characters.
 pub const QUERY_CHARS: usize = 100;
 
-/// The visitor's position in the graveyard: an optional search and the chat
-/// after which the page starts. Unknown cursors start at the newest row.
+/// The visitor's Bots page query: the page search, which filters live task
+/// trees and the graveyard alike, and the dead chat after which the graveyard
+/// page starts. Unknown cursors start at the newest row.
 #[derive(Default)]
 pub struct Query {
     pub search: String,
@@ -158,7 +159,7 @@ fn clip(text: &str, limit: usize) -> String {
 
 const REVIVE: &str = "Open its DM. Typing there revives it: your message starts a new turn with its full history (/bot on keeps it running).";
 
-/// One tombstone: the shared fennec skull, the name linking to its DM, why it
+/// One headstone: the shared fennec skull, the name linking to its DM, why it
 /// stopped, the day it stopped and a revive link. The objective, kind and
 /// exact stop time are tooltips, so every stone keeps the same height.
 fn row(grave: &Grave<'_>) -> String {
@@ -195,31 +196,29 @@ pub fn rows(graves: &[Grave<'_>], query: &Query) -> String {
 /// every stone, including rows a scroll fetch adds later, reuses it.
 const SKULL: &str = "fennec-skull";
 
-/// A stylised fennec fox skull in outline: huge ears, wide cheekbones, a
-/// slender snout and big eye sockets, in a 64-unit square.
-const SKULL_SYMBOL: &str = "<svg class='svg-defs' aria-hidden='true' focusable='false'><symbol id='fennec-skull' viewBox='0 0 64 64'><g fill='none' stroke='currentColor' stroke-width='1.6' stroke-linejoin='round' stroke-linecap='round'><path d='M20 27C14 19 8 10 4 2c9 3 18 7 24.5 13.4M44 27c6-8 12-17 16-25-9 3-18 7-24.5 13.4'/><path d='M18.5 21L9 6.5l14 8M45.5 21L55 6.5l-14 8' opacity='.55'/><path d='M20 27c-1-8 5-12 12-12s13 4 12 12c4 3 5 7 1 10-4 3-7 7-8 13-1 5-3 8-5 8s-4-3-5-8c-1-6-4-10-8-13-4-3-3-7 1-10z'/><path d='M20.5 31c0-4.5 4.5-5.5 9-3 2 2 1 6.5-2.5 7.5-4.5 1-6.5-1.5-6.5-4.5zM43.5 31c0-4.5-4.5-5.5-9-3-2 2-1 6.5 2.5 7.5 4.5 1 6.5-1.5 6.5-4.5z'/><path d='M32 37v7M30.5 50l1.5-3 1.5 3-1.5 3zM29.5 55l1 2.5M34.5 55l-1 2.5' opacity='.8'/></g></symbol></svg>";
+/// A stylised fennec fox skull in faceted outline, front view, in a 64-unit
+/// square: an angular cranium with ridge facets, wide cheekbones, angular eye
+/// sockets and nasal cavity, a slender snout ending in a row of small pointed
+/// teeth (canines at the ends) and the lower jaw.
+const SKULL_SYMBOL: &str = "<svg class='svg-defs' aria-hidden='true' focusable='false'><symbol id='fennec-skull' viewBox='0 0 64 64'><g fill='none' stroke='currentColor' stroke-width='1.8' stroke-linejoin='miter' stroke-linecap='square'><path d='M32 5L43 8L51 15L54 25L50 32L43 35L40 44L38 49H26L24 44L21 35L14 32L10 25L13 15L21 8Z'/><path d='M32 5V17M21 8L27 19H37L43 8M10 25L21 27M54 25L43 27M21 35L27 33M43 35L37 33' stroke-width='1' opacity='.5'/><path d='M18 23L27 21L29 28L22 31ZM46 23L37 21L35 28L42 31ZM30 38L32 34L34 38L32 42Z'/><path d='M26 49L27.5 54L29 49.5L30.5 53L32 49.5L33.5 53L35 49.5L36.5 54L38 49' stroke-width='1.2'/><path d='M25 50L26 56L30 59H34L38 56L39 50' stroke-width='1.2' opacity='.75'/></g></symbol></svg>";
 
-/// An outline tombstone with the fennec skull and an [X] cross, drawn in the
-/// page's purple line style. Inline so the page loads no images.
-const TOMBSTONE: &str = "<svg class='tombstone' viewBox='0 0 132 156' role='img' aria-label='Tombstone with a fennec fox skull and a crossed-out mark'><path class='ts-stone' d='M18 144V58C18 31 39 10 66 10s48 21 48 48v86'/><path class='ts-inner' d='M27 144V60c0-22 17-40 39-40s39 18 39 40v84'/><use class='ts-skull' href='#fennec-skull' x='42' y='30' width='48' height='48'/><text class='ts-text' x='66' y='106'>[X]</text><text class='ts-small' x='66' y='126'>EOL</text><path class='ts-ground' d='M4 144h124M14 150h104'/></svg>";
-
-/// The graveyard section, closing the Bots page.
+/// The graveyard: the ground beneath the live task trees on the Bots page,
+/// with the dead bots' headstones (the page selected by `query`, whose search
+/// the page's one search box sets).
 pub fn render(state: &State, query: &Query) -> String {
     let graves = dead(state, &query.search);
     let total = graves.len();
     let found = if query.search.is_empty() {
         format!("{total} dead {} · newest first", if total == 1 { "bot" } else { "bots" })
     } else {
-        format!("{total} {} for “{}”", if total == 1 { "match" } else { "matches" }, escape(&query.search))
+        format!("{total} dead {} for “{}”", if total == 1 { "match" } else { "matches" }, escape(&query.search))
     };
     let list = if graves.is_empty() {
-        format!("<p class='empty'>{}</p>", if query.search.is_empty() { "No dead bots. Stopped bots and finished agents rest here." } else { "No dead bots match that search." })
+        format!("<p class='graveyard-empty'>{}</p>", if query.search.is_empty() { "No dead bots. Stopped bots and finished agents rest here." } else { "No dead bots match that search." })
     } else {
         format!("<ol class='graveyard-grid'>{}</ol>", rows(&graves, query))
     };
-    let clear = if query.search.is_empty() { String::new() } else { "<a href='/?view=agents#graveyard'>Clear</a>".into() };
-    format!("<section class='graveyard' id='graveyard' aria-labelledby='graveyard-title'>{SKULL_SYMBOL}<div class='graveyard-header'>{TOMBSTONE}<div class='graveyard-title'><span class='eyebrow'>// TERMINATED PROCESSES</span><h2 id='graveyard-title'>Graveyard</h2><p class='muted tiny'>{found}. <span title='{REVIVE}'>Typing in a dead bot's DM revives it.</span></p><a href='/bots/history'>Full history ↗</a></div></div><form class='graveyard-search' method='get' action='/#graveyard' role='search'><input type='hidden' name='view' value='agents'><input type='search' name='q' value='{}' maxlength='{QUERY_CHARS}' placeholder='Search by name or objective' aria-label='Search dead bots by name or objective'><button>Search</button>{clear}</form>{list}</section>",
-        escape(&query.search))
+    format!("<section class='graveyard' id='graveyard' aria-labelledby='graveyard-title'>{SKULL_SYMBOL}<div class='graveyard-ground'><h2 id='graveyard-title'>Graveyard</h2><span>{found}. <span title='{REVIVE}'>Typing in a dead bot's DM revives it.</span></span><a href='/bots/history'>Full history ↗</a></div>{list}</section>")
 }
 
 #[cfg(test)]

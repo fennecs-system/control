@@ -428,15 +428,16 @@ tree about 0.14 ms, one chat read about 14 µs.
 
 **Bots page and graveyard.** The graveyard (stopped bots and finished spawned
 agents) is projected in one pass over runs and chats, sorted by stop time, and
-only one page of 50 tombstones is formatted; later pages come from
-`GET /bots/graveyard?older=ID[&q=…]` as the WASM client scrolls, and search
-filters the same pass. The fennec skull is one inline SVG `<symbol>` per page;
+only one page of 50 headstones is formatted; later pages come from
+`GET /bots/graveyard?older=ID[&q=…]` as the WASM client scrolls. The page's
+one search (`?q=`) filters the same pass and the live task trees, whose names it
+derives once only when searching. The fennec skull is one inline SVG `<symbol>` per page;
 each stone is a `<use>` of it, and the staggered layout is CSS on list
 position, so appended pages add no path data or layout script. The process
 tree indexes latest run statuses, chat ids and service owners once per render;
 it used to scan runs and chats per chat, which made the page quadratic.
-`performance::bots_page` holds 10, 1,000 or 10,000 dead bots (one turn each)
-and one live agent. Release, Apple Silicon, `CONTROL_TIMING_ROUNDS=51`, three
+`performance::bots_page` held 10, 1,000 or 10,000 dead bots (one turn each)
+and one live agent for this table. Release, Apple Silicon, `CONTROL_TIMING_ROUNDS=51`, three
 alternating runs against the previous revision with the same fixture, medians:
 
 | Workload | 10 | 1,000 | 10,000 dead bots |
@@ -449,6 +450,26 @@ alternating runs against the previous revision with the same fixture, medians:
 
 The page stays under 38 KB however many bots have died (39 KB as a list); a
 50-stone scroll page is about 31 KB.
+
+The page now draws the live trees and the graveyard as one scene with one search
+box, and the headstones are small CSS trapezoids (two clipped pseudo-elements,
+no per-stone path data). `performance::bots_page` now holds 100 live bots under
+one steering chat beside the dead ones, and renders the whole page (`GET
+/?view=agents`) unfiltered, searched (a query hitting live and dead bots) and
+with a query that matches nothing. Release, Apple Silicon,
+`CONTROL_TIMING_ROUNDS=31`, two alternating runs each, medians of the second
+(main → this layout):
+
+| Workload | 0 live / 10 dead | 100 / 1,000 | 100 / 10,000 |
+| --- | ---: | ---: | ---: |
+| Bots page | 27 → 28 µs | 0.76 → 0.77 ms | 8.5 → 7.8 ms |
+| Bots page, search hits | 14 → 11 µs | 0.82 → 0.58 ms | 8.3 → 6.6 ms |
+| Bots page, search misses | 13 → 10 µs | 0.77 → 0.59 ms | 7.9 → 7.5 ms |
+| Next graveyard page | 1 → 1 µs | 0.24 → 0.25 ms | 4.2 → 4.1 ms |
+
+At 10,000 dead bots runs vary by about 20% and neither side is consistently
+faster. A search now also prunes the live trees: the page drops from 77 KB to
+35 KB with a hit and to 4 KB on a miss. The unfiltered page is 76 KB at 100 live bots.
 
 **Bots / History.** One view lists DMs, newest activity first, 50 per page
 (`history_view`). Sorting needs one pass over chats; the listed rows' turn
