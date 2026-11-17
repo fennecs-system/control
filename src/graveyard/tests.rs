@@ -217,7 +217,7 @@ fn clearance(one: &[Segment], other: &[Segment]) -> f64 {
 }
 
 #[test]
-fn the_fennec_skull_is_squarish_earless_toothed_and_clear_at_26px() {
+fn the_fennec_skull_is_proportioned_earless_toothed_and_clear_at_26px() {
     let symbol = SKULL_SYMBOL.split("<symbol").nth(1).unwrap();
     let paths = symbol.split(" d='").skip(1).map(|path| path.split('\'').next().unwrap()).collect::<Vec<_>>();
     assert_eq!(paths.len(), 2, "one closed outline with the teeth, and the sockets: no facet lines or lower jaw");
@@ -232,27 +232,47 @@ fn the_fennec_skull_is_squarish_earless_toothed_and_clear_at_26px() {
     assert_eq!(sockets.len(), 3, "two eyes and a nose");
     let (left_eye, right_eye, nose) = (&sockets[0], &sockets[1], &sockets[2]);
 
-    // A squarish head, not a bulb: a flat top at y 14, nothing above it, and
-    // no point more than a tenth wider than the top.
-    assert!(outline.starts_with("M16 14H48L"), "a flat top: {outline}");
-    assert!(head.iter().all(|(_, y)| *y >= 14.0), "no ears or dome above the flat top");
+    // A flat top whose corners are chamfered like / \ down to the shoulders,
+    // nothing above it, and straight sides no more than 15% wider than the
+    // shoulders, so the head is not a bulb.
+    assert!(outline.starts_with("M24 10H40L51 18L"), "a flat top and chamfered corners: {outline}");
+    assert!(head.iter().all(|(_, y)| *y >= 10.0), "no ears or dome above the flat top");
+    let (top_left, top_right, right_shoulder, left_shoulder) = (head[0], head[1], head[2], head[head.len() - 1]);
+    for (top, shoulder) in [(top_right, right_shoulder), (top_left, left_shoulder)] {
+        let (dx, dy) = ((shoulder.0 - top.0).abs(), shoulder.1 - top.1);
+        assert!(dx >= 6.0 && dy >= 6.0, "a slanted chamfer, not a square corner: {top:?} to {shoulder:?}");
+    }
+    assert_eq!(left_shoulder.1, right_shoulder.1);
+    let shoulders = right_shoulder.0 - left_shoulder.0;
     let widest = head.iter().map(|p| p.0).fold(f64::MIN, f64::max) - head.iter().map(|p| p.0).fold(f64::MAX, f64::min);
-    assert!(widest <= 1.1 * (48.0 - 16.0), "widest {widest} against a top of 32");
+    assert!(widest <= 1.15 * shoulders, "widest {widest} against shoulders of {shoulders}");
 
-    // Mean eyes: each slit has horizontal top and bottom edges and slants in
-    // towards the nose; the nose is flat-bottomed.
+    // Large mean eyes: each slit has horizontal top and bottom edges, slants
+    // in towards the nose, and spans close to a third of the head's width.
     for eye in [left_eye, right_eye] {
         assert_eq!(eye.len(), 5);
         assert!(eye[0].1 == eye[1].1 && eye[3].1 == eye[4].1, "flat top and bottom: {eye:?}");
+        let span = eye.iter().map(|p| p.0).fold(f64::MIN, f64::max) - eye.iter().map(|p| p.0).fold(f64::MAX, f64::min);
+        assert!(span >= 0.3 * widest, "eye span {span} of a {widest}-wide head");
     }
     assert!(left_eye[2].0 > left_eye[1].0 && right_eye[2].0 < right_eye[1].0, "inner points aim at the nose");
-    assert!(paths[1].contains("M32 32L35.5 36L33.5 40H30.5L28.5 36Z"), "the nose keeps its shape");
+    assert!(paths[1].contains("M32 29L35.5 33L33.5 37H30.5L28.5 33Z"), "the nose keeps its shape");
 
-    // Teeth: one zigzag in the outline's own stroke, hanging below the snout.
-    assert!(outline.contains("L40 46L38 51.5L36 46.5L34 49.5L32 46.5L30 49.5L28 46.5L26 51.5L24 46L"), "{outline}");
+    // Proportions: most of the height is below the eyes. The cranium above the
+    // eyes is at most half the muzzle and jaw below them, and the muzzle is
+    // at least four eye-band heights tall.
+    let (eye_top, eye_bottom) = (left_eye[0].1, left_eye[3].1);
+    let chin = head.iter().map(|p| p.1).fold(f64::MIN, f64::max);
+    let (cranium, muzzle) = (eye_top - 10.0, chin - eye_bottom);
+    assert!(cranium <= 0.5 * muzzle, "cranium {cranium} above the eyes against a muzzle of {muzzle}");
+    assert!(muzzle >= 4.0 * (eye_bottom - eye_top), "muzzle {muzzle} against an eye band of {}", eye_bottom - eye_top);
+
+    // Teeth: six, in one zigzag in the outline's own stroke, below the jaw.
+    // Each is three units wide; incisors are shallow so the row reads at 26px.
+    assert!(outline.contains("L41 45.5L39.5 50L38 46L36.5 48.5L35 46L33.5 48.5L32 46L30.5 48.5L29 46L27.5 48.5L26 46L24.5 50L23 45.5L"), "{outline}");
     let edges = segments(&head);
-    let teeth = edges.iter().copied().filter(|(a, b)| a.1 >= 46.0 && b.1 >= 46.0).collect::<Vec<_>>();
-    assert_eq!(teeth.len(), 8, "four teeth (canines and two incisors), each two strokes, wide enough to read at 26px");
+    let teeth = edges.iter().copied().filter(|(a, b)| a.1 >= 45.5 && b.1 >= 45.5).collect::<Vec<_>>();
+    assert_eq!(teeth.len(), 12, "six teeth (two canines, four incisors), each two strokes");
 
     // Clear gaps that survive 26px (0.4 px per unit): between eyes and the
     // outline, eyes and the nose, the two eyes, and the nose and the teeth.

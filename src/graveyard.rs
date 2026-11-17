@@ -197,13 +197,14 @@ pub fn rows(graves: &[Grave<'_>], query: &Query) -> String {
 const SKULL: &str = "fennec-skull";
 
 /// A stylised fennec fox skull, front view, in a 64-unit square, drawn only
-/// in straight segments: a squarish head with a flat top and near-vertical
-/// sides (at most a tenth wider than the top, so no bulb) tapering to the
-/// snout, mean eye slits (flat tops and bottoms, slanting in towards the
-/// nose), a large nasal cavity and a snout whose edge runs straight into a row
-/// of pointed teeth (canines longest): outline and teeth are one closed
-/// stroke. Eyes, nose and teeth keep clear gaps that survive the 26px size.
-const SKULL_SYMBOL: &str = "<svg class='svg-defs' aria-hidden='true' focusable='false'><symbol id='fennec-skull' viewBox='0 0 64 64'><g fill='none' stroke='currentColor' stroke-width='1.8' stroke-linejoin='miter' stroke-linecap='square'><path d='M16 14H48L49 17L49 30L44 37L41 39L40 46L38 51.5L36 46.5L34 49.5L32 46.5L30 49.5L28 46.5L26 51.5L24 46L23 39L20 37L15 30L15 17Z'/><path d='M19.5 24H26.7L29.6 26.2L27.4 28.3H22.4ZM44.5 24H37.3L34.4 26.2L36.6 28.3H41.6ZM32 32L35.5 36L33.5 40H30.5L28.5 36Z'/></g></symbol></svg>";
+/// in straight segments: a short cranium with a flat top and chamfered
+/// corners, straight sides no wider than its shoulders, large mean eye slits
+/// (flat tops and bottoms, slanting in towards the nose), a large nasal
+/// cavity, and a long, full muzzle tapering to a jaw whose edge runs straight
+/// into a row of six pointed teeth (canines longest): outline and teeth are
+/// one closed stroke. Eyes, nose and teeth keep clear gaps that survive the
+/// 26px size.
+const SKULL_SYMBOL: &str = "<svg class='svg-defs' aria-hidden='true' focusable='false'><symbol id='fennec-skull' viewBox='0 0 64 64'><g fill='none' stroke='currentColor' stroke-width='1.8' stroke-linejoin='miter' stroke-linecap='square'><path d='M24 10H40L51 18L51 28L47 36L43 40L41 45.5L39.5 50L38 46L36.5 48.5L35 46L33.5 48.5L32 46L30.5 48.5L29 46L27.5 48.5L26 46L24.5 50L23 45.5L21 40L17 36L13 28L13 18Z'/><path d='M17.8 20H26.6L30.1 22.6L27.5 25.3H21.3ZM46.2 20H37.4L33.9 22.6L36.5 25.3H42.7ZM32 29L35.5 33L33.5 37H30.5L28.5 33Z'/></g></symbol></svg>";
 
 /// The graveyard: the ground beneath the live task trees on the Bots page,
 /// with the dead bots' headstones (the page selected by `query`, whose search
