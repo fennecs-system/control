@@ -89,7 +89,7 @@ impl Access {
         if self.authorized(header) {
             return false;
         }
-        respond(stream,"401 Unauthorized","text/html; charset=utf-8","<!doctype html><html lang='en'><head><title>Control / operator access</title></head><body><h1>Operator access required</h1><p>On this laptop, run <code>./target/release/control open</code> to open an authenticated browser session.</p><p>Discord users and worker containers cannot obtain operator access from the website.</p></body></html>","");
+        respond(stream,"401 Unauthorized","text/html; charset=utf-8","<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><title>Control / operator access</title></head><body><h1>Operator access required</h1><p>On this laptop, run <code>./target/release/control open</code> to open an authenticated browser session.</p><p>Discord users and worker containers cannot obtain operator access from the website.</p></body></html>","");
         true
     }
 }

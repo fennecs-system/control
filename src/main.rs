@@ -128,7 +128,7 @@ impl State {
 }
 /// Minimal error page; the browser's Back button keeps the submitted form draft.
 pub(crate) fn error_page(message: &str, back: &str) -> String {
-    format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><title>Control / Not saved</title><link rel='stylesheet' href='/style.css'></head><body><main><h1>Not saved</h1><p role='alert'>{}</p><p>Use the browser's Back button to recover your draft, or <a href='{}'>return</a>.</p></main></body></html>", escape(message), escape(back))
+    format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><title>Control / Not saved</title><link rel='stylesheet' href='/style.css'></head><body><main><h1>Not saved</h1><p role='alert'>{}</p><p>Use the browser's Back button to recover your draft, or <a href='{}'>return</a>.</p></main></body></html>", escape(message), escape(back))
 }
 fn escape(s: &str) -> String {
     s.replace('&', "&amp;")
