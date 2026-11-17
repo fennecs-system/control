@@ -335,7 +335,7 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         return;
     }
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
-    if compaction::http(&mut stream,&state,method,path,query){return;}
+    if compaction::http(&mut stream,&state,method,path,query,&data[header_end..header_end + length]){return;}
     if providers::live_http(&mut stream, &state, method, path) { return; }
     if ports::http(&mut stream, &state, method, path, &data[header_end..header_end + length]) { return; }
     if bots::http(&mut stream, &state, method, path, &data[header_end..header_end + length]) { return; }

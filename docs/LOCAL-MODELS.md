@@ -118,10 +118,61 @@ applies.
 
 ### Inspect and recall
 
-**Compaction tree** in a chat, `/chat/ID/compaction`, or `/compact` in the TUI
-shows model limits, the current cut, tree ranges, source counts, input and
-summary sizes, usage, pending work and failures. Links expand binary children
-down to a leaf's original evidence. Inspection makes no model calls.
+**MemoryTree** in a DM (`/chat/ID/memory`; the older `/chat/ID/compaction`
+redirects there), or `/compact` in the TUI, shows the history the next turn
+starts from as a diagram: older ranges folded into aligned summary blocks
+(level L covers 2^L entries) above the journal positions they cover, and the
+newest entries verbatim. Each block's tooltip gives its range, level, token
+and byte sizes, compactor model and time; legend marks pending blocks,
+operator revisions, pins and dropped ranges. The overview is drawn from
+memory only: O(log n) summary blocks plus at most 24 verbatim cells (older
+verbatim entries share one cell), so its cost does not grow with history.
+Selecting a block loads its detail lazily into a frame: its two children (or
+leaf entries), summary text, versions, sizes and a link to the original source.
+The detail reads one root-to-block path of node files outside the state lock.
+Inspection makes no model calls.
+
+Measured on an Apple M-series laptop (release build, 200 renders each, every
+cut block summarised):
+
+| entries | cells drawn | page bytes | overview render |
+|---|---|---|---|
+| 100 | {{B100}} |
+| 1,000 | {{B1K}} |
+| 10,000 | {{B10K}} |
+| 100,000 | {{B100K}} |
+
+A block detail page (two node levels, four node files) takes {{DETAIL}}.
+
+### Editing the MemoryTree
+
+The operator can edit what the agent remembers from the MemoryTree; agents
+cannot (there is no agent tool or route, and `control_history_read` stays
+read-only). Edits are saved with the DM and every change is logged.
+
+- **Regenerate with emphasis.** Select a block, enter a focus ("keep the
+  port/relay details") and **Regenerate summary**. The DM's compactor
+  summarises the same inputs as before (a leaf's entries or the two child
+  summaries) with the emphasis added to the summary instructions, which it
+  never relaxes. The result is a new revision, selected at once; the automatic
+  summary and every earlier revision stay listed and selectable (**Use this
+  version**). Nothing is overwritten. A revision of a block inside a larger one
+  changes that parent's cache key, so the next compaction rebuilds only its
+  ancestors from the revision.
+- **Pin / unpin.** A pinned entry (at most 32 per DM) stays verbatim in the
+  next turn even when its block is summarised: it follows the summary that
+  covers it. Pins also apply with the default recent-entries view.
+- **Drop / restore.** A dropped range leaves the agent's view: its verbatim
+  entries, retained instructions, the original assignment and recall's source
+  reads. Summaries are rebuilt from a redaction marker in its place; until
+  then the turn uses the byte-bounded recent view. A revision overlapping a
+  dropped range is not used. **Restore** reverses it; the journal itself is
+  never rewritten.
+
+The agent's next turn uses the edited tree: the projection that builds every
+turn (managed context, the legacy prompt and fork snapshots) applies the
+selected revisions, pins and drops, and `control_history_read` returns the
+selected revision with its emphasis and model.
 
 Agents use `control_history_read`: omit `root` to list this conversation's roots,
 then follow a `path` of 0/1 child indexes; `source=true` reads a leaf's original
@@ -420,7 +471,7 @@ Claude manage their own in-session context.
 **Compaction.** A chat on a local model is compacted by the same endpoint through
 the summary tree by default, without being listed under automatic summaries;
 in-turn summaries use it too. Listing the chat under **Automatic summaries** with
-another model overrides this. `/chat/ID/compaction` reports the policy
+another model overrides this. The DM's MemoryTree (`/chat/ID/memory`) reports the policy
 (`local chat model default`, `operator opt-in` or `off`).
 
 **Usage and provenance.** Step usage is summed into the attempt's token counts.

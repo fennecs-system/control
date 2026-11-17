@@ -282,6 +282,7 @@ pub fn create(state: &mut State) -> String {
         title: "New chat".into(),
         name: None,
         cancelled_through: None,
+        memory: None,
         messages: Vec::new(),
     });
     id
@@ -314,6 +315,7 @@ pub fn receive(state: &mut State, incoming: &discord::Incoming) -> Result<(), &'
             title: "Discord chat".into(),
             name: None,
             cancelled_through: None,
+            memory: None,
             messages: Vec::new(),
         });
     }
@@ -846,7 +848,7 @@ pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
         .unwrap_or_default();
     let lenses = selected_lenses(session);
     let room = format!("{room}{}", session.parent_chat.as_deref().filter(|parent| valid_id(parent)).map(|parent| format!("<a href='/chat/{parent}'>Parent DM ↗</a>")).unwrap_or_default());
-    let room = format!("{room}<a href='/chat/{id}/compaction'>Compaction tree ↗</a>");
+    let room = format!("{room}<a href='{}'>MemoryTree ↗</a>", crate::compaction::memory_url(id));
     let mode = if session.improve_mode {
         "<span class='chat-command active-command' title='Use /improve off to return to regular chat'>/improve</span>"
     } else {

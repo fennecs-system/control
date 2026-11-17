@@ -364,7 +364,10 @@ pub fn handle(
             Err(message) => respond(stream, "404 Not Found", "text/plain", message, ""),
         }
     } else if method == "GET" && operation == "compaction" {
-        match crate::compaction::render(state,id) {
+        // The MemoryTree's earlier address.
+        respond(stream,"308 Permanent Redirect","text/plain","",&format!("Location: {}\r\n",crate::compaction::memory_url(id)));
+    } else if method == "GET" && operation == "memory" {
+        match crate::compaction::render(state,id,query) {
             Ok(html)=>respond(stream,"200 OK","text/html; charset=utf-8",&crate::render(state,"artifact-page",lens,&html),""),
             Err(error)=>respond(stream,"404 Not Found","text/plain",error,""),
         }
