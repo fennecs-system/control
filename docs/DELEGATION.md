@@ -1,190 +1,146 @@
 # Spawning agents and judges
 
-`control_agent_spawn` starts background work with a plural `objectives` array:
+Agents start other agents with two tools:
+
+- `control_agent_spawn` starts independent background work and does not pause the
+  caller.
+- `control_agent_spawn_blocking` pauses the caller for one dependency or review
+  and resumes it with the result.
+
+Children share the caller's actor, captured provider and model, lenses and
+authority ceiling. They start from an immutable baseline and get their own
+writable workspace; their edits never merge automatically. Delegation depth is
+limited to two. Budgets are set in [`execution.json`](EXECUTION.md#configuration).
+
+## Background batches
+
+`control_agent_spawn` takes an `objectives` array, one task per child:
 
 ```json
 {"objectives":["Inspect the HTTP handlers","Review the tests"]}
 ```
 
-Use one concise, nonblank task per child: at most 2,000 characters each and
-24,000 UTF-8 bytes across the array. Shorten oversized task descriptions instead
-of copying the entire conversation into every objective. Request identity is
-supplied by the MCP transport; do not add a nonce or identity argument.
+Each objective is 1–2,000 characters, and the array is at most 24,000 UTF-8 bytes.
+Write a short task per child rather than copying the conversation into each one.
+The MCP transport supplies request identity; do not add a nonce.
 
-`control_agent_spawn_blocking` pauses the parent for one dependency or review,
-with a singular `objective` and a `role`:
+Children inherit the immutable baseline of the parent's active attempt, never its
+live edits. A first Improve turn without a published baseline must use
+`control_agent_spawn_blocking` (or finish) first. Children share the spawning
+chat's team room: its linked [room](ROOM-NOTIFICATIONS.md), otherwise its lead's.
+Agents cannot create rooms, and naming a room in an objective does not attach it.
+
+An accepted batch reserves the root budget (`max_agents_per_root`, default 64)
+and node backlog (`max_pending_agent_intents`, default 256) immediately,
+including tasks not yet started. Reservations count spawned and delegated
+descendants once and stay consumed after completion or cancellation. Control
+materializes children as space frees in the 32-run queue; model slots separately
+limit how many run at once. Accepting 50 tasks does not start 50 model calls.
+
+The response holds a `batch` ID, requested, materialized and pending counts, and
+the first ten handles. Keep the identifiers apart:
+
+| Identifier | Use |
+| --- | --- |
+| `batch` | `control_agent_spawn_status` and `control_agent_spawn_cancel` |
+| Child `run_id` | the `child` argument of `control_agent_result` |
+| Child `chat_id` | the child's conversation at `/chat/<chat_id>` |
+
+A chat ID or batch ID is not a child run ID; passing one gives a
+descendant-access error.
+
+`control_agent_spawn_status` takes the batch ID and optional `offset` and `limit`
+(1–20, default 10); follow `next_offset`, and repeat a page later to see newly
+materialized handles. Later turns in the originating chat can inspect or cancel a
+batch even after the parent turn finished; other chats and siblings cannot.
+Cancelling fences tasks not yet started and stops active descendants; completed
+results remain.
+
+After spawning, report the handles and end the turn so the user can keep
+chatting. Control queues a completion update in the parent chat, combining up to
+eight finished children per update. Each update is an ordinary model turn on the
+current conversation workspace; it never restores an old checkpoint or applies
+child edits. A saved receipt prevents duplicate notifications after a restart.
+Cancelled or revoked batches do not wake the parent. Status checks are for
+on-demand use, not polling loops.
+
+Batch receipts, source inputs and child IDs are saved atomically, so restarts and
+ambiguous retries never create duplicate children. A failed save rolls back the
+admission or cancellation. Actor revocation, source grant changes and ancestor
+cancellation fence further materialization. Backlog admission makes no extra
+model calls.
+
+## Blocking delegation
 
 ```json
 {"objective":"Verify the proposed change","role":"worker"}
 ```
 
-For shared coordination, start from a [room-linked chat](ROOM-NOTIFICATIONS.md)
-before spawning. Mentioning a room in an objective does not attach it.
+`role` is `worker` or `judge`. Control checkpoints the caller's current files,
+releases its model slot, runs the child from an immutable copy of that checkpoint
+(including in Improve mode) and resumes the caller with bounded feedback: a short
+diff excerpt and a link to the retained results. The caller's chat stays reserved
+until the child returns. The model must stop after the acknowledgement rather
+than poll or hold a command open. The web transcript links to the child's chat.
 
-Give each worker ownership of its goal, resources and dependencies. Workers can
-use `control_agent_message` to coordinate with same-task siblings directly;
-they do not need an active parent or a root bot to relay requests and answers.
-Use room notifications for evidence requiring several participants to act, and
-records for observations requiring no immediate action. Keep the parent available
-for user steering and consequential decisions. Assign ongoing infrastructure to
-a worker if it needs persistent ownership; do not turn the steering chat into a
-monitoring bot merely to coordinate the workers.
+A root task has its configured agent budget and one blocking judge review.
+Waiting state and child IDs are saved together; restart never duplicates a child,
+and an interrupted or failed child returns that status to the parent. Cancelling a
+parent cancels its descendants. A changed parent workspace fences the
+continuation.
 
-Each accepted batch reserves the shared root budget immediately, including tasks
-still in the backlog, while the parent keeps working.
-As space becomes available in the existing 32-pending-task execution queue, Control
-materializes children from the captured source. The model-slot limit independently
-controls execution concurrency. Accepting 50 tasks does not start 50 model calls.
+## Results
 
-For background work, report the handles and finish the parent turn so the user
-can keep chatting. New batches queue a concise completion response in the parent
-conversation, coalescing up to eight finished children per update. Callbacks use
-the ordinary queue and current conversation workspace; they never restore an old
-checkpoint or apply child edits. A saved receipt prevents duplicate notifications
-after restart. Cancelled/revoked batches do not wake the parent, and older saved
-batches retain their original polling behavior. Status tools remain available
-for on-demand checks; a polling loop is unnecessary. Each completion response is
-an ordinary model turn subject to the node queue and provider limits.
+`control_agent_result` takes the child's `run_id` as `child` and a `section`:
 
-Private `~/.config/control/execution.json` (mode 0600) configures these separate
-limits; omitted fields retain their defaults:
+- `status` while queued, running or failed;
+- `summary`, `files` or `file` (with `path`) after success.
 
-```json
-{"max_parallel_runs":3,"max_agents_per_root":64,"max_pending_agent_intents":256,"max_advisors_per_root":1,"advisor_failure_streak":3,"advisor_stall_turns":24,"advisor_bottleneck_members":2,"bot_recovery_continues":2,"bot_recovery_recheck_seconds":300,"steering_turn_seconds":240,"steering_exec_calls":6,"peer_digest_seconds":600,"observation_max_bytes":2048,"local_agent_steps":64}
-```
+Text pages use Unicode-character offsets (default 4,096, at most 16,384) and file
+listings at most 64 records per page; follow `next_offset` until it is null. File
+pages include hashes and change/deletion metadata when a scoped baseline exists.
+Reads follow the child's recorded continuations, verify published artifact
+hashes, and never read live workspaces. If no artifact was published, the tool
+says so. Only the caller's own descendants are readable; sharing a root or actor
+grants nothing. A lineage walk allows the larger of 1,024 records or four times
+`max_agents_per_root`, capped at 262,144; larger graphs fail rather than drop
+provenance.
 
-`max_advisors_per_root` (0–8; 0 disables advisors) caps the
-[team advisors](LENSES.md#team-advisor) a root task may start, separately from
-its one blocking judge review. `advisor_failure_streak` (2–64) is how many
-consecutive failed or blocked turns of one member make a fact for its advisor.
-`advisor_stall_turns` (4–4096) is how many settled team turns, while claims stay
-open and none becomes done or resumes from blocked, make a busy-but-stalled fact.
-`advisor_bottleneck_members` (2–64) is how many members other than a claim's owner
-must wait on it, directly or transitively, to make a bottleneck fact.
-`bot_recovery_continues` (0–16) is how many immediate recovery turns a persistent
-bot gets after its `control_turn_handoff` is rejected, counted since its last
-published handoff; `bot_recovery_recheck_seconds` (30–86,400) is the first
-backoff recheck once it is past that allowance or a turn ends without calling
-the handoff (see [turn continuity](TURN-CONTINUITY.md#commit-and-recovery)).
-`steering_turn_seconds` (30–86,400) and `steering_exec_calls` (1–1,024) are how
-long a turn of a chat steering active members may run, or how many command
-executions it may request, before its tool results suggest delegating the work
-and ending the turn, once per attempt (see
-[deadline and steering notes](TURN-CONTINUITY.md#deadline-and-steering-notes)).
-`peer_digest_seconds` (30–86,400) is how long a non-urgent agent message waits
-for another wake of its recipient before it is delivered as a digest turn (see
-[urgent and retained messages](ROOM-NOTIFICATIONS.md#urgent-and-retained-messages)).
-`observation_max_bytes` (256–16,384) caps each chat's
-[fresh observation](WATCHES.md#fresh-observations).
-`local_agent_steps` (16–1,024) is how many model steps a local-model turn may take
-before it stops with a host checkpoint (see
-[local agent turns](LOCAL-MODELS.md#local-agent-turns)).
-Agent budgets must be positive integers up to 65,536. The MCP transport's
-input-size limit also applies. Node pending-intent capacity is
-shared across roots; root reservations include spawned and delegated descendants,
-and are counted once rather than once again when each child materializes. Root
-reservations remain consumed for that root even after completion or cancellation.
-Depth remains a separate limit of two. Invalid configuration fails closed.
+## Coordinating workers
 
-The response contains a `batch` ID, requested/materialized/pending counts, and the
-first ten handles. Keep the identifiers distinct:
+Give each worker ownership of its goal, resources and dependencies, including
+ongoing infrastructure it must look after. Workers message same-task siblings
+directly with `control_agent_message`; they need no active parent or relay bot.
+Use room notifications for evidence several participants must act on, and
+records for observations that need no action. Keep the parent free for user
+steering and consequential decisions rather than turning it into a monitoring
+bot. Room watches deliver information to existing chats and are separate from
+spawning.
 
-| Identifier | Use |
-| --- | --- |
-| `batch` | `control_agent_spawn_status` and `control_agent_spawn_cancel` |
-| Child `run_id` | `control_agent_result`'s `child` argument |
-| Child `chat_id` | Open the child's conversation at `/chat/<chat_id>` |
+## Judges
 
-For example, inspect a returned child run with
-`{"child":"<run_id>","section":"status"}`. A chat ID or batch ID is not a child
-run ID; using one can produce a descendant-access error.
-
-`control_agent_spawn_status` accepts the batch ID and optional
-`offset` and `limit` (at most 20); follow `next_offset`. Repeat a page later to see
-newly materialized handles. A later turn in the originating chat can inspect or
-cancel the batch with `control_agent_spawn_cancel`, even after its original parent
-completed. Other chats and sibling agents cannot manage it. Cancellation fences
-unmaterialized tasks and stops active descendants; completed results remain.
-Management preserves the originating task/improve authority boundary. Result
-inspection allows at least 1,024 lineage records, scales with four times the
-configured root budget, and remains capped at 262,144 records including
-continuations; oversized graphs fail explicitly rather than dropping provenance.
-
-Spawned children inherit the captured provider/model, lenses, actor and immutable
-baseline from the parent's active attempt. They never read its live edits or
-share its writable directory. Use `control_agent_spawn_blocking` when current edits
-need a checkpoint first; a first Improve turn without a published baseline must
-delegate. Source modifications and child outputs are never automatically merged.
-Use `control_agent_result` with `section=status` to inspect queued/running/failed
-children, and the output sections below after successful completion. Later turns
-in the originating chat can inspect its recorded spawn receipts; siblings and
-unrelated chats cannot. Cancellation of an active parent cascades to its children.
-Room watches deliver information to existing chats and are a separate mechanism.
-Batch receipts, source inputs and child IDs are checkpointed atomically. Restart
-and ambiguous-acknowledgement retries do not create duplicate children. Failed
-checkpoints roll back admissions/cancellation, and a full queue retains accepted
-backlog without repeated state writes. Actor revocation, source grant changes and
-ancestor cancellation fence future materialization. No extra model calls or
-independent scheduler are used for backlog admission.
-
-Workers can call `control_agent_spawn_blocking` with an `objective` and `role`:
-`worker` or `judge`. Control checkpoints the current files, releases the worker,
-runs the child, and resumes the parent with bounded feedback. The web transcript
-links to the child conversation; Bots shows its execution and queue status.
-Independent chats can run concurrently within the [node limit](EXECUTION.md).
-A model must stop after delegation acknowledgement,
-rather than poll or hold a command open waiting for a child.
-Explicit delegation reserves the conversation until its dependency returns;
-use spawning for independently running bots and other background tasks.
-
-Each child has the same actor, captured lenses and authority ceiling. Its files
-come from an immutable copy of the parent's paused checkpoint, including in
-Improve mode. Children get independent writable workspaces; edits never merge
-automatically. Feedback includes a bounded diff excerpt and a link to retained
-results. The parent can use the feedback to make its own changes.
-
-Use `control_agent_result` with the child's `run_id` as `child` and `section` set to
-`summary`, `files`, or `file` to retrieve larger outputs. Follow `next_offset`
-until it is null; text offsets count Unicode characters. File pages include
-hashes and change/deletion metadata when a scoped baseline is available. Reads
-follow the child's recorded continuations and verify published artifact hashes.
-Only the requesting parent's actual delegated descendants are available; sharing
-a root or actor does not grant access to unrelated chats or sibling agents.
-The tool never reads live workspaces. If no viewer artifact was published, it
-reports that explicitly; existing artifact size and file-type limits still apply.
-
-Personas currently capture a role and enforced policy. The one persistent
-persona is the opt-in advisor judge below; there are no persona bundles yet. A worker may delegate to depth two; a root task uses its configured total
-agent budget and permits one independent blocking judge review, plus its
-configured advisor allowance (default one). Workers and judges inherit the parent's
-captured provider and model. A configured alternate provider is not evidence of
-available credentials. Explicit cross-model selection with availability checks
-is a later feature; judge context and source access remain isolated now.
-
-Judges have read-only project mounts and no delegation, project-access requests,
-preview publishing, or administration tools. They can inspect source, use isolated
-verification tools and collaborate through the linked room. Claude workspace
-commands inspect `/workspace`; Codex inspects `/review` and uses `/workspace`
-only for scratch and transport. `/tmp` is available for disposable verification
-outputs. Their reports do not advance the development workspace.
+Judges get a read-only project mount and no delegation, project-access, preview
+publishing or administration tools. They can inspect source, run isolated
+verification builds and use the linked room. Claude and local judges inspect
+`/workspace`; Codex judges inspect `/review` and use `/workspace` only for scratch.
+`/tmp` holds disposable outputs. Judge reports never advance the development
+workspace.
 
 When the root chat selects the advisor lens, `control_agent_spawn` accepts
-`"role":"judge"` with exactly one objective to start an advisor candidate without pausing the parent; it receives no services
-and the task-level review scope, as with blocking delegation. It uses the root's
-advisor allowance (`max_advisors_per_root`), not its blocking review. An
-operator-approved judge bot is the team's [advisor](LENSES.md#team-advisor): its
-only source is the `task:<root>` lifecycle topic and its only additional effect
-is evidence notes through `control_agent_message` to the lead's steering chat.
-It never sends services, never messages members, judges or advisors, and never
-posts to rooms. Other judges
-still cannot run as bots or message agents.
+`"role":"judge"` with exactly one objective. This starts an advisor candidate
+without pausing the parent, with no services and the task-level review scope. It
+uses the root's advisor allowance (`max_advisors_per_root`), not its blocking
+review. An operator-approved judge bot becomes the team's
+[advisor](LENSES.md#team-advisor): its only source is the `task:<root>` lifecycle
+topic, and its only effect is evidence notes sent with `control_agent_message`
+to the lead's steering chat. It never messages members, judges or advisors, never
+posts to rooms and never sends services. Other judges cannot run as bots or
+message agents.
 
-Waiting state and child/continuation IDs are persisted together. Restart does not
-create duplicate children; interrupted or failed children return that status to
-the parent. Cancelling a supervisor cancels its pending descendants. A changed
-parent workspace fences continuation. Merging, deployment and additional host
-access remain explicit operator actions.
+## Boundaries
 
-These are bounded node tasks using the configured providers. They are not an
-unattended evaluation or judge swarm. Use provider accounts and API keys within
-the applicable terms and usage limits.
+Workers and judges use the parent's captured provider and model; cross-model
+selection is not implemented. Merging, deployment and extra host access remain
+explicit operator actions. These are bounded node tasks on the configured
+providers, not an unattended evaluation swarm. Use provider accounts within their
+terms and usage limits.

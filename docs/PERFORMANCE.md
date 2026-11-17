@@ -1,1342 +1,67 @@
-# Performance checks
+# Performance
 
-## Cache-stable turn prefix (2026-11-16)
+How Control keeps its own overhead small, how to measure it, and the current
+reference numbers for each subsystem. Figures are local synthetic measurements:
+they show relative cost and catch regressions; they are not provider throughput
+or latency guarantees.
 
-Every turn re-sent about 3 KB of fixed adapter framing (environment profiles,
-room protocol, language and reporting rules), much of it repeated by the
-always-on policy, tool descriptions or `control_guidance` topics. The framing
-now keeps the safety and authority essentials and points at the new
-`environment` guidance topic for image, profile, Nix and network detail.
-Turn input is also ordered for provider prefix caches: the declared
-observation moved from the top of the input to the end, working and recovery
-notes moved after history, and the per-run bot-wake and continuation notes
-moved from the lens policy to the request. The history window no longer counts
-wake entries that render nothing as omitted, which had added a changing note
-before history at every bot wake.
+## Goals
 
-Measured with `turn_context::tests::policy_size::dump_prompt_sections` (the run
--128 shaped team: a managed Codex member with the swarm and advisor lenses,
-linked room, 12 earlier callbacks) and the Qwen3.8-27B GGUF's own tokenizer
-(`llama-tokenize` from the Nix-pinned llama.cpp). Claude and Codex figures are
-approximate (bytes ÷ 4); no tokenizer for them is available offline.
+Control's core, tools and TUI should be cheap enough to be plausible on a small
+machine. Pi Zero-class hardware illustrates that class; it is not a required
+board or a release gate, and 512 MiB without swap is one measurement condition,
+not a support promise. The website has its own budget.
 
-| Section | Before bytes | Before Qwen tokens | After bytes | After Qwen tokens | ≈ Claude/Codex tokens |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Codex framing, managed room chat | 3,194 | 590 | 1,186 | 232 | 800 → 300 |
-| Codex framing, unmanaged room chat | 3,243 | 597 | 1,332 | 259 | 810 → 330 |
-| Claude framing | 2,296 | 412 | 996 | 189 | 575 → 250 |
-| Lens policy and guidance index (`prompt_prefix`) | 2,188 | 440 | 2,297 | 457 | 550 → 575 |
-| Deferred tool index | 1,815 | 430 | 1,813 | 430 | 455 |
-| Session rules | 732 | 137 | 732 | 137 | 185 |
-| Core tool schemas, Codex listing | 8,918 | 1,926 | 8,918 | 1,926 | 2,230 |
-| Core tool schemas, local functions + system message | 10,074 | 2,158 | 10,074 | 2,158 | n/a |
-| Whole wake input (member, second wake) | 14,848 | 2,847 | 12,684 | 2,461 | 3,710 → 3,170 |
-| Shared with the previous wake | 13 | 4 | 12,395 | 2,379 | 3 → 3,100 |
-| Per-wake dynamic suffix | 14,835 | 2,843 | 289 | 82 | 3,710 → 72 |
+- Report Control's own overhead separately from model execution, container
+  backends and requested workload resources.
+- Prefer event-driven idle behaviour, bounded projections and journal-backed
+  history over polling, whole-state copies or repeated reconstruction.
+- Avoid extra timers, duplicated state, repeated history hydration and new core
+  dependencies. Keep web assets and optional adapters separable.
+- Durable saves and synchronous filesystem work are deliberate correctness
+  boundaries. Changing them needs crash and recovery evidence, not only timings.
 
-The lens policy grows by 17 tokens because the bot-wake persona line now comes
-in the request and the chat's own persona line stays put. For the local
-backend the cached share of a whole request (system message, core schemas and
-turn input) rises from 43 % (2,162 of 5,005 tokens) to 98 % (4,537 of 4,619),
-so a wake prefills about 82 new tokens instead of about 2,850. The history
-window still slides once its 20,000 characters are full, which moves the
-divergence back to the start of history; that and compaction summaries are the
-next limits. The local planning reserve (`OVERHEAD_TOKENS`, 7,168) is
-unchanged: the loop admits a step by its own estimate (3 bytes per token, 3,409
-for a lead's core schemas), so the reserve must cover that estimate even though
-the Qwen count for the same schemas is about 2,200.
+## Measuring
 
-## Compact tool results (2026-11-16)
-
-Every successful worker tool result now leaves the worker boundary in one
-compact shape (`worker_tools::compact`): null, empty and default-false fields
-are omitted, top-level fields equal to the request's own arguments are not
-echoed, and the structured data and model-visible text stay identical. Errors
-and schema/guidance results are untouched. Per tool: service command results
-show a 12-character `execution_id` handle (the full ID is still accepted, and
-an ambiguous handle is refused) and drop the constant `output_limit_bytes`;
-long output keeps its first and last bytes around one omission marker instead
-of only the first 16,000. `control_turn_context` no longer repeats the working
-notes and standing guidance the turn prompt already carries (`notes=true`
-returns the notes) and shows 16-character receipt handles; handoff results
-report a processed count, receipts left pending and adjustments instead of
-echoing the request; `control_watch_events` drops its constant note; watch
-start/stop and applied claims return only what the host assigned.
-
-Measured on the recorded tool outputs of run -128's six member chats (3,386
-calls over 174 member turns with tool calls; `history/*.jsonl` records each
-output up to 1,000 characters, so capped outputs count only their visible part
-and the totals are lower bounds):
-
-| Tool | Calls | Bytes/call before | After | Saved |
-| --- | ---: | ---: | ---: | ---: |
-| `control_turn_context` | 501 | ≥990 (capped) | 447 | ≥544 |
-| `control_service_exec` | 936 | 216 | 68 | 147 |
-| `control_watch_events` | 255 | 855 | 468 | 387 |
-| `control_service_exec_status` | 969 | 694 | 634 | 60 |
-| `control_watch_start` | 145 | 562 | 243 | 319 |
-| `control_room_claim` | 31 | 550 | 217 | 333 |
-| `control_watch_status` | 61 | 524 | 391 | 132 |
-| `control_agent_message` | 161 | 126 | 78 | 48 |
-| `control_turn_handoff` | 208 | 58 | 45 | 13 |
-
-Visible bytes fell from 1.80 MB to 1.16 MB (644 KB, about 3.7 KB per member
-turn). `control_turn_context` output was capped in 490 of 501 records: the
-omitted working notes were a further ~1.4–1.6 KB per call (median staged
-payload 1,416 bytes), about 4.5 KB more per member turn. Together roughly
-8 KB, or about 2,000 tokens, of fresh tool output per member turn; each result
-is also re-read from context by every later call of the same turn.
-
-## Usage after handoffs and score probes (2026-11-16)
-
-After an accepted handoff the provider now has up to 20 s (`HANDOFF_GRACE`)
-to end its turn, so Codex emits `turn.completed` with the turn's usage. Before,
-the host stopped it at once and 207 of 229 completed Codex attempts in the
-local state had no tokens. A turn that ends normally replies in a few seconds;
-the model slot is held that long and the attempt finalizes that much later.
-Codex is stopped at once if it starts shell or file work after the handoff,
-and every other tool is already fenced. Decoding adds one per-call usage
-record per Claude API call (a fixed-size struct); Codex is unchanged.
-
-The score supervisor wakes every 5 s and, only when probes exist, does one
-walk over chats, runs and claims under the state lock to count team
-milestones. Probe commands run without the lock. `scores::tests::due_profile`,
-debug build (a release build of the worktree was not possible: `build.rs`
-needs the web bundle, which Trunk could not build inside the nested
-worktree), Apple Silicon, mean of 200 passes:
-
-| Probes | Chats | Runs | First version | Final |
-| ---: | ---: | ---: | ---: | ---: |
-| 4 | 36 | 640 | 668 µs | 345 µs |
-| 32 | 288 | 5,120 | 37.6 ms | 2.35 ms |
-| 32 | 288 | 25,600 | 168 ms | 11.0 ms |
-
-The first version built a team set per probe (`chat::tree`) and scanned all
-runs for each; the final one finds every chat's root once and counts runs and
-claims in one pass, so a pass is linear in runs whatever the probe count.
-Release code is typically 10–30 times faster than these debug figures. With
-no probes the pass returns at once. Stored series are capped at 240 samples
-of up to 8 numbers per probe and 32 probes per node (about 60 KB per full
-probe). Samples append to the patch log; thinning a full series rewrites it
-once every 120 samples.
-
-## Retained peer messages and fresh observations (2026-11-16)
-
-Each reconcile pass now also scans the agent-message receipts (at most 256)
-for overdue digest flags. Bots compare one more definition field when checking
-for drift, and the supervisor checks deferral per pending reason. Retired
-receipts drop their flag, so a node at rest scans only flags. Observation
-refreshes run on their own thread, outside the state lock and outside
-reconcile.
-
-`bots::tests::reconcile_profile` (release, Apple Silicon, other builds
-running), three alternating base (`ce2ff76`) / head pairs. Median ns per pass:
-
-| Case | Base | Head |
-| --- | --- | --- |
-| 64 chats idle | 28,474–29,948 | 28,665–29,145 |
-| 64 chats offered | 36,100–37,546 | 36,167–36,532 |
-| 512 chats idle | 208,711–215,293 | 206,661–212,358 |
-| 512 chats offered | 218,857–226,913 | 214,193–222,389 |
-
-The ranges overlap, so no regression is measurable and no flamegraph was taken.
-The wake reduction is the intended effect. In run -128's member chats, 34 of
-143 supervised wakes had only a peer message as their reason. Those now wait
-for the member's next wake, or for the digest bound, unless the sender marks
-the message urgent.
-
-## Watch salience filters (2026-11-16)
-
-`Watch::observe` runs under the state lock for every frame a follower reads.
-The `watches::tests::profile::notification_observe_profile` fixture feeds 200,000
-JSON notifications (about 80 bytes, four symbols) through one watch, nine
-samples per variant, release build on an Apple M3 Max (macOS, arm64):
+Profiling fixtures are ignored tests. They use synthetic state, make no model
+calls and need no credentials. Run them in release mode:
 
 ```sh
-cargo test --release --locked --bin control watches::tests::profile -- --ignored --nocapture
+cargo test --release --locked --bin control <fixture path> -- --ignored --exact --nocapture
 ```
 
-Six alternating pairs of the unfiltered path against main `beb68d0`, using the
-same fixture copied into the baseline: medians of the per-run medians are
-155.9 ns/event before and 158.2 ns/event after (+1.5%; ranges 150.9–165.4 and
-149.9–160.5). This is within run-to-run variation; an unfiltered watch reads no
-clock and does no parsing. Declared filters cost, in medians of three runs:
-
-| Filter | ns/event |
-| --- | ---: |
-| none | 154 |
-| one `threshold` | 400 |
-| price: `key`, two `change` rules and a `rate_limit` | 532 |
-| `rate`, `zscore` (32 samples) and `hysteresis` rules | 652 |
-| `change` + `debounce` (a hold is replaced per event) | 575 |
-
-For context, the same fixture's spool append (the metadata/open/append calls
-the follower makes for every frame, in a scratch directory) costs about 26 µs
-per frame on this machine, so filter evaluation adds 2–3% to a frame's host
-path while every retained notification avoids a model wake. A macOS `sample`
-capture (15 s, 1 ms interval, Inferno flamegraph, retained under the ignored
-`.control/performance/salience-20261116/`) put about 37% of filtered time in JSON
-parsing and most of the rest in allocation and `Value::pointer`'s per-token
-allocation; a non-allocating pointer walk for unescaped pointers then reduced
-filtered costs by 10–20%. Not measured: Linux, contention on the state lock, or
-end-to-end wake latency.
-
-## Local model generation (2026-11-16)
-
-`control_model_generate` adds no work to chat, scheduling or rendering paths; it
-runs only when called. Summary and generation calls to plain-HTTP endpoints now use
-a small std `TcpStream` client that polls cancellation every 100 ms instead of a
-blocking reqwest call (HTTPS keeps reqwest). Response bodies keep the existing
-128 KiB ceiling. The polling interval adds at most ~100 ms after cancellation and
-does not delay a completed response, which is returned as soon as its framing is
-complete. End-to-end Qwen3.8-27B Q4_K_M figures through this adapter on an
-M3 Max with a host Metal llama.cpp server (live node running): median 4.8 s for
-41–107 output tokens, 14.3–16.6 output tokens/s, against 16.6 tokens/s server
-decode (the end-to-end figure also includes prompt processing), so adapter
-overhead is small relative to inference. Details, memory
-and the CPU-container comparison are in
-[LOCAL-MODELS.md](LOCAL-MODELS.md#measurements). These are
-single runs, not a controlled benchmark.
-
-Local agent turns add no work to Codex/Claude paths. Each local step re-sends about
-10.6 k tokens of system text and tool schemas. The first step of a cold slot cost
-71 s of prompt processing on Metal; later steps and later turns reuse llama.cpp's
-prefix cache (0.5–4 s of new prompt per step). An end-to-end four-tool turn took
-49 s. Model requests run without the state lock; tool calls take the same locks as the CLI mailboxes. See
-[LOCAL-MODELS.md](LOCAL-MODELS.md#measurements).
-
-## Planning tools (2026-11-16)
-
-`control_search_path` timings from the ignored `graph_search::tests::profile`
-fixture: release build, one Apple Silicon laptop, median of five calls each,
-including JSON deserialisation and graph construction. The graph is a random
-geometric graph (20,000 points in a 1000×1000 square, five random neighbours
-each, undirected, cost = length × [1, 2)); the grids have 100,000 random
-blocked cells (about 10%), corner to corner.
-
-| Case | A* | Dijkstra | Expanded (A* / Dijkstra) |
-| --- | ---: | ---: | ---: |
-| graph, 20k nodes / 100k edges | 27.0 ms | 25.9 ms | 2,448 / 10,489 |
-| grid 1000×1000, 4-connected | 9.3 ms | 78.8 ms | 53,270 / 904,797 |
-| grid 1000×1000, 8-connected | 40.0 ms | 79.6 ms | 162,274 / 904,797 |
-| grid 100³ open, 26-connected | 2.0 ms | — | 99 / — |
-
-Deserialising the maximum graph alone takes 17.3 ms, so graph calls are bounded
-by input handling rather than search; A* still expands a quarter of the nodes.
-On grids, which are generated from a small description, the search dominates
-and A* is up to 8× faster. All cases are far inside the 2-second limit.
-`control_room_plan` walks at most one room's 128 claims linearly and needs no
-benchmark. Reproduce with
-`cargo test --release --locked --bin control graph_search::tests::profile -- --ignored --nocapture`.
-
-## Timed-out turns and steering notes (2026-11-16)
-
-The advisor's `timed_out` fact adds one per-chat slot and one attempt check per
-settled run to `bots::lifecycle::observe`; recovery admission adds one status
-check. `bots::tests::reconcile_profile` (release, Apple Silicon), two alternating
-base (`0e52376`) / head pairs, median ns per pass:
-
-| Case | Base | Head |
-| --- | --- | --- |
-| 64 chats idle | 28,729–30,363 | 29,087–31,700 |
-| 64 chats offered | 36,344–36,940 | 35,905–37,103 |
-| 512 chats idle | 222,101–233,708 | 223,092–238,898 |
-| 512 chats offered | 228,422–247,185 | 224,968–241,946 |
-
-The ranges overlap; no regression is measurable. The tool-result notes run on
-the broker path under the state lock already taken for callback notices: a few
-field reads per call, plus one pass over chats and active runs only once a
-steering threshold is reached and the note has not yet been sent.
-
-## Guidance on demand: wake-context bytes (2026-11-16)
-
-Every wake starts a fresh provider session, so its whole context is resent.
-Before this change about 17 KB of each wake was generic policy: every captured
-lens's full text plus long room and session guidance, the same for lead,
-members and advisor. Now prompts carry a short core and one index line per
-on-demand lens ([LENSES.md](LENSES.md#guidance-on-demand-and-role-scoping)),
-and role-scoped lenses are left out for other roles.
-
-`turn_context::tests::policy_size` builds a run -128-shaped team (lead with
-`swarm` + `advisor`, a persistent member and the advisor, each woken by a room
-post after a dozen earlier callbacks) and measures the policy section and the
-whole wake text. Same fixture on `96cef20` (before) and this branch (after),
-UTF-8 bytes:
-
-| Role | Policy before | Policy after | Wake before | Wake after |
-| --- | ---: | ---: | ---: | ---: |
-| Lead | 17,209 | 2,958 | 26,447 | 12,196 |
-| Member | 17,209 | 2,768 | 26,538 | 12,097 |
-| Advisor | 15,875 | 5,122 | 19,255 | 7,655 |
-
-The advisor keeps its own 2.8 KB procedure inline. The fixture fails if a
-member's policy exceeds 3,072 bytes, a lead's 3,328 or the advisor's 5,632.
-
-Replay of the 182 captured run -128 contexts (read-only from
-`context-traces/contexts.jsonl`), replacing each policy section with this
-branch's policy for its role and keeping everything else:
-
-| Role | Contexts | Wake median before | Wake median after | Wake max after |
-| --- | ---: | ---: | ---: | ---: |
-| Lead and other root chats | 17 | 27,517 | 13,730 | 17,141 |
-| Member | 165 | 35,251 | 21,363 | 31,386 |
-
-The remainder is task-specific: the original assignment, working notes,
-recovery evidence and history. The adapter framing before the policy (about
-3 KB: environment, room protocol, language and reporting rules) is unchanged
-and is the next candidate. Tool schemas are sent separately at session start;
-deferred tool loading (below) cut them to each role's core set. Rendering adds one pass over at most 128 captured lenses per
-prompt; `control_guidance` is a read of the captured context under the state
-lock already taken for tool calls. Reproduce with
-`cargo test --locked --bin control policy_size -- --nocapture`
-(`CONTROL_PRINT_POLICY=1` prints the member's wake text).
-
-## Deferred tool loading: schema bytes per role (2026-11-16)
-
-Every worker session listed every tool it could call: for a lead or member 57
-schemas, 62 KB of JSON, more than the whole wake prompt. Now `tools/list` holds
-the role's core set and the prompt carries a terse index of the rest
-([LENSES.md](LENSES.md#current-boundaries)). The same run -128-shaped fixture as
-above (`turn_context::tests::policy_size`, Codex backend; "shell" adds
-`control_workspace_run` for Claude and local turns) measures UTF-8 bytes. Tokens
-are the local loop's conservative estimate (3 bytes per token). "Before" is every
-tool the session may call with unchanged schemas, which was the previous listing
-for leads and members (the advisor's was a slightly smaller judge list).
-
-| Role | Schemas before | Schemas after | Shell before / after | Tokens before / after | Index | Wake + schemas before / after |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Lead | 62,348 | 9,604 | 62,963 / 9,930 | 20,783 / 3,202 | 1,718 | 74,857 / 23,831 |
-| Member | 62,348 | 8,918 | 62,963 / 9,244 | 20,783 / 2,973 | 1,815 | 74,758 / 23,143 |
-| Advisor | 13,933 | 3,664 | 14,394 / 4,010 | 4,645 / 1,222 | 680 | 21,588 / 11,999 |
-
-The wake prompt grows by the index (12.5 → 14.2 KB for a lead); the session's
-whole input shrinks by about 51 KB. The fixture fails if any role lists 10,000
-bytes or more, keeps more than a third of its callable bytes, or carries an index
-over 2,048 bytes. Most of the cut comes from tight catalogue descriptions and
-compacted schemas for the always-loaded tools (members' core was 33 KB with the
-original text), not from deferring tools: spawn, bot and service tools stay core.
-
-Local turns: `OVERHEAD_TOKENS` falls from 15,360 to 7,168 (core schemas at most
-4,096, 2,048 for schemas loaded during the turn, 1,024 for the first exchange),
-leaving 8,192 more tokens of a 32k context for turn input. As function tools the
-core is 3,409 tokens for a lead, 3,161 for a member and 1,240 for an advisor,
-against 13,876 for every callable tool (14,775 in improve mode)
-(`local_agent::tests::worker_tool_schemas_fit_the_declared_overhead_reserve`).
-
-Lookups: `deferred::tests::a_member_turn_needs_few_lookups` scripts a run
--128-style member turn of 16 tool calls (turn context, room read/claim/post,
-service status/start/copy/exec/exec status, watch start/events/status, agent
-message, guidance, score probe, handoff). Fourteen are core; two
-(`control_watch_status`, `control_score_probe`) are deferred: one
-`control_tool_search` by names covers both, or two lookups one at a time. A
-lookup is one extra tool round trip for Codex and Claude; a local turn loads an
-indexed tool on first use without a model step. Search and the index are pure
-reads of the catalogue and the run's facts under the lock tool calls already take;
-`control_call` adds one JSON rewrite before the unchanged dispatch.
-
-Reproduce with `cargo test --locked --bin control policy_size -- --nocapture`
-and `cargo test --locked --bin control deferred -- --nocapture`.
-
-## Chat callsigns (2026-11-16)
-
-Chats are shown by callsigns derived on read (`callsigns::all`: one pass over
-the chats in creation order, a fixed-size ring of the last 48 callsigns and
-per-word counts, no hashing or allocation per chat). The new
-`performance::chat_lists` fixture renders `control.chats.list` (TUI picker,
-Discord `!chats`), the web conversation tree and one `control.chat.read` for
-10, 100 and 1,000 chats in task trees of eight. Release builds, Apple Silicon,
-`CONTROL_TIMING_ROUNDS=300`, the same fixture in both revisions, three
-alternating before/after runs; medians of the run medians:
-
-| Workload | Chats | Before | After |
-| --- | ---: | ---: | ---: |
-| `chats_list` | 10 / 100 / 1,000 | 19.1 / 189.9 / 1,970 µs | 20.8 / 195.1 / 2,036 µs |
-| `web_conversation_tree` | 10 / 100 / 1,000 | 6.4 / 44.6 / 131.0 µs | 4.6 / 30.1 / 137.8 µs |
-| `chat_read` | 10 / 100 / 1,000 | 2.2 / 2.5 / 5.2 µs | 2.2 / 3.2 / 14.1 µs |
-
-The list costs about 3% more for the full derivation pass; the web tree is
-smaller (short names, 14 KB instead of 26 KB at 1,000 chats) and faster up to
-100 chats, 5% slower at 1,000. Reading one chat derives the callsigns before
-it, about 9 µs for the 500th of 1,000 chats. A first version keyed the window
-in a `HashMap` and cost 374 µs for the 1,000-chat tree and 115 µs per read.
-
-```sh
-cargo test --release --locked --bin control performance::chat_lists -- --ignored --exact --nocapture
-```
-
-## State saves as a patch journal (2026-11-16)
-
-macOS disk-write diagnostics showed 8–34 GB/hour written by Control during
-swarm runs: nearly every tool call rewrote and synced the whole 18 MB
-`state.json`. Saves now append one transaction line of changed paths to
-`state.log` and compact into the snapshot only when the log outgrows it
-([design](HISTORY.md#state-checkpoints-a-snapshot-plus-a-patch-journal)).
-
-`storage::tests::profiling::profile_swarm_hour` replays a simulated swarm hour
-of 2,000 saves (the rate that reproduces the diagnostic: 37 GB/hour before) on a
-copy of the maintainer's 18.1 MB state (6,881 runs, 128 chats): room posts and
-agent messages across the six largest chats, watch deliveries, tool receipts on
-running turns, new turns and finished turns, in a fixed 7:5:4:2:2 mix. Same
-mutation sequence for both paths, release build, APFS on the internal SSD,
-`F_FULLFSYNC` durability as before.
-
-| 2,000 saves | Before (atomic rewrite) | After (patch journal) |
-| --- | --- | --- |
-| Bytes written | 37.4 GB (18.7 MB/save) | 1.38 MB (690 B/save) |
-| Save p50 / p99 / max | 30.9 / 38.0 / 47.1 ms | 25.2 / 29.3 / 39.4 ms |
-| Compactions | — | 0 (log 1.4 MB < snapshot) |
-
-Encoding with ranges costs 18.0 ms against 12.7 ms for `serde_json::to_vec`
-(p50, 21 samples); diffing an unchanged 18 MB state costs 1.3 ms. Cold load:
-41.6 ms to parse the monolithic file; 64 ms to load and adopt a clean snapshot
-(parse plus one encoding to confirm it is the diff base, no write); 102 ms to
-replay a 2,001-line, 1.4 MB log (then one compaction); 92 ms to recover from a
-torn final line, which is dropped with earlier saves intact.
-
-`sample` profiles of the save loop (700 saves each, 12 s at 1 ms) put the
-before path at 44% sync, 34% serialization and 17% writing 18 MB; after, 29%
-sync, 58% encoding, 10% diffing and about 1% writing. Bytes are no longer the
-cost; encoding all 6,881 runs on every save is. Moving finished runs out of the
-hot state is the next step and should cut encoding by about two thirds. The
-measurement does not cover APFS metadata writes, which `F_FULLFSYNC` still
-incurs once per save, or concurrent saves (each still syncs under the state
-mutex; group commit is not implemented).
-
-**Cached run encodings.** `Run` is now `history::Cached<Record>`. A save serializes a run once and then copies its saved bytes until the run is next borrowed mutably; any `&mut` access forgets them, so there is no dirty flag to forget. When a changed run, or one written from saved bytes, has to be diffed, diffing indexes just that run's bytes to find the member that changed. Debug builds and tests check every save against a fresh, uncached serialization.
-
-A clean start now adopts the snapshot by indexing the file's bytes (`snapshot::base`) instead of re-encoding the state.
-
-Same fixture and mutation sequence:
-
-| | Patch journal (#224) | With cached runs |
-| --- | --- | --- |
-| Encode (unchanged state, p50) | 18.0 ms | 5.6 ms |
-| Save p50 / p99 | 25.2 / 29.3 ms | 12.1 / 15.9 ms |
-| Bytes per save | 690 B | 690 B |
-| Clean start (parse + base) | 64 ms | 52.6 ms (42 parse + 10 index) |
-
-In the `sample` profile of the save loop, 62% of the time is now the sync, 22% encoding and 10% diffing.
-
-**Finished runs in archive blocks.** On the same state, the first two saves move 6,144 of the 6,881 runs into two blocks (10.3 MB, 73 ms, once). That leaves 743 hot runs: the newest 512 plus older resumable or still-referenced ones. Over the simulated hour:
-
-| | Cached runs | Archived runs |
-| --- | --- | --- |
-| State encoded per save (hot) | 18.1 MB | 8.5 MB |
-| Save p50 / p99 | 12.1 / 15.9 ms | 9.8 / 12.9 ms |
-| Bytes written per save | 690 B | 1,171 B (log 690 B, plus new and merged blocks) |
-| Replay of a 2,001-line log | 106 ms | 72 ms |
-| Clean start | 52.6 ms | 60 ms (snapshot plus blocks, read eagerly) |
-
-Array diffs anchor on byte-identical elements, so moving 64 runs from the middle of `runtime.runs` costs one 30-byte splice rather than a rewrite of everything after them.
-
-```sh
-CONTROL_PROFILE_STATE=/scratch/state.json CONTROL_PROFILE_DIR=/scratch/bench \
-  cargo test --release --locked --bin control \
-  storage::tests::profiling::profile_swarm_hour -- --ignored --exact --nocapture
-```
-
-## Bounded checkpoint recovery (2026-11-16)
-
-A swarm run's persistent bots took 269 `continue` wakes; about 90% followed a
-rejected `control_turn_handoff` and most of those turns did no new work. Each
-failed attempt re-armed recovery because its generation was new. Recovery is
-now bounded per streak (see [turn continuity](TURN-CONTINUITY.md#commit-and-recovery)).
-The `bots::tests::recovery` replay drives one bot whose every handoff is
-rejected, finishing each turn at once, and the same loop was run on `d4a1924`:
-
-| Replay | Before: turns / continue wakes | After |
-| --- | ---: | ---: |
-| Every handoff rejected, 3 h | 181 / 180 | 8 / 2 |
-| No handoff called, 30 min | 60 / 59 | 5 / 0 |
-
-Before, only the 60-turns-per-hour budget bounded the loop. Model time and
-tokens scale with turns; the replay makes no model calls.
-
-`bots::tests::reconcile_profile` (release, Apple Silicon) ran six alternating
-before/after pairs twice, under a load average of about 40 from other work. The
-recovery and watch-collection paths run only on recoveries and publications,
-which this fixture does not exercise; the idle and offered passes are unchanged
-within noise. Fastest of six (second round), µs:
-
-| Case | Before | After |
-| --- | ---: | ---: |
-| idle, 64 chats / 1,153 runs | 28.5 | 28.2 |
-| offered, 64 chats / 1,153 runs | 36.4 | 35.7 |
-| idle, 512 chats / 9,217 runs | 209.7 | 207.8 |
-| offered, 512 chats / 9,217 runs | 221.4 | 215.2 |
-
-Medians of the 512-chat cases varied by up to 20% between rounds in both
-directions under that load, so no change is claimed.
-
-## Cancel-all and container ownership reconciliation (2026-11-16)
-
-Investigated a reported CPU spike after `/cancel all` on a swarm root (lead,
-five player bots, an advisor, services and watches) on a node with an 18 MB
-`state.json` (6,881 runs). macOS ARM release builds, no models or credentials.
-
-The cancel path itself is cheap. `worker::tests::cancel_profile` runs the real
-dispatcher, worker threads, durable checkpoints and commit path on 127 chats,
-5,773 runs and 4,000 posts, with seven turns running and a thread re-rendering
-the transcript and navigation per change. Cancelling all seven took 417 ms,
-11 checkpoints, nine renders and 0.19 CPU-seconds including a 3 s tail. On a
-read-only copy of the 18 MB node state, one checkpoint serialises in 13 ms and
-writes/syncs in about 31 ms (17 ms CPU); transcript, detail, requests, port and
-bot reconciliation passes each took at most 14 ms. Per-item whole-state writes
-therefore do not explain a sustained spike at this size.
-
-The one cost found that scales with history is container ownership
-reconciliation, which the dispatcher runs every 2 s and which stops inactive
-owners' containers after cancellation. Each listed container scanned every
-historical attempt through `expected_path`, building a path (and reading the
-environment) per comparison. Sampling showed `expected_path`,
-`runtime::workspace`, `getenv` and allocation dominating. Attempts are now
-indexed by generation once per pass; `expected_path` still decides, in the
-original owner/attempt order.
-
-| `lifecycle::tests::reconcile_profile`, 48 containers | Before | After |
-| --- | ---: | ---: |
-| 500 attempts | 20.6 ms | 0.09 ms |
-| 3,000 attempts | 119 ms | 0.23 ms |
-| 12,000 attempts | 483 ms | 0.73 ms |
-| Copy of the 18 MB node state (3,248 owners), 24 containers | 66 ms | 0.29 ms |
-
-The spike itself was not reproduced: docker teardown, live services/watches and
-the browser were outside these fixtures. Separately, macOS disk-write reports
-for this node show 8–34 GB per hour of whole-state rewrites during normal swarm
-operation (per tool call), which a smaller hot state would reduce.
-
-## Explicit history-read failures (2026-11-14)
-
-Compared main `6bf92ef` with the R3 history-read patch, Linux aarch64 / pinned
-Rust 1.99, one pinned CPU, 512 MiB and no swap. Six alternating release pairs
-followed warmup; the same new read fixture was added to the baseline harness.
-It measures both inline and archived chat-detail reads at 10/100/500 messages.
-The existing web, core coordination and TUI fixtures also ran.
-
-| Workload | Baseline → patch median |
-| --- | ---: |
-| API detail, 500 inline turns | 10.510 → 10.514 ms |
-| API detail, 500 archived turns | 12.253 → 12.103 ms |
-| Web transcript, 500 turns | 3.001 → 2.943 ms |
-| TUI rendering, 500 turns | 62.901 → 62.305 µs |
-| Core coordination, 64 chats | 1.332 → 1.312 µs |
-
-All normal API JSON, HTML and terminal-buffer hashes matched. Across all measured
-sizes, differences ranged from −2.9% to +3.3%; these observations show no material
-regression in these fixtures, not a speedup or end-to-end inference result.
-The success path adds no filesystem operation, persistent state or model call.
-Cgroup memory-event and OOM counters stayed zero.
-
-Actual CPU-clock flamegraphs at 499 Hz with DWARF stacks contain 3,515/3,531
-samples for history reads and 925/925 for TUI rendering. Raw logs, source patch,
-measurement script and flamegraphs remain under
-`.control/performance/history-errors-20261114/` and
-`/private/tmp/control-history-errors-profile/`. Release Linux fault checks also
-passed: ten history tests, delegated feedback and the folded TUI warning.
-These checks do not claim a faster compactor, detection of every externally
-modified journal, or a Raspberry Pi device certification.
-
-## Bounded HTTP admission (2026-11-14)
-
-Compared main `6bf92ef` with the HTTP admission patch, using the same Linux
-aarch64 offline image and Rust 1.99.0 release build with debug symbols. Six
-alternating pairs followed warmup, on one pinned CPU, 512 MiB and no swap. Each
-probe started a fresh private node, with no provider calls, service containers or
-personal configuration. Values are medians of the six process measurements.
-
-| Fixture | Baseline → revised |
-| --- | ---: |
-| Ordinary loopback health request, 1,000 per process | 27.917 → 28.479 µs |
-| Process p95 health latency | 43.522 → 41.626 µs |
-| Total server threads: 16 live streams + 128 offered partial bodies | 151 → 39 |
-| Server RSS at that load | 81.93 → 37.92 MiB |
-| SIGTERM shutdown while bodies keep trickling | 9.913 → 0.063 s |
-| Coordination routing, 64 chats | 1.377 → 1.361 µs |
-| Cached TUI render, 10 / 100 / 500 messages | 63.204 / 63.366 / 62.896 → 62.643 / 64.493 / 63.790 µs |
-
-The 39 threads comprise 32 admitted HTTP handlers plus seven other server
-threads in this fixture. Idle measurements had seven/eight total threads and
-roughly 23–27 MiB RSS. The 32-handler cap retains capacity for 16 ordinary requests
-alongside the existing maximum 16 live streams. Partial authenticated requests
-declared a 512 KiB body and sent 511 KiB, retaining their final bytes. Excess
-patched connections closed without completing the request; an independent
-socket/process regression verifies the complete best-effort `503` when the peer
-has sent no request bytes. This is a bound on admission, not a whole-process RAM
-budget or guaranteed availability when all slots are occupied.
-
-Health medians overlap (26.834–30.625 µs baseline; 27.334–35.625 µs revised).
-All terminal-buffer hashes match and render ranges overlap. One baseline routing
-process was a large outlier at 35.818 µs; it is retained in the raw measurements
-and included in the median calculation. These results show no material ordinary
-request/core/TUI regression; small median changes do not establish a speedup.
-Health timings include local TCP setup and response reads, not inference or
-browser paint. RSS excludes the probe, container runtime and other workloads.
-The shutdown result is specific to continuously arriving request bytes; existing
-operation-specific waits still apply to already admitted tool calls.
-
-Socket and real-server tests passed on macOS and Linux, including H+1 overload,
-slot recovery, nonreading peers, retained panics and authenticated streams during
-shutdown. Real user-space CPU-clock flamegraphs contain 1,318 / 1,339 routing
-samples and 931 / 935 TUI samples. HTTP traces include the Rust probe and its
-server children. These short-lived request threads produced too few user-space
-samples to interpret; including kernel CPU yielded 258 baseline but only five
-revised samples, with unresolved kernel symbols. These HTTP traces do not support
-a per-function comparison. A denser diagnostic trace was stopped because its
-instrumentation distorted the workload; it is not used for timing claims. All
-paired measurements above were taken without perf attached. Full data, executables and commands
-remain in `/private/tmp/control-http-admission-profile/`; copied logs, folded
-stacks, probe source and SVGs are under
-`.control/performance/http-admission-20261114/`. See
-[HTTP-ADMISSION.md](HTTP-ADMISSION.md) for limits and overload semantics.
-
-## Event-driven chat delivery (2026-11-14)
-
-Compared deployed main `1be79c7` with the event-driven transport patch using five
-identical short prompts and `gpt-6.1-sol`. Direct Codex used one prestarted pinned
-container with `exec` then four `exec resume` calls; Control used a fresh ordinary
-chat and fresh provider attempt per message. Both provider containers had 2 CPUs
-and 2 GiB. Alternating the paths per turn, all ten replies matched. The patched
-server used an isolated fresh state; no civilisation agents were resumed for
-measurement. The offline profiler was paused during inference measurements.
-
-| Mean, five turns | Before | After |
-| --- | ---: | ---: |
-| Control first message text | 6.378 s | 4.592 s |
-| Direct Codex first message text | 3.860 s | 4.160 s |
-| Observed difference | +2.518 s | +0.432 s |
-| Control completed response | 7.808 s | 5.608 s |
-| Direct Codex completed response | 4.801 s | 5.133 s |
-
-Docker events placed provider start 1.191–1.305 s after submission before and
-0.552–0.619 s after. This includes admission and the unchanged per-attempt
-credential-isolation canary probe. Container create-to-start alone was already
-around 80–100 ms. Completion after container exit decreased from 0.259–0.645 s
-to 0.116–0.211 s. Ten authenticated pings after the patch took 0.917–1.271 ms;
-the previous pass took roughly 90–201 ms. MCP observation reads averaged 4.54 ms
-after, versus 84–98 ms before.
-
-First text means structured message-event availability, not raw token deltas or
-browser paint. Both passes sampled Control every 100 ms plus RPC duration. The
-CLI system/tool context and resumed-session strategy differ from Control's
-journal-based attempts. Five samples cannot establish a population latency or
-attribute every difference to the harness; inference and cache conditions vary.
-The web's 1 s transcript poll and TUI's 2 s refresh are replaced with coalesced,
-authenticated, payload-free hints; their former display delay is additional to
-the table. TUI input remains checked at 100 ms. Reconnects force a fresh read;
-failed transcript reads retry, and disconnected clients retain a recovery poll.
-Idle streams wait on the existing effect generation primitive, with 15 s
-transport heartbeats, and never wake agents. No task timeout policy changed.
-
-Firefox passed 15 successive sends (median 131 ms, maximum 137 ms in its
-synthetic fixture), long-message validation, streaming/service updates, retained
-focus/scroll/expanded details and transient request failures. Socket tests cover
-bounded stream admission, cancellation, malformed input and coalescing. The full
-Nix package builds with the embedded WASM UI. Local artifacts and the exact Rust
-benchmark driver are retained under `.control/performance/chat-latency-20261114/`
-and `/private/tmp/control-latency-after-20261114/`. These measurements do not
-claim lazy task sandboxes or provider-container pooling has been implemented.
-
-Twenty synthetic chat creations were observed through the shared client stream
-in 11.87–15.25 ms (median 13.00 ms), including the operation and checkpoint;
-dropping the idle subscription took 0.17 ms. A credential-free Docker mount test
-verified that a container's atomic mailbox rename reaches the host watcher.
-
-Six alternating Linux release pairs used one pinned CPU, 512 MiB and no swap.
-Core coordination medians were 1.219 → 1.215 µs. TUI render medians for
-10 / 100 / 500 messages were 59.871 / 59.415 / 59.254 →
-58.365 / 58.115 / 58.363 µs; all rendered-buffer hashes matched. These fixtures
-establish no material regression, not an inference or renderer speedup claim.
-CPU-clock flamegraphs cover both revisions' core and TUI; cgroup memory/OOM
-counters remained zero. Artifacts are retained in the `cpu-final` subdirectory
-of the local performance evidence directory. The core has no persisted UI
-state, new dependency or provider-specific notification logic.
-
-## Local compaction selection (2026-11-13)
-
-Compared merged main `b744ee2` with the local-compaction feature using the same
-release `conversation::tests::continuity_profile` fixture, Linux aarch64 / Rust
-1.99.0, pinned offline dependencies, one CPU, 512 MiB and no swap. Six alternating
-pairs followed warmup. Compaction remained disabled for this comparison; rendered
-prompt sizes were identical on both revisions.
-
-| Retained turns | Baseline → feature median | Prompt bytes |
-| --- | ---: | ---: |
-| 15 | 33.609 → 32.917 µs | 17,146 |
-| 150 | 56.501 → 51.167 µs | 24,888 |
-
-These runs show no disabled-path regression in this fixture. There is no intended
-speed improvement on that path; compiler layout and measurement effects can
-account for the observed difference. This is not an end-to-end inference result.
-
-The explicit `compaction::tests::selection_profile` fixture measures enabled,
-cached selection separately. It revalidates source hashes before reusing a view:
-
-| Source entries | Cached selection median | Selected summary nodes | Mock cold calls |
-| --- | ---: | ---: | ---: |
-| 32 | 10.911 µs | 4 | 12 |
-| 256 | 81.421 µs | 7 | 121 |
-| 1,024 | 318.403 µs | 9 | 503 |
-
-The source-validation pass is linear in the bounded snapshot, while the selected
-summary cut is logarithmic. Flamegraphs show source rendering and hashing as the
-main enabled-path work. Snapshot limits are 4096 entries / 1 MiB; this fixture
-uses short synthetic records, not maximum-sized entries. All model replies are
-mocked. Four-entry leaves produce many cold calls; operators can increase the
-maximum leaf size within their model's input budget, trading fewer requests for
-larger summaries. Warm persistent-cache reuse is covered separately by a test
-that forbids any repeated model call. No Qwen fidelity, inference latency or
-hardware-fit claim follows from these measurements.
-
-Separate 499 Hz user-space CPU profiles cover baseline, disabled feature and
-enabled selection. Artifacts and logs are retained under
-`.control/performance/local-compaction-20261113/` and the isolated profiling
-scratch directory. CPU flamegraphs exclude network/disk wait time. Cgroup memory
-events stayed zero, including OOM kills. The optional inference image was built
-and its `--help`/`--version` entry points smoke-tested without weights; the runtime
-reports llama.cpp 0.7.0, build 11669, commit `620d222`.
-
-The library target's existing `terminal::profiling::render_profile` ran three
-alternating pairs at the same runtime resource limits. For 10 / 100 / 500 messages,
-baseline → feature medians were 60.799 → 61.293 µs, 138.123 → 139.327 µs and
-474.670 → 486.577 µs (+0.8%, +0.9%, +2.5%). All rendered-buffer hashes matched.
-These small increases are reported rather than presented as a speed gain; the
-transcript renderer is unchanged and the new inspector command is not exercised
-by this fixture. A discarded binary-target probe selected zero tests; only the
-verified library-target runs contribute to these figures.
-
-## Approval publication ordering (2026-11-13)
-
-Compared merged main `93d189d` with the approval-publication slice, using the
-existing synthetic release fixture on Linux aarch64 / Rust 1.99.0 with pinned
-offline dependencies. Six alternating pairs after warmup ran on one CPU with
-512 MiB and no swap. Both revisions perform one dispatcher notification per
-admission; the revised fixture supplies that notification after its synthetic
-successful acknowledgement because publication no longer wakes by itself.
-
-| Retained completed runs | Baseline → revised median | Change |
-| --- | ---: | ---: |
-| 16 | 786.5 → 941 ns | +154.5 ns (+19.6%) |
-| 1,024 | 10.719 → 9.963 µs | −7.1% |
-| 20,001 | 408.374 → 375.511 µs | −8.0% |
-
-Typed `Busy` versus `Rejected` admission results remove duplicate authorization
-and capacity checks while preserving denial-before-capacity semantics. Larger
-ledgers improve, but the small fixture retains a fixed sub-microsecond overhead
-from the preparation/publication split; this is not a claim of zero regression.
-The fixture excludes checkpoint I/O, request grouping and bot reconciliation;
-it does not measure end-to-end approval latency or the new status projection.
-
-Actual CPU-clock flamegraphs contain 2,514 / 2,175 samples. Memory-event counters
-did not increase during the measured run; no OOM occurred. Scripts, timing logs,
-raw stacks, SVGs and binary hashes are retained locally under
-`.control/performance/approval-publication-20261113/`. Tests separately verify
-checkpoint-before-wake, save rejection without wake, reload deduplication and
-paused/queued/running labels. No live model calls were made.
-
-## Approval eligibility and checkpoint reconciliation (2026-11-13)
-
-Compared main `dda2b89` with runtime changes through `5f0babc`, with identical
-profiling fixtures injected into the baseline. Linux aarch64 / Rust 1.99.0,
-identical release flags and offline pinned dependencies; one CPU, 512 MiB and
-no swap during measurement. No live app, model or real credential was involved.
-After warmup, six alternating baseline/revised pairs measured these paths:
-
-| Retained completed runs | Approval resume, baseline → revised | Change |
-| --- | ---: | ---: |
-| 16 | 772 → 724 ns | −6.2% |
-| 1,024 | 10.222 → 10.346 µs | +1.2% |
-| 20,001 | 361.957 → 362.823 µs | +0.2% |
-
-The approval fixture includes eligibility, host authorization/capacity, queue
-construction, note append and dispatcher notification, then resets the appended
-records. Each process retains ten 100-operation batches after discarding the
-first. Larger-history process medians overlap; no broad speedup is claimed for
-moving the existing selection rules behind a borrowed interface.
-
-Normal saves use the existing 31-sample durable-save fixture, rotating its four
-stages. Median process medians for full serialization/publication are below.
-Tmpfs removes durable-storage latency but does **not** test durability.
-
-| Runs / finished handoffs | Disk save, baseline → revised (ms) | Tmpfs save, baseline → revised (µs) |
-| --- | ---: | ---: |
-| 1 / no | 2.306 → 2.173 | 40.980 → 40.188 |
-| 1 / yes | 1.724 → 2.131 | 40.084 → 39.917 |
-| 100 / no | 1.504 → 1.803 | 110.730 → 107.813 |
-| 100 / yes | 1.584 → 1.758 | 151.251 → 153.229 |
-| 1,000 / no | 2.963 → 2.932 | 727.563 → 733.459 |
-| 1,000 / yes | 3.379 → 3.388 | 1,104.772 → 1,122.418 |
-
-Normal successful saves gain no extra filesystem calls. Tmpfs changes range from
-−2.6% to +1.6%; disk results are noisier, including case medians up to +23.6%.
-These measurements do not prove unchanged durable-save latency. Reconciliation
-performs its bounded-buffer comparison and additional syncs only on uncertainty.
-
-Checkpoint loading now confirms file/directory durability before recovery. For a
-74,208-byte checkpoint, six process medians (50 retained loads after warmup)
-give **28.865 → 29.698 µs**, about +0.833 µs (+2.9%). This measures repeated
-warm, clean-file loads, not cold startup or degraded storage; sync latency on
-other filesystems can be higher. The confirmation is a correctness cost at
-startup, not an added sync on ordinary chat/tool reads.
-
-Actual CPU-clock samples/flamegraphs cover approval admission (2,212 / 2,211
-samples, 1,000-operation batches) and save stages (65 / 76 sparse samples).
-User-space CPU samples do not measure blocked fsync time. No memory-pressure,
-limit or OOM events occurred. Scripts, timing logs, raw stacks, SVGs, binary
-hashes and resource settings remain locally in
-`.control/performance/approval-checkpoint-20261113/`. Fault tests establish the
-new recovery/fencing behaviour separately; this is not a game or model-throughput
-comparison and does not establish out-of-lock or async persistence safety.
-
-## Shared continuation constructor (2026-11-13)
-
-Compared deployed main `6579846` with constructor slice `16bc49a`, injecting the
-same ignored `chat::tests::profile_continuation_admission` fixture into both
-snapshots. Both used identical release flags with debug symbols, pinned offline
-dependencies and Linux aarch64 / Rust 1.99.0. Timing used one CPU, 512 MiB and no
-swap in an isolated helper, with no live application/model calls. The fixture
-queues a continuation from captured settings, then removes that run to preserve
-the retained ledger. It includes authorization/capacity checks, queue-order
-scan, construction and dispatcher notification; it excludes persistence, real
-workers, web/TUI rendering and context-history hydration.
-
-After warmup, six alternating baseline/revised pairs each retained ten batches
-of 100 operations, discarding the first batch. The table reports the median of
-the six process medians; retained records are completed runs.
-
-| Retained runs | Baseline | Revised | Change |
-| --- | ---: | ---: | ---: |
-| 16 | 277.5 ns | 236.5 ns | −14.8% |
-| 1,024 | 1.586 µs | 1.502 µs | −5.3% |
-| 20,001 | 100.874 µs | 99.548 µs | −1.3% |
-
-All six short-ledger pairs improved. The large-ledger process medians overlap
-(baseline 98.752–102.170 µs; revised 99.066–103.078 µs), so the largest case is
-effectively unchanged at this precision; ledger scans still dominate. This is a
-small admission-path saving, not a model-throughput or whole-application speedup.
-No new memory-limit or OOM events occurred. Real `perf record` CPU-clock samples
-(577 / 565, using 1,000-operation batches) and before/after flamegraphs accompany
-the timings under `.control/performance/continuation-construction-20261113/`, with
-scripts, resource limits, binary hashes and raw stacks.
-
-## Classified checkpoint boundary (2026-11-13)
-
-Compared test-layout baseline `bbdd73c` with checkpoint adapter `9b2765a`, using
-the existing `storage::tests::profile_durable_save_stages` release fixture.
-Both binaries used identical flags (debug symbols retained), Linux aarch64,
-Rust 1.99.0, one CPU and 512 MiB without swap in an isolated helper. Live bots,
-models and application state were not involved. Each fixture rotates serialization,
-overwrite/fsync, atomic replacement and complete save, retaining 31 samples per
-stage and case. Complete-save medians below are medians across three alternating
-disk pairs after warmup, and six alternating tmpfs pairs respectively.
-
-| Retained runs / finished handoffs | Disk save, baseline → revised (ms) | Tmpfs save, baseline → revised (µs) |
-| --- | ---: | ---: |
-| 1 / no | 2.144 → 2.068 | 43.29 → 44.00 |
-| 1 / yes | 2.709 → 2.871 | 44.52 → 41.83 |
-| 100 / no | 1.517 → 1.524 | 114.98 → 115.90 |
-| 100 / yes | 2.199 → 2.468 | 163.11 → 162.42 |
-| 1,000 / no | 3.167 → 3.485 | 754.73 → 745.92 |
-| 1,000 / yes | 3.619 → 3.748 | 1,158.84 → 1,144.61 |
-
-Disk results are noisy: individual process medians span 1.16–4.02 ms before and
-1.12–4.15 ms after. Some case medians rise up to 12%; this small sample cannot
-prove unchanged durable-save latency. The tmpfs control removes durable storage
-latency while retaining serialization and filesystem calls: changes range from
-−6.0% to +1.6%, with no consistent CPU overhead detected. Tmpfs does **not** test
-durability. No speed improvement is claimed for adding error classification.
-
-Actual `perf record` CPU-clock stacks and flamegraphs were collected for both disk
-fixtures (72 / 115 samples). These sparse user-space samples are a sanity check,
-not evidence about blocked fsync time or a statistically precise CPU comparison.
-No new memory-limit or OOM events occurred. Logs, scripts, resource settings,
-binary hashes, raw samples and SVGs remain locally under
-`.control/performance/checkpoint-outcomes-20261113/`. This does not measure provider
-throughput, web/TUI rendering or persistence moved outside the lock.
-
-## Small-machine efficiency goal
-
-Control's core, tools and TUI should have sufficiently low overhead to be
-plausible on a tiny machine. Pi Zero-class hardware illustrates that resource
-class; it is not a required board, instruction set or 512 MiB release gate.
-The website has a separate deployment and performance budget. The goal is an
-efficient architecture, rather than certification for a particular device.
-
-Measure cold and warm startup, peak/idle RSS, idle CPU, tool dispatch, context
-construction and TUI input/render latency, including tail latency and growing
-history. Record architecture, storage, concurrency and swap use. Model execution
-and requested workload resources have separate budgets; report Control's own
-overhead explicitly. Avoid extra timers, duplicated state, repeated history
-hydration and dependencies in the core. Keep web assets and optional adapters
-separable through the typed state/effect boundaries; the current all-in-one
-binary is not evidence of a website-free minimal build.
-
-Keep state and typed effects independent of execution backends. Treat Docker as
-one backend adapter; alternative runtimes should implement the same
-capability, ownership and lifecycle contracts. Measure Control's own overhead
-separately from each backend's startup, resident services and workload costs.
-Prefer event-driven idle behavior, bounded active projections and journal-backed
-history over polling, whole-state copies or repeated reconstruction.
-
-Use reproducible baselines to catch relative regressions and justify overhead.
-Constrained-container and hardware checks provide additional evidence, without
-making a named board a prerequisite. The 512 MiB/no-swap experiment below is
-one measurement condition, not a product support promise or mandatory budget.
-
-## Typed room notification publication (2026-11-13)
-
-Compared main `457a117` with the typed publication operation using an identical
-`profile_room_publication` fixture in both source snapshots. The fixture admits
-and publishes one notification through reconciliation, verifies its receipt and
-run count, then resets the touched records for the next iteration. Checkpoint
-I/O is a counted no-op and no worker/model is started. Timings include planning,
-run construction, mutation and fixture reset, but exclude fsync, active dispatcher
-delivery and real application workload latency.
-
-Linux ARM64/rustc 1.99.0, release with debug symbols, one pinned virtual CPU,
-512 MiB and no swap. Each fixture uses ten batches of 100 iterations, discards
-the first batch and reports the remaining median. One warmup fixture per revision
-precedes six alternating pairs; the table shows medians of their six medians.
-
-| Retained runs | Before | After | Change |
-| --- | ---: | ---: | ---: |
-| 16 | 938 ns | 951 ns | +1.4% |
-| 1,024 | 31.219 µs | 30.751 µs | -1.5% |
-| 20,001 | 1.050 ms | 0.985 ms | -6.2% |
-
-The smaller cases are roughly unchanged. The largest fixture is lower in all
-six pairs; this is a result for this in-memory publication path, not a general
-server or TUI speedup. The driver now checks capacity once under exclusive
-ownership rather than again inside `Runtime::enqueue_for`, and constructs the
-run directly from captured settings. Retained-run index/queue-order scans remain
-linear. No allocation or resident-memory improvement is established.
-
-Real `perf` captures use `cpu-clock:u`, 499 Hz and DWARF stacks: 6,628 baseline
-samples and 6,570 revised samples, rendered with Inferno. Profiling/symbolization
-use 2 GiB, outside the timing runs. During the measured pairs, memory-limit and
-OOM counters do not increase (the max counter was already nine after setup and
-warmups). Raw logs, environment/counters, scripts, perf data and flamegraphs are
-retained under `.control/performance/room-effects-20261113/` (ignored locally).
-These measurements and fake-checkpoint tests do not cover ambiguous real save
-outcomes; see [state boundaries](STATE-BOUNDARIES.md).
-
-## One-shot room admission boundary (2026-11-13)
-
-Compared main `52bff4c` with the borrowed application planner using the same
-`profile_idle_and_waiting_room_reconciliation` fixture in both source snapshots.
-The fixture now accepts `CONTROL_ROOM_PROFILE_ROUNDS` for the armed case; its
-default remains 10. Timings used 100 iterations per batch, nine batches per
-fixture, one warmup fixture per revision and six alternating pairs. Linux ARM64,
-rustc 1.99.0, release with debug symbols, one pinned virtual CPU, 512 MiB and no
-swap were held constant. Compiler builds and stack symbolization used higher
-memory limits, outside the timing runs.
-
-With 20,001 retained runs and one armed, waiting subscription, the median of the
-six fixture medians was 766,740.5 ns before and 762,609.5 ns after (-0.54%). The
-ranges were 720,569–814,141 ns and 691,706–805,498 ns. Treat this as roughly
-unchanged performance, not a speedup. The unarmed fast path remained at the
-fixture's few-nanosecond measurement floor. No model, container lifecycle or
-checkpoint I/O occurs inside this waiting-path fixture; its save callback fails
-the test if called. It does not measure queue publication/fsync, interactive TUI,
-web latency or overall swarm throughput.
-
-Real `perf` captures use `cpu-clock:u`, 499 Hz and DWARF stacks: 3,229 baseline
-samples and 3,464 revised samples, rendered with Inferno. The revised stacks
-contain `application::room_wakes::plan`; retained-run index construction remains
-in this path. This extraction does not remove its linear scan. Timing-run
-`memory.events.max` increased by six while OOM/kill counters stayed zero;
-the logs retain this limit pressure and do not establish a resident-memory
-improvement. Raw paired logs, environment, memory counters, scripts, perf data
-and flamegraphs are retained under the ignored local directory
-`.control/performance/room-wakes-20261113/`.
-
-## Watch notification transport (2026-11-09)
-
-Compared the existing stdout collector with the notification-channel revision,
-using the same isolated Linux ARM64 fixture on one virtual CPU, a 512 MiB cgroup
-limit and no swap. The compatibility path keeps notifications disabled. Each run
-starts eight finite processes producing 20,000 diagnostic lines each, collects
-their framed output and verifies the exact source count. One warmup per revision
-precedes six alternating pairs. Median wall time is 499.6 ms before and 504.3 ms
-after (+0.9%); ranges are 491.6–555.3 and 490.5–520.9 ms. This fixture shows roughly
-unchanged throughput within its observed variation, not a general regression bound.
-
-Separate real `perf` captures use `cpu-clock:u`, 499 Hz and DWARF stacks: 169
-baseline samples and 164 revised samples, converted with Inferno into flamegraphs.
-These short captures are coarse; they do not establish allocation or idle-CPU
-bounds. Enabling notifications adds a descriptor and bounded input buffer to the
-existing collector thread rather than adding a thread per channel. The std-only
-runner gains no dependency; model execution and task-resource costs are excluded.
-
-The common `watches::tests::collector_profile` fixture uses only the old runner API and
-can be copied unchanged into the baseline. Run it only inside an isolated Linux
-container with a private home and writable `/workspace`, without credentials:
-
-```sh
-rustc --edition=2024 --test -O -C debuginfo=1 tools/service-runner/main.rs -o /tmp/runner-tests
-/tmp/runner-tests watches::tests::collector_profile --ignored --exact --nocapture
-```
-
-For longer sampling, set `CONTROL_WATCH_PROFILE_BATCHES=128` and apply the
-`perf record`/Inferno procedure below. Functional regressions separately verify
-that diagnostic floods admit no turns, a selected notification releases an
-event-only wait once, and published notification receipts suppress an extra turn.
-
-## Shared client and terminal build boundary (2026-11-10)
-
-Compared main `52bff4c` with the client/terminal module extraction. The identical
-offline Ratatui `TestBackend` fixture constructs a transcript and draws a 100×30
-frame. Six alternating pairs each discard one warmup batch and retain nine
-batches of 100 frames. Linux ARM64 timings use one virtual CPU, 512 MiB and no
-swap, with the same release toolchain. Medians of the six fixture medians:
-
-| Messages | Before | After | Change |
-| --- | ---: | ---: | ---: |
-| 10 | 63.299 µs | 63.366 µs | +0.1% |
-| 100 | 143.474 µs | 146.010 µs | +1.8% |
-| 500 | 499.106 µs | 503.656 µs | +0.9% |
-
-Visible frame hashes match. These small increases are not a rendering speedup or
-a guarantee of zero overhead. The fixture measures transcript construction and
-in-memory terminal layout/drawing, not actual terminal I/O or interactive latency.
-
-Stripped Linux executables are 10,820,376 bytes for both default servers and
-10,427,072 bytes for the new server-only variant (-3.6%). The standalone terminal
-grows 3,807,632 → 3,873,168 bytes (+64 KiB); text/data totals grow 8,592 bytes.
-This is a recorded cost of the shared library boundary, not a size improvement.
-The server-only normal dependency graph contains neither ratatui nor crossterm.
-
-101 alternating startup pairs, after three warmups, give 473.585/469.584 µs for
-`--version` and 463.209/465.126 µs for MCP startup to stdin EOF: effectively
-unchanged at this scale. In a separate comparison, baseline/server-only version
-startup is 451.710/447.668 µs. Initial grouped startup results varied substantially;
-the alternating comparisons avoid that order effect. Standalone TUI connect/check
-uses three warmups and 31 launches per variant against a scratch loopback node:
-152.601/152.603 ms, and 152.310 ms against the server-only node. That check does
-not measure interactive rendering. Fresh-node readiness waits for HTTP health,
-not merely an open socket; no production retry or timeout policy was changed.
-
-Real terminal flamegraphs capture 3,340/3,279 `cpu-clock:u` samples at 499 Hz with
-DWARF call stacks and function-level Inferno conversion. Profiling/symbolization
-uses 2 GiB; compilation uses 4 GiB. Timing runs record no OOM events. No models,
-live node state or credentials are used. The lean Nix package also passes local
-health, shared MCP read/denial and both terminal-entry-point checks on a scratch
-node with zero model runs.
-
-Reproduce the after fixture with `cargo test --release --locked --lib
-terminal::profiling::render_profile -- --ignored --exact --nocapture` in the pinned
-environment. For before/after work, copy the same fixture into the baseline's
-terminal module. The server-only build is `cargo build --release --locked
---no-default-features --bin control`, or `nix build .#control-server`.
-
-## Directed-message application boundary (2026-11-10)
-
-Compared main `856be99` with the typed state/effect extraction, using the unchanged
-`agent_message::profile::routing_profile` and `performance::hot_paths` fixtures.
-Both builds use the same lockfile versions, Linux ARM64 toolchain and embedded
-WASM bundle. Six alternating pairs run on one virtual CPU under 512 MiB with
-swap disabled. Routing discards one warmup batch and retains nine batches of
-20,000 calls per size. These are medians of the six fixture medians:
-
-| Chats/runs | Before | After | Change |
-| --- | ---: | ---: | ---: |
-| 16 | 0.923 µs | 0.919 µs | -0.4% |
-| 64 | 1.184 µs | 1.112 µs | -6.1% |
-| 1,024 | 4.038 µs | 3.475 µs | -13.9% |
-
-The small case is effectively unchanged. This is the existing downward-message
-path, including in-memory construction/reset, result encoding and dispatcher
-notification, with fake archive/save effects. It excludes actual fsync, peer wake
-reconciliation, provider work and async scheduling. Bounded receipt retention no
-longer clones the cache on every call; the new constructor directly inherits the
-recipient's settings. Treat these as CPU fixture results, not whole-swarm gains.
-
-The existing transcript-rendering fixture measures 10, 100 and 500 messages with
-0, 1,000 and 5,000 unrelated runs. Before/after medians are 43.131/42.102 µs,
-498.231/476.081 µs and 2.418/2.359 ms. Output byte counts and SHA-256 hashes match
-in every pair. The small decreases do not establish a general rendering speedup
-from moving record types; the important check is no observed regression here.
-
-Real `perf` sampling runs are separate from timing: `cpu-clock:u`, 499 Hz,
-DWARF stacks, then `perf script --no-inline`, Inferno collapse and flamegraph.
-Routing captures 1,202/1,125 samples and web rendering 141/136 (a coarse web view).
-The profiler/symbolizer receives 2 GiB with swap disabled; the timing limit remains
-512 MiB. The initial inline-symbolization session at 512 MiB recorded one OOM
-kill and failed helper reads after the timed fixtures had finished. Final graphs
-use function-level stacks and the larger profiling allowance. Only the isolated offline profiler receives
-PERFMON; production services receive no profiling privileges.
-
-Release compilation uses a separate 4 GiB allowance; runtime timings begin only
-after builds finish. No models, private node state or credentials are used.
-Blocking/Tokio conformance tests exercise the same message transition, but Tokio
-is not a production dependency or a measured speed improvement. TUI presentation
-is unchanged; its eventual crate extraction still needs dedicated interactive
-rendering/startup measurements. No Pi-board or whole-server latency claim follows.
-
-Reproduce with identical source fixtures and separate executables:
-
-```sh
-CONTROL_PROFILE_ROUNDS=20000 cargo test --release --locked --bin control \
-  agent_message::profile::routing_profile -- --ignored --exact --nocapture
-cargo test --release --locked --bin control \
-  performance::hot_paths -- --ignored --exact --nocapture
-```
-
-## Peer coordination review (2026-11-09)
-
-Compared the reviewed peer-delivery patch with `abc93d4`, using separate optimized
-Linux ARM64 build directories, identical Rust fixtures and a two-CPU offline
-container. Six alternating pairs each discard one warmup batch and retain nine
-batches of 10,000 downward messages. These are medians of the six batch medians:
-
-| Retained chats/runs | Baseline routing | Reviewed routing | Change |
-| --- | ---: | ---: | ---: |
-| 16 | 1.356 µs | 0.962 µs | -29.1% |
-| 64 | 1.673 µs | 1.246 µs | -25.6% |
-| 1,024 | 5.105 µs | 4.160 µs | -18.5% |
-
-The first version regressed the 16-chat fixture by 6.2%. Borrowing the bounded
-title and truncating the formatted objective at a UTF-8 boundary removes two
-allocations without changing the 80/2,000-character limits. The fixture includes
-in-memory message/queue construction and reset, excluding filesystem durability,
-peer wake reconciliation, provider execution and fixture setup. It compares the
-existing downward path; it does not claim these numbers for new peer delivery.
-Room guidance is 1,110 → 1,108 bytes; the message tool schema is 1,048 → 1,343 bytes.
-
-The 600-turn HTTP/save/render check remains sensitive to this VM and storage.
-Unpinned bind-mount samples gave 7.429 → 7.998 ms/turn across the five measured
-stages, with contradictory paired CPU changes from -29% to +49%. Six further
-pairs pinned to one virtual CPU, on container-local disk under a 512 MiB cgroup
-limit with swap disabled, gave 11.117 → 10.057 ms/turn and 3.793 → 3.248 ms measured
-thread CPU. Both save 601 KiB. These differing results do not establish a general
-save/render speedup or a precise regression bound. Retain the noisy results and
-validate durability latency in representative deployment environments before
-setting numeric performance gates.
-
-Real `perf` flamegraphs cover routing and HTTP before/after, using `cpu-clock:u`,
-499 Hz and DWARF stacks. Routing captures 1,712/1,260 samples and HTTP 738/757;
-profiling runs are separate from timing runs. Inspect them with the conversion
-commands below; elapsed timings are not used to manufacture flamegraphs.
-
-Real stripped production executables on container-local disk were also checked
-under the 512 MiB/no-swap limit. Startup uses three warmups then 31 process
-launches; peak RSS uses nine separate GNU Time samples. TUI `--check` connects to
-a fresh empty server; it does not measure interactive rendering.
-
-| Footprint/check | Baseline | Reviewed |
-| --- | ---: | ---: |
-| Stripped Control binary | 10,754,840 bytes | 10,754,840 bytes |
-| Stripped standalone TUI | 3,807,632 bytes | 3,807,632 bytes |
-| MCP startup to stdin EOF, median | 0.323 ms | 0.334 ms |
-| MCP peak RSS, median | 5,112 KiB | 5,112 KiB |
-| TUI connect/check, median | 162.03 ms | 161.35 ms |
-| TUI connect/check peak RSS, median | 7,260 KiB | 7,300 KiB |
-| Empty server RSS after requests | 21,428 KiB | 21,540 KiB |
-
-The short `--version` startup check varies from 0.335 → 0.457 ms; do not describe
-all startup paths as faster. No cgroup OOM events occurred. Server memory is one
-idle observation, not a bound for an active swarm; larger histories, concurrency,
-tool workloads and interactive TUI rendering need their own measurements. These
-results describe Control's measured overhead, not certification for a Pi board.
-
-Reproduce routing with the same fixture copied unchanged into the baseline:
-
-```sh
-nix develop --command cargo test --release --locked --bin control \
-  agent_message::profile::routing_profile -- --ignored --exact --nocapture
-```
-
-For HTTP comparisons, create a fresh `CONTROL_STATE_DIR` before each invocation
-of the 600-turn fixture below. Keep revisions in separate build directories and
-alternate their execution order. Never point profiling at the running node.
-
-## Active sessions and durable bot handoffs
-
-The active-session implementation was compared with `fcc76fc` using identical
-600-turn HTTP/save/render fixtures, separate release build directories, the
-same offline Linux ARM image and a two-CPU limit. Six pairs alternate execution
-order after builds finish. No credentials, live node state or model calls are
-used. Ordinary chat medians are 6.575 ms/turn before and 6.535 ms after; median
-measured thread CPU across the five stages is 5.164 ms and 5.097 ms respectively.
-Both save 582 KiB. Samples range from 6.481–9.955 ms before and 6.038–7.253 ms
-after. This supports no observed ordinary-path regression, not a throughput
-speedup claim. Host load and filesystem latency still affect these timings.
-
-The initial prototype regressed this fixture. Optional managed state now lives
-behind boxes, finished receipt mailboxes use the existing history journal, and
-progress is derived from the accepted handoff instead of duplicated per attempt.
-Managed admission also avoids constructing an unused legacy prompt. On this
-Linux build, `Attempt`/`Run`/`Session` sizes change from 512/1104/504 bytes to
-544/1080/512 bytes. These are compiler/layout observations, not wire contracts.
-
-The context benchmark separately compares the managed task view with this
-branch's legacy prompt path over the same synthetic monitoring history. It
-measures construction, not provider execution or persistence. Raw history is
-retained; only the projected model input is bounded. Before/after HTTP workloads,
-both context paths, journal capture and durable saves have real `perf` sampling
-flamegraphs (`cpu-clock:u`, 499 Hz, DWARF call stacks), rather than diagrams
-inferred from elapsed times. Only the isolated profiler container is privileged.
-
-| Monitoring exchanges | Legacy construction | Managed construction | Managed input |
-| --- | ---: | ---: | ---: |
-| 15 | 9.43 µs | 2.30 µs | 4,192 bytes |
-| 150 | 76.55 µs | 12.76 µs | 4,193 bytes |
-| 1,000 | 183.08 µs | 101.79 µs | 4,194 bytes |
-
-Construction still indexes retained history; bounded input does not imply
-constant construction time. This fixture's repeated wake text is deliberately
-unhelpful, so these reductions are not a general compression ratio.
-
-Reproduce with fresh scratch state directories; never use a running node's state:
-
-```sh
-CONTROL_STATE_DIR=/tmp/control-http-bench CONTROL_PROFILE_CONVERSATIONS=40 \
-  nix develop --command cargo test --release --locked --bin control \
-  session_http::tests::fifteen_turn_conversations_workload -- --ignored --exact --nocapture
-CONTROL_PROFILE_PROJECTION=managed \
-  nix develop --command cargo test --release --locked --bin control \
-  turn_context::tests::active_context_profile -- --ignored --exact --nocapture
-CONTROL_STATE_DIR=/tmp/control-save-bench \
-  nix develop --command cargo test --release --locked --bin control \
-  storage::tests::profile_durable_save_stages -- --ignored --exact --nocapture
-nix develop --command cargo test --release --locked --bin control \
-  turn_context::tests::trace_persistence_profile -- --ignored --exact --nocapture
-```
-
-The save fixture separates serialization, overwrite plus fsync, atomic replacement
-plus file/directory fsync, and the complete save across 31 rotated-order samples.
-It tests 1/100/1000 finished runs with and without archived handoff receipts.
-Journal capture appends and syncs exact inputs off the global state lock; normal
-checkpoint saves retain their existing atomic replacement and fsync contract.
-On native macOS storage, 1,000 archived handoff attempts leave an 897,525-byte
-checkpoint: median serialization is 1.93 ms, atomic file/directory replacement
-and fsync is 9.07 ms, and complete save is 10.00 ms (p95 12.02 ms). These stages
-are independently timed and their medians need not add. Overwrite plus fsync
-alone is 4.14 ms; it provides weaker crash guarantees than atomic replacement.
-Exact-input journal appends measure 4.08 ms median for 4,404-byte records over
-nine batches of 100 durable writes, close to the overwrite/fsync floor. No fsync
-was removed or deferred to obtain those results.
-These synthetic checks do not establish the quality or latency of a live bot
-playtest, nor do they measure a provider's private context management.
-
-## Chat request panel
-
-Rechecked after rebasing onto `d665d60`. Compared with `fcc76fc`, the isolated Linux ARM release fixture renders a chat
-with zero or 32 pending bot approvals. Before: one transcript containing the
-forms. After: transcript plus the independently embeddable request document.
-Nine batches of 5,000 calls measured 0.82 → 1.01 µs with no approvals and
-24.02 → 21.79 µs with 32. The latter also reflects shorter bot-card text;
-it does not isolate an architectural speedup. Request content is now outside
-the conversation's scroll area. Actual browser
-latency also includes the additional small request-document poll each second.
-Unchanged snapshots preserve DOM nodes and active approval forms.
-
-Real before/after `perf` flamegraphs use the same offline build image, two-CPU
-limit, 499 Hz CPU sampling and DWARF stacks as the continuity comparison below.
-No model calls, credentials or running-node mutations are involved. Reproduce
-with `cargo test --release --locked --bin control bots::tests::requests_profile
--- --ignored --exact --nocapture`. Chrome and Firefox exercise automatic panel disclosure
-for a new child request, retained collapse state/drafts and slow/retried approvals.
-
-## Bot turn continuity
-
-The continuity fix was compared with `8f170c7`, using identical synthetic
-fixtures, Rust release builds with debug symbols, the same offline Linux ARM
-build image and a two-CPU container limit. No credentials or model calls were
-used. Nine batches of 20,000 prompt constructions include hydration of the
-previous attempt's archived observations:
-
-| Context workload | Before | After |
-| --- | ---: | ---: |
-| 15 turns, 16 prior observations | 8.42 µs | 35.72 µs |
-| 150 turns, 16 prior observations | 26.36 µs | 61.05 µs |
-
-This is an intentional correctness cost, not a performance improvement: later
-turns now receive execution evidence and omitted user instructions. Genuine
-`perf` sampling flamegraphs were captured before and after with
-`cpu-clock:u`, 499 Hz and DWARF call stacks. Archived activity hydration appears
-in approximately 34% of weighted after-context samples; JSON decoding overlaps
-that stack. The new handoff formatting appears in approximately 16%.
-
-The existing 600-turn HTTP/save/render workload measured 6.85 ms/turn before
-and 6.47 ms after, with 582 KiB saved state in both cases. This single paired
-sample suggests no regression in that path; it does not prove a speedup or
-measure model throughput. It does not construct model prompts, so it cannot
-hide the extra prompt cost above. Both workloads have before/after flamegraphs.
-
-On macOS ARM, a separate release benchmark with 64 archived observations of
-4,000 Unicode characters each measured 0.360 ms per prompt over nine batches
-of 100 calls. Excerpt limits bound prompt output, not the journal decode;
-the existing reader hydrates the entire previous record. Cold journal opening
-also scans offsets and was not isolated by these warm-loop timings. Retained
-user input grows with human instructions; the future summary plugin addresses
-that separately.
-
-Reproduce the synthetic prompt checks:
-
-```sh
-nix develop --command cargo test --release --locked --bin control \
-  conversation::tests::continuity_profile -- --ignored --exact --nocapture
-nix develop --command cargo test --release --locked --bin control \
-  conversation::tests::large_observation_profile -- --ignored --exact --nocapture
-```
-
-For Linux sampling, build the test binary with `CARGO_PROFILE_RELEASE_DEBUG=1`,
-then run that binary under `perf record -e cpu-clock:u -F 499
---call-graph dwarf,8192` with the same test filter. Convert `perf script` through
-`inferno-collapse-perf` and `inferno-flamegraph`. Only the isolated profiling
-container receives kernel profiling privileges; application workers do not.
-
-## Core scheduling extraction
-
-The initial `control-core` scheduling boundary uses borrowed, statically
-dispatched views and retains the original FIFO, chat ownership, capacity and
-attempt-fencing behavior. The application tests compare it with the original
-scheduler over 2,000 deterministic mixed ledger states, including unknown saved
-statuses, tied order, missing chat IDs, answered questions and delegation.
-
-Reproduce the old/new release comparison without credentials or model calls:
-
-```sh
-nix develop --command cargo test --release --locked --bin control \
-  scheduler::qa::scheduling_profile -- --ignored --exact --nocapture
-```
-
-Observed development Mac medians across three invocations; each invocation uses
-nine batches of 200 calls per implementation. Long ledgers contain 5,032 runs:
-
-| Workload | Previous | Core |
-| --- | ---: | ---: |
-| Open, 32 runs | 266 ns | 76 ns |
-| Open, long ledger | 9.09 µs | 8.25 µs |
-| One occupied slot, long ledger | 8.91 µs | 8.74 µs |
-| Waiting chats, long ledger | 9.09 µs | 9.15 µs |
-| Paused, long ledger | 2.95 µs | 3 ns |
-| Full slots, long ledger | 2.92 µs | 2.89 µs |
-| Full admission, long ledger | 3.91 µs | 3.90 µs |
-| Available admission, long ledger | 3.63 µs | 3.65 µs |
-
-Ordinary long-ledger cases are neutral within observed sampling variation;
-waiting-chat samples ranged 8.96–9.16 µs before and 9.02–9.19 µs after. These
-microbenchmarks do not establish an end-to-end model throughput improvement.
-No additional history buffers or persistent indexes are introduced. Paused
-selection now returns before examining history. Eager record projections and
-early-exit counting variants were rejected after they slowed ordinary queues;
-the selected implementation retains compiler-friendly full reductions.
-
-## Rust microbenchmark tool
-
-Use synthetic state and explicit workloads before changing execution policy.
-Benchmarks never load personal chat history or call a model. Timing is evidence,
-not a test assertion; correctness and publication fences remain separate checks.
+- Never point a fixture at the running node. Use fresh scratch
+  `CONTROL_STATE_DIR` and `CONTROL_CONFIG_DIR` directories.
+- For before/after work, copy the identical fixture into the baseline, keep the
+  two builds in separate target directories and alternate their runs. Report
+  medians of several runs and their ranges; overlapping ranges mean no change.
+- Treat timings as evidence, not assertions. Correctness stays in normal tests.
+- Linux flamegraphs: build with `CARGO_PROFILE_RELEASE_DEBUG=1`, run the test
+  binary under `perf record -e cpu-clock:u -F 499 --call-graph dwarf,8192` with
+  the same filter, then pipe `perf script` through `inferno-collapse-perf` and
+  `inferno-flamegraph`. Only an isolated profiling container gets profiling
+  privileges. On macOS, `sample` plus Inferno gives the same view.
+
+Fixtures by subsystem:
+
+| Subsystem | Fixture |
+| --- | --- |
+| Prompt and tool-schema size | `turn_context::tests::policy_size`, `worker_tools::deferred::tests::a_member_turn_needs_few_lookups` |
+| Context construction | `conversation::tests::continuity_profile`, `conversation::tests::large_observation_profile`, `turn_context::tests::active_context_profile`, `turn_context::tests::trace_persistence_profile` |
+| State saves | `storage::tests::profiling::profile_swarm_hour`, `storage::tests::profile_durable_save_stages`, `storage::tests::profiling::profile_checkpoint_load` |
+| Bot reconciliation | `bots::tests::reconcile_profile`, `bots::tests::recovery`, `bots::tests::requests_profile` |
+| Rooms and messages | `rooms::notifications::tests::profile_room_publication`, `rooms::notifications::tests::profile_idle_and_waiting_room_reconciliation`, `agent_message::profile::routing_profile` |
+| Scheduling and cancellation | `scheduler::qa::scheduling_profile`, `chat::tests::profile_continuation_admission`, `lifecycle::tests::reconcile_profile`, `worker::tests::cancel_profile` |
+| Services and watches | `services::commands::tests::dispatch_profile`, `services::commands::tests::live_latency`, `watches::tests::profile` |
+| Web and HTTP | `performance::hot_paths`, `performance::ownership_snapshots`, `performance::history_reads`, `performance::chat_lists`, `session_http::tests::fifteen_turn_conversations_workload` |
+| Terminal (`--lib`) | `terminal::profiling` |
+| Tools | `graph_search::tests::profile`, `compaction::tests::selection_profile`, `scores::tests::due_profile` |
 
 ## Rust benchmark tool
 
-`control.rust.bench` is available through Control's MCP server; managed workers
-use `control_rust_bench`. Rebuild the worker image with setup when updating from
-an older installation. Old images fail compilation explicitly rather than report
-unoptimized timings. The Tools catalogue groups it with the Rust playground.
-
-Example MCP call:
+`control.rust.bench` (MCP) and `control_rust_bench` (managed workers) time a
+standalone Rust expression. Use it to compare candidate implementations before
+changing application code.
 
 ```json
 {
@@ -1350,383 +75,414 @@ Example MCP call:
 }
 ```
 
-Setup runs once; the tool warms up for up to 100 iterations, then times batches
-using `Instant`. Results include raw batch nanoseconds and min/median/max per
-iteration, plus the captured image digest. Compilation and container startup are
-excluded. Return the measured value and black-box inputs to resist constant
-folding. Mutable setup state is shared across iterations; reset it in the measured
-code when that is part of the workload. Even sample counts use the upper median.
+- Setup runs once. The tool warms up for `min(iterations, 100)` iterations,
+  then times each sample batch with `Instant`. Results give raw batch
+  nanoseconds, min/median/max per iteration and the image digest. With an even
+  sample count the median is the upper one.
+- Compilation and container startup are excluded. Black-box inputs and return
+  the result to resist constant folding. Mutable setup state is shared across
+  iterations; reset it inside `code` if that is part of the workload.
+- Optimized Rust 2024, standard library only, no host files or network. Code
+  plus setup is at most 14,000 bytes; 1–1,000,000 iterations; 3–31 samples.
+- It runs in the playground's offline container: read-only root, 768 MiB, one
+  CPU, 64 PIDs, 96 MiB `/tmp`. Compilation has 12 s and the program 3 s. Results
+  are untrusted evidence.
+- Old worker images fail compilation rather than report unoptimized timings;
+  rebuild the image with setup after updating.
 
-This is optimized Rust 2024 with the standard library, no Cargo dependencies or
-host files. It uses the playground's credential-free offline container, read-only
-root, 768 MiB memory, one CPU, 64 PIDs and 96 MiB private temporary filesystem.
-Compilation has a 12-second deadline; the whole program has three seconds. Source,
-sample counts and output are bounded. The tool does not request profiling kernel
-privileges. Executed code and its reported results remain untrusted evidence.
+For a whole Cargo project, run its own benchmarks with the declared build
+environment and `control_workspace_start`.
 
-For a whole Cargo project, use the existing declared build environment and
-`control_workspace_start`/status tools to run its own benchmarks. This keeps long
-commands, source grants, cancellation and resource ownership in one executor.
+## Prompt and tool-schema size
 
-## Reproduce Control's workloads
+Every wake starts a fresh provider session and resends its whole input, so
+prompt bytes are the largest per-turn cost Control controls.
+
+**Policy on demand.** Prompts carry a short core plus one index line per
+on-demand lens; role-scoped lenses are omitted for other roles (see
+[LENSES.md](LENSES.md)). `policy_size` builds a team shaped like a real swarm
+(lead with `swarm` and `advisor`, a persistent member and the advisor, each
+woken by a room post after a dozen callbacks). It fails if the policy section
+exceeds 3,072 bytes for a member, 3,328 for a lead or 5,632 for the advisor
+(the advisor keeps its procedure inline). Moving guidance out of the prompt cut
+a member's wake text from about 26.5 KB to about 12 KB.
+
+**Deferred tool loading.** `tools/list` holds each role's core tools; the prompt
+indexes the rest, loaded with `control_tool_search`. `policy_size` fails if a
+role lists 10,000 bytes or more of schemas, keeps more than a third of its
+callable schema bytes, or has an index over 2,048 bytes. Current figures (Codex
+backend, UTF-8 bytes):
+
+| Role | Core schemas | All callable schemas | Index |
+| --- | ---: | ---: | ---: |
+| Lead | 9,604 | 62,348 | 1,718 |
+| Member | 8,918 | 62,348 | 1,815 |
+| Advisor | 3,664 | 13,933 | 680 |
+
+Most of the saving comes from tight descriptions and compact schemas for the
+core tools; spawn, bot and service tools stay core. In a scripted member turn
+of 16 typical calls, 14 are core and the other two need one
+`control_tool_search` by name (`a_member_turn_needs_few_lookups`). A local turn
+loads an indexed tool on first use without a model step.
+
+**Local planning reserve.** `OVERHEAD_TOKENS` in `src/local_agent.rs` is 7,168:
+4,096 for core schemas, 2,048 for schemas loaded during the turn and 1,024 for
+the first exchange. The local loop estimates 3 bytes per token, so the reserve
+must cover that estimate even where a real tokenizer counts fewer
+(`local_agent::tests::worker_tool_schemas_fit_the_declared_overhead_reserve`).
+
+**Cache-stable prefix.** Turn input is ordered for provider prefix caches:
+fixed framing and policy first, then history, with working and recovery notes,
+per-run wake notes and the declared observation after it. Consecutive wakes
+of the same member share all but about 300 bytes, so a local llama.cpp backend
+reprocesses about 80 tokens per wake instead of the whole input. The prefix
+breaks when the 20,000-character history window starts to slide or compaction
+summaries change.
+
+**Compact tool results.** Successful worker tool results pass through
+`worker_tools::compact`: null, empty and default-false fields are dropped, and
+top-level fields equal to the request's arguments are not echoed. Errors and
+schema or guidance results are unchanged. Service command results use a
+12-character `execution_id` handle (the full ID is also accepted; an ambiguous
+handle is refused) and keep the head and tail of long output around one
+omission marker. On a recorded swarm this cut visible tool output by about a
+third, roughly 2,000 tokens per member turn.
+
+Reproduce:
 
 ```sh
-nix develop --command cargo test --locked --release --bin control \
-  performance::hot_paths -- --ignored --exact --nocapture
-nix develop --command cargo test --locked --release --bin control \
-  performance::ownership_snapshots -- --ignored --exact --nocapture
+cargo test --locked --bin control policy_size -- --nocapture
+CONTROL_PRINT_POLICY=1 cargo test --locked --bin control policy_size -- --nocapture  # print a member's wake text
+CONTROL_PROMPT_DUMP=/scratch/prompts cargo test --locked --bin control dump_prompt_sections -- --ignored --nocapture
+cargo test --locked --bin control deferred -- --nocapture
 ```
 
-Each workload records nine batches of ten calls. Transcript workloads include
-Unicode, escaping, diffs, command output and mixed run states. Unrelated runs
-precede recent chat runs. SHA-256 fingerprints captured before the refactor check
-byte-identical HTML in normal tests. Browser regressions additionally exercise
-live updates, design questions, folder requests, focus and retained drafts.
+`dump_prompt_sections` writes each section to files for an external tokenizer,
+such as `llama-tokenize` from the Nix-pinned llama.cpp.
 
-Observed local macOS ARM release medians on 2026-10-30:
+## Context construction
 
-| Synthetic workload | Before | After |
-| --- | ---: | ---: |
-| 10 messages | 176 µs | 130 µs |
-| 100 messages, 1,000 older unrelated runs | 1.27 ms | 0.74 ms |
-| 500 messages, 5,000 older unrelated runs | 11.85 ms | 3.12 ms |
-| 500 attempt ownership snapshots with command/log buffers | 615 µs | 310 µs |
+`conversation::tests::continuity_profile` builds a managed turn context for 15
+and 150 retained turns, including hydration of the previous attempt's archived
+observations. Hydration is a deliberate correctness cost: later turns see
+execution evidence and omitted user instructions. Excerpt limits bound prompt
+output, but the reader still decodes the whole previous record, and
+construction still indexes retained history, so bounded input is not constant
+construction time. `large_observation_profile` measures 64 archived
+observations of 4,000 characters (about 0.36 ms per prompt on Apple Silicon).
 
-The renderer borrows typed messages, runs and activity instead of constructing
-an intermediate JSON response. Request-local borrowed run indexes avoid repeated
-linear searches and preserve first-match behavior. API JSON remains a separate
-projection. Ownership snapshots retain identity fields without allocating copies
-of command/log strings that are immediately discarded.
+```sh
+cargo test --release --locked --bin control conversation::tests::continuity_profile -- --ignored --exact --nocapture
+cargo test --release --locked --bin control conversation::tests::large_observation_profile -- --ignored --exact --nocapture
+CONTROL_PROFILE_PROJECTION=managed cargo test --release --locked --bin control \
+  turn_context::tests::active_context_profile -- --ignored --exact --nocapture
+cargo test --release --locked --bin control turn_context::tests::trace_persistence_profile -- --ignored --exact --nocapture
+```
 
-MCP microbenchmarks also tested an alternative HTML escaper. Even with a plain-text
-fast path it regressed sparse markup: about 1.39 µs versus 0.54 µs in the same
-Linux ARM image. That candidate is retained only as a benchmark fixture under
-`tools/rust-analysis/`; application escaping is unchanged. The ignored
-`terminal::tests::live_rust_benchmarks_use_mcp_and_compare_html_escaping` library test runs
-the comparison through an isolated node and checks compile errors and deadlines.
+## State saves
 
-These are local synthetic measurements, not provider throughput guarantees or
-kernel sampling profiles. Repeat on representative histories and the same image;
-CPU contention, allocators and VM scheduling affect results.
+Saves append one transaction line of changed paths to `state.log` and compact
+into the `state.json` snapshot only when the log outgrows it (see
+[HISTORY.md](HISTORY.md)). Before this, every save rewrote and synced the whole
+state, which on an 18 MB node meant 8–34 GB written per hour of swarm work.
 
-## Execution model next
+- `Run` is `history::Cached<Record>`: a save serializes a run once and reuses
+  its bytes until the run is next borrowed mutably. Debug builds and tests check
+  every save against a fresh serialization.
+- Finished runs move into archive blocks; the hot state keeps the newest 512
+  (`storage::archive::RECENT`) plus older resumable or still-referenced runs.
+- Array diffs anchor on byte-identical elements, so removing runs from the
+  middle of `runtime.runs` is a small splice.
+- A clean start adopts the snapshot by indexing its bytes
+  (`journal::snapshot::base`) instead of re-encoding the state.
+- A torn final log line is dropped on load; earlier saves are intact.
 
-At the time of this performance pass, the dispatcher ran one model at a time
-node-wide. The pass did not change
-admission, ordering, cancellation, mounts, durable saves or provider access.
-Durable full-ledger saves and synchronous filesystem work remain deliberate
-correctness boundaries; changing them needs separate crash/recovery evidence.
+`profile_swarm_hour` replays a simulated swarm hour of 2,000 saves (room posts,
+agent messages, watch deliveries, tool receipts, new and finished turns) on a
+copy of a real state file. On an 18.1 MB state (6,881 runs, 128 chats), APFS,
+`F_FULLFSYNC`:
 
-Concurrency should use bounded node slots while retaining per-chat ordering and
-independent writable workspaces. Parent/child waits must release slots. Exact
-attempt/resource ownership, stale-result fences and shutdown recovery must hold
-under overlapping execution. Set resource budgets before increasing fan-out;
-do not substitute model judgment for deterministic scheduling.
+| 2,000 saves | Whole-file rewrite | Current |
+| --- | --- | --- |
+| Bytes written | 37.4 GB (18.7 MB/save) | about 1.2 KB/save (log line plus new and merged blocks) |
+| Save p50 / p99 | 30.9 / 38.0 ms | 9.8 / 12.9 ms |
+| Replay of a 2,001-line log | — | 72 ms |
+| Clean start | 41.6 ms | 60 ms (snapshot plus archive blocks) |
 
-The subsequent [bounded execution implementation](EXECUTION.md) changes admission
-and supervision separately from these rendering measurements.
+About 60% of a save is now the sync. Not measured: APFS metadata writes and
+concurrent saves (each save still syncs under the state mutex; there is no
+group commit).
 
-## Terminal command discovery (2026-11-13)
+```sh
+CONTROL_PROFILE_STATE=/scratch/state.json CONTROL_PROFILE_DIR=/scratch/bench \
+  cargo test --release --locked --bin control \
+  storage::tests::profiling::profile_swarm_hour -- --ignored --exact --nocapture
+```
 
-Compared merged main `93d189d` with the terminal-only command catalogue/help
-changes using the existing release render fixture. Linux aarch64 / Rust 1.99.0,
-pinned offline dependencies, identical release flags and six alternating pairs
-after warmup; one CPU, 512 MiB and no swap during measurement.
+`CONTROL_PROFILE_STATE` must be a copy, never the live file. Optional
+`CONTROL_PROFILE_SAVES` sets the save count and `CONTROL_PROFILE_MODE=before|after`
+runs one path. `profile_durable_save_stages` times serialization,
+overwrite plus fsync, atomic replacement and the complete save separately for
+1/100/1,000 finished runs; tmpfs runs remove storage latency but do not test
+durability.
 
-| Transcript messages | Baseline → revised render median | Change |
-| --- | ---: | ---: |
-| 10 | 62.750 → 63.841 µs | +1.7% |
-| 100 | 141.492 → 143.214 µs | +1.2% |
-| 500 | 495.203 → 492.831 µs | −0.5% |
+## Bot reconciliation
 
-Process-median ranges overlap in every case and rendered-buffer hashes match.
-This is evidence against a material transcript-render regression in this fixture,
-not proof of unchanged latency on every device. It does not exercise popup layout
-or network polling. A separate revised-only fixture measures discovery plus
-highlight construction at **201–267 ns** for `/`, `/con`, `/context` and `/improve`
-and **38 ns** for ordinary text. That is not full-frame or keyboard latency.
+`bots::tests::reconcile_profile` measures one reconcile pass on a task tree
+with N helper chats (16 turns each, one in twenty failed), 128 live claims and
+one persistent room bot. `idle` passes find nothing to do; `offered` passes are
+forced through the full path. Reconciliation is event-triggered, not polled.
+Release, Apple Silicon, medians:
 
-Actual render flamegraphs contain 1,032 / 1,042 CPU-clock samples. Memory-event
-counters did not increase during measurement and no OOM occurred. Timing logs,
-raw stacks, SVGs, scripts and binary hashes remain locally under
-`.control/performance/tui-commands-20261113/`. An interactive local-client smoke
-check completed `/con` with Tab and opened `/help` without submitting a model
-prompt; all existing paused bot/run state was preserved.
-
-## Model/compaction series (2026-11-13)
-
-Compared deployed `b744ee2` with the series through chat model selection using
-the existing release fixtures, Linux aarch64 and the pinned offline toolchain.
-Six alternating history pairs and three TUI pairs followed warmup. Measurements
-used one pinned CPU, 512 MiB and no swap; the external Qwen experiment used
-different CPU cores on the same host. Treat host pressure and compiler layout as
-possible noise, particularly for code paths unchanged with compaction disabled.
-
-| Fixture | Baseline → revised median |
-| --- | ---: |
-| Managed context, 15 turns, compaction off | 37.033 → 35.971 µs |
-| Managed context, 150 turns, compaction off | 62.736 → 57.493 µs |
-| TUI render, 10 messages | 83.960 → 79.354 µs |
-| TUI render, 100 messages | 179.193 → 180.981 µs |
-| TUI render, 500 messages | 618.735 → 632.162 µs |
-
-Prompt sizes match at 17146/24888 bytes; every rendered-buffer hash matches.
-The largest TUI median increase is 2.2%, with overlapping sample distributions.
-No material regression is established by these fixtures; they do not measure
-network polling, end-to-end inference or every workload. The revised enabled
-selection fixture took 7.702/43.955/157.545 µs for 32/256/1024 entries, selecting
-4/7/9 tree nodes. Its model calls are deterministic mocks, not Qwen timings.
-Covered-prefix validation still scans retained source; this is not constant-time
-history access. Cold summary generation and disk cache size are separate costs.
-
-CPU-clock flamegraphs were captured for baseline/revised history and revised
-enabled selection. Memory-event counters remained zero, including OOM. Local
-logs, raw profiling data and SVGs are retained under
-`/private/tmp/control-boundary-profile/compaction-series/`; copied logs/SVGs are
-under `.control/performance/compaction-series-20261113/`. The profiling helper is
-stopped. These fixtures profile the host/core path; the inference container is an
-optional external service and its RAM is reported separately in
-[LOCAL-MODELS.md](LOCAL-MODELS.md).
-
-## TUI history layout and scrolling (2026-11-13)
-
-The revised terminal caches the formatted transcript and UTF-8 row ranges until
-its data/view changes. Resize rebuilds the row index; ordinary scrolling borrows
-only visible rows. It retains one active transcript, not a full history-sized cell
-grid. This adds retained text/index memory and moves linear work to initial load,
-changed data and resize. Network refresh remains synchronous and is not measured
-by these offline renderer fixtures. Scroll positions now use `usize`, removing
-the previous 65535-row ceiling. Tool details are folded in presentation by
-default; `/activity full` expands the retained output and failures remain visible.
-
-Linux aarch64, pinned release toolchain, one CPU / 512 MiB / no swap, six
-alternating pairs against the pre-styling model-series binary:
-
-| Messages | Previous → cached warm-frame median |
-| --- | ---: |
-| 10 | 58.989 → 58.443 µs |
-| 100 | 132.922 → 58.370 µs |
-| 500 | 454.856 → 58.737 µs |
-
-A separate fixture scrolls to varied offsets in 1000/10000-message histories:
-**62.047/71.417 µs** warm-frame medians, including viewport drawing/diffing. Cold
-format/index construction took **2/24 ms** respectively (6000/60000 indexed rows).
-This is evidence for bounded visible-row work, not constant-time initial loading,
-model inference or network latency. The buffer hashes deliberately change with
-the new cards/spacing; Unicode/style, attribution, expansion and large-offset
-checks validate correctness instead of expecting the old appearance.
-
-Actual CPU-clock flamegraphs were retained (921 revised samples), with no memory
-event/OOM increases. Local scripts, binaries, raw stacks and logs remain under
-`/private/tmp/control-boundary-profile/tui-history/final/`; copied SVGs/logs and
-the synthetic offline visual preview are in
-`.control/performance/tui-history-20261113/`. The helper is stopped.
-
-## Scoped GitHub inspection (2026-11-14)
-
-Compared deployed main `4ebabf7` with utility revision `098fc80` using the existing
-release fixtures, Linux aarch64 and the same pinned offline toolchain. Six
-alternating pairs followed warmup, with one pinned CPU, 512 MiB and no swap.
-Values below are medians of the six process medians.
-
-| Fixture | Baseline → revised median |
-| --- | ---: |
-| Cached TUI render, 10 messages | 60.737 → 59.592 µs |
-| Cached TUI render, 100 messages | 60.509 → 59.709 µs |
-| Cached TUI render, 500 messages | 60.498 → 59.062 µs |
-| Coordination routing, 64 chats | 1.258 → 1.250 µs |
-
-All rendered-buffer hashes match and process-median ranges overlap. These
-fixtures show no material regression; the small decreases are not a demonstrated
-optimization. Command discovery plus highlighting for `/`, `/con`, `/context`
-and `/improve` measured 285/201.5/214.5/211 ns before and 293/205/218/209.5 ns
-after adding `/github`; ordinary text measured 38/37.5 ns. The largest increase
-is 8 ns. This does not measure keyboard-to-frame latency or GitHub API latency.
-GitHub authorization, bounded replies and TUI transport use deterministic mocks
-and loopback fixtures; no live credential was used for these checks.
-
-Actual CPU-clock flamegraphs contain 901/884 baseline/revised TUI samples and
-1258/1228 routing samples. Rendering remains dominated by Ratatui buffer work;
-routing by string traversal, comparisons and copies. Memory-event counters
-remained zero, including OOM. Raw data, scripts and binaries remain under
-`/private/tmp/control-boundary-profile/github-inspection/`; copied logs, folded
-stacks and four SVGs are under
-`.control/performance/github-inspection-20261114/`. The profiling helper is
-stopped; the separate inference service is retained.
-
-
-## Team advisor lifecycle facts (2026-11-15)
-
-The advisor's lifecycle facts are computed inside `bots::reconcile`, so the
-fixture `bots::tests::reconcile_profile` measures one reconcile pass on a single
-task tree: a root, N helper chats with 16 executed turns each (one in twenty
-failed), 128 live claims and one persistent room bot. `idle` passes find nothing
-to do; `offered` passes are forced through the full path by an own-chat post
-that admits no turn. The before case ran the identical fixture copied to
-`36e09dd`. Release builds on one Apple Silicon laptop, three alternating
-rounds of ten 1,000-pass batches; the table shows the median of the round medians.
-No credentials or model calls are involved.
-
-| Case | Before | After, no advisor | After, one advisor |
+| Case | No advisor | One advisor | Advisor, a quarter of claims blocked |
 | --- | ---: | ---: | ---: |
-| idle, 64 chats / 1,153 runs | 27.7 µs | 27.8 µs | 42.4 µs |
-| offered, 64 chats / 1,153 runs | 35.0 µs | 35.6 µs | 49.9 µs |
-| idle, 512 chats / 9,217 runs | 208.7 µs | 206.6 µs | 339.4 µs |
-| offered, 512 chats / 9,217 runs | 214.9 µs | 213.1 µs | 350.7 µs |
+| idle, 64 chats / 1,153 runs | 27.7 µs | 45.1 µs | 46.1 µs |
+| offered, 64 chats / 1,153 runs | 35.5 µs | 52.6 µs | 55.6 µs |
+| idle, 512 chats / 9,217 runs | 206.0 µs | 347.4 µs | 351.5 µs |
+| offered, 512 chats / 9,217 runs | 214.1 µs | 355.5 µs | 358.7 µs |
 
-Nodes without an advisor are unchanged within noise: the check reads only bot
-definitions and adds no state, lock or copy. An advisor adds one read-only pass
-over chats and runs per reconcile, about 14 ns per run. A `sample` call tree
-showed that pass dominated by SipHash lookups of chat IDs. Replacing them with a
-per-pass word-at-a-time (Fx-style) hasher cut the advisor overhead at 9,217 runs
-from about 200 µs to 131 µs; a byte-wise FNV hasher was slower and was dropped.
-The rest is one cache-missing read per run, comparable to the existing claim
-abandonment pass. Terminal statuses are not final (operator retry re-queues
-failed runs), so an incremental watermark was not used. Reconciliation is
-event-triggered, not polled. Reproduce with
-`cargo test --release --locked --bin control bots::tests::reconcile_profile -- --ignored --nocapture`,
-adding `CONTROL_PROFILE_ADVISOR=1` for the advisor cases.
+Advisor lifecycle facts are computed only for trees whose root offers the
+`advisor` lens; a defined advisor with the lens unticked costs the same as none.
+An advisor adds one read-only pass over chats and runs (about 14 ns per run),
+using a per-pass word-at-a-time hasher for chat IDs. Blocker reasons are
+fingerprinted, so they are re-tokenised only when a blocked note or a failing
+member's latest result changes. Terminal statuses are not final (operator retry
+re-queues failed runs), so the pass does not use an incremental watermark.
 
-**Fact set and advisor-note revisions.** Replacing per-turn failure counts with
-per-member consecutive-failure streaks keeps the same single pass: one extra
-`(count, open)` slot per chat, indexed by position, and one O(chats) sweep. The
-web transcript and TUI box advisor notes with one source check per message. A
-single paired run of each fixture before (`2938d51`) and after this revision, on
-the same laptop (one round of ten 200-pass batches, median):
+```sh
+cargo test --release --locked --bin control bots::tests::reconcile_profile -- --ignored --nocapture
+```
 
-| Case | Before | After |
+Set `CONTROL_PROFILE_ADVISOR=1` for the advisor cases, `blocked` for the
+blocked-claims case and `off` for a defined advisor with its lens unticked.
+
+**Bounded recovery.** Checkpoint recovery is bounded per streak (see
+[TURN-CONTINUITY.md](TURN-CONTINUITY.md)). The `bots::tests::recovery` replay
+drives a bot whose every handoff is rejected: over 3 simulated hours it takes 8
+turns and 2 `continue` wakes; without the bound it took 181 turns, limited only
+by the 60-turns-per-hour budget.
+
+**Handoff grace.** After an accepted handoff the provider has up to 20 s
+(`HANDOFF_GRACE`) to end its turn, so Codex reports the turn's usage. Codex is
+stopped at once if it starts shell or file work after the handoff.
+
+**Peer messages.** Each reconcile pass also scans agent-message receipts for
+overdue digest flags; retired receipts drop their flag. Non-urgent peer
+messages wait for the recipient's next wake or the digest bound instead of
+waking it. Observation refreshes run on their own thread, outside the state
+lock.
+
+## Rooms and directed messages
+
+`profile_room_publication` admits and publishes one room notification through
+reconciliation with a no-op checkpoint. `profile_idle_and_waiting_room_reconciliation`
+measures an armed, waiting subscription (`CONTROL_ROOM_PROFILE_ROUNDS`, default
+10); the unarmed path is at the measurement floor. Both still scan retained
+runs linearly: about 1 ms and 0.76 ms at 20,001 retained runs on one pinned
+Linux ARM64 CPU.
+
+`agent_message::profile::routing_profile` measures the downward message path
+with in-memory construction, result encoding and dispatcher notification, but
+no fsync, peer wake or provider work: about 0.9 µs at 16 chats and 3.5 µs at
+1,024 on one pinned Linux ARM64 CPU.
+
+```sh
+CONTROL_PROFILE_ROUNDS=20000 cargo test --release --locked --bin control \
+  agent_message::profile::routing_profile -- --ignored --exact --nocapture
+```
+
+## Scheduling and cancellation
+
+- `scheduler::qa::scheduling_profile` compares `control-core` scheduling with
+  the previous scheduler over long ledgers (5,032 runs). Ordinary cases are
+  within noise (about 3–9 µs); a paused node returns before reading history.
+  The application tests also check both schedulers agree over 2,000
+  deterministic mixed ledger states.
+- `chat::tests::profile_continuation_admission` measures queueing a
+  continuation, including authorization, capacity, queue-order scan and
+  dispatcher notification: about 0.24 µs at 16 retained runs and 100 µs at
+  20,001, where the ledger scan dominates.
+- Container ownership reconciliation runs every 2 s in the dispatcher and stops
+  inactive owners' containers. Attempts are indexed by generation once per pass;
+  `lifecycle::tests::reconcile_profile` with 48 containers takes 0.09 ms at 500
+  attempts and 0.73 ms at 12,000 (it was linear per container before indexing,
+  483 ms at 12,000).
+- `worker::tests::cancel_profile` runs the real dispatcher, workers, durable
+  checkpoints and commit path on 127 chats and 5,773 runs with seven running
+  turns. Cancelling all seven took 417 ms and 11 checkpoints.
+
+```sh
+cargo test --release --locked --bin control scheduler::qa::scheduling_profile -- --ignored --exact --nocapture
+```
+
+## Services and watches
+
+**Command dispatch.** The service supervisor dispatches when a command is
+admitted or a request status changes (one shared `Changes` signal), and also on
+a 2 s tick for engine reconciliation. Exec and copy wait inline up to
+`wait_seconds` (default 15, max 30) without the state lock and return the final
+result if the command finishes in time.
+
+`services::commands::tests::live_latency` creates a service from the pinned
+worker image and runs 40 `echo ok` commands under each policy (debug build,
+Docker Desktop, Apple Silicon):
+
+| Policy | submit→start p50 / p95 | submit→result p50 / p95 |
 | --- | ---: | ---: |
-| idle, 64 chats | 32.2 µs (min 27.5) | 27.9 µs |
-| offered, 64 chats | 35.5 µs | 34.9 µs |
-| idle, 512 chats | 207.0 µs | 203.8 µs |
-| offered, 512 chats | 217.2 µs | 212.9 µs |
-| idle, 64 chats, one advisor | 44.1 µs | 43.7 µs |
-| offered, 64 chats, one advisor | 50.2 µs | 52.0 µs |
-| idle, 512 chats, one advisor | 356.0 µs | 336.0 µs |
-| offered, 512 chats, one advisor | 347.9 µs | 343.2 µs |
-| TUI render, 100 / 500 messages | 50.6 / 50.4 µs | 49.6 / 49.6 µs |
-| TUI scroll, 10,000 messages | 60.3 µs | 59.0 µs |
+| 2 s tick, then a status poll | 1,018 / 1,910 ms | 1,102 / 1,996 ms |
+| Wake on admit, inline wait | 20 / 25 ms | 107 / 189 ms |
 
-All differences are within single-run noise; TUI render output hashes are
-unchanged. Reproduce the terminal cases with
-`cargo test --release --locked --lib terminal::profiling -- --ignored --nocapture --test-threads=1`.
+The remaining ~85 ms is `docker inspect` plus `docker exec`. The tick-only row
+is a lower bound: a real poll adds a model round trip.
 
-**Strict opt-in.** Advisors exist only when the root chat's lenses offer the
-`advisor` lens's `team.advisor` tool, and the lifecycle topic is computed only
-for such trees. `CONTROL_PROFILE_ADVISOR=off` measures the remaining cost: an
-advisor bot still defined but its lens unticked. Each check is one bot
-definition scan, then one root-chat lookup and a walk of its few selected
-lenses. A single run on the final head (median of ten 200-pass batches):
+`dispatch_profile` measures one pass with nothing to launch. A pass reads each
+retained command record once (about 6 ns each): about 0.4 µs for 8 idle
+services and 15 µs for 128 services with 64 running commands each. Records per
+service are bounded by the command ceiling plus 16 finished ones, and a running
+record holds no command text, so it stays under about 18 KB
+(`persisted_command_records_stay_bounded`).
 
-| Case | No advisor | Lens off, advisor defined | One advisor |
-| --- | ---: | ---: | ---: |
-| idle, 64 chats | 36.6 µs (min 27.4) | 28.2 µs | 43.6 µs |
-| offered, 64 chats | 35.2 µs | 35.9 µs | 52.2 µs |
-| idle, 512 chats | 207.5 µs | 206.8 µs | 339.1 µs |
-| offered, 512 chats | 213.9 µs | 213.6 µs | 347.2 µs |
+```sh
+cargo test --release --locked --bin control services::commands::tests::dispatch_profile -- --ignored --nocapture
+CONTROL_QA_SERVICE_IMAGE=<image id> CONTROL_STATE_DIR=<scratch dir> \
+  cargo test --locked --bin control live_exec_latency -- --ignored --nocapture
+```
 
-With the lens off, a pass costs the same as with no advisor, within noise.
+`CONTROL_PROFILE_ROUNDS` sets passes per batch; `CONTROL_QA_ROUNDS` sets the
+live fixture's rounds.
 
-**Shared-blocker and stall facts (2026-11-16).** The same pass now also counts
-each team's open claims and latest `advanced_at`, and compares blocker reasons.
-`CONTROL_PROFILE_ADVISOR=blocked` is the advisor case with a quarter of the 128
-claims blocked with similar free-text notes, so reasons form one shared group.
-Before is `0097058` with the identical fixture. Alternating before/after
-binaries, three rounds of ten 1,000-pass batches; the table shows the median of
-the round medians.
+**Watch salience filters.** `Watch::observe` runs under the state lock for every
+frame a follower reads. `watches::tests::profile::notification_observe_profile`
+feeds 200,000 JSON notifications through one watch (release, Apple M3 Max):
 
-| Case | Before | After |
+| Filter | ns/event |
+| --- | ---: |
+| none | 154 |
+| one `threshold` | 400 |
+| `key`, two `change` rules and a `rate_limit` | 532 |
+| `change` and `debounce` | 575 |
+| `rate`, `zscore` (32 samples) and `hysteresis` | 652 |
+
+An unfiltered watch reads no clock and does no parsing. The follower's spool
+append costs about 26 µs per frame, so filters add 2–3% to a frame's host path,
+and every notification they hold back avoids a model wake. Not measured: Linux,
+state-lock contention and end-to-end wake latency.
+
+```sh
+cargo test --release --locked --bin control watches::tests::profile -- --ignored --nocapture
+```
+
+**Watch collector.** The service runner's `watches::tests::collector_profile`
+collects framed output from eight processes of 20,000 lines each. Enabling
+notifications adds a descriptor and bounded buffer to the existing collector
+thread, not a thread per channel. Run it only in an isolated Linux container
+with a private home and writable `/workspace`, without credentials:
+
+```sh
+rustc --edition=2024 --test -O -C debuginfo=1 tools/service-runner/main.rs -o /tmp/runner-tests
+/tmp/runner-tests watches::tests::collector_profile --ignored --exact --nocapture
+```
+
+`CONTROL_WATCH_PROFILE_BATCHES=128` gives longer runs for sampling.
+
+## Web, HTTP and chat delivery
+
+**Transcript rendering.** The web renderer borrows typed messages, runs and
+activity instead of building intermediate JSON, and uses request-local run
+indexes. Ownership snapshots keep identity fields without copying command and
+log buffers. macOS ARM release medians:
+
+| Workload | Median |
+| --- | ---: |
+| 10 messages | 130 µs |
+| 100 messages, 1,000 older unrelated runs | 0.74 ms |
+| 500 messages, 5,000 older unrelated runs | 3.12 ms |
+| 500 attempt ownership snapshots | 310 µs |
+
+Normal tests compare rendered HTML against SHA-256 fingerprints.
+
+**Chat lists and callsigns.** Callsigns are derived on read
+(`callsigns::all`: one pass in creation order with a ring of the last 48).
+`performance::chat_lists` renders the chat list, the web conversation tree and
+one chat read for 10, 100 and 1,000 chats. At 1,000 chats: list about 2.0 ms,
+tree about 0.14 ms, one chat read about 14 µs.
+
+```sh
+cargo test --locked --release --bin control performance::hot_paths -- --ignored --exact --nocapture
+cargo test --locked --release --bin control performance::ownership_snapshots -- --ignored --exact --nocapture
+CONTROL_TIMING_ROUNDS=300 cargo test --release --locked --bin control performance::chat_lists -- --ignored --exact --nocapture
+CONTROL_STATE_DIR=/scratch/http-bench CONTROL_PROFILE_CONVERSATIONS=40 cargo test --release --locked --bin control \
+  session_http::tests::fifteen_turn_conversations_workload -- --ignored --exact --nocapture
+```
+
+**Request panel.** `bots::tests::requests_profile` renders a chat with zero or
+32 pending bot approvals as a transcript plus the separate request document
+(about 1 µs and 22 µs).
+
+**Live updates.** Web and TUI clients receive coalesced, authenticated,
+payload-free change hints over a stream instead of polling the transcript. Idle
+streams wait on the effect generation signal with 15 s heartbeats and never
+wake agents; reconnects force a fresh read. In one comparison with direct
+Codex, this brought Control's time to first message text within about 0.4 s of
+running Codex directly, from about 2.5 s with polling. Five turns cannot
+establish population latency.
+
+**HTTP admission.** At most 32 HTTP handlers run at once
+(`http_admission::MAX_HANDLERS`), alongside at most 16 live streams. With 16
+streams and 128 slow partial request bodies, the server held 39 threads and
+38 MiB RSS instead of 151 threads and 82 MiB, and shut down in 0.06 s instead
+of 10 s. Ordinary health requests were unchanged (about 28 µs on loopback).
+This bounds admission; it is not a whole-process memory budget. See
+[HTTP-ADMISSION.md](HTTP-ADMISSION.md).
+
+## Terminal
+
+The TUI caches the formatted transcript and UTF-8 row ranges until its data or
+view changes. Resize rebuilds the row index; scrolling borrows only visible
+rows. A warm frame costs about 59 µs at 10, 100 or 500 messages and about
+60–71 µs at 1,000–10,000 messages; building the index once takes about 2 ms
+for 1,000 messages and 24 ms for 10,000. Network refresh is not part of these
+offline fixtures.
+
+```sh
+cargo test --release --locked --lib terminal::profiling -- --ignored --nocapture --test-threads=1
+```
+
+The server-only build omits terminal code and its dependencies
+(`cargo build --release --locked --no-default-features --bin control`, or
+`nix build .#control-server`); its stripped Linux binary is about 4% smaller.
+
+## Tools
+
+**Path search.** `control_search_path` limits are 20,000 nodes, 100,000 edges,
+1,000,000 cells, 2,000,000 expansions and 2 s. `graph_search::tests::profile`
+(release, Apple Silicon, median of five calls, including JSON parsing):
+
+| Case | A* | Dijkstra |
 | --- | ---: | ---: |
-| idle, 64 / 512 chats, no advisor | 27.7 / 206.8 µs | 27.7 / 206.0 µs |
-| offered, 64 / 512 chats, no advisor | 35.5 / 214.5 µs | 35.5 / 214.1 µs |
-| idle, 64 / 512 chats, one advisor | 43.8 / 347.8 µs | 45.1 / 347.4 µs |
-| offered, 64 / 512 chats, one advisor | 51.6 / 355.8 µs | 52.6 / 355.5 µs |
-| idle, 64 / 512 chats, blocked | 44.1 / 344.6 µs | 46.1 / 351.5 µs |
-| offered, 64 / 512 chats, blocked | 53.5 / 356.1 µs | 55.6 / 358.7 µs |
+| graph, 20k nodes / 100k edges | 27.0 ms | 25.9 ms |
+| grid 1000×1000, 4-connected, 10% blocked | 9.3 ms | 78.8 ms |
+| grid 1000×1000, 8-connected, 10% blocked | 40.0 ms | 79.6 ms |
+| grid 100³ open, 26-connected | 2.0 ms | — |
 
-Nodes without an advisor are unchanged. With one, every member claim now costs
-one owner lookup (about 10 ns each for 128 claims) instead of only blocked
-ones. A first version re-tokenised every blocked note on every pass and cost
-+25 µs in the blocked case at 64 chats; the team snapshot now keeps a
-fingerprint of the reasons (claim revisions and run positions), so unchanged
-reasons are not compared again. Tokenising and grouping run only when a
-blocked note or a failing member's latest result changes.
+Graph calls are dominated by parsing the input (17.3 ms for the largest graph).
+`control_room_plan` walks at most one room's claims linearly.
 
-## Concurrent service commands (2026-11-16)
+```sh
+cargo test --release --locked --bin control graph_search::tests::profile -- --ignored --nocapture
+```
 
-The service supervisor calls `commands::dispatch` every 2 s. It now launches
-every admitted command on a running service instead of at most one, and holds
-a requested copy until nothing runs. The ignored fixture
-`services::commands::tests::dispatch_profile` measures one pass with nothing to
-launch: 8 or 128 running services, each with 0, 1, 8 or 64 running commands
-plus 16 retained finished ones. Before is `0d07ff9` with the identical fixture
-(it could not admit more than one, but the pass reads such records). Release
-builds on one Apple Silicon laptop, alternating before/after binaries, three
-rounds of ten 20,000-pass batches; the table shows the median of the round
-medians.
+**Compaction selection.** `compaction::tests::selection_profile` measures
+cached summary selection with mocked model replies. It revalidates source
+hashes before reusing a view, so cost is linear in the retained source (about
+11 µs at 32 entries, 320 µs at 1,024); the selected summary cut is logarithmic.
 
-| Case | Before | After |
-| --- | ---: | ---: |
-| 8 services, idle | 200 ns | 212 ns |
-| 8 services, 1 running each | 184 ns | 208 ns |
-| 8 services, 8 running each | 185 ns | 226 ns |
-| 8 services, 64 running each | 183 ns | 562 ns |
-| 128 services, idle | 3.11 µs | 3.31 µs |
-| 128 services, 1 running each | 2.78 µs | 3.29 µs |
-| 128 services, 8 running each | 2.78 µs | 4.42 µs |
-| 128 services, 64 running each | 2.78 µs | 14.7 µs |
+**Score probes.** The score supervisor wakes every 5 s and, only when probes
+exist, makes one pass over chats, runs and claims under the state lock to count
+team milestones; probe commands run without the lock. Series are capped at 240
+samples per probe and 32 probes per node (`scores::MAX_SAMPLES`,
+`scores::MAX_PROBES`). `scores::tests::due_profile` measures the pass.
 
-The old pass stopped at a service's first running command; the new one reads
-each retained record once (about 6 ns each) to find launchable requests. Records
-are bounded per service by the command ceiling plus 16 finished ones, so the
-pass is linear in commands actually running: 8,192 concurrent commands cost
-15 µs per 2 s pass, against milliseconds for the same pass's engine inventory.
-No CPU profile was taken. Requests always form a suffix of the record list, so
-a reverse scan could make the pass O(1) per service; that invariant was not
-worth relying on at this cost. A first version scanned twice (running, then
-requested) and was no faster. No lock or persisted field was added; launch now
-drops the command text from state, so a running record is at most about 18 KB
-(2,000-character label plus 16,000 bytes of output), measured by
-`persisted_command_records_stay_bounded`. Reproduce with
-`cargo test --release --locked --bin control services::commands::tests::dispatch_profile -- --ignored --nocapture`
-(`CONTROL_PROFILE_ROUNDS` sets passes per batch).
-
-## Service command wake and inline wait (2026-11-16)
-
-Persistent players drive a game through `control_service_exec` and then poll
-`control_service_exec_status`, about one status call per command (run -128:
-20–28 actions per player in 25 min, each costing two or three model round
-trips). Two host latencies sat under each action: the supervisor launched
-admitted commands only on its 2 s tick, and the result needed a second tool
-call. Admission and every request status change now bump one `Changes` signal;
-the supervisor dispatches on it, keeping the 2 s tick for engine reconciliation
-and as a fallback. Exec and copy then wait inline (`wait_seconds`, default 15,
-max 30, below the bridge's 35 s reply timeout) on the same signal, without the
-state lock, and return the final result if the command finishes in time.
-
-The ignored live fixture
-`services::commands::tests::live_latency::live_exec_latency_before_and_after_wake_and_inline_wait`
-creates its own service from the pinned worker image with an isolated state
-directory and runs 40 `echo ok` commands, submitted at spread tick phases,
-under each policy. Before is the tick-only dispatcher with a status poll that
-succeeds the moment the record is terminal (a lower bound: a real poll adds a
-model round trip). Debug build, Docker Desktop on one Apple Silicon laptop:
-
-| Policy | submit→start p50 / p95 | submit→result p50 / p95 | Dispatch passes |
-| --- | ---: | ---: | ---: |
-| 2 s tick, poll status | 1018 / 1910 ms | 1102 / 1996 ms | 43 |
-| Wake on admit, inline wait | 20 / 25 ms | 107 / 189 ms | 142 |
-
-The remaining ~85 ms is `docker inspect` plus `docker exec`. Each command
-now costs about three dispatch passes (admission, its own launch, completion)
-instead of sharing the tick's one; a pass is unchanged
-(`dispatch_profile`, release, medians before → after: 8 services idle
-465 → 413 ns, 128 services with 64 running each 15.5 → 15.8 µs), so even 1,000
-commands a minute add well under 1 ms of supervisor CPU. Idle supervision is
-unchanged: with no admissions it still wakes once per tick. Each inline wait
-wakes only on request status changes (not output progress) and rechecks
-cancellation, attempt replacement and the turn deadline at least once a second.
-The agent saves one status round trip per command that finishes within the
-wait. Reproduce with `CONTROL_QA_SERVICE_IMAGE=<image id>`,
-`CONTROL_STATE_DIR=<temporary directory>` and optionally `CONTROL_QA_ROUNDS`:
-`cargo test --locked --bin control live_exec_latency -- --ignored --nocapture`.
+**Local models.** `control_model_generate` runs only when called. Plain-HTTP
+endpoints use a small std client that checks cancellation every 100 ms; bodies
+are capped at 128 KiB. Inference figures are in [LOCAL-MODELS.md](LOCAL-MODELS.md).

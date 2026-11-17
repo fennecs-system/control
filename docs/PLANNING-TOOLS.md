@@ -68,7 +68,7 @@ Limits: 20,000 nodes, 100,000 edges, 1,000,000 grid cells, 256 goals,
 2,000,000 expansions and 2 seconds of search; exceeding one is an error that
 names it. Worker requests also pass through the 32 KiB tool mailbox, so large
 graphs come from the operator bridge; compact `rows` suit spatial tasks.
-[Timings](PERFORMANCE.md#planning-tools-2026-11-16).
+[Timings](PERFORMANCE.md#tools).
 
 ## Not here
 
