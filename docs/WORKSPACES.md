@@ -1,5 +1,7 @@
 # Projects and previews
 
+## Opening a folder
+
 Open a project on the machine running Control:
 
 ```sh
@@ -7,107 +9,104 @@ control tui --directory /absolute/path/to/project
 ```
 
 In an existing TUI or web chat, use `/open /absolute/path/to/project`, or expand
-**Open folder** in the web transcript. Review the folder and confirm **Trust
-folder and open**. In the TUI, review the prompt at the end of the conversation
-and enter `/trust` (or `/trust REQUEST`) to confirm without opening a browser.
-`/open` reviews the current request; `/open /another/path` replaces it.
-Requests alone do not read or mount files. An agent can request access with
-`control_project_request`; it cannot approve its own request. External MCP clients
-can use `control.project.request` with a chat ID.
+**Open folder** in the web transcript, then review the folder and confirm **Trust
+folder and open**. In the TUI, review the request at the end of the conversation
+and enter `/trust` (or `/trust REQUEST`). `/open` alone shows the current request;
+`/open /another/path` replaces it.
 
-Each approved folder appears as `/workspace/<folder-name>`. Repeat `/open` to add
-another folder to the same chat; approvals stay beside the corresponding request.
-Use `/open --as api2 /another/path/api` for duplicate names, or edit the workspace
-name in the approval form. MCP requests accept an optional `name`. Each folder
-has its own Git metadata. Pending or failed additions keep already-approved
-folders and their edits; an import error appears beside its request for retry.
-Existing single-folder chats retain their layout until another folder is approved.
+A request alone reads and mounts nothing. Agents can ask with
+`control_project_request` but cannot approve their own request. External MCP
+clients use `control.project.request` with a chat ID.
 
-Approval answers at once, like port and bot decisions; the import runs in the
-background. The request shows **Importing folder…** with the entries copied so
-far, and the chat shows `Opened /workspace/<name>` when it completes. Without
-the chat client, the approval page refreshes itself and returns to the chat.
-An import error appears beside the request, which stays available to retry.
-Messages to the agent wait until the import finishes; a restart interrupts it
-and grants nothing.
+Each approved folder appears at `/workspace/<folder-name>`. Repeat `/open` to add
+more folders to the same chat. For duplicate names use
+`/open --as api2 /another/path/api`, edit the name in the approval form, or pass
+`name` in an MCP request. Each folder keeps its own Git metadata. A pending or
+failed addition leaves already approved folders and their edits in place.
+Single-folder chats keep their layout until a second folder is approved.
 
-Control imports the current files, including uncommitted edits, into a private
-Git worktree. The original checkout and its Git metadata remain unchanged.
-Each attempt and child conversation gets independent writable files and Git
-metadata. Project history is retained, but the source remote is removed from the
-container's private clone. No automatic host merge, push or deployment occurs.
-The completed worktree's local path is shown in the chat and TUI for review.
+Approval answers at once; the import runs in the background. The request shows
+**Importing folder…** with progress, and the chat shows `Opened /workspace/<name>`
+when it finishes. An import error appears beside the request, which stays
+available to retry. Messages to the agent wait until the import finishes. A
+restart interrupts the import and grants nothing.
 
-Git needs relative-worktree support; the Nix development environment provides it.
-Plain folders get a private initial Git baseline. Symlinks, including dangling
-links and links into the Nix store, are skipped without following their targets.
-Special files are rejected.
-Control configuration/state, known credential files, environment files and common
-generated directories are excluded from the file import. Git history is retained,
-so only trust repositories whose history you intend to expose. Project imports and
-checkpoints have no byte or entry-count cap; available node storage is the limit.
-The depth-64 guard remains. A failed import grants nothing. Approved folders are
-mounted separately and do not consume a container writable-layer quota. Isolated
-project copies and checkpoints still use node storage; APFS clones share unchanged
-blocks until modified.
+## Isolated copies
 
-Project checkpoints retain full files, executable modes and private Git metadata.
-They are separate from bounded artifact previews. Successful matching attempts
-advance the project head; failures and interrupted attempts retain their work
-without replacing it. Retries and design continuations keep their captured
-baseline. APFS copies use independent copy-on-write files; writable hardlinks
-are never shared between agents or with the original checkout.
+Control imports the current files, including uncommitted edits, into a private Git
+worktree. The original checkout and its Git metadata are unchanged. Each attempt
+and child conversation gets its own writable files and Git metadata. History is
+kept, but the source remote is removed from the private clone. Control never
+merges, pushes or deploys to the host automatically. The finished worktree's local
+path is shown in the chat and TUI for review.
 
-Working copies are disposable views of the captured checkpoint; they do not need
-per-file disk flushes before execution. Published checkpoints still flush their
-files before advancing the project head. Preparation and checkpoint durations
-appear in recent activity in the web chat and TUI.
+- Git must support relative worktrees; the Nix development environment provides
+  this. Plain folders get a private initial commit.
+- Symlinks (including dangling links and links into the Nix store) are skipped
+  without being followed. Special files are rejected. Directory depth is limited
+  to 64.
+- Control configuration and state, known credential files, environment files and
+  common generated directories are excluded. Git history is included, so only
+  trust repositories whose history you are willing to expose.
+- There is no byte or entry cap on imports or checkpoints; node storage is the
+  limit. Approved folders are mounted separately and do not count toward a
+  container's writable-layer quota. On APFS, copies are copy-on-write clones that
+  share unchanged blocks; writable hard links are never shared between agents or
+  with the original checkout.
+
+Project checkpoints keep full files, executable modes and private Git metadata,
+separately from bounded artifact previews. A successful attempt advances the
+project head; failed and interrupted attempts keep their work without replacing
+it. Retries and design continuations keep their captured baseline. Working copies
+are disposable views of a checkpoint and are not flushed file by file; published
+checkpoints are flushed before the head advances. Preparation and checkpoint
+times appear in recent activity.
 
 ## Local previews
 
-Trusting a project also allows its agents to start local previews:
+Trusting a project also lets its agents serve local HTTP previews:
 
-- `control_preview_start`: a server command and its container port.
-- `control_preview_stop`: stop the attempt's preview.
+- `control_preview_start` takes a server `command` and its container `port`.
+  Bind the server to `0.0.0.0`.
+- `control_preview_stop` stops the attempt's preview.
 
-The selected backend's pinned Nix image runs the service without credentials or
-external networking. Its project mount is read-only; builds and caches can use
-`/tmp` (`CARGO_TARGET_DIR=/tmp/target`). Control forwards HTTP traffic from a
-loopback listener to that container port using a small Rust stdin/stdout bridge.
-The bridge is compiled from bundled source by the pinned image's Rust compiler.
+The preview runs in the backend's pinned Nix image with no credentials and no
+external network. The project mount is read-only; write builds and caches under
+`/tmp` (`CARGO_TARGET_DIR=/tmp/target` is set). Control forwards HTTP from a
+loopback listener to the container port through a small Rust stdin/stdout bridge,
+compiled from bundled source by the image's Rust compiler.
 
-**Open preview** appears in chat; the URL also appears in the TUI. Preview
-hostnames are separate from Control's operator origin. The proxy rejects requests
-for Control's hostname and requests carrying its operator cookie. Ingress is
-limited to 16 connections per service; headers are bounded to 32 KiB. Connections
-have a five-minute input idle limit and a 30-second output write timeout.
+**Open preview** appears in chat, and the URL appears in the TUI. Preview
+hostnames are separate from Control's operator origin: the proxy rejects requests
+for Control's hostname or carrying its operator cookie.
 
-Services survive a completed agent turn. On restart, Control verifies the
-persisted container identity and mount policy before rebinding the same local
-port. A busy port or changed resource becomes unavailable; it is never adopted
-or overwritten. Stop services from their chat. At most 16 active previews are
-allowed per node. Container logs are bounded and retained until the service is
-stopped.
+| Limit | Value |
+| --- | --- |
+| Active previews per node | 16 |
+| Connections per preview | 16 |
+| Request header size | 32 KiB |
+| Input idle timeout | 5 minutes |
+| Output write timeout | 30 seconds |
 
-## Transport boundary
+Previews outlive the agent turn. On restart, Control checks the saved container
+identity and mount policy before rebinding the same local port; a busy port or
+changed container makes the preview unavailable rather than adopting or
+overwriting anything. Stop previews from their chat. Container logs are bounded
+and kept until the preview stops.
 
-A project grant authorizes files; a preview service identifies one target and
-port. A lens selects which tools are offered; it does not grant host access.
-Transport is separate from both. SSH forwarding, Tailscale or an authenticated
-tunnel can later publish the same scoped service without giving the agent a host
-socket or arbitrary proxy target. Remote publishing, native file pickers,
-in-place host edits and Jujutsu integration are not implemented by this first cut.
+For non-HTTP protocols, use [scoped TCP ports](PORTS.md).
 
-## Environment boundary
+## Boundaries
 
-Base images are pinned and mounted read-only. Worker changes belong in the
-private workspace or temporary filesystem; there is no container-engine socket
-or host Nix daemon available to agents. The current images are built with Nix
-but do not include the `nix` command. Additional package environments should be
-provided through tools, with explicit capabilities rather than guessed commands.
+A project grant authorizes files. A preview identifies one container and port. A
+lens selects which tools are offered; it grants no host access. Transport is
+separate from all three: an SSH forward, Tailscale or an authenticated tunnel
+could publish the same scoped preview later without giving the agent a host socket
+or an arbitrary proxy target. Remote publishing, native file pickers, in-place
+host edits and Jujutsu integration are not implemented.
 
-Future in-worker Nix support must keep writable stores, profiles and build state
-private to the worker. It must not commit a worker into a shared image or publish
-to a shared cache implicitly. Fetching packages and publishing cache entries are
-separate permissions. Cache reuse can improve efficiency without making a
-worker's writable state the next worker's base.
+Base images are pinned and read-only; agents get no container-engine socket or
+host Nix daemon. Writable state stays in the private workspace or temporary
+filesystem. See [worker profiles](WORKER-PROFILES.md) for the private Nix store in
+Full images and [build environments](BUILD-ENVIRONMENTS.md) for declared build
+images.

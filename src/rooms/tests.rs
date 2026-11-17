@@ -215,11 +215,11 @@ fn room_sidebar_scopes_activity_and_keeps_message_chat_links() {
     });
     let page = crate::render(&state, "rooms", "none", "research");
     let (_, sidebar) = page.split_once("aria-label='Room details'").unwrap();
-    let (participants, links) = sidebar.split_once("<h2>Linked chats</h2>").unwrap();
+    let (participants, links) = sidebar.split_once("<h2>Linked DMs</h2>").unwrap();
     assert!(page.contains("body-grid rooms-workspace"));
     assert!(page.contains("channel=research' aria-current='page'"));
     assert!(page.contains("An update &lt;script&gt;"));
-    assert!(page.contains(&format!("href='/chat/{active}'>Open chat ↗")));
+    assert!(page.contains(&format!("href='/chat/{active}'>Open DM ↗")));
     assert!(participants.contains("Investigate &lt;sources&gt;"));
     assert!(participants.contains("<small>running</small>"));
     assert!(!participants.contains(&format!("href='/chat/{idle}'")));

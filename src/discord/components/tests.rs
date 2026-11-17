@@ -22,7 +22,7 @@ fn requests_render_as_coloured_embeds_with_tagged_buttons() {
     assert_eq!(embed["title"], "Decision requested");
     assert_eq!(embed["color"], color(Severity::Attention));
     assert!(embed["footer"]["text"].as_str().unwrap().contains("!answer q-1"));
-    assert_eq!(embed["fields"][0], json!({"name":"Chat","value":"Swarm lead","inline":true}));
+    assert_eq!(embed["fields"][0], json!({"name":"DM","value":"Swarm lead","inline":true}));
     assert_eq!(question["content"], "Control · Decision requested · Swarm lead");
     assert_eq!(question["allowed_mentions"], json!({"parse":[]}));
     // Six options take two rows; the answer and link buttons a third.
@@ -33,14 +33,14 @@ fn requests_render_as_coloured_embeds_with_tagged_buttons() {
     assert_eq!(all[0]["style"], 1, "recommended");
     assert_eq!(all[1]["style"], 2);
     assert_eq!(all[6]["custom_id"], "ctl:abcd1234:answer");
-    assert_eq!(all[7], json!({"type":2,"style":5,"label":"Open chat","url":"http://localhost:8080/chat/c-lead"}));
+    assert_eq!(all[7], json!({"type":2,"style":5,"label":"Open DM","url":"http://localhost:8080/chat/c-lead"}));
     for button in &all {
         assert!(button["label"].as_str().unwrap().chars().count() <= 80);
         assert!(button["custom_id"].as_str().is_none_or(|id| id.len() <= 100));
     }
     let port = message(&rendered(1), "abcd1234", true);
     assert_eq!(port["embeds"][0]["color"], color(Severity::Danger));
-    assert_eq!(buttons(&port).iter().map(|b| b["label"].as_str().unwrap()).collect::<Vec<_>>(), ["Allow loopback", "Deny", "Open chat"]);
+    assert_eq!(buttons(&port).iter().map(|b| b["label"].as_str().unwrap()).collect::<Vec<_>>(), ["Allow loopback", "Deny", "Open DM"]);
     assert_eq!(buttons(&port)[0]["style"], 4);
     // Without links the URL moves into the text.
     let plain = message(&rendered(2), "abcd1234", false);
@@ -57,7 +57,7 @@ fn settling_recolours_and_keeps_only_link_buttons() {
     assert_eq!(edit["embeds"][0]["footer"]["text"], "Allowed by you");
     assert_eq!(edit["embeds"][0]["title"], "Bot request");
     assert!(edit["embeds"][0]["type"].is_null(), "only fields Discord accepts are sent back");
-    assert_eq!(buttons(&edit), [json!({"type":2,"style":5,"label":"Open chat","url":"http://localhost:8080/chat/c-lead"})]);
+    assert_eq!(buttons(&edit), [json!({"type":2,"style":5,"label":"Open DM","url":"http://localhost:8080/chat/c-lead"})]);
     let unlinked = settled(&message(&rendered(2), "t", false), &request::closed()).unwrap();
     assert_eq!(unlinked["components"], json!([]));
     assert!(settled(&json!({"content":"plain text fallback","embeds":[]}), &request::closed()).is_none());

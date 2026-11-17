@@ -396,7 +396,7 @@ pub(crate) fn overview(state: &State) -> String {
     let mut html = "<div class='section-heading'><h2>Bots</h2><a href='/?view=runs'>Run history ↗</a></div>".to_owned();
     match crate::process_tree::render(state) {
         Some(tree) => html.push_str(&tree),
-        None => html.push_str("<div class='empty'>No bots, services or active agents. Use /bot on in a chat or approve a bot request.</div>"),
+        None => html.push_str("<div class='empty'>No bots, services or active agents. Use /bot on in a DM or approve a bot request.</div>"),
     }
     html
 }

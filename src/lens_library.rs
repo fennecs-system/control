@@ -139,7 +139,7 @@ pub(crate) fn save_with(
     persist: impl FnOnce(&State) -> io::Result<()>,
 ) -> Result<Definition, String> {
     if state.lens_library.get(&draft.id).map_or(0, |d| d.revision) != draft.revision {
-        return Err("This lens changed in another tab. Your edit is below; open the latest revision before merging.".into());
+        return Err("This gene changed in another tab. Your edit is below; open the latest revision before merging.".into());
     }
     draft.revision = draft
         .revision
@@ -169,11 +169,11 @@ pub(crate) fn save_with(
     Ok(draft)
 }
 pub fn choices(state: &State, selected: &[String], form: &str) -> String {
-    let mut html=format!("<input type='hidden' name='composition' value='1' form='{form}'><div class='chat-tags'><details class='lens-selector'><summary>+ Lenses</summary></details><div class='tag-options'>");
+    let mut html=format!("<input type='hidden' name='composition' value='1' form='{form}'><div class='chat-tags'><details class='lens-selector'><summary>+ Genes</summary></details><div class='tag-options'>");
     for lens in state.lens_library.current() {
         html.push_str(&format!("<label class='lens-option lens-tag'><input type='checkbox' name='lens_{}' value='{}' form='{form}'{}><span>{}</span></label>",escape(&lens.id),escape(&lens.id),if selected.contains(&lens.id){" checked"}else{""},escape(&lens.name)));
     }
-    html.push_str("</div><a class='lens-library-shortcut' href='/lenses' aria-label='Open lens library'>↗</a></div>");
+    html.push_str("</div><a class='lens-library-shortcut' href='/lenses' aria-label='Open DNA library'>↗</a></div>");
     html
 }
 fn checkbox(prefix: &str, id: &str, name: &str, checked: bool) -> String {
@@ -191,7 +191,7 @@ pub fn render(
     let definition = submitted
         .or_else(|| state.lens_library.get(id))
         .unwrap_or(&blank);
-    let mut html=String::from("<div class='section-heading'><h2>Lenses</h2><a class='primary' href='/lenses?new=1'>＋ New lens</a></div><p class='muted'>Build context from knowledge, tools, instructions, and other lenses.</p><div class='knowledge-workspace lens-workspace'><aside class='note-files' aria-label='Lens library'>");
+    let mut html=String::from("<div class='section-heading'><h2>DNA</h2><a class='primary' href='/lenses?new=1'>＋ New gene</a></div><p class='muted'>Each gene bundles knowledge, tools, instructions and other genes; spawned workers inherit a DM's DNA.</p><div class='knowledge-workspace lens-workspace'><aside class='note-files' aria-label='Genes'>");
     for lens in current {
         html.push_str(&format!(
             "<a href='/lenses?id={}'{}>{} <small>v{}</small></a>",
@@ -205,7 +205,7 @@ pub fn render(
             lens.revision
         ));
     }
-    html.push_str("<a class='lens-export' href='/lenses/export'>Export definitions ↓</a></aside><section class='knowledge-content'>");
+    html.push_str("<a class='lens-export' href='/lenses/export'>Export genes ↓</a></aside><section class='knowledge-content'>");
     if let Some(message) = notice {
         html.push_str(&format!(
             "<p class='{}' role='{}'>{}</p>",
@@ -218,7 +218,7 @@ pub fn render(
             escape(message)
         ));
     }
-    html.push_str(&format!("<form class='lens-definition' method='post' action='/lenses/save'><input type='hidden' name='revision' value='{}'><div class='lens-name-row'><label>Name<input name='name' required maxlength='80' value='{}' placeholder='Project context'></label><label>Identifier<input name='id' required maxlength='64' pattern='[a-z0-9-]+' value='{}' placeholder='project-context'{}></label></div><fieldset><legend>Compose lenses</legend><div class='library-choices'>",definition.revision,escape(&definition.name),escape(&definition.id),if state.lens_library.get(&definition.id).is_some(){" readonly"}else{""}));
+    html.push_str(&format!("<form class='lens-definition' method='post' action='/lenses/save'><input type='hidden' name='revision' value='{}'><div class='lens-name-row'><label>Name<input name='name' required maxlength='80' value='{}' placeholder='Project context'></label><label>Identifier<input name='id' required maxlength='64' pattern='[a-z0-9-]+' value='{}' placeholder='project-context'{}></label></div><fieldset><legend>Include genes</legend><div class='library-choices'>",definition.revision,escape(&definition.name),escape(&definition.id),if state.lens_library.get(&definition.id).is_some(){" readonly"}else{""}));
     for other in state.lens_library.current() {
         if other.id != definition.id {
             html.push_str(&checkbox(
@@ -272,7 +272,7 @@ pub fn render(
     if state.packages.is_empty() && definition.packages.is_empty() {
         html.push_str("<p class='muted'>No packages admitted. Use control package import.</p>");
     }
-    html.push_str("</div></fieldset><fieldset><legend>Roles</legend><p class='muted'>Who sees this lens; none checked means every role. With a summary, prompts carry only that line and agents read the instructions on demand, except for roles marked inline.</p><div class='library-choices'>");
+    html.push_str("</div></fieldset><fieldset><legend>Roles</legend><p class='muted'>Who sees this gene; none checked means every role. With a summary, prompts carry only that line and agents read the instructions on demand, except for roles marked inline.</p><div class='library-choices'>");
     for role in Audience::ALL {
         html.push_str(&checkbox("role", role.as_str(), role.as_str(), definition.roles.contains(&role)));
     }
@@ -280,7 +280,7 @@ pub fn render(
         html.push_str(&checkbox("inline", role.as_str(), &format!("{} inline", role.as_str()), definition.inline.contains(&role)));
     }
     html.push_str(&format!("</div></fieldset><label>On-demand summary<input name='summary' maxlength='240' value='{}' placeholder='One line; empty includes the instructions in every prompt'></label>", escape(&definition.summary)));
-    html.push_str(&format!("<label>Instructions<textarea name='instructions' rows='4' maxlength='4000' placeholder='Guidance to include in this context…'>{}</textarea></label><button class='primary'>Save lens ↗</button></form>",escape(&definition.instructions)));
+    html.push_str(&format!("<label>Instructions<textarea name='instructions' rows='4' maxlength='4000' placeholder='Guidance to include in this context…'>{}</textarea></label><button class='primary'>Save gene ↗</button></form>",escape(&definition.instructions)));
     if !definition.id.is_empty() && submitted.is_none() {
         html.push_str("<details class='resolved-context' open><summary>Resolved context</summary>");
         match resolve(state, std::slice::from_ref(&definition.id)) {
@@ -296,7 +296,7 @@ pub fn render(
                 }
                 html.push_str("</div><h3>Effective instructions</h3>");
                 if resolved.instructions.is_empty() && resolved.guidance.is_empty() {
-                    html.push_str("<p class='muted'>No lens instructions.</p>");
+                    html.push_str("<p class='muted'>No gene instructions.</p>");
                 }
                 for instruction in &resolved.instructions {
                     html.push_str(&format!("<pre class='manifest'>{}</pre>", escape(instruction)));
@@ -377,7 +377,7 @@ pub fn handle(
             id,
             None,
             if saved {
-                Some("✓ Lens saved. Future messages will resolve this revision.")
+                Some("✓ Gene saved. Future messages will resolve this version.")
             } else {
                 None
             },

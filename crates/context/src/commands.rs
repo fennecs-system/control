@@ -73,13 +73,13 @@ pub const DEFINITIONS: &[Definition] = &[
     },
     Definition { id:"listen", text:"/listen", description:"Listen for room messages", architect:false },
     Definition { id:"listen-off", text:"/listen off", description:"Stop room listening", architect:false },
-    Definition { id:"bot", text:"/bot on", description:"Run this chat as a persistent bot", architect:false },
-    Definition { id:"bot-off", text:"/bot off", description:"Stop this chat's bot", architect:false },
-    Definition { id:"room", text:"/room general", description:"Attach this chat to a room", architect:false },
-    Definition { id:"room-off", text:"/room off", description:"Detach this chat from its room", architect:false },
-    Definition { id:"cancel-all", text:"/cancel all", description:"Stop runs and bots in this chat and every chat it spawned", architect:false },
-    Definition {id:"model",text:"/model",description:"List or select this chat's model",architect:false},
-    Definition { id:"rename", text:"/rename", description:"Rename this chat", architect:false },
+    Definition { id:"bot", text:"/bot on", description:"Run this DM as a persistent bot", architect:false },
+    Definition { id:"bot-off", text:"/bot off", description:"Stop this DM's bot", architect:false },
+    Definition { id:"room", text:"/room general", description:"Attach this DM to a room", architect:false },
+    Definition { id:"room-off", text:"/room off", description:"Detach this DM from its room", architect:false },
+    Definition { id:"cancel-all", text:"/cancel all", description:"Stop runs and bots in this DM and every DM it spawned", architect:false },
+    Definition {id:"model",text:"/model",description:"List or select this DM's model",architect:false},
+    Definition { id:"rename", text:"/rename", description:"Rename this DM", architect:false },
 ];
 
 #[derive(Debug, PartialEq, Eq)]

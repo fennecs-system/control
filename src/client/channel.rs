@@ -155,7 +155,7 @@ impl Settings {
         let server = control_context::commands::DEFINITIONS.iter().filter(|d| d.id != "answer").map(|d| (d.text, d.description));
         let rows = chats::COMMANDS.iter().copied().chain(operator::COMMANDS.iter().copied()).chain(server).chain([("/help", "This list")]);
         let lines = rows.map(|(usage, description)| format!("{usage} — {description}")).collect::<Vec<_>>().join("\n");
-        self.present(&format!("Commands (anything else goes to the selected chat):\n{lines}"))
+        self.present(&format!("Commands (anything else goes to the selected DM):\n{lines}"))
     }
 }
 
@@ -348,8 +348,8 @@ pub enum Pressed {
 /// select one and how to return to this conversation's own chat.
 pub fn chat_list(to: &Recipient, list: &Value) -> String {
     let recent = chats::recent(&chats::entries(list.as_array().map(Vec::as_slice).unwrap_or(&[])), RECENT);
-    let back = to.home.as_ref().map(|home| format!(", /resume {home} for this conversation's own chat")).unwrap_or_default();
-    format!("Recent chats. Reply /resume ID to talk to one, /new for a new chat{back}.\n\n{}", chats::resume_list(&recent))
+    let back = to.home.as_ref().map(|home| format!(", /resume {home} for this conversation's own DM")).unwrap_or_default();
+    format!("Recent DMs. Reply /resume ID to talk to one, /new for a new DM{back}.\n\n{}", chats::resume_list(&recent))
 }
 
 /// The notification for one pending request.
@@ -525,25 +525,29 @@ impl Channel {
         let home = to.home.as_deref().unwrap_or("");
         if matches!(&navigation, Navigation::Open(id) if id == home) {
             self.ledger.select(to, None);
-            return Ok("Back to this conversation's own chat.".into());
+            return Ok("Back to this conversation's own DM.".into());
         }
         // `/use` applies to the selected chat, else the conversation's own chat.
         let target = self.ledger.active(to).map(|a| a.chat.clone()).or_else(|| to.home.clone());
         let hive = self.hive()?;
         let fail = |e: std::io::Error| e.to_string();
         match navigation {
-            // Naming no lens changes nothing; say how to use it.
-            Navigation::Use(None) => Ok("Usage: /use LENS… (space or comma separated), or /use none to clear.".into()),
+            // Naming no gene changes nothing; say how to use it.
+            Navigation::Use(None) => Ok("Usage: /use GENE… (space or comma separated), or /use none to clear. /genes lists them.".into()),
+            Navigation::Genes => {
+                let library = hive.tool("control.lenses.list", json!({})).map_err(fail)?;
+                Ok(chats::gene_list(&library))
+            }
             Navigation::Use(Some(lenses)) => {
-                let chat = target.ok_or("Select a chat with /chats first.")?;
+                let chat = target.ok_or("Select a DM with /chats first.")?;
                 let detail = chats::use_lenses(hive, &chat, &lenses).map_err(fail)?;
-                let names = if lenses.is_empty() { "no lenses".to_owned() } else { lenses.join(" + ") };
-                Ok(format!("Future messages in {}: {names}.\n{}", detail["title"].as_str().unwrap_or("this chat"), Self::link(&chat)))
+                let names = if lenses.is_empty() { "no genes".to_owned() } else { lenses.join(" + ") };
+                Ok(format!("Future messages in {}: {names}.\n{}", detail["title"].as_str().unwrap_or("this DM"), Self::link(&chat)))
             }
             Navigation::Rename(name) => {
-                let chat = target.ok_or("Select a chat with /chats first.")?;
+                let chat = target.ok_or("Select a DM with /chats first.")?;
                 let detail = chats::rename(hive, &chat, &name).map_err(fail)?;
-                Ok(format!("Renamed this chat to {}.\n{}", detail["title"].as_str().unwrap_or(&name), Self::link(&chat)))
+                Ok(format!("Renamed this DM to {}.\n{}", detail["title"].as_str().unwrap_or(&name), Self::link(&chat)))
             }
             Navigation::List => {
                 let list = hive.tool("control.chats.list", json!({})).map_err(fail)?;
@@ -553,13 +557,13 @@ impl Channel {
                 let detail = hive.tool("control.chat.read", json!({"id":id})).map_err(fail)?;
                 let count = detail["messages"].as_array().map_or(0, Vec::len);
                 self.ledger.select(to, Some((id.clone(), count)));
-                Ok(format!("Now talking to {}. Messages go to that chat and its replies come here; /chats to switch.\n{}", detail["title"].as_str().unwrap_or("Chat"), Self::link(&id)))
+                Ok(format!("Now talking to {}. Messages go to that DM and its replies come here; /chats to switch.\n{}", detail["title"].as_str().unwrap_or("Chat"), Self::link(&id)))
             }
             Navigation::New => {
                 let detail = hive.tool("control.chat.create", json!({})).map_err(fail)?;
                 let id = detail["id"].as_str().unwrap_or("").to_owned();
                 self.ledger.select(to, Some((id.clone(), 0)));
-                Ok(format!("New chat started. Messages go to it and its replies come here.\n{}", Self::link(&id)))
+                Ok(format!("New DM started. Messages go to it and its replies come here.\n{}", Self::link(&id)))
             }
         }
     }

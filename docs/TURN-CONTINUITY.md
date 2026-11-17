@@ -1,709 +1,337 @@
-# Turn continuity implementation handoff
+# Turn continuity
 
-Design for Sol, 2026-11-04. The implementation checkpoint below is historical;
-see the [current roadmap](SWARM-ROADMAP.md) for shipped scope and open follow-ups.
-Provider-session contract clarified 2026-11-06.
+How an agent keeps working across model attempts: working notes, event receipts,
+handoffs, host checkpoints and recovery. Shipped scope and open follow-ups are in
+the [swarm roadmap](SWARM-ROADMAP.md).
 
-## Cheap handoffs and host checkpoints (2026-11-16)
+## Model
 
-Run -128 members averaged about 2.7 `control_turn_context` and 1.1
-`control_turn_handoff` calls per turn; 35 of 41 handoff failures were one
-refusal ("Wait can only narrow existing wake_topics"). Run -121 spent 9 h 26 min
-blocked on a rejection that named no callable fix. A checkpoint should cost one
-call, and a refusal should say what to call next.
+A **bot is an agent plus a supervisor plus callbacks**. Control owns task state,
+evidence, permissions and recovery. A provider process may take several related
+steps before it yields; the next attempt rebuilds its task from Control's
+committed journal, instructions and selected history. It never resumes the ended
+provider session, and provider caches are optimisations, not task state.
 
-**The wake carries its delta.** At admission a bot wake (or room notification)
-gets one bounded page (16 posts, 8 KiB) of its linked room's posts after the
-committed watermark, rendered under its current event and recorded in the
-attempt's mailbox as the host-issued receipt `wake`. Both come from the same
-state snapshot at preparation, so the receipt never covers a post the
-projection did not show. Wake, bot and room guidance no longer tell agents to
-re-read these posts with `control_turn_context`; it remains for events that
-arrive after admission (the callback hint on tool results says when).
-Conversation events up to the wake were already baselined, and watch events
-are still read with `control_watch_events`.
+- Keep the provider session running while it makes useful progress. Callbacks
+  deliver events and steering to that session; they are not a reason to restart it.
+- Yield on a genuine dependency, an approval or design question, completion,
+  cancellation or the attempt deadline. A short asynchronous operation alone is
+  not a reason to yield if useful work remains.
+- No periodic soft handoff timer, model sleep loops, long-poll tools or
+  permanently held slots. The hard attempt deadline stays authoritative.
+- A handoff supports recovery and idle waits; it is not the normal action loop.
+- Token budgets are not enforced from end-of-attempt usage telemetry.
 
-**Only the disposition is required.** `control_turn_handoff` accepts
-`{"disposition":{"kind":"done"}}` (or a bare `"done"` string):
+Ordinary and spawned agents use the same continuity path at their next admission.
+Approving a permanent bot (or `/bot on`) only adds unattended scheduling.
 
-- `processed` omitted means every receipt delivered in this attempt, the
-  `wake` receipt included, that follows each source's committed position. An
-  explicit list processes exactly those receipts, for partial processing.
-- Receipts that cannot be applied (not delivered to this attempt, a gap not
-  marked resynchronised, or a range starting after an unprocessed one) are
-  left pending and reported in `left_pending` instead of failing the handoff.
-  Leaving events pending is always safe; the delivery stays at least once.
-- `payload` omitted keeps the latest draft or committed notes (a placeholder
-  subgoal if neither exists). `base_revision` omitted, or stale, uses the
-  committed revision: one writer per chat means it cannot move within an
-  attempt; publication still rechecks it.
-- Wait topics are normalised against current `wake_topics`, never widened past
-  them: `room:general`, `general` and `#general` all select `room:general`; a
-  bare kind selects its subscriptions. Unknown names are dropped. If a
-  non-empty selection matches nothing, or has more than 16 topics, or topics
-  are omitted, the wait keeps every current subscription (the park order,
-  truncated to 16) — the widest interpretation, so no event is missed. An
-  explicit `[]` keeps its meaning (urgent failures and direct messages only).
-  A claim wait on an already resolved claim records `continue`;
-  `recheck_seconds: 0` means no recheck. Over-long progress is truncated.
-- Every adjustment is listed in the result's `adjusted`. Superseded drafts no
-  longer exhaust a correction budget; only the accepted draft is kept.
+## Invariants
 
-Payload validation (empty subgoal, oversized notes) still refuses, since
-notes are claims and are never silently rewritten; each refusal says how to
-retry, including omitting the payload.
+1. One writer per chat. FIFO order, node slots, turn budgets and authority
+   ceilings still apply. Idle agents release model slots.
+2. Intent is durable before model or tool execution. The attempt generation fences
+   all updates. Cancellation, pause, design questions and blocking delegation keep
+   their usual semantics.
+3. A working-state revision is promoted only together with a matching successful
+   workspace publication (or an explicit paused-checkpoint transition). A draft
+   does not prove its files or external effects committed.
+4. Event delivery is at least once. Reading is not processing. Cursors advance
+   only for validated receipts; unseen or truncated data is never acknowledged.
+5. Restart interrupts an in-flight provider attempt. Model requests and ambiguous
+   external effects are never replayed silently.
+6. Model-written notes are attributed claims with checkpoint provenance. They
+   cannot change user instructions, grants, resource truth or admitted knowledge.
+7. Raw evidence and lifecycle history stay inspectable under the normal retention
+   rules, even when left out of model context. Missing evidence is explicit.
 
-**Every refusal names a callable fix.** Turn handoff/context refusals carry
-their own concrete next call (tool and JSON arguments) or "ask the operator via
-control_design_ask". For service, room, watch and agent-message tools, worker
-dispatch appends the family's default fix to any refusal that lacks one (for
-example `control_service_status {}` then retry with a listed `service_id`).
-`worker_tools::fixes::tests` scans those tools' sources for error strings and
-asserts each reaches the model with a fix.
+## Tools
 
-**Exec results are final inline.** A command that finishes within
-`wait_seconds` returns its result marked `final: true`; only a result that says
-running gets a `wait` hint naming the exact `control_service_exec_status` call.
+Two attempt-scoped MCP tools, advertised as `agent.continuity` (independent of
+`agent.bot`), with identical semantics for every provider and spawned agent. The
+worker MCP transport supplies run and attempt identity; the operator HTTP/stdio
+catalog does not advertise these tools and never accepts a model-supplied identity.
 
-**Host checkpoint on timeout or provider failure.** When a managed turn is
-stopped at its time limit or ends on a provider error before its handoff, the
-worker's finish transaction records `continuity.interrupted`: the generation,
-cause, whether the workspace was captured as a recovery candidate, elapsed
-time, any staged draft's progress, and the last 8 tool calls with outcomes
-(200 characters per field), all from host records with no model call. A local
-model's turn adds its latest step's reasoning, verbatim (the last 1500
-characters), and the next turn is told to continue that plan rather than
-re-plan ([Thinking](LOCAL-MODELS.md#thinking)). The next
-turn's working notes render it with the exact restore call,
-`control_recovery {"generation":"…","restore":true}`. Crash safety is
-unchanged: the note shares the finish transaction and its rollback, advances no
-head or cursor, and is cleared by the next published handoff or completed
-turn. A persistent bot treats a provider failure like a timeout: a prompt
-recovery turn within `bot_recovery_continues`, then the parked backoff.
+### `control_turn_context`
 
-In `bots::tests::handoff_cost` a scripted agent handles five room wakes, sending
-only the fields each version's schema requires and following each refusal's
-fix. Before: 2.0 context reads, 2.0 handoffs and 1 refusal per turn. After: 0
-context reads, 1 handoff, no refusals.
+Reads events that arrived after the turn started, from `source`
+`conversation` (default) or `room`. Returns the events, the time budget
+(`limit_seconds`, `remaining_seconds`; `null` when unlimited),
+`continuation_enabled`, the allowed `wake_topics` and an opaque receipt;
+`notes: true` adds the committed working notes. A page holds at most 16 events
+and 8 KiB, with `more` and gap markers. New reads continue from the last
+delivered position; `after_receipt` selects an earlier page, and a non-empty
+request identity replays its exact range. Empty polls share a cursor and spend
+no delivery slots; a turn may read at most 128 deliveries. Reading stages
+receipts but marks nothing processed. Watch events are read with
+`control_watch_events`, whose receipts go into the same mailbox.
 
-**Local step cap and approval waits (2026-11-17).** Run -138's lead on a local
-model ran `control_service_exec` 33 times retrying `curl` that could not resolve
-hosts it had requested egress for, then stopped at 64 model steps and lost the
-turn. A local turn is now warned once when few steps remain, and reaching the cap
-(`local_agent_steps`, cause `step_limit`) writes the host checkpoint above and is
-resumed like a timeout ([LOCAL-MODELS.md](LOCAL-MODELS.md#local-agent-turns)).
-A handoff can wait on `port:PORT_ID` for a pending port request; the decision,
-approved or denied, queues the requester's next turn, including after a cut-off
-turn. Port records and service-exec failures that name a requested host say how
-to wait or how to use the relay ([PORTS.md](PORTS.md)).
+**The wake carries its delta.** At admission a bot wake or room notification gets
+one page (16 posts, 8 KiB) of its linked room's posts after the committed
+watermark, rendered under the current event and recorded as the host-issued
+receipt `wake`. Both come from the same state snapshot, so the receipt never
+covers a post the agent was not shown. `control_turn_context` is only needed for
+events that arrive after admission; tool results carry a callback hint when there
+are some.
 
-## Persistent attempts and R1 (2026-11-07)
+Managed sessions cannot call `control_room_notifications` or `control_room_ack`;
+they read rooms with `control_turn_context {"source":"room"}` and acknowledge them
+by handing off.
 
-Approved persistent bots get their own default turn limit, 1,200 seconds
-(`bot-turn-timeout-secs` / `CONTROL_BOT_TURN_TIMEOUT_SECS`, 60 s–24 h; `0` or
-`none` for unlimited), captured at admission. Bots continue across turns through
-handoffs, routines and bounded recovery, so the limit loses nothing a handoff
-keeps, and with a limit the deadline warning tells the bot to checkpoint first.
-(Until 2026-11-16 bots had no implicit limit; a lead then lost a whole turn of
-work at another limit, and member bots ran single turns for 45 minutes while
-messages queued behind them.) An explicit operator `worker-timeout-secs` /
-`CONTROL_WORKER_TIMEOUT_SECS` limit is captured at admission and takes priority
-for every attempt. Ordinary attempts retain the 600-second default. Approval
-during an active attempt switches only the implicit default to the captured bot
-limit.
+### `control_turn_handoff`
 
-**Local-model turns (2026-11-16).** Every attempt on the local backend (a
-`local:NAME` chat, spawn or bot) uses its own default limit, 3,600 seconds
-(`local-turn-timeout-secs` / `CONTROL_LOCAL_TURN_TIMEOUT_SECS`, 60 s–24 h; `0`
-or `none` for unlimited), captured at admission like the bot limit and applied
-to chats and bots alike; it replaces both the 600-second and bot defaults for
-that attempt, and an explicit `worker-timeout-secs` still wins. A lead on Qwen
-27B (Metal, about 150–200 prompt tokens/s and 15 output tokens/s, roughly ten
-times slower per step than a hosted model) hit the 600-second limit during its
-first setup turn: the workspace was retained but the turn was lost. The
-deadline warning, the context budget's `limit_seconds`/`remaining_seconds`, the
-service-exec wait cap and the host checkpoint all read the same selected limit
-(`attempt_control::deadline`), so a local turn is warned at 15 % (540 s) before
-3,600 s and its interruption is recorded the same way. Attempts admitted before
-this release carry no local limit and run unlimited. Context budget responses return `null` for unlimited remaining time. Quiet output is not a health
-failure, and no periodic finish window or automatic progress extension is used.
+Only the disposition is required: `{"disposition":{"kind":"done"}}` or the bare
+string `"done"`.
 
-`control_turn_handoff` is an explicit yield: once its validated draft is durable,
-the host stops attempt-owned writers and commits the workspace, notes and processed
-cursors through the existing transaction, without waiting for another model reply.
-Persistent services survive; an approved bot's existing disposition controls its
-next admission. Cancellation and shutdown still override publication. A failed
-save cannot advance notes, cursors or the committed workspace independently.
+- **Dispositions.** `continue` requests one bounded successor because runnable
+  work remains. `wait` names existing topics and an optional recheck. `done`
+  stops automatic continuation of the current task; it does not cancel a bot's
+  subscriptions or stop services. Bot pause is separate and needs an operator
+  resume. Without an approved bot the disposition is saved for the next
+  requested turn; it cannot create a supervisor or schedule a recheck.
+- **`processed`.** Omitted means every receipt delivered in this attempt
+  (including `wake`) that follows each source's committed position. An explicit
+  list processes exactly those receipts. Receipts that cannot be applied (not
+  delivered to this attempt, a gap not listed in `resynchronised`, or a range
+  after an unprocessed one) stay pending and are reported in `left_pending`
+  rather than failing the handoff.
+- **`payload`.** Omitted keeps the latest draft or committed notes (a placeholder
+  subgoal if neither exists). `base_revision` omitted or stale uses the committed
+  revision; with one writer per chat it cannot move within an attempt, and
+  publication rechecks it.
+- **Wait topics** are matched to current `wake_topics` and never widened beyond
+  them. `room:general`, `general` and `#general` all select `room:general`; a
+  bare kind such as `conversation` selects its subscriptions; unknown names are
+  dropped. If topics are omitted, or a non-empty list matches nothing, or more
+  than 16 match, the wait keeps every current subscription (own conversation
+  first, then rooms, other topics, watches; truncated to 16). An explicit `[]`
+  waits only for urgent failures and direct messages.
+- `claim:NAME` waits on a claim; an already resolved claim records `continue`.
+  `port:PORT_ID` waits on a pending port request: the operator's decision,
+  approved or denied, queues the requester's next turn ([ports](PORTS.md)).
+- `recheck_seconds` omitted or `0` means events only; a positive value is a
+  fallback recheck. An over-long `progress` (over 1,000 characters) is truncated.
+- Every adjustment is listed in `adjusted`. Only the accepted draft is kept.
 
-R1b retains a stopped attempt's workspace as a separate immutable recovery
-candidate, with generation, original base/project grant, termination cause and
-accepted draft. It uses the existing checkpoint copy rules (including exclusions
-for credentials, generated directories and symlinks), not the bounded HTML-preview
-artifact. Stop/copy/save failures are explicit. Restart reconciliation captures
-interrupted work after verifying writer termination. Nothing schedules a recovery
-turn or acknowledges a callback merely because a candidate exists.
+Payload validation still refuses, because notes are claims and are never silently
+rewritten. Limits: 12 KiB of UTF-8 JSON, 16 findings, 16 tried approaches,
+16 pending actions, 8 next actions and 1,000 characters per text field. Each
+refusal says how to retry, including retrying without a payload.
 
-The next authorized attempt receives bounded recovery references. The
-`control_recovery` tool lists all candidates, inspects notes/files, and can copy a
-matching candidate to an isolated `.control-recovery-GENERATION` folder. Copying
-requires the current attempt, base and project grant to match; it does not replace
-the committed head. The agent must reconcile external effects and select changes
-before its normal publication. Large/binary files are retained and accessible via
-that recovery folder even when the bounded text inspector cannot display them.
+The same idempotency identity with the same payload returns the same result;
+conflicting reuse fails. A failed save is not an acknowledgement.
 
-Attempt-owned command deadlines are capped by an explicit/default owner deadline
-when present. Responses disclose requested/effective limits; persistent service
-jobs are independent. Yielding cancels remaining attempt-owned jobs, so work that
-must outlive a model turn belongs in a persistent service.
+**Handoff is an explicit yield.** Once the draft is durable, the host stops
+attempt-owned writers and commits the workspace, notes and processed cursors in
+the worker's finish transaction, without waiting for another model reply. Until
+the attempt ends, only observations and handoff corrections may run; Control's
+typed tool policy enforces this, not the tool's own read-only annotation.
+Persistent services survive the yield; remaining attempt-owned jobs are
+cancelled, so work that must outlive a turn belongs in a persistent service. The
+MCP fence does not cover a native CLI's private built-in shell; container
+isolation is the boundary there. Cancellation and shutdown still override
+publication.
 
-The earlier design notes below are historical where they conflict with this
-implementation contract.
+### Refusals name a fix
 
-The next priority is reducing stop/start context pollution: longer active slices,
-event deltas, and reliable working-state handoffs, while preserving Control's
-recovery model. Implement this in small reviewed slices. Keep the current
-playtest running unchanged while establishing its baseline.
+Every refusal from the turn, service, room, watch and agent-message tools names a
+concrete next call (tool and JSON arguments) or says "ask the operator via
+control_design_ask". Worker dispatch appends the family's default fix to any
+refusal that lacks one. `worker_tools::fixes::tests` scans those tools' sources
+for error strings and checks each reaches the model with a fix.
 
-Control owns task state, evidence, permissions and recovery. A provider process
-may perform several related steps before yielding; the next process reconstructs
-its task from Control. Provider session reuse, API/local-model adapters and
-background summary generation are outside this implementation.
+A `control_service_exec` command that finishes within `wait_seconds` returns its
+result marked `final: true`; only a still-running result carries a `wait` hint
+naming the exact `control_service_exec_status` call.
 
-The runtime model is **bot = agent + supervisor + callbacks**. While meaningful
-activity is advancing the goal, preserve the active provider session within its
-attempt. If that attempt ends with runnable work remaining, the supervisor may
-admit a fresh attempt without another human "continue", subject to existing
-authority and budgets. Every new attempt reconstructs context from Control's
-committed journal, instructions and selected history; it never resumes the ended
-provider session. Provider caches are optional optimizations, not task-state
-authority. A real dependency or a scheduled condition is
-different from runnable work. Neither callbacks nor a short elapsed interval
-justify periodically restarting an agent.
+## Working state
 
-### Implementation checkpoint
+Model-authored notes hold the current subgoal, findings (text claims with
+confidence), tried approaches and outcomes, pending actions and expected results,
+and next actions conditional on results. Control supplies identity, checkpoint and
+instruction provenance; the model cannot forge them. The original assignment and
+later steering are kept as Control-owned references and are never replaced by the
+model's summary. Unknown fields and schema versions are rejected.
 
-Scope correction: agents own handoffs, callback delivery and context; bots add
-supervisor admission and approved unattended scheduling.
-Keep the existing append-only chat tape, comonad positions and configured
-compactor/lenses. A task view may omit typed wake bookkeeping without deleting
-history or keeping every old instruction in the model prompt forever. General
-context browsing, new evidence expansion and a new scheduling language are not
-prerequisites for the next continuity playtest. Do not grow those features while
-the core lifecycle remains incomplete.
+## Events and wakes
 
-The feature branch contains the private projection and captured-input
-path, typed working notes, attempt-scoped deliveries/drafts, atomic publication,
-conversation/room delta prototypes, host-tool yield fencing, and a budgeted,
-deduplicated runnable-successor path. Callback hints can reach an active session
-on normal MCP responses. The prompt guidance no longer demands termination after
-each event. Ordinary and spawned agents use this same path at their next admission.
-Committed idle waits narrow existing topics and suspend periodic check-ins,
-including timer reasons accumulated during active work. A wait may omit/null
-`recheck_seconds` to remain event-only, or supply a positive explicit fallback
-in seconds. Selected events and urgent process failures still wake it; direct
-human input, pause and cancellation remain available. Periodic checks resume
-after the wait resolves, without replaying missed timer ticks. Active sessions are never restarted
-just because those callbacks arrive. Captured inputs reuse the append-only
-journal component; finished handoff receipts leave the mutable state checkpoint
-with finished tool activity instead of being rewritten on every save.
+Ingestion, delivery and processing are tracked separately. The supervisor's
+ingestion cursor only deduplicates; delivered ranges belong to the attempt and
+processed watermarks to the chat. On a committed handoff, pending wake reasons are
+retired only up to the committed watermarks; newer events stay pending. Overflow
+needs an explicit resync receipt; a truncated preview never consumes a range.
 
-Approving a permanent bot or using `/bot on` enables unattended scheduling; the
-agent already owns its continuity. Pre-existing provider attempts without a
-mailbox retain their protocol until the next admission. Captured typed
-triggers identify why that turn exists; conversation and room reads issue exact
-delivery receipts. Managed room processing uses handoffs instead of the ordinary
-room-ack tool. A successful published bot session that omits a handoff can resume
-once through the normal supervisor budget, retaining its last report. Explicit
-wait/done, unanswered approvals, newer input and unsuccessful/interrupted
-publication prevent that fallback; it does not guess completion from prose.
+- **Watch wake policy:** any line (default), exit only, or 1–8 literal line
+  prefixes of at most 128 bytes plus exit. All output stays in the spool. No
+  regular expressions or domain parsing in Control; task containers can print
+  explicit milestone markers.
+- **Waits narrow, never widen.** A committed wait selects which existing topics
+  wake the bot. Deferred room posts stay readable. Human input, cancellation,
+  approval answers, direct task messages and resource failures (urgent watch
+  exits and gaps) bypass waits. Missed timer ticks are not replayed.
+- **Fresh bot activation** starts at the current room tail. Reconfiguration,
+  pause/resume and reload keep that origin. Older posts remain readable with
+  `control_room_read` but do not wake the bot.
+- **Continue** creates at most one successor per predecessor and working-state
+  revision. Pending events join it; it counts against the normal cooldown budget,
+  and user turns keep their FIFO priority.
+- A bot session that publishes without a handoff may resume once through the
+  normal supervisor budget. Explicit wait/done, unanswered approvals, newer input
+  or failed publication prevent this; completion is never inferred from prose.
 
-The first implementation deliberately supports bounded text working notes and
-conversation/room/watch receipts. Unsupported evidence/resource reference types are
-absent from the core and tool schemas. Saved notes from #133 can still decode
-its empty reference arrays; those placeholders are omitted on subsequent saves.
-Watch spool reads run outside shared state, then capture a scoped delivery receipt
-in the same mailbox used by conversation and room reads. Publication retires only
-the processed range; later events remain eligible. Watch prefix/exit selection
-lives in the tool adapter. Idle waits retain unrelated telemetry until a relevant
-event or explicit recheck. MCP yield fencing does not intercept a native CLI's
-private built-in shell; container isolation remains authoritative there.
-
-Fresh bot activation starts at the current room tail, even if the chat has an
-older inbox. First room linkage records the same origin in the session, active
-mailbox and supervisor ingestion cursor. Reconfiguration, pause/resume and reload
-preserve the origin. This excludes prior playtests from automatic delivery and
-wakes; it does not delete posts or prevent explicit `control_room_read` browsing.
-Empty deltas return a reusable source-position receipt. Repeated idle reads at
-that position neither consume additional delivery slots nor rewrite state.
-Fresh reads default to the last delivered position, so callers receive new
-events without repeatedly injecting earlier batches. Delivery is still separate
-from processing; only committed handoff receipts advance the room inbox.
-Processing a delivered steering message retires its queued run without suppressing
-the handoff's requested continuation; genuinely newer input still takes precedence.
-
-## Evidence and diagnosis
-
-The inspected Cass chat is `c-18e48bae83f5c340-7`. A captured state snapshot had
-49 runs, including 45 bot wakes and 48 completed runs. In the completed interval
-2026-11-03 13:44:24–13:54:24 UTC, runs `18e48ce47f50b5c0-171` through
-`18e48d701c514228-201` comprise 17 consecutive monitoring turns:
-
-- Every turn called room notifications, watch events, service status and room
-  acknowledgement: 68 calls, with no gameplay action or room post in this interval.
-- Recorded attempt time totals 313,933 ms. Provider telemetry totals 1,711,818
-  input tokens, including 1,362,304 cached input tokens, and 3,730 output tokens.
-  These are aggregate attempt usage, not the size of one prompt or a billing claim.
-- Reconstructing the next turn's default Recent window from saved messages and
-  journal replies yields 19,311 characters across 24 entries. Those 17 monitoring
-  exchanges occupy 10,026 characters, about 52%. Wake-message text occupies
-  14,810 characters across the entire window. The calculation excludes framing,
-  lenses and the separate handoff; it is not a captured provider prompt.
-
-Alice's repeated joins/leaves and progress posts wake Cass after Cass has reached
-a stable connection. Cass checks itself, acknowledges Alice's news, and ends.
-Earlier turns did advance the protocol diagnosis; the whole run was not idle.
-The original playtest also explicitly requested one action per bot turn and an
-end at asynchronous boundaries. That instruction contributes to fragmentation;
-do not silently override it in the live test or attribute all latency to the
-harness. The next comparative test must explicitly permit longer active slices.
-
-The code explains the feedback loop:
-
-- `src/bots.rs::queue` appends a wake message containing recent watch output.
-- `src/conversation.rs::Entry::render` treats that message and its reply as
-  ordinary prompt history; `Recent` retains by recency and character count.
-- `handoff` adds the previous attempt's last six eligible observations, so the
-  monitoring ritual becomes both recent conversation and execution handoff.
-- `crates/bot/src/supervisor.rs` coalesces transport events but does not decide
-  their relevance. Reading/acknowledging room content does not consume the
-  supervisor's independently queued reasons. Events already handled during a
-  running turn can consequently still cause another turn.
-- `src/watches.rs::observe` retains the last five lines, not just the new range;
-  wake descriptions can repeat old output alongside a new line count.
-
-The implementation must reduce unnecessary model admissions as well as prompt
-size. Summarizing the ritual alone would still pay for the ritual.
-
-## Required invariants
-
-1. One writer per chat, existing FIFO, node slots, turn budgets and authority
-   ceilings remain enforced. Idle agents release model slots.
-2. Intent is durable before model/tool execution. Attempt generation fences all
-   updates. Cancellation, explicit pause, design questions and blocking delegation
-   retain their existing semantics.
-3. A working-state revision is promoted only with a matching successful workspace
-   publication, or an existing explicit paused-checkpoint transition. A draft is
-   not proof that its files or external effects committed.
-4. Event delivery is at least once. Reading does not mean processing. Cursors
-   advance only for validated receipts; never acknowledge unseen/truncated data.
-5. Restart interrupts an in-flight provider attempt as today. Never silently
-   replay model requests or ambiguous external effects. A later explicit retry
-   or independently admitted wake uses committed state and retained evidence.
-6. Model-written facts remain attributed claims with checkpoint provenance. They
-   cannot alter user instructions, grants, resource truth or admitted knowledge.
-7. Raw evidence and lifecycle history remain inspectable under existing retention
-   rules, even when omitted from model context. Missing evidence is explicit.
-
-## Bot = agent + supervisor + callbacks
-
-Keep the agent's provider session active while useful work is progressing. The
-supervisor owns lifecycle and recovery; callbacks supply events and steering to
-that active session. A callback is not a request to restart the agent. Within
-an existing model attempt, the agent can inspect,
-act, verify and take the next related action. Remove Control-generated guidance
-that requires one action and immediate termination at every watch start.
-Keep explicit user-imposed limits effective and visible.
-
-Consume newly available events at meaningful action boundaries through the
-context tool below. Do not create a follow-up run solely because an event arrived
-while the chat's writer was active. Do not inject arbitrary text into a provider's
-stdin after launch or depend on native session-resume protocols.
-
-Yield when there is a genuine unresolved dependency, an approval/design question,
-task completion, cancellation, or the configured attempt deadline. A short asynchronous
-operation does not by itself require yielding if independent useful work remains.
-Do not add model sleep loops, long-poll tools or a permanently occupied slot.
-
-Do not introduce a periodic soft handoff timer. Report elapsed/remaining allowance
-under the configured hard attempt deadline, which remains authoritative. The
-agent should checkpoint before that boundary when practical, but useful progress
-must not be interrupted merely because a short interval elapsed. Durable handoffs
-support recovery and genuinely idle agents; they are not the normal action loop.
-Do not promise token-budget enforcement from end-of-attempt CLI usage telemetry.
-
-Lifecycle refinement (2026-11-07): use typed callbacks/effects at existing tool,
-dependency, decision and yield boundaries; do not introduce a fixed early finishing
-window. Preserve the explicit-yield fence and safe publication transaction below.
-These hooks cannot turn a live draft into a committed checkpoint or guarantee a
-final save after a crash. Independent persistent jobs retain their handles and
-completion subscriptions across model attempts; an attempt deadline does not set
-their lifetime. Evaluate the current attempt cap separately from workflow progress
-and tool-specific transport limits. No new general hook/plugin runtime is required.
-Long-job tools can supply bounded health/progress inspection and configurable
-runtime/review policy. Keep liveness, progress and unknown observations distinct;
-request a scoped lead/operator decision before extending an authorized limit.
-Pending decisions retain the existing policy, and a failed health probe alone
-does not establish that the underlying job failed.
-
-## State and tool contract
-
-Add a narrow `src/turn_context.rs` adapter and pure data/validation/projection
-types in `crates/context`. Extend existing bot transitions only where mailbox
-receipts and self-continuations require it. Avoid a broad crate extraction.
-
-| Record | Contents and ownership |
-| --- | --- |
-| WorkingState | Schema version, monotonic revision, chat, originating run/attempt generation, published checkpoint reference; model-proposed goal progress, findings, rejected approaches, pending work and conditional next actions |
-| Instruction references | Control-owned original assignment and later user/authorized steering references, in order; never replaced by the model's summary |
-| EventReceipt | Opaque ID tied to chat/run/attempt generation and exact delivered per-source ranges; records gaps and pagination |
-| PendingHandoff | Attempt-scoped candidate WorkingState, base revision, acknowledged receipt IDs, disposition, optional task-progress summary, and idempotency identity |
-| ContextTrace | Projection version, exact Control text sent to the harness, section sizes and selected/omitted evidence references; privately retained with the attempt |
-
-Working-state fields include: current subgoal; findings with confidence/uncertainty
-as text claims; tried approaches and outcomes; pending actions and expected results;
-expected event conditions; and next actions conditional on results. Control fills
-identity, checkpoint and instruction provenance; the model cannot forge them.
-
-Start with a 12 KiB UTF-8 JSON limit for the model-authored working-state payload,
-16 findings, 16 attempted approaches, 16 pending actions and 8 next actions.
-Reject oversized writes with actionable errors;
-do not silently truncate claims or instructions. Cap each free-text field at
-1,000 characters within the total limit. Schema versions and unknown fields
-must be validated, not accepted as arbitrary executable configuration.
-
-Expose two attempt-scoped MCP tools through the shared registry and BotOps-style
-host boundary. Both providers and ordinary spawned agents receive identical
-semantics. They are advertised as `agent.continuity`, independently of `agent.bot`.
-The worker MCP transport supplies run/attempt identity; the operator HTTP/stdio
-catalog does not advertise these attempt-bound tools or accept model-supplied
-attempt identities. This shared transport is the integration boundary for native
-adapters, not a new public session-authentication protocol.
-
-- `control_turn_context`: returns committed working state (or this attempt's
-  staged candidate), conversation/room deltas, remaining attempt time,
-  `continuation_enabled`, allowed wake topics and opaque delivery receipts.
-  Accept an optional previous receipt for pagination, including an empty read's
-  source-position receipt. Nonempty request identities replay their exact range;
-  an empty poll is a fresh observation and shares its cursor with other empty polls.
-  Default delta page: at most 16 items and 8 KiB, with `more` and explicit gap
-  markers. A read stages delivery receipts but does not acknowledge processing.
-- `control_turn_handoff`: accepts the base working-state revision, candidate
-  state, processed receipt IDs, disposition and optional progress summary. It
-  validates scope/generation, saves PendingHandoff and returns its revision.
-  Same idempotency identity and same payload returns the same result; conflicting
-  reuse fails. A failed save is not an acknowledgement.
-
-Dispositions are `continue`, `wait`, `done`. `continue` requests one bounded
-successor because runnable work remains after the slice; `wait` specifies existing
-sources/conditions and an optional recheck deadline; `done` relinquishes automatic
-continuation. Explicit bot pause remains distinct and requires operator resume.
-`done` stops synthetic continuation for the current task; it does not revoke an
-operator's bot subscription or stop services. Maintenance belongs in `wait` with
-explicit conditions. The optional progress summary is task progress, not a
-mandatory wake/sleep report.
-Without an approved bot, dispositions are saved with the agent's workspace for
-its next requested turn; they cannot create a supervisor or schedule a recheck.
-
-After a handoff is accepted, the provider should finish naturally. Fence further
-mutating tools for that attempt, allowing only reads and correction of the draft;
-this prevents actions after the declared checkpoint candidate. Do not implement
-yield by killing the process and treating cancellation as success. If the CLI
-fails to finish, normal timeout/cancellation applies and the candidate remains
-uncommitted. Forced graceful provider termination is outside the first slice.
-Use Control's typed tool policy for that fence, not caller-supplied read-only
-annotations. A tool with an effect cannot bypass it by labeling itself a read.
-
-## Events recorded versus events requiring a model
-
-Keep source ingestion, delivery and processed cursors separate. The current
-supervisor cursor deduplicates ingestion; it is not a model acknowledgement.
-Track delivered ranges on the attempt, and committed processing watermarks on
-the chat/bot. Protect outstanding referenced watch evidence from retirement.
-
-At dispatch, record the initial delta receipt with the attempt intent before
-launch, retaining the full structured wake reasons and source ranges. The
-supervisor currently removes pending reasons on dispatch; its held topic names
-alone are insufficient to recover an unprocessed delivery. During an active
-slice, context reads page additional events using the
-same receipt mechanism. Include current authoritative status for relevant handles
-without dumping historical service execution lists. Additional status tools
-remain available for explicit investigation.
-
-On successful handoff commit, retire pending wake reasons only through the
-committed watermarks. If a coalesced reason includes newer events, retain it and
-deliver only the unprocessed source range next time. A later event racing with
-commit must remain pending. Overflow records require an explicit resync receipt;
-never interpret a truncated preview as consumption of a complete range.
-
-For managed turns, legacy `control_room_ack` must stage a processing receipt in
-the same transaction model rather than independently clearing future wake work.
-Ordinary room listeners and legacy bots retain their existing contract. Watch
-reads stay non-acknowledging. Do not wire a plain status read to wake suppression.
-
-Prevent passive telemetry from waking an idle model on every line:
-
-- Add an optional watch wake policy: any line (legacy default), exit only, or
-  bounded literal line prefixes plus exit. Retain all output in the spool. Limit
-  to 8 prefixes of 128 bytes; no arbitrary predicates, regular expressions or
-  domain-specific parsing in Control. Task containers can emit explicit milestone
-  markers. Terminal failures and source loss remain actionable.
-- A committed wait may narrow which already-authorized topics wake that bot.
-  Deferred room news remains readable and can be batched at its next actionable
-  wake or finite recheck deadline. Do not infer relevance by keyword or silently
-  unsubscribe the bot. Include the effective wait in operator status.
-- Human input/steering, cancellation, approval answers, authorized direct task
-  messages and resource failure bypass ordinary telemetry deferral. Preserve
-  their existing ownership and FIFO semantics; they do not gain new authority.
-- Initial maximum deferred-room recheck is five minutes, bounded by an existing
-  shorter approved timer. Model requests cannot extend the operator's timer or
-  grant subscriptions/resources. Explicit user directives to process every event
-  remain effective. A timer is a fallback, not a reason to repeat status rituals.
-
-When a turn commits `continue`, create at most one durable successor intent keyed
-by predecessor and working-state revision. Existing pending eligible events join
-that successor; do not create separate event and continuation runs. Count it in
-the normal cooldown/window budget and preserve background scheduling. Materialize
-it when queue capacity permits. User turns remain ahead according to current FIFO;
-invalidate/re-evaluate a stale continuation intent if newer work changes its
-checkpoint. Temporary one-shot bots retain explicit rearm semantics.
+A watch's processed watermark is retired only when its record is deleted, since
+watch ids are never reused. After a publication, a bot chat's watch records are
+deleted once terminal, fully offered, processed through their last sequence and
+with no turn of the chat queued or active.
 
 ## Commit and recovery
 
-Extend the existing worker finish transaction; do not publish working state from
-the tool handler. First quiesce command writers and publish the workspace using
-existing rules. Under the state lock, validate current attempt generation and
-checkpoint parent, then promote handoff, processed watermarks, workspace head,
-run result and continuation intent together. Persist the journal/reference and
-state with existing rollback/recovery conventions. Include the newly touched
-bot/chat fields in rollback without reverting another chat's progress.
+The worker's finish transaction quiesces command writers, publishes the workspace,
+then under the state lock checks the attempt generation and checkpoint parent and
+promotes the handoff, processed watermarks, workspace head, run result and
+continuation intent together, with the usual rollback. Other chats' progress is
+never reverted. Paused design/delegation checkpoints use the same association; a
+child completion is evidence, not permission to overwrite the parent's notes.
 
-The same atomic association applies when existing design/delegation machinery
-publishes a paused checkpoint. Transfer handoff lineage through its explicit
-continuation receipt; do not release the bot or duplicate a successor while that
-chain still owns the chat. A child completion is evidence, not permission to
-overwrite the parent's working state.
+On a crash before commit, the last committed handoff and cursors remain. The draft
+is kept as interrupted evidence, not as committed fact. External effects are
+reconciled through service/job intent receipts, never by blind replay or by
+rolling services back. Uncommitted event ranges stay as backlog; a restart alone
+does not retry the failed attempt.
 
-On crash before commit, retain the last committed handoff and cursors. Retain the
-draft as interrupted evidence with its attempt/checkpoint provenance; do not
-present its claims as committed facts. External actions may already have happened:
-use existing service/job intent receipts and ambiguous-result handling, not blind
-replay. Do not roll back external services to match the old handoff.
-Retain uncommitted initial and subsequent event ranges as recovery backlog. A
-restart must not turn that backlog alone into an automatic retry of the failed
-attempt; include it when an explicit retry or a new independent wake is admitted.
-Expose that recovery condition in status rather than losing the dispatch reasons.
+### Recovery candidates
 
-R1b follow-up: after confirming attempt writers stopped, capture retained workspace
-bytes as an immutable unpublished recovery candidate, independently of model
-cooperation. Keep the draft separately attributed; neither advances the published
-head or processed cursors. A failed stop/copy leaves visible unstable/missing
-evidence. Record timeout as a structured termination cause even if cleanup also
-fails. Candidate adoption checks authority and the current baseline; copied files
-may still be incomplete and do not roll back external services.
+After confirming attempt writers stopped, the host keeps the stopped attempt's
+workspace as an immutable recovery candidate, with its generation, base, project
+grant, termination cause and accepted draft. It uses the checkpoint copy rules
+(credentials, generated directories and symlinks excluded). Stop, copy and save
+failures are explicit. Restart reconciliation captures interrupted work too.
 
-A provider ending successfully without a handoff keeps its result/evidence and
-workspace under existing rules, marks continuity incomplete and retains the last
-committed working state. It does not acknowledge delivered events or invent a
-`continue` disposition from prose. Tag the retained state's older checkpoint and
-require reconciliation before actions depending on it.
+`control_recovery` lists candidates, reads their notes and files (UTF-8 files up
+to 64 KiB), and with `restore: true` copies one into a new
+`.control-recovery-GENERATION` folder in the workspace, only if the original base
+and project grant still match. It never replaces the committed head or
+acknowledges events. A candidate alone never schedules a turn.
 
-Each attempt has a new generation, so the per-generation recovery stamp alone
-would re-arm a recovery after every failed turn. The chat's continuity therefore
-counts turns that end without an accepted handoff since the last published one,
-and keeps the host's last handoff rejection with its attempt generation (a
-storage failure is not a rejection). For a persistent bot:
+### Host checkpoint
 
-- A rejected handoff gets an immediate recovery turn, at most
-  `bot_recovery_continues` times per streak (default 2). Its wake text quotes
-  the rejection and asks the agent to repair the receipt rather than re-verify
-  the world or start new watches. For an unseen or unbaselined event range it
-  quotes only the error's first sentence (the previous turn's receipt list is
-  stale) and says how to resynchronise: read each handled source again from its
-  committed position and list every receipt read, oldest first, skipping none.
-- A turn the host stopped at its time limit was cut off mid-work, not waiting:
-  it gets the same bounded immediate recovery turn, counted in the same streak,
-  with the timeout wake text below.
-- A turn that ended without calling the handoff is waiting, not runnable work:
-  it is never answered with `continue`.
-- Otherwise the bot waits on all its current subscriptions (own conversation
-  first; a wait names at most 16 topics, and urgent watch exits and gaps release
-  any wait) with a recheck after `bot_recovery_recheck_seconds` (default 300),
-  doubling per further failed turn up to 64 times or one day.
-- Past the allowance, once per streak, the node notice, the bot's status
-  (`cannot checkpoint`) and the team advisor's lifecycle facts report that the
-  member cannot checkpoint, with the last rejection.
+When a managed turn hits its time limit, its local step cap, or ends on a provider
+error before handing off, the finish transaction records `continuity.interrupted`:
+generation, cause, whether a recovery candidate was captured, elapsed time, any
+staged draft's progress and the last 8 tool calls (200 characters per field). It
+is built from host records without a model call. A local model's turn adds its
+latest step's reasoning, verbatim (the last 1500 characters), and the next turn
+is told to continue that plan ([Thinking](LOCAL-MODELS.md#thinking)). The next turn's working notes
+render it with the restore call `control_recovery {"generation":"…","restore":true}`.
+It advances no head or cursor and is cleared by the next published handoff.
+
+### Recovery streaks
+
+Each attempt has a new generation, so the chat counts turns that ended without an
+accepted handoff since the last published one, and keeps the last handoff
+rejection (a storage failure is not a rejection). For a persistent bot:
+
+- A rejected handoff, or a turn cut off by its time limit, step cap or provider
+  failure, gets an immediate recovery turn, at most `bot_recovery_continues`
+  times per streak (default 2, range 0–16). A rejection wake quotes the error and
+  asks for a repaired receipt; for an unseen or unbaselined range it says how to
+  resynchronise (re-read each source from its committed position and list every
+  receipt, oldest first).
+- A turn that ended without calling the handoff is waiting, not runnable, and is
+  never answered with `continue`.
+- Otherwise the bot waits on all its subscriptions with a recheck after
+  `bot_recovery_recheck_seconds` (default 300, range 30–86,400), doubling with
+  each further failed turn up to 64 times that or one day.
+- Past the allowance, once per streak, the node notice, the bot status
+  (`cannot checkpoint`) and the team advisor report it with the last rejection.
 - A published handoff ends the streak.
 
-In a replay of one run's loop shape (every turn's handoff rejected, the worker
-finishing turns at once), three simulated hours gave 181 turns, 180 of them
-continue wakes, before; and 8 turns, 2 continue wakes, after. Thirty minutes of
-turns without a handoff gave 60 turns (59 continues) before and 5 (none) after.
-See `bots::tests::recovery`.
+See `bots::tests::recovery` and `bots::tests::handoff_cost`.
 
-A watch's processed watermark is retired only when its record is deleted, since
-reads and receipts need the record and watch ids are never reused. After a
-publication, a bot chat's watch records are deleted once terminal (last frame a
-final exit, given up or transient, or stopped), fully offered, processed through
-their last observed sequence, and no turn of that chat is queued or active; the
-next publication then drops their watermarks. Retiring a watermark while
-keeping the record would let a later read restart from zero, so that is not done.
+A timed-out turn fails like any other. Claims of an owner that is not an approved
+persistent bot are marked abandoned so dependents wake; the owner keeps them and
+can resume one with `update`, which clears the flag. The team advisor hears of it
+once (`timed_out`). The next wake says the previous turn hit its limit, points to
+`control_recovery` and the claims, and suggests splitting or delegating the work.
+See `bots::tests::timeout`.
+
+## Turn limits
+
+Each attempt captures its limit at admission. `0` or `none` means unlimited;
+other values are clamped to 60 s–24 h.
+
+| Attempt | Default | Setting |
+| --- | --- | --- |
+| Explicit operator limit (wins for every attempt) | none | `worker-timeout-secs` / `CONTROL_WORKER_TIMEOUT_SECS` |
+| Local backend (`local:NAME` chat, spawn or bot) | 3,600 s | `local-turn-timeout-secs` / `CONTROL_LOCAL_TURN_TIMEOUT_SECS` |
+| Chat that is an approved persistent bot | 1,200 s | `bot-turn-timeout-secs` / `CONTROL_BOT_TURN_TIMEOUT_SECS` |
+| Anything else (including temporary or stopped bots) | 600 s | — |
+
+The setting files live in the node configuration directory. The limit depends on
+the chat, not the run kind: every run in an approved bot chat uses the bot limit.
+Approval during an active attempt switches only the implicit default. The
+deadline warning, the context budget, the service-exec wait cap and the host
+checkpoint all use the same limit (`attempt_control::deadline`). Quiet output is
+not a health failure, and there is no automatic extension. Command deadlines
+owned by the attempt are capped by its deadline; responses state requested and
+effective limits. Persistent service jobs are independent of it.
+
+Local turns also have a model-step cap, `local_agent_steps` (default 64, range
+16–1,024). The agent is warned once when few steps remain; reaching the cap ends
+the turn with cause `step_limit`, writes the host checkpoint and is resumed like
+a timeout ([local agent turns](LOCAL-MODELS.md#local-agent-turns)).
 
 ### Deadline and steering notes
 
-A turn stopped at its attempt limit loses everything since its last published
-checkpoint, so the host warns before that happens. Every managed session's tool
-results (other than `control_turn_handoff`) can carry two advisory notes, each
-at most once per attempt and never after a handoff is staged:
+Tool results other than `control_turn_handoff` can carry two advisory notes, each
+at most once per attempt and never after a handoff is staged. The attempt records
+which were sent (`nudges`).
 
-- When an attempt with a time limit has at most 90 seconds, or 15% of its limit
-  if larger, left (half the limit for limits under 180 seconds):
+- **Deadline:** when the remaining time is at most 15% of the limit or 90 s,
+  whichever is larger (half the limit for limits under 180 s):
   `N s left in this turn: publish your checkpoint (control_turn_handoff) now and
-  continue in a routine or the next turn.` Attempts without a limit get none.
-  The limit is decided by the chat, not the run kind: every run in a chat
-  that is an approved permanent bot (its wakes and any queued message turns)
-  uses the bot turn limit (default 1,200 s), while a chat that is not
-  (including a temporary or stopped bot) keeps the 600-second default. An
-  attempt on a local model uses the local turn limit (default 3,600 s) whether
-  or not its chat is a bot; an explicit `worker-timeout-secs` overrides all
-  three.
-- When the acting chat steers active members (chats spawned from it, directly or
-  through members, with a turn queued, running or waiting, or approved as
-  persistent bots) and its turn has run `steering_turn_seconds` (default 240) or
-  requested `steering_exec_calls` (default 6) command executions
-  (`control_service_exec`, `control_workspace_run`, `control_workspace_start`):
+  continue in a routine or the next turn.` Unlimited attempts get none.
+- **Steering:** when the chat steers active members (chats spawned from it,
+  directly or through members, with a turn queued, running or waiting, or
+  approved as persistent bots) and its turn has run `steering_turn_seconds`
+  (default 240) or made `steering_exec_calls` (default 6) calls to
+  `control_service_exec`, `control_workspace_run` or `control_workspace_start`:
   `You are steering N active members: delegate this work to a member and end
   your turn.`
 
-Both are evidence on an ordinary tool result. They stop nothing and grant
-nothing; commands run inside a provider's own shell are not counted. The
-attempt records which were sent (`nudges`), so a note is not repeated within it.
+The notes stop nothing and grant nothing. Commands run inside a provider's own
+shell are not counted. See `worker_tools::nudges`.
 
-A timed-out turn fails like any other. Its unpublished workspace is a recovery
-candidate. Claims of an owner that is not an approved persistent bot are marked
-abandoned, as for any failed turn, so dependents wake instead of waiting on an
-owner that will not act without new input. The owner keeps them and their
-notes: no peer can acquire them, and its next turn resumes one with `update`,
-which clears the flag. Treating a timeout differently would leave dependents
-asleep on a turn that has already ended. The team advisor hears of it once
-(`timed_out`). A persistent bot with managed continuity gets a prompt recovery
-turn within `bot_recovery_continues` rather than a parked recheck (one run
-idled ten minutes after its lead timed out); any bot's next wake says its
-previous turn reached the time limit, points to `control_recovery` and its
-claims, and suggests splitting or delegating the work. See
-`worker_tools::nudges`, `bots::tests::timeout` and `bots::tests::recovery`.
+## Context projection
 
-## Context projection and inspection
-
-Keep lifecycle records in storage and UI, but exclude raw `Bot woke: ...` entries
-from managed prompt history. Do not hide failures, approvals or human instructions
-along with bookkeeping. Use typed run/entry metadata, not matching result prose,
-to identify automatic turns. Include only their explicit task-progress summaries
-in the task-history section; show the current wake once as a delta envelope.
+Lifecycle records stay in storage and the UI, but raw `Bot woke: …` entries are
+left out of managed prompt history. Automatic turns are identified by typed run
+metadata, never by matching prose; failures, approvals and human instructions are
+never hidden with them. The current wake appears once as a delta envelope.
 
 Projection order: policy and original/steering instructions; committed working
-state with provenance; relevant current deltas/resource changes; selected task
-history and lenses; current request. Use the structured handoff instead of blindly
-reinjecting the previous six status observations for managed turns. Preserve the
-legacy projection only for already running attempts without a captured mailbox.
+state with provenance; current deltas; selected task history and lenses; the
+current request.
 
-Required Control framing has a 256 KiB guard, including adapter policy, original
-assignment, working notes, lenses and current request. History selection belongs
-solely to the configured `Compactor`: Recent supplies its bounded window,
-Passthrough supplies all selected task history for provider-native compaction,
-and Lens supplies its chosen verbatim entries and summary blocks. Assembly
-preserves that selection in chronological order without a second truncation
-pass. This does not bound provider system prompts, tool schemas or later tool
-responses. Callback pages retain their separate byte/item bounds.
-If required framing cannot fit, stop admission with an
-actionable context-budget error, not silent truncation or instruction loss.
-Do not replace a human constraint with an unchecked model summary.
+Required Control framing (adapter policy, original assignment, working notes,
+lenses and current request) has a 256 KiB guard. If it cannot fit, admission
+stops with an actionable context-budget error rather than truncating
+instructions. History selection belongs to the configured compactor (Recent,
+Passthrough or Lens; see [lenses](LENSES.md)), and assembly keeps its selection in
+order without a second truncation pass. The guard does not cover provider system
+prompts, tool schemas or later tool responses.
 
-Build a typed PreparedContext at admission and save its exact rendered text as a
-private attempt artifact before launch; adapters must send that captured text.
-Record trace references atomically with attempt intent, recover orphan writes
-using existing artifact patterns, and apply retention/access rules. Capture later
-context-tool envelopes by receipt too. This supports comparing what was available
-with what was actually projected; it does not expose hidden provider reasoning.
+At admission Control builds a typed `PreparedContext` and saves its exact
+rendered text as a private attempt artifact before launch; adapters send that
+captured text. This records what was projected; it does not expose provider
+reasoning.
 
-## Implementation sequence and code map
+## Code map
 
-1. **Projection and measurement:** add typed automatic-turn classification and
-   PreparedContext/trace; exclude repeated wake text while preserving raw history,
-   required instructions and meaningful progress. Add the sanitized Cass fixture.
-2. **Working state and receipts:** add optional versioned state, the two MCP tools,
-   evidence resolution and transactional commit/rollback. Add replay/crash tests
-   before enabling event-consumption suppression.
-3. **Longer slices and deltas:** change managed guidance, expose current deltas
-   during execution, connect committed receipts to supervisor pending reasons,
-   and implement bounded deduplicated continuation intents and wait disposition.
-4. **Wake selectivity:** add watch prefix/exit policies and scoped wait deferral,
-   verify human/failure bypass and evidence retention, then run the live comparison.
-
-| Existing area | Implementation responsibility |
+| Area | Responsibility |
 | --- | --- |
-| `src/chat.rs`, `src/runtime.rs`, `src/usage.rs` | Optional versioned state, attempt candidates/receipts, trace reference and projection selection |
-| `src/turn_context.rs`, `crates/context` | Typed contracts, validation, pure projection, evidence resolver adapter and tool host |
-| `src/bots.rs`, `crates/bot/src/supervisor.rs` | Separate ingestion/processed watermarks, pending reasons, waits, continuation identity and budget |
-| `src/watches.rs`, `src/watches/ops.rs`, `src/rooms/notifications.rs` | Delta ranges, wake policies, scoped staged acknowledgements and gaps |
-| `src/worker.rs`, `src/claude.rs`, `src/history.rs`, `src/storage.rs` | Captured input, matching publication, handoff promotion, rollback and interrupted recovery |
-| `src/tool_registry.rs`, `src/worker_tools.rs`, `crates/context/src/tool_policy.rs`, `crates/context/src/agent_policy.rs` | Shared discovery/dispatch, mutating-tool fence and managed guidance |
-| `src/design.rs`, `src/delegation.rs`, `src/approvals.rs` | Existing paused-checkpoint and continuation chains retain handoff provenance |
-| Chat/web/TUI views | Compact current disposition and trace access; retained lifecycle activity stays inspectable |
-
-Use an explicit continuity schema version. During development, start with fresh
-state rather than building a legacy-chat migration path. A future `control
-migrate` is roadmap work. Do not wipe a running playtest or retrofit its attempts
-and cursors. Start on isolated test chats for both providers; unknown versions
-fail visibly. Ordinary chats and supervised bots may select different context
-views, but they share the same append-only history and compactor/lens interface.
-Enable the tested text-handoff and conversation/room/watch receipt contract for
-agent admissions; bot approval controls unattended scheduling only. Broader
-resource-reference contracts remain separate work.
-
-## Acceptance tests
-
-- **No-op churn:** replay sanitized join/leave telemetry and informational room
-  posts under a committed wait. They remain inspectable but do not cause 17 model
-  admissions; only the finite recheck or an actionable event can admit a turn.
-- **Active consumption:** events arriving during a multi-action slice appear in
-  context; committed receipts prevent duplicate wake admission. A racing newer
-  event remains pending. Read-only delivery and failed saves consume nothing.
-- **Paging and overflow:** multi-page reads, partial previews and spool gaps
-  cannot skip unseen events. Explicit unavailable evidence reaches the model.
-- **Atomicity:** inject failures before/after receipt save, workspace publication,
-  journal append and final state save. Verify matching workspace/state/cursors,
-  retained interrupted drafts, no duplicate successors, and other chats preserved.
-- **Recovery and controls:** restart, cancellation, pause/resume, exhausted budget,
-  queued human input, approval and blocking delegation preserve one writer and
-  existing continuation-chain ownership. No automatic ambiguous-effect replay.
-- **Authority:** reject foreign chat/resource references, forged ranges, stale
-  generations, stale base revisions and conflicting idempotency keys. Model
-  handoffs cannot replace instructions or admit knowledge.
-- **Projection:** adding 100 unchanged wake cycles does not grow task context or
-  evict standing instructions. Progress and failures remain visible. UTF-8 byte
-  bounds, missing references and over-budget required inputs are explicit.
-- **Provider parity:** the same committed state/deltas produce the same neutral
-  envelope under Codex and Claude; adapter framing is captured separately within
-  the required-framing guard. No provider-session ID is required for recovery.
-- **Live comparison:** repeat equivalent tasks with explicit permission for
-  multi-action slices. Record launches, useful actions per slice, monitoring-only
-  turns, context bytes, cached/uncached input, output, model-slot time, elapsed
-  task time, and progress against the goal. Compare protocol failures separately.
-
-Run the relevant focused tests during each slice, then the workspace/web tests,
-clippy, WASM and release builds required by CONTRIBUTING.md before publication.
-Use isolated state roots for fault/live tests. Live provider checks are explicit,
-not CI or doctor behavior. Report unperformed checks accurately in each PR.
-The maintainer merges; deploy only when requested. Do not stop services, modify
-the ongoing playtest, or clean its diagnostics as part of this implementation.
-
-## Sol task brief
-
-Implement the sequence above on feature branches from the current merged base.
-Inspect overlapping request-panel work before touching chat presentation. First
-deliver a reviewable projection/measurement slice with the regression fixture;
-then the durable handoff/receipt contract, then active execution and selective
-wakes. Keep each slice buildable and preserve saved-state compatibility. Do not
-ship prompt-only changes as completion of the receipt/recovery contract, broaden
-into a provider runtime rewrite, or claim semantic continuity from unit tests
-alone. Publish PRs with validation and measured before/after evidence; do not merge.
+| `crates/context` (`working_state`, `turn_mailbox`, `turn_context`, `tool_policy`, `agent_policy`) | Typed contracts, validation, pure projection, the after-handoff tool fence and managed guidance |
+| `src/turn_context.rs`, `src/turn_context/tools.rs` | Tool host, receipts, handoff normalisation, host checkpoint |
+| `src/bots.rs`, `src/bots/lifecycle.rs`, `crates/bot/src/supervisor.rs` | Watermarks, pending reasons, waits, continuation, recovery streaks |
+| `src/watches.rs`, `src/watches/policy.rs`, `src/rooms/notifications.rs` | Delta ranges, wake policies and gaps |
+| `src/worker.rs`, `src/attempt_control.rs`, `src/recovery.rs` | Finish transaction, deadlines, recovery candidates |
+| `src/worker_tools/fixes.rs`, `src/worker_tools/nudges.rs` | Refusal fixes and advisory notes |

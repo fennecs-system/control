@@ -621,7 +621,7 @@ pub fn http(
             "browser",
             "none",
             &format!(
-                "<h2>Web access</h2><form method='post' action='/tools/browser/access'><label>Chat<select name='chat'>{chats}</select></label><label>Origin<input name='origin' type='url' placeholder='https://example.com' required></label><label>Seconds<input name='seconds' type='number' value='900' min='1' max='3600' required></label><button class='primary'>Allow origin</button></form><ul>{grants}</ul><a href='/tools/browser'>Browser</a>"
+                "<h2>Web access</h2><form method='post' action='/tools/browser/access'><label>DM<select name='chat'>{chats}</select></label><label>Origin<input name='origin' type='url' placeholder='https://example.com' required></label><label>Seconds<input name='seconds' type='number' value='900' min='1' max='3600' required></label><button class='primary'>Allow origin</button></form><ul>{grants}</ul><a href='/tools/browser'>Browser</a>"
             ),
         ))
     })();

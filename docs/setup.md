@@ -218,8 +218,8 @@ in the Discord developer portal, or presses go there instead. If the gateway is
 down, typed replies still work.
 
 Architects can steer any chat whether or not forwarding is on: `!chats` lists
-recent chats, `!resume ID` selects one, `!new` starts one and `!use LENS…` sets
-lenses (`!use none` clears). Messages then go to the selected chat, and `!steer`,
+recent DMs, `!resume ID` selects one, `!new` starts one, `!genes` lists genes and
+`!use GENE…` sets the DM's DNA (`!use none` clears). Messages then go to the selected DM, and `!steer`,
 `!cancel`, `!btw` and the other chat commands work as in the TUI. Replies are
 relayed back. `!resume` with the DM's own chat ID returns to it. Routing state is
 kept in `channels/NAME.json` in the state directory.

@@ -430,8 +430,8 @@ pub const TOOLS: [Tool; 31] = [
     },
     Tool {
         name: "chats.manage",
-        title: "Chats",
-        description: "Conversations · operator MCP",
+        title: "DMs",
+        description: "Direct conversations with agents · operator MCP",
         href: Some("/chats"),
         aliases: "sessions messages agents",
         mcp_names: &[
@@ -449,8 +449,8 @@ pub const TOOLS: [Tool; 31] = [
     },
     Tool {
         name: "lenses.resolve",
-        title: "Lenses",
-        description: "Library · compose context and tool selections",
+        title: "DNA",
+        description: "Genes · compose context and tool selections",
         href: Some("/lenses"),
         aliases: "context composition guidance on demand",
         mcp_names: &[
