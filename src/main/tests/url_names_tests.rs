@@ -62,6 +62,8 @@ fn legacy_urls_redirect_permanently_with_tail_and_query() {
         ("GET", format!("/chat/{id}/transcript?after=3"), format!("/dm/{id}/transcript?after=3")),
         ("GET", format!("/chat/{id}/context?run=r-1&attempt=2"), format!("/dm/{id}/context?run=r-1&attempt=2")),
         ("GET", format!("/chat/{id}/compaction/read?node=4"), format!("/dm/{id}/compaction/read?node=4")),
+        ("GET", format!("/chat/{id}/compaction"), format!("/dm/{id}/memory")),
+        ("GET", format!("/dm/{id}/compaction?block=0.2"), format!("/dm/{id}/memory?block=0.2")),
         ("GET", "/chats?new=1".to_owned(), "/dms?new=1".to_owned()),
         ("GET", "/chats".to_owned(), "/dms".to_owned()),
         ("GET", "/lenses?id=engineering".to_owned(), "/dna?id=engineering".to_owned()),
@@ -108,7 +110,8 @@ fn current_names_serve_and_pages_link_only_to_current_names() {
         format!("/dm/{id}/transcript"),
         format!("/dm/{id}/requests"),
         format!("/dm/{id}/artifacts"),
-        format!("/dm/{id}/compaction"),
+        format!("/dm/{id}/memory"),
+        format!("/dm/{id}/memory/node"),
         format!("/dm/{id}/project"),
     ];
     for page in &pages {

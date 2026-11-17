@@ -11,6 +11,8 @@ fn legacy_paths_map_to_current_names_with_their_tail() {
         ("/chat/c1/requests", "/dm/c1/requests"),
         ("/chat/c1/project", "/dm/c1/project"),
         ("/chat/c1/compaction/read", "/dm/c1/compaction/read"),
+        ("/chat/c1/compaction", "/dm/c1/memory"),
+        ("/dm/c1/compaction", "/dm/c1/memory"),
         ("/chat/c1/context", "/dm/c1/context"),
         ("/chat/c1/messages", "/dm/c1/messages"),
         ("/lenses", "/dna"),
@@ -23,7 +25,7 @@ fn legacy_paths_map_to_current_names_with_their_tail() {
 
 #[test]
 fn current_and_unrelated_paths_are_not_renamed() {
-    for path in ["/", "/dms", "/dm/c1", "/dna", "/dna/save", "/chatsx", "/chatter", "/lensesx", "/knowledge", "/v1/chat/completions", "/chats/history"] {
+    for path in ["/", "/dms", "/dm/c1", "/dm/c1/memory", "/dm/c1/memory/node", "/dm/c1/compaction/read", "/dna", "/dna/save", "/chatsx", "/chatter", "/lensesx", "/knowledge", "/v1/chat/completions", "/chats/history"] {
         assert_eq!(renamed(path), None, "{path}");
     }
 }

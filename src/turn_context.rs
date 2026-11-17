@@ -508,7 +508,7 @@ fn project_with(state: &State, id: &str, compactor: &dyn crate::conversation::Co
     // Keep the original assignment explicit, but select older dialogue through
     // the same comonadic view/compactor as every other frontend. Never copy all
     // historical instructions into an unbounded required prompt section.
-    let assignment = (0..current).find_map(|index| {
+    let assignment = (0..current).filter(|index| !conversation.dropped(*index)).find_map(|index| {
         let entry = conversation.entry(index)?;
         entry
             .run

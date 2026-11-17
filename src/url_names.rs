@@ -12,6 +12,10 @@
 /// alias for creating a DM, so it maps to the list that now accepts that POST.
 const RENAMES: [(&str, &str, &str); 3] = [("/chats", "/dms", "/dms"), ("/chat", "/dm", "/dms"), ("/lenses", "/dna", "/dna")];
 
+/// Renamed pages under a DM: `/dm/ID/<old>` (or `/chat/ID/<old>`) moves to
+/// `/dm/ID/<new>`. Only the exact page is renamed; deeper routes keep theirs.
+const DM_PAGES: [(&str, &str); 1] = [("compaction", "memory")];
+
 /// The DM page for `id`.
 pub fn dm(id: &str) -> String {
     format!("/dm/{id}")
@@ -24,14 +28,19 @@ pub fn renamed(path: &str) -> Option<String> {
     if path == "/chats/history" {
         return None;
     }
-    RENAMES.iter().find_map(|(old, new, bare)| {
+    let segment = RENAMES.iter().find_map(|(old, new, bare)| {
         let rest = path.strip_prefix(old)?;
         if rest.is_empty() {
             Some((*bare).to_owned())
         } else {
             rest.starts_with('/').then(|| format!("{new}{rest}"))
         }
-    })
+    });
+    dm_page(segment.as_deref().unwrap_or(path)).or(segment)
+}
+fn dm_page(path: &str) -> Option<String> {
+    let (id, page) = path.strip_prefix("/dm/")?.split_once('/')?;
+    DM_PAGES.iter().find(|(old, _)| *old == page).map(|(_, new)| format!("/dm/{id}/{new}"))
 }
 
 /// `(status, location)` for a request to a legacy path: `301 Moved

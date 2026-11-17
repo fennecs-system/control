@@ -126,6 +126,25 @@ fn fifteen_turn_conversations_workload() {
     );
 }
 #[test]
+fn memory_tree_has_one_address_and_the_old_ones_are_renamed() {
+    let mut state = crate::State::default();
+    let id = crate::chat::create(&mut state);
+    let get = |state: &mut crate::State, path: &str| {
+        let mut response = Vec::new();
+        handle(&mut response, state, "GET", path, "none", "", &[]);
+        String::from_utf8(response).unwrap()
+    };
+    for old in [format!("/chat/{id}/compaction"), format!("/dm/{id}/compaction")] {
+        assert_eq!(crate::url_names::renamed(&old), Some(crate::compaction::memory_url(&id)));
+    }
+    assert_eq!(crate::compaction::memory_url(&id), format!("/dm/{id}/memory"));
+    let page = get(&mut state, &crate::compaction::memory_url(&id));
+    assert!(page.starts_with("HTTP/1.1 200 OK"));
+    assert!(page.contains("<h2>MemoryTree</h2>") && page.contains("name='memory-detail'"));
+    assert!(!page.to_lowercase().contains("compaction tree"));
+    assert!(get(&mut state, &crate::url_names::dm(&id)).contains("MemoryTree ↗"));
+}
+#[test]
 fn returning_to_chat_remembers_only_an_existing_authorized_conversation() {
     let mut state = crate::State::default();
     let id = crate::chat::create(&mut state);

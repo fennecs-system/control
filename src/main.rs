@@ -350,7 +350,7 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         let _ = control_http::respond(&mut stream, status, "text/plain", b"", &format!("Location: {location}\r\n"), control_http::Policy::Page);
         return;
     }
-    if compaction::http(&mut stream,&state,method,path,query){return;}
+    if compaction::http(&mut stream,&state,method,path,query,&data[header_end..header_end + length]){return;}
     if providers::live_http(&mut stream, &state, method, path) { return; }
     if ports::http(&mut stream, &state, method, path, &data[header_end..header_end + length]) { return; }
     if bots::http(&mut stream, &state, method, path, &data[header_end..header_end + length]) { return; }
