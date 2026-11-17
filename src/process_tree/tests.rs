@@ -98,13 +98,14 @@ fn the_tree_shows_bots_services_and_processes_of_active_task_trees() {
     assert!(html.contains(&format!("href='/dm/{worker}'")));
     // A canvas the client pans and zooms: the viewBox is the drawing's bounds
     // (a parent over one child, plus the stroke margin) and nothing fixes its size.
-    assert!(html.contains("<div class='process-tree' role='region' aria-label='Process tree' tabindex='0' data-canvas='ground' data-levels='2'>"));
+    assert!(html.contains("<div class='process-tree' id='process-tree' role='region' aria-label='Process tree' tabindex='0' data-canvas='ground' data-levels='2'><svg"));
     let svg = &html[html.find("<svg").unwrap()..];
     let svg = &svg[..svg.find('>').unwrap()];
     assert!(svg.contains(&format!("viewBox='-2 -2 {:.0} {:.0}'", WIDTH + 4.0, 2.0 * HEIGHT + V_GAP + 4.0)), "{svg}");
     assert!(!svg.contains("width=") && !svg.contains("height="), "the canvas, not the drawing, sets the size");
     assert!(svg.contains("preserveAspectRatio='xMidYMax meet'"), "without the client the trees still stand on the ground");
-    assert!(html.contains("<div class='canvas-controls' hidden>") && html.contains("data-zoom='fit'"), "controls appear once the client runs");
+    assert!(!html.contains("canvas-controls") && !html.contains("data-zoom"), "the zoom buttons live in the page toolbar's slot");
+    assert!(ZOOM_SLOT.contains("data-canvas-controls='process-tree'") && ZOOM_SLOT.ends_with(" hidden></div>"), "an empty slot naming this canvas, hidden until the client fills it");
     // Trees grow up: the lead stands at the bottom, its agent a level above,
     // and the edge runs from the lead's top to the agent's bottom.
     let low = 1.0 * (HEIGHT + V_GAP);
