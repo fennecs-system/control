@@ -172,10 +172,10 @@ fn headstones_form_a_grid_sharing_one_fennec_skull() {
 }
 
 #[test]
-fn the_fennec_skull_is_faceted_earless_and_toothed() {
+fn the_fennec_skull_is_angular_earless_jawless_and_toothed() {
     let symbol = SKULL_SYMBOL.split("<symbol").nth(1).unwrap();
     let paths = symbol.split(" d='").skip(1).map(|path| path.split('\'').next().unwrap()).collect::<Vec<_>>();
-    assert!(paths.len() >= 4);
+    assert_eq!(paths.len(), 3, "outline, sockets and teeth only: no facet lines or lower jaw");
     for path in &paths {
         assert!(!path.contains(|c: char| "CcSsQqTtAa".contains(c)), "straight facets only, no curves: {path}");
     }
@@ -183,8 +183,15 @@ fn the_fennec_skull_is_faceted_earless_and_toothed() {
     let tops = paths.iter().flat_map(|path| path.split(|c: char| c.is_ascii_alphabetic()).filter_map(|pair| pair.split_whitespace().nth(1)?.parse::<f64>().ok()));
     assert!(tops.fold(f64::INFINITY, f64::min) >= 5.0, "no ears above the crown");
     // A row of pointed teeth: one zigzag path that turns at least eight times.
-    let teeth = paths.iter().find(|path| path.starts_with("M26 49")).expect("a tooth row");
-    assert!(teeth.matches('L').count() >= 8, "{teeth}");
+    let teeth = paths.iter().find(|path| path.starts_with("M24 42")).expect("a tooth row hanging from the snout");
+    assert!(teeth.matches('L').count() >= 8 && !teeth.contains('Z'), "{teeth}");
+    // A short snout: the teeth hang from y 42 and nothing is drawn below them.
+    let bottom = paths.iter().flat_map(|path| path.split(|c: char| c.is_ascii_alphabetic()).filter_map(|pair| pair.split_whitespace().nth(1)?.parse::<f64>().ok()));
+    assert!(bottom.fold(0.0, f64::max) <= 48.0, "no jaw below the teeth");
+    // Mean eyes: each socket has a horizontal top and bottom edge.
+    let sockets = paths[1];
+    assert_eq!(sockets.matches('H').count(), 5, "two eye slits with flat top and bottom, and a flat-bottomed nose: {sockets}");
+    assert!(sockets.contains("M15 25H25L29 28L26 31H19Z") && sockets.contains("M49 25H39L35 28L38 31H45Z"), "slits slanting in towards the nose");
     assert!(SKULL_SYMBOL.contains("stroke-linejoin='miter'"), "angular joins");
 }
 
@@ -211,7 +218,7 @@ fn one_search_filters_live_trees_and_graves() {
     assert!(searched.contains("value='TUNNEL'"));
     assert!(searched.contains(&format!("href='/dm/{tunnel_live}'")) && searched.contains(&format!("href='/dm/{tunnel_dead}'")), "hits live and dead");
     assert!(!searched.contains(&format!("/dm/{other_live}'")) && !searched.contains(&format!("/dm/{other_dead}'")));
-    assert!(searched.contains("<svg class='searching'") && searched.contains(" pt-match'"), "the live hit is marked");
+    assert!(searched.contains("<svg class='searching' preserveAspectRatio") && searched.contains(" pt-match'"), "the live hit is marked");
     assert!(searched.contains("1 dead match for “TUNNEL”"));
     // A name search reaches live bots too.
     let name = crate::callsigns::name(&state.chats, &other_live).unwrap().into_owned();
@@ -234,7 +241,7 @@ fn one_search_filters_live_trees_and_graves() {
 }
 
 #[test]
-fn headstones_are_small_flat_topped_trapezoids_in_staggered_rows() {
+fn headstones_are_small_low_poly_stones_in_staggered_rows() {
     // Odd rows hold one stone fewer and start half a stone in, so the first
     // stone of each odd row repeats every 2c-1 stones for c columns. The rule
     // depends only on a stone's position in the list, so stones the scroll
@@ -250,13 +257,17 @@ fn headstones_are_small_flat_topped_trapezoids_in_staggered_rows() {
     assert!(bands[8].starts_with("width>=1020px)") && bands[1].starts_with("320px<=width<420px)"));
     assert!(graveyard.contains(".graveyard-grid{list-style:none;padding:0 4px;margin:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));"));
     assert!(graveyard.contains(".grave{grid-column:span 2;") && graveyard.contains(".graveyard-more{grid-column:1/-1;"));
-    // A trapezoid: flat top narrower than its base, no rounded corners.
-    assert!(graveyard.contains("clip-path:polygon(20% 0,80% 0,100% 100%,0 100%)"));
+    // A low-poly silhouette: a flat-topped trapezoid cap with chamfered
+    // shoulders overhanging a rectangular body. No rounded corners.
+    assert!(graveyard.contains("clip-path:polygon(24% 0,76% 0,96% 17%,90% 17%,90% 100%,10% 100%,10% 17%,4% 17%)"));
     let stone = graveyard.split(".grave{").nth(1).unwrap().split('}').next().unwrap();
     assert!(!stone.contains("border-radius") && !graveyard.contains("50% 50%"));
     assert!(graveyard.contains(".grave-skull{width:26px;height:26px;"), "smaller than the 48px skulls before");
     assert!(!graveyard.contains("cyan") && !graveyard.contains("8cdacb"), "greys and purples only");
-    // One scene: no dot grid behind the trees, no card borders between halves.
+    // One scene: no dot grid behind the trees, no card borders between halves,
+    // and a plain flat line (no gradient or glow) with room above it.
+    assert!(graveyard.contains(".graveyard{margin-top:36px;padding:20px 0 18px;border-top:1px solid var(--line);"));
+    assert!(!graveyard.contains("gradient"), "no gradients in the scene");
     let tree = css.lines().find(|line| line.starts_with(".process-tree{")).unwrap();
     assert!(!tree.contains("radial-gradient") && !tree.contains("cyan") && !tree.contains("8cdacb"));
     assert!(!graveyard.contains(".graveyard{margin-top:44px;padding-top:26px;border-top"));

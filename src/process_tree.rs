@@ -1,6 +1,7 @@
 //! The Bots page process tree: steering chats, the agents and bots they
 //! spawned, the services those own and the processes running inside them,
-//! drawn as a tidy tree in server-rendered SVG.
+//! drawn as tidy trees in server-rendered SVG that grow up from a shared
+//! baseline, roots at the bottom.
 use crate::State;
 
 const WIDTH: f64 = 196.0;
@@ -336,20 +337,23 @@ pub(crate) fn render(state: &State, search: &str) -> Option<String> {
     if trees.is_empty() {
         return None;
     }
-    let (mut body, mut offset, mut height, mut levels) = (String::new(), 0.0_f64, 0.0_f64, 0_usize);
-    for tree in &trees {
-        let placed = layout(&tree.children);
+    // Trees grow up like real ones: every root stands on one baseline at the
+    // bottom of the drawing and each generation is drawn a level above it.
+    let placements = trees.iter().map(|tree| layout(&tree.children)).collect::<Vec<_>>();
+    let levels = placements.iter().flatten().map(|(_, depth)| depth + 1).max().unwrap_or(1);
+    let height = levels as f64 * (HEIGHT + V_GAP) - V_GAP;
+    let (mut body, mut offset) = (String::new(), 0.0_f64);
+    for (tree, placed) in trees.iter().zip(&placements) {
         let span = placed.iter().map(|(x, _)| *x).fold(0.0, f64::max);
-        let depth = placed.iter().map(|(_, depth)| *depth).max().unwrap_or(0);
         let at = |index: usize| {
             let (x, depth) = placed[index];
-            (offset + x * (WIDTH + H_GAP), depth as f64 * (HEIGHT + V_GAP))
+            (offset + x * (WIDTH + H_GAP), (levels - 1 - depth) as f64 * (HEIGHT + V_GAP))
         };
         for (parent, children) in tree.children.iter().enumerate() {
             let (px, py) = at(parent);
             for &child in children {
                 let (cx, cy) = at(child);
-                let (x1, y1, x2, y2) = (px + WIDTH / 2.0, py + HEIGHT, cx + WIDTH / 2.0, cy);
+                let (x1, y1, x2, y2) = (px + WIDTH / 2.0, py, cx + WIDTH / 2.0, cy + HEIGHT);
                 let middle = (y1 + y2) / 2.0;
                 body.push_str(&format!("<path class='pt-edge' d='M{x1:.1} {y1:.1}C{x1:.1} {middle:.1} {x2:.1} {middle:.1} {x2:.1} {y2:.1}'/>"));
             }
@@ -378,8 +382,6 @@ pub(crate) fn render(state: &State, search: &str) -> Option<String> {
             body.push_str(&group);
         }
         offset += (span + 1.0) * (WIDTH + H_GAP) - H_GAP + TREE_GAP;
-        height = height.max((depth + 1) as f64 * (HEIGHT + V_GAP) - V_GAP);
-        levels = levels.max(depth + 1);
     }
     let width = (offset - TREE_GAP).max(WIDTH);
     // The viewBox is the drawing's bounds: without the client it fits the
@@ -387,7 +389,7 @@ pub(crate) fn render(state: &State, search: &str) -> Option<String> {
     // get a shorter canvas (`data-levels`, styled in CSS) so the graveyard
     // below them stays close.
     Some(format!(
-        "<div class='process-tree' role='region' aria-label='Process tree' tabindex='0' data-canvas data-levels='{}'><div class='canvas-controls' hidden><button type='button' data-zoom='in' aria-label='Zoom in'>+</button><button type='button' data-zoom='out' aria-label='Zoom out'>−</button><button type='button' data-zoom='fit' aria-label='Fit to view'>Fit</button></div><svg{} role='img' aria-label='Task trees: steering chats, agents, bots, services and processes' viewBox='-2 -2 {:.0} {:.0}'>{body}</svg></div>",
+        "<div class='process-tree' role='region' aria-label='Process tree' tabindex='0' data-canvas='ground' data-levels='{}'><div class='canvas-controls' hidden><button type='button' data-zoom='in' aria-label='Zoom in'>+</button><button type='button' data-zoom='out' aria-label='Zoom out'>−</button><button type='button' data-zoom='fit' aria-label='Fit to view'>Fit</button></div><svg{} preserveAspectRatio='xMidYMax meet' role='img' aria-label='Task trees: steering chats, agents, bots, services and processes' viewBox='-2 -2 {:.0} {:.0}'>{body}</svg></div>",
         levels.min(6), if search.is_empty() { "" } else { " class='searching'" }, width + 4.0, height + 4.0
     ))
 }

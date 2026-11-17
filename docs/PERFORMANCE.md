@@ -452,7 +452,7 @@ The page stays under 38 KB however many bots have died (39 KB as a list); a
 50-stone scroll page is about 31 KB.
 
 The page now draws the live trees and the graveyard as one scene with one search
-box, and the headstones are small CSS trapezoids (two clipped pseudo-elements,
+box, and the headstones are small low-poly CSS stones (two clipped pseudo-elements,
 no per-stone path data). `performance::bots_page` now holds 100 live bots under
 one steering chat beside the dead ones, and renders the whole page (`GET
 /?view=agents`) unfiltered, searched (a query hitting live and dead bots) and

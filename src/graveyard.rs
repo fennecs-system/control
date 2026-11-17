@@ -196,11 +196,11 @@ pub fn rows(graves: &[Grave<'_>], query: &Query) -> String {
 /// every stone, including rows a scroll fetch adds later, reuses it.
 const SKULL: &str = "fennec-skull";
 
-/// A stylised fennec fox skull in faceted outline, front view, in a 64-unit
-/// square: an angular cranium with ridge facets, wide cheekbones, angular eye
-/// sockets and nasal cavity, a slender snout ending in a row of small pointed
-/// teeth (canines at the ends) and the lower jaw.
-const SKULL_SYMBOL: &str = "<svg class='svg-defs' aria-hidden='true' focusable='false'><symbol id='fennec-skull' viewBox='0 0 64 64'><g fill='none' stroke='currentColor' stroke-width='1.8' stroke-linejoin='miter' stroke-linecap='square'><path d='M32 5L43 8L51 15L54 25L50 32L43 35L40 44L38 49H26L24 44L21 35L14 32L10 25L13 15L21 8Z'/><path d='M32 5V17M21 8L27 19H37L43 8M10 25L21 27M54 25L43 27M21 35L27 33M43 35L37 33' stroke-width='1' opacity='.5'/><path d='M18 23L27 21L29 28L22 31ZM46 23L37 21L35 28L42 31ZM30 38L32 34L34 38L32 42Z'/><path d='M26 49L27.5 54L29 49.5L30.5 53L32 49.5L33.5 53L35 49.5L36.5 54L38 49' stroke-width='1.2'/><path d='M25 50L26 56L30 59H34L38 56L39 50' stroke-width='1.2' opacity='.75'/></g></symbol></svg>";
+/// A stylised fennec fox skull, front view, in a 64-unit square, drawn only
+/// in straight segments: an angular cranium with wide cheekbones, mean eye
+/// slits (flat tops and bottoms, slanting in towards the nose), a large nasal
+/// cavity and a short snout ending in a row of pointed teeth, canines longest.
+const SKULL_SYMBOL: &str = "<svg class='svg-defs' aria-hidden='true' focusable='false'><symbol id='fennec-skull' viewBox='0 0 64 64'><g fill='none' stroke='currentColor' stroke-width='1.8' stroke-linejoin='miter' stroke-linecap='square'><path d='M32 8L44 11L52 19L54 28L48 34L42 36L40 42H24L22 36L16 34L10 28L12 19L20 11Z'/><path d='M15 25H25L29 28L26 31H19ZM49 25H39L35 28L38 31H45ZM32 32L35.5 36L33.5 40H30.5L28.5 36Z'/><path d='M24 42L25.8 48L27.5 42.5L29 46L30.5 42.5L32 46L33.5 42.5L35 46L36.5 42.5L38.2 48L40 42' stroke-width='1.2'/></g></symbol></svg>";
 
 /// The graveyard: the ground beneath the live task trees on the Bots page,
 /// with the dead bots' headstones (the page selected by `query`, whose search

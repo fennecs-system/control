@@ -15,6 +15,20 @@ fn view_boxes_parse_strictly() {
 }
 
 #[test]
+fn a_grounded_view_stands_the_drawing_on_the_bottom_edge() {
+    // Trees that grow up from a baseline: fitted, the drawing's bottom edge
+    // meets the element's, horizontally centred; Fit restores that.
+    let small = View::new(Rect { x: 0.0, y: 0.0, w: 100.0, h: 50.0 }, 1000.0, 600.0).grounded();
+    assert_eq!(small.scale, 1.0);
+    assert!(close(small.point(500.0, 600.0), (50.0, 50.0)), "bottom centre of the drawing at the element's bottom centre");
+    let mut wide = View::new(Rect { x: -2.0, y: -2.0, w: 2000.0, h: 400.0 }, 1000.0, 600.0).grounded();
+    assert!(close(wide.point(0.0, 600.0), (-2.0, 398.0)), "scaled to fit, still on the bottom edge");
+    wide.pan(30.0, -40.0);
+    wide.fit();
+    assert!(close(wide.point(0.0, 600.0), (-2.0, 398.0)));
+}
+
+#[test]
 fn a_new_view_fits_and_centres_the_drawing() {
     let bounds = Rect { x: -2.0, y: -2.0, w: 2000.0, h: 400.0 };
     let view = View::new(bounds, 1000.0, 600.0);
