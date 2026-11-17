@@ -256,6 +256,7 @@ fn preview_pages() {
     }
     turn(&mut state, Some(&opened), RunKind::BotWake, "running", "claude-opus");
     turn(&mut state, None, RunKind::Task, "completed", "gpt-5.1-codex");
+    state.runtime.notice.clear();
     let inline = |html: String| {
         let mut page = crate::render(&state, "history", "none", &html);
         for (link, css) in [
