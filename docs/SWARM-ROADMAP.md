@@ -1,673 +1,277 @@
-# Persistent swarm and self-improvement roadmap
+# Roadmap
 
-Triaged 2026-11-05 against main `2d3492e` (#138). This is a plan, not a runtime
-change. [The main roadmap](../roadmap.md) tracks shipped capabilities and release
-gates. Stable IDs below identify independently reviewable increments.
-Status audited 2026-11-10 against locally deployed main `52bff4c` (through #148).
-The checklist distinguishes shipped slices from remaining acceptance work;
-unmarked product proposals remain planned. The native Nix package and pinned
-WASM tooling fix shipped in #143; both platform checks passed before merging.
+This file lists work Control does not do yet. Shipped behaviour is described in
+the reference docs ([README](../README.md), [architecture](ARCHITECTURE.md) and
+the topic pages it links), not here. Stable IDs (R, A, E, G, …) name
+independently reviewable increments.
 
-## Shipped status and next increment
+## Direction
 
-- [x] **R1a lifecycle slice:** approved persistent bots have no implicit 600-second
-  wall-clock cap; explicit operator limits remain enforced. Accepted handoffs
-  finish through host-owned stop/publication paths, and event-only waits release
-  model capacity. Both CLI loops use the shared attempt policy; attempt-owned
-  commands cap their deadlines to the owner and expose requested/effective limits.
-- [x] **R1b implementation:** immutable unpublished recovery candidates retain
-  workspace bytes, base/generation, termination cause and accepted drafts after
-  verified writer shutdown. Scoped inspection/recovery tools do not advance the
-  published head or processed cursors. Capture/rejection fixtures exist; this
-  successful unattended replay does not exercise an injected recovery fault.
-- [x] **R2 admission slice:** configurable watch exit/prefix selection, retained
-  spool evidence, source-gap reporting and generation/creator references; scoped
-  task rooms, record-versus-notify delivery and targeted peer communication.
-  Idle peer wakes use existing bot approval, budgets, pause and stop intent.
-- [x] **Steering-chat relay removal:** workers can coordinate directly with
-  siblings; the root conversation need not be a bot or relay their routine work.
-- [x] **Room claims and selective waits:** advisory, revisioned ownership per task
-  room with operator-only reclaim of abandoned claims. Bots can wait on a claim
-  without lost wakes, and selective waits retain unrelated direct messages.
-  See [ROOM-NOTIFICATIONS.md](ROOM-NOTIFICATIONS.md#claims).
-- [x] **MCP bridge transport:** mailbox I/O errors on shared mounts answer the
-  affected call instead of closing the provider session.
-- [x] **R2 explicit callback channel (#146):** opt-in watches deliver application
-  notifications separately from diagnostic stdout/stderr; process exits remain
-  host-observed facts. Default callback reads omit logs; explicit diagnostic
-  reads retain them. No workload-specific parser or timeout was added to core.
-- [x] **Opt-in autonomy/investigation lenses (#144):** declarative guidance is
-  captured with runs; adding a lens does not grant resource or tool authority.
-- [ ] **Opt-in team advisor (in review, not deployed):** an `advisor` lens on
-  top of coordination lens r6. The advisor is the existing read-only judge
-  persona run as an operator-approved bot with its own per-root allowance,
-  strictly opt-in through the `advisor` lens (not part of `swarm`),
-  woken only by edge-triggered host facts on a `task:<root>` topic (team
-  quiescence, a member's repeated consecutive failures, a retired restart loop,
-  an abandoned claim, members newly blocked on a claim, members reporting a
-  similar blocker, turns settling while open claims do not advance, one
-  claim holding up several members transitively; never
-  single failures or exits). It helps the lead steer:
-  each evidence note goes only to the lead's steering chat, and the lead
-  decides what reaches the team.
-  No new role, supervisor state, clock rule or core concept; judge turns, notes
-  and note-only wakes are not team activity, so it cannot wake itself. See
-  [LENSES.md](LENSES.md#team-advisor). Whether it reduces stalls or noise still
-  needs an opt-in paired trial.
-- [x] **First typed message operation (#148):** borrowed application views and
-  ordered archive/checkpoint/wake effects, with blocking/Tokio conformance tests.
-  Shared conversation/run records no longer belong to rendering modules. The
-  production driver retains its cross-domain lock through persistence.
-- [x] **Efficiency checks for #142:** routing benchmarks, flamegraphs and bounded
-  resource probes are recorded in [PERFORMANCE.md](PERFORMANCE.md). The tiny-device
-  goal concerns efficient core/tools/TUI and replaceable backends, not a mandatory
-  Raspberry Pi certification or a claim that every HTTP path became faster.
-- [x] **M1 / C1–C3 model and compaction series (#162–#168):** deployed in main
-  `130c6fa` on 2026-11-13. Shared bounded text calls, native Codex/Claude summary
-  adapters, incremental source pages, whole-input fit, scoped tree/source recall,
-  explicit comparison tooling and chat/TUI/spawn model selection are delivered.
-  Live Codex and mounted-weight Qwen readiness calls passed. Claude needs its
-  existing login refreshed. Compaction remains opt-in; this does not replace
-  private compaction inside an active CLI attempt. See [LOCAL-MODELS.md](LOCAL-MODELS.md)
-  and [PERFORMANCE.md](PERFORMANCE.md) for measured results and limits.
-- [ ] **R1/R2 remaining evaluation and classification:** paired interruption/recovery
-  comparisons and finer causal classification of raw watch output. Creator identity alone does
-  not establish which attempt caused each line. Deliver these only as narrow
-  tool/adapter fixes when needed; do not add workload semantics to the supervisor.
-- [ ] **R3 implementation in review:** missing/invalid/unavailable activity reads
-  return a typed failure; chat API retains the journal reference and reports it
-  in web/TUI, legacy context, delegated feedback and notifications. Empty records
-  remain empty, repaired reads recover and no synthetic tool event is introduced.
-  Fault and read-only regressions pass; this is not yet deployed.
-- [ ] **R4:** bounded HTTP handler admission remains open. It can ship
-  independently alongside the architecture slice.
-- [x] **Minimum architecture checkpoint: first A1/A2/A4 boundary**, then
-  consumer-led A3. The directed-message increment in #148 establishes the first typed
-  transition/effect boundary, with a blocking production interpreter and Tokio
-  conformance fixture. Out-of-lock persistence, broader callback admission and
-  complete web/TUI separation remain open; see [STATE-BOUNDARIES.md](STATE-BOUNDARIES.md).
-  This follow-up separates the shared MCP client from terminal presentation,
-  compiles terminal code once and provides an optional server-only build. The
-  independent crate split and web rendering boundary remain subsequent work.
-  The storage adapter now exposes phase-aware checkpoint errors to distinguish
-  pre-replacement failure from unconfirmed rename/directory sync.
-  The adapter reconciles exact published bytes and durability on uncertainty;
-  an unresolved legacy save uses existing shutdown/state-unavailable fencing.
-  Startup confirms disk state before journal recovery. This does not yet make
-  out-of-lock or cancellable persistence safe.
-  Typed client operations now own port/project approval transport and confirmation;
-  terminal presentation cannot access production HTTP-client fields. This closes
-  the immediate separation increment, not every A1–A4 migration. Complete web
-  extraction, independent client/TUI crates and out-of-lock persistence remain
-  follow-ups. Extend boundaries with their consumers rather than adding more
-  general architecture ahead of features.
-  Continuation construction also uses the shared application `Submission`
-  constructor with captured settings and host-supplied grants/IDs. Approval
-  eligibility is a borrowed application decision; authorization and the complete
-  request acknowledgement/publication transaction remain in the host.
+Control is a **swarm management platform**: a person directs a team of agents
+that plan, build, review, test and operate systems. Agents specialise through
+lenses, personas, tools and model choices; chats retain their work; rooms
+coordinate; services keep running between turns; admitted knowledge carries
+lessons between tasks. Deterministic Rust supervision handles scheduling,
+ownership and budgets. Replacing a whole engineering team is an ambition to
+validate on real delivery and operations tasks, not a demonstrated capability.
 
-The fresh deployed Codex trial ran over two hours after approvals without further
-operator steering: house/perimeter verification, repeated crop harvest/replant,
-bread production and recovery from game hazards. At the audited checkpoint it had
-52 completed attempts, zero failed attempts, 29 record-only room posts and no root
-turn after setup approvals. Individual useful attempts lasted about 26 and 32
-minutes. This supports continuity and quieter coordination; it is not a paired
-speed, token-cost or injected-fault benchmark. House size, starting location,
-client versions and inherited knowledge differed from the original run.
+Keep the pattern that works: a steering chat sets direction, a lead coordinates,
+workers talk to each other through rooms and directed messages, and persistent
+services hold the workload. Improve it with measured reliability and noise fixes.
 
-**Deployment usability:** #143 shipped the native Nix package and NixOS
-instructions. The normal setup path should build/install the package, load images
-and save immutable pins in one command; manual build/pin steps are an advanced
-reference. Provider login and optional service activation remain explicit.
-
-## Direction and comparison
-
-Control is a **swarm management platform**. The product ambition is an entire
-engineering team of agents that can plan, implement, review, test and operate
-systems under a person's direction. Agents specialize through lenses, personas,
-tools and model choices; chats retain their work; rooms coordinate; services keep
-running independently; admitted knowledge carries lessons between tasks.
-Deterministic Rust supervision handles scheduling, ownership and budgets.
-
-Lead with team coordination, inter-agent communication (A2A), computer use (CUA),
-the steering/Rooms UI and self-improvement. Here A2A describes agent communication;
-support for a particular external A2A protocol would need a separate adapter and
-interoperability tests. CUA is a product workstream whose current capture tool and
-planned interactive capabilities must be described accurately.
-
-Preserve the successful steering-chat pattern: the playtest team responded to
-redirection and reported progress through building, farming and diamonds.
-Engineering-team replacement remains an ambition to validate on delivery and
-operations tasks. Improve the working flow through measurable reliability fixes.
-
-**Pi/tinygrad layering is the architectural constraint.** Keep a small pure
-vocabulary for lifecycle, generic admission/waits and typed effects. Implement
-product behavior as tools, strategies and configuration over narrow application
-operations; adapters own I/O. A new feature does not justify a new core concept.
-Every implementation PR must identify its layer and explain any core API change:
-which generic invariant cannot be expressed through the existing seam? Merely
-being useful to several tools is not sufficient reason to move their behavior
-into `control-core` or `control-bot`. Tool implementations still use host-enforced
-authorization and durable acceptance; a prompt cannot enforce those invariants.
-
-| Reference | Useful idea | Application to Control |
-| --- | --- | --- |
-| Hermes | Reusable procedural knowledge with progressive disclosure | Extend admitted claims into reviewed procedures, lens/persona revisions and tool proposals; measure reuse across agents. |
-| Pi / Pi Durable | Small interfaces between models, storage, tools and execution; explicit recovery and background compaction | Separate Control's state transitions from effects; retain evidence and classify replay safety; use the existing continuation and context seams. |
-| tinygrad | Small internal vocabulary, separate transformation and execution layers | Typed commands/events/effects with thin interpreters and measurable boundaries; tool implementations form a standard library. |
-| Kubernetes | Desired/observed state, ownership and explicit scheduling/admission policies | Borrow contracts at their existing boundaries; G1 projects status, O1 audits resource lifetimes and Q1 aggregates admission. No Kubernetes-shaped core object model. |
-| UniiChat | Hierarchical summaries with expansion to retained source text | C1 extends the existing comonadic history seams; summaries remain lossy derived views with source provenance. |
-| Control playtest | Steering chat and communicating workers achieved successive goals, including diamonds; maintenance and recovery were noisy | Keep the working coordination pattern and make targeted admission, publication and visibility improvements. |
-
-These projects supply useful ideas; Control's feature priorities come from the
-needs of an agent team. Hermes also supports
-[delegation](https://hermes-agent.nousresearch.com/docs/user-guide/features/delegation).
-Its [skills](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills)
-provide a useful procedural-memory reference, rather than evidence that Control
-already learns reusable procedures.
-[Pi Durable](https://earendil.com/posts/pi-durable/) separates storage and
-execution and retains raw history during compaction. Its runtime/storage choices
-are not dependencies of this plan. The
-[tinygrad layers](https://docs.tinygrad.org/developer/developer/) are an analogy
-for separation, not an agent scheduler or a required inference backend.
-Control remains Rust/WASM/Nix with plain files and atomic commits. Upstream
-non-Rust runtimes stay in explicitly configured tool/agent containers.
-
-[UniiChat](https://github.com/VictorTaelin/UniiChat) is Victor Taelin's project.
-Its summary trees support bounded context and source expansion, not automatic
-full-text search or guaranteed recall. Pi Durable also supplies durable timers
-and dependency waits.
-
-The [Kubernetes controller model](https://kubernetes.io/docs/concepts/architecture/controller/)
-is a useful organizing analogy. Control already has pure supervisor decisions,
-source cursors, coalescing, waits, generations and per-bot turn budgets;
-[the bot-control research contract](research/BOT-CONTROL.md) also proposes desired
-state and typed effects. A controller cannot infer completion of an arbitrary
-prose goal. Resource quotas are not model-spend enforcement.
-
-## Delivery order
-
-This is the canonical priority/dependency table; `roadmap.md` links here.
-G1/O1/Q1 are consumer-scoped changes, not a foundation release ahead of all P1.
-The sequence is **small diamond-run reliability fixes → state/effect abstraction
-→ broader improvements**. The shipped R1/R2 slices above are the baseline; preserve
-their regressions and address remaining reproduced failures in small changes.
-Do not make further gameplay tuning or a perfect run a prerequisite for the state
-boundary. Use the paired-trial gates below for comparative performance claims.
-Before expanding product behavior, prove the first A1/A2/A4 operation boundary
-with interchangeable drivers; complete the remaining extractions incrementally.
-
-| Priority | Work | Minimum dependency / first exit |
-| --- | --- | --- |
-| Shipped baseline / remaining P0 | R1a/R1b and R2 slices above; remaining R1/R2 edges, R3 history errors and R4 HTTP limits | Preserve shipped behavior; finish independent fixes with fault tests and real alerts. |
-| Established baseline; extend with consumers | A1/A2/A4 first state/effect slice, then incremental A3 and remaining boundaries | Typed message/effect conformance, captured continuations, checkpoint reconciliation and the client/server build boundary are established. Broader web/client crate extraction and out-of-lock persistence remain open, without blocking the next feature. |
-| Delivered; extend from evidence | M1 summary calls and C1–C3 compaction (#162–#168) | Codex/Claude CLI and private local text adapters, bounded source reads, independent compactor selection and scoped recall are shipped. Authenticated hosted APIs, cache retention/GC and full local tool-using agents remain follow-ups. |
-| P1 | E1 escalation with G1 request/dependency projections | Existing lifecycle and durable requests; one-slot resolution works. No broad spec/status subsystem. |
-| P1 | U1 coordination UI and A2A visibility | Read existing lifecycle, requests and ownership; add projections as needed. No dependency on all G1/O1/Q1 work. |
-| P1 | T1 terminal development workflow | Complete existing typed tool/query/approval surfaces for terminal review, PR/check follow-up and browser/process interaction. Keep policy in tools/adapters; see [terminal gaps and acceptance](TERMINAL.md). |
-| P1 | W1 bounded schedules | Existing timers/admission, durable occurrence IDs and shared schedule-write authorization. Q1 before expanding team-wide fan-out; Replace deferred. |
-| Supporting | Q1 team admission; O1 ownership audit/fixes | Aggregate existing counters; extend ownership only for a demonstrated gap or a consumer changing resource lifetimes. |
-| P1, before more fan-out | S1 service resource requests and admission | Extend existing service operations with requested/effective capacity and operator-defined shapes; reserve aggregate node/team capacity before provisioning. Local backend first, cloud adapters later. |
-| P1 | V1 Manage Vault and scoped secret injection | Typed tool/resource operations and host authorization; agents use opaque references, with values resolved only inside trusted effect adapters. No supervisor credential subsystem. |
-| P2 | U2 CUA; W2 workflow tools | Scoped browser/resource operations; validated recipes using existing spawn/wait/message primitives. |
-| P2 | M1 model adapters; C1–C3 summary strategies | Bounded reads and summary-call adapter enable C1 before general local tool execution; on/off plus model selector. |
-| P2 | L1 lenses/persona/SOUL configuration; L2/L3 reviewed improvement | Captured revisions, scoped tools, evaluation and admission; no new supervisor personality or learning lifecycle. |
-| P2 | H1 layered control (reflexes, perception, skills, strategy) | Autonomy r7 rule and agent-built packages first; declarative salience filters on notification watches; accelerators, summarisers and observation feeds only for a demonstrated real-time need. Planning tools shipped; behaviour-tree/state-machine routines go through W2, prototyped as a package. |
-| Later | Federation, inference bundles, general workflow languages, weight training | Demonstrated local need. |
-
-## V1: Manage Vault and scoped secret injection
-
-Provide a Vault in **Manage** for operator-owned API keys, tokens and other
-credentials, with the requested GrokBot-inspired workflow. Operators add, rotate,
-revoke and grant use without pasting secrets into chat. Agents can discover only
-permitted metadata and request an opaque secret reference; values never enter
-model context, steering/room chat, tool-call arguments visible to the model,
-transcripts, summaries, knowledge, recovery candidates or ordinary logs. The
-private operator input flow must also stay outside agent-visible browser/CUA
-surfaces and captures. Do not echo a newly stored value back into chat.
-
-Resolve references at the trusted tool/API/service effect boundary, after checking
-the current caller, owning team/chat, attempt generation, permitted destination,
-operation and expiry. Support broker-attached API authentication (for example an
-authorization header) and explicitly approved service bindings. Tool schemas
-carry references, not literal keys. Do not expose a secret-reading tool, put keys
-in URLs, or inject raw values into an agent's shell/environment/workspace: the
-agent could read and print those values. If a tool runs arbitrary agent-authored
-code, use a credential-bearing broker outside that process. Plain redaction is
-defence in depth, not the isolation boundary; constrain destinations/redirects
-and filter secret-bearing or reflected responses before returning tool output.
-Return bounded typed response projections; raw request/header dumps must not
-become model-visible tool results. A secret-bound service must not also grant
-agents arbitrary exec/read access to its credential-bearing process or files.
-
-Keep values outside the checkout and ordinary application state/journals, using a
-platform secret store or encrypted private files with separately protected key
-material. Specify backup/recovery, rotation, revocation and per-node ownership.
-Audit who used which reference, for what operation/destination and with what
-result, without logging the value or authentication payload. Grants are checked
-at execution, not only registration; queued calls and persistent services must
-respect revocation. An API credential or payment credential grants no implicit
-permission to spend or perform another consequential action: use existing durable
-operator approvals and action-specific limits where required.
-
-Implement the Manage UI, secret storage and injection as application operations
-and trusted adapters over existing capability/resource semantics. Reuse generic
-typed authorization/effect interfaces; keep provider formats, payment workflows
-and credential resolution out of the supervisor. Declarative tools/configuration
-select bindings, including dynamically admitted tools, without receiving values.
-
-**First exit:** create a synthetic secret through Manage, let an authorized agent
-call a local test API by reference, and prove the API received authentication
-while model input/output, chats, tool traces, logs and persisted candidates did
-not contain it. Exercise cross-agent misuse, wrong destination/redirects,
-reflected response bodies, expired/revoked grants, queued-call revocation,
-rotation and denied CUA access. Measure dispatch/memory overhead with synthetic
-values; never use real credentials in fixtures or CI. This is planned work.
-
-## Evidence and reconciliation
-
-Public contracts: [turn continuity](TURN-CONTINUITY.md),
-[architecture](ARCHITECTURE.md), [crate boundaries](CRATE-BOUNDARIES.md),
-[knowledge](KNOWLEDGE-TOOLS.md) and [delegation](DELEGATION.md).
-The operator's private playtest and continuity analysis informed triage; their
-relevant observations are summarized below. They are not reproducible public
-benchmarks or implementation prerequisites. Preserve the original local records.
-
-| Evidence | Triage decision |
-| --- | --- |
-| Private analysis reported 55 worker attempts during 44 minutes of maintenance, repeated roughly 14 KB starting prompts and status-output wakes. | R2 targets redundant admission; C1 and bounded projections target context cost per useful turn. Reproduce with a public synthetic watch fixture before attributing a specific cause. |
-| Private analysis reported three redirected attempts reaching the 600-second limit without committing a staged handoff. | R1: trace checkpoint/yield boundaries and retain recovery evidence. This does not establish that an earlier forced wind-down improves progress. |
-| Steering records reported useful progress, repeated no-change replies and workload failures. | Preserve coordination; isolate generic harness defects from workload/protocol issues. Retained services after cancellation alone do not prove an ownership bug. |
-| Current source: `history::activity` defaults failed reads to empty; HTTP accept spawns a handler thread per request. | R3/R4 remain concrete reliability work. Model slot limits do not bound HTTP threads. |
-| Current source: Lens selection uses `NoSummaries`; the server still owns broad mutable `State`. | C1 and A1–A4 remain real gaps despite journal/core-crate progress. |
-
-Preserve shipped journals/outbox, ancestor request visibility and #134 continuity
-composition. Historical planning labels are not current status; callbacks already
-exist without a full off-lock writer. New work follows current crate contracts.
-
-## P0: continuity and observable failures
-
-| ID | Small implementation slice | Acceptance |
-| --- | --- | --- |
-| R1a | Trace and harden existing callback, explicit yield/pause and checkpoint-publication hooks. Deliver changed input at tool boundaries; preserve productive attempts. Request/stage handoffs at genuine dependency, decision or completion boundaries, then commit through the existing safe publication transaction. | Both CLI providers process useful events without forced restarts; duplicate callbacks create no extra turns; checkpoints commit on normal yield/pause; abrupt termination retains honest recovery evidence. No fixed 60-second finishing window or time-triggered blanket mutation fence. |
-| R1b | Host-owned recovery: after confirming attempt writers stopped, retain workspace bytes as an immutable unpublished candidate with generation/base references, termination cause and any accepted draft/logs. Surface it on the next authorized turn without relying on model warnings. | A provider making no Control calls still leaves inspectable recovery work after termination. Copy/save/stop failures stay visible; committed workspace, notes and cursors remain unchanged. Cancel/pause does not auto-retry; adoption revalidates authority and current baseline. |
-| R2 | Select relevant events and reconcile known intent/observations before admitting a turn. Retain full watch output; exit-only or bounded literal-prefix-plus-exit policies provide an incremental filter for untyped streams. Preserve provenance, source sequences and eligible references. | Unchanged status-query/own-output telemetry causes zero admissions. Human steering, relevant child/tool completion, failure and source loss remain visible. Restart, stale observations, coalescing and missing spool tested. Reading is not acknowledgement. |
-| R3 | Distinguish missing/corrupt history from an empty activity record in UI and model context. | Missing/decode-failed records preserve cause and references; ordinary empty records remain empty. |
-| R4 | Bound HTTP handler admission before spawning, with a bounded overload path and existing deadlines. | The implementation PR must specify numeric handler cap H and request/overload deadlines from measured memory and slow-client fixtures. Test H+1 admission, recovery, shutdown and long-lived routes; no unbounded rejection threads. |
-
-R4 implementation pending review: the HTTP adapter admits at most 32 handlers,
-including the existing maximum 16 live-update streams. Overload uses one
-nonblocking best-effort response write and closes; it creates no rejection thread
-or application queue. Existing 10-second request-read and 3-second I/O bounds
-remain, with shutdown checked between reads. Socket and isolated process tests
-cover saturation, recovery, retained panics and live streams alongside trickled
-requests. See [HTTP-ADMISSION.md](HTTP-ADMISSION.md) and the release measurements
-in [PERFORMANCE.md](PERFORMANCE.md). This does not change agent timeouts or goals.
-
-R1a/R1b form the recovery increment; R2 is independently testable. R3 and R4 can
-ship as isolated fixes. Keep typed delivery-retirement bookkeeping out of task
-context while retaining lifecycle records. Continue the existing shared agent
-contract: a bot adds approved scheduling, not a different memory/runtime system.
-
-R2 targets `src/bots.rs::watch_events` and its `Event::Info { from: None }`
-delivery. `Watch` already retains chat/service/generation; line aggregation loses
-causal detail. Carry source/resource generation and, where known, producing
-attempt/call identity through admission. Unknown origin stays unknown; owning a
-stream does not prove who caused each line. Keep event kind and provenance
-separate from room-post echo suppression. Simply setting `from` to the owning
-chat would drop its exits too: the supervisor checks `own(from)` before urgency.
-
-Classify typed events in the tool/application adapter; retain configurable
-exit/prefix selection for raw streams whose semantics the host cannot know.
-Test an unchanged status echo alongside the same owner's completion/failure,
-unknown-source output, restart and missing spool. Preserve full evidence and
-processing cursors. Deterministic admission needs no goal-interpreting model;
-unknown/stale observations are not success. This fix does not depend on G1.
-
-R1 starts with existing `turn_context::callback_notice`, handoff tools and worker
-finish/design/delegation publication paths. Reproduce the lost-handoff case and
-fix its boundary; do not add a generic hook framework. Hooks here are typed Rust
-integration points over existing operations/effects. Tool results, dependency
-completion/failure and steering supply events; raw telemetry need not call a model.
-An active attempt consumes relevant deltas at tool boundaries. When it genuinely
-yields, existing admission can schedule an authorized successor from committed
-state. An event alone does not restart the current writer.
-
-A handoff draft or callback is not a committed workspace. Preserve the fence
-after an explicitly accepted yield and quiesce attempt-owned writers before
-atomic publication. Do not snapshot a changing workspace on every tool response.
-R1b covers crashes before that transaction; callbacks cannot guarantee a final
-checkpoint after abrupt process loss. Independent persistent jobs keep running:
-record their handles and completion subscriptions, then resume by reference.
-Large downloads, for example, belong to a resumable tool over persistent resource
-operations; download protocols and model-weight semantics stay outside the core.
-
-Current timeout paths already retain the run directory; R1b makes those bytes
-durably discoverable and inspectable as recovery work. Capture after verified
-writer shutdown, not at a timed reserve while native tools can still mutate files.
-Use existing artifact/project storage boundaries with a separate candidate
-reference; preserve exclusions and expose retention/capacity failures. Do not
-change the published head or promote a handoff's processed cursors. Record the
-latest accepted draft separately: it may describe an earlier state than the final
-files. A stable copy may still contain a partially written file or unfinished
-multi-file change; it is evidence to inspect, not proof of successful execution.
-If quiescence cannot be confirmed, retain the source as unstable and report why
-no stable candidate exists. Restart recovery can retry capture after inspection.
-Candidate adoption into fresh work rechecks the current baseline and authority;
-external service/world state must be inspected separately. A Minecraft world
-living in a service is not restored by copying an agent workspace.
-
-Record a structured timeout cause and the captured effective deadline on the
-attempt, independently of the broad failed/interrupted lifecycle label. Preserve
-that primary cause if cleanup also fails. No new supervisor state is needed just
-to let U1 or accounting distinguish timeout from provider error or cancellation.
-
-`control_workspace_start` jobs are attempt-owned, unlike persistent service jobs.
-Their timeout is an upper bound, not a predicted completion time. Use the same
-captured attempt deadline as the provider loop: cap the effective job deadline at
-the owner's remaining lifetime, disclose requested/effective limits and owner
-termination in start/status responses, and reject launch once no time remains.
-Revalidate at launch after queue/setup delay. Do not reject an otherwise useful
-short command merely because its requested maximum exceeds the remaining time.
-Long independent work uses persistent resources with separate limits. Test the
-minimum 60-second configuration, late launch, cancellation and independent jobs;
-none requires reinstating an early finishing reserve.
-
-Keep bounded backstops for cancellation, hung providers and transport operations,
-with distinct scopes and visible configurable defaults; they need not require
-an operator to opt in on every call. Capture the effective limit and termination
-reason. Distinguish request deadlines, cancellation grace, inactivity detection,
-attempt budgets and persistent-job lifetime. Silence alone does not establish a
-stall; a heartbeat or log line does not establish useful progress. Tool adapters
-choose operation-appropriate bounds and report them through generic outcomes.
-Ordinary attempts retain a default 600-second cap; approved persistent bots now
-have no implicit wall-clock cap, while explicit configured limits remain binding.
-This is an attempt policy, not a task/service lifetime or a universal target.
-Remaining allowance may be reported; no periodic handoff timer or additional short
-deadline controls ordinary progress. Any cap change needs measured recovery and
-capacity results and cannot silently extend an authorized budget. Timeouts remain
-a failure/resource backstop rather than the workflow.
-
-Long-job tools may expose a bounded health/progress inspection hook: resource
-identity/generation, liveness, last observed progress and evidence. Keep workload
-semantics in the tool; an alive process does not prove progress, and missing metrics
-mean unknown. Healthy, progressing work continues within its authorized limits.
-Stale/unknown progress triggers a bounded recheck or decision request, not an
-automatic claim of failure. Inspection failure is distinct from job failure.
-
-Expose effective runtime/inactivity limits, review interval and expiry action at
-job creation and inspection; allow authorized changes per tool/job within node
-policy. Before a configurable limit is reached, request more time through E1's
-existing design-question flow when needed: lead within delegated scope, otherwise
-operator. Apply an extension through an authorized host operation; answer prose
-alone cannot change a budget. While awaiting a decision, the captured policy
-governs continuation and expiry; silence does not grant more time. A quiet long
-calculation may succeed, so test it alongside a hung process, unavailable health
-hook and unanswered extension request. These hooks extend the relevant tools,
-not core job-specific states or a prerequisite health framework for R1.
-
-Change workload guidance separately: act while useful work remains, check deltas
-at meaningful boundaries, publish on explicit yield/pause, send changed facts/milestones/
-blockers, and wait after completion. A lead intervenes for changed goals,
-dependencies, evidence or stalled progress. Routine audits should not repeatedly
-nudge a productive builder. Preserve the successful long active slices.
-
-## Supporting contracts, delivered with their consumers
-
-**G1: one lifecycle authority, narrow projections.** Reuse `Definition`, `Restart`,
-bot generation and `Supervisor::status()` in `crates/bot/src/supervisor.rs`.
-`Status { Ready, WaitingTurn, Paused, Stopping }` is derived lifecycle state;
-do not persist a second status or force product conditions into that enum.
-Extend these primitives only for a required generic transition. E1/U1 first need
-application projections of NeedsDecision from durable requests and
-WaitingDependency from existing wait/continuation records, with generation,
-last transition and source references. Goal/persona prose stays outside the core.
-
-Use separate application types for host observations and agent progress claims.
-Only host-owned writers construct observations from authoritative records;
-model input constructs an attributed claim with checkpoint/evidence references.
-An active process is observable; useful goal progress is not established by that
-fact. UI shows the distinction and missing/stale data. Tests prove claims alone
-cannot resolve requests, advance lifecycle or overwrite observations; duplicate/stale
-deliveries cannot produce a second turn. Add further conditions only for a consumer.
-
-**O1: audit existing ownership at the resource boundary.** Reuse the persistent
-resource transitions in `control-core` and their application/engine adapters.
-Chat parentage is not resource ownership. First reproduce a lifetime mismatch or
-identify a new feature changing cancellation/cleanup semantics; then add the
-smallest needed ownership or retain/cascade operation. A persistent service left
-after `/cancel all` may be correct. Test owned versus borrowed/shared services,
-cleanup failure and restart. No general garbage collector blocks E1 or U1.
-
-**Q1: start with shared counters.** Aggregate existing `Budget` window/turn limits
-and runtime slot admission by team in the application admission operation, with
-durable charges keyed by attempt. Capture team identity through child/retry work;
-spawning or redefining a bot must not reset team charges. Use pure counter helpers
-only where needed; currency pricing and team configuration stay out of the supervisor.
-For CLI adapters, this slice enforces turn/concurrency limits only: there is no
-in-flight token or cost ceiling. Expose unknown usage separately from live capacity.
-
-Release a slot on confirmed termination, regardless of whether usage arrived.
-On recovery, inspect/fence the old attempt before reusing its capacity. A stale
-reservation has a reconciliation deadline and visible operator action; expiry
-triggers reconciliation, not an assumption that the process stopped. Later
-adapter-specific usage reservations require a bounded settlement policy: close
-unknown usage as an explicit conservative charge or audited operator adjustment,
-retain a tombstone for late usage, and never silently refund spend on timeout.
-Tests cover absent/late usage, crashes, concurrent admission and idempotent release.
-
-Add non-preempting queue priorities when contention demonstrates the need:
-interactive/decision work before workers and summaries, with fairness/aging.
-Priority cannot create capacity or bypass grants; test one-slot parent/child
-resolution. Increased unattended team fan-out needs Q1; a bounded W1 prototype
-can use existing budgets and slots without completing this later scheduling work.
-
-**S1: agents request service resources through tools.** Let an agent request,
-for example, a 24 GiB Minecraft container or an inference service with GPU access.
-Extend existing service operations with typed CPU, memory and accelerator requests;
-operator-defined shapes are optional presets. Separate compute size from image
-capabilities (`Lite`/`Full`), which currently fix memory at 512 MiB/2 GiB and cap
-every service at one CPU. Keep existing defaults compatible.
-
-The first local slice delivers optional `small` (2 GiB/1 CPU), `medium`
-(4 GiB/2 CPUs) and `large` (8 GiB/2 CPUs) shapes through the existing service
-start/status tools, persisted immutable presets, atomic 20 GiB/8 CPU service
-admission and matching UI limits. Omitting a shape preserves image defaults.
-Replacement reuses the chat's retained workspace. This does not complete S1:
-operator-configurable pools/presets, raw CPU/RAM requests, worker accounting,
-device grants and backend provisioning remain later slices. No core lifecycle,
-provider adapter or scheduler changes are needed for these local presets.
-
-Admit requests within configured capacity and grants; otherwise return a clear
-capacity result or use the existing durable approval path. Approval cannot create
-missing RAM or a GPU. Report requested/effective limits, accelerator availability
-and bounded utilization/pressure through inspection tools. Account for concurrent
-workers and services on the same backend. GPU access is an explicit device grant,
-not privileged mode or arbitrary device passthrough.
-
-Agents can also start a model server as an ordinary persistent service and call
-it through a scoped tool/MCP endpoint. Model selection, downloads, inference
-configuration and MCP wrapping belong to tools, with network/device grants as
-needed. This can ship before M1: calling a model as a tool does not require using
-it as Control's agent backend. No model-serving lifecycle belongs in the supervisor.
-
-Keep admission and ownership generic, with provisioning interpreted by replaceable
-backends. Agents choose approved tools; provider-specific cloud APIs, instance
-types and credentials stay in those tools/configuration. Borrow Kubernetes'
-intent/status/reconciliation boundary, without building a cloud scheduler. Adding
-a provider must not change pure core or the bot supervisor. Remote capacity and
-spend authorization are scoped to that backend.
-
-First deliver local resource requests, persisted effective limits and lifecycle
-accounting. Test concurrent/duplicate admission, unsupported CPU/GPU requests,
-restart reconciliation and cleanup after an agent stops. Release reservations on
-confirmed teardown; reconcile unknown provisioning outcomes visibly. Resizing an
-existing service must explicitly report live-update versus replacement support
-and preserve data and port/grant generation fences. Measure matched-load latency,
-CPU throttling and memory pressure before claiming an improvement from more RAM.
+**Layering is the architectural constraint (Pi/tinygrad style).** Keep a small
+pure vocabulary for lifecycle, admission, waits and typed effects. Build product
+behaviour as tools, strategies and configuration over narrow application
+operations; adapters own I/O. A new feature does not justify a new core concept:
+each PR that changes a core API must name the generic invariant the existing
+seams cannot express. Authorization and durable acceptance stay host-enforced;
+a prompt cannot enforce them.
 
 | Placement | Responsibility |
 | --- | --- |
-| Pure `control-bot` / domain core | Existing generic lifecycle, waits, counters, generation fences, resource transitions and typed effects; no goal, recipe, persona or model-specific policy |
-| Narrow application operations / projections | Authorization, atomic acceptance, team accounting, host observations versus claims, request resolution and UI views; no second lifecycle store |
-| Standard-library tools, strategies and configuration | W1 cron interpretation, W2 recipes, E1 decision tools, L1 persona/SOUL bundles, learning procedures and C1/C2 compaction strategies |
-| Effect / infrastructure adapters | Persistence, clocks, model calls, process/container work and resource inspection; interpret typed effects and revalidate authority |
+| Pure `control-bot` / `control-core` | Lifecycle, waits, counters, generation fences, resource transitions, typed effects. No goal, recipe, persona or model policy. |
+| Application operations / projections | Authorization, atomic acceptance, accounting, request resolution, UI views. No second lifecycle store. |
+| Tools, strategies, configuration | Schedules, recipes, decision tools, personas, learning procedures, compaction strategies. |
+| Effect adapters | Persistence, clocks, model calls, containers, resource inspection. They interpret effects and revalidate authority. |
 
-Product features can ship together without becoming new concepts inside the
-supervisor. Reuse existing `Compactor`, `Summaries` and Lens seams rather than
-introducing a second parallel plugin system or putting network calls in pure code.
+| Reference | Idea to borrow |
+| --- | --- |
+| [Hermes](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills) | Reusable procedural knowledge with progressive disclosure (L2). |
+| [Pi Durable](https://earendil.com/posts/pi-durable/) | Small interfaces between model, storage, tools and execution; durable timers and dependency waits. |
+| [tinygrad](https://docs.tinygrad.org/developer/developer/) | A small internal vocabulary with separate transformation and execution layers (an analogy, not a dependency). |
+| [Kubernetes controllers](https://kubernetes.io/docs/concepts/architecture/controller/) | Desired/observed state, ownership, explicit admission. No Kubernetes-shaped object model; a controller cannot infer completion of a prose goal. |
 
-## P1: upward escalation and prompting
+Control stays Rust/WASM/Nix with plain files and atomic commits. Upstream
+non-Rust runtimes stay inside explicitly configured tool/agent containers.
+[Bot-control research](research/BOT-CONTROL.md) and
+[bot inspirations](BOT-INSPIRATIONS.md) hold the longer comparisons.
 
-**E1 extends `control_design_ask`; it does not replace it or add a second request
-system.** Reuse [design::Question and Continuation](../src/design.rs), request
-identity/generation checks, durable pause, worker-slot release and checkpoint
-resumption. Existing `pending`/`answer_target`/`answer` operations already support
-ancestor-visible questions and answers to descendants. The missing increment is
-an agent-callable, scoped lead-resolution tool over that same application path.
+## Delivery order
 
-Add only the resolver reference/scope and answer attribution needed for that
-extension to the existing question record. Old records and ordinary calls retain
-operator resolution by default. A worker may route a delegated task decision to
-its assigned lead; host checks recorded lineage and delegated decision authority
-at resolution time. Naming a resolver does not grant authority. The answer tool
-must use the existing validated answer and durable-save/rollback boundary, retaining
-checkpoint, workspace-baseline, grant, budget and continuation rules. Do not expose
-the internal answer function without those checks or introduce supervisor variants.
+| Priority | Work | First exit |
+| --- | --- | --- |
+| P0 | [Reliability backlog](#p0-reliability-backlog): storage bounds, fault tests, provider gates, R1/R2 evaluation | Each fix ships with a fault test; comparative claims use the [paired-trial gate](#evaluation-gates). |
+| Ongoing | [A1–A4 state/effect boundaries](#a1a4-remaining-stateeffect-boundaries) | Extend the established boundary with its consumers; no big-bang extraction. |
+| P1 | [E1 escalation](#e1-escalation-to-the-lead) with [G1 projections](#g1-one-lifecycle-authority-narrow-projections) | One-slot parent/child resolution works through the existing question path. |
+| P1 | [U1 coordination UI](#u1-coordination-ui-and-a2a-visibility) | Read existing lifecycle, requests and claims; add projections only as needed. |
+| P1 | T1 terminal development workflow | Finish the gaps listed in [TERMINAL.md](TERMINAL.md). |
+| P1 | [W1 schedules](#w1-cron-style-schedules) | Durable occurrence IDs and operator-only schedule writes. |
+| P1, before more fan-out | [S1 service resources](#s1-service-resource-requests) and [Q1 team admission](#q1-team-admission) | Typed requests and aggregate capacity reserved before provisioning. |
+| P1 | [V1 Vault](#v1-manage-vault-and-scoped-secret-injection) | Agents use secrets by opaque reference; values never reach model context. |
+| P2 | [U2 interactive browser](#u2-computer-use-starting-with-an-interactive-browser); [W2 recipes](#w2-a-small-workflow-layer) | Scoped browser sessions; validated recipes over spawn/wait/message. |
+| P2 | [M1 follow-ups](#m1-model-follow-ups) | Hosted API adapters; local parallel tools; multi-model review turns. |
+| P2 | [L1 personas](#l1-versioned-personas-and-soulmd); [L2/L3 self-improvement](#l2l3-a-reviewed-self-improvement-loop) | Captured revisions, scoped tools, evaluation and admission. |
+| P2 | [H1 layered control](#h1-layered-control) | Fewer model turns per milestone in a paired trial. |
+| Later | [X1 execution backends](#x1-pluggable-execution-backends), [deferred items](#deferred) | Demonstrated local need. |
 
-Unresolved human preferences and decisions outside the lead's mandate go to the
-operator through the existing UI/Discord path, preserving the question identity.
-Access requests continue through the permission broker; procedure/knowledge
-proposals continue through knowledge review. Those are separate existing flows,
-not additional E1 resolver types, and a design answer never grants access.
+## P0: reliability backlog
 
-G1's NeedsDecision view references the same `Question`; changed questions reach
-the lead through existing delivery. Keep the existing request deduplication and
-single-pending-question semantics. Ordinary collaboration still uses steering,
-room messages and follow-ups; a decision question pauses only the affected work.
+- **Storage bounds.** Hard writable limits for live workspaces and scratch on the
+  supported macOS engine, retained checkpoint/artifact budgets and admission
+  backpressure. Bind mounts and polling are not quotas. Test disk-full and
+  crash behaviour without losing the last good checkpoint. (Services already
+  accept an optional writable-layer `storage_limit_mb`; `/workspace` is not
+  capped.)
+- **Fault tests.** Inject termination around launch, checkpoint and result
+  publication; auth expiry/refresh, cancellation, stale completions, duplicate
+  requests, slow clients and poisoned state. Fail closed without a false
+  acknowledgement or a second workspace writer.
+- **Provider gates.** Claude login refresh and cancellation fault tests,
+  independently of Codex. Model checks stay explicit, never in offline `doctor`.
+- **Unexplained MCP stall.** A Codex attempt once exited successfully while a
+  room post was still `in_progress`. The adapter now reports that as an
+  interrupted attempt with unconfirmed tool outcome (`src/worker.rs`); the
+  original stall is unreproduced.
+- **R1/R2 evaluation.** Paired interruption/recovery comparisons and finer
+  causal attribution of raw watch output. Owning a stream does not prove which
+  attempt caused each line. Deliver fixes as narrow tool/adapter changes, never
+  workload semantics in the supervisor.
+- **Long-job health and extensions.** Long-running tools may expose a bounded
+  health/progress hook (identity, generation, liveness, last observed progress).
+  An alive process does not prove progress; missing metrics mean unknown. Before
+  a configured limit, request more time through E1; only an authorized host
+  operation changes a budget, and silence grants nothing. Test a quiet but
+  healthy calculation alongside a hung process and an unanswered request.
+- **Second-machine evidence.** Two independent installs complete a two-turn
+  task, a restart and artifact inspection; record setup blockers.
+- **Hardening.** Close the gaps recorded in the [threat model](THREAT-MODEL.md):
+  malicious project code, prompt injection and resource exhaustion.
 
-A parent waiting on its child must be able to receive and resolve that child's
-request. Test legacy records/default operator routing, the one-model-slot case,
-a full queue, restart, duplicate/stale
-answers, reparented or cancelled work, authority revocation and answer-save
-failure. Resolution must neither create a second writer nor deadlock behind the
-child it must unblock. If the lead cannot resolve or is unavailable, forward
-the same request visibly to the operator under a bounded policy.
+## A1–A4: remaining state/effect boundaries
 
-E1's prompt review spans tool descriptions, ordinary/spawned agents, bot wakes,
-judges and continuation prompts. Replace the blanket “take your recommended
-option” instruction with a scope-aware rule: decide routine authorized steps;
-ask the lead when a blocker exceeds the worker's remit; ask the operator when mandate or preference
-is missing; use the permission path for access. Waiting for a healthy peer is
-not itself an escalation. Check scenario fixtures across those entry points;
-prompt text never substitutes for deterministic policy tests.
+The first typed operation boundary is in place; see
+[state boundaries](STATE-BOUNDARIES.md) for what exists. Remaining work extends
+it with its consumers. Broad `State` access is not an acceptable shortcut for
+new features.
 
-### Opt-in investigation when a plan is blocked
+| ID | Work | Exit gate |
+| --- | --- | --- |
+| A1 | Unify command/approval/continuation operations across transports with narrow typed inputs. | Same authorization, lineage, rollback and checkpoint outcomes from every transport. |
+| A2 | Move rendering, reads and selected persistence outside the broad lock; separate pending intent from durable completion. | Concurrent save/failure/cancel tests; durable-before-effect; benchmark under concurrent fsync load. |
+| A3 | Lazy bounded transcript reads; runtime-owned journal readers and caches; visible source gaps. | Startup and resident memory scale with the working set, not full transcript hydration. |
+| A4 | Narrow Host/ToolSet operations per area; extract web/TUI/MCP crates once their application interface is real. | Dispatch parity including denials and cancellation; legacy full-state access measured per slice. |
 
-Start with a versioned procedure/lens enabled per task or team, using existing
-inspect, execute, message, wait and checkpoint tools. Routine troubleshooting is
-already encouraged; this adds a concrete method, not a mandatory experiment on
-every wait. Implement after the first state/effect slice. Add a thin tool only if
-the procedure cannot retain or inspect trial records through existing operations.
-No new supervisor mode, ambient state handle or generic experimentation framework.
+No mandatory async rewrite, global event bus, second tool catalogue or
+crate-per-file split. Domain locks come only after narrow borrows and measured
+contention. Plain-file storage stays; layout changes need fault tests.
 
-The procedure records the blocker and source evidence, a hypothesis, the smallest
-authorized probe, expected/disconfirming observations, and the actual result.
-Use a bounded number of probes and existing task/resource/model budgets. Compare
-outcomes before retrying; an unchanged guard rejection is not a new experiment.
-Choose an alternative, request targeted peer help, or use E1's existing decision
-path when the next action exceeds the mandate. Valid dependency waits remain
-valid; elapsed silence alone neither diagnoses a stall nor authorizes intervention.
+## Supporting contracts
 
-Keep trial notes with the task's checkpoint/evidence and resume from them, rather
-than rediscovering failed approaches. Probe state and workload-specific health or
-risk judgments belong to the procedure/tool. Existing host operations enforce
-grants, cancellation and publication; a hypothesis, lens or peer suggestion adds
-no authority. Avoid broad broadcasts or model wakes for every sample.
+These ship with the feature that needs them, not as a foundation release.
 
-Acceptance: an unchanged safety/dependency guard leads to a distinct evidence-led
-probe or explicit blocked outcome instead of endless identical retries; a healthy
-long-running dependency continues undisturbed; failed/interrupted probes preserve
-notes and uncertain outcomes; exhausted budgets and out-of-scope actions use the
-existing wait/request paths. Evaluate whether the procedure reduces repeated
-actions without increasing intervention or noise. Verified general lessons may
-be proposed through L2 review; one successful probe is not automatically knowledge.
-Minecraft combat/despawn rules remain workload knowledge, outside Control's core.
+### G1: one lifecycle authority, narrow projections
 
-## U1/U2: coordination UI, A2A and computer use
+`Supervisor::status()` in `crates/bot/src/supervisor.rs` derives
+`Ready | WaitingTurn | Paused | Stopping`; do not persist a second status.
+E1/U1 need application projections: *needs decision* (from durable design
+questions) and *waiting on dependency* (from wait/continuation records), with
+generation, last transition and source references.
 
-**U1: retain the steering chat as the team's control surface.** Keep the current
-Rooms layout and theme: room selection, broad conversation area, participants
-and useful links. Make ownership, current objective, progress, blocked dependency
-and the latest changed fact easy to inspect. Collapse routine activity while
-retaining logs and evidence. Keep steering, pause/cancel and actionable questions
-close to the work; show whether a message was queued, delivered or processed
-where the existing receipt contract can establish it. Avoid a new dashboard
-that forces users to abandon the useful chat flow.
+Keep host observations and agent progress claims as separate types. Only host
+writers build observations; model input builds attributed claims. Tests prove a
+claim cannot resolve a request, advance lifecycle or overwrite an observation.
 
-Read authoritative lifecycle and existing ownership directly; use G1 projections
-for requests/waits as they ship. Show observation age and unknown progress.
-O1 is needed only if a concrete ownership gap prevents that view or operation.
+### O1: ownership audit
 
-A2A work builds on rooms, child results and directed messages. Preserve attribution,
-lineage, evidence links and explicit destinations. E1 fills the decision/resumption
-gap. First improve the user's ability to see and direct this communication; remote
-protocol interoperability is separately scoped. Acceptance: steer an active team,
-follow a handoff, find one real blocker amid retained telemetry, and resume without
-duplicate tasks or missed human direction.
+Chat parentage is not resource ownership. First reproduce a lifetime mismatch,
+or identify a feature that changes cleanup semantics, then add the smallest
+retain/cascade operation. A service surviving `/cancel all` may be correct.
 
-**U2: make computer use a visible product capability.** Start from offline browser
-capture and the [browser demonstration](DEMONSTRATIONS.md), then add scoped
-interactive browser observation and actions with visible evidence, persistent
-session handles and human handoff. Wider desktop control can follow a demonstrated
-need. Existing capture is not yet an interactive browser or desktop CUA runtime.
-Reuse resource, transport, tool and policy contracts; do not wait for all A1–A4
-extractions. Acceptance: an agent builds a page, another exercises it in a browser,
-reports a reproducible defect, and verifies the fix in the steering conversation.
+### Q1: team admission
 
-## W1/W2: schedules and a small workflow layer
+Aggregate the existing per-bot `Budget` limits and model-slot admission by team,
+with durable charges keyed by attempt. Spawning or redefining a bot must not
+reset team charges. CLI adapters enforce turn/concurrency limits only; there is
+no in-flight token or cost ceiling, and unknown usage stays visible as unknown.
+Release a slot on confirmed termination; reconcile stale reservations visibly.
+Add non-preempting priorities (interactive and decision work first, with aging)
+only when contention shows the need. Priority never creates capacity.
 
-Make recurring team work easy to configure. Start with **W1 cron-style schedules**
-over the existing supervisor/timer machinery: choose a team or chat, goal, schedule
-and time zone, then inspect the next run, recent outcomes, pause/resume and run-now.
-Capture the definition revision and a stable scheduled-occurrence ID so restart
-does not submit the same occurrence twice. Existing model slots, bot approval,
-budgets and per-chat ordering still govern admission.
+### S1: service resource requests
 
-Borrow explicit [CronJob policies](https://kubernetes.io/docs/concepts/workloads/controllers/cron-jobs/):
-Allow, Forbid (default), or Replace, plus a missed-run start deadline. Concurrency
-policy applies per schedule; existing admission limits remain effective. Allow
-creates independently owned instances and never concurrent writers in one chat. Replace requires
-confirmed cancellation/quiescence of the prior writer and reconciliation of its
-effects; defer enabling it until that contract is tested. Show skipped occurrences
-and reasons. Initially choose at most the latest eligible missed occurrence within
-the deadline; document this Control catch-up policy rather than claiming complete
-Kubernetes equivalence. Specify daylight-saving gaps/repeats and test previews,
-restart, clock changes, edits and pause racing a due trigger. A deduplicated trigger
-does not make uncertain external effects safe to replay. Schedule ticks never
-restart a progressing provider attempt; a later admitted attempt starts fresh.
+Services already take an optional `shape` (`small` 2 GiB/1 CPU, `medium`
+4 GiB/2 CPUs, `large` 8 GiB/2 CPUs) within an operator-configured node service
+budget; see [persistent tools](PERSISTENT-TOOLS.md). Remaining:
 
-First W1 keeps schedule creation/edit/enable operations operator-only. All writes
-call one typed application operation that checks authenticated operator authority
-and rejects agent-attempt credentials, regardless of transport or caller-provided
-origin fields. Agents can propose definitions for operator activation. This narrow
-A1 operation ships with W1; a complete transport refactor is not required. Tests
-cover direct agent MCP calls, child/continuation attempts and all exposed write
-routes. Messages cannot confer schedule-write authority. An operator acting on a
-proposal is a new authorized action. Agent-managed schedule writes are deferred
-until durable capability restrictions survive delegation and continuation; do not
-claim a universal message-origin guarantee. Hermes' configurable
-[cron guard](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron)
-is a reference, not the enforcement mechanism.
+- raw CPU/RAM requests and operator-defined presets;
+- explicit GPU device grants (never privileged mode or arbitrary passthrough),
+  with accelerator availability and utilisation in status;
+- accounting that covers workers and services on the same backend;
+- replaceable backends for remote capacity, with provider APIs and credentials
+  kept in tools/configuration.
 
-**W2 is a small declarative recipe layer** for repeated team patterns: triggers,
-roles, named steps, dependencies, bounded parallel branches, completion checks,
-failure handling and result destinations. Reuse existing spawn/message/wait/tool
-operations and typed supervisor effects. A simple form and versioned configuration
-can expose the same definition; defer choosing a new custom syntax until real
-recipes establish what people need. No authored JavaScript/Python integration.
+Approval cannot create missing RAM or a GPU. Resizing reports whether it is a
+live update or a replacement and preserves data and port/grant fences. Measure
+latency, throttling and memory pressure before claiming a gain from more RAM.
 
-Example recipe, illustrative rather than supported syntax:
+## V1: Manage Vault and scoped secret injection
+
+Operators add, rotate, revoke and grant credentials in **Manage** without
+pasting them into chat. Agents see only permitted metadata and use an opaque
+reference. Values never enter model context, chats, tool arguments visible to
+the model, transcripts, summaries, knowledge, recovery candidates or ordinary
+logs, and the input flow stays outside agent-visible browser captures.
+
+- Resolve references only in trusted effect adapters, after checking caller,
+  team/chat, attempt generation, destination, operation and expiry.
+- Support broker-attached API authentication and approved service bindings.
+  Never expose a secret-reading tool, put keys in URLs or inject values into an
+  agent's shell, environment or workspace. Code written by agents uses a
+  credential-bearing broker outside its process.
+- Redaction is defence in depth, not the boundary: constrain destinations and
+  redirects, filter reflected responses and return bounded typed projections.
+- Store values outside the checkout and application state (platform store or
+  encrypted files with separately protected keys). Audit use without logging
+  values. Check grants at execution so revocation reaches queued calls and
+  services. A credential grants no permission to spend; consequential actions
+  keep their own approvals.
+
+**First exit:** a synthetic secret created in Manage lets an authorized agent call
+a local test API; model I/O, chats, traces, logs and candidates never contain
+it. Test cross-agent misuse, wrong destinations, reflected bodies, expiry,
+revocation of queued calls, rotation and denied browser access. Never use real
+credentials in fixtures or CI.
+
+## E1: escalation to the lead
+
+Extend `control_design_ask` (`src/design.rs`); do not add a second request
+system. Today questions resolve through the operator. Add an agent-callable,
+scoped resolution tool so a worker can route a delegated decision to its lead.
+The host checks lineage and delegated authority at resolution time; naming a
+resolver grants nothing. The answer path reuses the existing validated answer,
+durable save/rollback, checkpoint, grant and continuation rules. Old records keep
+operator resolution. Questions outside the lead's mandate go to the operator
+through the existing UI/Discord path under the same identity. Access requests
+and knowledge proposals keep their own flows; a design answer never grants access.
+
+Test legacy records, the one-model-slot case, a full queue, restart,
+duplicate/stale answers, reparented or cancelled work, authority revocation and
+answer-save failure. Resolution must not create a second writer or deadlock
+behind the child it unblocks.
+
+Review prompts across tool descriptions, spawned agents, bot wakes, judges and
+continuations: decide routine authorized steps; ask the lead when a blocker
+exceeds the worker's remit; ask the operator when mandate or preference is
+missing; use the permission path for access. Waiting on a healthy peer is not an
+escalation. Prompt text never replaces deterministic policy tests.
+
+## U1: coordination UI and A2A visibility
+
+Keep the steering chat and current Rooms layout as the team's control surface.
+Make ownership, current objective, progress, blocked dependency and the latest
+changed fact easy to see; collapse routine activity while keeping evidence.
+Show whether a message was queued, delivered or processed where receipts can
+establish it. Show observation age and unknown progress. No separate dashboard
+that pulls users out of the chat. Remote A2A protocol interoperability is a
+separate adapter with its own tests.
+
+Acceptance: steer an active team, follow a handoff, find one real blocker amid
+retained telemetry and resume without duplicate tasks or missed direction.
+
+## U2: computer use, starting with an interactive browser
+
+Today Control has offline browser capture only (`control_browser_capture`; see
+[demonstrations](DEMONSTRATIONS.md)). Add scoped interactive sessions:
+navigation, observation and actions with visible evidence, persistent session
+handles and human handoff. Drive the browser from a Rust client over a browser
+protocol, taking ideas from Playwright-like tools without an authored JavaScript
+layer. Bound lifetime, downloads, tabs and resources; isolate profiles; filter
+private-network and metadata access unless granted. Treat page content as
+untrusted and keep credentials, payments and consequential actions outside page
+control. Start with read/observe tasks. Wider desktop control follows a
+demonstrated need.
+
+Acceptance: one agent builds a page, another exercises it in a browser, reports a
+reproducible defect and verifies the fix in the steering conversation.
+
+## W1: cron-style schedules
+
+Bots already support fixed intervals (`/bot on every N`, 1–1440 minutes). W1
+adds calendar schedules: team or chat, goal, cron expression and time zone, with
+next-run preview, recent outcomes, pause/resume and run-now. Capture the
+definition revision and a stable occurrence ID so restart never submits the same
+occurrence twice. Existing slots, approvals, budgets and per-chat ordering still
+govern admission.
+
+Borrow [CronJob policies](https://kubernetes.io/docs/concepts/workloads/controllers/cron-jobs/):
+Allow, Forbid (default) and a missed-run start deadline; defer Replace until
+confirmed cancellation of the prior writer is tested. Run at most the latest
+missed occurrence within the deadline, and show skipped occurrences with reasons.
+Specify daylight-saving gaps and repeats. A tick never restarts a progressing
+attempt.
+
+Schedule writes are operator-only in the first slice: one typed operation checks
+operator authority and rejects agent credentials on every transport. Agents can
+propose definitions for activation. Agent-managed schedules wait until
+capability restrictions survive delegation and continuation.
+
+## W2: a small workflow layer
+
+A declarative recipe for repeated team patterns: triggers, roles, named steps,
+dependencies, bounded parallel branches, completion checks, failure handling and
+result destinations, interpreted by a workflow tool over existing
+spawn/message/wait operations. Recipe state lives outside the supervisor.
+Choose syntax only after real recipes show what is needed. Illustrative example:
 
 ```text
 Trigger: weekdays at 09:00 in the team's time zone, or run now
@@ -675,506 +279,188 @@ Lead: select one issue from the approved project scope
 Builder: implement in an isolated workspace
 Reviewer + tester: review the diff and run checks in parallel
 On failure: return evidence to the builder, within the retry budget
-On success: prepare a draft PR and post one result to steering chat
+On success: prepare a draft PR and post one result to the steering chat
 On unresolved blocker: request a decision; resume this step after the answer
 ```
 
-Persist instance/step identities, inputs, results and wait reasons with the
-existing intent/receipt rules. Capture approved definition revisions for active
-instances; edits affect future instances unless explicitly applied at a safe
-boundary. Retry only classified safe operations or reconcile uncertain outcomes.
-Users can inspect, steer, pause and cancel through the same chat/UI. Workflow
-definitions describe work within existing grants; they do not grant access.
+Validate before activation (schema, cycles, fan-out/retry limits, capabilities,
+budgets, destinations) with a bounded dry run. Active instances keep their
+captured revision. Retry only operations classified as safe. A recipe describes
+work within existing grants; it never grants access. Behaviour-tree and
+state-machine routines (see [H1](#h1-layered-control)) can be recipe steps.
 
-Validate recipes before activation: schema and referenced revisions, dependency
-cycles, fan-out/retry limits, required capabilities, budgets, ownership and result
-destinations. Require a bounded dry-run/fixture trace for the selected revision;
-show failures before enabling triggers. A changed recipe needs renewed validation.
-Implement interpretation as a workflow tool over spawn/message/wait operations;
-persist its recipe-specific state outside the supervisor. Add G1/O1/Q1 pieces
-only for the decisions, resource lifetimes and fan-out the recipe actually needs.
+First exit: a scheduled inspect/build/review recipe survives a restart and a
+human decision wait, posts one outcome and leaves unrelated work running.
 
-First acceptance: a scheduled inspect/build/review recipe survives a restart and
-a human decision wait, posts one outcome and leaves unrelated work running.
-Ad hoc teams continue to work without recipes. Keep generalized workflow languages,
-distributed scheduling and arbitrary executable hooks outside this first layer.
+## M1: model follow-ups
 
-## State/effect boundaries: established baseline and incremental follow-up
+Shared bounded model calls, local summarizers, compaction model selection and
+local agent turns are described in [local models](LOCAL-MODELS.md). Remaining:
 
-The first A1/A2/A4 operation boundary follows the small diamond-run fixes and is
-now established by the slices above. A1–A4 remain directions for consumer-led
-work: typed input, domain state transition, persisted intent, interpreted effect
-and typed completion. Reuse the existing bot machine and application adapter;
-do not invent a second supervisor. Keep the conformance gates below for each
-migrated operation. Finishing every extraction or web/TUI crate split is not a
-prerequisite for M1 and compaction. New features use the proven boundary and
-extend it where needed; broad `State` access is not an acceptable shortcut.
+- **Hosted API adapters** behind the same model-call contract and registry,
+  recording provider/model revision, limits, capabilities, usage semantics and an
+  opaque credential reference. Listing a model does not establish access.
+- **Local agent turns:** parallel tool execution, tokenizer-exact budgets, and a
+  quality comparison against hosted models on the same tasks.
+- **Summary cache retention/GC**, and summary-quality evaluation before any local
+  summarizer becomes a default.
+- **Model roles:** separate captured selections for worker, lead, reviewer and
+  compactor.
+- **Visible multi-model review turns:** named participants with explicit
+  provider/model selection, isolated contexts and visible review/handoff turns in
+  chat, passing bounded evidence rather than whole histories. Check availability
+  before claiming independent review. Review is evidence, never merge/deploy
+  permission. Make it useful for `/improve` first.
 
-The useful state-monad-like property is explicit composition: a transition maps
-domain state plus typed input to updated state and effect descriptions. Lift a
-domain transition into its owning application operation through narrow borrowed
-views and typed effect mapping; do not give tools an ambient global-state handle.
-The existing `Machine::step` mutation interface can express this without cloning
-all state, a generic monad framework or adding feature-specific core concepts.
-Effects carry their resource/generation/revision context. Interpreters own I/O;
-results return as typed events and stale completions cannot mutate newer state.
+Every new attempt is a fresh provider session rebuilt from Control's committed
+journal. Provider caches are optimisations, never the authority for task state.
+Benchmark hardware, latency, memory and quality before choosing a runtime; do not
+add a host Python/Node adapter.
 
-Keep clocks, filesystem/process handles, channels and executor types in drivers.
-The first slice must run through the existing driver and one experimental async
-driver against the same fixtures, with no runtime dependency in its domain types.
-Check ordering, duplicate delivery, cancellation, restart, save failure and
-durable-before-effect behavior, including concurrent completion. This proves a
-runtime can change without changing domain semantics; it does not establish that
-an async runtime is faster. Benchmark before choosing a production replacement.
-Record which full-state accesses the slice removes and retain the diamond-run
-fixtures as behavior regressions.
+## L1: versioned personas and SOUL.md
 
-Target dependency direction:
+Keep four things distinct: a **lens** selects context and tool descriptions; a
+**persona** describes behaviour and role; a **procedure** explains a class of
+work; **policy** grants enforceable capabilities. A lens or persona never grants
+access.
 
-```text
-web / TUI / Discord / MCP
-          ↓ typed commands, bounded queries
-application operations + authorization + durable acceptance
-          ↓
-pure domain transitions → stamped effects
-                              ↓
-             persistence / tools / engine / model adapters
-```
+Add versioned persona bundles that reference lenses, optional `SOUL.md` prose
+(identity, tone, collaboration preferences), procedure revisions, model-role
+preferences and proposed resource needs. They are configuration resolved at
+admission; the supervisor does not interpret persona prose. Personal definitions
+live under the configured home roots.
 
-| ID | Work | Exit gate |
-| --- | --- | --- |
-| A1 | Unify command/approval/continuation operations across transports; handlers take narrow typed inputs and projections. Group state by domain with borrowed views before changing lock ownership. | Same authorization, lineage, rollback and checkpoint outcomes from each transport; no new public `Arc<Mutex<State>>` dependency. |
-| A2 | Move expensive rendering/reads and selected persistence work outside the broad lock. For writes, explicitly distinguish pending intent from durable completion and revalidate generation/authority before effects. | Concurrent save/failure/cancel tests, no rollback over newer changes, durable-before-effect, visible degraded persistence; benchmark under concurrent fsync load. Migrate callers incrementally. |
-| A3 | Lazy bounded transcript/activity reads and explicit checkpoint projections; runtime-owned journal readers, bounded caches and visible source gaps. | Startup and resident memory scale with working set, not full transcript hydration; stable source positions, restart and disk-full tests. JSON/JSONL plus atomic file manifests; preserve cross-domain commit atomicity. |
-| A4 | Finish narrow Host/ToolSet operations and the common execution Engine per area; built-in tools form a standard library. Extract web/TUI/MCP crates only once their application interface is real. | Dispatch parity including denials, cancellation and ownership; live engine tests per migrated area; removal of legacy full-state access measured per slice. |
+Composition is deterministic and the effective context is visible: node policy;
+current task, steering and standing constraints; persona; relevant procedures and
+knowledge; attributed evidence. Stale persona prose cannot override newer user
+direction, and tool or page content cannot promote itself to instruction.
+Capture resolved revisions per attempt. Children get explicit role bindings, not
+a copy of the parent's identity.
 
-The existing `control-core`, `control-effect`, `control-bot`, `control-ai`,
-comonad and context crates are the starting point. No mandatory async rewrite,
-global event bus, second tool catalogue or crate-per-file split. Domain locks
-come only after narrow borrows and measured contention, with a fixed order.
-Storage-layout changes preserve durability and require fault tests; plain-file
-storage is the chosen direction. Architectural work should yield usable slices.
+The [team advisor](LENSES.md) is the first concrete persona: the read-only judge
+role plus the `advisor` lens. When bundles land it becomes a bundle referencing
+that lens, with no supervisor change.
 
-A4 enables operator-registered container-backed tools through the same catalogue.
-Registration/discovery does not authorize execution. Schema/version checks,
-namespacing, duplicate detection and scoped resource grants precede activation.
-Task-specific game adapters remain in their granted workload containers.
-
-## M1: shared model calls, roles and local inference
-
-The first implementation slice is the bounded text-only local compactor described
-in [LOCAL-MODELS.md](LOCAL-MODELS.md): a shared pure request/result contract,
-external private endpoint adapter, declared context/output limits and model
-revision, private persistent summary nodes, independent compactor selection and
-read-only web/TUI inspection. It feeds both existing CLI providers through the
-common history projection. The follow-up series adds CLI-as-compactor adapters,
-configured chat/TUI and spawn model selection, whole-input context-fit planning,
-and scoped source expansion. All six follow-up slices (#163–#168) are merged and
-deployed; they do not add authenticated hosted APIs or local tool agents.
-The incremental slice replaces the total snapshot ceiling with bounded source
-pages (64 entries / 1 MiB), preserves source checksums and reuses completed
-subtrees. Cache retention/GC remains follow-up work. Validate real
-Qwen summary quality/latency/memory before promoting it to a default. The recorded
-local evaluation supports explicit experimentation only: it exposed a truncated
-commit ID that the original eight-anchor score missed. The v2 comparison fixture
-now scores that ID and the concurrency limit, with identifier boundaries.
-
-The local-inference slice reuses that registry for direct bounded generation:
-`control_model_generate` (operator: `control.model.generate`, `control models
-generate|bench`) with declared limits, honest usage, provenance (declared revision
-plus server-reported identity) and connection-closing cancellation.
-
-Local agent turns are delivered by a native Rust tool loop (`local` backend,
-`local:NAME` for chats, spawns and bots, enabled per endpoint by a declared
-tool-call capability). Control sends the same turn input and the attempt's worker
-MCP tools as function tools to `/v1/chat/completions`. It executes calls through
-the existing worker dispatch, so authority, handoff fencing, publication and
-fresh-attempt recovery are unchanged. Malformed calls get bounded corrective
-feedback, cancellation closes the request, and admission counts tool schemas. A
-turn that outgrows the context compacts its earlier steps. A local-model chat's
-history compaction defaults to the same endpoint's summary tree; an explicit
-operator choice can override it. `nix run .#inference` selects Metal on Apple
-Silicon (approved host-native llama.cpp from the pinned nixpkgs, as a launchd
-agent) and the Nix container elsewhere (CUDA if available, else CPU). Qwen3.8-27B
-Q4_K_M completed real Control-tool turns on Metal at 13–15 decode tokens/s
-([LOCAL-MODELS.md](LOCAL-MODELS.md#local-agent-turns)).
-Plain Codex-over-llama.cpp was rejected because Codex sends MCP tools as a
-Responses `namespace` tool, which llama.cpp skips. Remaining work: parallel tool
-execution, tokenizer-exact budgets, and a quality comparison of local and hosted
-models on the same gameplay tasks.
-
-M1 defines separate captured selections for worker, lead, reviewer and compactor.
-S1 can independently expose an agent-started model service through tools/MCP;
-M1 concerns using a model to execute Control's own agent or summary attempts.
-Start with a bounded model request/result/usage interface usable by the summary
-worker, then add native API and configured local inference through Rust adapters.
-CLI providers continue to work. A provider choice does not change tools,
-permissions, workspace publication or the supervisor.
-
-This is the next feature increment after the client approval boundary. Keep one
-model-call contract and a shared registry, with CLI, hosted API and local endpoint
-adapters; do not add a crate per model or require a runtime rewrite. List the
-configured models in the UI, including local models and available low-cost
-Codex/Claude selections. Capture provider/model and capability metadata rather
-than treating every listed model as interchangeable or assuming account access.
-
-Every new attempt is a fresh provider session reconstructed from Control's
-committed journal, standing instructions and selected context. Within an active
-attempt the provider may keep its session/KV state and perform multiple steps;
-callbacks do not force a restart. Once it ends, recovery and continuation create
-a fresh attempt, never resume its provider session. Provider caches are optional
-optimizations, never the authority for task state. This applies equally to CLI,
-native API and local adapters.
-
-Record provider/model revision, parameters, context/output limits, capabilities,
-usage semantics and opaque credential reference in execution provenance. Verify
-availability and fail visibly; listing a model does not establish access. Local
-endpoints declare supported streaming, tools and structured output instead of
-assuming API compatibility. Pin model/runtime/quantization identity where
-available. Bound concurrency, memory and context; report missing usage honestly.
-
-Use Nix-declared isolated inference services where supported. Benchmark available
-hardware, latency, memory and task quality before choosing a runtime; tinygrad
-is an optional experiment, not a migration prerequisite. Do not introduce a host
-Python/Node adapter or treat local inference as zero-cost. Tool-capable local
-agents must pass cancellation, malformed-output, authority and recovery contract
-tests. A text-only summarizer can ship sooner, with no tool execution rights.
-
-## C1–C3: infinite chat and compaction model selection
-
-“Infinite chat” means a continuous conversation with bounded active context over
-growing retained history. Disk retention, artifact budgets and explicit gaps are
-still necessary. Compaction is a derived view, never deletion or automatic
-knowledge admission. Keep append-only positions and the existing Store/zipper,
-`Summaries`, Lens cut and zoom seams; preserve Recent/Passthrough options.
-
-- **C1: summary storage and worker.** Immutable source blocks acquire leaf and
-  pairwise merged summaries in a lazy tree. Background effects call the selected
-  model; pure code selects a budgeted cut. Publish complete validated nodes
-  atomically at a turn boundary. Deduplicate work and retain the last usable view
-  on failure. The worker needs A3's bounded reads and M1's summary-call path,
-  not a complete provider/runtime rewrite.
-- **C2: small user controls.** Expose automatic compaction on/off and an independent
-  compaction model selector: configured hosted, local, or an available same-model
-  adapter. Keep history strategy, reserves, output bounds and resource limits in
-  versioned node defaults/advanced configuration with permitted per-chat overrides
-  and existing admission limits (Q1 for team aggregation). Use existing context seams, with
-  hosted/local workers as effect adapters. Disabling automatic summaries stops
-  new jobs; it does not erase summaries or raw history. Retain bounded deterministic
-  selection and show omissions. No seven-setting panel is required to use a chat.
-- **C3: inspect and expand.** Show selected model and revision, source ranges,
-  summary age/status, usage/cost where known, and omitted/unavailable evidence.
-  A bounded zoom/read tool expands by stable reference down to original text.
-  Pin standing human constraints, unresolved requests, committed working state
-  and recovery warnings outside lossy summaries, within the whole input budget.
-
-The compaction model is independent of the conversation model. For the requested
-OpenAI 5.6 example, evaluate
-[`gpt-5.6-luna`](https://developers.openai.com/api/docs/models/gpt-5.6-luna), which
-official documentation describes as cost-sensitive. It is a candidate, not a
-hard-coded cheapest/default promise: choose using current account availability,
-measured recall and total cost. Local-model selection is equally explicit.
-[Pi's custom compaction](https://pi.dev/docs/latest/compaction) also demonstrates
-using a separate summarizer; Control implements its own typed boundary.
-
-The selector must also include configured Codex and Claude CLI models that can
-run a bounded text-only summary request without tool execution rights. Reuse
-CLI execution/normalization adapters and record availability and usage limits;
-do not create a separate summarizer implementation for each model. Low-cost
-choices should be selectable for compaction as well as ordinary model selection.
-Validate current availability, total cost and summary quality rather than
-hard-coding a permanent "cheapest" model. Never silently substitute a cloud model
-for a local-only selection.
-
-Cache identity includes access scope, immutable source IDs/hashes and ranges,
-child-summary hashes, model/provider revision, prompt/schema version and relevant
-generation settings. Capture that configuration per summary job. Switching models
-creates a new cache namespace; old nodes retain provenance. Do not rewrite raw
-history or rebuild every historical node immediately. Prevent mixed-revision
-publication and cross-chat/actor evidence leakage.
-
-If a model is offline, slow, unaffordable or returns malformed output, retain the
-prior view and show the failure. A preconfigured permitted fallback may run;
-never silently send local-only history to a cloud provider. Switching compaction
-off does not turn a bounded model into an unlimited one. If mandatory constraints
-and selected evidence cannot fit, surface a context-budget condition rather than
-silently dropping them. Schedule summary jobs below interactive work with separate
-bounded queues/budgets and cancellation; no unbounded background model loop.
-
-This selector controls **Control's summary service**. It does not promise to
-replace a CLI provider's private auto-compaction model. Configure the projection
-sent to that provider and report those two layers distinctly. A configured native
-API/local summarizer is usable even while the chat runs through a CLI adapter.
-
-Acceptance: large synthetic history with bounded memory/context; lookup of old
-constraints and evidence after multiple merges; unresolved actions and late
-steering retained; corrupted/missing source and summary nodes; model switch,
-restart, stale completion, cancellation, queue exhaustion and local outage.
-Evaluate hosted/local candidates on identical recall and contradiction fixtures,
-including prompt injection embedded in old tool output. Summaries preserve source
-trust labels and cannot turn quoted text into policy. Measure fidelity, latency,
-total summarization plus conversation cost and provider cache hits separately.
-“Cheaper per token” alone is not success.
-
-## L1: versioned lenses, personas and SOUL.md
-
-Keep four distinct things: a lens selects context/tool descriptions; a persona
-describes behavior and role; a procedure explains how to do a class of work;
-policy grants enforceable capabilities. Complete lens-based execution filtering
-through the tool host where intended; a descriptor or persona cannot grant access.
-
-Add versioned persona bundles referencing composable lenses, optional `SOUL.md`
-prose, procedure revisions, model-role preferences and proposed resource needs.
-These are standard-library/configuration artifacts resolved at admission; the
-supervisor does not interpret persona prose or acquire a persona-specific lifecycle.
-`SOUL.md` supplies persistent identity, tone and collaboration preferences. It is
-inert, reviewed content with explicit ownership and scope, not a mutable secret
-system prompt or a permission file. Personal definitions live under configured
-home roots; shared examples must contain no private configuration.
-
-Define deterministic composition and display effective context: enforced node
-policy; current authorized task/steering and standing constraints; selected
-persona/soul; relevant procedures/knowledge; attributed evidence. Conflicts stay
-visible. Stale persona prose cannot override newer user direction; tool/page
-content cannot promote itself to instruction. Capture resolved revisions per
-attempt, apply accepted changes at a boundary and retain rollback. Children get
-explicit role/identity bindings; do not copy every parent's identity or entire
-history by default.
-
-Acceptance: stable composition and source traces, bounded progressive disclosure,
-conflicting lens/persona inputs, revision changes during a run, rejection of
-capability escalation, independent sibling identities and restart/reuse.
-
-The team advisor is a first concrete persona under these rules: role = the
-existing judge (read-only, no grants), behaviour = the versioned `advisor` lens
-(standing in for its future bundle and `SOUL.md`), policy = operator bot
-approval plus host checks on notes. When persona bundles land, it becomes a
-bundle referencing that lens; no supervisor change is needed.
-
-## P2: a reviewed self-improvement loop
-
-Separate working notes, factual knowledge, reusable procedures and source changes.
-All can inform improvement, but they have different admission and rollback paths.
-Model-weight training is a later research track, not required for this loop.
+## L2/L3: a reviewed self-improvement loop
 
 ```text
-task → action → evidence → verification → lesson proposal
-                                         ↓
-                              review / evaluate / admit
-                                         ↓
-                        versioned knowledge / procedure / lens
-                                         ↓
-                              reuse on a subsequent task
+task → evidence → verification → lesson proposal → review / evaluate / admit
+     → versioned knowledge / procedure / lens / tool package → reuse
 ```
 
-**L2: procedural learning.** Extend the existing knowledge proposal/review pattern
-with typed procedure/lens/persona candidates: motivation, applicability,
-preconditions, steps, failure modes, counterexamples, source attempts and test
-evidence. Use deduplication, revision/supersession, expiry/recheck and rollback.
-Reviewers receive bounded evidence and can disagree. No admission solely because
-an agent declares success. Retrieval loads relevant accepted revisions, not every
-lesson into every prompt. Preserve individual and shared scope.
+**L2: procedural learning.** Extend [knowledge](KNOWLEDGE-TOOLS.md) proposals and
+review with typed procedure/lens/persona candidates: applicability,
+preconditions, steps, failure modes, source attempts and test evidence, with
+deduplication, supersession, expiry and rollback. An agent declaring success is
+never enough for admission. Retrieval loads relevant accepted revisions only.
 
-First demonstration: two agents encounter the same generic setup/verification
-problem. One proposes a procedure after deterministic verification; review admits
-it; a fresh agent retrieves it, succeeds with fewer redundant actions, and records
-the revision used. Also test a stale/revoked procedure and a misleading proposal.
-Measure failure recurrence, useful reuse, review burden, task cost and regression
-rate against a baseline. Minecraft protocol details stay in workload knowledge.
+First exit: two agents hit the same generic setup problem; one proposes a
+procedure after deterministic verification; review admits it; a fresh agent
+retrieves it, succeeds with fewer redundant actions and records the revision.
+Also test a stale procedure and a misleading proposal.
 
-**L3: source and tool self-development.** Use existing architect-authorized
-improvement workspaces, offline builds, child review and GitHub draft publication.
-Capture a reproducer and baseline, propose a bounded patch, run deterministic
-checks, obtain review evidence, publish a reviewable change, and retain provenance.
-Tool/persona changes follow their respective admission paths. Merge/deploy remains
-under existing maintainer/operator authority; neither a judge nor a learned skill
-can expand it. Add selectable reviewers with M1 availability checks before claiming
-independent multi-model review. Runtime registration never auto-installs agent code.
+**L3: source and tool self-development.** `/improve` workspaces, offline builds,
+read-only review, [GitHub](GITHUB.md) reads/writes and draft PRs, and
+[tool packages](TOOL-PACKAGES.md) (operator import, revocation, lens opt-in) exist.
+Remaining:
 
-Agreed delivery order: prove `/improve` source editing, declared-environment tests,
-read-only review and real draft-PR publication; then deliver deployment/restart
-tools (including a clean source checkout matching the installed revision),
-compaction hardening and generic MCP integration. Follow with versioned tool
-packages, proposal/activation/revocation, scoped discovery/execution and a measured
-two-agent reuse demonstration. Keep service CPU/RAM requests in S1's tool/adapter
-slice; a larger Docker VM alone does not change captured service limits.
+- **Package proposals** from agents with operator review, and a measured
+  two-agent reuse demonstration.
+- **Deployment/restart jobs:** capture an authorized merged revision, back up the
+  installation, build, replace atomically, check `/health/build` and roll back
+  on failure. The runner must be managed separately from the service it restarts
+  (a separate launchd job or systemd unit). Merging stays with maintainers unless
+  the operator explicitly authorizes an agent.
+- **Inference/service profiles:** operator-configured immutable mount references
+  and CPU/RAM limits, exposed through the same TUI/web operations.
+- **Lazy task sandboxes:** acquire execution sandboxes through workspace tools with
+  bounded idle leases. Codex native tools still share the provider container and
+  need an adapter contract first.
 
-[Tool packages](TOOL-PACKAGES.md) describes the design. The first slice is
-implemented: a node-local Git store, operator import, revocation, lens opt-in,
-scoped discovery and a pinned per-attempt copy. Agent proposals with operator
-review, and the measured reuse demonstration, come next.
+Runtime registration never auto-installs agent code. Model-weight training is a
+later research track.
 
-The 2026-11-14 isolated `/improve` trial reproduced a stale build-image dependency
-failure, then passed a real offline Cargo test and independent read-only judge
-after refreshing the image. This proves edit/build/review/artifact recovery, not
-remote publication: this node still needs its own GitHub credential binding for
-the real draft-PR step. The opt-in live test now supports that step explicitly.
+## H1: layered control
 
-**Next tooling slice: TUI self-development parity.** The TUI already drives the
-shared workspace, service, review and draft-publication tools. Session work still
-uses external GitHub review/CI tooling, host-configured inference mounts and
-resource limits, a perf harness, and host deployment/restart commands. Follow the
-compaction/model settings series with scoped GitHub read/check/comment operations,
-operator-configured immutable inference/service profiles (mount references and
-CPU/RAM limits), and durable deployment/restart jobs. Deployment captures an
-authorized merged revision, backs up the current installation, runs the existing
-build, replaces it atomically, checks health and reports or rolls back failure.
-Expose approval/results through the same TUI/web application operations. Keep
-these effects in the tool/host interpreters; they do not require new supervisor
-concepts, model-specific core paths or access to credential contents. Preserve
-the repository rule that maintainers merge PRs unless the operator explicitly
-authorizes an agent to do so.
-
-The first utility increment provides typed, repository-bound PR/file/comment/
-review/check/status reads through `control_github_read` and TUI `/github`, with
-bounded excerpts and no model turn. It reuses the credential broker and host
-attempt interface; it adds no supervisor state. A second increment adds typed
-comments, title/description updates and exact-head merges through
-`control_github_write` and `/github`. Merge requires an explicit node binding
-permission and operator authorization; GitHub branch rules remain authoritative.
-Resource/mount profiles and deployment/restart jobs remain separate slices.
-
-Deployment's first verification slice stamps Nix packages with their Git revision
-and dirty flag, exposed as typed JSON by `control --version --json` and the
-state-free `/health/build` probe. Unstamped builds report a null revision, and a
-dirty build must not satisfy an exact merged-revision check. This is build
-identification, not signed provenance or deployment permission. The remaining
-job runner must be managed separately from the service it restarts (for example,
-a separate launchd job or systemd unit); detaching a child process alone does not
-escape a service manager's process-group/cgroup cleanup. Keep its durable journal,
-rollback installation and health result outside application State.
-
-**Chat latency boundary.** Deliver update hints through transport adapters, not
-agent wakes: event-driven HTTP admission, mailbox notifications and authenticated
-web/TUI subscriptions reuse existing effect primitives. Keep fresh provider
-attempts, credential isolation and per-attempt sandbox verification. The next
-execution slice can acquire task sandboxes lazily through workspace tools, with
-bounded idle leases. Claude already separates execution from its provider
-container; Codex native workspace tools still share that container and need an
-explicit adapter contract before that separation. Do not expose a shared mount
-of other chats to warm containers or expire resources while useful work runs.
-Lightweight provider containers remain required. Measure startup and delivery
-separately from model inference; see [PERFORMANCE.md](PERFORMANCE.md).
-
-## H1: layered control — the model decides, routines react
-
-Runs -121 and -128 drove an external system like a joystick: one small job per
-tool call, then a status poll, about one action per minute at two or three model
-round trips each. The model is the brain for strategic, tactical and
-organisational decisions; immediate reactions belong in programs the agents
-write and run. Animals walk without deliberating and decide to go to the coffee
-shop; a commander sets the plan, not each soldier's next step.
+Earlier game runs drove the system like a joystick: one small job per tool call
+and a status poll, about one action per minute at two or three model round trips
+each. The model should make strategic and organisational decisions; immediate
+reactions belong in programs the agents write and run.
 
 | Layer | Timescale | Runs as | Example (game) |
 | --- | --- | --- | --- |
-| Reflexes / control | 10–100 ms | always-on loop per agent: classic control, behaviour trees, small policies | eat, fight or flee, avoid hazards, aim |
-| Perception | 30–200 ms | small local model or parser feeding the loops | detect threats, read the scene or HUD |
-| Tactics (skills) | ~1 s | bounded routines started as watches toward a target | gather N then deliver, hold a position, build a segment from a plan |
-| Strategy | seconds–minutes | model turns | what to do next, who does it, when to change the plan |
+| Reflexes | 10–100 ms | always-on loop: classic control, behaviour trees, small policies | eat, flee, avoid hazards |
+| Perception | 30–200 ms | small local model or parser feeding the loops | detect threats, read the HUD |
+| Tactics (skills) | ~1 s | bounded routines started as watches | gather N and deliver, build a segment |
+| Strategy | seconds–minutes | model turns | what next, who does it, when to change plan |
 
-Lower layers escalate only outcomes, milestones and situations they cannot
-handle; the model supervises from those events and never polls per step.
+Lower layers escalate only outcomes, milestones and situations they cannot handle.
 
-**Already generic in Control:** services and concurrent commands host the loops;
-watches run them across turns and report outcomes; ports expose a local
-perception or policy model as its own service; packages version reflexes, skills
-and trained policies as a reusable library across runs; autonomy r7 states the
-rule. Game-specific reflexes and skills stay in agent-built packages, never in
-Control's source.
+**Already available:** services and watches host the loops; the opt-in Ganglia
+lens states the rule ([lenses](LENSES.md)); tool packages version reflexes and
+skills; watch salience filters, declared observations (`control_observe_set`) and
+score probes are described in [watches](WATCHES.md); the
+[planning tools](PLANNING-TOOLS.md) give the strategy layer computed answers.
 
-**Gaps for real-time systems** (demonstrated need first):
-- **Accelerators for services:** schedule GPUs for perception/policy services
-  (S1 shapes), with the same budget and admission rules.
-- **Salience filtering:** fast loops emit far more events than a model should
-  see. Notification watches now take a declared `salience` filter (threshold,
-  change/dedup, rate, z-score, hysteresis, debounce, rate limit; see
-  [WATCHES.md](WATCHES.md#salience-filters-perception)); filtered events stay
-  readable. A model summariser remains open until a run demonstrates the need.
-- **Observation feeds:** a streaming frame or state input to a service, for
-  systems without a structured API (Minecraft has one through Mineflayer).
-- **Measurement:** scorecard turns per completed goal and model wakes per hour,
-  to show the split works rather than asserting it.
+**Gaps** (build each only for a demonstrated need):
 
-**Strategy aids (shipped):** [planning tools](PLANNING-TOOLS.md) give the
-strategy layer computed answers instead of token reasoning: `control_room_plan`
-(critical path, bottlenecks, parallel frontier and available members over the
-claim graph, sharing the advisor's bottleneck walk) and `control_search_path`
-(bounded A*/Dijkstra over inline graphs and 2D/3D grids).
+- **Accelerators:** GPU scheduling for perception/policy services (S1).
+- **Summarising perception:** a model summariser over filtered events.
+- **Observation feeds:** streaming frame or state input into a service for
+  systems without a structured API.
+- **Routines as a generic language:** behaviour trees and state machines (named
+  states, guarded transitions, hysteresis, escalation as an explicit outcome) as
+  W2 recipe steps. Prototype as an agent-built package run as a watch; promote a
+  generic interpreter only after real routines show which constructs are needed.
 
-**Routines as a generic language (not implemented):** behaviour trees and
-state machines are the natural declarative form for the tactics layer: named
-states, guarded transitions, commit/hysteresis so a routine does not flap
-between goals, and escalation as an explicit outcome. They belong to the
-[W1/W2 workflow layer](#w1w2-schedules-and-a-small-workflow-layer) rather than
-a new runtime: a W2 recipe step can be a routine, W1 schedules or watch events
-trigger it, and [L1 personas](#l1-versioned-lenses-personas-and-soulmd) and
-scheduling decide who runs it. Prototype first as an agent-built package run as
-a watch; promote a generic interpreter only after real routines show which
-constructs are needed.
+First exit: agents build a shared reflex loop and skills, run them as watches and
+complete milestones with markedly fewer model turns per claim than the
+joystick-style baseline, in a paired trial.
 
-First exit: a run whose agents build a shared reflex loop and skills, start them
-as watches, and complete milestones with markedly fewer model turns per claim than
--121 (77) — evaluated as a paired trial.
+## X1: pluggable execution backends
 
-## Regression lanes, deferrals and delivery evidence
+Workspace jobs, services and previews assume the local Docker engine. Put
+container lifecycle behind one backend interface over the existing service
+`Engine` seam:
 
-**2026-11-14 approval-stall investigation (not yet deployed).** A Codex setup
-attempt ended with a successful CLI exit while its first MCP room post remained
-`in_progress`; no approval request or service had been created. This was not an
-approval expiring. A replay of the identical objective on the deployed stack
-reached an 8-GiB service, five children and pending persistent-bot approvals;
-the replay was cancelled without granting access. The original transport/provider
-stall remains unreproduced. The narrow adapter fix rejects successful completion
-with an unfinished MCP call after draining stdout, marks retained activity
-interrupted and uses the existing recovery path without publishing or retrying
-uncertain effects. Accepted host handoffs remain valid. It adds no supervisor
-concept, wake or deadline. A real pinned-image mailbox fixture exercises
-initialize, notifications, discovery and 20 consecutive room posts without a
-model; synthetic exit fixtures cover interruption, completed/failed calls,
-accepted handoffs and stale generations. These checks establish honest failure
-reporting, not a fix for the original stall or faster gameplay.
+- Docker stays the default. Firecracker microVMs and remote nodes implement the
+  same start/inspect/exec/attach/stop contract with generation fencing and leases.
+- A host-shell backend for local development runs commands on the host with no
+  isolation: explicit per-node opt-in, never a default, never selectable by a
+  model, visibly marked wherever active.
+- Backends declare capabilities (network modes, storage, profiles), checked at
+  admission. Authorization, ownership, approvals and checkpoints stay in
+  Control's domain code.
 
-Preserve child-result lineage, typed activity, room discovery, approval and
-continuity regressions. Reproduce historical failures against main before
-reopening them. Follow measured knowledge/transcript/polling hot paths; keep disk
-quotas, launch-recording crash gaps and relay memory limits as separate reliability
-work. The #138 FIN-drain fix is merged. Preserve plain-file storage and explicit
-migrations; federation and inference bundles remain later work.
+## Deferred
 
-Each implementation PR states its ID, observed problem, contract changed,
-dependencies, checks and remaining limits. Run the relevant
-[contribution checks](../CONTRIBUTING.md); engine changes additionally need live
-resource tests. Fault/cancellation tests precede claims of recovery correctness.
-Planning-only changes require document/link/diff checks, not model calls.
+- **External bridge writes:** `control mcp` hides room posting and chat sends;
+  expose them only with the same durable run service and no inherited
+  worker/operator authority.
+- **Remote transport:** scoped, revocable remote MCP or preview access (for
+  example over Tailscale/SSH) when a user needs it. Private networking is not
+  authentication.
+- **Declarative environment requests** and a constrained image-build tool; never
+  host mounts, engine options or the engine socket.
+- **`control migrate`** for deliberate state upgrades once the schema settles.
+- Live federation and remote delegation, bundled inference and model routing.
+- Deterministic supervisor simulation, parser fuzzing, scoped capability tokens,
+  artifact editing.
 
-**Paired evidence gates comparative R1/R2 performance claims.** The deployed
-slices and the unattended observations above do not establish those claims.
-First publish credential-free regressions for the specific defect: unchanged
-watch echoes with genuine exits, or timeout with useful files and no Control tool
-calls. Then run baseline and changed revisions in separate fresh worlds from seed
-`-5872320857145672064`, with the same steering script, agents, model configuration,
-tools, budgets and workload version. Preserve the successful original world.
-Verify generated-world identity, spawn/start conditions and milestone size as well
-as the configured seed; this replay visibly differed from the original despite
-the requested seed. Verify milestones from world/tool evidence. Each experiment
-changes one factor: watch admission, recovery candidates, or attempt-limit policy.
-Repeated paired trials are needed to assess model variability; a single successful
-run is a smoke test. Record run count and pinning/availability limitations.
+## Evaluation gates
 
-Predeclare the targeted gain and acceptable variation before comparing runs.
-R2 must reduce redundant maintenance turns while preserving milestone completion
-and response to real failures/steering. R1b must preserve recoverable bytes after
-the same injected interruption and reduce repeated work or time to resume useful
-progress; separately measure candidate capture/inspection overhead. Test natural
-uninterrupted runs too, so an injected fault alone cannot hide a regression.
-Track time to diamonds, milestones, useful actions, repeated actions, human
-interventions, checkpoint loss, context bytes and reported/missing usage. Observe
-30 minutes of maintenance after completion, then apply identical redirection and
-a real fault. Include a persistent job spanning model attempts. Fewer wakes or
-more saved files alone do not prove better diamond-run performance. Mixed results
-remain experimental; do not present planned mechanisms as proven improvements.
+Each implementation PR states its ID, the observed problem, the contract it
+changes, its checks and remaining limits, and runs the relevant
+[contribution checks](../CONTRIBUTING.md). Fault and cancellation tests come
+before claims of recovery correctness.
 
-Use the delivery table above for sequencing. C1 pure cache/cut fixtures and the
-first reviewed learning demonstration can proceed without the full model or
-architecture extraction. Measure delivery quality, coordination, intervention,
-noise and reuse. This roadmap does not implement or deploy runtime changes.
+Comparative claims (fewer wakes, faster recovery, fewer turns) need paired
+trials. First publish a credential-free regression for the specific defect. Then
+run baseline and changed revisions in fresh worlds from the same seed, steering
+script, agents, models, tools, budgets and workload version, changing one factor
+at a time. Verify world identity and start conditions, not just the configured
+seed, and verify milestones from world or tool evidence. Predeclare the target
+gain and acceptable variation; repeat trials to account for model variability.
+A single successful run is a smoke test. Track milestones, useful and repeated
+actions, interventions, checkpoint loss, context bytes and reported/missing
+usage. Fewer wakes alone do not prove better task performance.
