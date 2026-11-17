@@ -197,14 +197,14 @@ pub fn rows(graves: &[Grave<'_>], query: &Query) -> String {
 const SKULL: &str = "fennec-skull";
 
 /// A stylised fennec fox skull, front view, in a 64-unit square, drawn only
-/// in straight segments: a short cranium with a flat top and chamfered
-/// corners, straight sides no wider than its shoulders, large mean eye slits
-/// (flat tops and bottoms, slanting in towards the nose), a large nasal
-/// cavity, and a long, full muzzle tapering to a jaw whose edge runs straight
-/// into a row of six pointed teeth (canines longest): outline and teeth are
-/// one closed stroke. Eyes, nose and teeth keep clear gaps that survive the
-/// 26px size.
-const SKULL_SYMBOL: &str = "<svg class='svg-defs' aria-hidden='true' focusable='false'><symbol id='fennec-skull' viewBox='0 0 64 64'><g fill='none' stroke='currentColor' stroke-width='1.8' stroke-linejoin='miter' stroke-linecap='square'><path d='M24 10H40L51 18L51 28L47 36L43 40L41 45.5L39.5 50L38 46L36.5 48.5L35 46L33.5 48.5L32 46L30.5 48.5L29 46L27.5 48.5L26 46L24.5 50L23 45.5L21 40L17 36L13 28L13 18Z'/><path d='M17.8 20H26.6L30.1 22.6L27.5 25.3H21.3ZM46.2 20H37.4L33.9 22.6L36.5 25.3H42.7ZM32 29L35.5 33L33.5 37H30.5L28.5 33Z'/></g></symbol></svg>";
+/// in straight segments: a cranium with a flat top and chamfered
+/// corners, straight sides no wider than its shoulders, large evil eye sockets
+/// set low (top edges scowling down towards the nose, flat bottoms, sharp
+/// inner points), a large nasal cavity, and a muzzle tapering to a jaw whose
+/// edge runs straight into a row of six pointed teeth (canines longest):
+/// outline and teeth are one closed stroke. Eyes, nose and teeth keep clear
+/// gaps that survive the 26px size.
+const SKULL_SYMBOL: &str = "<svg class='svg-defs' aria-hidden='true' focusable='false'><symbol id='fennec-skull' viewBox='0 0 64 64'><g fill='none' stroke='currentColor' stroke-width='1.8' stroke-linejoin='miter' stroke-linecap='square'><path d='M24 10H40L51 18L51 28L47 36L43 40L41 45.5L39.5 50L38 46L36.5 48.5L35 46L33.5 48.5L32 46L30.5 48.5L29 46L27.5 48.5L26 46L24.5 50L23 45.5L21 40L17 36L13 28L13 18Z'/><path d='M17.1 22L26.4 23.2L30.1 25.75L27.3 29.5H20.8ZM46.9 22L37.6 23.2L33.9 25.75L36.7 29.5H43.2ZM32 31.2L35.85 35.6L33.65 40H30.35L28.15 35.6Z'/></g></symbol></svg>";
 
 /// The graveyard: the ground beneath the live task trees on the Bots page,
 /// with the dead bots' headstones (the page selected by `query`, whose search
