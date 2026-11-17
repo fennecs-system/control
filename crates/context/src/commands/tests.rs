@@ -37,3 +37,17 @@ fn syntax_keeps_boundaries_arguments_and_unicode_offsets() {
     assert_eq!(completions("/op"), vec![7]);
     assert!(completions("/open\n").is_empty());
 }
+
+#[test]
+fn memory_parses_its_switches_and_compact_is_its_status_alias() {
+    let text = "/memory on local-qwen";
+    let command = parse(text).unwrap();
+    assert_eq!((command.kind, &text[command.highlight]), (Kind::Memory, "/memory on"));
+    assert_eq!(command.tail, " on local-qwen");
+    assert_eq!(&"/memory off"[parse("/memory off").unwrap().highlight], "/memory off");
+    assert_eq!(tail("/memory", Kind::Memory), Some(""));
+    assert_eq!(tail("/compact", Kind::Compact), Some(""));
+    assert!(parse("/memorize").is_none() && parse("/compaction").is_none());
+    let names = completions("/mem").into_iter().map(|i| DEFINITIONS[i].text).collect::<Vec<_>>();
+    assert_eq!(names, ["/memory", "/memory on", "/memory off"]);
+}

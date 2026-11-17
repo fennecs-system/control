@@ -16,6 +16,8 @@ fn local_and_shared_commands_share_completion_highlighting_and_help() {
     assert_eq!(highlight("/context more"), Some(0..8));
     assert_eq!(highlight("/port allow port-a"), Some(0..11));
     assert_eq!(highlight("/improve off"), Some(0..12));
+    assert_eq!(highlight("/memory on local-qwen"), Some(0..10));
+    assert!(help.contains("/memory on [MODEL]") && help.contains("/memory off"));
 }
 
 #[test]

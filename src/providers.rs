@@ -467,8 +467,11 @@ fn save_text(state: &mut crate::State, fields: &HashMap<String,String>, save: im
         }
         "text-remove" => { models.retain(|m|m.id!=get("id")); }
         "compaction" => {
+            let chats:Vec<String>=get("chats").split_whitespace().map(str::to_owned).collect();
+            // `/memory off` opt-outs are kept unless the form now lists the DM.
+            let opted_out=settings.opted_out.iter().filter(|id|!chats.contains(id)).cloned().collect();
             settings = crate::compaction::Settings { enabled:fields.contains_key("enabled"), model:(!get("model").is_empty()).then(||get("model").to_owned()),
-                chats:get("chats").split_whitespace().map(str::to_owned).collect(),
+                chats, opted_out,
                 recent_entries:get("recent_entries").parse().map_err(|_|"Invalid recent window")?,leaf_entries:get("leaf_entries").parse().map_err(|_|"Invalid leaf size")?,
                 history_bytes:get("history_bytes").parse().map_err(|_|"Invalid history budget")? };
         }
@@ -477,6 +480,15 @@ fn save_text(state: &mut crate::State, fields: &HashMap<String,String>, save: im
     if models.iter().enumerate().any(|(at,m)|models[..at].iter().any(|other|other.id!=m.id && same_target(other,m))) {
         return Err("Another entry already uses this endpoint and model ID. Edit that entry instead: one entry serves summaries, generation and agent turns.");
     }
+    apply_text(state,models,settings,save)
+}
+/// Compaction settings changed by a chat command (`/memory on|off`), through
+/// the same validation, save and rollback as the Models page.
+pub(crate) fn save_compaction(state: &mut crate::State, settings: crate::compaction::Settings, save: impl FnOnce(&crate::State)->std::io::Result<()>) -> Result<(), &'static str> {
+    let models=state.runtime.compaction.models.clone();
+    apply_text(state,models,settings,save)
+}
+fn apply_text(state: &mut crate::State, models: Vec<crate::model_calls::Endpoint>, settings: crate::compaction::Settings, save: impl FnOnce(&crate::State)->std::io::Result<()>) -> Result<(), &'static str> {
     validate_text(&models,&settings).map_err(|_|"Invalid model/window settings: check endpoint, limits, unique names and selected model")?;
     let previous_models=std::mem::replace(&mut state.runtime.compaction.models,models);
     let previous_settings=std::mem::replace(&mut state.runtime.compaction.settings,settings);

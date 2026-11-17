@@ -65,6 +65,18 @@ default (see [local agent turns](#local-agent-turns)). Compaction changes only
 what enters each fresh turn; a long Codex or Claude attempt can still run that
 CLI's own private compaction.
 
+In a DM (web composer, TUI, or Discord as `!memory`), `/memory` (alias
+`/compact`) shows whether the Memory Tree is on, which compactor serves it and
+why (operator opt-in, local chat model default, opted out or off), how many
+entries are verbatim or folded, and the `/dm/ID/memory` link. The operator
+(local operator or a Discord architect) changes it per DM through the same
+settings save as the Models page: `/memory on [MODEL]` lists the DM and turns
+automatic summaries on, using MODEL (a configured text model), else the DM's
+local endpoint, else the configured compactor. The compactor is shared by every
+listed DM, so changing it while others are listed requires naming MODEL.
+`/memory off` unlists the DM and records an opt-out that also overrides the
+local-model default; listing it again (command or Models page) clears it.
+
 The compactor can also be the Codex or Claude CLI adapter (leave the URL empty).
 It reuses the pinned worker image and login isolation, with no project mount and
 no Control tools: Claude's advertised tools are checked against an empty list,
@@ -344,7 +356,8 @@ nix run .#inference -- --status
    spawning.
 
 A chat on `local:qwen-27b` compacts on `qwen-27b` unless the operator lists it
-under automatic summaries, which then uses `qwen-7b`. Budget memory for both
+under automatic summaries, which then uses `qwen-7b`, or opts it out with
+`/memory off`. Budget memory for both
 models' weights and KV caches.
 
 ### Manual container

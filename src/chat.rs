@@ -452,6 +452,14 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
         session.revision=session.revision.saturating_add(1);
         return Ok(());
     }
+    let memory=commands::tail(text.trim(),Kind::Memory).map(str::to_owned).or_else(||commands::tail(text.trim(),Kind::Compact).map(|tail|if tail.trim().is_empty() {String::new()} else {"?".into()}));
+    if let Some(option)=memory {
+        let reply=crate::compaction::command::command(state,id,&option)?;
+        let session=state.chats.iter_mut().find(|c|c.id==id).ok_or("Chat not found.")?;
+        session.messages.push(Message { speaker: Default::default(), text:text.trim().into(),run_id:None,reply});
+        session.revision=session.revision.saturating_add(1);
+        return Ok(());
+    }
     if let Some(option)=commands::tail(text.trim(),Kind::Bot) {
         let reply=crate::bots::command(state,id,option)?;
         let session=state.chats.iter_mut().find(|session|session.id==id).unwrap();

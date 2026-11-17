@@ -12,7 +12,7 @@ pub(super) struct Entry {
 const LOCAL: &[Entry] = &[
     Entry {text:"/github",usage:crate::client::github::USAGE,description:"Inspect, comment, edit or merge PRs through the configured GitHub tools"},
     Entry {text:"/activity",usage:"/activity [compact|full]",description:"Fold or expand retained tool activity"},
-    Entry { text: "/compact", usage: "/compact", description: "Inspect the Memory Tree model, window and blocks" },
+    Entry { text: "/compact", usage: "/compact", description: "Inspect the Memory Tree status, model, window and blocks" },
     Entry { text: "/help", usage: "/help", description: "Show commands and keyboard shortcuts" },
     Entry { text: "/context", usage: "/context", description: "Inspect the next message's DNA context" },
     Entry { text: "/chat", usage: "/chat", description: "Return to the DM" },
@@ -45,6 +45,7 @@ fn entries() -> impl Iterator<Item = Entry> {
             "bot" => "/bot on [every N]",
             "model" => "/model [PROVIDER:MODEL | default]",
             "rename" => "/rename NAME",
+            "memory-on" => "/memory on [MODEL]",
             _ => entry.text,
         }, description: entry.description,
     }))

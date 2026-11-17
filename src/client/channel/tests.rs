@@ -181,6 +181,11 @@ fn the_prefix_maps_to_control_commands_both_ways() {
     assert!(bang.help().contains("!rename — Rename this DM"));
     assert_eq!(channel.route(&bang, &me(), inbound(None, "!genes")), Some(Routed::Navigate(Navigation::Genes)));
     assert!(bang.help().contains("!genes — List the genes !use can select"));
+    // `!memory` reaches the DM as the shared `/memory` command; replies use `!`.
+    assert_eq!(bang.command("!memory on local-qwen"), "/memory on local-qwen");
+    assert_eq!(channel.route(&bang, &me(), inbound(None, "!memory off")), channel.route(&bang, &me(), inbound(None, "hello")));
+    assert_eq!(bang.present("Memory Tree off. /memory on opts back in. /dm/c-1/memory"), "Memory Tree off. !memory on opts back in. /dm/c-1/memory");
+    assert!(bang.help().contains("!memory on — Opt this DM into the Memory Tree (operator)"));
 }
 
 #[test]

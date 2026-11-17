@@ -71,7 +71,8 @@ impl<'a> Entry<'a> {
     }
     /// The entry as prompt history shows it.
     pub fn render(&self) -> String {
-        if self.run.is_none() && control_context::commands::tail(self.message.text.trim(),control_context::commands::Kind::Model).is_some() {return String::new();}
+        // Settings commands answered by Control are not conversation history.
+        if self.run.is_none() && control_context::commands::parse(self.message.text.trim()).is_some_and(|c|matches!(c.kind,control_context::commands::Kind::Model|control_context::commands::Kind::Memory|control_context::commands::Kind::Compact)) {return String::new();}
         // A Control notice is evidence of what happened, not operator input, and
         // has no reply of its own.
         if self.message.is_notice(self.run) {return format!("{}: {}\n", self.speaker(), self.message.text);}
