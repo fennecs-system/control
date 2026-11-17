@@ -43,7 +43,7 @@ In **Manage → Models & providers → Text models**, add one entry per model:
 
 Each entry lists its capabilities (summaries and text generation, plus agent
 turns when it serves tool calls). Roles refer to entries by name: the compactor
-under **MemoryTree model**, `control_model_generate` by `model`, and agent turns
+under **Memory Tree model**, `control_model_generate` by `model`, and agent turns
 by `/model local:NAME`. **Edit** changes everything except the name and adapter,
 with the same validation as adding. Older settings that had two entries for the
 same endpoint and model are merged on start; the tool-capable entry's name is
@@ -56,7 +56,7 @@ directory.
 `control models test MODEL_ID` sends one small request and reports response size
 and usage, without history or setting changes.
 
-## MemoryTree model
+## Memory Tree model
 
 Compaction is opt-in and off by default. Choose a compactor, list the exact chat
 IDs to process and enable **Automatic summaries**; an empty list processes
@@ -127,7 +127,7 @@ applies.
 
 ### Inspect and recall
 
-**MemoryTree** in a DM (`/dm/ID/memory`; the older `/dm/ID/compaction` and
+**Memory Tree** in a DM (`/dm/ID/memory`; the older `/dm/ID/compaction` and
 `/chat/ID/compaction` redirect there), or `/compact` in the TUI, shows the history the next turn
 starts from as a diagram: older ranges folded into aligned summary blocks
 (level L covers 2^L entries) above the journal positions they cover, and the
@@ -155,9 +155,9 @@ cut block summarised; `memory_tree_render_benchmark` in
 A block detail page (summary, two children, versions; four node files read
 outside the lock) takes about 83 µs.
 
-### Editing the MemoryTree
+### Editing the Memory Tree
 
-The operator can edit what the agent remembers from the MemoryTree; agents
+The operator can edit what the agent remembers from the Memory Tree; agents
 cannot (there is no agent tool or route, and `control_history_read` stays
 read-only). Edits are saved with the DM and every change is logged.
 
@@ -339,7 +339,7 @@ nix run .#inference -- --status
 
 1. Add `qwen-27b` (`http://127.0.0.1:8081/v1`) with **Serves tool calls**, and
    `qwen-7b` (`http://127.0.0.1:8082/v1`) without it.
-2. Set **MemoryTree model → Summary model** to `qwen-7b`.
+2. Set **Memory Tree model → Summary model** to `qwen-7b`.
 3. Use `/model local:qwen-27b` in a chat, or `model: "local:qwen-27b"` when
    spawning.
 
@@ -508,7 +508,7 @@ Only the roots of each attempt's cut are registered, in memory, for the eight
 most recent local attempts; an evicted attempt's files are deleted, and files a
 restart left unregistered are deleted after an hour. `control_history_read`
 lists, reads and searches them ([Inspect and recall](#inspect-and-recall)). The
-DM's MemoryTree (`/dm/ID/memory`) lists their roots under **Local turn step
+DM's Memory Tree (`/dm/ID/memory`) lists their roots under **Local turn step
 trees** (from memory, no disk reads), each linked to the evidence reader, which
 expands it to the original steps; its metadata carries them as `turn_trees`.
 Operator edits (pins, drops, revisions) index conversation entries and do not
@@ -525,7 +525,7 @@ same. Codex and Claude manage their own in-session context.
 **Compaction.** A chat on a local model is compacted by the same endpoint through
 the summary tree by default, without being listed under automatic summaries;
 in-turn summaries use it too. Listing the chat under **Automatic summaries** with
-another model overrides this. The DM's MemoryTree (`/dm/ID/memory`) reports the policy
+another model overrides this. The DM's Memory Tree (`/dm/ID/memory`) reports the policy
 (`local chat model default`, `operator opt-in` or `off`).
 
 **Usage and provenance.** Step usage is summed into the attempt's token counts.

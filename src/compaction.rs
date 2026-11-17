@@ -19,7 +19,7 @@ pub(crate) mod tree;
 pub(crate) mod turn;
 pub use recall::Tools;
 pub use surgery::{Edits, Op, edit, regenerate};
-/// The MemoryTree page for a DM (its earlier `compaction` address redirects
+/// The Memory Tree page for a DM (its earlier `compaction` address redirects
 /// here; see `url_names`).
 pub(crate) fn memory_url(chat: &str) -> String {
     format!("{}/memory", crate::url_names::dm(chat))
@@ -167,7 +167,7 @@ impl Memory {
         self.attempted.clear();
         self.errors.clear();
     }
-    /// An operator edited one DM's MemoryTree: rebuild what it affects. A
+    /// An operator edited one DM's Memory Tree: rebuild what it affects. A
     /// changed source (drop/restore) invalidates the published view and any
     /// job summarising the old sources; unchanged nodes are reused.
     pub(crate) fn edited(&mut self, chat: &str, sources: bool) {
@@ -627,7 +627,7 @@ pub fn selector(state: &State) -> Selector<'_> {
     Selector(state)
 }
 impl Compactor for Selector<'_> {
-    /// The configured view, then the operator's MemoryTree edits (which
+    /// The configured view, then the operator's Memory Tree edits (which
     /// apply whichever compactor serves the chat).
     fn window(&self, conversation: &Conversation<'_>, current: usize) -> Window {
         let window = self.base(conversation, current);
@@ -769,7 +769,7 @@ pub fn status(state: &State, chat: &str) -> serde_json::Value {
         "notice":"Summaries are derived untrusted evidence. Raw history is retained. Missing/invalid summaries use the existing history view."})
 }
 
-/// The MemoryTree overview: bounded, in-memory, no disk reads or model calls.
+/// The Memory Tree overview: bounded, in-memory, no disk reads or model calls.
 pub fn render(state: &State, id: &str, query: &str) -> Result<String, &'static str> {
     let session = state
         .chats

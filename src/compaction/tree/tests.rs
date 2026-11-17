@@ -68,7 +68,7 @@ fn overview_is_bounded_and_fast_for_long_histories() {
         assert_eq!(cells.last().unwrap().end, n as u64);
         assert!(cells.windows(2).all(|w| w[0].end == w[1].start));
         let html = render(&state, &chat, "").unwrap();
-        assert!(html.contains("<h2>MemoryTree</h2>"));
+        assert!(html.contains("<h2>Memory Tree</h2>"));
         assert!(html.len() < 96 * 1024, "{n}: {} bytes", html.len());
         // Summary text is lazy: the overview carries none of it.
         assert!(!html.contains(&"s".repeat(600)));
@@ -294,8 +294,8 @@ fn surgery_is_operator_only() {
     let agent = crate::identity::Actor::Unknown;
     let discord = crate::identity::Actor::Discord { user_id: "123".parse().unwrap(), channel_id: "456".parse().unwrap() };
     for actor in [&agent, &discord] {
-        assert_eq!(edit(&mut state, &chat, actor, Op::Pin(1)), Err("MemoryTree edits are operator-only"));
-        assert_eq!(edit(&mut state, &chat, actor, Op::Drop { start: 0, end: 4 }), Err("MemoryTree edits are operator-only"));
+        assert_eq!(edit(&mut state, &chat, actor, Op::Pin(1)), Err("Memory Tree edits are operator-only"));
+        assert_eq!(edit(&mut state, &chat, actor, Op::Drop { start: 0, end: 4 }), Err("Memory Tree edits are operator-only"));
         assert!(surgery::plan(&state, &chat, actor, ROOT, "focus").is_err());
     }
     let shared = Arc::new(Mutex::new(state));
@@ -396,7 +396,7 @@ fn memory_tree_preview() {
     let src = format!("src='{}'", crate::escape(&format!("{}/node?{query}", memory_url(&chat))));
     assert!(overview.contains(&src));
     let overview = overview.replace(&src, &format!("srcdoc='{}'", crate::escape(&detail)));
-    std::fs::write(&target, format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><title>MemoryTree preview</title><style>{styles}</style></head><body><main>{overview}</main></body></html>")).unwrap();
+    std::fs::write(&target, format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><title>Memory Tree preview</title><style>{styles}</style></head><body><main>{overview}</main></body></html>")).unwrap();
     std::fs::remove_dir_all(dir).unwrap();
 }
 fn plan_detail(state: &State, chat: &str, query: &str) -> Detail {

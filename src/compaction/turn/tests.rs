@@ -66,7 +66,7 @@ fn compacted_steps_join_the_tree_and_recall_returns_their_verbatim_excerpts() {
     assert!(none["hits"].as_array().unwrap().is_empty() && none["complete"] == true, "{none}");
     assert!(read(json!({"query":"x".repeat(201)})).is_err());
     assert!(read(json!({"query":"jdk","limit_bytes":0})).is_err());
-    // The operator sees the same trees on the DM's MemoryTree page, and the
+    // The operator sees the same trees on the DM's Memory Tree page, and the
     // evidence reader expands them down to the original step.
     let page = super::super::render(&shared.lock().unwrap(), &chat, "").unwrap();
     assert!(page.contains("Local turn step trees") && page.contains(&format!("?root={parent}'>Local turn {generation}: steps 1–2")), "{page}");

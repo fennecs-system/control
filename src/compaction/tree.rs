@@ -1,4 +1,4 @@
-//! MemoryTree: a DM's compaction tree drawn as blocks.
+//! Memory Tree: a DM's compaction tree drawn as blocks.
 //!
 //! The overview is rendered from memory only (the published view's O(log n)
 //! roots plus at most `MAX_ENTRY_CELLS` recent entries), so its cost does not
@@ -114,7 +114,7 @@ pub(super) fn svg(chat: &str, cells: &[Cell], len: usize, edits: &Edits, model: 
     let free = SPAN - gap * cells.len().saturating_sub(1) as f64;
     let ruler = |at: u64| LEFT + at as f64 / len * SPAN;
     let mut out = String::with_capacity(512 + cells.len() * 700);
-    let _ = write!(out, "<svg class='mt-svg' xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1000 250' role='img' aria-labelledby='mt-title'><title id='mt-title'>MemoryTree: {} blocks covering {} entries</title>", cells.len(), len as u64);
+    let _ = write!(out, "<svg class='mt-svg' xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1000 250' role='img' aria-labelledby='mt-title'><title id='mt-title'>Memory Tree: {} blocks covering {} entries</title>", cells.len(), len as u64);
     out.push_str("<text x='20' y='22' class='mt-label'>SELECTED HISTORY · WHAT THE NEXT TURN STARTS FROM</text>");
     let mut x = LEFT;
     for cell in cells {
@@ -242,14 +242,14 @@ pub(super) fn overview(state: &State, session: &crate::chat::Session, query: &Ha
         )
     };
     format!(
-        "<section class='memory-tree'><span class='eyebrow'>DM / MEMORYTREE</span><h2>MemoryTree</h2>\
-<p class='mt-links'><a href='{}'>Return to DM</a> · <a href='/?view=providers'>MemoryTree model and window settings</a> · <a href='{}'>Read retained evidence</a></p>\
+        "<section class='memory-tree'><span class='eyebrow'>DM / MEMORY TREE</span><h2>Memory Tree</h2>\
+<p class='mt-links'><a href='{}'>Return to DM</a> · <a href='/?view=providers'>Memory Tree model and window settings</a> · <a href='{}'>Read retained evidence</a></p>\
 <p class='mt-stats'>{len} entries · {summaries} summary block{} · {pending} pending · {verbatim} verbatim · compactor {} {status}{edited}</p>{surgery}\
 <div class='mt-legend' aria-label='Legend'><span><i class='mt-sw mt-sw-sum'></i>Summary</span><span><i class='mt-sw mt-sw-rev'></i>Operator revision</span><span><i class='mt-sw mt-sw-pending'></i>Not summarised yet</span><span><i class='mt-sw mt-sw-entry'></i>Verbatim entry</span><span><i class='mt-sw mt-sw-pin'></i>Pinned</span><span><i class='mt-sw mt-sw-drop'></i>Dropped from agent view</span></div>\
-<div class='mt-visual' tabindex='0' role='region' aria-label='MemoryTree diagram; scroll horizontally on small screens'>{}</div>\
+<div class='mt-visual' tabindex='0' role='region' aria-label='Memory Tree diagram; scroll horizontally on small screens'>{}</div>\
 <p class='mt-hint'>Older history folds into aligned summary blocks (level L covers 2<sup>L</sup> entries); recent entries stay verbatim. Select a block to expand its children, summary, versions and source; regenerate with an emphasis, pin or drop entries there. Ranges are zero-based and end-exclusive. Summaries are untrusted evidence; the original journal is never rewritten.</p>\
-<iframe class='mt-detail' name='memory-detail' title='MemoryTree block detail' src='{}'></iframe>{}\
-<details class='mt-meta'><summary>Raw MemoryTree metadata</summary><pre>{}</pre></details></section>",
+<iframe class='mt-detail' name='memory-detail' title='Memory Tree block detail' src='{}'></iframe>{}\
+<details class='mt-meta'><summary>Raw Memory Tree metadata</summary><pre>{}</pre></details></section>",
         esc(&crate::url_names::dm(chat)),
         esc(&evidence_url(chat)),
         if summaries == 1 { "" } else { "s" },
@@ -503,7 +503,7 @@ fn detail_page(d: &Detail, nodes: io::Result<Loaded>) -> String {
         }
     }
     format!(
-        "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><title>Control · MemoryTree block</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'></head><body class='mt-frame'><main>{body}</main></body></html>"
+        "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><title>Control · Memory Tree block</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'></head><body class='mt-frame'><main>{body}</main></body></html>"
     )
 }
 
@@ -529,7 +529,7 @@ fn respond(stream: &mut impl std::io::Write, status: &str, body: &str, extra: &s
     let _ = control_http::respond(stream, status, "text/html; charset=utf-8", body.as_bytes(), extra, control_http::Policy::Embedded);
 }
 
-/// MemoryTree routes that need the shared state handle: lazy block detail
+/// Memory Tree routes that need the shared state handle: lazy block detail
 /// (disk reads outside the lock), operator edits, and retained evidence.
 pub(crate) fn http(stream: &mut impl std::io::Write, state: &Arc<Mutex<State>>, method: &str, path: &str, query: &str, body: &[u8]) -> bool {
     if recall::http(stream, state, method, path, query) {
@@ -597,7 +597,7 @@ pub(crate) fn post(state: &Arc<Mutex<State>>, chat: &str, actor: &Actor, fields:
             let block = block()?;
             (Op::Select { block, revision: number("revision")? as u32 }, back(block))
         }
-        _ => return Err("Unknown MemoryTree action"),
+        _ => return Err("Unknown Memory Tree action"),
     };
     let mut s = state.lock().map_err(|_| "State unavailable")?;
     let previous = edit(&mut s, chat, actor, op)?;
@@ -605,7 +605,7 @@ pub(crate) fn post(state: &Arc<Mutex<State>>, chat: &str, actor: &Actor, fields:
         if let Some(session) = s.chats.iter_mut().find(|c| c.id == chat) {
             session.memory = previous;
         }
-        return Err("Could not save the MemoryTree edit");
+        return Err("Could not save the Memory Tree edit");
     }
     Ok(location)
 }
