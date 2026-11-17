@@ -74,7 +74,7 @@ fn reconcile_profile() {
     // with similar free-text notes, so the advisor compares blocker reasons.
     // `antibody`: no advisor; an operator observer tree runs one antibody that
     // observes every team, with 8 services of 16 retained member commands
-    // each (failing repeats, status reads and builds) for pathology facts.
+    // each (failing repeats, status reads and builds) from recent turns.
     let mode = std::env::var("CONTROL_PROFILE_ADVISOR").unwrap_or_default();
     let (advised, lens_off) = (matches!(mode.as_str(), "1" | "off" | "blocked"), mode == "off");
     for (chats, runs) in [(64, 16), (512, 16)] {
@@ -90,12 +90,12 @@ fn reconcile_profile() {
             }
             let immune = mode == "antibody";
             if immune {
-                for service in 0..8 {
+                for (service, helper) in helpers.iter().enumerate().take(8) {
                     let commands = (0..16).map(|index| match index % 4 {
                         0 => ("./place-wall.sh 10 64", 1), 1 => ("tail -n 20 /tmp/bot.log", 0), 2 => ("cat > lib.js <<EOF\nx\nEOF", 0), _ => ("./run.sh", 0),
                     }).collect::<Vec<_>>();
-                    let run = format!("bench-{service}-0");
-                    super::antibody::service(&mut state, &helpers[service], &run, &commands);
+                    let run = format!("bench-{service}-{}", runs - 1);
+                    super::antibody::service(&mut state, helper, &run, &commands);
                 }
                 let judge = super::antibody::observer(&mut state).1;
                 command_at(&mut state, &judge, "on", Now(0)).unwrap();

@@ -604,14 +604,10 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
     if immune {
         // An antibody observes every team (a root with spawned members),
         // except trees that run antibodies themselves.
-        for (position, top) in tops.iter().enumerate() {
-            if let Some(top) = *top && top != position {
-                let root = state.chats[top].id.as_str();
-                if !super::antibody_offered(state, root) {
-                    roots.push(root);
-                }
-            }
-        }
+        let mut teams = tops.iter().enumerate().filter_map(|(position, top)| top.filter(|top| *top != position)).collect::<Vec<_>>();
+        teams.sort_unstable();
+        teams.dedup();
+        roots.extend(teams.into_iter().map(|top| state.chats[top].id.as_str()).filter(|root| !super::antibody_offered(state, root)));
         roots.sort_unstable();
         roots.dedup();
     }
@@ -631,7 +627,7 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
     // pass below resolves runs to members.
     let finished = crate::services::finished_commands(state).collect::<Vec<_>>();
     let mut by_run: Fast<&str, usize> = finished.iter().map(|command| (command.run, usize::MAX)).collect();
-    let mut tokens = vec![0u64; roots.len()];
+    let mut unresolved = by_run.len();
     let threshold = state.runtime.execution.advisor_failure_streak.max(2);
     // Per member, newest first: consecutive failed or blocked turns, until a
     // turn that settled otherwise. Interrupted and cancelled turns neither
@@ -648,11 +644,12 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
         if crate::delegation::is_judge(run) {
             continue;
         }
-        if let Some(slot) = by_run.get_mut(run.id.as_str()) {
+        // Commands come from recent runs; the newest-first walk stops looking
+        // once every one is resolved.
+        if unresolved > 0 && let Some(slot) = by_run.get_mut(run.id.as_str()).filter(|slot| **slot == usize::MAX) {
             *slot = position;
+            unresolved -= 1;
         }
-        tokens[team_at[position]] += run.attempts.iter().filter_map(|attempt| attempt.tokens)
-            .map(|t| t.input_tokens.saturating_add(t.output_tokens)).sum::<u64>();
         let scan = &mut scans[team_at[position]];
         match run.status.as_str() {
             "queued" | "running" | "waiting" | "cancelling" => scan.active = true,
@@ -717,7 +714,25 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
         }
     }
     // Per team: pathology inputs (member commands, tokens, score advances).
-    let mut sick = tokens.into_iter().map(|tokens| pathology::Scan { tokens, ..Default::default() }).collect::<Vec<_>>();
+    // Token totals change only as turns settle, so a team's runs are summed
+    // again only when its settled count changed; otherwise the last total holds.
+    let mut sick = roots.iter().zip(&scans).map(|(root, scan)| {
+        let known = state.bots.teams.get(*root).map(|team| &team.pathology).filter(|known| known.turns == scan.settled);
+        pathology::Scan { tokens: known.map_or(u64::MAX, |known| known.spent), turns: scan.settled, ..Default::default() }
+    }).collect::<Vec<_>>();
+    if sick.iter().any(|scan| scan.tokens == u64::MAX) {
+        for scan in sick.iter_mut().filter(|scan| scan.tokens == u64::MAX) {
+            scan.tokens = 0;
+            scan.recount = true;
+        }
+        for run in &state.runtime.runs {
+            let Some(&position) = run.chat_id.as_deref().and_then(|chat| member.get(chat)) else { continue };
+            let scan = &mut sick[team_at[position]];
+            if scan.recount && !crate::delegation::is_judge(run) {
+                scan.tokens += run.attempts.iter().filter_map(|attempt| attempt.tokens).map(|t| t.input_tokens.saturating_add(t.output_tokens)).sum::<u64>();
+            }
+        }
+    }
     for command in &finished {
         if let Some(&position) = by_run.get(command.run).filter(|position| **position != usize::MAX) {
             sick[team_at[position]].commands.push((state.chats[position].id.as_str(), command.id, command.command, command.failed));

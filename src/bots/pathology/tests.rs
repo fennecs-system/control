@@ -3,7 +3,7 @@ use super::*;
 const LIMITS: Limits = Limits { churn: 3, repeat: 3, poll: 3, burn: 1_000 };
 
 fn scan<'a>(commands: &[(&'a str, &'a str, &'a str, bool)], tokens: u64, score: u64) -> Scan<'a> {
-    Scan { commands: commands.to_vec(), tokens, score }
+    Scan { commands: commands.to_vec(), tokens, score, ..Default::default() }
 }
 
 #[test]

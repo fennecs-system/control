@@ -86,6 +86,14 @@ pub(super) struct Snapshot {
     /// Unix time of the newest score probe sample that raised a value.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub(super) score: u64,
+    /// Team tokens and settled turns when the tokens were last summed.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(super) spent: u64,
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub(super) turns: usize,
+}
+fn is_zero_usize(value: &usize) -> bool {
+    *value == 0
 }
 fn is_zero(value: &u64) -> bool {
     *value == 0
@@ -116,6 +124,10 @@ pub(super) struct Scan<'a> {
     pub(super) commands: Vec<(&'a str, &'a str, &'a str, bool)>,
     /// Tokens of every recorded member attempt (judges excluded).
     pub(super) tokens: u64,
+    /// Settled member turns, which key the token total.
+    pub(super) turns: usize,
+    /// Whether `tokens` is being summed in this pass.
+    pub(super) recount: bool,
     /// Newest score sample that raised a value, as unix time.
     pub(super) score: u64,
 }
@@ -204,6 +216,7 @@ pub(super) fn fold(known: Option<&Snapshot>, scan: &Scan<'_>, advanced: bool, li
     ids.sort_unstable();
     let commands = if ids.is_empty() { 0 } else { fingerprint(&ids) };
     let mut next = known.cloned().unwrap_or_default();
+    (next.spent, next.turns) = (scan.tokens, scan.turns);
     let mut found = Found::default();
     // Classify only a changed retained set.
     let mut loops = Vec::new();
