@@ -591,6 +591,16 @@ impl Channel {
                 let names = if lenses.is_empty() { "no genes".to_owned() } else { lenses.join(" + ") };
                 Ok(format!("Future messages in {}: {names}.\n{}", detail["title"].as_str().unwrap_or("this DM"), Self::link(&chat)))
             }
+            Navigation::Personas => {
+                let library = hive.tool("control.personas.list", json!({})).map_err(fail)?;
+                Ok(chats::persona_list(&library))
+            }
+            Navigation::Persona(persona) => {
+                let chat = target.ok_or("Select a DM with /chats first.")?;
+                let detail = chats::use_persona(hive, &chat, &persona).map_err(fail)?;
+                let named = detail["persona"].as_str().map_or("no persona".to_owned(), |p| format!("persona {p} (DNA {})", detail["lenses"].as_array().map(|a| a.iter().filter_map(serde_json::Value::as_str).collect::<Vec<_>>().join(" + ")).unwrap_or_default()));
+                Ok(format!("Future messages in {}: {named}.\n{}", detail["title"].as_str().unwrap_or("this DM"), Self::link(&chat)))
+            }
             Navigation::Rename(name) => {
                 let chat = target.ok_or("Select a DM with /chats first.")?;
                 let detail = chats::rename(hive, &chat, &name).map_err(fail)?;

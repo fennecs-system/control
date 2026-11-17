@@ -22,7 +22,7 @@ pub(super) fn opt_in(state: &mut State, root: &str, on: bool) {
 fn judge(state: &mut State, root: &str) -> String {
     let chat = spawned(state, root, "Advisor");
     let lead = state.runtime.runs[0].id.clone();
-    state.runtime.runs.last_mut().unwrap().persona = Some(crate::delegation::Persona { role: crate::delegation::Role::Judge, root: lead, depth: 1, parent: None });
+    state.runtime.runs.last_mut().unwrap().persona = Some(crate::delegation::Persona { role: crate::delegation::Role::Judge, root: lead, depth: 1, parent: None, bundle: None });
     state.runtime.runs.last_mut().unwrap().attempts = vec![crate::usage::Attempt { review_only: true, ..Default::default() }];
     chat
 }
@@ -59,6 +59,9 @@ fn a_judge_advises_on_team_facts_only_without_timers_rooms_or_grants() {
     let definition = state.bots.supervisor.definitions().find(|d| d.chat.0 == advisor).unwrap();
     assert_eq!(definition.sources, [lifecycle::source(&root)], "no room inbox, watch or timer");
     assert!(state.bots.advises(&advisor) && !state.bots.advises(&root));
+    // Standing parity: the pre-persona judge reads as the built-in advisor.
+    let run = state.runtime.runs.iter().rev().find(|run| run.chat_id.as_deref() == Some(advisor.as_str())).unwrap();
+    assert_eq!(crate::personas::of(&state.bots, run), crate::personas::Effective::builtin("advisor", true));
     assert!(status(&state, &advisor).unwrap().starts_with("Advisor · sleeping · team facts"));
     assert!(state.collective.room_watches.iter().all(|watch| watch.chat != advisor));
     assert!(command_at(&mut state, &advisor, "on every 5", Now(1)).is_err(), "facts trigger; no clock rule");
@@ -289,7 +292,7 @@ fn nodes_without_advisors_skip_team_observation() {
 fn a_lead_requests_its_judge_as_advisor_and_the_operator_approves_it() {
     let (mut state, lead, _) = requester();
     let judge = spawned(&mut state, &lead, "Advisor");
-    let persona = crate::delegation::Persona { role: crate::delegation::Role::Judge, root: state.runtime.runs[0].id.clone(), depth: 1, parent: None };
+    let persona = crate::delegation::Persona { role: crate::delegation::Role::Judge, root: state.runtime.runs[0].id.clone(), depth: 1, parent: None, bundle: None };
     state.runtime.runs.last_mut().unwrap().persona = Some(persona);
     assert!(ask(&mut state, "off", &judge, None).is_err(), "no request without the advisor lens");
     opt_in(&mut state, &lead, true);

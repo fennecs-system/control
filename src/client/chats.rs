@@ -19,6 +19,11 @@ pub enum Navigation {
     /// `/rename NAME` names the active chat in every client (`control.chat.rename`).
     /// The server validates the name; an empty one returns its usage.
     Rename(String),
+    /// `/personas` (or a bare `/persona`) lists the persona library.
+    Personas,
+    /// `/persona NAME` selects a persona for the DM's future messages;
+    /// `/persona none` clears it (`control.chat.persona`).
+    Persona(String),
 }
 /// Client navigation commands, for help text and menus.
 pub const COMMANDS: &[(&str, &str)] = &[
@@ -27,6 +32,8 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/new", "Start a DM"),
     ("/genes", "List the genes /use can select"),
     ("/use GENE…", "Set this DM's DNA for future messages; /use none clears"),
+    ("/personas", "List the personas /persona can select"),
+    ("/persona NAME", "Give this DM a persona (purpose, DNA, standing, model); /persona none clears"),
 ];
 pub fn navigation(text: &str) -> Option<Navigation> {
     let text = text.trim();
@@ -40,6 +47,8 @@ pub fn navigation(text: &str) -> Option<Navigation> {
         "/chats" | "/resume" => Some(Navigation::List),
         "/new" => Some(Navigation::New),
         "/genes" | "/lenses" => Some(Navigation::Genes),
+        "/personas" | "/persona" => Some(Navigation::Personas),
+        text if text.starts_with("/persona ") => Some(Navigation::Persona(text["/persona ".len()..].trim().to_owned())),
         text => text.strip_prefix("/resume ").map(str::trim).filter(|id| !id.is_empty() && !id.contains(char::is_whitespace)).map(|id| Navigation::Open(id.into())),
     }
 }
@@ -145,6 +154,24 @@ pub fn gene_list(library: &Value) -> String {
         if let Some(includes) = gene["includes"].as_array().filter(|a| !a.is_empty()) {
             lines.push(format!("  includes {}", includes.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" + ")));
         }
+    }
+    lines.join("\n")
+}
+
+/// Selects (or with `none` clears) a DM's persona, for every client.
+pub fn use_persona(hive: &mut super::Hive, chat: &str, persona: &str) -> std::io::Result<Value> {
+    let persona = if persona == "none" { Value::Null } else { Value::String(persona.to_owned()) };
+    hive.tool("control.chat.persona", serde_json::json!({"id":chat,"persona":persona}))
+}
+/// `/personas`: each persona in a `control.personas.list` view with its
+/// version, genes and standing.
+pub fn persona_list(library: &Value) -> String {
+    let mut lines = vec!["Personas. Give a DM one with /persona lead; clear with /persona none. Agents spawn them with control_agent_spawn {persona}.".to_owned()];
+    for persona in library.as_array().into_iter().flatten() {
+        let genes = persona["lenses"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" + ")).unwrap_or_default();
+        let standing = &persona["standing"];
+        lines.push(format!("{} · {} · v{} · DNA {} · sees {} · steers {} · answers to {}", persona["id"].as_str().unwrap_or("?"), persona["name"].as_str().unwrap_or("?"), persona["revision"].as_u64().unwrap_or(0),
+            if genes.is_empty() { "none".into() } else { genes }, standing["sees"].as_str().unwrap_or("team"), standing["steers"].as_str().unwrap_or("team"), standing["answers_to"].as_str().unwrap_or("lead")));
     }
     lines.join("\n")
 }

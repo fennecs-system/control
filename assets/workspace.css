@@ -119,3 +119,4 @@
 .requests-panel .project-picker{font:inherit;margin:0;padding:10px 0}
 @media(max-width:1100px){.conversation:has(.chat-requests[open])>.conversation-main{margin-right:0}.request-drawer{width:min(330px,100%);box-shadow:-10px 0 22px #0006}}
 @media(max-width:700px){.request-drawer{right:16px;top:68px;bottom:16px;width:min(330px,calc(100% - 32px))}}
+.persona-table{width:100%%;border-collapse:collapse;margin:16px 0 24px;font-size:13px}.persona-table th{text-align:left;font-weight:500;color:var(--muted);border-bottom:1px solid var(--line);padding:8px 10px}.persona-table td{border-bottom:1px solid var(--line);padding:8px 10px;vertical-align:top;color:var(--muted)}.persona-table td:first-child a{color:var(--purple)}.persona-table small{color:var(--muted)}.persona-table tr[aria-current] td{background:#b5a0ff0a}.persona-definition select{accent-color:var(--purple)}@media(max-width:700px){.persona-table th:nth-child(3),.persona-table td:nth-child(3){display:none}}

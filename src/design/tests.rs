@@ -202,7 +202,7 @@ fn answering_a_design_question_preserves_the_existing_team_budget() {
         role: crate::delegation::Role::Worker,
         root: root.clone(),
         depth: 1,
-        parent: Some(root.clone()),
+        parent: Some(root.clone()), bundle: None
     });
     state.runtime.runs.push(used);
     answer(&mut state, &chat, None, "1", "test").unwrap();
@@ -242,7 +242,7 @@ fn answering_preserves_an_existing_judge_persona_exactly() {
         role: crate::delegation::Role::Judge,
         root: "existing-team".into(),
         depth: 1,
-        parent: Some("parent".into()),
+        parent: Some("parent".into()), bundle: None
     };
     state.runtime.runs[0].persona = Some(persona.clone());
     answer(&mut state, &chat, None, "1", "test").unwrap();

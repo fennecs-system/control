@@ -95,6 +95,7 @@ pub fn load() -> io::Result<State> {
     crate::turn_context::recover(&state)?;
     changed |= crate::knowledge::migrate(&mut state);
     changed |= state.lens_library.merge_defaults();
+    changed |= state.personas.merge_defaults();
     changed |= interrupt_active(&mut state);
     // Without a current snapshot to adopt as the diff base, the first save
     // compacts: replayed logs, older schemas and migrations all end here.

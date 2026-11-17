@@ -21,6 +21,8 @@ const LOCAL: &[Entry] = &[
     Entry { text: "/new", usage: "/new", description: "Start a fresh DM" },
     Entry { text: "/genes", usage: "/genes", description: "Browse and select genes (alias /lenses)" },
     Entry { text: "/use", usage: "/use GENE GENE | /use GENE, GENE | /use none", description: "Set this DM's DNA for future messages" },
+    Entry { text: "/personas", usage: "/personas", description: "List personas (purpose, DNA, standing, model)" },
+    Entry { text: "/persona", usage: "/persona NAME | /persona none", description: "Give this DM a persona for future messages" },
     Entry { text: "/trust", usage: "/trust [REQUEST]", description: "Approve the folder request displayed in this DM" },
     Entry { text: "/port allow", usage: "/port allow ID [--loopback]", description: "Approve the exact displayed port request" },
     Entry { text: "/port deny", usage: "/port deny ID", description: "Deny a port request" },

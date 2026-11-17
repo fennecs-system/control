@@ -35,6 +35,8 @@ pub(super) fn input(n: usize) -> Input {
         objectives: (0..n).map(|n| format!("Inspect page {n}")).collect(),
         model:None,
         role:None,
+        persona:None,
+        lenses:None,
     }
 }
 #[test]

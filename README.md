@@ -135,6 +135,9 @@ These chat commands work on the web, in the TUI and in authorized Discord DMs:
   Engineering and Research are built from smaller reusable genes. Optional
   [task autonomy and bounded investigation](docs/LENSES.md) guide recovery from
   blocked plans without changing host permissions.
+- **Personas.** Named, versioned compositions of a purpose (`SOUL.md`), DNA,
+  standing, a default model and opt-in behaviours: spawn a `worker`, `advisor`
+  or `antibody`, or give a DM the `lead` persona ([personas](docs/PERSONAS.md)).
 - **Knowledge.** Write Markdown notes, connect them with `[[links]]`, explore the
   graph and [review agent-proposed claims](docs/KNOWLEDGE-TOOLS.md).
 - **Rooms.** Shared updates, durable inboxes and opt-in

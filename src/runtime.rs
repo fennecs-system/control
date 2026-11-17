@@ -335,6 +335,9 @@ fn run_record(run: &Run) -> String {
     let mut html = format!("<article class='record'><span class='tag'>{}</span><span class='eyebrow'>{} / {}</span><h3>{}</h3><p class='muted tiny'>run {} · {}{}{}</p>", escape(&run.status), escape(run.kind.as_str()), escape(&run.source), escape(&run.objective), escape(&run.id), escape(run.backend.label()), run.model.as_ref().map(|m| format!(" · {}", escape(m))).unwrap_or_default(), usage(run));
     if let Some(persona)=&run.persona {
         html.push_str(&format!("<span class='tag'>{} · depth {}</span>",if persona.role==crate::delegation::Role::Judge{"judge · read only"}else{"worker"},persona.depth));
+        if let Some(bundle)=&persona.bundle {
+            html.push_str(&format!("<a class='tag' href='/personas?id={}'>persona {}@{}</a>",escape(&bundle.id),escape(&bundle.id),bundle.revision));
+        }
     }
     if !run.result.is_empty() {
         html.push_str(&format!(

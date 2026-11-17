@@ -159,7 +159,7 @@ fn ordinary_stale_judge_and_changed_owner_attempts_cannot_inspect() {
         role: crate::delegation::Role::Judge,
         root: "fixture".into(),
         depth: 1,
-        parent: Some("parent".into()),
+        parent: Some("parent".into()), bundle: None
     });
     assert!(authorize(&state, caller).is_err());
     state.runtime.runs[0].persona = None;

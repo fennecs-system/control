@@ -259,7 +259,7 @@ fn admission_rejects_foreign_services_judges_stale_attempts_and_oversized_source
     assert!(refuse(&shared, &run, "attempt-a", &"node-b".to_owned().try_into().unwrap(), &id).contains("not owned"));
     // A judge, even of the owning chat.
     let (shared, run, node, id) = fixture();
-    shared.lock().unwrap().runtime.runs[0].persona = Some(crate::delegation::Persona { role: crate::delegation::Role::Judge, root: "root".into(), depth: 1, parent: None });
+    shared.lock().unwrap().runtime.runs[0].persona = Some(crate::delegation::Persona { role: crate::delegation::Role::Judge, root: "root".into(), depth: 1, parent: None, bundle: None });
     assert!(refuse(&shared, &run, "attempt-a", &node, &id).contains("read-only attempt"));
     // An earlier attempt of the same run.
     let (shared, run, node, id) = fixture();

@@ -294,6 +294,15 @@ impl App {
                     self.set_detail(hive.tool("control.chat.lenses",json!({"id":self.active,"lenses":lenses}))?);
                     self.inspector=None;self.status=format!("Future messages: {}",lens_label(&self.detail));self.follow=true;
                 }
+                Navigation::Personas => {
+                    let library=hive.tool("control.personas.list",json!({}))?;
+                    self.inspector=Some(("Personas".into(),format!("{}\nReturn with /chat.",chats::persona_list(&library))));self.scroll=0;self.follow=false;self.status="Select with /persona NAME · Esc back".into();
+                }
+                Navigation::Persona(persona) => {
+                    if self.active.is_empty(){self.new_chat(hive)?;}
+                    self.set_detail(chats::use_persona(hive,&self.active,&persona)?);
+                    self.inspector=None;self.status=format!("Persona: {} · DNA {}",self.detail["persona"].as_str().unwrap_or("none"),lens_label(&self.detail));self.follow=true;
+                }
                 Navigation::Rename(name) => {
                     if self.active.is_empty() {return Err(failure("Start or resume a DM before renaming it."));}
                     self.set_detail(chats::rename(hive,&self.active,&name)?);
@@ -563,7 +572,7 @@ fn resume_selection(args:&[String])->io::Result<Option<&str>> {
 pub fn run() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|s| s == "--help") {
-        println!("control tui [--server {}] [--resume ID] [--directory PATH] [--check]\nAlso available as control-harness. Starts a fresh DM; --resume ID (or --session ID) explicitly resumes one. CONTROL_ADDR sets the default server.\n\n/resume · /open /absolute/path · /trust [REQUEST] · /port allow|deny ID · /answer QUESTION_ID choice · /genes · /use GENE GENE · /use none · /context · /chat · /help", crate::config::server_url());
+        println!("control tui [--server {}] [--resume ID] [--directory PATH] [--check]\nAlso available as control-harness. Starts a fresh DM; --resume ID (or --session ID) explicitly resumes one. CONTROL_ADDR sets the default server.\n\n/resume · /open /absolute/path · /trust [REQUEST] · /port allow|deny ID · /answer QUESTION_ID choice · /genes · /use GENE GENE · /use none · /personas · /persona NAME · /context · /chat · /help", crate::config::server_url());
         return Ok(());
     }
     let option = |name: &str| {

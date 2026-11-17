@@ -277,7 +277,9 @@ bot approval.
    objective naming the shared outcome. It gets no resources. It uses the root
    task's advisor allowance (`max_advisors_per_root` in `execution.json`,
    default 1, range 0–8), which is separate from the root's one blocking judge
-   review.
+   review. `persona: "advisor"` instead of the role spawns the built-in
+   [advisor persona](PERSONAS.md): the same judge, with the `advisor` gene as
+   its DNA and its purpose first in its prompt.
 2. The lead requests it with `control_bot_request` (no interval). The operator
    approves it like any bot, or types `/bot on` in its chat. The lens or a
    request alone runs nothing.
@@ -375,6 +377,9 @@ the advisor, the lead spawns a judge (`control_agent_spawn` with `role:
 "judge"`, from the root's advisor allowance) and asks for it with
 `control_bot_request`; the operator's approval (or `/bot on` in its chat) runs
 it. An antibody may take a patrol timer (`every_minutes`); an advisor may not.
+`persona: "antibody"` spawns the built-in [antibody persona](PERSONAS.md),
+whose captured standing (node visibility) selects the antibody mode even in a
+tree that also offers an advisor; the antibody gene gate still applies.
 A root owned by a Discord user cannot run one, because an antibody reads every
 team on the node.
 

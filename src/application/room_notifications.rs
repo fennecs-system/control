@@ -86,7 +86,7 @@ pub(crate) fn queue(
             .unwrap_or(&origin.id)
             .clone(),
         depth: 0,
-        parent: None,
+        parent: None, bundle: None
     });
     Ok(Change::Queue(Box::new(Delivery {
         run,

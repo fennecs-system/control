@@ -19,6 +19,13 @@ pub struct Input {
     /// A judge batch starts one read-only reviewer, for example a team advisor.
     #[serde(default,skip_serializing_if="Option::is_none")]
     role:Option<Role>,
+    /// A persona from the library: its purpose, DNA, standing, body and
+    /// behaviours, captured for every child. Read-only personas are judges.
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    persona:Option<String>,
+    /// Explicit genes, replacing the persona's DNA (or the inherited lenses).
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    lenses:Option<Vec<String>>,
 }
 impl Input {
     fn role(&self) -> Role {
@@ -59,6 +66,9 @@ struct Seed {
     parent_chat: String,
     room: Option<String>,
     design: Option<String>,
+    /// The persona every child of this batch captures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    persona: Option<Box<control_context::persona::Captured>>,
 }
 impl Batch {
     /// A missing handoff must not turn a normal asynchronous dependency into
@@ -123,7 +133,7 @@ pub fn definition() -> Value {
     definition
 }
 fn inherited_definition()->Value {
-    json!({"name":"control_agent_spawn","description":"Start independent or background worker objectives without pausing this conversation. Give each worker ownership of its goal and dependencies, including ongoing infrastructure when needed. Workers coordinate directly with same-task peers; keep the root chat for steering and consequential decisions rather than relaying routine updates. Continue useful work in this session; spawning does not require ending it. Control queues completion updates automatically. Yield when genuinely waiting with no independent work remaining. Use control_agent_spawn_status only when a current status check is needed, never in a polling loop. Configured team budget (default 64), pending-intent budget and 24000-byte payload apply independently of model slots. Children inherit captured model, lenses, actor and immutable baseline, never live edits, and share this chat's team room (its linked room, else its lead's), so objectives need not name a room; agents cannot create rooms. First Improve turns without a published baseline must checkpoint via control_agent_spawn_blocking or finish first. Depth limit 2; children and blocking spawns share one root budget. Cancellation fences backlog and descendants; later originating-chat turns can inspect or cancel retained batches.","inputSchema":{"type":"object","properties":{"objectives":{"type":"array","description":"One concise task per child, 1–2000 characters each and 24000 UTF-8 bytes total. Example: [\"Inspect the API\",\"Review the tests\"]. Request identity comes from the transport; do not supply nonce or identity fields.","minItems":1,"items":{"type":"string","minLength":1,"maxLength":2000}},"role":{"type":"string","enum":["worker","judge"],"default":"worker","description":"judge starts exactly one isolated read-only advisor candidate with no resources, within the root task's advisor allowance (default 1), separate from its one blocking judge review. Available only when the root chat selects the advisor lens; request it as a bot to make it the team's advisor."}},"required":["objectives"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
+    json!({"name":"control_agent_spawn","description":"Start independent or background worker objectives without pausing this conversation. Give each worker ownership of its goal and dependencies, including ongoing infrastructure when needed. Workers coordinate directly with same-task peers; keep the root chat for steering and consequential decisions rather than relaying routine updates. Continue useful work in this session; spawning does not require ending it. Control queues completion updates automatically. Yield when genuinely waiting with no independent work remaining. Use control_agent_spawn_status only when a current status check is needed, never in a polling loop. Configured team budget (default 64), pending-intent budget and 24000-byte payload apply independently of model slots. Children inherit captured model, lenses, actor and immutable baseline, never live edits, and share this chat's team room (its linked room, else its lead's), so objectives need not name a room; agents cannot create rooms. First Improve turns without a published baseline must checkpoint via control_agent_spawn_blocking or finish first. Depth limit 2; children and blocking spawns share one root budget. Cancellation fences backlog and descendants; later originating-chat turns can inspect or cancel retained batches.","inputSchema":{"type":"object","properties":{"objectives":{"type":"array","description":"One concise task per child, 1–2000 characters each and 24000 UTF-8 bytes total. Example: [\"Inspect the API\",\"Review the tests\"]. Request identity comes from the transport; do not supply nonce or identity fields.","minItems":1,"items":{"type":"string","minLength":1,"maxLength":2000}},"role":{"type":"string","enum":["worker","judge"],"description":"Default worker. judge starts exactly one isolated read-only advisor candidate with no resources, within the root task's advisor allowance (default 1), separate from its one blocking judge review. Available only when the root chat selects the advisor lens; request it as a bot to make it the team's advisor."},"persona":{"type":"string","maxLength":64,"description":"A persona from the library (control.personas.list; built-ins lead, worker, advisor, antibody, judge): children capture its purpose, DNA, standing, default model and behaviours. Read-only personas are judges and need their opt-in gene. Omit to inherit your context as before."},"lenses":{"type":"array","maxItems":32,"items":{"type":"string"},"description":"Explicit genes replacing the persona's DNA or your inherited lenses."}},"required":["objectives"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
 }
 pub fn management_definitions() -> Vec<Value> {
     vec![
@@ -137,7 +147,7 @@ pub fn request(
     id: &str,
     generation: &str,
     nonce: &str,
-    input: Input,
+    mut input: Input,
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Result<Value, &'static str> {
     if input.objectives.is_empty()
@@ -157,6 +167,21 @@ pub fn request(
         return Err(
             "Expected objectives within the configured team budget, 1–2000 characters each, 24000 total bytes, and a valid request identity.",
         );
+    }
+    // A persona is captured once per batch; its standing decides the role.
+    let bundle = match input.persona.as_deref() {
+        Some(persona) => Some(crate::personas::capture(state, persona).map_err(|_| "Unknown persona, or its SOUL.md cannot be captured; control.personas.list names them.")?),
+        None => None,
+    };
+    if let Some(bundle) = &bundle {
+        let role = if bundle.standing.acts.read_only() { Role::Judge } else { Role::Worker };
+        if input.role.is_some_and(|given| given != role) {
+            return Err("The persona's standing decides the role: read-only personas are judges, others workers.");
+        }
+        input.role = Some(role);
+    }
+    if input.lenses.as_ref().is_some_and(|lenses| lenses.len() > 32) {
+        return Err("Select at most 32 genes.");
     }
     let index = state
         .runtime
@@ -195,6 +220,16 @@ pub fn request(
             return Err("A judge batch starts exactly one read-only advisor candidate.");
         }
         advisor_allowance(state, run)?;
+        // Observer personas keep their own opt-in gene gate.
+        if let (Some(bundle), Some(chat)) = (bundle.as_ref(), run.chat_id.as_deref()) {
+            use control_context::persona::{Sees, Steers};
+            if bundle.standing.sees == Sees::Node && !crate::bots::antibody_offered_for(state, chat) {
+                return Err(crate::bots::ANTIBODY_OFF);
+            }
+            if bundle.standing.steers == Steers::Lead && !crate::bots::advisor_offered_for(state, chat) {
+                return Err(crate::bots::ADVISOR_OFF);
+            }
+        }
     }
     // A spawned judge is a team advisor candidate: it uses the root's advisor
     // allowance, not the one blocking judge review.
@@ -239,11 +274,14 @@ pub fn request(
     // with blocking delegation.
     let judge = input.role() == Role::Judge;
     let action = if judge { identity::Action::Task } else { run.action };
-    let selected=crate::providers::selection::resolve(&state.runtime,run.backend,&run.model.clone().unwrap_or_else(||run.backend.default_model()),input.model.as_deref())?;
+    let selected=crate::providers::selection::resolve(&state.runtime,run.backend,&run.model.clone().unwrap_or_else(||run.backend.default_model()),input.model.as_deref().or(bundle.as_ref().map(|b| b.model.as_str()).filter(|m| !m.is_empty())))?;
     let backend = selected.backend;
     let model = Some(selected.model);
-    let context = (*run.context).clone();
-    let lenses = run.lenses.clone();
+    // Explicit genes, else the persona's DNA, else the parent's captured context.
+    let (context, lenses) = match input.lenses.clone().or_else(|| bundle.as_ref().map(|b| b.lenses.clone())) {
+        Some(genes) => (Some(crate::lens_library::resolve(state, &genes).map_err(|_| "Selected genes cannot be resolved; check the persona's DNA or the lenses given.")?), Some(genes)),
+        None => ((*run.context).clone(), run.lenses.clone()),
+    };
     let lineage = delegation::lineage(run);
     let baseline = attempt.parent_artifact.clone();
     let mut project = project;
@@ -256,6 +294,8 @@ pub fn request(
     let design = parent.design_context.clone();
     let before = (state.chats.len(), state.runtime.runs.len());
     let previous_notice = state.runtime.notice.clone();
+    // A persona's wake behaviours file bot requests; a refused batch files none.
+    let previous_bots = bundle.as_ref().filter(|b| !b.behaviours.is_empty()).map(|_| state.bots.clone());
     let seed = Seed {
         resource_grants: if judge { Vec::new() } else { crate::services::grants(state,run) },
         actor,
@@ -270,6 +310,7 @@ pub fn request(
         parent_chat,
         room,
         design,
+        persona: bundle.map(Box::new),
     };
     let result = (|| {
         let batch = Batch {
@@ -301,6 +342,9 @@ pub fn request(
         state.chats.truncate(before.0);
         state.runtime.runs.truncate(before.1);
         state.runtime.notice = previous_notice;
+        if let Some(bots) = previous_bots {
+            state.bots = bots;
+        }
     }
     result
 }
@@ -366,7 +410,7 @@ fn materialize(state: &mut State, index: usize, batch_index: usize) -> Result<()
             seed.action,
         )?;
         let run = state.runtime.runs.last_mut().unwrap();
-        run.chat_id = Some(child_id);
+        run.chat_id = Some(child_id.clone());
         run.resource_grants = seed.resource_grants.clone();
         run.backend = seed.backend;
         run.model = seed.model.clone();
@@ -377,8 +421,13 @@ fn materialize(state: &mut State, index: usize, batch_index: usize) -> Result<()
             root: seed.lineage.root.clone(),
             depth: seed.lineage.depth + 1,
             parent: Some(parent_id.clone()),
+            bundle: seed.persona.clone(),
         });
         let child_run = run.id.clone();
+        // Wake behaviours become an ordinary pending bot request.
+        if let Some(bundle) = seed.persona.as_deref() {
+            crate::bots::persona_request(state, &seed.parent_chat, &parent_id, &child_id, &bundle.behaviours);
+        }
         state
             .chats
             .last_mut()

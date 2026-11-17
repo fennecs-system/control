@@ -335,9 +335,11 @@ fn execute(host: &LocalHost<'_>, attempt: &AttemptRef<'_>, name: &str, args: &Va
         .find(|run| run.id == attempt.run && run.status == "running" && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation))
         .ok_or_else(|| fail("Attempt is not active"))?;
     crate::identity::authorize(&run.actor, run.action).map_err(fail)?;
-    let judge = crate::delegation::is_judge(run);
+    // Node visibility and operator escalation are the run's standing.
+    let standing = crate::personas::of(&state.bots, run);
+    let judge = standing.read_only();
     let chat = run.chat_id.clone().ok_or_else(|| fail("A chat is required"))?;
-    let antibody = judge && state.bots.antibody(&chat);
+    let antibody = standing.antibody() && state.bots.antibody(&chat);
     match name {
         "control_intel_brief" => {
             let input = serde_json::from_value::<BriefInput>(args.clone()).map_err(|_| fail("Expected an optional chat_id"))?;
@@ -358,7 +360,7 @@ fn execute(host: &LocalHost<'_>, attempt: &AttemptRef<'_>, name: &str, args: &Va
             // A lead (top-level chat) or an approved antibody may notify; a
             // member asks its lead, and other judges only review.
             let lead = state.chats.iter().any(|session| session.id == chat && session.parent_chat.is_none());
-            if (judge && !antibody) || (!judge && !lead) {
+            if !standing.notifies() || (judge && !antibody) || (!judge && !lead) {
                 return Err(fail("Only an approved antibody or a team's lead may notify the operator"));
             }
             if !crate::chat::valid_id(attempt.nonce) {

@@ -71,7 +71,7 @@ pub fn design_topic(value: &str) -> Option<(&'static str, &'static str)> {
         "tools" | "browser" | "tool-page" => ("tools", "Tools"),
         "nodes" => ("nodes", "Nodes"),
         "authority" => ("authority", "Access requests"),
-        "personas" => ("personas", "Personas"),
+        "personas" | "persona-page" => ("personas", "Personas"),
         "discord-access" => ("discord-access", "Discord access"),
         "evolution" => ("evolution", "Self-improvement"),
         "integrations" => ("integrations", "Integrations"),
@@ -273,6 +273,7 @@ pub fn create(state: &mut State) -> String {
         improve_workspace: None,
         workspace: None,
         lenses: Some(Vec::new()),
+        persona: None,
         design_context: None,
         room: None,
         lens: None,
@@ -305,6 +306,7 @@ pub fn receive(state: &mut State, incoming: &discord::Incoming) -> Result<(), &'
             improve_workspace: None,
             workspace: None,
             lenses: Some(Vec::new()),
+        persona: None,
             design_context: None,
             room: None,
             lens: None,
@@ -649,7 +651,12 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
         run.resource_grants = resources;
         run.lenses = Some(selected_lenses(&state.chats[index]));
         *run.context = Some(context);
-        Some(run.id.clone())
+        let queued = state.runtime.runs.len() - 1;
+        if let Err(error) = crate::personas::apply_to_root(state, id, queued) {
+            state.runtime.runs.pop();
+            return Err(error);
+        }
+        Some(state.runtime.runs[queued].id.clone())
     } else {
         None
     };
@@ -729,7 +736,9 @@ pub(crate) fn prompt_prefix(run:&crate::runtime::Run,session:&Session)->String {
     }).unwrap_or_default();
     let coordination=session.room.as_deref().filter(|room|crate::rooms::valid(room))
         .map(|room|format!("Linked room #{room}: {}\n",control_context::agent_policy::ROOM_COMMUNICATION_GUIDANCE)).unwrap_or_default();
-    format!("{persona}{folders}{context}{discussion}{mode}{coordination}")
+    // A captured persona's purpose and standing are its first instruction.
+    let soul = run.persona.as_ref().and_then(|p| p.bundle.as_deref()).map(control_context::persona::Captured::prompt).unwrap_or_default();
+    format!("{soul}{persona}{folders}{context}{discussion}{mode}{coordination}")
 }
 /// Framing that belongs to this run rather than its chat (a bot wake, a
 /// paused task's continuation). Placed after history with the request, so
@@ -778,7 +787,7 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
     let runs=crate::conversation::Conversation::of(state,session);
     let pending_questions = crate::design::pending_json(state, id);
     Ok(
-        json!({"id":session.id,"title":crate::callsigns::name_or_id(&state.chats,&session.id),"previews":state.previews.iter().filter(|p|p.chat==id && p.status!="stopped").map(|p|json!({"id":p.id,"url":p.url,"status":p.status})).collect::<Vec<_>>(),"project":session.project,"project_importing":crate::projects::importing(&session.id).is_some(),"project_worktree":session.project.as_ref().and_then(|p|p.head.as_deref()).and_then(|id|crate::runtime::workspace(id).ok()),"parent_chat":session.parent_chat,"mode":if session.improve_mode {"improve"} else {"chat"},"room":session.room,"lens":session.lens,"lenses":selected_lenses(session),"design_context":session.design_context,"revision":session.revision,"messages": session.messages.iter().map(|m| {
+        json!({"id":session.id,"title":crate::callsigns::name_or_id(&state.chats,&session.id),"previews":state.previews.iter().filter(|p|p.chat==id && p.status!="stopped").map(|p|json!({"id":p.id,"url":p.url,"status":p.status})).collect::<Vec<_>>(),"project":session.project,"project_importing":crate::projects::importing(&session.id).is_some(),"project_worktree":session.project.as_ref().and_then(|p|p.head.as_deref()).and_then(|id|crate::runtime::workspace(id).ok()),"parent_chat":session.parent_chat,"mode":if session.improve_mode {"improve"} else {"chat"},"room":session.room,"lens":session.lens,"lenses":selected_lenses(session),"persona":session.persona,"design_context":session.design_context,"revision":session.revision,"messages": session.messages.iter().map(|m| {
         let run = m.run_id.as_deref().and_then(|id|runs.run(id));
         let (status, reply) = response_from_run(m,run);
         let mut message = json!({"text":m.text,"reply":reply,"status":status,"run_id":m.run_id,"kind":run.map(|r| &r.kind),"persona":run.and_then(|r|r.persona.as_ref()),"delegation":run.and_then(|r|r.delegation.as_ref()),"question":run.and_then(|r|r.question.as_ref()),"attempts":run.map(|r| crate::history::hydrated(r.chat_id.as_deref(),&r.attempts))});
@@ -813,7 +822,7 @@ pub fn list(state: &State) -> Value {
     let callsigns=crate::callsigns::all(&state.chats);
     json!(crate::conversations::ordered(state).into_iter().map(|entry| {
         let s=entry.session;
-        json!({"id":s.id,"title":crate::callsigns::label(s,callsigns[entry.position]),"lens":s.lens,"lenses":selected_lenses(s),"revision":s.revision,"messages":s.messages.len(),"parent_chat":entry.parent,"depth":entry.depth,"activity_order":s.activity_order,"decision_revision":decision_revision,"port_revision":port_revision,"bot_revision":bot_revision})
+        json!({"id":s.id,"title":crate::callsigns::label(s,callsigns[entry.position]),"lens":s.lens,"lenses":selected_lenses(s),"persona":s.persona,"revision":s.revision,"messages":s.messages.len(),"parent_chat":entry.parent,"depth":entry.depth,"activity_order":s.activity_order,"decision_revision":decision_revision,"port_revision":port_revision,"bot_revision":bot_revision})
     }).collect::<Vec<_>>())
 }
 /// Pending operator decisions across the node, grouped by top-level chat in
@@ -1030,6 +1039,7 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
         "control.chat.read" => detail(state, id()?),
         "control.run.scores" => crate::scores::read(state, id()?),
         "control.intel.brief" => crate::intel::tool(state, arguments),
+        "control.personas.list" | "control.persona.read" | "control.chat.persona" => crate::personas::tool(state, name, arguments),
         "control.chat.rename" => {
             let id = id()?;
             rename(state, id, arguments["name"].as_str().unwrap_or(""))?;

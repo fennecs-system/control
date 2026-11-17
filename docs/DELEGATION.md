@@ -137,10 +137,15 @@ to the lead's steering chat. It never messages members, judges or advisors, neve
 posts to rooms and never sends services. Other judges cannot run as bots or
 message agents.
 
+`control_agent_spawn` also accepts `persona` (and explicit `lenses`): children
+capture the [persona](PERSONAS.md)'s purpose, DNA, standing, default model and
+behaviours, and a read-only persona is a judge. Without it, children inherit
+the parent's captured context and model as before.
+
 ## Boundaries
 
-Workers and judges use the parent's captured provider and model; cross-model
-selection is not implemented. Merging, deployment and extra host access remain
+Workers and judges use the parent's captured provider and model unless the
+spawn names a `model` or a persona with a body. Merging, deployment and extra host access remain
 explicit operator actions. These are bounded node tasks on the configured
 providers, not an unattended evaluation swarm. Use provider accounts within their
 terms and usage limits.

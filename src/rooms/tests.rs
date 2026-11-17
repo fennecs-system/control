@@ -521,7 +521,7 @@ fn an_advisor_does_not_post_through_its_inherited_team_room() {
     state.runtime.runs[0].status = "completed".into();
     let (advisor, run) = active(&mut state, Some(&lead));
     let session = state.runtime.runs.iter_mut().find(|r| r.id == run).unwrap();
-    session.persona = Some(crate::delegation::Persona { role: crate::delegation::Role::Judge, root: "root".into(), depth: 1, parent: None });
+    session.persona = Some(crate::delegation::Persona { role: crate::delegation::Role::Judge, root: "root".into(), depth: 1, parent: None, bundle: None });
     crate::bots::command(&mut state, &advisor, "on").unwrap();
     assert!(state.bots.advises(&advisor));
     assert!(room_failure(&mut state, &run, "control_room_post", json!({"message":"Build claim looks abandoned"})).contains("does not post to rooms"));

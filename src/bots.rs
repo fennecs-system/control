@@ -549,9 +549,14 @@ fn start(state: &mut State, chat: &str, minutes: Option<u64>, room: bool, now: N
 /// about every team) and may take a patrol timer.
 fn advise(state: &mut State, chat: &str, minutes: Option<u64>, now: Now) -> Result<&'static str, &'static str> {
     let team = root(state, chat).filter(|team| *team != chat).ok_or("An advisor must belong to a spawned task tree.")?.to_owned();
-    let antibody = antibody_offered(state, &team);
+    // The mode is the captured persona's visibility (else the root's opt-in);
+    // each mode keeps its own opt-in gene gate.
+    let antibody = crate::personas::observes_node(state, chat);
     if minutes.is_some() && !antibody {
         return Err("An advisor wakes only on its team's host facts; it takes no timer.");
+    }
+    if crate::personas::observer_offered(state, chat) == Some(false) {
+        return Err(if antibody { ANTIBODY_OFF } else { ADVISOR_OFF });
     }
     if !antibody && !advisor_offered(state, &team) {
         return Err(ADVISOR_OFF);
@@ -1211,6 +1216,8 @@ fn root<'a>(state: &'a State, chat: &str) -> Option<&'a str> {
 /// The catalogue tool the `advisor` lens offers.
 pub(crate) const ADVISOR_TOOL: &str = "team.advisor";
 pub(crate) const ADVISOR_OFF: &str = "Advisors are opt-in: select the advisor lens on the root chat (/use advisor) first.";
+/// Antibody personas keep the antibody opt-in gate.
+pub(crate) const ANTIBODY_OFF: &str = "Antibodies are opt-in: select the antibody gene on an operator-owned root chat (/use antibody) first.";
 /// Whether the task tree rooted at `top` opted in to an advisor: the root
 /// chat's selected lenses (ticked in the UI or with `/use advisor`) offer
 /// [`ADVISOR_TOOL`]. This is availability, not authority: without it there is
@@ -1290,6 +1297,8 @@ fn handle(state: &mut State, attempt: &AttemptRef<'_>, call: BotCall, save: impl
             Ok(json!({"chat_id":chat,"bot":status(state, &chat),"requests":requests}))
         }
         BotCall::Request { chat_id, every_minutes, room } => {
+            // A persona's schedule behaviour is the default interval.
+            let every_minutes = every_minutes.or_else(|| crate::personas::schedule(state, &chat_id));
             if !attempt.nonce.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') || attempt.nonce.is_empty() || attempt.nonce.len() > 128 {
                 return Err(fail("Invalid request identity"));
             }
@@ -1307,7 +1316,10 @@ fn handle(state: &mut State, attempt: &AttemptRef<'_>, call: BotCall, save: impl
             let linked = target.room.as_deref().is_some_and(crate::rooms::valid);
             // A read-only judge becomes its team's advisor: host facts, no timer or room.
             let advisor = judge_chat(state, &chat_id);
-            let antibody = advisor && antibody_offered_for(state, &chat_id);
+            let antibody = advisor && crate::personas::observes_node(state, &chat_id);
+            if advisor && crate::personas::observer_offered(state, &chat_id) == Some(false) {
+                return Err(fail(if antibody { ANTIBODY_OFF } else { ADVISOR_OFF }));
+            }
             if advisor && !antibody && !advisor_offered_for(state, &chat_id) {
                 return Err(fail(ADVISOR_OFF));
             }
@@ -1343,6 +1355,31 @@ fn handle(state: &mut State, attempt: &AttemptRef<'_>, call: BotCall, save: impl
             Ok(value)
         }
     }
+}
+/// A spawned persona's wake behaviours (schedule, room) file the bot request
+/// `control_bot_request` would, on behalf of the spawning chat, for the operator
+/// to approve like any other. Nothing runs until approval. `None` when the
+/// persona asks for no wake or the request cannot be filed now (the agent can
+/// still request one itself).
+pub(crate) fn persona_request(state: &mut State, requester: &str, origin: &str, chat: &str, behaviours: &[control_context::persona::Behaviour]) -> Option<String> {
+    use control_context::persona::Behaviour;
+    let every_minutes = behaviours.iter().find_map(|b| match b { Behaviour::Schedule { every_minutes } => Some(*every_minutes), _ => None });
+    let linked = state.chats.iter().find(|session| session.id == chat).and_then(|session| session.room.as_deref()).is_some_and(crate::rooms::valid);
+    let advisor = judge_chat(state, chat);
+    let room = behaviours.contains(&Behaviour::Room) && linked && !advisor;
+    if (every_minutes.is_none() && !room)
+        || every_minutes.is_some_and(|m| !(1..=MAX_INTERVAL_MINUTES).contains(&m))
+        || defined(state, chat)
+        || state.bots.approvals.iter().any(|a| a.chat == chat && a.decision == Decision::Pending)
+        || state.bots.approvals.iter().filter(|a| a.decision == Decision::Pending).count() >= MAX_APPROVALS
+    {
+        return None;
+    }
+    let id = format!("bot-{}", digest(&["persona", origin, chat]));
+    state.bots.approvals.retain(|a| !(a.acknowledged && a.decision != Decision::Pending));
+    state.bots.approvals.push(Approval { id: id.clone(), chat: chat.into(), requester: requester.into(), origin: origin.into(), every_minutes, room, decision: Decision::Pending, acknowledged: false });
+    bump(state, requester);
+    Some(id)
 }
 /// Whether a chat's latest task is a read-only judge, so it can only advise.
 fn judge_chat(state: &State, chat: &str) -> bool {
