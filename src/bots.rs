@@ -420,21 +420,31 @@ pub(crate) fn background_allowed(state: &State, chat: &str) -> bool {
     !state.bots.supervisor.paused(&bot(chat)) && state.bots.supervisor.status(&bot(chat)) != Some(Status::Stopping)
 }
 
-/// Task trees with their bots, agents, services and processes, for the Bots page.
-pub(crate) fn overview(state: &State) -> String {
-    let mut html = format!("<div class='section-heading'><h2>Bots</h2></div>{}", crate::navigation::bots_tabs(false));
-    match crate::process_tree::render(state) {
-        Some(tree) => html.push_str(&tree),
-        None => html.push_str("<div class='empty'>No bots, services or active agents. Use /bot on in a DM or approve a bot request.</div>"),
+/// The live forest: task trees with their bots, agents, services and
+/// processes that `search` matches (all of them without a search), or why
+/// there are none.
+pub(crate) fn overview(state: &State, search: &str) -> String {
+    match crate::process_tree::render(state, search) {
+        Some(tree) => tree,
+        None if search.is_empty() => "<p class='forest-empty'>No bots, services or active agents. Use /bot on in a DM or approve a bot request.</p>".into(),
+        None => "<p class='forest-empty'>No live bots match that search.</p>".into(),
     }
-    html
 }
-/// The whole Bots page: live task trees, queued turns, then the graveyard page
-/// selected by `graveyard`.
-pub(crate) fn page(state: &State, graveyard: &crate::graveyard::Query) -> String {
-    let mut html = overview(state);
+/// The whole Bots page: one search over live and dead bots, then one scene with
+/// the live task trees above and the graveyard (the page `query` selects) on
+/// the ground beneath them, then queued turns.
+pub(crate) fn page(state: &State, query: &crate::graveyard::Query) -> String {
+    let clear = if query.search.is_empty() { "" } else { "<a href='/?view=agents'>Clear</a>" };
+    let mut html = format!(
+        "<div class='section-heading'><h2>Bots</h2></div>{}<form class='bots-search' method='get' action='/' role='search'><input type='hidden' name='view' value='agents'><input type='search' name='q' value='{}' maxlength='{}' placeholder='Search live and dead bots by name or objective' aria-label='Search live and dead bots by name or objective'><button>Search</button>{clear}</form><div class='bots-scene'>{}{}</div><p class='muted tiny'>{}</p>",
+        crate::navigation::bots_tabs(false),
+        crate::escape(&query.search),
+        crate::graveyard::QUERY_CHARS,
+        overview(state, &query.search),
+        crate::graveyard::render(state, query),
+        crate::process_tree::LEGEND,
+    );
     html.push_str(&state.runtime.render("agents", "").unwrap_or_default());
-    html.push_str(&crate::graveyard::render(state, graveyard));
     html
 }
 

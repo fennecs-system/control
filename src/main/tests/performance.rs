@@ -218,7 +218,7 @@ fn operator_views() {
         let workloads: [(&str, &View); 6] = [
             ("web_chat_page", &|s| chat::render(s, "benchmark-chat").unwrap().len()),
             ("web_requests_panel", &|s| chat::requests(s, "benchmark-chat").unwrap().len()),
-            ("web_bots_page", &|s| crate::bots::overview(s).len()),
+            ("web_bots_page", &|s| crate::bots::overview(s, "").len()),
             ("chat_read", &|s| chat::detail(s, "benchmark-chat").unwrap().to_string().len()),
             ("chats_list", &|s| chat::list(s).to_string().len()),
             ("requests_list", &|s| chat::pending_requests(s).to_string().len()),
@@ -297,9 +297,10 @@ fn chat_lists() {
         }
     }
 }
-/// A node with `dead` stopped bots (one turn each, varied stop reasons) beside
-/// one steering chat with a live spawned agent, for the Bots page.
-pub(crate) fn dead_bots(dead: usize) -> State {
+/// A node with `live` running bots spawned by one steering chat (which also
+/// has a live agent) beside `dead` stopped bots (one turn each, varied stop
+/// reasons), for the Bots page.
+pub(crate) fn dead_bots(live: usize, dead: usize) -> State {
     let mut state = State::default();
     let root = chat::create(&mut state);
     let template = state.chats[0].clone();
@@ -320,6 +321,19 @@ pub(crate) fn dead_bots(dead: usize) -> State {
         turn.attempts.push(Attempt { started_unix: 1_700_000_000 + index as u64 * 37, elapsed_ms: 90_000, ..Default::default() });
         state.runtime.runs.push(turn);
     }
+    for index in 0..live {
+        let mut chat = template.clone();
+        chat.id = format!("c-live-bot-{index}");
+        chat.title = format!("Patrol tunnel ridge {index} for intruders");
+        chat.parent_chat = Some(root.clone());
+        state.chats.push(chat);
+        let mut turn = run.clone();
+        turn.id = format!("run-live-bot-{index}");
+        turn.chat_id = Some(format!("c-live-bot-{index}"));
+        turn.status = "completed".into();
+        state.runtime.runs.push(turn);
+        crate::bots::command(&mut state, &format!("c-live-bot-{index}"), "on every 10").unwrap();
+    }
     let mut agent = template.clone();
     agent.id = "c-live-agent".into();
     agent.parent_chat = Some(root);
@@ -337,17 +351,18 @@ pub(crate) fn dead_bots(dead: usize) -> State {
 #[ignore = "explicit release-mode synthetic timing; no credentials, models or source execution"]
 fn bots_page() {
     let rounds = std::env::var("CONTROL_TIMING_ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(9);
-    for dead in [10, 1000, 10_000] {
-        let state = dead_bots(dead);
+    for (live, dead) in [(0, 10), (100, 1000), (100, 10_000)] {
+        let state = dead_bots(live, dead);
         let next = crate::graveyard::dead(&state, "").get(crate::graveyard::PAGE.min(dead) - 1).map(|grave| grave.chat.id.clone()).unwrap_or_default();
         let next: &'static str = next.leak();
-        let workloads: [(&str, &View); 3] = [
-            ("web_bots_page", &|s| crate::render(s, "agents", "none", "general").len()),
+        let workloads: [(&str, &View); 4] = [
+            ("web_bots_page", &|s| crate::public_render(s, &crate::fields("view=agents"), "none").len()),
+            ("web_bots_page_search", &|s| crate::public_render(s, &crate::fields("view=agents&q=tunnel+9"), "none").len()),
+            ("web_bots_page_search_miss", &|s| crate::public_render(s, &crate::fields("view=agents&q=zzzz"), "none").len()),
             ("graveyard_next_page", &move |s| {
                 let query = crate::graveyard::Query { older: Some(next.into()), ..Default::default() };
                 crate::graveyard::rows(&crate::graveyard::dead(s, ""), &query).len()
             }),
-            ("graveyard_search", &|s| crate::graveyard::render(s, &crate::graveyard::Query { search: "tunnel 9".into(), ..Default::default() }).len()),
         ];
         for (name, workload) in workloads {
             let mut samples = Vec::new();
@@ -359,7 +374,7 @@ fn bots_page() {
                 samples.push(start.elapsed().as_nanos() / 10);
             }
             samples.sort_unstable();
-            println!("{}", serde_json::json!({"workload":name,"dead_bots":dead,"median_ns":samples[samples.len() / 2],"min_ns":samples[0],"bytes":workload(&state)}));
+            println!("{}", serde_json::json!({"workload":name,"live_bots":live,"dead_bots":dead,"median_ns":samples[samples.len() / 2],"min_ns":samples[0],"bytes":workload(&state)}));
         }
     }
 }

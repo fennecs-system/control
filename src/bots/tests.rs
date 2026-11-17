@@ -2041,9 +2041,9 @@ fn a_bot_follows_its_chats_watches_and_wakes_on_lines_and_exits() {
 #[test]
 fn the_bots_page_lists_sleeping_bots() {
     let (mut state, chat) = fixture();
-    assert!(overview(&state).contains("No bots"));
+    assert!(overview(&state, "").contains("No bots"));
     command_at(&mut state, &chat, "on every 10", Now(0)).unwrap();
-    let page = overview(&state);
+    let page = overview(&state, "");
     assert!(
         page.contains("sleeping") && page.contains(&format!("/dm/{chat}")),
         "{page}"

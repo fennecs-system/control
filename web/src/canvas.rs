@@ -26,24 +26,35 @@ impl Rect {
 }
 
 /// What part of the drawing is on screen: the drawing point at the element's
-/// top-left corner and the screen pixels per drawing unit.
+/// top-left corner and the screen pixels per drawing unit. A grounded view
+/// (`data-canvas='ground'`, for drawings that grow up from a baseline) fits
+/// the drawing to the element's bottom edge instead of its middle.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct View { bounds: Rect, width: f64, height: f64, x: f64, y: f64, scale: f64, moved: bool }
+pub struct View { bounds: Rect, width: f64, height: f64, x: f64, y: f64, scale: f64, moved: bool, ground: bool }
 impl View {
     pub fn new(bounds: Rect, width: f64, height: f64) -> View {
-        let mut view = View { bounds, width: 1.0, height: 1.0, x: bounds.x, y: bounds.y, scale: 1.0, moved: false };
+        let mut view = View { bounds, width: 1.0, height: 1.0, x: bounds.x, y: bounds.y, scale: 1.0, moved: false, ground: false };
         view.resize(width, height);
         view
+    }
+    /// The same view, fitted to the element's bottom edge.
+    pub fn grounded(mut self) -> View {
+        self.ground = true;
+        if !self.moved {
+            self.fit();
+        }
+        self
     }
     /// The scale at which the whole drawing fits, never enlarged past 1:1.
     fn fit_scale(&self) -> f64 {
         (self.width / self.bounds.w).min(self.height / self.bounds.h).min(1.0)
     }
-    /// Centres the whole drawing in the element.
+    /// Centres the whole drawing in the element (on its bottom edge when grounded).
     pub fn fit(&mut self) {
         self.scale = self.fit_scale();
         self.x = self.bounds.x + (self.bounds.w - self.width / self.scale) / 2.0;
-        self.y = self.bounds.y + (self.bounds.h - self.height / self.scale) / 2.0;
+        let spare = self.bounds.h - self.height / self.scale;
+        self.y = self.bounds.y + if self.ground { spare } else { spare / 2.0 };
         self.moved = false;
     }
     /// A new element size refits an untouched view and otherwise keeps the
@@ -209,7 +220,10 @@ fn listen<E: JsCast + 'static>(target: &web_sys::EventTarget, name: &str, captur
 fn attach_one(root: web_sys::HtmlElement) -> Result<(), JsValue> {
     let Some(svg) = root.query_selector("svg")? else { return Ok(()) };
     let Some(bounds) = svg.get_attribute("viewBox").as_deref().and_then(Rect::parse) else { return Ok(()) };
-    let view = View::new(bounds, root.client_width() as f64, root.client_height() as f64);
+    let mut view = View::new(bounds, root.client_width() as f64, root.client_height() as f64);
+    if root.get_attribute("data-canvas").as_deref() == Some("ground") {
+        view = view.grounded();
+    }
     if let Some(controls) = root.query_selector(".canvas-controls")? {
         controls.remove_attribute("hidden")?;
     }

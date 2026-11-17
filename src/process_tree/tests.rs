@@ -86,26 +86,42 @@ fn many_generated_trees_stay_tidy() {
 #[test]
 fn the_tree_shows_bots_services_and_processes_of_active_task_trees() {
     let mut state = State::default();
-    assert!(render(&state).is_none());
+    assert!(render(&state, "").is_none());
     let lead = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &lead, "Run a <civilisation>", "test").unwrap();
     state.chats[0].name = Some("Run a <civilisation>".into());
     let worker = crate::chat::create(&mut state);
     state.chats.iter_mut().find(|chat| chat.id == worker).unwrap().parent_chat = Some(lead.clone());
-    let html = render(&state).unwrap();
+    let html = render(&state, "").unwrap();
     assert!(html.contains("<svg") && html.contains("pt-steering") && html.contains("pt-agent"));
     assert!(html.contains("Run a &lt;civilisation&gt;") && !html.contains("<civilisation>"));
     assert!(html.contains(&format!("href='/dm/{worker}'")));
     // A canvas the client pans and zooms: the viewBox is the drawing's bounds
     // (a parent over one child, plus the stroke margin) and nothing fixes its size.
-    assert!(html.contains("<div class='process-tree' role='region' aria-label='Process tree' tabindex='0' data-canvas>"));
+    assert!(html.contains("<div class='process-tree' role='region' aria-label='Process tree' tabindex='0' data-canvas='ground' data-levels='2'>"));
     let svg = &html[html.find("<svg").unwrap()..];
     let svg = &svg[..svg.find('>').unwrap()];
     assert!(svg.contains(&format!("viewBox='-2 -2 {:.0} {:.0}'", WIDTH + 4.0, 2.0 * HEIGHT + V_GAP + 4.0)), "{svg}");
     assert!(!svg.contains("width=") && !svg.contains("height="), "the canvas, not the drawing, sets the size");
+    assert!(svg.contains("preserveAspectRatio='xMidYMax meet'"), "without the client the trees still stand on the ground");
     assert!(html.contains("<div class='canvas-controls' hidden>") && html.contains("data-zoom='fit'"), "controls appear once the client runs");
+    // Trees grow up: the lead stands at the bottom, its agent a level above,
+    // and the edge runs from the lead's top to the agent's bottom.
+    let low = 1.0 * (HEIGHT + V_GAP);
+    assert!(html.contains(&format!("pt-steering' transform='translate(0.0 {low:.1})'")), "{html}");
+    assert!(html.contains("pt-agent' transform='translate(0.0 0.0)'"), "{html}");
+    let middle = (low + HEIGHT) / 2.0;
+    assert!(html.contains(&format!("d='M{x:.1} {low:.1}C{x:.1} {middle:.1} {x:.1} {middle:.1} {x:.1} {HEIGHT:.1}'", x = WIDTH / 2.0)), "{html}");
+    // A shallower tree beside it stands on the same baseline.
+    let other = crate::chat::create(&mut state);
+    state.runtime.enqueue("Work".into(), crate::runtime::RunKind::Chat, "test");
+    let run = state.runtime.runs.last_mut().unwrap();
+    run.chat_id = Some(other);
+    run.status = "running".into();
+    let both = render(&state, "").unwrap();
+    assert_eq!(both.matches(&format!(" {low:.1})'")).count(), 2, "both roots on the bottom level: {both}");
     state.runtime.runs.iter_mut().for_each(|run| run.status = "completed".into());
-    assert!(render(&state).is_none(), "trees without bots, services or active turns are omitted");
+    assert!(render(&state, "").is_none(), "trees without bots, services or active turns are omitted");
 }
 #[test]
 fn nodes_show_callsigns_and_renames() {
@@ -117,7 +133,7 @@ fn nodes_show_callsigns_and_renames() {
     state.runtime.enqueue("Work".into(), crate::runtime::RunKind::Chat, "test");
     state.runtime.runs[0].chat_id = Some(worker.clone());
     state.runtime.runs[0].status = "running".into();
-    let svg = render(&state).unwrap();
+    let svg = render(&state, "").unwrap();
     let lead_name = crate::callsigns::name(&state.chats, &lead).unwrap().into_owned();
     assert!(svg.contains(&format!(">{lead_name}</text>")), "{svg}");
     assert!(svg.contains(">player1</text>"), "{svg}");
