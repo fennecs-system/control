@@ -72,6 +72,11 @@ pub fn bots_tabs(history: bool) -> String {
     let current = |selected| if selected {" aria-current='page'"} else {""};
     format!("<nav class='tabs' aria-label='Bots'><a href='/?view=agents'{}>Live</a><a href='/bots/history'{}>History</a></nav>",current(!history),current(history))
 }
+/// The one toolbar row above the Bots and History pages: the tabs, then the
+/// page's search form, then `controls` (the tree's zoom slot, or empty).
+pub fn bots_toolbar(history: bool, search: &str, controls: &str) -> String {
+    format!("<div class='bots-toolbar'>{}{search}{controls}</div>",bots_tabs(history))
+}
 /// The DM picker: the newest ten threads and the active one's thread. All DMs
 /// are on Bots / History (`crate::history_view`).
 pub fn conversations(state: &crate::State, active: &str) -> String {

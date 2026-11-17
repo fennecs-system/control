@@ -329,6 +329,11 @@ fn clip(text: &str, limit: usize) -> String {
 /// The drawing's key, shown once below the whole Bots scene.
 pub(crate) const LEGEND: &str = "Bright purple: steering chats and bots · grey: agents · lavender: services · dashed: watches and running commands · dot: active. Drag the trees to pan; scroll or pinch to zoom.";
 
+/// The toolbar slot for the drawing's zoom buttons. It stays hidden and empty
+/// until the client attaches the canvas whose id it names and mounts the
+/// buttons into it, so a page without the client shows no gap.
+pub(crate) const ZOOM_SLOT: &str = "<div class='canvas-controls' data-canvas-controls='process-tree' role='group' aria-label='Tree zoom' hidden></div>";
+
 /// The SVG drawing, or None when no task tree has a bot, service or active turn
 /// (that `search` matches, when it is not empty). Matched chats are marked
 /// `pt-match`; the rest of a searched drawing is dimmed.
@@ -389,7 +394,7 @@ pub(crate) fn render(state: &State, search: &str) -> Option<String> {
     // get a shorter canvas (`data-levels`, styled in CSS) so the graveyard
     // below them stays close.
     Some(format!(
-        "<div class='process-tree' role='region' aria-label='Process tree' tabindex='0' data-canvas='ground' data-levels='{}'><div class='canvas-controls' hidden><button type='button' data-zoom='in' aria-label='Zoom in'>+</button><button type='button' data-zoom='out' aria-label='Zoom out'>−</button><button type='button' data-zoom='fit' aria-label='Fit to view'>Fit</button></div><svg{} preserveAspectRatio='xMidYMax meet' role='img' aria-label='Task trees: steering chats, agents, bots, services and processes' viewBox='-2 -2 {:.0} {:.0}'>{body}</svg></div>",
+        "<div class='process-tree' id='process-tree' role='region' aria-label='Process tree' tabindex='0' data-canvas='ground' data-levels='{}'><svg{} preserveAspectRatio='xMidYMax meet' role='img' aria-label='Task trees: steering chats, agents, bots, services and processes' viewBox='-2 -2 {:.0} {:.0}'>{body}</svg></div>",
         levels.min(6), if search.is_empty() { "" } else { " class='searching'" }, width + 4.0, height + 4.0
     ))
 }

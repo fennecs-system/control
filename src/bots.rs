@@ -422,25 +422,36 @@ pub(crate) fn background_allowed(state: &State, chat: &str) -> bool {
 
 /// The live forest: task trees with their bots, agents, services and
 /// processes that `search` matches (all of them without a search), or why
-/// there are none.
+/// there are none. The page renders it via [`page`]; tests and benchmarks
+/// call it alone.
+#[cfg(test)]
 pub(crate) fn overview(state: &State, search: &str) -> String {
-    match crate::process_tree::render(state, search) {
+    forest(crate::process_tree::render(state, search), search)
+}
+fn forest(tree: Option<String>, search: &str) -> String {
+    match tree {
         Some(tree) => tree,
         None if search.is_empty() => "<p class='forest-empty'>No bots, services or active agents. Use /bot on in a DM or approve a bot request.</p>".into(),
         None => "<p class='forest-empty'>No live bots match that search.</p>".into(),
     }
 }
-/// The whole Bots page: one search over live and dead bots, then one scene with
+/// The whole Bots page: one toolbar row (tabs, one search over live and dead
+/// bots, and the tree's zoom slot when there is a tree), then one scene with
 /// the live task trees above and the graveyard (the page `query` selects) on
 /// the ground beneath them, then queued turns.
 pub(crate) fn page(state: &State, query: &crate::graveyard::Query) -> String {
     let clear = if query.search.is_empty() { "" } else { "<a href='/?view=agents'>Clear</a>" };
-    let mut html = format!(
-        "<div class='section-heading'><h2>Bots</h2></div>{}<form class='bots-search' method='get' action='/' role='search'><input type='hidden' name='view' value='agents'><input type='search' name='q' value='{}' maxlength='{}' placeholder='Search live and dead bots by name or objective' aria-label='Search live and dead bots by name or objective'><button>Search</button>{clear}</form><div class='bots-scene'>{}{}</div><p class='muted tiny'>{}</p>",
-        crate::navigation::bots_tabs(false),
+    let search = format!(
+        "<form class='bots-search' method='get' action='/' role='search'><input type='hidden' name='view' value='agents'><input type='search' name='q' value='{}' maxlength='{}' placeholder='Search live and dead bots by name or objective' aria-label='Search live and dead bots by name or objective'><button>Search</button>{clear}</form>",
         crate::escape(&query.search),
         crate::graveyard::QUERY_CHARS,
-        overview(state, &query.search),
+    );
+    let tree = crate::process_tree::render(state, &query.search);
+    let zoom = if tree.is_some() { crate::process_tree::ZOOM_SLOT } else { "" };
+    let mut html = format!(
+        "<div class='section-heading'><h2>Bots</h2></div>{}<div class='bots-scene'>{}{}</div><p class='muted tiny'>{}</p>",
+        crate::navigation::bots_toolbar(false, &search, zoom),
+        forest(tree, &query.search),
         crate::graveyard::render(state, query),
         crate::process_tree::LEGEND,
     );

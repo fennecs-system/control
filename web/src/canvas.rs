@@ -9,6 +9,9 @@ use wasm_bindgen::{closure::Closure, JsCast, JsValue};
 const DRAG_SLOP: f64 = 4.0;
 /// Largest zoom, in screen pixels per drawing unit.
 const MAX_SCALE: f64 = 4.0;
+/// Largest scale a fit uses: a small drawing grows to fill a tall canvas,
+/// but only a little past 1:1 so its text stays in proportion.
+const MAX_FIT: f64 = 1.25;
 /// Step for the zoom buttons and keys.
 const STEP: f64 = 1.25;
 /// Pixels moved per arrow key press.
@@ -22,6 +25,10 @@ impl Rect {
         let mut numbers = view_box.split(|c: char| c.is_whitespace() || c == ',').filter(|s| !s.is_empty()).map(str::parse::<f64>);
         let rect = Rect { x: numbers.next()?.ok()?, y: numbers.next()?.ok()?, w: numbers.next()?.ok()?, h: numbers.next()?.ok()? };
         (numbers.next().is_none() && rect.w > 0.0 && rect.h > 0.0 && [rect.x, rect.y].iter().all(|v| v.is_finite())).then_some(rect)
+    }
+    /// A CSS `aspect-ratio` value with this rectangle's proportions.
+    pub fn aspect(&self) -> String {
+        format!("{:.2} / {:.2}", self.w, self.h)
     }
 }
 
@@ -45,9 +52,9 @@ impl View {
         }
         self
     }
-    /// The scale at which the whole drawing fits, never enlarged past 1:1.
+    /// The scale at which the whole drawing fits, never enlarged past [`MAX_FIT`].
     fn fit_scale(&self) -> f64 {
-        (self.width / self.bounds.w).min(self.height / self.bounds.h).min(1.0)
+        (self.width / self.bounds.w).min(self.height / self.bounds.h).min(MAX_FIT)
     }
     /// Centres the whole drawing in the element (on its bottom edge when grounded).
     pub fn fit(&mut self) {
@@ -121,8 +128,7 @@ impl Canvas {
         (rect.left(), rect.top())
     }
     fn press(&mut self, event: &web_sys::PointerEvent) {
-        let controls = event.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()).and_then(|t| t.closest(".canvas-controls").ok().flatten());
-        if controls.is_some() || (event.pointer_type() == "mouse" && event.button() != 0) {
+        if event.pointer_type() == "mouse" && event.button() != 0 {
             return;
         }
         if self.pointers.is_empty() {
@@ -187,19 +193,49 @@ impl Canvas {
         self.draw();
     }
     fn command(&mut self, command: &str) -> bool {
-        match command {
-            "in" | "+" | "=" => self.view.zoom_centre(STEP),
-            "out" | "-" | "_" => self.view.zoom_centre(1.0 / STEP),
-            "fit" | "0" => self.view.fit(),
-            "ArrowLeft" => self.view.pan(NUDGE, 0.0),
-            "ArrowRight" => self.view.pan(-NUDGE, 0.0),
-            "ArrowUp" => self.view.pan(0.0, NUDGE),
-            "ArrowDown" => self.view.pan(0.0, -NUDGE),
-            _ => return false,
+        let known = steer(&mut self.view, command);
+        if known {
+            self.draw();
         }
-        self.draw();
-        true
+        known
     }
+}
+
+/// Applies a zoom button's `data-zoom` value or a key to `view`; false when
+/// `command` is neither.
+pub fn steer(view: &mut View, command: &str) -> bool {
+    match command {
+        "in" | "+" | "=" => view.zoom_centre(STEP),
+        "out" | "-" | "_" => view.zoom_centre(1.0 / STEP),
+        "fit" | "0" => view.fit(),
+        "ArrowLeft" => view.pan(NUDGE, 0.0),
+        "ArrowRight" => view.pan(-NUDGE, 0.0),
+        "ArrowUp" => view.pan(0.0, NUDGE),
+        "ArrowDown" => view.pan(0.0, -NUDGE),
+        _ => return false,
+    }
+    true
+}
+
+/// The zoom buttons the client mounts into a canvas's toolbar slot. Each
+/// `data-zoom` value is a [`steer`] command.
+pub const CONTROLS: &str = "<button type='button' data-zoom='in' aria-label='Zoom in'>+</button><button type='button' data-zoom='out' aria-label='Zoom out'>−</button><button type='button' data-zoom='fit' aria-label='Fit to view'>Fit</button>";
+
+/// The selector of the slot (`data-canvas-controls`, anywhere on the page)
+/// that holds the zoom buttons of the canvas whose element id is `id`; None
+/// for a canvas without a plain id.
+pub fn slot_selector(id: &str) -> Option<String> {
+    (!id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')).then(|| format!("[data-canvas-controls='{id}']"))
+}
+
+/// Fills the canvas's toolbar slot with [`CONTROLS`] and shows it. The slot
+/// is hidden and empty until now, so a page without the client has no gap.
+fn mount_controls(document: &web_sys::Document, root: &web_sys::HtmlElement) -> Result<Option<web_sys::Element>, JsValue> {
+    let Some(selector) = slot_selector(&root.id()) else { return Ok(None) };
+    let Some(slot) = document.query_selector(&selector)? else { return Ok(None) };
+    slot.set_inner_html(CONTROLS);
+    slot.remove_attribute("hidden")?;
+    Ok(Some(slot))
 }
 
 fn listen<E: JsCast + 'static>(target: &web_sys::EventTarget, name: &str, capture: bool, canvas: &Rc<RefCell<Canvas>>, handle: fn(&mut Canvas, &E)) -> Result<(), JsValue> {
@@ -217,17 +253,20 @@ fn listen<E: JsCast + 'static>(target: &web_sys::EventTarget, name: &str, captur
     Ok(())
 }
 
-fn attach_one(root: web_sys::HtmlElement) -> Result<(), JsValue> {
+fn attach_one(document: &web_sys::Document, root: web_sys::HtmlElement) -> Result<(), JsValue> {
     let Some(svg) = root.query_selector("svg")? else { return Ok(()) };
     let Some(bounds) = svg.get_attribute("viewBox").as_deref().and_then(Rect::parse) else { return Ok(()) };
+    // The drawing keeps setting the canvas's proportions (CSS bounds its
+    // height) once its viewBox follows the view, so zooming never resizes it.
+    if let Some(svg) = svg.dyn_ref::<web_sys::SvgElement>() {
+        svg.style().set_property("aspect-ratio", &bounds.aspect())?;
+    }
+    root.class_list().add_1("live")?;
     let mut view = View::new(bounds, root.client_width() as f64, root.client_height() as f64);
     if root.get_attribute("data-canvas").as_deref() == Some("ground") {
         view = view.grounded();
     }
-    if let Some(controls) = root.query_selector(".canvas-controls")? {
-        controls.remove_attribute("hidden")?;
-    }
-    root.class_list().add_1("live")?;
+    let controls = mount_controls(document, &root)?;
     let canvas = Rc::new(RefCell::new(Canvas { root: root.clone(), svg, view, pointers: Vec::new(), travel: 0.0, dragged: false }));
     canvas.borrow().draw();
     let target: &web_sys::EventTarget = root.as_ref();
@@ -244,12 +283,14 @@ fn attach_one(root: web_sys::HtmlElement) -> Result<(), JsValue> {
             event.stop_propagation();
         }
     })?;
-    listen(target, "click", false, &canvas, |canvas, event: &web_sys::MouseEvent| {
-        let button = event.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()).and_then(|t| t.closest("[data-zoom]").ok().flatten());
-        if let Some(command) = button.and_then(|b| b.get_attribute("data-zoom")) {
-            canvas.command(&command);
-        }
-    })?;
+    if let Some(controls) = &controls {
+        listen(controls.as_ref(), "click", false, &canvas, |canvas, event: &web_sys::MouseEvent| {
+            let button = event.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()).and_then(|t| t.closest("[data-zoom]").ok().flatten());
+            if let Some(command) = button.and_then(|b| b.get_attribute("data-zoom")) {
+                canvas.command(&command);
+            }
+        })?;
+    }
     listen(target, "keydown", false, &canvas, |canvas, event: &web_sys::KeyboardEvent| {
         if !event.ctrl_key() && !event.meta_key() && !event.alt_key() && canvas.command(&event.key()) {
             event.prevent_default();
@@ -273,7 +314,7 @@ pub fn attach(document: &web_sys::Document) -> Result<bool, JsValue> {
     let roots = document.query_selector_all("[data-canvas]")?;
     for index in 0..roots.length() {
         if let Some(root) = roots.item(index).and_then(|node| node.dyn_into::<web_sys::HtmlElement>().ok()) {
-            attach_one(root)?;
+            attach_one(document, root)?;
         }
     }
     Ok(roots.length() > 0)

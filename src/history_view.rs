@@ -375,11 +375,12 @@ pub fn page(state: &State, filter: &Filter) -> String {
     if summaries.get(OUTSIDE).is_some_and(|summary| summary.turns == 0) {
         listed.remove(0);
     }
-    let mut html = format!("<div class='section-heading'><h2>Bots<span class='slash' aria-hidden='true'>/</span>History</h2><a href='/dms?new=1'>+ New DM</a></div>{}", crate::navigation::bots_tabs(true));
+    // The Live tab's toolbar with these filters as its search; no canvas, so no zoom slot.
+    let toolbar = crate::navigation::bots_toolbar(true, &form(filter, &models(state)), "");
+    let mut html = format!("<div class='section-heading'><h2>Bots<span class='slash' aria-hidden='true'>/</span>History</h2><a href='/dms?new=1'>+ New DM</a></div>{toolbar}");
     if !state.runtime.notice.is_empty() {
         html.push_str(&format!("<p role='status'>{}</p>", escape(&state.runtime.notice)));
     }
-    html.push_str(&form(filter, &models(state)));
     let dms = rows.iter().filter(|row| row.chat.is_some()).count();
     let found = match &matches {
         Some(matches) if filter.narrows() => {

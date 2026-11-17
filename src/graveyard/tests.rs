@@ -353,6 +353,111 @@ fn one_search_filters_live_trees_and_graves() {
 }
 
 #[test]
+fn one_toolbar_row_holds_the_tabs_search_and_zoom_slot() {
+    let mut state = State::default();
+    let live = grave(&mut state, "Guard the tunnel mouth", "completed", true, 3_000, None);
+    crate::bots::command(&mut state, &live, "on every 10").unwrap();
+    let page = crate::public_render(&state, &crate::fields("view=agents"), "none");
+    assert_eq!(page.matches("<div class='bots-toolbar'>").count(), 1);
+    let toolbar = page.split("<div class='bots-toolbar'>").nth(1).unwrap();
+    let toolbar = &toolbar[..toolbar.find("<div class='bots-scene'>").expect("the toolbar sits directly above the scene")];
+    let (tabs, search, zoom) = (toolbar.find("<nav class='tabs' aria-label='Bots'>").unwrap(), toolbar.find("<form class='bots-search'").unwrap(), toolbar.find(crate::process_tree::ZOOM_SLOT).unwrap());
+    assert!(tabs == 0 && tabs < search && search < zoom, "tabs left, search middle, zoom right: {toolbar}");
+    assert!(toolbar.ends_with(&format!("{}</div>", crate::process_tree::ZOOM_SLOT)), "nothing else in the row");
+    assert_eq!(page.matches("data-zoom").count(), 0, "the client mounts the buttons; without it the slot stays hidden and empty");
+    assert!(page.contains("id='process-tree'"), "the canvas the slot names");
+    // No tree, no slot.
+    let empty = crate::bots::page(&State::default(), &Query::default());
+    assert!(empty.contains("<div class='bots-toolbar'><nav class='tabs'") && !empty.contains("data-canvas-controls"));
+    // History shares the row: its tabs and filters, but no canvas to zoom.
+    let mut response = Vec::new();
+    assert!(crate::session_http::handle(&mut response, &mut state, "GET", "/bots/history", "none", "", &[]));
+    let history = String::from_utf8(response).unwrap();
+    let toolbar = history.split("<div class='bots-toolbar'>").nth(1).expect("History has the toolbar");
+    assert!(toolbar.starts_with("<nav class='tabs' aria-label='Bots'><a href='/?view=agents'>Live</a><a href='/bots/history' aria-current='page'>History</a></nav><form class='history-filters'"));
+    assert!(!history.contains("data-canvas-controls"));
+}
+
+/// With `CONTROL_PREVIEW_DIR`, writes self-contained Bots pages for
+/// screenshots: `bots.html` as served (no client, so no zoom buttons) and
+/// `bots-client.html` with the zoom buttons mounted as the client mounts them.
+#[test]
+fn preview_pages() {
+    let Ok(directory) = std::env::var("CONTROL_PREVIEW_DIR") else { return };
+    let mut state = State::default();
+    let bot = |state: &mut State, title: &str, parent: Option<&str>| {
+        let chat = grave(state, title, "completed", true, 9_000, None);
+        crate::bots::command(state, &chat, "on every 10").unwrap();
+        state.chats.iter_mut().find(|session| session.id == chat).unwrap().parent_chat = parent.map(str::to_owned);
+        chat
+    };
+    bot(&mut state, "Patrol the outer farms", None);
+    let lead = bot(&mut state, "Run the mining colony", None);
+    let mut first = String::new();
+    for title in ["Dig the north tunnel", "Smelt the iron", "Count the sheep", "Guard the gate"] {
+        let child = bot(&mut state, title, Some(&lead));
+        if first.is_empty() {
+            first = child;
+        }
+    }
+    let worker = grave(&mut state, "Survey tunnel 9", "running", false, 9_500, None);
+    state.chats.iter_mut().find(|session| session.id == worker).unwrap().parent_chat = Some(first);
+    let reasons = ["failed", "cancelled", "completed", "interrupted", "blocked"];
+    for index in 0..34 {
+        let termination = [None, Some(Termination::TimedOut), Some(Termination::StepLimit)][index % 3];
+        grave(&mut state, &format!("Old job {index}"), reasons[index % reasons.len()], index % 4 != 0, 1_000 + index as u64 * 60, termination);
+    }
+    let mut page = crate::public_render(&state, &crate::fields("view=agents"), "none");
+    for (link, css) in [
+        ("<link rel=\"stylesheet\" href=\"/style.css\">", include_str!("../../assets/style.css")),
+        ("<link rel='stylesheet' href='/collective.css'>", include_str!("../../assets/collective.css")),
+        ("<link rel='stylesheet' href='/runtime.css'>", include_str!("../../assets/runtime.css")),
+        ("<link rel='stylesheet' href='/workspace.css'>", include_str!("../../assets/workspace.css")),
+        ("<link rel='stylesheet' href='/navigation.css'>", include_str!("../../assets/navigation.css")),
+    ] {
+        page = page.replace(link, &format!("<style>{css}</style>"));
+    }
+    let page = page.split("<script").next().unwrap().to_owned() + "</body></html>";
+    let mounted = crate::process_tree::ZOOM_SLOT.replace(" hidden></div>", "><button type='button' data-zoom='in' aria-label='Zoom in'>+</button><button type='button' data-zoom='out' aria-label='Zoom out'>−</button><button type='button' data-zoom='fit' aria-label='Fit to view'>Fit</button></div>");
+    let directory = std::path::Path::new(&directory);
+    std::fs::create_dir_all(directory).unwrap();
+    // The client also sizes the live canvas to the drawing's proportions.
+    let view_box = page.split("viewBox='-2 -2 ").nth(1).unwrap().split('\'').next().unwrap().replace(' ', " / ");
+    let client = page.replace(crate::process_tree::ZOOM_SLOT, &mounted)
+        .replace("<div class='process-tree' id='process-tree'", "<div class='process-tree live' id='process-tree'")
+        .replace(" preserveAspectRatio='xMidYMax meet'", &format!(" style='aspect-ratio:{view_box}' preserveAspectRatio='xMidYMax meet'"));
+    std::fs::write(directory.join("bots-client.html"), client).unwrap();
+    std::fs::write(directory.join("bots.html"), page).unwrap();
+}
+
+#[test]
+fn every_toolbar_control_shares_one_height() {
+    let navigation = include_str!("../../assets/navigation.css");
+    let runtime = include_str!("../../assets/runtime.css");
+    let toolbar = navigation.lines().find(|line| line.starts_with(".bots-toolbar{")).unwrap();
+    assert!(toolbar.starts_with(".bots-toolbar{--toolbar-h:36px;display:flex;align-items:flex-start;"), "one height token; wrapped lines keep the tabs on top");
+    // Tabs, search input, Search and History filter buttons, selects and the
+    // mounted zoom buttons: one rule sizes them all, borders included.
+    assert!(toolbar.contains(".bots-toolbar :is(.tabs a,input[type=search],select,button){box-sizing:border-box;height:var(--toolbar-h);margin:0;padding-top:0;padding-bottom:0;border-radius:0;vertical-align:middle}"));
+    assert_eq!(toolbar.matches(";height:").count() + toolbar.matches("{height:").count(), 1, "nothing in the row sets another height");
+    // Matching one-pixel borders: tabs, input (the page default), Search and zoom buttons.
+    assert!(include_str!("../../assets/collective.css").contains(".tabs a{padding:8px 12px;border:1px solid var(--line);"));
+    assert!(include_str!("../../assets/style.css").contains("input,select{display:block;width:100%;margin-top:8px;padding:12px;background:#15151c;color:var(--text);border:1px solid var(--line)}"));
+    assert!(runtime.contains(".bots-search button{flex:none;padding:0 12px;border:1px solid var(--line);"));
+    assert!(runtime.contains(".canvas-controls button{min-width:var(--toolbar-h);padding:0 10px;border:1px solid var(--line);"));
+    // The tree canvas takes the drawing's proportions (the client sets them;
+    // without it the SVG's own), bounded per depth and by 70% of the viewport.
+    assert!(runtime.contains(".process-tree{--tree-max:min(1400px,70dvh);") && runtime.contains(".process-tree svg{display:block;flex:none;width:100%;height:auto;min-height:0;max-height:var(--tree-max);"));
+    for (css, rule) in [(runtime, ".canvas-controls button{"), (runtime, ".bots-search input{"), (runtime, ".bots-search button{")] {
+        let body = css.split(rule).nth(1).unwrap().split('}').next().unwrap();
+        assert!(!format!(";{body}").contains(";height") && !body.contains("padding:8px"), "{rule}{body}");
+    }
+    // Tabs and zoom share one line on a phone; the search takes the next.
+    assert!(toolbar.contains("@media(max-width:600px){.bots-toolbar{flex-wrap:wrap;row-gap:8px}.bots-toolbar>form{order:1;flex-basis:100%}}"));
+    assert!(!toolbar.contains("cyan") && !toolbar.contains("8cdacb"));
+}
+
+#[test]
 fn headstones_are_small_low_poly_stones_in_staggered_rows() {
     // Odd rows hold one stone fewer and start half a stone in, so the first
     // stone of each odd row repeats every 2c-1 stones for c columns. The rule
