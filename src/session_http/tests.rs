@@ -743,8 +743,8 @@ fn browser_fixture(long_messages_only: bool) {
     // The old run history opens the one History page with every DM's turns listed.
     b.post("/url", json!({"url":format!("{server}/?view=runs")}));
     b.wait("History run 54");
-    assert_eq!(count(&b, "details.history-dm[open]"), 50, "One page of DMs");
-    assert_eq!(count(&b, ".history-turn"), 50, "The child DM has no turns to list");
+    assert_eq!(count(&b, "details.history-dm[open]"), 50, "One page of DMs, every row open");
+    assert_eq!(count(&b, ".history-turn"), 49, "The newest DM, the child, has no turns");
     // The old DM history is the same page; rows load their turns when opened.
     b.post("/url", json!({"url":format!("{server}/chats/history")}));
     b.element(".sidebar a[href='/?view=agents'][aria-current='page']");

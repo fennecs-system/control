@@ -4,9 +4,10 @@
 //! Rows are DMs, newest activity first, [`PAGE`] per page. Each row is a
 //! `<details>`; the client loads its turns from `GET /bots/history/turns?dm=ID`
 //! the first time it opens, and without the client its link opens the DM's
-//! turns as a page (`?dm=ID`). Turn filters (status, kind, model, or "show
-//! turns") list the matching turns grouped under their DMs, at most [`INLINE`]
-//! per DM with a link to the rest. Turns outside any DM are grouped under one
+//! turns as a page (`?dm=ID`). Turn filters (status, kind, model) list only
+//! DMs with matching turns, and those turns under them; "Show turns" lists each
+//! DM's newest turns. Either shows at most [`INLINE`] per DM with a link to the
+//! rest. Turns outside any DM are grouped under one
 //! "Outside DMs" row. A page costs one pass over chats and a sort, then one
 //! pass over runs that adds up only the listed DMs' turns (a turn filter adds
 //! one more); only one page is formatted and every fragment is bounded. The
@@ -180,10 +181,6 @@ impl Filter {
     fn narrows(&self) -> bool {
         self.status.is_some() || self.kind.is_some() || !self.model.is_empty()
     }
-    /// Whether rows list their turns rather than loading them on demand.
-    fn grouped(&self) -> bool {
-        self.narrows() || self.expand
-    }
     fn matches(&self, run: &Run) -> bool {
         self.status.is_none_or(|outcome| outcome.matches(run))
             && self.kind.is_none_or(|kind| run.kind == kind)
@@ -245,13 +242,24 @@ struct Summary<'a> {
     tokens: u64,
     measured: bool,
     latest: Option<&'a Run>,
+    /// The newest [`INLINE`] turns, oldest first, when rows list them.
+    recent: Matches<'a>,
 }
-/// A DM's turns that match a turn filter: how many, and the newest
-/// [`INLINE`] of them, oldest first.
+/// A DM's turns that match a turn filter (or all of them): how many, and the
+/// newest [`INLINE`] of them, oldest first.
 #[derive(Default)]
 struct Matches<'a> {
     count: usize,
     recent: VecDeque<&'a Run>,
+}
+impl<'a> Matches<'a> {
+    fn push(&mut self, run: &'a Run) {
+        self.count += 1;
+        if self.recent.len() == INLINE {
+            self.recent.pop_front();
+        }
+        self.recent.push_back(run);
+    }
 }
 /// Tokens a turn's attempts reported, input plus output, when any did.
 fn tokens(run: &Run) -> Option<u64> {
@@ -284,15 +292,10 @@ struct Rows<'a> {
     matches: Option<ByDm<'a, Matches<'a>>>,
 }
 fn rows<'a>(state: &'a State, filter: &Filter) -> Rows<'a> {
-    let mut matches = filter.grouped().then(ByDm::<Matches>::default);
+    let mut matches = filter.narrows().then(ByDm::<Matches>::default);
     if let Some(matches) = &mut matches {
         for run in state.runtime.runs.iter().filter(|run| filter.matches(run)) {
-            let found = matches.entry(key(run)).or_default();
-            found.count += 1;
-            if found.recent.len() == INLINE {
-                found.recent.pop_front();
-            }
-            found.recent.push_back(run);
+            matches.entry(key(run)).or_default().push(run);
         }
     }
     let needle = filter.search.to_lowercase();
@@ -317,15 +320,19 @@ fn rows<'a>(state: &'a State, filter: &Filter) -> Rows<'a> {
     Rows { rows: rows.into_iter().map(|(_, row)| row).collect(), matches }
 }
 /// Summaries of the listed DMs, from one pass over runs that only adds up
-/// turns of those DMs.
-fn summaries<'a>(state: &'a State, listed: &[&Row<'a>]) -> ByDm<'a, Summary<'a>> {
+/// turns of those DMs, keeping their newest turns when `recent`.
+fn summaries<'a>(state: &'a State, listed: &[&Row<'a>], recent: bool) -> ByDm<'a, Summary<'a>> {
     let mut summaries: ByDm<Summary> = listed.iter().map(|row| (row.id, Summary::default())).collect();
     let outside = summaries.contains_key(OUTSIDE);
     for run in state.runtime.runs.iter() {
-        if let Some(summary) = run.chat_id.as_deref().and_then(|id| summaries.get_mut(id)) {
-            add(summary, run);
-        } else if outside && key(run) == OUTSIDE {
-            add(summaries.get_mut(OUTSIDE).expect("listed"), run);
+        let summary = match run.chat_id.as_deref().and_then(|id| summaries.get_mut(id)) {
+            Some(summary) => summary,
+            None if outside && key(run) == OUTSIDE => summaries.get_mut(OUTSIDE).expect("listed"),
+            None => continue,
+        };
+        add(summary, run);
+        if recent {
+            summary.recent.push(run);
         }
     }
     summaries
@@ -364,7 +371,7 @@ pub fn page(state: &State, filter: &Filter) -> String {
         && matches.as_ref().is_none_or(|matches| matches.contains_key(OUTSIDE)) {
         listed.insert(0, &outside);
     }
-    let summaries = summaries(state, &listed);
+    let summaries = summaries(state, &listed, filter.expand && matches.is_none());
     if summaries.get(OUTSIDE).is_some_and(|summary| summary.turns == 0) {
         listed.remove(0);
     }
@@ -396,8 +403,13 @@ pub fn page(state: &State, filter: &Filter) -> String {
     }
     html.push_str("<div class='history-dms' role='list'><div class='history-head' aria-hidden='true'><span>DM</span><span>Persona · model</span><span>Last activity</span><span>Turns</span><span>Tokens</span><span></span></div>");
     for row in listed {
-        let found = matches.as_ref().and_then(|matches| matches.get(row.id));
-        html.push_str(&dm_row(state, row, summaries.get(row.id), found, filter));
+        let summary = summaries.get(row.id);
+        // Turns to list: those matching a turn filter, or with "Show turns" the newest.
+        let found = match &matches {
+            Some(matches) => matches.get(row.id),
+            None => summary.map(|summary| &summary.recent).filter(|_| filter.expand),
+        };
+        html.push_str(&dm_row(state, row, summary, found, filter));
     }
     html.push_str("</div>");
     if filter.dm.is_none() {
