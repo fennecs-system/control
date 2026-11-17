@@ -113,7 +113,7 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
     match call {
         WatchCall::Start { service_id, name, command, permanent, wake, wake_policy, notifications, salience } => {
             let id = format!("w-{}", digest(&[attempt.run, attempt.generation, attempt.nonce, &service_id, &name]));
-            let service = {
+            let (service, proxy) = {
                 let state = shared.lock().map_err(|_| fail("State unavailable"))?;
                 if let Some(existing) = state.watches.iter().find(|watch| watch.id == id) {
                     return Ok(existing.brief());
@@ -121,17 +121,21 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
                 if state.watches.iter().filter(|watch| watch.chat == chat && watch.active()).count() >= MAX_WATCHES {
                     return Err(fail("This chat already runs 8 watches; stop one first"));
                 }
-                state.services.iter()
+                let service = state.services.iter()
                     .find(|service| service.resource.id.as_str() == service_id && crate::services::accessible(service, &node, &caller))
                     .ok_or_else(|| fail("Service is not owned by or granted to this chat"))?
-                    .binding_snapshot()
+                    .binding_snapshot();
+                let proxy = crate::ports::proxy_exports(&state, &service);
+                (service, proxy)
             };
+            // Approved egress brings HTTPS_PROXY, as for exec, when it fits the runner's bound.
+            let launched = if command.len() + proxy.len() <= 16_000 { format!("{proxy}{command}") } else { command.clone() };
             if !crate::services::supports_watches(&service)? {
                 return Err(fail("This service's image predates watches; start a new service from rebuilt worker images"));
             }
             let mut arguments = vec!["watch-put", &id, if permanent { "permanent" } else { "transient" }];
             if notifications { arguments.push("notify-v1"); }
-            match runner(&service, &arguments, &command)? {
+            match runner(&service, &arguments, &launched)? {
                 Some(0) => {}
                 Some(2) if notifications => return Err(fail("This service runner does not support notifications; start a new service from rebuilt worker images")),
                 Some(3) => return Err(fail("This service already supervises 8 watches")),

@@ -67,7 +67,8 @@ The operator approves that exact host, port and lifetime. Approval resolves the
 host once, rejects mixed or special-use addresses, and pins one public IP.
 Connections use only that IP and port, with no redirects or re-resolution. The
 service can speak TLS itself; Control neither terminates TLS nor supplies
-credentials. This is TCP forwarding, not an HTTP proxy or container-wide egress.
+credentials. This is TCP forwarding, not container-wide egress; the
+[egress proxy](#egress-proxy-https_proxy) admits only the same approved endpoints.
 
 Service containers have no DNS, so a command that names the host directly fails
 with `Could not resolve host`. Use the relay while keeping TLS hostname checks,
@@ -79,8 +80,40 @@ curl --connect-to example.com:443:127.0.0.1:3001 https://example.com/file -o /wo
 
 Every egress record from `control_port_request` and `control_port_status`
 carries that exact line as `usage`, and the approval wake repeats it. Redirects
-and other hosts need their own approved endpoints; package managers may need a
-task-local adapter rather than a proxy setting.
+and other hosts need their own approved endpoints.
+
+#### Egress proxy (`HTTPS_PROXY`)
+
+Package managers cannot pin SNI per host, so each service with at least one
+approved target egress also gets one HTTP forward proxy at `127.0.0.1:3129`
+inside its container. `control_service_exec` commands and newly started watches
+then run with `HTTPS_PROXY`, `HTTP_PROXY`, `https_proxy` and `http_proxy` set to
+`http://127.0.0.1:3129` and `NO_PROXY=localhost,127.0.0.1`. npm ci, pip, cargo,
+git and curl use `HTTPS_PROXY` automatically for every approved host, with no
+lockfile rewriting or task-local adapter; `--connect-to` still works. Commands
+started before the first approval, or with no approved egress, get no proxy
+settings; restart a watch to pick them up.
+
+- `CONNECT host:port` is admitted only when the service holds an approved, live
+  egress grant for exactly that host and port. Control connects to that grant's
+  pinned address and then tunnels bytes; TLS stays end to end and is never
+  terminated or inspected.
+- A plain-HTTP absolute-URI request (`GET http://host/…`) is relayed only to an
+  approved `host:80` grant, in origin form with `Proxy-*` headers dropped. Other
+  ports are refused; use HTTPS.
+- Anything else gets `403 Forbidden` whose body names the fix: request an egress
+  port for that `host:port` with `control_port_request`. Malformed requests get
+  `400`; an unreachable pinned target gets `502`.
+- Revocation, expiry or a service change refuses new requests at once and closes
+  open tunnels for that grant, like a port's own relay. The proxy stops when the
+  service's last grant ends.
+
+The proxy reuses the existing `listen-multi` relay (no image change): its streams
+reach the host as data, which reads the request head (at most 8 KiB within ten
+seconds) before connecting. The relay protocol still carries no destinations.
+It shares the 32-session bound of one egress listener. Port 3129 is reserved:
+`control_port_request` refuses it as a `service_port`. Peer routes are unchanged
+and are not reachable through the proxy.
 
 One egress listener carries up to 32 concurrent sessions. Each stream has its own
 bounded flow control, so a slow download does not block other streams or
@@ -167,7 +200,13 @@ approved, use the `--connect-to` line; if already using the relay, check
 Unit tests in `src/ports/tests.rs` cover nonce, owner and attempt checks,
 failed-save rollback, endpoint pinning, loopback approval, expiry, generation
 changes, stale requests, foreign-node restore, frame limits, split HTTP/TLS
-prefixes, binary HTTP bodies and raw ASCII half-close.
+prefixes, binary HTTP bodies and raw ASCII half-close. `src/ports/proxy/tests.rs`
+covers the egress proxy against a local plain-TCP echo upstream: CONNECT
+tunnelling (directly and through the multiplex transport), 403 with the fix for
+unapproved hosts, plain HTTP only to port 80, revocation refusing new requests
+and closing open tunnels, proxy settings present only with approved egress, the
+usage text and the reserved port. The ignored `proxy_relay_benchmark` compares
+tunnel throughput and round-trip latency with the raw relay path.
 
 Two ignored live tests in `src/ports/tests/live_tests.rs` need
 `CONTROL_QA_SERVICE_IMAGE` (an immutable image ID) and `CONTROL_QA_CONTROL_BIN`,
