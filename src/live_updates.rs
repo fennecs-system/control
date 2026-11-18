@@ -23,6 +23,22 @@ pub(crate) fn notify() {
     }
 }
 
+/// Progress that lives only in memory (a folder copy's entry count) has no
+/// checkpoint to announce it. Readers are hinted at most this often, so a long
+/// copy shows progress without one re-read per entry.
+pub(crate) const PROGRESS_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Hints readers about in-memory progress when `last` is unset or at least
+/// [`PROGRESS_INTERVAL`] old; returns whether it did and records the time.
+pub(crate) fn progress(last: &mut Option<Instant>, now: Instant) -> bool {
+    if last.is_some_and(|last| now.saturating_duration_since(last) < PROGRESS_INTERVAL) {
+        return false;
+    }
+    *last = Some(now);
+    notify();
+    true
+}
+
 static SUBSCRIBERS: AtomicUsize = AtomicUsize::new(0);
 const MAX_SUBSCRIBERS: usize = 16;
 struct Subscriber;
@@ -82,6 +98,17 @@ pub(crate) fn fixture_stream(stream: &mut TcpStream, token: &CancelToken) -> io:
     let _subscriber =
         Subscriber::acquire().ok_or_else(|| io::Error::other("fixture stream limit"))?;
     stream_updates(stream, changes(), token)
+}
+
+/// A connected reader for tests outside this module, and the hint generation it
+/// would observe.
+#[cfg(test)]
+pub(crate) fn fixture_subscriber() -> Option<impl Sized> {
+    Subscriber::acquire()
+}
+#[cfg(test)]
+pub(crate) fn generation() -> u64 {
+    changes().generation()
 }
 
 #[cfg(test)]
