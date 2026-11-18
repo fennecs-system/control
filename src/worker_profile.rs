@@ -20,6 +20,21 @@ impl Profile {
         self == Self::Lite
     }
 
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Lite => "Lite",
+            Self::Full => "Full",
+        }
+    }
+
+    /// A short toolset hint for pages; docs/WORKER-PROFILES.md has the full list.
+    pub fn toolset(self) -> &'static str {
+        match self {
+            Self::Lite => "Rust, Git, C compiler, shell tools",
+            Self::Full => "Lite plus Nix, Node/npm, JDK, Python, curl",
+        }
+    }
+
     pub fn service_memory(self) -> u64 {
         match self {
             Self::Lite => 512 * 1024 * 1024,

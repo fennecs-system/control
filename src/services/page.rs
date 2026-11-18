@@ -242,24 +242,26 @@ fn memory_label(bytes: u64) -> String {
     if bytes.is_multiple_of(compute::GIB) { format!("{} GiB", bytes / compute::GIB) } else { format!("{} MiB", bytes / (1024 * 1024)) }
 }
 
-fn compute_label(shape: Option<compute::Shape>, limits: compute::Limits, pids: u64) -> String {
-    let memory = memory_label(limits.memory_bytes);
-    format!("{} · {memory} RAM · {} CPU{} · {pids} processes", shape.map_or("default", compute::Shape::name), limits.cpus, if limits.cpus == 1 { "" } else { "s" })
+/// RAM, CPU and process limits without the size name.
+fn limits_label(limits: compute::Limits, pids: u64) -> String {
+    format!("{} RAM · {} CPU{} · {pids} processes", memory_label(limits.memory_bytes), limits.cpus, if limits.cpus == 1 { "" } else { "s" })
 }
 
 fn compute_panel(services: &[Service]) -> String {
+    use crate::worker_profile::Profile;
     let used = compute::reserved(services);
     let capacity = compute::capacity();
-    let mut rows = compute::SHAPES.map(|shape| {
-        let limits = shape.limits();
-        format!("<tr><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td></tr>", shape.name(), memory_label(limits.memory_bytes), limits.cpus, compute::pids_limit(limits.memory_bytes, crate::worker_profile::Profile::Lite, capacity))
+    let images = [Profile::Lite, Profile::Full].map(|profile| {
+        let limits = compute::limits(None, profile);
+        format!("<tr><td><strong>{}</strong></td><td>{}</td><td>{}</td></tr>", profile.label(), profile.toolset(), limits_label(limits, compute::pids_limit(limits.memory_bytes, profile, capacity)))
     }).join("");
-    for profile in [crate::worker_profile::Profile::Lite, crate::worker_profile::Profile::Full] {
-        rows.push_str(&format!("<tr><td>No shape · {profile:?} profile</td><td>{}</td><td>1</td><td>{}</td></tr>", memory_label(profile.service_memory()), compute::pids_limit(profile.service_memory(), profile, capacity)));
-    }
+    let sizes = compute::SHAPES.map(|shape| {
+        let limits = shape.limits();
+        format!("<tr><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td></tr>", shape.name(), memory_label(limits.memory_bytes), limits.cpus, compute::pids_limit(limits.memory_bytes, Profile::Lite, capacity))
+    }).join("");
     format!(
-        "<section class='record service-record'><h3>Service resources</h3><h4>Limits per service</h4><p class='muted'>Ask an agent to choose a shape when starting a service. Shapes set limits for one service; bots can share services or run without one.</p><table><thead><tr><th>Size choice</th><th>RAM limit</th><th>CPU limit</th><th>Process limit</th></tr></thead><tbody>{rows}</tbody></table><p class='muted'>Process limits (threads included) scale at {} per GiB of RAM, up to {}, never below the profile default (Lite {}, Full {}). Each service keeps the limit captured when it started.</p><p class='muted'>With no shape requested, the image profile supplies the defaults shown above. Lite and Full describe available tools; an explicit shape overrides those defaults.</p><h4>Total service budget</h4><p><strong>RAM limits reserved:</strong> {} of {}<br><strong>CPU limits reserved:</strong> {} of {} CPUs</p><p class='muted'>Totals add the full limits of active services, including idle ones. Containers consume RAM as needed up to their limit. The CPU budget allows {} configured CPUs × {}.</p><p class='muted'>This service budget excludes model inference, model workers and the host. Leave capacity for those separately.</p><p class='muted'>Actual consumption appears as <strong>Live usage</strong> on each running service below. To resize, stop and replace the service in the same DM; its <code>/workspace</code> is retained.</p></section>",
-        capacity.pids_per_gib, capacity.pids_max, crate::worker_profile::Profile::Lite.service_pids(), crate::worker_profile::Profile::Full.service_pids(), memory_label(used.memory_bytes), memory_label(capacity.memory_bytes), used.cpus, capacity.admitted_cpus(), capacity.cpus, capacity.cpu_oversubscription
+        "<section class='record service-record'><h3>Service resources</h3><p class='muted'>Each service has an image and a size, chosen separately: any image runs at any size. Ask an agent for a size when it starts a service; bots can share services or run without one.</p><h4>Image · which tools</h4><table><thead><tr><th>Image</th><th>Tools</th><th>Default size</th></tr></thead><tbody>{images}</tbody></table><p class='muted'>The node's pinned worker image decides Lite or Full. Its default size applies only when no size is chosen.</p><h4>Size · how much it may use</h4><table><thead><tr><th>Size</th><th>RAM limit</th><th>CPU limit</th><th>Process limit</th></tr></thead><tbody>{sizes}</tbody></table><p class='muted'>Process limits (threads included) scale at {} per GiB of RAM, up to {}, never below the image default (Lite {}, Full {}). Each service keeps the limits captured when it started.</p><h4>Total service budget</h4><p><strong>RAM limits reserved:</strong> {} of {}<br><strong>CPU limits reserved:</strong> {} of {} CPUs</p><p class='muted'>Totals add the full limits of active services, including idle ones. Containers consume RAM as needed up to their limit. The CPU budget allows {} configured CPUs × {}.</p><p class='muted'>This service budget excludes model inference, model workers and the host. Leave capacity for those separately.</p><p class='muted'>Actual consumption appears as <strong>Live usage</strong> on each running service below. To resize, stop and replace the service in the same DM; its <code>/workspace</code> is retained.</p></section>",
+        capacity.pids_per_gib, capacity.pids_max, Profile::Lite.service_pids(), Profile::Full.service_pids(), memory_label(used.memory_bytes), memory_label(capacity.memory_bytes), used.cpus, capacity.admitted_cpus(), capacity.cpus, capacity.cpu_oversubscription
     )
 }
 
@@ -278,8 +280,11 @@ fn card(service: &Service) -> String {
     };
     if matches!(service.storage, Storage::Workspace { .. }) { storage.push_str(" · /workspace retained for this chat"); }
     let chat = resource.owner.chat.as_str();
-    let conversation = if crate::chat::valid_id(chat) { format!("<a href='/dm/{chat}'>Conversation</a> · ") } else { String::new() };
-    let container = resource.phase.container().map(|id| format!("container {} · ", crate::escape(&id.as_str().chars().take(12).collect::<String>()))).unwrap_or_default();
+    let links = [
+        crate::chat::valid_id(chat).then(|| format!("<a href='/dm/{chat}'>Conversation</a>")),
+        resource.phase.container().map(|id| format!("container {}", crate::escape(&id.as_str().chars().take(12).collect::<String>()))),
+    ].into_iter().flatten().collect::<Vec<_>>();
+    let links = if links.is_empty() { String::new() } else { format!("<p>{}</p>", links.join(" · ")) };
     let image = resource.image.as_str().trim_start_matches("sha256:").chars().take(12).collect::<String>();
     let live = if matches!(resource.phase, Phase::Running(_)) { format!("<div class='service-live' data-live='{}'><p class='muted'>Live usage loading…</p></div>", crate::escape(resource.id.as_str())) } else { String::new() };
     let diagnostic = if service.diagnostic.is_empty() { String::new() } else { format!("<p class='muted'>{}</p>", crate::escape(&service.diagnostic)) };
@@ -290,13 +295,16 @@ fn card(service: &Service) -> String {
     } else {
         String::new()
     };
-    let compute = compute_label(service.shape, service.limits(), service.pids_limit());
+    // Image (tools) and size (limits) are independent choices, so each gets its own row.
+    let size = service.shape.map_or("image default", compute::Shape::name);
+    let limits = limits_label(service.limits(), service.pids_limit());
     format!(
-        "<article class='record service-record' id='{}'><h3><code>{}</code></h3><p>{} · {compute}</p><p>{:?} image · {storage} · {lease}</p><p>{conversation}{container}image {}</p>{live}{diagnostic}{action}</article>",
+        "<article class='record service-record' id='{}'><h3><code>{}</code></h3><dl class='service-facts'><dt>Status</dt><dd>{}</dd><dt>Image</dt><dd><strong>{}</strong> <span class='muted'>· {} · <code>{}</code></span></dd><dt>Size</dt><dd><strong>{size}</strong> <span class='muted'>· {limits}</span></dd><dt>Storage</dt><dd>{storage} · {lease}</dd></dl>{links}{live}{diagnostic}{action}</article>",
         crate::escape(resource.id.as_str()),
         crate::escape(&command),
         phase(&resource.phase),
-        service.profile,
+        service.profile.label(),
+        service.profile.toolset(),
         crate::escape(&image),
     )
 }
