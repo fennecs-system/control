@@ -261,7 +261,7 @@ fn dispatch_raw(
                 let chat=run.chat_id.clone().unwrap_or_default();
                 let Some(index)=state.chats.iter().position(|c|c.id==chat) else {return error("Chat not found");};
                 let previous=state.chats[index].clone();
-                let result=crate::projects::request_named(&mut state,&chat,request["params"]["arguments"]["path"].as_str().unwrap_or(""),request["params"]["arguments"]["name"].as_str());
+                let result=crate::projects::request_named(&mut state,&chat,request["params"]["arguments"]["path"].as_str().unwrap_or(""),request["params"]["arguments"]["name"].as_str(),crate::projects::Requester::Agent{run:Some(run_id)});
                 return match result {
                     Ok(value) if crate::storage::save(&state).is_ok()=>json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":value.to_string()}],"isError":false}}),
                     Ok(_)=>{state.chats[index]=previous;error("Could not save project request")},

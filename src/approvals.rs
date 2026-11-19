@@ -1,5 +1,5 @@
-//! Operator decisions that resume the agent which asked, shared by port and bot
-//! requests. Callers keep their own request records and acknowledge them once
+//! Operator decisions that resume the agent which asked, shared by port, bot
+//! and dismissed folder requests. Callers keep their own request records and acknowledge them once
 //! `resume` returns anything but `Wait`. Checkpoint that receipt with the edits
 //! before waking the dispatcher; this preparation step performs no I/O.
 use crate::{State, runtime::RunKind};
@@ -10,7 +10,8 @@ pub(crate) struct Decisions<'a> {
     /// Requester chat and the runs that made the requests.
     pub chat: &'a str,
     pub origins: &'a [&'a str],
-    /// One of `approval_resume::HEADINGS`; also the chat note's heading.
+    /// One of `approval_resume::HEADINGS` or `FOLDER_DECISIONS`; also the chat
+    /// note's heading.
     pub heading: &'a str,
     pub lines: &'a str,
     /// What the resumed agent should do next.

@@ -2,6 +2,8 @@
 use super::*;
 use std::os::unix::fs::PermissionsExt;
 struct Fixture(PathBuf);
+/// Agent requests are never probed, so fixtures may name absent folders.
+const AGENT: Requester<'static> = Requester::Agent { run: None };
 
 #[test]
 fn pending_project_files_survive_uncertain_unwind_but_not_ordinary_rejection() {
@@ -67,10 +69,10 @@ fn command(directory: &Path, args: &[&str]) -> std::process::Output {
 fn project_request_is_only_intent_and_cannot_replace_an_approved_grant() {
     let mut state = State::default();
     let id = crate::chat::create(&mut state);
-    let value = request(&mut state, &id, "/a/nonexistent/project").unwrap();
+    let value = request(&mut state, &id, "/a/nonexistent/project", AGENT).unwrap();
     assert_eq!(value["approval_required"], true);
     assert!(state.chats[0].project.as_ref().unwrap().grant.is_none());
-    assert!(request(&mut state, &id, "../private").is_err());
+    assert!(request(&mut state, &id, "../private", AGENT).is_err());
     let before = serde_json::to_vec(&state).unwrap();
     assert!(
         crate::session_http::rpc(
@@ -81,7 +83,7 @@ fn project_request_is_only_intent_and_cannot_replace_an_approved_grant() {
     );
     assert_eq!(serde_json::to_vec(&state).unwrap(), before);
     state.chats[0].project.as_mut().unwrap().grant = Some("approved".into());
-    request(&mut state, &id, "/another").unwrap();
+    request(&mut state, &id, "/another", AGENT).unwrap();
     assert_eq!(
         state.chats[0].project.as_ref().unwrap().grant.as_deref(),
         Some("approved")
@@ -439,7 +441,7 @@ fn adding_a_folder_migrates_a_legacy_root_without_reimporting_its_host_files() {
         grant: Some("original".into()),
         ..Default::default()
     });
-    request(&mut state, &id, second.to_str().unwrap()).unwrap();
+    request(&mut state, &id, second.to_str().unwrap(), Requester::Operator).unwrap();
     let stage = root.join("grants/combined");
     fs::create_dir_all(&stage).unwrap();
     compose(&root, state.chats[0].project.as_ref().unwrap(), &stage).unwrap();
@@ -456,27 +458,31 @@ fn adding_a_folder_migrates_a_legacy_root_without_reimporting_its_host_files() {
         "host original"
     );
     for name in ["..", "../escape", ".git", "target", "a/b", "a b"] {
-        assert!(request_named(&mut state, &id, second.to_str().unwrap(), Some(name)).is_err());
+        assert!(request_named(&mut state, &id, second.to_str().unwrap(), Some(name), Requester::Operator).is_err());
     }
 }
 #[test]
 fn repeated_folder_requests_keep_message_provenance_and_replace_panel_approval() {
+    let fixture = Fixture::new();
+    let (first_path, second_path) = (fixture.0.join("first"), fixture.0.join("second"));
+    fs::create_dir(&first_path).unwrap();
+    fs::create_dir(&second_path).unwrap();
     let mut state = State::default();
     let id = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &id, "Discuss first", "test").unwrap();
-    crate::chat::send(&mut state, &id, "/open /first", "test").unwrap();
+    crate::chat::send(&mut state, &id, &format!("/open {}", first_path.display()), "test").unwrap();
     let first = state.chats[0].project.clone().unwrap();
     state.chats[0].project.as_mut().unwrap().error = Some("Synthetic import failure".into());
     let failed = crate::chat::requests(&state, &id).unwrap();
     assert!(failed.contains("role='alert'>Synthetic import failure"));
-    crate::chat::send(&mut state, &id, "/open /second", "test").unwrap();
+    crate::chat::send(&mut state, &id, &format!("/open {}", second_path.display()), "test").unwrap();
     let project = state.chats[0].project.as_ref().unwrap();
     assert_ne!(first.request, project.request);
-    assert_eq!(project.path, "/second");
+    assert_eq!(project.path, second_path.display().to_string());
     assert!(project.error.is_none());
     assert_eq!(message_index(&state.chats[0]), Some(2));
     let rendered = crate::chat::transcript(&state, &id).unwrap();
-    assert!(rendered.contains("/open</span> /second"));
+    assert!(rendered.contains(&format!("/open</span> {}", second_path.display())));
     assert!(!rendered.contains("Trust folder and open"));
     let panel = crate::chat::requests(&state, &id).unwrap();
     assert_eq!(panel.matches("Trust folder and open").count(), 1);
@@ -790,7 +796,7 @@ fn in_chat_folder_decisions_answer_like_port_decisions() {
     {
         let panel = crate::chat::requests(&shared.lock().unwrap(), &id).unwrap();
         assert!(panel.contains(&format!("<form class='decision-form' method='post' action='{page}'")), "{panel}");
-        assert!(panel.contains("Trust folder and open</button><p role='alert' hidden></p></form>"));
+        assert!(panel.contains("Trust folder and open</button><button class='secondary' name='dismiss' value='yes'>Dismiss</button><p role='alert' hidden></p></form>"));
     }
     // A stale request is refused in the form, not as an error page.
     let stale = exchange(&shared, "POST", &page, "", "request=p-0&approve=yes&response=json", no_save);
@@ -801,7 +807,7 @@ fn in_chat_folder_decisions_answer_like_port_decisions() {
     wait_for_import(&id);
     assert!(!shared.lock().unwrap().chats[0].project.as_ref().unwrap().needs_approval());
     // An import that fails is reported to the form that approved it.
-    crate::chat::send(&mut shared.lock().unwrap(), &id, &format!("/open {}", fixture.0.join("missing").display()), "test").unwrap();
+    super::request(&mut shared.lock().unwrap(), &id, fixture.0.join("missing").to_str().unwrap(), AGENT).unwrap();
     let request = pending_request(&shared);
     let accepted = exchange(&shared, "POST", &page, "", &format!("request={request}&approve=yes&response=json"), no_save);
     if accepted.starts_with("HTTP/1.1 200") { wait_for_import(&id); } else { assert!(accepted.contains("\"error\""), "{accepted}"); }
@@ -813,7 +819,10 @@ fn background_import_errors_appear_beside_the_request_for_retry() {
     let mut initial = State::default();
     let id = crate::chat::create(&mut initial);
     let missing = fixture.0.join("missing");
+    // The folder exists when requested and is gone by approval.
+    fs::create_dir(&missing).unwrap();
     crate::chat::send(&mut initial, &id, &format!("/open {}", missing.display()), "test").unwrap();
+    fs::remove_dir(&missing).unwrap();
     let shared = Arc::new(Mutex::new(initial));
     let page = format!("/dm/{id}/project");
     let request = pending_request(&shared);
@@ -906,4 +915,216 @@ fn live_container_git_commits_and_restores_an_independent_project_worktree() {
     assert_eq!(run(&copy, "git log -1 --format=%s").trim(), "edited");
     assert_eq!(fs::read(source.join("code.txt")).unwrap(), b"original");
     assert!(!run(&copy, "git status --porcelain").contains(".control-git"));
+}
+/// `/open /open /x` once made a pending request for a path that never existed,
+/// with no way to reject it.
+#[test]
+fn operator_open_checks_the_folder_but_agent_requests_are_never_probed() {
+    let fixture = Fixture::new();
+    let folder = fixture.source();
+    let file = fixture.0.join("notes.txt");
+    fs::write(&file, "text").unwrap();
+    let mut state = State::default();
+    let id = crate::chat::create(&mut state);
+    let typo = format!("/open /open {}", folder.display());
+    assert!(crate::chat::send(&mut state, &id, &typo, "test").unwrap_err().contains("No readable folder"));
+    assert!(crate::chat::send(&mut state, &id, &format!("/open {}", file.display()), "test").unwrap_err().contains("not a folder"));
+    assert!(crate::chat::send(&mut state, &id, &format!("/open --as other {}/missing", folder.display()), "test").is_err());
+    assert!(state.chats[0].project.is_none() && state.chats[0].messages.is_empty(), "nothing is requested or recorded");
+    crate::chat::send(&mut state, &id, &format!("/open {}", folder.display()), "test").unwrap();
+    assert!(state.chats[0].project.as_ref().unwrap().origin.is_none());
+    // An agent learns nothing about the host: a folder, a file and a missing
+    // path give the same answer, and the requesting turn is recorded.
+    let answers = [folder.clone(), file, fixture.0.join("missing")].map(|path| {
+        let mut value = request_named(&mut state, &id, path.to_str().unwrap(), Some("asked"), Requester::Agent { run: Some("r-asking") }).unwrap();
+        assert_eq!(state.chats[0].project.as_ref().unwrap().origin.as_deref(), Some("r-asking"));
+        for varying in ["request", "path"] { value.as_object_mut().unwrap().remove(varying); }
+        value
+    });
+    assert!(answers.iter().all(|answer| *answer == answers[0]), "{answers:?}");
+}
+fn approved(path: &str) -> Project {
+    let name = Path::new(path).file_name().unwrap().to_str().unwrap();
+    Project { request: "p-approved".into(), path: path.into(), name: name.into(), grant: Some("p-grant".into()), head: Some("c-before".into()),
+        named: true, mounts: vec![Mount { name: name.into(), path: path.into(), message_index: Some(0) }], ..Project::default() }
+}
+fn snapshot(project: &Option<Project>) -> Value { serde_json::to_value(project).unwrap() }
+#[test]
+fn dismissal_restores_the_previous_folders_and_ignores_stale_or_repeated_requests() {
+    let mut state = State::default();
+    let id = crate::chat::create(&mut state);
+    state.chats[0].project = Some(approved("/node/api"));
+    request(&mut state, &id, "/node/replaced", AGENT).unwrap();
+    // Replacing a pending request still restores the approved project.
+    request_named(&mut state, &id, "/open /node/typo", Some("typo"), AGENT).unwrap();
+    let pending = state.chats[0].project.clone().unwrap();
+    assert!(pending.needs_approval() && pending.mounts.len() == 1);
+    // Approved folders keep working while the request waits; a checkpoint
+    // published meanwhile survives dismissal.
+    state.chats[0].project.as_mut().unwrap().head = Some("c-after".into());
+    let mut expected = approved("/node/api");
+    expected.head = Some("c-after".into());
+    // A stale page names an older request: nothing changes.
+    let before = serde_json::to_vec(&state).unwrap();
+    assert!(dismiss(&mut state, &id, "p-0").unwrap().is_none());
+    assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+    assert_eq!(dismiss(&mut state, &id, &pending.request).unwrap(), Some(crate::approvals::Outcome::Noted));
+    assert_eq!(snapshot(&state.chats[0].project), snapshot(&Some(expected)));
+    let notice = state.chats[0].messages.last().unwrap();
+    assert!(notice.text.starts_with("Folder decisions\n/open /node/typo (") && notice.text.contains("dismissed by the operator"), "{}", notice.text);
+    assert!(notice.is_notice(None));
+    // A repeated dismissal, or one for the approved request, is a no-op.
+    let after = serde_json::to_vec(&state).unwrap();
+    assert!(dismiss(&mut state, &id, &pending.request).unwrap().is_none());
+    assert!(dismiss(&mut state, &id, "p-approved").unwrap().is_none());
+    assert_eq!(serde_json::to_vec(&state).unwrap(), after);
+    // With no earlier folder, the chat returns to having none.
+    let fresh = crate::chat::create(&mut state);
+    request(&mut state, &fresh, "/node/first", AGENT).unwrap();
+    let index = state.chats.iter().position(|c| c.id == fresh).unwrap();
+    let first = state.chats[index].project.as_ref().unwrap().request.clone();
+    dismiss(&mut state, &fresh, &first).unwrap().unwrap();
+    assert!(state.chats[index].project.is_none());
+    // Requests saved before predecessors were recorded keep approved folders.
+    let mut legacy = approved("/node/api");
+    (legacy.pending, legacy.request, legacy.path, legacy.name) = (true, "p-legacy".into(), "/node/new".into(), "new".into());
+    state.chats[index].project = Some(legacy);
+    dismiss(&mut state, &fresh, "p-legacy").unwrap().unwrap();
+    let kept = state.chats[index].project.as_ref().unwrap();
+    assert!(!kept.needs_approval() && kept.path == "/node/api" && kept.name == "api" && kept.grant.as_deref() == Some("p-grant"));
+}
+#[test]
+fn dismissal_reaches_the_requesting_agent_like_a_port_decision() {
+    let mut state = State::default();
+    let id = crate::chat::create(&mut state);
+    crate::chat::send(&mut state, &id, "Review the shared library", "test").unwrap();
+    let origin = state.runtime.runs[0].id.clone();
+    let run = Some(origin.as_str());
+    request(&mut state, &id, "/node/library", Requester::Agent { run }).unwrap();
+    // A busy chat only notes it; the agent reads it on its next turn.
+    let busy = state.chats[0].project.as_ref().unwrap().request.clone();
+    assert_eq!(dismiss(&mut state, &id, &busy).unwrap(), Some(crate::approvals::Outcome::Noted));
+    assert_eq!(state.runtime.runs.len(), 1);
+    state.runtime.runs[0].status = "completed".into();
+    request(&mut state, &id, "/node/library", Requester::Agent { run }).unwrap();
+    let idle = state.chats[0].project.as_ref().unwrap().request.clone();
+    let Some(crate::approvals::Outcome::Resumed(resumed)) = dismiss(&mut state, &id, &idle).unwrap() else { panic!("resumes the finished turn") };
+    let continuation = state.runtime.runs.last().unwrap();
+    assert_eq!((continuation.id.as_str(), continuation.kind), (resumed.as_str(), crate::runtime::RunKind::FolderDecision));
+    assert!(continuation.objective.starts_with("Operator folder decisions:\n/node/library ("), "{}", *continuation.objective);
+    assert!(continuation.objective.contains("Original task:\nReview the shared library"));
+}
+#[test]
+fn dismissal_from_the_page_names_its_request_and_never_breaks_the_page() {
+    let fixture = Fixture::new();
+    let folder = fixture.source();
+    let mut initial = State::default();
+    let id = crate::chat::create(&mut initial);
+    crate::chat::send(&mut initial, &id, &format!("/open {}", folder.display()), "test").unwrap();
+    let shared = Arc::new(Mutex::new(initial));
+    let page = format!("/dm/{id}/project");
+    let request = pending_request(&shared);
+    let stale = exchange(&shared, "POST", &page, "", "request=p-0&dismiss=yes&response=json", no_save);
+    assert!(stale.starts_with("HTTP/1.1 200") && stale.contains("already dismissed, replaced or approved"), "{stale}");
+    assert!(shared.lock().unwrap().chats[0].project.as_ref().is_some_and(|p| p.request == request));
+    // A dismissal that cannot be saved leaves the request in place.
+    let unsaved = exchange(&shared, "POST", &page, "", &format!("request={request}&dismiss=yes&response=json"), failed_save);
+    assert!(unsaved.starts_with("HTTP/1.1 400") && unsaved.contains("request is unchanged"), "{unsaved}");
+    assert!(shared.lock().unwrap().chats[0].project.as_ref().is_some_and(|p| p.request == request && p.needs_approval()));
+    assert_eq!(shared.lock().unwrap().chats[0].messages.len(), 1);
+    let dismissed = exchange(&shared, "POST", &page, "", &format!("request={request}&dismiss=yes&response=json"), no_save);
+    assert!(dismissed.starts_with("HTTP/1.1 200") && dismissed.contains(&format!("\"message\":\"{DISMISSED}\"")), "{dismissed}");
+    {
+        let state = shared.lock().unwrap();
+        assert!(state.chats[0].project.is_none());
+        assert_eq!(state.chats[0].messages[0].reply, DISMISSED);
+        let transcript = crate::chat::transcript(&state, &id).unwrap();
+        assert!(transcript.contains(DISMISSED) && !transcript.contains("replaced by a later request"), "{transcript}");
+        assert!(!crate::chat::requests(&state, &id).unwrap().contains("Trust folder and open"));
+    }
+    // The approval page's own (non-script) form gets a page, not an error.
+    let again = exchange(&shared, "POST", &page, "", &format!("request={request}&dismiss=yes"), no_save);
+    assert!(again.starts_with("HTTP/1.1 200") && again.contains("role='status'>That folder request was already dismissed"), "{again}");
+    // An approval for a dismissed request grants nothing.
+    let late = exchange(&shared, "POST", &page, "", &format!("request={request}&approve=yes&response=json"), no_save);
+    assert!(late.starts_with("HTTP/1.1 400"), "{late}");
+    assert!(importing(&id).is_none() && shared.lock().unwrap().chats[0].project.is_none());
+}
+fn failed_save(_: &State) -> io::Result<()> { Err(io::Error::other("disk full")) }
+/// The copy cannot be cancelled: once approved, a request imports to the end.
+#[test]
+fn a_request_that_is_importing_cannot_be_dismissed() {
+    let mut state = State::default();
+    let id = crate::chat::create(&mut state);
+    request(&mut state, &id, "/node/large", AGENT).unwrap();
+    let request = state.chats[0].project.as_ref().unwrap().request.clone();
+    IMPORTS.lock().unwrap().push(Import { chat: id.clone(), request: request.clone(), started: std::time::Instant::now(), entries: Arc::default() });
+    let registered = Registered { chat: id.clone(), request: request.clone() };
+    let before = serde_json::to_vec(&state).unwrap();
+    assert!(dismiss(&mut state, &id, &request).unwrap_err().contains("importing"));
+    assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+    drop(registered);
+    assert!(dismiss(&mut state, &id, &request).unwrap().is_some());
+}
+#[test]
+fn approving_twice_starts_one_import_and_keeps_its_grant() {
+    let fixture = Fixture::new();
+    let folder = fixture.source();
+    fs::write(folder.join("code.txt"), "code").unwrap();
+    let mut initial = State::default();
+    let id = crate::chat::create(&mut initial);
+    crate::chat::send(&mut initial, &id, &format!("/open {}", folder.display()), "test").unwrap();
+    let shared = Arc::new(Mutex::new(initial));
+    let page = format!("/dm/{id}/project");
+    let request = pending_request(&shared);
+    let first = exchange(&shared, "POST", &page, "", &format!("request={request}&approve=yes&response=json"), no_save);
+    assert!(first.ends_with("{\"ok\":true}"), "{first}");
+    wait_for_import(&id);
+    let opened = shared.lock().unwrap().chats[0].project.clone().unwrap();
+    assert!(!opened.needs_approval() && opened.previous.is_none() && opened.origin.is_none());
+    // Once attached, the approval is not replayed: refused, with nothing copied.
+    for body in [format!("request={request}&approve=yes&response=json"), format!("request={request}&approve=yes")] {
+        let repeated = exchange(&shared, "POST", &page, "", &body, no_save);
+        assert!(repeated.starts_with("HTTP/1.1 400") && repeated.contains("request changed"), "{repeated}");
+        assert!(importing(&id).is_none(), "no second copy starts");
+    }
+    assert_eq!(snapshot(&shared.lock().unwrap().chats[0].project), snapshot(&Some(opened)));
+}
+/// Only a complete copy is ever published under `grants/`, and only while the
+/// checkpoint that attaches it is written.
+#[test]
+fn failed_or_interrupted_imports_publish_nothing() {
+    let fixture = Fixture::new();
+    let root = fixture.0.join("projects");
+    let folder = fixture.source();
+    fs::write(folder.join("a.txt"), "copied first").unwrap();
+    fs::write(folder.join("z.txt"), "unreadable").unwrap();
+    fs::set_permissions(folder.join("z.txt"), fs::Permissions::from_mode(0o000)).unwrap();
+    let readable = fs::File::open(folder.join("z.txt")).is_ok();
+    let mut state = State::default();
+    let id = crate::chat::create(&mut state);
+    request(&mut state, &id, folder.to_str().unwrap(), AGENT).unwrap();
+    let project = state.chats[0].project.clone().unwrap();
+    let shared = Arc::new(Mutex::new(state));
+    let published = || fs::read_dir(root.join("grants")).map(|entries| entries.map(|e| e.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>()).unwrap_or_default();
+    // Superusers read anything; the unreadable-entry case needs a normal user.
+    if !readable {
+        assert!(import_in(&root, &shared, &id, &project.request, project.clone(), no_save).unwrap_err().to_string().contains("unreadable"));
+        assert!(published().is_empty(), "{:?}", published());
+    }
+    fs::set_permissions(folder.join("z.txt"), fs::Permissions::from_mode(0o600)).unwrap();
+    // A checkpoint that cannot be written attaches nothing and keeps no copy.
+    assert!(import_in(&root, &shared, &id, &project.request, project.clone(), failed_save).is_err());
+    assert!(published().is_empty(), "{:?}", published());
+    assert!(shared.lock().unwrap().chats[0].project.as_ref().unwrap().needs_approval());
+    // A process that stopped mid-copy left only a staging directory, which the
+    // next start removes; published grants stay.
+    fs::create_dir_all(root.join("grants/.pending-p-1/combined")).unwrap();
+    fs::write(root.join("grants/.pending-p-1/combined/half.txt"), "partial").unwrap();
+    import_in(&root, &shared, &id, &project.request, project.clone(), no_save).unwrap();
+    let grant = shared.lock().unwrap().chats[0].project.as_ref().unwrap().grant.clone().unwrap();
+    assert_eq!(fs::read_to_string(root.join("grants").join(&grant).join("seed/source/z.txt")).unwrap(), "unreadable");
+    discard_interrupted_in(&root).unwrap();
+    assert_eq!(published(), [grant]);
+    discard_interrupted_in(&fixture.0.join("absent")).unwrap();
 }

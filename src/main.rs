@@ -700,6 +700,8 @@ fn main() -> std::io::Result<()> {
     let access = Arc::new(access::Access::load()?);
     let mut loaded=storage::load()?;
     if let Err(error)=model_calls::recover() {loaded.runtime.notice=format!("Text-call cleanup needs inspection: {error}");}
+    // No import runs yet; a staged copy left by the last process is unreferenced.
+    if let Err(error)=projects::discard_interrupted_imports() {eprintln!("Could not remove interrupted folder imports: {error}");}
     let state = Arc::new(Mutex::new(loaded));
     shutdown::install()?;
     // Blocking accept removes the 50 ms admission poll. Cancellation wakes it

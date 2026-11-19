@@ -283,6 +283,15 @@ impl App {
                 approval.result.map_err(failure)?;
                 self.inspector=None;self.status="Folder ready · isolated worktree".into();
             }
+            _ if text=="/dismiss" || text.starts_with("/dismiss ")=>{
+                let project=pending_project(&self.detail).ok_or_else(||failure("No folder request to dismiss."))?;
+                let displayed=project["request"].as_str().filter(|request|!request.is_empty()).ok_or_else(||failure("Project request changed. Use /open to review it."))?;
+                let request=text.strip_prefix("/dismiss ").map(str::trim).unwrap_or(displayed).to_owned();
+                if request!=displayed {return Err(failure("Project request changed. Use /open to review it."));}
+                let message=hive.dismiss_project(&self.active,&request)?;
+                self.set_detail(hive.tool("control.chat.read",json!({"id":self.active}))?);
+                self.inspector=None;self.status=message;
+            }
             "/quit" => return Ok(true),
             _ if let Some(navigation) = chats::navigation(&text) => match navigation {
                 Navigation::New => self.new_chat(hive)?,
@@ -549,7 +558,8 @@ impl App {
             lines.push(Line::from(format!("Open as /workspace/{}",clean(project["name"].as_str().unwrap_or("")))));
             lines.push(Line::from("Trust this folder’s code and allow local previews? Control copies it into an isolated worktree; credentials, generated directories and symlinks are excluded. The original stays unchanged."));
             if let Some(error)=project["error"].as_str() {lines.push(Line::from(clean(error)));}
-            lines.push(Line::from(format!("/trust {} to approve · /open /absolute/path to change",clean(project["request"].as_str().unwrap_or("")))));
+            let request=clean(project["request"].as_str().unwrap_or(""));
+            lines.push(Line::from(format!("/trust {request} to approve · /dismiss {request} to reject · /open /absolute/path to change")));
         }
         Text::from(lines)
     }
@@ -574,7 +584,7 @@ fn resume_selection(args:&[String])->io::Result<Option<&str>> {
 pub fn run() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|s| s == "--help") {
-        println!("control tui [--server {}] [--resume ID] [--directory PATH] [--check]\nAlso available as control-harness. Starts a fresh DM; --resume ID (or --session ID) explicitly resumes one. CONTROL_ADDR sets the default server.\n\n/resume · /open /absolute/path · /trust [REQUEST] · /port allow|deny ID · /answer QUESTION_ID choice · /genes · /use GENE GENE · /use none · /personas · /persona NAME · /context · /chat · /help", crate::config::server_url());
+        println!("control tui [--server {}] [--resume ID] [--directory PATH] [--check]\nAlso available as control-harness. Starts a fresh DM; --resume ID (or --session ID) explicitly resumes one. CONTROL_ADDR sets the default server.\n\n/resume · /open /absolute/path · /trust [REQUEST] · /dismiss [REQUEST] · /port allow|deny ID · /answer QUESTION_ID choice · /genes · /use GENE GENE · /use none · /personas · /persona NAME · /context · /chat · /help", crate::config::server_url());
         return Ok(());
     }
     let option = |name: &str| {

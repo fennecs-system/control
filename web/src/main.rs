@@ -390,6 +390,7 @@ fn attach_port_approvals(frame:&web_sys::HtmlIFrameElement)->Result<(),JsValue> 
             let label=button.text_content().unwrap_or_default();
             button.set_text_content(Some(match button.get_attribute("name").as_deref() {
                 Some("revoke"|"deny")=>"Denying…",
+                Some("dismiss")=>"Dismissing…",
                 // Folder approval is accepted at once; the refreshed panel shows the import.
                 Some("approve")=>"Importing…",
                 _=>"Allowing…",
@@ -427,11 +428,11 @@ fn attach_port_approvals(frame:&web_sys::HtmlIFrameElement)->Result<(),JsValue> 
     submit.forget();Ok(())
 }
 /// Operator decisions posted without leaving the chat: port and bot requests,
-/// and folder approvals (`/dm/ID/project` with its approve button). Changing
-/// the requested folder stays a normal form submission.
+/// and folder decisions (`/dm/ID/project` with its approve or dismiss button).
+/// Changing the requested folder stays a normal form submission.
 fn decision_action(action:&str,submitter:Option<&str>)->bool {
     matches!(action,"/tools/ports"|"/tools/bots")
-        || (submitter==Some("approve") && action.strip_prefix("/dm/").and_then(|rest|rest.strip_suffix("/project"))
+        || (matches!(submitter,Some("approve"|"dismiss")) && action.strip_prefix("/dm/").and_then(|rest|rest.strip_suffix("/project"))
             .is_some_and(|id|!id.is_empty() && !id.contains('/')))
 }
 fn restore_port_form(form:&web_sys::HtmlFormElement,controls:&[web_sys::Element],button:Option<&(web_sys::HtmlElement,String)>) {
