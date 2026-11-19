@@ -53,6 +53,25 @@ fn later_human_steering_is_relative_to_the_latest_matching_request() {
 }
 
 #[test]
+fn human_turns_absorbed_by_the_requesting_turn_do_not_steer() {
+    // A message queued while the requester ran, then delivered into it, is
+    // retired as absorbed and must not suppress the decision's wake.
+    let mut absorbed = run("steering", "chat", "queued", RunKind::Task);
+    absorbed.absorb("origin");
+    assert_eq!(absorbed.absorbed_by(), Some("origin"));
+    let mut runs = vec![run("origin", "chat", "completed", RunKind::PortDecision), absorbed];
+    assert_eq!(decide(&runs, "chat", &["origin"], None), Eligibility::Candidate(0));
+    // Absorbed by another turn, it is still later human steering.
+    runs[1].absorb("other");
+    assert_eq!(decide(&runs, "chat", &["origin"], None), Eligibility::Note);
+    // A turn that ran is never read as absorbed.
+    runs[1] = run("steering", "chat", "completed", RunKind::Task);
+    runs[1].result = "Processed in active run origin; see that session's response.".into();
+    runs[1].attempts.push(Default::default());
+    assert_eq!(decide(&runs, "chat", &["origin"], None), Eligibility::Note);
+}
+
+#[test]
 fn missing_requests_and_unsuccessful_latest_turns_are_not_resumed() {
     for status in ["failed", "interrupted", "cancelled", "blocked"] {
         let runs = [

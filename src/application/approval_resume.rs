@@ -55,7 +55,10 @@ pub(crate) enum Eligibility {
 }
 
 /// Request IDs name the originating turns. Later design answers continue their
-/// task; later human turns steer it. Any live turn in this chat defers decisions.
+/// task; later human turns steer it. A queued human turn that a requesting turn
+/// absorbed (delivered and processed while it ran) was seen by that turn, so it
+/// neither steers nor stands in as the latest turn. Any live turn in this chat
+/// defers decisions.
 /// `cancelled_through` is the chat's operator-cancellation mark (the highest run
 /// `queue_order` at its latest cancellation): a request made by a run queued
 /// before it belongs to cancelled work and is only noted.
@@ -74,9 +77,10 @@ pub(crate) fn decide(runs: &[Run], chat: &str, origins: &[&str], cancelled_throu
     let requested = runs
         .iter()
         .rposition(|run| origins.contains(&run.id.as_str()));
-    let latest = runs.iter().rposition(|run| in_chat(&run));
+    let counts = |run: &&Run| !run.absorbed_by().is_some_and(|active| origins.contains(&active));
+    let latest = runs.iter().rposition(|run| in_chat(&run) && counts(&run));
     let steered = requested.is_some_and(|at| {
-        runs[at + 1..].iter().filter(in_chat).any(|run| {
+        runs[at + 1..].iter().filter(in_chat).filter(counts).any(|run| {
             run.kind.speaker() == MessageSpeaker::User && run.kind != RunKind::DesignAnswer
         })
     });

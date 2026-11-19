@@ -123,7 +123,12 @@ string `"done"`.
   waits only for urgent failures and direct messages.
 - `claim:NAME` waits on a claim; an already resolved claim records `continue`.
   `port:PORT_ID` waits on a pending port request: the operator's decision,
-  approved or denied, queues the requester's next turn ([ports](PORTS.md)).
+  approved or denied, queues the requester's next turn ([ports](PORTS.md)); an
+  already decided one records `continue`. Without continuation (no approved bot)
+  a recorded `continue` would start no turn, so such a wait is refused instead
+  and the agent acts on the resolution in the same turn.
+- Arguments that do not deserialize are refused naming the failing field: a
+  `payload` needs all of `subgoal`, `findings`, `tried`, `pending` and `next`.
 - `recheck_seconds` omitted or `0` means events only; a positive value is a
   fallback recheck. An over-long `progress` (over 1,000 characters) is truncated.
 - Every adjustment is listed in `adjusted`. Only the accepted draft is kept.

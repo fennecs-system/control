@@ -721,6 +721,39 @@ fn a_wait_on_a_pending_port_request_sleeps_until_its_decision() {
     assert!(decided["adjusted"].to_string().contains("already approved"), "{decided}");
 }
 #[test]
+fn without_continuation_a_wait_on_a_decided_port_keeps_the_turn_going() {
+    let (mut state, id, generation) = fixture();
+    let chat = state.chats[0].id.clone();
+    assert!(!crate::bots::continuation_enabled(&state, &chat));
+    let port = |status: &str| serde_json::from_value::<crate::ports::Port>(json!({
+        "id":"port-1","service":"svc-a","generation":1,"container":"b".repeat(64),"node":"node-a","chat":chat,
+        "actor":{"type":"local_operator"},"origin_run":id,"origin_attempt":generation,"name":"download","direction":"egress",
+        "service_port":3128,"target":{"host":"files.example","port":443},"status":status,"approval":null,"diagnostic":""})).unwrap();
+    // A pending request sleeps: its decision starts the next turn.
+    state.ports.push(port("pending"));
+    hand_off(&mut state, &id, &generation, "pending", json!({"disposition":{"kind":"wait","topics":["port:port-1"]}})).unwrap();
+    // Decided already: a recorded continue would start no turn, and the
+    // decision may have been delivered, so the agent is told to act now.
+    state.ports[0] = port("approved");
+    let refused = hand_off(&mut state, &id, &generation, "stranded", json!({"disposition":{"kind":"wait","topics":["port:port-1","#general"]}})).unwrap_err().to_string();
+    assert!(refused.contains("already approved") && refused.contains("act on it now in this turn"), "{refused}");
+    assert!(crate::worker_tools::fixes::names_fix(&refused), "{refused}");
+}
+#[test]
+fn malformed_handoffs_name_the_field_to_fix() {
+    let (mut state, id, generation) = fixture();
+    let missing = hand_off(&mut state, &id, &generation, "missing", json!({"progress":"x"})).unwrap_err().to_string();
+    assert!(missing.contains("Expected a handoff with a disposition"), "{missing}");
+    // A payload missing required notes is named rather than blamed on the disposition.
+    let payload = hand_off(&mut state, &id, &generation, "payload", json!({"disposition":"continue","payload":{"subgoal":"x"}})).unwrap_err().to_string();
+    assert!(payload.contains("payload") && payload.contains("missing field") && !payload.contains("Expected a handoff"), "{payload}");
+    let unknown = hand_off(&mut state, &id, &generation, "unknown", json!({"disposition":"continue","summary":"x"})).unwrap_err().to_string();
+    assert!(unknown.contains("arguments did not match") && unknown.contains("summary"), "{unknown}");
+    for error in [missing, payload, unknown] {
+        assert!(crate::worker_tools::fixes::names_fix(&error), "{error}");
+    }
+}
+#[test]
 fn omitted_receipts_process_what_was_delivered_and_explicit_ones_exactly_those() {
     let (mut state, id, generation) = fixture();
     post(&mut state, "first");
