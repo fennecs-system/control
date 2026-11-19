@@ -32,6 +32,8 @@ use std::{
 };
 const MAX_RECORDS: usize = 128;
 const OUTPUT: usize = 16000;
+/// A caller's latest executions a status or attach result lists.
+const OWN_EXECUTIONS: usize = 8;
 fn fail(s: impl ToString) -> io::Error {
     io::Error::other(s.to_string())
 }
@@ -182,6 +184,50 @@ impl Service {
     fn summary(&self) -> Value {
         json!({"service_id":self.resource.id,"platform":format!("linux/{}", std::env::consts::ARCH),"shape":self.shape,"limits":self.limits(),"pids_limit":self.pids_limit(),"phase":self.resource.phase,"scope":self.resource.scope,"storage":self.storage,"workspace":workspace::Workspace::of(self).map(|workspace|json!({"path":"/workspace","volume":workspace.name(),"retained_on_removal":true,"shared_with":"same_chat_services"})),"workspace_executable":self.workspace_exec,"expires_unix":(!self.resource.lease.is_until_stopped()).then(||self.resource.lease.expires()),"until_stopped":self.resource.lease.is_until_stopped(),"diagnostic":self.diagnostic,"output":self.output,"exit_code":self.exit_code,"executions":self.executions.iter().map(|e|e.brief()).collect::<Vec<_>>()})
     }
+    /// What the calling run needs to act on this service: its state and
+    /// limits, its ports and watches, and its own latest executions. `node`
+    /// keeps the full record, every caller's executions included.
+    fn view(&self, state: &State, run: &str, node: bool) -> Value {
+        let mut value = self.summary();
+        let ports = crate::ports::of_service(&state.ports, &self.resource.id);
+        if !ports.is_empty() {
+            value["ports"] = json!(ports);
+        }
+        let watches = state.watches.iter()
+            .filter(|w| !w.stopped && w.service == self.resource.id.as_str() && w.generation == self.resource.generation.get())
+            .map(|w| json!({"watch_id":w.id,"name":w.name,"active":w.active()})).collect::<Vec<_>>();
+        if !watches.is_empty() {
+            value["watches"] = json!(watches);
+        }
+        if node {
+            return value;
+        }
+        let Some(map) = value.as_object_mut() else { return value };
+        // Fixed for every service (offline, no host mounts) or empty.
+        map.remove("scope");
+        // A live phase's container ID is for operators; stop reasons stay.
+        if matches!(self.resource.phase, Phase::Starting(_) | Phase::Running(_)) {
+            map.insert("phase".into(), json!(self.phase_name()));
+        }
+        map.retain(|key, v| !(v.is_null() || v == "" || (key == "until_stopped" && v == false)));
+        if map.get("storage").is_some_and(|s| s["limit_mb"].is_null()) {
+            map.remove("storage");
+        }
+        if map.contains_key("workspace") {
+            map.insert("workspace".into(), json!("/workspace (retained volume)"));
+        }
+        let own = self.executions.iter().filter(|e| e.run() == run).collect::<Vec<_>>();
+        let skip = own.len().saturating_sub(OWN_EXECUTIONS);
+        map.insert("executions".into(), json!(own[skip..].iter().map(|e| e.brief()).collect::<Vec<_>>()));
+        if skip > 0 {
+            map.insert("older_executions".into(), json!(skip));
+        }
+        let others = self.executions.len() - own.len();
+        if others > 0 {
+            map.insert("other_callers_executions".into(), json!(others));
+        }
+        value
+    }
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -223,29 +269,33 @@ fn caller<'a>(
             .ok_or_else(|| fail("Service requires a chat"))?,
     ))
 }
+/// The caller's active services and ten recent completed ones; node capacity
+/// only with `detail`.
+fn listing(s: &State, owned: impl Fn(&&Service) -> bool, run: &str, detail: bool) -> Value {
+    let services = s.services.iter().filter(&owned).filter(|service|service.resource.phase.reserves_capacity()).chain(s.services.iter().rev().filter(&owned).filter(|service|!service.resource.phase.reserves_capacity()).take(10)).map(|service|service.view(s, run, detail)).collect::<Vec<_>>();
+    if detail { json!({"compute":compute::status(&s.services),"services":services}) } else { json!({"services":services}) }
+}
 pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call: ServiceCall) -> io::Result<Value> {
     let (run, generation, nonce) = (attempt.run, attempt.generation, attempt.nonce);
     let node: NodeId = crate::config::node_id()
         .map_err(fail)?
         .try_into()
         .map_err(fail)?;
-    let (stop, list, id) = match call {
+    let (stop, list, id, detail) = match call {
         ServiceCall::Start(input) => return start(shared, run, generation, nonce, node, input),
         ServiceCall::Exec(input) => return commands::exec(shared, run, generation, nonce, &node, input),
         ServiceCall::ExecStatus(handle) => return commands::status_wait(shared, run, generation, &node, handle),
         ServiceCall::Copy(input) => return copy::request(shared, attempt, &node, input),
-        ServiceCall::Status(id) => (false, true, id),
-        ServiceCall::Attach(id) => (false, false, id),
-        ServiceCall::Stop(id) => (true, false, id),
+        ServiceCall::Status(id, detail) => (false, true, id, detail),
+        ServiceCall::Attach(id, detail) => (false, false, id, detail),
+        ServiceCall::Stop(id) => (true, false, id, false),
     };
     let mut s = shared.lock().map_err(|_| fail("State unavailable"))?;
     let (active, _) = caller(&s, run, generation)?;
     let owned = |service: &&Service| accessible(service, &node, active);
     let Some(id) = id else {
         return if list {
-            Ok(
-                json!({"compute":compute::status(&s.services),"services":s.services.iter().filter(owned).filter(|service|service.resource.phase.reserves_capacity()).chain(s.services.iter().rev().filter(owned).filter(|service|!service.resource.phase.reserves_capacity()).take(10)).map(Service::summary).collect::<Vec<_>>()}),
-            )
+            Ok(listing(&s, owned, run, detail))
         } else {
             Err(fail("service_id is required"))
         };
@@ -263,10 +313,10 @@ pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
             now(),
             crate::storage::save,
         )?;
-        return Ok(s.services[index].summary());
+        return Ok(s.services[index].view(&s, run, false));
     }
     let service = s.services[index].binding_snapshot();
-    let mut value = s.services[index].summary();
+    let mut value = s.services[index].view(&s, run, detail);
     drop(s);
     if let Some(id) = service.resource.phase.container() {
         // Verify identity before reading another process's output.

@@ -9,8 +9,8 @@ impl ServiceOps for Recorder {
         let id = |id: Option<String>| id.unwrap_or_else(|| "-".into());
         let call = match call {
             ServiceCall::Start(_) => "start".to_owned(),
-            ServiceCall::Status(service) => format!("status {}", id(service)),
-            ServiceCall::Attach(service) => format!("attach {}", id(service)),
+            ServiceCall::Status(service, node) => format!("status {}{}", id(service), if node { " node" } else { "" }),
+            ServiceCall::Attach(service, node) => format!("attach {}{}", id(service), if node { " node" } else { "" }),
             ServiceCall::Stop(service) => format!("stop {}", id(service)),
             ServiceCall::Exec(_) => "exec".to_owned(),
             ServiceCall::ExecStatus(_) => "exec_status".to_owned(),
@@ -41,6 +41,8 @@ fn service_tools_decode_typed_calls_and_keep_lenient_service_ids() {
     )
     .unwrap();
     call("control_service_attach", json!({"service_id":"svc-a"})).unwrap();
+    call("control_service_attach", json!({"service_id":"svc-a","detail":"node"})).unwrap();
+    call("control_service_status", json!({"detail":"everything"})).unwrap();
     call(
         "control_service_stop",
         json!({"service_id":"svc-a","extra":1}),
@@ -63,6 +65,8 @@ fn service_tools_decode_typed_calls_and_keep_lenient_service_ids() {
             "run/gen/n1 status -",
             "run/gen/n1 status -",
             "run/gen/n1 attach svc-a",
+            "run/gen/n1 attach svc-a node",
+            "run/gen/n1 status -",
             "run/gen/n1 stop svc-a",
             "run/gen/n1 exec",
             "run/gen/n1 exec_status",
@@ -85,7 +89,7 @@ fn service_tools_decode_typed_calls_and_keep_lenient_service_ids() {
         error("control_service_restart", json!({})),
         "Unknown service tool"
     );
-    assert_eq!(host.0.lock().unwrap().len(), 7);
+    assert_eq!(host.0.lock().unwrap().len(), 9);
 }
 
 #[test]
