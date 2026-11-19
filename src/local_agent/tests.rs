@@ -32,6 +32,8 @@ struct Mock {
     firsts: Vec<bool>,
     /// Reasoning the loop handed over, step by step.
     reasoned: Vec<String>,
+    /// Summary-tree nodes kept for recall, with their original sources.
+    retained: Vec<(control_comonad::Block, Vec<String>)>,
 }
 impl Host for Mock {
     fn tools(&mut self) -> io::Result<Vec<Value>> {
@@ -80,6 +82,10 @@ impl Host for Mock {
     fn observation(&mut self, first: bool) -> Option<String> {
         self.firsts.push(first);
         self.observations.pop_front()
+    }
+    fn retain(&mut self, block: control_comonad::Block, _: &str, _: Option<[String; 2]>, sources: Vec<String>) -> Option<String> {
+        self.retained.push((block, sources));
+        Some(format!("{:064x}", self.retained.len()))
     }
 }
 fn mock(replies: Vec<Value>) -> Mock {
@@ -285,7 +291,8 @@ fn a_lean_transcript_grows_slowly_and_carries_nothing_twice() {
     // A large context, so neither run compacts: only the rolling window differs.
     let wide = Limits { context_tokens: 131072, output_tokens: 1024, input_bytes: 28000, output_bytes: 8192 };
     let (_, _, full) = setup_turn(&wide, &Policy { verbatim_steps: usize::MAX, ..Policy::default() }, 12);
-    let (host, outcome, lean) = setup_turn(&wide, &Policy { shrink_batch: 1, ..Policy::default() }, 12);
+    // A zero threshold shrinks every step that leaves the window.
+    let (host, outcome, lean) = setup_turn(&wide, &Policy { shrink_batch: 1, shrink_percent: 0, ..Policy::default() }, 12);
     assert_eq!(outcome.unwrap().compactions, 0);
     let growth = |used: &[u32]| used.windows(2).map(|w| w[1] - w[0]).collect::<Vec<_>>();
     println!("input tokens per request, whole transcript: {full:?}\n  growth per step: {:?}", growth(&full));
@@ -723,9 +730,11 @@ fn prefix_reuse(requests: &[Value]) -> (usize, usize) {
 }
 #[test]
 fn shrinking_in_batches_keeps_the_prefix_stable_between_batches() {
+    // A zero threshold: every step that leaves the window shrinks, in batches.
     let wide = Limits { context_tokens: 131072, output_tokens: 1024, input_bytes: 28000, output_bytes: 8192 };
     let steps = 24;
-    let (host, outcome, _) = setup_turn(&wide, &Policy::default(), steps);
+    let eager = Policy { shrink_percent: 0, ..Policy::default() };
+    let (host, outcome, _) = setup_turn(&wide, &eager, steps);
     assert_eq!(outcome.unwrap().compactions, 0);
     let messages: Vec<&Vec<Value>> = host.requests.iter().map(|r| r["messages"].as_array().unwrap()).collect();
     let shrunk = |step: usize| step.saturating_sub(4) / 4 * 4;
@@ -746,10 +755,49 @@ fn shrinking_in_batches_keeps_the_prefix_stable_between_batches() {
         assert!(whole == count || (4..=7).contains(&whole), "{whole} of {count}");
     }
     // The measured reuse against shrinking one step per step.
-    let (single, _, _) = setup_turn(&wide, &Policy { shrink_batch: 1, ..Policy::default() }, steps);
+    let (single, _, _) = setup_turn(&wide, &Policy { shrink_batch: 1, ..eager }, steps);
     let (a, total_a) = prefix_reuse(&single.requests);
     let (b, total_b) = prefix_reuse(&host.requests);
     let (one, four) = (a as f64 * 100.0 / total_a as f64, b as f64 * 100.0 / total_b as f64);
     println!("prefix reuse over a {steps}-step turn: one step per step {one:.1}% of {total_a} prompt bytes; batches of 4 {four:.1}% of {total_b}");
     assert!(four > one + 10.0, "batched {four:.1}% against {one:.1}%");
+}
+#[test]
+fn requests_stay_append_only_until_the_shrink_threshold_then_shrink_once() {
+    // Half the budget falls at step 16 of a 24-step turn; the compaction
+    // threshold is never reached.
+    let limits = Limits { context_tokens: 77000, output_tokens: 1024, input_bytes: 28000, output_bytes: 8192 };
+    let budget = limits.context_tokens - limits.output_tokens;
+    let steps = 24;
+    let (host, outcome, used) = setup_turn(&limits, &Policy::default(), steps);
+    assert_eq!(outcome.unwrap().compactions, 0);
+    let texts: Vec<String> = host.requests.iter().map(rendered).collect();
+    let extends = |pair: &[String]| pair[1].len() > pair[0].len() && pair[1].starts_with(&pair[0]);
+    let breaks: Vec<usize> = texts.windows(2).enumerate().filter(|(_, pair)| !extends(pair)).map(|(step, _)| step + 1).collect();
+    println!("input tokens per request (budget {budget}): {used:?}\nprefix breaks at requests {breaks:?}");
+    // Below the threshold each request extends the previous one byte for byte.
+    let first = breaks[0];
+    assert!(used[first - 1] * 100 < budget * SHRINK_PERCENT, "no shrink below the threshold");
+    for pair in texts[..first].windows(2) {
+        assert!(extends(pair) && !pair[1].contains("more bytes of this earlier result"));
+    }
+    // Reaching it shrinks every step but the newest four at once, and the
+    // shrunk prefix then stays stable for many steps.
+    let results: Vec<&str> = host.requests[first]["messages"].as_array().unwrap().iter()
+        .filter(|m| m["role"] == "tool").map(|m| m["content"].as_str().unwrap()).collect();
+    assert_eq!(results.iter().filter(|r| r.contains("more bytes of this earlier result")).count(), results.len() - 4);
+    assert!(used[first] < used[first - 1] / 2, "the shrink frees context: {} after {}", used[first], used[first - 1]);
+    let next = breaks.get(1).copied().unwrap_or(texts.len());
+    assert!(next - first >= 8, "stable for {} requests after the shrink", next - first);
+    // Against shrinking in batches of four from step 8 on, as before.
+    let (eager, _, _) = setup_turn(&limits, &Policy { shrink_percent: 0, ..Policy::default() }, steps);
+    let ((a, total_a), (b, total_b)) = (prefix_reuse(&eager.requests), prefix_reuse(&host.requests));
+    let (batched, stable) = (a as f64 * 100.0 / total_a as f64, b as f64 * 100.0 / total_b as f64);
+    println!("prefix reuse over a {steps}-step turn: batches of 4 {batched:.1}% of {total_a} prompt bytes ({} prefilled); append-only to the threshold {stable:.1}% of {total_b} ({} prefilled)", total_a - a, total_b - b);
+    assert!(stable > batched && total_b - b < total_a - a, "{stable:.1}% against {batched:.1}%");
+    // Recall is unchanged: steps leave the recent window in batches as before,
+    // shrunk or not, and their leaves hold the whole originals.
+    let leaves: Vec<u64> = host.retained.iter().filter(|(block, _)| block.level == 0).map(|(block, _)| block.start).collect();
+    assert_eq!(leaves, (0..(steps - context::window(steps, 4, 4)) as u64).collect::<Vec<_>>());
+    assert!(host.retained.iter().all(|(_, sources)| sources.len() == 1 && sources[0].contains(&host.tool_text[host.tool_text.len() - 400..])));
 }
