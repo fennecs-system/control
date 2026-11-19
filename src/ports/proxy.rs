@@ -31,7 +31,7 @@ const ENV: [(&str, &str); 6] = [
 
 /// The usage line appended to every approved target egress.
 pub(super) fn usage() -> String {
-    format!("Standard tools work unmodified: exec and watch commands get HTTPS_PROXY/HTTP_PROXY={PROXY_URL}, so npm ci, pip, cargo, git and curl use HTTPS_PROXY automatically for every approved host; --connect-to still works.")
+    format!("exec and watch commands get HTTPS_PROXY/HTTP_PROXY={PROXY_URL}, so npm ci, pip, cargo, git and curl reach every approved host unchanged. Restart a watch that started before the approval.")
 }
 
 /// Whether `service`'s current generation holds an approved target egress.

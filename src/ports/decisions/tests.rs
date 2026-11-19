@@ -285,7 +285,7 @@ fn approving_egress_wakes_a_chat_whose_turn_was_cut_off_with_the_relay_line() {
     let wake = state.runtime.runs.last().unwrap();
     assert_eq!((wake.kind, wake.chat_id.as_deref()), (RunKind::PortDecision, Some(chat.as_str())));
     assert!(wake.objective.contains("download") && wake.objective.contains("approved"), "{}", wake.objective);
-    assert!(wake.objective.contains("curl --connect-to files.example:443:127.0.0.1:3128 https://files.example/…"), "{}", wake.objective);
+    assert!(wake.objective.contains("HTTPS_PROXY") && wake.objective.contains("curl -fsSLO https://files.example/…"), "{}", wake.objective);
     assert!(state.ports[0].decision.as_ref().unwrap().acknowledged);
     // A denial wakes a timed-out requester the same way, without relay instructions.
     let (mut denied, _) = approved();
@@ -297,7 +297,7 @@ fn approving_egress_wakes_a_chat_whose_turn_was_cut_off_with_the_relay_line() {
     advance(&mut denied, |_| Ok(())).unwrap();
     let wake = denied.runtime.runs.last().unwrap();
     assert_eq!(wake.kind, RunKind::PortDecision);
-    assert!(wake.objective.contains("denied") && !wake.objective.contains("--connect-to"), "{}", wake.objective);
+    assert!(wake.objective.contains("denied") && !wake.objective.contains("HTTPS_PROXY"), "{}", wake.objective);
     // An ordinary failure (no host checkpoint) still does not wake.
     let (mut failed, _) = approved();
     failed.runtime.runs[0].status = "failed".into();

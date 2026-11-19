@@ -70,17 +70,12 @@ service can speak TLS itself; Control neither terminates TLS nor supplies
 credentials. This is TCP forwarding, not container-wide egress; the
 [egress proxy](#egress-proxy-https_proxy) admits only the same approved endpoints.
 
-Service containers have no DNS, so a command that names the host directly fails
-with `Could not resolve host`. Use the relay while keeping TLS hostname checks,
-for example:
-
-```sh
-curl --connect-to example.com:443:127.0.0.1:3001 https://example.com/file -o /workspace/file
-```
-
-Every egress record from `control_port_request` and `control_port_status`
-carries that exact line as `usage`, and the approval wake repeats it. Redirects
-and other hosts need their own approved endpoints.
+Service containers have no DNS. HTTP and TLS clients use the real host name
+through the [egress proxy](#egress-proxy-https_proxy); non-HTTP clients dial
+`127.0.0.1:service_port`, which relays to the target. Every egress record from
+`control_port_request` and `control_port_status` carries this as `usage`, and the
+approval wake repeats it. Redirects and other hosts need their own approved
+endpoints.
 
 #### Egress proxy (`HTTPS_PROXY`)
 
@@ -90,7 +85,7 @@ inside its container. `control_service_exec` commands and newly started watches
 then run with `HTTPS_PROXY`, `HTTP_PROXY`, `https_proxy` and `http_proxy` set to
 `http://127.0.0.1:3129` and `NO_PROXY=localhost,127.0.0.1`. npm ci, pip, cargo,
 git and curl use `HTTPS_PROXY` automatically for every approved host, with no
-lockfile rewriting or task-local adapter; `--connect-to` still works. Commands
+lockfile rewriting or task-local adapter. Commands
 started before the first approval, or with no approved egress, get no proxy
 settings; restart a watch to pick them up.
 
@@ -165,7 +160,8 @@ pending request gets no automatic recovery turn; it sleeps until the decision.
 When a `control_service_exec` or `control_service_exec_status` result shows a
 name-resolution or connection failure and names the host of one of this chat's
 egress requests, the result gets one hint: if pending, wait on `port:PORT_ID`; if
-approved, use the `--connect-to` line; if already using the relay, check
+approved, use the proxy (restart a watch started before approval); if already
+dialling the relay, check
 `control_port_status` for `ready` and `diagnostic`. Other hosts get no hint.
 
 ## Limits and guarantees

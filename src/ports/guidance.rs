@@ -20,7 +20,7 @@ impl Port {
                     80 => format!("http://{host}/…"),
                     _ => format!("https://{host}:{port}/…"),
                 };
-                format!("The service has no DNS or direct network: connect to {local} inside it and the relay forwards to {host}:{port}, e.g. curl --connect-to {host}:{port}:{local} {url}. {}", super::proxy::usage())
+                format!("Use the real host name: {} For example curl -fsSLO {url}. Non-HTTP clients connect to {local} instead; it relays to {host}:{port}.", super::proxy::usage())
             }
             None => format!("Connect to {local} inside the service; the relay forwards to the peer ingress."),
         })
@@ -95,7 +95,7 @@ pub(crate) fn egress_hint(state: &State, run_id: &str, command: &str, output: &s
     Some(match port.status {
         Status::Pending => format!("Egress to {host} is pending operator approval (port request {id}): hand off with control_turn_handoff {{\"disposition\":{{\"kind\":\"wait\",\"topics\":[\"port:{id}\"]}}}} and wait on it rather than retrying."),
         _ if command.contains(&local) => format!("The egress relay for {host} (port {id}) at {local} did not connect: check control_port_status {{\"port_id\":\"{id}\"}} for ready and diagnostic before retrying."),
-        _ => format!("Egress to {host} is approved as port {id}, but only through its relay. {}", port.usage()?),
+        _ => format!("Egress to {host} is approved as port {id}, but this process did not use its proxy. {}", port.usage()?),
     })
 }
 
