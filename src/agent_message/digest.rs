@@ -95,6 +95,40 @@ pub(crate) fn reconcile(state: &mut State, now_ms: u64, save: &mut impl FnMut(&S
     }
     Ok(())
 }
+/// Completes queued message turns whose message the recipient's attempt was
+/// already delivered, so one message never also starts a later turn on stale
+/// input. A message that shared services still runs: its grants activate only
+/// in that turn. Decided from saved deliveries, so a restart decides the same;
+/// a failed save leaves the turns queued.
+pub(crate) fn settle(state: &mut State, save: &mut impl FnMut(&State) -> std::io::Result<()>) -> Result<(), &'static str> {
+    let settled = state.runtime.runs.iter().enumerate()
+        .filter(|(_, run)| run.kind == RunKind::AgentMessage && run.status == "queued" && run.attempts.is_empty())
+        .filter(|(_, run)| state.agent_messages.iter().any(|sent| sent.run == run.id && sent.services.is_empty()))
+        .filter_map(|(index, run)| {
+            let chat = run.chat_id.as_deref()?;
+            let session = state.chats.iter().find(|session| session.id == chat)?;
+            let cursor = session.messages.iter().position(|message| message.run_id.as_deref() == Some(run.id.as_str()))? as u64 + 1;
+            crate::application::messages::delivered(&state.runtime.runs, &state.chats, chat, cursor).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    if settled.is_empty() {
+        return Ok(());
+    }
+    let previous = settled.iter().map(|&index| state.runtime.runs[index].clone()).collect::<Vec<_>>();
+    for &index in &settled {
+        let run = &mut state.runtime.runs[index];
+        run.status = "completed".into();
+        run.emitted = Some("completed".into());
+        run.result = "Already delivered to a running turn.".into();
+    }
+    if save(state).is_err() {
+        for (index, run) in settled.into_iter().zip(previous) {
+            state.runtime.runs[index] = run;
+        }
+        return Err("Could not settle delivered agent messages; they stay queued.");
+    }
+    Ok(())
+}
 /// Queues one digest turn per starved chat with its latest task's settings
 /// and the services granted to the messages it carries. Returns how many were
 /// queued; a full queue or revoked authority leaves the rest for a later pass.

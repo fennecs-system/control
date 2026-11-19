@@ -346,7 +346,7 @@ fn recorded_room_updates_are_readable_without_callback_hints() {
     let (mut state, id, generation) = fixture();
     post(&mut state, "Retained observation, no action required");
     state.collective.posts.last_mut().unwrap().delivery = crate::rooms::Delivery::Record;
-    assert!(!callback_notice(&mut state, &id));
+    assert!(!callback_notice(&mut state, &id, true));
     let page = handle(
         &mut state,
         &AttemptRef {
@@ -365,17 +365,17 @@ fn recorded_room_updates_are_readable_without_callback_hints() {
         "Retained observation, no action required"
     );
     post(&mut state, "Dependency is ready");
-    assert!(callback_notice(&mut state, &id));
+    assert!(callback_notice(&mut state, &id, true));
 }
 
 #[test]
 fn callback_hints_are_once_per_change_and_do_not_acknowledge_processing() {
     let (mut state, id, generation) = fixture();
-    assert!(!callback_notice(&mut state, &id));
+    assert!(!callback_notice(&mut state, &id, true));
     let chat = state.chats[0].id.clone();
     crate::chat::send(&mut state, &chat, "/steer Keep the public API", "test").unwrap();
-    assert!(callback_notice(&mut state, &id));
-    assert!(!callback_notice(&mut state, &id));
+    assert!(callback_notice(&mut state, &id, true));
+    assert!(!callback_notice(&mut state, &id, true));
     handle(
         &mut state,
         &AttemptRef {
@@ -388,7 +388,7 @@ fn callback_hints_are_once_per_change_and_do_not_acknowledge_processing() {
         |_| Ok(()),
     )
     .unwrap();
-    assert!(!callback_notice(&mut state, &id));
+    assert!(!callback_notice(&mut state, &id, true));
     assert!(
         state.chats[0]
             .continuity
@@ -398,8 +398,8 @@ fn callback_hints_are_once_per_change_and_do_not_acknowledge_processing() {
             .is_none()
     );
     post(&mut state, "A peer has new evidence");
-    assert!(callback_notice(&mut state, &id));
-    assert!(!callback_notice(&mut state, &id));
+    assert!(callback_notice(&mut state, &id, true));
+    assert!(!callback_notice(&mut state, &id, true));
 }
 #[test]
 fn unicode_pages_stay_within_the_byte_budget_and_oversize_data_requires_resynchronisation() {
@@ -774,4 +774,32 @@ fn context_reads_carry_events_and_position_not_the_notes_the_prompt_already_show
     let cx = AttemptRef { run: &id, generation: &generation, nonce: "with-notes" };
     let notes = handle(&mut state, &cx, "control_turn_context", &json!({"source":"room","notes":true}), |_| Ok(())).unwrap();
     assert!(notes.get("working_state").is_some_and(Value::is_null) || notes["working_state"].is_object(), "{notes}");
+}
+#[test]
+fn the_inbox_delivers_new_conversation_once_and_cut_entries_point_to_their_full_text() {
+    let (mut state, id, generation) = fixture();
+    assert!(inbox(&mut state, &id, |_| Ok(())).is_none(), "nothing new");
+    let chat = state.chats[0].id.clone();
+    crate::chat::send(&mut state, &chat, "/steer Keep the public API", "test").unwrap();
+    let long = format!("Plan: {}", "step ".repeat(400));
+    state.chats[0].messages.push(crate::chat::Message { speaker: Default::default(), text: long.clone(), run_id: None, reply: String::new() });
+    // A failed save delivers nothing.
+    assert!(inbox(&mut state, &id, |_| Err(io::Error::other("disk"))).is_none());
+    let block = inbox(&mut state, &id, |_| Ok(())).unwrap();
+    assert!(block.starts_with("Inbox (2 new, shown once)") && block.contains("[instruction] /steer Keep the public API"), "{block}");
+    assert!(!block.contains(&long) && block.contains("[cut; full text: control_turn_context"), "{block}");
+    assert!(inbox(&mut state, &id, |_| Ok(())).is_none(), "shown once");
+    assert!(!callback_notice(&mut state, &id, true), "no hint for what the inbox delivered");
+    let cx = |nonce| AttemptRef { run: &id, generation: &generation, nonce };
+    let read = handle(&mut state, &cx("after-inbox"), "control_turn_context", &json!({}), |_| Ok(())).unwrap();
+    assert!(read["events"].as_array().unwrap().is_empty(), "already delivered: {read}");
+    // The pointer rereads the cut entry in full.
+    let pointer = block.split("\"after_receipt\":\"").nth(1).unwrap().split('"').next().unwrap();
+    let full = handle(&mut state, &cx("full"), "control_turn_context", &json!({"after_receipt":pointer}), |_| Ok(())).unwrap();
+    assert_eq!(full["events"][0]["text"], long.as_str());
+    // A handoff that omits processed acknowledges what the inbox delivered.
+    let staged = handle(&mut state, &cx("handoff"), "control_turn_handoff", &json!({"disposition":"done"}), |_| Ok(())).unwrap();
+    assert!(staged.get("left_pending").is_none(), "{staged}");
+    crate::chat::send(&mut state, &chat, "/steer Too late", "test").unwrap();
+    assert!(inbox(&mut state, &id, |_| Ok(())).is_none(), "nothing after a staged handoff");
 }

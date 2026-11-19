@@ -73,6 +73,22 @@ covers a post the agent was not shown. `control_turn_context` is only needed for
 events that arrive after admission; tool results carry a callback hint when there
 are some.
 
+**The inbox carries new conversation.** Instructions, agent messages and results
+that reach a running turn's own conversation are shown once at the end of its
+next model request: a local turn's loop appends them to the newest unsent step,
+and a CLI agent (Codex, Claude Code) gets them on its next Control tool result.
+The sent prefix never changes. The block holds at most 8 entries and 6 KiB; an
+entry over 1,500 characters is cut with an `after_receipt` that rereads it, and
+the rest wait for the next request (`More: control_turn_context {}`). Showing
+records an ordinary delivery, so `control_turn_context` does not repeat it and a
+handoff that omits `processed` acknowledges it. Nothing is shown after a handoff
+is staged. Room posts keep the hint. A CLI agent that makes no Control tool call
+sees nothing until it does: Control does not drive that loop. A queued
+`control_agent_message` turn whose message was delivered this way is completed
+without running (unless the message shared services), so a message never also
+starts a later turn; the decision uses saved deliveries and survives a restart.
+See `turn_context::tools::tests` and `agent_message::tests::urgency`.
+
 Managed sessions cannot call `control_room_notifications` or `control_room_ack`;
 they read rooms with `control_turn_context {"source":"room"}` and acknowledge them
 by handing off.

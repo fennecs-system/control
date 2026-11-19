@@ -200,7 +200,8 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
         // An omitted room means the team room: this chat's link, else its lead's.
         let attached = if linked { chat.room.clone() } else { address::team_room(state, &chat.id) };
         let args = &req["params"]["arguments"];
-        let room = || -> Result<String, std::borrow::Cow<'static, str>> { match args.get("room").and_then(Value::as_str) {
+        // Prompts render rooms as #name, so a leading # names the same room.
+        let room = || -> Result<String, std::borrow::Cow<'static, str>> { match args.get("room").and_then(Value::as_str).map(|room| room.strip_prefix('#').unwrap_or(room)) {
             Some(room) if valid(room) => Ok(address::for_worker(state, &chat.id, room)?),
             // Name the team room instead of silently redirecting a mistaken name.
             Some(room) => Err(match &attached {

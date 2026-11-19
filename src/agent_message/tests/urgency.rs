@@ -152,3 +152,31 @@ fn digests_are_bounded_and_count_what_they_omit() {
     assert!(digest.contains("(urgent): Need the key now"), "urgent messages are quoted first");
     assert!(digest.contains(": 19 x") && !digest.contains(": 0 x"), "then the newest; the oldest are counted");
 }
+
+/// A message sent while its recipient's turn runs reaches that turn's next
+/// request once; the turn it queued is then settled instead of starting on
+/// stale input, also after a restart in between.
+#[test]
+fn a_message_delivered_into_a_running_turn_does_not_also_start_one() {
+    let (mut state, _, child, _) = family();
+    let lead_run = state.runtime.runs[0].id.clone();
+    let index = crate::chat::latest_task(&state, &child, &state.chats[0].actor).unwrap();
+    state.runtime.runs[index].status = "queued".into();
+    let admitted = crate::worker::checkpoint_next(&mut state, |_| Ok(())).unwrap();
+    let child_run = state.runtime.runs[admitted].id.clone();
+    send(&mut state, &lead_run, "attempt-a", "loud", &child, "Stop: the chest moved", true);
+    assert_eq!(queued(&state), 1, "queued in case the turn ends first");
+    let block = crate::turn_context::inbox(&mut state, &child_run, |_| Ok(())).unwrap();
+    assert_eq!(block.matches("Stop: the chest moved").count(), 1, "{block}");
+    assert!(crate::turn_context::inbox(&mut state, &child_run, |_| Ok(())).is_none(), "exactly once");
+    let mut state: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+    crate::bots::reconcile_at_ms(&mut state, now()).unwrap();
+    assert_eq!(queued(&state), 0, "already delivered: no second turn");
+    let settled = state.runtime.runs.last().unwrap();
+    assert_eq!((settled.status.as_str(), settled.attempts.len()), ("completed", 0));
+    // After the turn ends, an undelivered urgent message still starts one.
+    state.runtime.runs.iter_mut().find(|run| run.id == child_run).unwrap().status = "completed".into();
+    send(&mut state, &lead_run, "attempt-a", "later", &child, "Now the gate", true);
+    crate::bots::reconcile_at_ms(&mut state, now()).unwrap();
+    assert_eq!(queued(&state), 1);
+}

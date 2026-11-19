@@ -58,16 +58,18 @@ blockers in `record` posts.
 task tree. Messages are retained conversation evidence, not executable
 continuations, and wake nobody unless the sender sets `urgent: true`.
 
-- **Non-urgent.** A running recipient reads it through its conversation
-  callbacks. An idle recipient gets it with its next wake as an unread count
-  and a compact digest: urgent messages first, then the newest; at most eight
+- **Non-urgent.** A running recipient gets it once at the end of its next
+  model request ([inbox](TURN-CONTINUITY.md#control_turn_context)), and it is
+  not digested again. An idle recipient gets it with its next wake as an unread
+  count and a compact digest: urgent messages first, then the newest; at most eight
   quotes of 160 characters, the rest counted, under 2 KB. The full text stays
   in the recipient's conversation. Status such as "verified, deposited five
   logs" belongs here or in a `record` post.
 - **Urgent.** For a request the recipient must act on now. It wakes an approved
   persistent bot under its budget, pause and stop intent, or queues a
-  descendant's follow-up turn. It never lets a peer wake a chat that is not a
-  bot.
+  descendant's follow-up turn. If the recipient's running turn already showed
+  it in its inbox, that follow-up completes without running. It never lets a
+  peer wake a chat that is not a bot.
 
 | Input | Wakes |
 | --- | --- |
