@@ -675,7 +675,7 @@ fn tool_failures_are_results_and_protocol_faults_stay_errors() {
     let call = |id: Value, name: &str, arguments: Value| rpc(&shared, &run, &json!({"nonce":"7-1","request":{"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":name,"arguments":arguments}}}));
     for (id, name, arguments, expected) in [
         (json!(2), "control_room_post", json!({"room":"general","message":"never posted","delivery":"shout"}), Some("Expected delivery=record or notify.")),
-        (json!("bad-room"), "control_room_post", json!({"room":"no such room","message":"never posted"}), Some("Unknown room. Call control_room_list.")),
+        (json!("bad-room"), "control_room_post", json!({"room":"no such room","message":"never posted"}), Some("Unknown room no such room. This chat's team room is general/")),
         (json!(3), "control_room_claim", json!({"room":"general","key":"k","action":"acquire","status":"released"}), None),
         (json!(4), "control_agent_spawn_blocking", json!({"unexpected":true}), Some("Expected a delegation objective and role")),
         // MCP names unknown tools a protocol error; a tool result keeps Codex's call

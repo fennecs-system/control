@@ -13,7 +13,13 @@ unrelated tasks have separate history, participants and wake subscriptions.
 Selecting an existing thread and **New chat in this thread** joins it
 explicitly. Workers can also attach by posting: a bare name such as `general`
 resolves inside their top-level task's thread, even if they were spawned before
-the lead attached. See [thread addressing](PERSISTENT-TOOLS.md#task-coordination-threads).
+the lead attached. A worker tool call that omits `room` uses the team room: the
+chat's link, else its lead's, else the task's own `general` thread when nobody
+has attached yet, so `control_room_read`, `control_room_claim`,
+`control_room_plan` and `control_room_post` agree from the first call. Reading,
+claiming and planning do not link the chat; posting does. An empty room reads as
+a `note` rather than an empty result. See
+[thread addressing](PERSISTENT-TOOLS.md#task-coordination-threads).
 
 Mentioning a room in a prompt or selecting a lens does not attach it. Ongoing
 room-triggered turns also need the owner's `/listen` command or persistent-bot

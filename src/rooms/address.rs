@@ -55,16 +55,32 @@ pub(super) fn for_worker(state: &State, chat: &str, room: &str) -> Result<String
 /// lead's room, including one linked after they started; a different actor's
 /// or unrelated task's link is never inherited.
 pub(crate) fn team_room(state: &State, chat: &str) -> Option<String> {
-    let mut session = state.chats.iter().find(|session| session.id == chat)?;
+    team(state, chat).ok()
+}
+
+/// The room an omitted worker `room` names: the team room, else the task's own
+/// `#general` thread when no chat up to the root (within one actor) is linked,
+/// so read, claim, plan and post agree before anyone attaches.
+pub(super) fn default_room(state: &State, chat: &str) -> Option<String> {
+    match team(state, chat) {
+        Ok(room) => Some(room),
+        Err(root) => root.map(|root| format!("general/{root}")),
+    }
+}
+
+/// The nearest same-actor link, else `Err` with the unlinked root's ID, or
+/// `Err(None)` when the lineage leaves the actor or is unavailable.
+fn team<'a>(state: &'a State, chat: &str) -> Result<String, Option<&'a str>> {
+    let mut session = state.chats.iter().find(|session| session.id == chat).ok_or(None)?;
     let actor = &session.actor;
     for _ in 0..64 {
         if let Some(room) = session.room.as_deref().filter(|room| Address::parse(room).is_some()) {
-            return Some(room.to_owned());
+            return Ok(room.to_owned());
         }
-        let parent = session.parent_chat.as_deref()?;
-        session = state.chats.iter().find(|candidate| candidate.id == parent && &candidate.actor == actor)?;
+        let Some(parent) = session.parent_chat.as_deref() else { return Err(Some(session.id.as_str())) };
+        session = state.chats.iter().find(|candidate| candidate.id == parent && &candidate.actor == actor).ok_or(None)?;
     }
-    None
+    Err(None)
 }
 
 pub(crate) fn names(state: &State) -> Vec<String> {
