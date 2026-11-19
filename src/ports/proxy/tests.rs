@@ -139,7 +139,7 @@ fn proxy_settings_and_usage_appear_only_with_approved_egress() {
     assert!(env(&state, service).contains(&("HTTPS_PROXY", "http://127.0.0.1:3129")));
     assert!(exports(&state, service).starts_with("export HTTPS_PROXY=http://127.0.0.1:3129 "));
     let usage = state.ports[0].summary()["usage"].as_str().unwrap().to_owned();
-    assert!(usage.contains("HTTPS_PROXY") && usage.contains("npm ci, pip, cargo, git and curl") && usage.contains("--connect-to"), "{usage}");
+    assert!(usage.contains("HTTPS_PROXY") && usage.contains("npm ci, pip, cargo, git and curl") && !usage.contains("--connect-to"), "{usage}");
     let (fresh, _, _) = fixture();
     assert!(env(&fresh, &fresh.services[0]).is_empty() && exports(&fresh, &fresh.services[0]).is_empty());
 }

@@ -24,7 +24,7 @@ fn a_pending_request_says_how_to_wait_and_how_it_will_be_used() {
     assert!(next.contains(&format!(r#"control_turn_handoff {{"disposition":{{"kind":"wait","topics":["port:{id}"]}}}}"#)), "{next}");
     assert!(next.contains("Do not poll or retry"), "{next}");
     let usage = summary["usage"].as_str().unwrap();
-    assert!(usage.contains("curl --connect-to files.example:443:127.0.0.1:3128 https://files.example/…"), "{usage}");
+    assert!(usage.contains("curl -fsSLO https://files.example/…") && usage.contains("HTTPS_PROXY") && usage.contains("127.0.0.1:3128") && !usage.contains("--connect-to"), "{usage}");
     assert_eq!(summary["ready"], json!(false));
 }
 
@@ -53,13 +53,13 @@ fn a_failure_for_an_approved_host_names_the_relay_line() {
     state.ports[0].status = Status::Approved;
     state.ports[0].decision = Some(decisions::Receipt::pending(true));
     let hint = egress_hint(&state, &run, "curl -fsSLO https://files.example/a.jar", DNS).unwrap();
-    assert!(hint.contains(&format!("approved as port {id}, but only through its relay")), "{hint}");
-    assert!(hint.contains("curl --connect-to files.example:443:127.0.0.1:3128 https://files.example/…"), "{hint}");
+    assert!(hint.contains(&format!("approved as port {id}, but this process did not use its proxy")), "{hint}");
+    assert!(hint.contains("HTTPS_PROXY") && hint.contains("Restart a watch"), "{hint}");
     // Already using the relay: point at its readiness instead.
     let relayed = egress_hint(&state, &run, "curl --connect-to files.example:443:127.0.0.1:3128 https://files.example/a.jar", "curl: (7) Failed to connect to 127.0.0.1 port 3128").unwrap();
     assert!(relayed.contains(&format!(r#"control_port_status {{"port_id":"{id}"}}"#)), "{relayed}");
     assert!(state.ports[0].summary().get("next").is_none(), "only a pending request is waited on");
-    assert!(matches!(wait_topic(&state, &chat, &id), Err((true, message)) if message.contains("already approved") && message.contains("--connect-to")));
+    assert!(matches!(wait_topic(&state, &chat, &id), Err((true, message)) if message.contains("already approved") && message.contains("HTTPS_PROXY")));
 }
 
 #[test]
