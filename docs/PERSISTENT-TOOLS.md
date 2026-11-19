@@ -63,7 +63,7 @@ not expose service management.
 | Tool | Result |
 | --- | --- |
 | `control_service_start` | Checkpoint a command and return its durable handle; startup is asynchronous. |
-| `control_service_status` | Inspect one handle, or list active services and ten recent completed handles. Each shows its state, limits, ports, watches and the caller's latest executions. `detail: "node"` adds shapes, the remaining node budget, the volume name and other callers' executions. |
+| `control_service_status` | Inspect one handle, or list active services and ten recent completed handles. Each shows its state, limits, ports, watches and this chat's latest executions. `detail: "node"` adds shapes, the remaining node budget, the volume name and other chats' executions. |
 | `control_service_attach` | Read the same status and bounded logs for an owned handle; does not extend its lease. |
 | `control_service_stop` | Record stop intent. Wait for `Stopped` before assuming removal succeeded. |
 | `control_service_exec` | Run a bounded command in an owned running service. Waits up to `wait_seconds` for the result, else returns an `execution_id`. |

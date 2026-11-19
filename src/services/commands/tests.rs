@@ -564,7 +564,7 @@ fn capture_publishes_output_before_command_exit() {
 /// own latest executions; node capacity and other callers' executions need
 /// `detail: "node"`.
 #[test]
-fn agent_status_omits_node_capacity_and_other_callers_executions() {
+fn agent_status_omits_node_capacity_and_other_chats_executions() {
     let (mut state, run, node, id) = fixture();
     for n in 0..14 {
         admit(&mut state, &run, "attempt-a", &format!("command-{n}"), &node, input(&id, "echo test"), |_| Ok(())).unwrap();
@@ -572,6 +572,11 @@ fn agent_status_omits_node_capacity_and_other_callers_executions() {
     for execution in &mut state.services[0].executions[..4] {
         execution.run = "another-run".into();
     }
+    // An earlier turn of the same chat counts as the caller's own.
+    let mut earlier = state.runtime.runs[0].clone();
+    earlier.id = "earlier-run".into();
+    state.runtime.runs.push(earlier);
+    state.services[0].executions[4].run = "earlier-run".into();
     let generation = state.services[0].resource.generation.get();
     state.watches.push(serde_json::from_value(json!({"id":"watch-a","name":"log","chat":"c","service":id,"generation":generation,"permanent":false,"command":"tail -f log","stopped":false})).unwrap());
     let owned = |_: &&Service| true;
@@ -583,7 +588,7 @@ fn agent_status_omits_node_capacity_and_other_callers_executions() {
     assert!(listed.get("compute").is_none(), "{after}");
     assert_eq!(service["executions"].as_array().unwrap().len(), super::super::OWN_EXECUTIONS);
     assert_eq!(service["older_executions"], 2);
-    assert_eq!(service["other_callers_executions"], 4);
+    assert_eq!(service["other_chats_executions"], 4);
     assert_eq!(service["watches"], json!([{"watch_id":"watch-a","name":"log","active":true}]));
     assert_eq!(service["workspace"], "/workspace (retained volume)");
     assert_eq!(service["phase"], "Running");
@@ -603,7 +608,7 @@ fn agent_status_omits_node_capacity_and_other_callers_executions() {
     // Only this run's executions; another run sees none of these as its own.
     let other = state.services[0].view(&state, "another-run", false);
     assert_eq!(other["executions"].as_array().unwrap().len(), 4);
-    assert_eq!(other["other_callers_executions"], 10);
+    assert_eq!(other["other_chats_executions"], 10);
 }
 #[path = "tests/dispatch_profile.rs"]
 mod dispatch_profile;

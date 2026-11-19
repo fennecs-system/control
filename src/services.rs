@@ -185,7 +185,7 @@ impl Service {
         json!({"service_id":self.resource.id,"platform":format!("linux/{}", std::env::consts::ARCH),"shape":self.shape,"limits":self.limits(),"pids_limit":self.pids_limit(),"phase":self.resource.phase,"scope":self.resource.scope,"storage":self.storage,"workspace":workspace::Workspace::of(self).map(|workspace|json!({"path":"/workspace","volume":workspace.name(),"retained_on_removal":true,"shared_with":"same_chat_services"})),"workspace_executable":self.workspace_exec,"expires_unix":(!self.resource.lease.is_until_stopped()).then(||self.resource.lease.expires()),"until_stopped":self.resource.lease.is_until_stopped(),"diagnostic":self.diagnostic,"output":self.output,"exit_code":self.exit_code,"executions":self.executions.iter().map(|e|e.brief()).collect::<Vec<_>>()})
     }
     /// What the calling run needs to act on this service: its state and
-    /// limits, its ports and watches, and its own latest executions. `node`
+    /// limits, its ports and watches, and its chat's latest executions. `node`
     /// keeps the full record, every caller's executions included.
     fn view(&self, state: &State, run: &str, node: bool) -> Value {
         let mut value = self.summary();
@@ -216,7 +216,10 @@ impl Service {
         if map.contains_key("workspace") {
             map.insert("workspace".into(), json!("/workspace (retained volume)"));
         }
-        let own = self.executions.iter().filter(|e| e.run() == run).collect::<Vec<_>>();
+        // The caller's chat's executions, from this turn or earlier ones.
+        let chat = state.runtime.runs.iter().find(|r| r.id == run).and_then(|r| r.chat_id.as_deref());
+        let mine = |id: &str| id == run || chat.is_some_and(|chat| state.runtime.runs.iter().any(|r| r.id == id && r.chat_id.as_deref() == Some(chat)));
+        let own = self.executions.iter().filter(|e| mine(e.run())).collect::<Vec<_>>();
         let skip = own.len().saturating_sub(OWN_EXECUTIONS);
         map.insert("executions".into(), json!(own[skip..].iter().map(|e| e.brief()).collect::<Vec<_>>()));
         if skip > 0 {
@@ -224,7 +227,7 @@ impl Service {
         }
         let others = self.executions.len() - own.len();
         if others > 0 {
-            map.insert("other_callers_executions".into(), json!(others));
+            map.insert("other_chats_executions".into(), json!(others));
         }
         value
     }

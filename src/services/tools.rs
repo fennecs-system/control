@@ -27,12 +27,12 @@ impl AttemptTools for Tools {
         for (name, description, readonly) in [
             (
                 "control_service_attach",
-                "Attach this turn to one of this chat's services; returns status, its ports, watches and your executions, and bounded logs. Attachment grants no host filesystem access and does not extend the lease.",
+                "Attach this turn to one of this chat's services; returns status, its ports, watches and this chat's executions, and bounded logs. Attachment grants no host filesystem access and does not extend the lease.",
                 true,
             ),
             (
                 "control_service_status",
-                "Read this chat's service status and bounded logs. Omit service_id to list active services and ten recent completed handles. detail \"node\" adds compute shapes, the node service budget and other callers' executions.",
+                "Read this chat's service status and bounded logs. Omit service_id to list active services and ten recent completed handles. detail \"node\" adds compute shapes, the node service budget and other chats' executions.",
                 true,
             ),
             (
