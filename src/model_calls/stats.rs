@@ -72,6 +72,14 @@ impl Metrics {
         let total = cached + self.prompt_tokens?;
         (total > 0.0).then(|| cached / total)
     }
+    /// Share of the server's busy time spent processing prompts (prefill)
+    /// rather than generating, 0–1, since start. A high share means prompts
+    /// are re-processed instead of reused from the prefix cache.
+    pub fn prefill_share(&self) -> Option<f64> {
+        let prefill = self.prompt_seconds?;
+        let busy = prefill + self.predicted_seconds?;
+        (busy > 0.0).then(|| prefill / busy)
+    }
 }
 fn rate(tokens: Option<f64>, seconds: Option<f64>) -> Option<f64> {
     let seconds = seconds.filter(|s| *s > 0.0)?;
@@ -182,6 +190,9 @@ pub fn line(stats: &Stats) -> String {
             }
             if let Some(share) = m.cache_share() {
                 parts.push(format!("prefix cache {:.0}% of prompt tokens", share * 100.0));
+            }
+            if let (Some(prefilled), Some(share)) = (m.prompt_tokens, m.prefill_share()) {
+                parts.push(format!("prefilled {} tokens, {:.0}% of busy time", tokens(prefilled as u64), share * 100.0));
             }
         }
         None => parts.push(format!("metrics {}", stats.metrics_error.as_deref().unwrap_or("unavailable"))),

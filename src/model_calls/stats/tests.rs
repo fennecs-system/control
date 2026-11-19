@@ -47,6 +47,7 @@ fn recorded_llama_metrics_parse_into_rates_cache_share_and_queue() {
     assert!((metrics.prompt_rate().unwrap() - 4.753).abs() < 0.01);
     assert!((metrics.generation_rate().unwrap() - 3.378).abs() < 0.01);
     assert!((metrics.cache_share().unwrap() - 51.0 / 110.0).abs() < 1e-9);
+    assert!((metrics.prefill_share().unwrap() - 12.4125 / (12.4125 + 2.36842)).abs() < 1e-9);
 }
 
 #[test]
@@ -95,7 +96,7 @@ fn reads_a_live_server_and_formats_the_cli_line() {
     let stats = read(&endpoint).unwrap();
     server.join().unwrap();
     assert!(stats.reachable);
-    assert_eq!(line(&stats), "prompt 4.8 tok/s · generation 3.4 tok/s (avg since start) · 0 processing, 0 queued · prefix cache 46% of prompt tokens · slots 0/1 busy · KV 58/1.0k tokens (6%)");
+    assert_eq!(line(&stats), "prompt 4.8 tok/s · generation 3.4 tok/s (avg since start) · 0 processing, 0 queued · prefix cache 46% of prompt tokens · prefilled 59 tokens, 84% of busy time · slots 0/1 busy · KV 58/1.0k tokens (6%)");
     let json = serde_json::to_value(&stats).unwrap();
     assert_eq!(json["metrics"]["prompt_tokens_cached"], 51.0);
     assert_eq!(json["slots"]["context_capacity"], 1024);
