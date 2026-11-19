@@ -3,9 +3,11 @@
 //! older steps in aligned power-of-two blocks that grow with distance and never
 //! change once complete. Each request is rendered from the original steps:
 //!
-//! - outside the verbatim steps, a step is shrunk deterministically: tool
-//!   results keep a short head and size marker, call arguments lose long
-//!   string bodies (only the result matters later);
+//! - once the request reaches the shrink threshold, the steps outside the
+//!   verbatim window are shrunk deterministically, all at once: tool results
+//!   keep a short head and size marker, call arguments lose long string bodies
+//!   (only the result matters later). Below it every step stays whole, so each
+//!   request extends the previous one;
 //! - only while the request is still over the compaction threshold, the oldest
 //!   block is folded into a summary node on the local compactor. A block's
 //!   summary is built from its children's summaries when its steps do not fit
@@ -226,11 +228,10 @@ pub(super) fn steps(messages: &[Value]) -> Vec<Range<usize>> {
     steps
 }
 
-/// How many of `count` steps a request carries verbatim: at least `keep`, with
-/// the shrunk older steps growing only in whole batches of `batch`. Between
-/// batches the rendered prefix is byte-identical from step to step, so a
-/// server's prefix cache reuses it; at a batch boundary `batch` steps shrink
-/// together, at most `batch - 1` extra steps stay verbatim meanwhile.
+/// The recent window of `count` steps: at least `keep`, with the older steps
+/// growing only in whole batches of `batch`. Steps older than it are retained
+/// for recall; with a zero shrink threshold it is also the verbatim window, so
+/// the rendered prefix is byte-identical between batches.
 pub(super) fn window(count: usize, keep: usize, batch: usize) -> usize {
     let batch = batch.max(1);
     count - count.saturating_sub(keep) / batch * batch

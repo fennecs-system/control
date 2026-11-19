@@ -312,12 +312,34 @@ Running the same start command again restarts that model with the current flags
 drops the KV cache and fails any in-flight local turn, which then leaves a host
 checkpoint like any other failure.
 
+### Several agents on one server
+
+Agents sharing one slot take turns in it: each request evicts the previous
+agent's prefix from the slot, and llama-server restores the best match from its
+host prompt cache (`--cache-ram`, in MiB; 8192 by default). When that cache is
+too small for every active agent's context, an agent's history is prefilled
+again on each step. Size it as about 165 KB per cached token (observed for a 27B
+Q4 model) × peak context × active agents: three agents at 24k tokens need about
+12 GB. Pass it, like any extra `llama-server` flag, after `--`:
+
+```sh
+nix run .#inference -- --model /absolute/model.gguf -- --cache-ram 12288
+```
+
+`--parallel N` gives N slots, so agents run concurrently and each keeps its own
+prefix, but the slots split `--ctx-size`: pass N × the per-agent context (for
+example `--parallel 3 --ctx-size 98304` for 32k each), and declare the per-slot
+value (each slot's `n_ctx` in `/slots`) as the model entry's context, since that
+is what one request can use. Either way keep weights, KV cache and the prompt
+cache well below physical memory. `requests_deferred` in the statistics line
+counts requests waiting for a slot.
+
 ### Server statistics
 
 `control models stats NAME [--json]` reads a local endpoint's server once:
 
 ```text
-qwen-local: prompt 162.4 tok/s · generation 15.1 tok/s (avg since start) · 1 processing, 0 queued · prefix cache 91% of prompt tokens · slots 1/1 busy · KV 26.9k/32.8k tokens (82%)
+qwen-local: prompt 162.4 tok/s · generation 15.1 tok/s (avg since start) · 1 processing, 0 queued · prefix cache 91% of prompt tokens · prefilled 514.0k tokens, 45% of busy time · slots 1/1 busy · KV 26.9k/32.8k tokens (82%)
 ```
 
 The same line appears on each local endpoint's card in Manage, refreshed from
@@ -330,6 +352,11 @@ response limit; at most 1,024 metric lines are parsed.
   `tokens_predicted_total / tokens_predicted_seconds_total`, averaged since start.
 - Requests: `requests_processing` and `requests_deferred`.
 - Prefix cache: `prompt_tokens_cached_total` as a share of prompt tokens.
+- Prefill: `prompt_tokens_total` (prompt tokens evaluated, cache hits excluded)
+  and `prompt_seconds_total` as a share of prompt plus generation seconds. A high
+  share with a busy slot means prompts are being re-processed rather than reused;
+  each local turn's `local_model` activity also gives its input tokens and how
+  many were cached.
 - Slots and KV: each slot's prompt plus generated tokens against its `n_ctx`.
   This approximates KV use; llama.cpp exposes no KV usage metric.
 
@@ -471,21 +498,33 @@ the loop estimates tokens at 3 bytes per token for messages plus offered schemas
 Input that cannot fit at admission blocks the run before any model call.
 
 **In-turn context.** Each request is rendered from the turn's steps through the
-same lens as chat history (`control_comonad::cut`, per step): the newest four
-steps verbatim, older steps in aligned power-of-two blocks that never change once
-complete. Older steps are shrunk without a model call: tool results keep a
-600-byte head and a size marker, and long string arguments keep a 160-byte head
-while staying valid JSON. A result that repeats a long argument of its own call
-cites it instead.
+same lens as chat history (`control_comonad::cut`, per step): recent steps
+verbatim, older steps in aligned power-of-two blocks that never change once
+complete. A result that repeats a long argument of its own call cites it instead.
 
-Older steps shrink in batches of four, not one per step: the verbatim window
-holds four to seven steps, and steps 1–4 shrink together at step 8, 5–8 at step
-12, and so on. Between batches each request is the previous one plus the new
-step, byte for byte, so the prefix cache reuses all of it. Shrinking one step per
-step re-prefilled the four verbatim steps every time (a live Qwen run reused only
-64% of prompt tokens). In a mock 24-step turn
+While a request is below half of the input budget (`SHRINK_PERCENT`, 50%), every
+step stays whole: each request is the previous one plus the new step, byte for
+byte, so the server's prefix cache reuses all of it. When a request reaches that
+share, every step but the newest four shrinks at once, without a model call:
+tool results keep a 600-byte head and a size marker, and long string arguments
+keep a 160-byte head while staying valid JSON. The shrunk steps then stay fixed
+while the request grows back towards the threshold; the next shrink covers at
+least four more steps. Shrinking rewrites the middle of the prompt, so the
+server re-prefills everything after the first changed step. Shrinking in batches
+of four from step 8 on, as before, did so every four steps even when the context
+was mostly free: a live run of three Qwen 27B players on one slot of a 64k server
+(contexts of 12–22k tokens) spent about 9 of 36 slot-minutes re-prefilling after
+those shrinks. In a mock 24-step turn whose request reaches half the budget at
+step 16 (`local_agent::tests::requests_stay_append_only_until_the_shrink_threshold_then_shrink_once`)
+the prefix breaks once instead of five times, and prompt bytes to prefill fall
+from 302k to 208k (reuse from the previous request 72.5% → 86.4%), although the
+requests are larger. With a zero threshold
 (`local_agent::tests::shrinking_in_batches_keeps_the_prefix_stable_between_batches`)
-prompt bytes reused from the previous request rose from 31.9% to 72.4%.
+batches of four still beat one step per step (32.4% → 72.5%). Recall is unchanged:
+steps leave the recent window (four to seven steps) in batches of four whether or
+not they were shrunk, and become summary-tree leaves holding their originals.
+The loop only serves local and private endpoints; Codex and Claude manage their
+own context, and hosted prefix caches would favour an append-only prefix too.
 
 When a request reaches 75% of the input budget, the oldest block is folded into a
 summary on the chat's compactor (never splitting a call from its results). A
@@ -603,7 +642,7 @@ each request is a prefix of the next.
 
 The prefix still breaks when the history window slides (once full, the oldest
 entry drops at a wake), when a compaction summary changes, when a local turn
-shrinks its next batch of older steps, or when a deferred tool's schema loads
+reaches half its budget and shrinks its older steps, or when a deferred tool's schema loads
 mid-turn (chat templates render tools in the system block). The slot also holds
 the newest step's generated thinking, which the next request leaves out, so reuse
 ends at that step's assistant message and only the newest step is prefilled again.

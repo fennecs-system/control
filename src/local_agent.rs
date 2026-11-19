@@ -34,6 +34,12 @@ const LOADED_TOKENS: u32 = 2048;
 pub(crate) const SYSTEM: &str = "You are an agent running inside Control on a local model. Act only through the provided tools; there is no other way to read files, run commands or reach rooms. Use control_workspace_run for short shell commands in /workspace. Call tools with arguments that are a JSON object matching the schema. Tools in the prompt's \"More tools\" index are callable by their full control_ name; Control loads the schema on first use. When the request is complete or you are waiting on someone, call control_turn_handoff if it is offered; otherwise reply with a brief plain-text final report and no tool call. Write each key fact or diagnosis you establish on its own line starting Finding: and each choice on a line starting Decision:; Control keeps those lines verbatim when it summarizes older steps, and control_history_read with a query searches the original older steps.";
 const RESULT_BYTES: usize = 12000;
 const CALLS_PER_STEP: usize = 8;
+/// Share of the input budget below which a turn's requests are append-only:
+/// older steps stay whole, so each request extends the previous one byte for
+/// byte and the server's prefix cache reuses all of it. Shrinking rewrites the
+/// middle of the prompt, which costs a re-prefill of everything after it; below
+/// this share that costs more prefill time than the context it saves.
+const SHRINK_PERCENT: u32 = 50;
 /// Share of the input budget at which a turn compacts by summary, before it is
 /// exhausted, so a summary call still has room to succeed.
 const COMPACT_PERCENT: u32 = 75;
@@ -53,12 +59,16 @@ pub(crate) struct Policy {
     /// Consecutive malformed steps (bad JSON, unknown tool, empty or cut reply)
     /// answered with a corrective message before the attempt fails visibly.
     pub max_repairs: usize,
-    /// The newest steps every request carries verbatim; older steps are seen
+    /// The newest steps a shrink keeps verbatim; older steps are then seen
     /// through the lens (shrunk, then folded only when over the threshold).
     pub verbatim_steps: usize,
-    /// Older steps shrink in batches of this many, so the request prefix stays
-    /// byte-identical across the steps between batches (prefix-cache reuse).
+    /// A shrink covers at least this many steps, so the request prefix stays
+    /// byte-identical across the steps between shrinks (prefix-cache reuse).
+    /// Steps also leave the recent window for recall in batches of this many.
     pub shrink_batch: usize,
+    /// Share of the input budget a request must reach before older steps are
+    /// shrunk (`SHRINK_PERCENT`); below it every request is append-only.
+    pub shrink_percent: u32,
     /// The model entry's base thinking level; each step adapts around it.
     pub thinking: Thinking,
     /// The turn resumes a cut-off one (host checkpoint or retried attempt):
@@ -67,7 +77,7 @@ pub(crate) struct Policy {
 }
 impl Default for Policy {
     fn default() -> Self {
-        Self { max_steps: 64, max_repairs: 3, verbatim_steps: 4, shrink_batch: 4, thinking: Thinking::default(), resumed: false }
+        Self { max_steps: 64, max_repairs: 3, verbatim_steps: 4, shrink_batch: 4, shrink_percent: SHRINK_PERCENT, thinking: Thinking::default(), resumed: false }
     }
 }
 /// The in-turn compactor's limits: its input budget in bytes (system prompt
@@ -268,6 +278,8 @@ pub(crate) fn run(
     let (mut steps, mut repairs, mut compactions) = (0usize, 0usize, 0usize);
     let (mut noted, mut step_noted) = (false, false);
     let mut lens = context::Lens::default();
+    // Oldest steps shrunk so far; it only grows, so the shrunk prefix is stable.
+    let mut shrunk = 0usize;
     let mut adaptive = thinking::Adaptive::new(policy.thinking, policy.resumed);
     // A `/think` request already granted for the step being re-sent.
     let mut granted = false;
@@ -294,10 +306,19 @@ pub(crate) fn run(
         // context is full; folds persist, so later prefixes stay stable.
         let used = |view: &[Value]| fixed.saturating_add(tokens(size(view)));
         let percent = |view: &[Value]| u32::try_from(u64::from(used(view)) * 100 / u64::from(budget.max(1))).unwrap_or(u32::MAX);
+        // Below `shrink_percent` the request is append-only. Reaching it, every
+        // step but the newest `verbatim_steps` shrinks at once (at least
+        // `shrink_batch` of them), and the shrunk prefix then stays fixed while
+        // the request grows back towards the threshold.
         let count = context::steps(&messages).len();
-        let mut verbatim = context::window(count, policy.verbatim_steps, policy.shrink_batch);
+        let mut view = lens.view(&messages, count - shrunk, false);
+        let target = count.saturating_sub(policy.verbatim_steps);
+        if percent(&view) >= policy.shrink_percent && target >= shrunk + policy.shrink_batch.max(1) {
+            shrunk = target;
+            view = lens.view(&messages, count - shrunk, false);
+        }
+        let mut verbatim = count - shrunk;
         let mut shrink_all = false;
-        let mut view = lens.view(&messages, verbatim, false);
         let reached = percent(&view);
         let mut folded = false;
         if reached >= COMPACT_PERCENT {
@@ -353,8 +374,10 @@ pub(crate) fn run(
             append_note(&mut messages, &note);
             view = lens.view(&messages, verbatim, shrink_all);
         }
-        // Steps no longer seen verbatim join the summary tree, for recall.
-        lens.retain_shrunk(host, &messages, if shrink_all { count } else { count - verbatim });
+        // Steps that left the recent window, or are no longer seen verbatim,
+        // join the summary tree for recall, whether or not they were shrunk.
+        let recent = context::window(count, policy.verbatim_steps, policy.shrink_batch).min(verbatim);
+        lens.retain_shrunk(host, &messages, if shrink_all { count } else { count - recent });
         view.extend(observation);
         let mut body = tool_request(model, &view, &tools, limits).map_err(|e| failed(e.to_string()))?;
         // Thinking shares `max_tokens` with the answer: the budget is at most
