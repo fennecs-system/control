@@ -963,6 +963,7 @@ fn reconcile_with_wake_at(state: &mut State, now: u64, mut save: impl FnMut(&Sta
     // Salience debounces end on this pass (at least every two seconds) even
     // when their routine has gone quiet.
     for w in &mut state.watches { w.release(now); }
+    crate::agent_message::digest::settle(state, &mut save)?;
     crate::agent_message::digest::reconcile(state, now, &mut save)?;
     let peers = peer_events(state).into_iter().map(|(chat, cursor, info)| (chat.to_owned(), cursor, info)).collect::<Vec<_>>();
     let teams = lifecycle::observe(state);

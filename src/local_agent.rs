@@ -106,6 +106,11 @@ pub(crate) trait Host {
     fn observation(&mut self, _first: bool) -> Option<String> {
         None
     }
+    /// New conversation callbacks for the end of the next request, recorded
+    /// as delivered so each appears once.
+    fn inbox(&mut self) -> Option<String> {
+        None
+    }
     /// The reasoning of the step just answered, kept by the host only to
     /// carry into a host checkpoint if the turn is cut off; never transcript.
     fn reasoned(&mut self, _reasoning: &str) {}
@@ -287,6 +292,12 @@ pub(crate) fn run(
         // request only: never stored in the steps, so it is never part of the
         // stable prefix, never shrunk and never folded.
         let observation = host.observation(steps == 0).map(|text| json!({"role":"user","content":text}));
+        // New conversation callbacks join the newest, unsent step once, so the
+        // sent prefix is unchanged and later requests keep them in history.
+        if let Some(block) = host.inbox() {
+            host.record("note", &format!("local-inbox-{steps}"), &block, "", "completed");
+            append_note(&mut messages, &block);
+        }
         let fixed = tool_tokens.saturating_add(observation.as_ref().map_or(0, |o| tokens(size(std::slice::from_ref(o)))));
         // Context fit, re-checked every step: the request is the lens view of
         // the turn's original steps. Past the threshold, the oldest blocks are
@@ -594,6 +605,10 @@ impl Host for Live<'_> {
     }
     fn observation(&mut self, first: bool) -> Option<String> {
         crate::observe::step(self.shared, self.run, first)
+    }
+    fn inbox(&mut self) -> Option<String> {
+        let mut state = self.shared.lock().ok().filter(|_| self.managed)?;
+        crate::turn_context::inbox(&mut state, self.run, crate::storage::save)
     }
     fn reasoned(&mut self, reasoning: &str) {
         self.reasoning = Some(crate::turn_context::carried_reasoning(reasoning));

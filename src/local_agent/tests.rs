@@ -32,6 +32,8 @@ struct Mock {
     firsts: Vec<bool>,
     /// Reasoning the loop handed over, step by step.
     reasoned: Vec<String>,
+    /// Inbox blocks returned to successive steps.
+    inboxes: VecDeque<Option<String>>,
 }
 impl Host for Mock {
     fn tools(&mut self) -> io::Result<Vec<Value>> {
@@ -80,6 +82,9 @@ impl Host for Mock {
     fn observation(&mut self, first: bool) -> Option<String> {
         self.firsts.push(first);
         self.observations.pop_front()
+    }
+    fn inbox(&mut self) -> Option<String> {
+        self.inboxes.pop_front().flatten()
     }
 }
 fn mock(replies: Vec<Value>) -> Mock {
@@ -540,6 +545,31 @@ fn the_observation_ends_every_request_and_never_enters_the_stable_prefix() {
         assert_eq!(&pair[1][..stable.len()], stable, "the stable prefix is unchanged step to step");
     }
     assert!(host.records.iter().all(|(_, text)| !text.contains("hp=")), "never recorded");
+}
+#[test]
+fn an_inbox_joins_the_end_of_the_next_request_once_and_keeps_the_prefix() {
+    let mut host = mock(vec![
+        reply(None, call("control_room_post", r#"{"message":"a"}"#), "tool_calls"),
+        reply(None, call("control_room_post", r#"{"message":"b"}"#), "tool_calls"),
+        reply(Some("Done."), json!(null), "stop"),
+    ]);
+    let inbox = "Inbox (1 new, shown once).\n[evidence] Message from lead\nGo north";
+    host.inboxes = [None, Some(inbox.to_owned()), None].into();
+    host.observations = ["hp=20", "hp=17", "hp=9"].map(observed).into();
+    go(&mut host).unwrap();
+    let requests: Vec<&Vec<Value>> = host.requests.iter().map(|r| r["messages"].as_array().unwrap()).collect();
+    assert!(!requests[0].iter().any(|m| m.to_string().contains("Go north")));
+    // Last before the observation: the end of the newest tool result.
+    let newest = &requests[1][requests[1].len() - 2];
+    assert_eq!(newest["role"], "tool");
+    assert!(newest["content"].as_str().unwrap().ends_with(inbox), "{newest}");
+    for request in &requests[1..] {
+        assert_eq!(request.iter().filter(|m| m.to_string().contains("Go north")).count(), 1, "exactly once: {request:?}");
+    }
+    for pair in requests.windows(2) {
+        let stable = &pair[0][..pair[0].len() - 2];
+        assert_eq!(&pair[1][..stable.len()], stable, "sent steps are unchanged");
+    }
 }
 #[test]
 fn a_step_without_an_observation_sends_nothing_extra() {

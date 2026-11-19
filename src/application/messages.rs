@@ -200,14 +200,27 @@ pub(crate) fn record(run: &Run) -> bool {
 pub(crate) fn awaiting(runs: &[Run], chats: &[Session], sent: &Sent) -> bool {
     let (Some(cursor), true) = (sent.peer_cursor, sent.digest) else { return false };
     let Some(index) = runs.iter().position(|run| run.id == sent.run) else { return false };
-    let processed = chats.iter().find(|chat| chat.id == sent.chat)
-        .and_then(|chat| chat.continuity.as_ref()?.working.as_ref())
-        .into_iter().flat_map(|working| &working.processed)
-        .filter_map(|range| match range {
-            control_context::turn_mailbox::Range::Conversation { chat, through, .. } if *chat == sent.chat => Some(*through),
-            _ => None,
-        }).max().unwrap_or(0);
-    processed < cursor && !runs[index + 1..].iter().any(|run| run.chat_id.as_deref() == Some(sent.chat.as_str()) && !record(run))
+    !delivered(runs, chats, &sent.chat, cursor)
+        && !runs[index + 1..].iter().any(|run| run.chat_id.as_deref() == Some(sent.chat.as_str()) && !record(run))
+}
+/// Whether conversation position `cursor` of `chat` already reached a turn:
+/// a published handoff processed it, or an attempt was delivered it (its
+/// inbox or a `control_turn_context` read). Saved state only, so a restart
+/// decides the same way.
+pub(crate) fn delivered(runs: &[Run], chats: &[Session], chat: &str, cursor: u64) -> bool {
+    use control_context::turn_mailbox::Range;
+    let covers = |range: &Range, through_only: bool| match range {
+        Range::Conversation { chat: id, after, through } => id == chat && cursor <= *through && (through_only || *after < cursor),
+        _ => false,
+    };
+    chats.iter().find(|session| session.id == chat)
+        .and_then(|session| session.continuity.as_ref()?.working.as_ref())
+        .is_some_and(|working| working.processed.iter().any(|range| covers(range, true)))
+        || runs.iter().filter(|run| run.chat_id.as_deref() == Some(chat))
+            .flat_map(|run| &run.attempts)
+            .filter_map(|attempt| attempt.turn_mailbox.as_ref())
+            .flat_map(|mailbox| mailbox.deliveries.values())
+            .any(|delivery| delivery.ranges.iter().any(|range| covers(range, false)))
 }
 fn ancestry<'a>(
     chats: &'a [Session],

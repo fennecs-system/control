@@ -492,6 +492,9 @@ fn omitted_room_uses_the_team_room_and_unknown_names_point_to_it() {
     assert_eq!(state.chats[1].room, None);
     assert_eq!(room_call(&mut state, &child_run, "control_room_list", json!({}), "2-1")["attached"], team);
     assert_eq!(room_call(&mut state, &child_run, "control_room_read", json!({}), "2-2")["room"], team);
+    // The prompt renders it as #research/<lead>; that spelling names it too.
+    assert_eq!(room_call(&mut state, &child_run, "control_room_read", json!({"room":format!("#{team}")}), "2-5")["room"], team);
+    assert_eq!(room_call(&mut state, &child_run, "control_room_read", json!({"room":"#research"}), "2-6")["room"], team);
     let claim = room_call(&mut state, &child_run, "control_room_claim", json!({"key":"m1","action":"acquire"}), "2-3");
     assert_eq!(claim["applied"], true, "{claim}");
     assert_eq!(state.collective.claims[0].room, team);

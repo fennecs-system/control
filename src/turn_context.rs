@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::{fs, io, path::PathBuf};
 pub use tools::Tools;
 pub(crate) use tools::WAKE_RECEIPT;
-pub(crate) use tools::receipt_handle;
+pub(crate) use tools::{inbox, receipt_handle};
 /// Calls a continuity tool for an active attempt without persisting state.
 #[cfg(test)]
 pub(crate) fn tool_call(state: &mut State, run: &str, generation: &str, nonce: &str, name: &str, args: &serde_json::Value) -> io::Result<serde_json::Value> {
@@ -170,7 +170,9 @@ pub(crate) fn managed(state: &State, run: &crate::runtime::Run) -> bool {
 /// A small hint on a normal tool response makes new input visible without
 /// restarting the provider or injecting unsupported stdin messages. Announcing
 /// is ephemeral and separate from both durable delivery and processing.
-pub(crate) fn callback_notice(state: &mut State, id: &str) -> bool {
+/// Without `conversation_hint` only room posts count: a local turn's loop ends
+/// each request with the conversation [`inbox`] instead.
+pub(crate) fn callback_notice(state: &mut State, id: &str, conversation_hint: bool) -> bool {
     use control_context::turn_mailbox::Range;
     let Some(index) = state
         .runtime
@@ -238,7 +240,7 @@ pub(crate) fn callback_notice(state: &mut State, id: &str) -> bool {
             && p.delivery == crate::rooms::Delivery::Notify)
         .map_or(0, |(i, _)| i + 1);
     let stamp = (chat.messages.len(), posts);
-    if stamp.0 <= conversation && stamp.1 <= room || mailbox.announced == Some(stamp) {
+    if (!conversation_hint || stamp.0 <= conversation) && stamp.1 <= room || mailbox.announced == Some(stamp) {
         return false;
     }
     state.runtime.runs[index]
