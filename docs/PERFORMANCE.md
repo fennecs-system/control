@@ -103,21 +103,21 @@ on-demand lens; role-scoped lenses are omitted for other roles (see
 [LENSES.md](LENSES.md)). `policy_size` builds a team shaped like a real swarm
 (lead with `swarm` and `advisor`, a persistent member and the advisor, each
 woken by a room post after a dozen callbacks). It fails if the policy section
-exceeds 3,072 bytes for a member, 3,328 for a lead or 5,632 for the advisor
+exceeds 2,944 bytes for a member, 3,136 for a lead or 5,632 for the advisor
 (the advisor keeps its procedure inline). Moving guidance out of the prompt cut
 a member's wake text from about 26.5 KB to about 12 KB.
 
 **Deferred tool loading.** `tools/list` holds each role's core tools; the prompt
 indexes the rest, loaded with `control_tool_search`. `policy_size` fails if a
-role lists 10,000 bytes or more of schemas, keeps more than a third of its
-callable schema bytes, or has an index over 2,048 bytes. Current figures (Codex
+role lists 9,600 bytes or more of schemas, keeps more than a third of its
+callable schema bytes, or has an index over 1,700 bytes. Current figures (Codex
 backend, UTF-8 bytes):
 
 | Role | Core schemas | All callable schemas | Index |
 | --- | ---: | ---: | ---: |
-| Lead | 9,604 | 62,348 | 1,718 |
-| Member | 8,918 | 62,348 | 1,815 |
-| Advisor | 3,664 | 13,933 | 680 |
+| Lead | 9,021 | 65,909 | 1,576 |
+| Member | 8,406 | 65,909 | 1,656 |
+| Advisor | 3,444 | 14,586 | 638 |
 
 Most of the saving comes from tight descriptions and compact schemas for the
 core tools; spawn, bot and service tools stay core. In a scripted member turn

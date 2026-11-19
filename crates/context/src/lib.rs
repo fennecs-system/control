@@ -32,8 +32,9 @@ pub struct Mcp {
     /// Roles (`roles::*` bits) whose sessions list the schema at start.
     pub core: u8,
     pub judge: Judge,
-    /// Tight description for an always-loaded schema; the tool's full
-    /// description stays available through `control_tool_search`. Empty keeps it.
+    /// Tight description for an always-loaded schema; `control_tool_search`
+    /// adds only the properties the listing compacts away. Empty keeps the
+    /// full description.
     pub brief: &'static str,
 }
 /// Whether a judge (read-only reviewer) may call a worker tool.
@@ -150,7 +151,7 @@ pub const TOOLS: [Tool; 34] = [
             w("control_service_start", "start a persistent offline service").core(WORKERS)
                 .brief("Start a chat-owned offline container that survives turns. Keep ALL task data in /workspace (persistent); other paths are lost. Foreground command; confirm with control_service_status."),
             w("control_service_attach", "use a granted service"),
-            w("control_service_status", "list services, leases and capacity").core(WORKERS).brief("Read service status and bounded logs; without service_id, list services, shapes and node budget."),
+            w("control_service_status", "list services and their leases").core(WORKERS).brief("Service status and bounded logs; without service_id, list services. detail node: node capacity."),
             w("control_service_stop", "stop a service"),
             w("control_service_exec", "run a command in a service").core(WORKERS)
                 .brief("Run a bounded command in a chat-owned service; inline result within wait_seconds, else an execution_id. Killed at timeout_seconds; repeated or long work belongs in control_watch_start."),
