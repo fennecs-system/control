@@ -39,16 +39,8 @@ fn cards_escape_commands_and_show_live_data_only_when_observed() {
         !plain.contains("data-live="),
         "only running services wait for live usage"
     );
-    assert!(plain.contains("large · 8 GiB RAM · 2 CPUs · 512 processes") && !plain.contains("<table>"));
-    // Optional local preview uses only this synthetic state and repository CSS.
-    if let Some(path) = std::env::var_os("CONTROL_QA_SERVICES_PREVIEW") {
-        let mut page = render(&Arc::new(Mutex::new(state))).unwrap();
-        for (name, css) in [("style", include_str!("../../../assets/style.css")), ("navigation", include_str!("../../../assets/navigation.css")), ("workspace", include_str!("../../../assets/workspace.css")), ("runtime", include_str!("../../../assets/runtime.css")), ("collective", include_str!("../../../assets/collective.css"))] {
-            page = page.replace(&format!("<link rel=\"stylesheet\" href=\"/{name}.css\">"), &format!("<style>{css}</style>"));
-            page = page.replace(&format!("<link rel='stylesheet' href='/{name}.css'>"), &format!("<style>{css}</style>"));
-        }
-        std::fs::write(path, page).unwrap();
-    }
+    assert!(plain.contains("<dt>Size</dt><dd><strong>large</strong> <span class='muted'>· 8 GiB RAM · 2 CPUs · 512 processes</span></dd>") && !plain.contains("<table>"));
+    assert!(plain.contains("<dt>Image</dt><dd><strong>Lite</strong>"), "the image is its own field, apart from the size");
     let live = Live {
         stats: Some(crate::engine::Stats {
             cpu: "3.5%".into(),
@@ -177,6 +169,44 @@ fn card_actions_return_to_their_card_or_its_neighbour() {
 
     assert!(nearby(&state, "svc-unknown'\r\nSet-Cookie: x").is_empty(), "anchors come from state, never the request");
     assert_eq!(fragment(&state, &[]), "", "page-wide actions return to the top");
+}
+
+/// One sized Lite service, one unsized Full service and a stopped one. Writes an
+/// optional local preview from this synthetic state and repository CSS only.
+#[test]
+fn preview_mixed_images_and_sizes() {
+    let (mut state, run, _chat, time) = super::super::tests::fixture();
+    let start = |state: &mut State, nonce, shape, profile| {
+        let input = Input { command: "sleep infinity".to_owned().try_into().unwrap(), lease_seconds: -1, storage_limit_mb: None, shape };
+        admit_profile(state, Request { run: &run, generation: "attempt-a", nonce }, input, "node-a".to_owned().try_into().unwrap(), time, profile, |_| Ok(())).unwrap();
+    };
+    start(&mut state, "lite-small", Some(compute::Shape::Small), crate::worker_profile::Profile::Lite);
+    start(&mut state, "full-default", None, crate::worker_profile::Profile::Full);
+    start(&mut state, "old", Some(compute::Shape::Large), crate::worker_profile::Profile::Lite);
+    state.services[2].resource.phase = Phase::Stopped(StopReason::Requested);
+    let (sized, default_sized) = (card(&state.services[0].binding_snapshot()), card(&state.services[1].binding_snapshot()));
+    assert!(sized.contains("<dt>Image</dt><dd><strong>Lite</strong> <span class='muted'>· Rust, Git"));
+    assert!(sized.contains("<dt>Size</dt><dd><strong>small</strong> <span class='muted'>· 2 GiB RAM · 1 CPU · 128 processes"));
+    assert!(default_sized.contains("<dt>Image</dt><dd><strong>Full</strong> <span class='muted'>· Lite plus Nix"));
+    assert!(default_sized.contains("<dt>Size</dt><dd><strong>image default</strong> <span class='muted'>· 2 GiB RAM · 1 CPU · 128 processes"));
+    assert!(!sized.contains(" · </p>"), "no dangling separator after the links");
+
+    let panel = compute_panel(&state.services);
+    let (images, sizes) = (panel.find("<h4>Image · which tools</h4>").unwrap(), panel.find("<h4>Size · how much it may use</h4>").unwrap());
+    assert!(images < sizes, "images and sizes are separate tables");
+    let (image_table, size_table) = (&panel[images..sizes], &panel[sizes..]);
+    assert!(image_table.contains("<td><strong>Full</strong></td><td>Lite plus Nix") && image_table.contains("512 MiB RAM · 1 CPU · 64 processes"));
+    assert!(!image_table.contains("<code>small</code>") && size_table.contains("<td><code>small</code></td><td>2 GiB</td>"));
+    assert!(!size_table.split("<h4>Total").next().unwrap().contains("Lite</strong>"), "no image rows among the sizes");
+    let page = render(&Arc::new(Mutex::new(state))).unwrap();
+    if let Some(path) = std::env::var_os("CONTROL_QA_SERVICES_PREVIEW") {
+        let mut page = page.clone();
+        for (name, css) in [("style", include_str!("../../../assets/style.css")), ("navigation", include_str!("../../../assets/navigation.css")), ("workspace", include_str!("../../../assets/workspace.css")), ("runtime", include_str!("../../../assets/runtime.css")), ("collective", include_str!("../../../assets/collective.css"))] {
+            page = page.replace(&format!("<link rel=\"stylesheet\" href=\"/{name}.css\">"), &format!("<style>{css}</style>"));
+            page = page.replace(&format!("<link rel='stylesheet' href='/{name}.css'>"), &format!("<style>{css}</style>"));
+        }
+        std::fs::write(path, page).unwrap();
+    }
 }
 
 /// The client re-reads the `data-live-refresh` region on each state-change
