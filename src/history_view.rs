@@ -103,11 +103,12 @@ fn status_group(run: &Run) -> &'static str {
 }
 
 /// Every turn kind, in the order the kind filter lists them.
-const KINDS: [RunKind; 15] = [
+const KINDS: [RunKind; 16] = [
     RunKind::Chat,
     RunKind::BotWake,
     RunKind::BotDecision,
     RunKind::PortDecision,
+    RunKind::FolderDecision,
     RunKind::Spawned,
     RunKind::Delegated,
     RunKind::DelegationResult,
@@ -138,6 +139,7 @@ pub fn kind_label(kind: RunKind) -> &'static str {
         RunKind::AgentMessage => "agent message",
         RunKind::BotDecision => "bot decision",
         RunKind::BotWake => "bot wake",
+        RunKind::FolderDecision => "folder decision",
     }
 }
 

@@ -119,6 +119,23 @@ impl Hive {
         }
     }
 
+    /// Dismiss the exact displayed folder request. Returns the server's message;
+    /// a request that is no longer pending is a no-op, not an error.
+    pub fn dismiss_project(&self, chat: &str, request: &str) -> io::Result<String> {
+        let endpoint = Url::parse(&self.endpoint).map_err(failure)?;
+        let mut target = endpoint.join("/").map_err(failure)?;
+        target.path_segments_mut().map_err(|_| failure("Invalid server URL"))?
+            .pop_if_empty().extend(["dm", chat, "project"]);
+        let response = self.client.post(target).timeout(Duration::from_secs(15))
+            .header("Origin", endpoint.origin().ascii_serialization())
+            .form(&[("dismiss", "yes"), ("request", request), ("response", "json")]).send()
+            .map_err(|_| failure("Dismissal was not confirmed; use /open to check the request."))?;
+        let status = response.status();
+        let value: Value = response.json().map_err(failure)?;
+        if !status.is_success() { return Err(failure(value["error"].as_str().unwrap_or("Folder request was not dismissed"))); }
+        Ok(value["message"].as_str().unwrap_or("Folder request dismissed.").to_owned())
+    }
+
     pub fn connect(server: &str) -> io::Result<Self> {
         let url = local_server(server)?;
         let path = std::env::var_os("CONTROL_OPERATOR_FILE")

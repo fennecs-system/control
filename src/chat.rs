@@ -492,8 +492,8 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
     if let Some(path) = commands::tail(text.trim(), Kind::Open) {
         if let Some(named)=path.trim().strip_prefix("--as ") {
             let (name,path)=named.split_once(char::is_whitespace).ok_or("Use /open --as NAME /absolute/path.")?;
-            crate::projects::request_named(state,id,path,Some(name))?;
-        }else{crate::projects::request(state,id,path)?;}
+            crate::projects::request_named(state,id,path,Some(name),crate::projects::Requester::Operator)?;
+        }else{crate::projects::request(state,id,path,crate::projects::Requester::Operator)?;}
         let session = state.chats.iter_mut().find(|s| s.id == id).unwrap();
         session.messages.push(Message { speaker: Default::default(), text: text.trim().into(), run_id: None, reply: format!("Review and approve folder access: /dm/{id}/project") });
         session.project.as_mut().unwrap().message_index=Some(session.messages.len()-1);
@@ -922,7 +922,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
         };
         let folder_request=message.run_id.is_none() && commands::tail(message.text.trim(), Kind::Open).is_some();
         let opened=session.project.as_ref().and_then(|p|p.mounts.iter().find(|m|m.message_index==Some(position)));
-        let folder_reply=folder_request.then(||opened.map(|m|format!("Opened /workspace/{}",m.name)).unwrap_or_else(||"Folder request replaced by a later request.".into()));
+        let folder_reply=folder_request.then(||opened.map(|m|format!("Opened /workspace/{}",m.name)).unwrap_or_else(||if message.reply==crate::projects::DISMISSED {message.reply.clone()} else {"Folder request replaced by a later request.".into()}));
         let reply = folder_reply.as_deref().unwrap_or(run_reply);
         let reply = reply.strip_prefix("Agent conversation: ").and_then(crate::url_names::dm_route)
             .filter(|child| valid_id(child) && state.chats.iter().any(|c| c.id == *child && c.parent_chat.as_deref() == Some(id)))

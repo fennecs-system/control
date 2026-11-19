@@ -24,6 +24,7 @@ const LOCAL: &[Entry] = &[
     Entry { text: "/personas", usage: "/personas", description: "List personas (purpose, DNA, standing, model)" },
     Entry { text: "/persona", usage: "/persona NAME | /persona none", description: "Give this DM a persona for future messages" },
     Entry { text: "/trust", usage: "/trust [REQUEST]", description: "Approve the folder request displayed in this DM" },
+    Entry { text: "/dismiss", usage: "/dismiss [REQUEST]", description: "Reject the displayed folder request; approved folders stay open" },
     Entry { text: "/port allow", usage: "/port allow ID [--loopback]", description: "Approve the exact displayed port request" },
     Entry { text: "/port deny", usage: "/port deny ID", description: "Deny a port request" },
     Entry { text: "/bot pause", usage: "/bot pause", description: "Pause this bot and retain its pending events" },
@@ -73,7 +74,7 @@ pub(super) fn help() -> String {
         text.push_str(entry.description);
         text.push_str("\n\n");
     }
-    text.push_str("Keyboard\n\nTab completes the selected command; it does not execute it.\n↑ ↓ choose a command · Esc dismisses suggestions or returns to chat\nEnter sends · Alt+Enter inserts a newline\nPageUp / PageDown scroll · End follows new output\nCtrl+↑ / Ctrl+↓ switch conversations\nCtrl+N starts a chat · Ctrl+Q exits\n\n/improve REQUEST asks agents to develop Control using the server's configured tools and permissions.\n/open /absolute/path requests a project folder; review it before /trust.\n");
+    text.push_str("Keyboard\n\nTab completes the selected command; it does not execute it.\n↑ ↓ choose a command · Esc dismisses suggestions or returns to chat\nEnter sends · Alt+Enter inserts a newline\nPageUp / PageDown scroll · End follows new output\nCtrl+↑ / Ctrl+↓ switch conversations\nCtrl+N starts a chat · Ctrl+Q exits\n\n/improve REQUEST asks agents to develop Control using the server's configured tools and permissions.\n/open /absolute/path requests a project folder; review it before /trust, or /dismiss it.\n");
     text
 }
 

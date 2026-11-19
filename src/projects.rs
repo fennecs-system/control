@@ -36,6 +36,13 @@ pub struct Project {
     pub mounts: Vec<Mount>,
     #[serde(default)]
     pub named: bool,
+    /// A pending request's predecessor: the chat's project before it was made,
+    /// restored when the operator dismisses it. `None` when there was none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous: Option<Box<Project>>,
+    /// The turn that asked for a pending request, told if it is dismissed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
 }
 impl Project {
     fn needs_approval(&self)->bool {self.pending||self.grant.is_none()}
@@ -43,6 +50,7 @@ impl Project {
         self.grant.as_ref()?;
         let mut inherited=self.clone();
         inherited.pending=false;inherited.error=None;inherited.message_index=None;
+        inherited.previous=None;inherited.origin=None;
         if let Some(mount)=inherited.mounts.last() {inherited.path=mount.path.clone();inherited.name=mount.name.clone();}
         for mount in &mut inherited.mounts {mount.message_index=None;}
         Some(inherited)
@@ -74,10 +82,21 @@ fn nonce() -> String {
         }
     }
 }
-pub fn request(state: &mut State, id: &str, path: &str) -> Result<Value, &'static str> {
-    request_named(state,id,path,None)
+/// Who is asking for a folder. Only the operator may learn whether a host path
+/// exists, so only an operator's `/open` probes it.
+#[derive(Clone, Copy)]
+pub enum Requester<'a> {
+    /// `/open`, typed or posted by the authenticated operator: a mistyped or
+    /// missing folder fails at once instead of waiting for approval.
+    Operator,
+    /// `control_project_request` (worker) or `control.project.request` (MCP).
+    /// Never probed. `run` is the requesting turn, if any.
+    Agent { run: Option<&'a str> },
 }
-pub fn request_named(state: &mut State, id: &str, path: &str, name:Option<&str>) -> Result<Value, &'static str> {
+pub fn request(state: &mut State, id: &str, path: &str, requester: Requester<'_>) -> Result<Value, &'static str> {
+    request_named(state,id,path,None,requester)
+}
+pub fn request_named(state: &mut State, id: &str, path: &str, name:Option<&str>, requester: Requester<'_>) -> Result<Value, &'static str> {
     let path = path.trim();
     if path.len() > 4096 || !Path::new(path).is_absolute() || path.contains(['\n', '\r', '\0', ','])
     {
@@ -89,6 +108,13 @@ pub fn request_named(state: &mut State, id: &str, path: &str, name:Option<&str>)
         .find(|c| c.id == id)
         .ok_or("Chat not found.")?;
     crate::identity::authorize(&chat.actor, Action::Task)?;
+    if matches!(requester, Requester::Operator) {
+        match fs::metadata(path) {
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => return Err("That path is not a folder. Use /open followed by a folder's absolute path."),
+            Err(_) => return Err("No readable folder at that path on this node. Check it and use /open /absolute/path."),
+        }
+    }
     let name=name.filter(|s|!s.is_empty()).or_else(||Path::new(path).file_name().and_then(|s|s.to_str())).ok_or("Choose a named project folder.")?;
     if !valid_name(name) {return Err("Folder names must use letters, numbers, dots, dashes or underscores, without a leading dot. Use /open --as NAME /absolute/path.");}
     let mut mounts=chat.project.as_ref().map(|p|p.mounts.clone()).unwrap_or_default();
@@ -107,6 +133,9 @@ pub fn request_named(state: &mut State, id: &str, path: &str, name:Option<&str>)
         head:chat.project.as_ref().and_then(|p|p.head.clone()),
         mounts,
         named:chat.project.as_ref().is_some_and(|p|p.named),
+        // A replaced request restores what preceded it, not itself.
+        previous:chat.project.as_ref().and_then(|p|if p.needs_approval() {p.previous.clone()} else {Some(Box::new(p.clone()))}),
+        origin:match requester {Requester::Agent{run}=>run.map(str::to_owned),Requester::Operator=>None},
         ..Project::default()
     };
     let result = json!({"approval_required":true,"request":project.request,"path":project.path,"mount":format!("/workspace/{}",project.name),"url":format!("/dm/{id}/project")});
@@ -164,13 +193,63 @@ pub fn panel(state: &State, id: &str) -> String {
                 ));
             }
         } else {
-            html.push_str(&format!("<p>Open as <code>/workspace/{}</code></p><form class='decision-form' method='post' action='/dm/{id}/project' target='_top'><input type='hidden' name='request' value='{}'><p>Trust this folder’s code for this chat and allow local previews? Control will copy its files into an isolated worktree. Credentials, generated directories and symlinks are excluded. The original folder stays unchanged.</p><button name='approve' value='yes'>Trust folder and open</button><p role='alert' hidden></p></form><form method='post' action='/dm/{id}/project' target='_top'><label>Folder on this node<input name='path' value='{}' required></label><label>Workspace name<input name='name' value='{}' required></label><button>Change folder</button></form>",crate::escape(&project.name),crate::escape(&project.request),crate::escape(&project.path),crate::escape(&project.name)));
+            html.push_str(&format!("<p>Open as <code>/workspace/{}</code></p><form class='decision-form' method='post' action='/dm/{id}/project' target='_top'><input type='hidden' name='request' value='{}'><p>Trust this folder’s code for this chat and allow local previews? Control will copy its files into an isolated worktree. Credentials, generated directories and symlinks are excluded. The original folder stays unchanged.</p><button class='primary' name='approve' value='yes'>Trust folder and open</button><button class='secondary' name='dismiss' value='yes'>Dismiss</button><p role='alert' hidden></p></form><form method='post' action='/dm/{id}/project' target='_top'><label>Folder on this node<input name='path' value='{}' required></label><label>Workspace name<input name='name' value='{}' required></label><button>Change folder</button></form>",crate::escape(&project.name),crate::escape(&project.request),crate::escape(&project.path),crate::escape(&project.name)));
         }
     } else {
         html.push_str(&format!("<form method='post' action='/dm/{id}/project' target='_top'><label>Folder on this node<input name='path' value='{}' placeholder='/absolute/path' required></label><button>Continue</button></form>",crate::escape(path)));
     }
     html.push_str("</details>");
     html
+}
+/// The reply an `/open` command shows once its request is dismissed.
+pub(crate) const DISMISSED: &str = "Folder request dismissed.";
+/// The operator rejects the displayed request. The chat's project returns to
+/// what it was before the request, with any checkpoint agents have made since,
+/// so approved folders keep working. `Ok(None)` when that request is no longer
+/// pending (dismissed, replaced or approved): nothing changes, so a stale page
+/// cannot dismiss a newer request. An approved request that is still importing
+/// cannot be dismissed; the copy is not cancellable and attaches when done.
+/// Like port and bot decisions, the dismissal is noted in the chat and resumes
+/// the requesting agent's finished turn. Callers checkpoint, then wake on
+/// `Resumed`.
+pub fn dismiss(state: &mut State, id: &str, request: &str) -> Result<Option<crate::approvals::Outcome>, &'static str> {
+    use crate::application::approval_resume::{self, FOLDER_DECISIONS};
+    let chat = state.chats.iter().find(|c| c.id == id).ok_or("Chat not found.")?;
+    crate::identity::authorize(&chat.actor, Action::Task)?;
+    let Some(pending) = chat.project.clone().filter(|p| p.request == request && p.needs_approval()) else { return Ok(None) };
+    if importing(id).is_some_and(|import| import.request == request) {
+        return Err("This folder is already approved and importing; it opens when the copy finishes.");
+    }
+    let restored = match pending.previous.clone() {
+        Some(mut previous) => { previous.head = pending.head.clone(); Some(*previous) }
+        // Requests saved before predecessors were recorded keep their folders.
+        None => pending.grant.is_some().then(|| {
+            let mut kept = Project { request: nonce(), pending: false, error: None, previous: None, origin: None, ..pending.clone() };
+            if let Some(mount) = kept.mounts.last() { (kept.path, kept.name, kept.message_index) = (mount.path.clone(), mount.name.clone(), mount.message_index); }
+            kept
+        }),
+    };
+    let chat = state.chats.iter_mut().find(|c| c.id == id).unwrap();
+    chat.project = restored;
+    if let Some(message) = pending.message_index.and_then(|index| chat.messages.get_mut(index))
+        .filter(|m| m.run_id.is_none() && control_context::commands::tail(m.text.trim(), control_context::commands::Kind::Open).is_some()) {
+        message.reply = DISMISSED.into();
+    }
+    chat.revision = chat.revision.saturating_add(1);
+    let lines = format!("{} ({}): dismissed by the operator; it is not mounted.", pending.path, pending.request);
+    let origins = pending.origin.iter().map(String::as_str).collect::<Vec<_>>();
+    let task = state.runtime.runs.iter().find(|run| pending.origin.as_deref() == Some(run.id.as_str())).map(|run| (*run.objective).clone()).unwrap_or_default();
+    let outcome = crate::approvals::resume(state, crate::approvals::Decisions {
+        chat: id, origins: &origins, heading: FOLDER_DECISIONS, lines: &lines,
+        instruction: "Continue the original task without that folder; request it again only if it is still needed.",
+        task: &task, kind: crate::runtime::RunKind::FolderDecision, source: "folder-decision", grants: Vec::new(),
+    });
+    // A busy chat cannot resume now. A request has no receipt to retry later,
+    // so the decision is only noted; the agent reads it on its next turn.
+    Ok(Some(if outcome == crate::approvals::Outcome::Wait {
+        approval_resume::record(approval_resume::Edit { runs: &mut state.runtime.runs, notice: &mut state.runtime.notice, chats: &mut state.chats },
+            id, None, format!("{FOLDER_DECISIONS}\n{lines}"))
+    } else { outcome }))
 }
 pub fn message_index(chat: &crate::chat::Session) -> Option<usize> {
     let project=chat.project.as_ref()?;
@@ -631,6 +710,25 @@ pub fn importing(id: &str) -> Option<Importing> {
         entries: import.entries.load(Ordering::Relaxed),
     })
 }
+/// Remove imports a crash or restart cut short. Call at startup while holding
+/// the state lock and before serving, so no live import owns these directories.
+pub fn discard_interrupted_imports() -> io::Result<()> {
+    discard_interrupted_in(&root()?)
+}
+fn discard_interrupted_in(root: &Path) -> io::Result<()> {
+    let entries = match fs::read_dir(root.join("grants")) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    for entry in entries {
+        let entry = entry?;
+        if entry.file_name().to_str().is_some_and(|name| name.starts_with(STAGING)) {
+            fs::remove_dir_all(entry.path())?;
+        }
+    }
+    Ok(())
+}
 /// Wait for approved imports during shutdown; each stops at its next entry.
 pub fn join_imports() {
     let threads = IMPORT_THREADS.lock().map(|mut threads| std::mem::take(&mut *threads)).unwrap_or_default();
@@ -711,7 +809,8 @@ fn record(shared: &Arc<Mutex<State>>, id: &str, request: &str, error: io::Error,
     Ok(())
 }
 /// Check the displayed request and register its import. `None`: this request
-/// is already importing (a repeated click), so nothing new starts.
+/// is already importing (a repeated click), so nothing new starts. Approving it
+/// again once attached is refused: an approval is never replayed.
 fn accept(shared: &Arc<Mutex<State>>, id: &str, request: &str) -> io::Result<Option<(Project, Arc<AtomicUsize>)>> {
     if crate::shutdown::requested() {
         return Err(fail("Control is stopping; folder access was not granted"));
@@ -750,12 +849,23 @@ fn accept(shared: &Arc<Mutex<State>>, id: &str, request: &str) -> io::Result<Opt
 /// Slow copies/Git run without holding the shared state lock; the approval is
 /// rechecked before its durable attachment to the chat.
 fn import(shared: &Arc<Mutex<State>>, id: &str, request: &str, project: Project, save: Save) -> io::Result<()> {
+    import_in(&root()?, shared, id, request, project, save)
+}
+/// Staging prefix of grants still being composed. Nothing references them.
+const STAGING: &str = ".pending-";
+/// The copy is composed in `grants/.pending-<grant>` and renamed into place
+/// under the state lock just before the checkpoint that attaches it. A failed
+/// import removes its directory; one cut short by a crash or restart leaves
+/// only a staging directory, discarded at the next start, so a partial copy is
+/// never published or mounted.
+fn import_in(root: &Path, shared: &Arc<Mutex<State>>, id: &str, request: &str, project: Project, save: Save) -> io::Result<()> {
     let grant = nonce();
-    let directory = root()?.join("grants").join(&grant);
-    fs::create_dir_all(directory.parent().unwrap())?;
-    fs::create_dir(&directory)?;
-    let mut pending=PendingGrant(Some(directory.clone()));
-    compose(&root()?, &project, &directory)?;
+    let grants = root.join("grants");
+    fs::create_dir_all(&grants)?;
+    let staging = grants.join(format!("{STAGING}{grant}"));
+    fs::create_dir(&staging)?;
+    let mut pending=PendingGrant(Some(staging.clone()));
+    compose(root, &project, &staging)?;
     let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
     if crate::shutdown::requested() {
         return Err(fail(
@@ -782,10 +892,14 @@ fn import(shared: &Arc<Mutex<State>>, id: &str, request: &str, project: Project,
     }
     let previous = chat.clone();
     crate::identity::authorize(&chat.actor, Action::Task).map_err(fail)?;
+    let directory = grants.join(&grant);
+    fs::rename(&staging, &directory)?;
+    pending.0 = Some(directory);
+    fs::File::open(&grants)?.sync_all()?;
     chat.project.as_mut().unwrap().grant = Some(grant);
     chat.project.as_mut().unwrap().error = None;
     let approved=chat.project.as_mut().unwrap();
-    approved.head=None;approved.pending=false;approved.named=true;
+    approved.head=None;approved.pending=false;approved.named=true;approved.previous=None;approved.origin=None;
     approved.mounts.push(Mount{name:approved.name.clone(),path:approved.path.clone(),message_index:approved.message_index});
     chat.workspace = None;
     chat.improve_mode = false;
@@ -849,7 +963,8 @@ fn http_in(
     // The approval page polls an import by its request nonce (`p-<hex>`).
     let watched = query.split('&').find_map(|pair| pair.strip_prefix("importing="))
         .filter(|request| request.len() <= 64 && request.strip_prefix("p-").is_some_and(|hex| !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit())));
-    enum Reply { Page(String), Redirect(String), Accepted }
+    enum Reply { Page(String), Redirect(String), Accepted, Dismissed(String) }
+    let page = |state: &State, status: &str| format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><title>Open project</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/workspace.css'></head><body><main>{status}{}<a href='/dm/{id}'>Back to DM</a></main></body></html>",panel(state,id));
     // The chat client posts decisions with `response=json`, like port requests.
     let asynchronous = method == "POST" && crate::fields(&String::from_utf8_lossy(body)).get("response").is_some_and(|value| value == "json");
     let result: io::Result<Reply> = (|| {
@@ -864,12 +979,36 @@ fn http_in(
             if let Some(request) = watched && chat.project.as_ref().is_some_and(|p| p.request == request && !p.needs_approval()) {
                 return Ok(Reply::Redirect(format!("/dm/{id}")));
             }
-            return Ok(Reply::Page(format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><title>Open project</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/workspace.css'></head><body><main>{}<a href='/dm/{id}'>Back to DM</a></main></body></html>",panel(&state,id))));
+            return Ok(Reply::Page(page(&state, "")));
         }
         if method != "POST" {
             return Err(fail("Use GET or POST"));
         }
         let fields = crate::fields(&String::from_utf8_lossy(body));
+        if fields.get("dismiss").is_some_and(|v| v == "yes") {
+            // Names the displayed request, like approval; a stale one is a no-op.
+            let request = fields.get("request").map(String::as_str).unwrap_or("");
+            let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
+            let index = state.chats.iter().position(|c| c.id == id).ok_or_else(|| fail("Chat not found"))?;
+            let (previous, runs, notice) = (state.chats[index].clone(), state.runtime.runs.len(), state.runtime.notice.clone());
+            let message = match dismiss(&mut state, id, request).map_err(fail)? {
+                None => "That folder request was already dismissed, replaced or approved; nothing changed.",
+                Some(outcome) => {
+                    if save(&state).is_err() {
+                        state.chats[index] = previous;
+                        state.runtime.runs.truncate(runs);
+                        state.runtime.notice = notice;
+                        return Err(fail("Could not save the dismissal; the request is unchanged"));
+                    }
+                    if matches!(outcome, crate::approvals::Outcome::Resumed(_)) { crate::worker::wake(); }
+                    crate::live_updates::notify();
+                    DISMISSED
+                }
+            };
+            return Ok(if asynchronous { Reply::Dismissed(message.into()) } else {
+                Reply::Page(page(&state, &format!("<p role='status'>{}</p>", crate::escape(message))))
+            });
+        }
         if fields.get("approve").is_some_and(|v| v == "yes") {
             // Respond at once; the approval page shows the import's progress,
             // returns to the chat when it opens, or shows its error inline.
@@ -914,6 +1053,7 @@ fn http_in(
     })();
     if asynchronous && method == "POST" {
         let (status, value) = match result {
+            Ok(Reply::Dismissed(message)) => ("200 OK", json!({"ok":true,"message":message})),
             Ok(_) => ("200 OK", json!({"ok":true})),
             Err(error) => ("400 Bad Request", json!({"error":error.to_string()})),
         };
@@ -921,7 +1061,7 @@ fn http_in(
         return true;
     }
     match result {
-        Ok(Reply::Accepted) => {}
+        Ok(Reply::Accepted | Reply::Dismissed(_)) => {}
         Ok(Reply::Page(body)) => {
             let _ = control_http::respond(stream, "200 OK", "text/html; charset=utf-8", body.as_bytes(), "", control_http::Policy::RestrictedEmbedded);
         }
