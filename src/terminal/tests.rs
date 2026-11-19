@@ -257,6 +257,64 @@ fn terminal_folder_approval_uses_displayed_identity_and_retains_errors_without_a
 }
 
 #[test]
+fn terminal_dismissal_names_the_displayed_request() {
+    use std::io::{BufRead, Read};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        for index in 0..2 {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let mut reader = io::BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let path = line.split_whitespace().nth(1).unwrap().to_owned();
+            let mut length = 0;
+            loop {
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" { break; }
+                if let Some((name, value)) = line.split_once(':') && name.eq_ignore_ascii_case("content-length") {
+                    length = value.trim().parse::<usize>().unwrap();
+                }
+            }
+            let mut bytes = vec![0; length];
+            reader.read_exact(&mut bytes).unwrap();
+            let response = if index == 0 {
+                assert_eq!(path, "/dm/c-fixture/project");
+                let fields: std::collections::HashMap<_, _> = Url::parse(&format!("http://fixture/?{}", String::from_utf8(bytes).unwrap()))
+                    .unwrap().query_pairs().into_owned().collect();
+                assert_eq!((fields["dismiss"].as_str(), fields["request"].as_str(), fields["response"].as_str()), ("yes", "p-fixture", "json"));
+                json!({"ok":true,"message":"Folder request dismissed."})
+            } else {
+                assert_eq!(path, "/mcp");
+                let request: Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(request["params"]["name"], "control.chat.read");
+                json!({"jsonrpc":"2.0","id":request["id"],"result":{"isError":false,"structuredContent":{"data":{"id":"c-fixture","project":null}}}})
+            };
+            control_http::respond(&mut stream, "200 OK", "application/json", response.to_string().as_bytes(), "", control_http::Policy::Embedded).unwrap();
+        }
+    });
+    let mut hive = Hive::fixture(Client::builder().timeout(Duration::from_secs(3)).build().unwrap(), format!("http://{addr}/mcp"));
+    let mut app = App {
+        active: "c-fixture".into(),
+        detail: json!({"project":{"request":"p-fixture","path":"/open /node/project","name":"project","pending":true}}),
+        input: "/dismiss p-obsolete".into(),
+        ..Default::default()
+    };
+    assert!(app.transcript().to_string().contains("/dismiss p-fixture to reject"));
+    // A different request than the one displayed is refused before any call.
+    assert!(app.submit(&mut hive).unwrap_err().to_string().contains("request changed"));
+    app.input = "/dismiss".into();
+    app.submit(&mut hive).unwrap();
+    assert_eq!(app.status, "Folder request dismissed.");
+    assert!(!app.transcript().to_string().contains("/dismiss"));
+    app.input = "/dismiss".into();
+    assert!(app.submit(&mut hive).unwrap_err().to_string().contains("No folder request"));
+    server.join().unwrap();
+}
+
+#[test]
 fn listen_commands_reach_the_server_and_render_returned_state() {
     use std::io::{BufRead, Read};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

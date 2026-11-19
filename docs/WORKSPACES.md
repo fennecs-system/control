@@ -12,11 +12,23 @@ In an existing TUI or web chat, use `/open /absolute/path/to/project`, or expand
 **Open folder** in the web transcript, then review the folder and confirm **Trust
 folder and open**. In the TUI, review the request at the end of the conversation
 and enter `/trust` (or `/trust REQUEST`). `/open` alone shows the current request;
-`/open /another/path` replaces it.
+`/open /another/path` replaces it. Your `/open` checks that the path is an
+existing folder and fails at once if not, so a typo never becomes a request.
+
+**Dismiss** in the web request (or `/dismiss [REQUEST]` in the TUI) rejects the
+displayed request. The chat returns to the folders it had before the request,
+including agents' edits since; already approved folders keep working. Dismissal
+names the request it rejects: from a stale page, or for a request that was
+already dismissed, replaced or approved, it changes nothing and says so. An
+approved request that is still importing cannot be dismissed; the copy is not
+cancellable and opens when it finishes. The chat records a **Folder decisions**
+notice, and an agent that asked resumes its finished turn, as for port and bot
+decisions.
 
 A request alone reads and mounts nothing. Agents can ask with
 `control_project_request` but cannot approve their own request. External MCP
-clients use `control.project.request` with a chat ID.
+clients use `control.project.request` with a chat ID. Agent requests are never
+checked against the host, so agents cannot learn which paths exist.
 
 Each approved folder appears at `/workspace/<folder-name>`. Repeat `/open` to add
 more folders to the same chat. For duplicate names use
@@ -29,7 +41,10 @@ Approval answers at once; the import runs in the background. The request shows
 **Importing folder…** with progress, and the chat shows `Opened /workspace/<name>`
 when it finishes. An import error appears beside the request, which stays
 available to retry. Messages to the agent wait until the import finishes. A
-restart interrupts the import and grants nothing.
+second approval of the same request starts no second copy. The copy is staged
+outside the published grants and moved into place only as the chat records it,
+so a failed import leaves nothing behind. A restart interrupts the import and
+grants nothing; the next start removes its staged copy.
 
 ## Isolated copies
 

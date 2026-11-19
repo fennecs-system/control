@@ -109,7 +109,7 @@ pub(crate) fn change_with_save(
             .map(str::to_owned)
     } else { None };
     transact(state, arguments["id"].as_str(), related.as_deref(), |state| if crate::tool_registry::lookup(name).is_some_and(|tool|tool.route==crate::tool_registry::Route::Project) {
-        crate::projects::request_named(state,arguments["id"].as_str().unwrap_or(""),arguments["path"].as_str().unwrap_or(""),arguments["name"].as_str())
+        crate::projects::request_named(state,arguments["id"].as_str().unwrap_or(""),arguments["path"].as_str().unwrap_or(""),arguments["name"].as_str(),crate::projects::Requester::Agent{run:None})
     } else if crate::tool_registry::lookup(name).is_some_and(|tool|tool.route==crate::tool_registry::Route::Room) {
         crate::rooms::tool(state, name, arguments)
     } else {

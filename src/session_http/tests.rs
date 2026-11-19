@@ -307,7 +307,11 @@ fn web_folder_picker_is_opt_in_and_bare_open_only_navigates() {
     );
     assert_eq!(serde_json::to_vec(&state).unwrap(), before);
     // An explicit path produces an approval in the separate request panel.
-    chat::send(&mut state, &id, "/open /fixture/source", "test").unwrap();
+    // The operator's path is checked now; a missing folder fails at once.
+    assert!(chat::send(&mut state, &id, "/open /fixture/missing-source", "test").unwrap_err().contains("No readable folder"));
+    assert!(state.chats[0].project.is_none());
+    let source = std::env::temp_dir();
+    chat::send(&mut state, &id, &format!("/open {}", source.display()), "test").unwrap();
     let transcript = chat::requests(&state, &id).unwrap();
     assert_eq!(transcript.matches("project-picker").count(), 1);
     assert!(transcript.contains("Trust folder and open"));
@@ -336,7 +340,7 @@ fn browser_fixture(long_messages_only: bool) {
     let question = initial.runtime.runs[0].question.take().unwrap();
     initial.runtime.runs[0].status = "running".into();
     initial.runtime.runs[0].result.clear();
-    crate::projects::request(&mut initial, &chat, "/fixture/project").unwrap();
+    crate::projects::request(&mut initial, &chat, "/fixture/project", crate::projects::Requester::Agent { run: None }).unwrap();
     let long_chat = crate::chat::create(&mut initial);
     let (ports, _, port_chat) = crate::ports::tests::pending_fixture();
     initial.services.extend(ports.services);
@@ -995,11 +999,11 @@ fn browser_fixture(long_messages_only: bool) {
     let previous_project = b.element(".project-picker > summary");
     b.post(&format!("/element/{previous_project}/click"), json!({}));
     {
-        crate::chat::send(
+        crate::projects::request(
             &mut state.lock().unwrap(),
             &chat,
-            "/open /fixture/replacement",
-            "test",
+            "/fixture/replacement",
+            crate::projects::Requester::Agent { run: None },
         )
         .unwrap();
     }

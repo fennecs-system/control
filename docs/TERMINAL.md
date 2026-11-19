@@ -4,8 +4,8 @@ The TUI is a client of the same server the website uses. It has no separate agen
 loop or terminal-only tools. Start the server, then run `control tui`. Use
 `/improve REQUEST` to ask agents to develop Control; the node must already have
 improvement authority, a source root, a provider and tool containers configured.
-`/open /absolute/path` requests another project folder and `/trust` approves the
-exact request shown. Agents work in isolated [workspaces](WORKSPACES.md).
+`/open /absolute/path` requests another project folder, `/trust` approves the
+exact request shown and `/dismiss` rejects it. Agents work in isolated [workspaces](WORKSPACES.md).
 
 ## Composer
 
@@ -15,7 +15,7 @@ command, and makes no server or model call. Enter sends; Alt+Enter inserts a
 newline. `/help` opens a scrollable reference of commands and shortcuts; Esc or
 `/chat` returns to the conversation. Shared chat commands (`/improve`, `/spawn`,
 `/answer`, `/open`, …) come from `crates/context/src/commands.rs`; terminal-only
-actions such as `/activity`, `/lenses`, `/context`, `/trust`, `/port` and `/bot`
+actions such as `/activity`, `/lenses`, `/context`, `/trust`, `/dismiss`, `/port` and `/bot`
 are added in `src/terminal/command_menu.rs`.
 
 ## Agent tools

@@ -9,6 +9,8 @@ use super::conversations::{Message, Session};
 pub(crate) const PORT_DECISIONS: &str = "Port decisions";
 pub(crate) const BOT_DECISIONS: &str = "Bot decisions";
 pub(crate) const HEADINGS: [&str; 2] = [PORT_DECISIONS, BOT_DECISIONS];
+/// Newer than speaker records, so never needed for legacy recognition.
+pub(crate) const FOLDER_DECISIONS: &str = "Folder decisions";
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Outcome {

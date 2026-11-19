@@ -38,6 +38,7 @@ pub enum RunKind {
     AgentMessage,
     BotDecision,
     BotWake,
+    FolderDecision,
 }
 impl RunKind {
     /// Managed task projection uses typed provenance, never status prose.
@@ -45,7 +46,7 @@ impl RunKind {
         match self {
             Self::Chat|Self::Task|Self::Job|Self::SelfImprovement|Self::Steering|Self::DesignAnswer|Self::Delegated|Self::Spawned=>PromptRole::Instruction,
             Self::BotWake|Self::RoomNotification=>PromptRole::Wake,
-            Self::DelegationResult|Self::AgentCompletion|Self::PortDecision|Self::AgentMessage|Self::BotDecision=>PromptRole::Evidence,
+            Self::DelegationResult|Self::AgentCompletion|Self::PortDecision|Self::AgentMessage|Self::BotDecision|Self::FolderDecision=>PromptRole::Evidence,
         }
     }
     pub fn as_str(self) -> &'static str {
@@ -65,6 +66,7 @@ impl RunKind {
             Self::AgentMessage => "agent-message",
             Self::BotDecision => "bot-decision",
             Self::BotWake => "bot-wake",
+            Self::FolderDecision => "folder-decision",
         }
     }
     pub fn parse(kind: &str) -> Option<Self> {
@@ -73,7 +75,7 @@ impl RunKind {
     pub fn speaker(self) -> MessageSpeaker {
         match self {
             Self::Chat | Self::Task | Self::Job | Self::SelfImprovement | Self::Steering | Self::DesignAnswer | Self::Delegated | Self::Spawned => MessageSpeaker::User,
-            Self::DelegationResult | Self::AgentCompletion | Self::RoomNotification | Self::PortDecision | Self::AgentMessage | Self::BotDecision | Self::BotWake => MessageSpeaker::Control,
+            Self::DelegationResult | Self::AgentCompletion | Self::RoomNotification | Self::PortDecision | Self::AgentMessage | Self::BotDecision | Self::BotWake | Self::FolderDecision => MessageSpeaker::Control,
         }
     }
 }
