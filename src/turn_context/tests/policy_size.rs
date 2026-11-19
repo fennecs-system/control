@@ -117,14 +117,15 @@ fn wake_policy_is_a_short_core_with_guidance_on_demand() {
     let index = |id: &str| tool_bytes(&team, id, false).2;
     let [(_, lead, _), (_, member, _), (_, advisor, _)] = sizes;
     let (lead, member) = (lead - index(&team.lead), member - index(&team.member));
-    assert!(member <= 3_072 && lead <= 3_328, "member {member}, lead {lead}");
+    // Member 3,031 and lead 3,221 bytes before the lens header and spawn note were shortened.
+    assert!(member <= 2_944 && lead <= 3_136, "member {member}, lead {lead}");
     assert!(advisor <= 5_632, "advisor {advisor}: its own procedure is inline");
     for id in ids {
-        assert!(index(id) <= 2_048, "index {}", index(id));
+        assert!(index(id) <= 1_700, "index {}", index(id));
         for shell in [false, true] {
             let (before, after, _) = tool_bytes(&team, id, shell);
             // Every role's always-loaded schemas stay below 10 KB.
-            assert!(after < 10_000 && after * 3 < before, "{after} of {before}");
+            assert!(after < 9_600 && after * 3 < before, "{after} of {before}");
         }
     }
     let text = |id: &str| project(&team.state, id).unwrap().text;

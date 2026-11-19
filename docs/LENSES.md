@@ -497,7 +497,7 @@ worker received.
 **Deferred tool loading.** Tool lists are role-scoped like prompts. A worker
 session's `tools/list` holds only its role's core schemas; every other tool it
 may call appears in the prompt's deferred index, one terse line per tool family
-(e.g. `- Watches: watch_status (inspect watches); watch_stop (stop one)`).
+(e.g. `- watch_status (inspect watches); watch_stop (stop one)`).
 
 - Core sets are catalogue metadata: each protocol name in
   `control_context::TOOLS` carries its core roles, index phrase (at most eight
@@ -514,11 +514,15 @@ may call appears in the prompt's deferred index, one terse line per tool family
 - Always-loaded schemas (except a judge's) use the catalogue's tight
   description. All drop nested property descriptions and annotations and reduce
   a large optional property (such as the handoff payload or watch salience) to
-  its type with a pointer to the search. The host validates every argument
-  either way. Each role's listing is under 10 KB.
+  its type with a pointer to the search. They also drop the closed-object flag
+  and type-sized bounds. The host validates every argument either way. Each
+  role's listing is under 9.6 KB.
 - `control_tool_search {names | query}` returns full schemas (at most 16 named
   or 5 ranked, 32 KB) of tools this session may call; without arguments it lists
-  the deferred tools. It is a read for every role, including after a staged
+  the deferred tools. A tool already in the session's listing comes back under
+  `already_listed` as its name and index phrase, plus (when named) only the
+  properties its listing reduced to a pointer. A local turn's result shows each
+  found tool's name and one line; the schemas are in its function tools. It is a read for every role, including after a staged
   handoff.
 - Codex and Claude call a deferred tool with `control_call {tool, arguments}`.
   The broker rewrites it into the direct call before any check, so authority,

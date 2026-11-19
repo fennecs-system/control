@@ -452,6 +452,33 @@ fn deferred_tools_load_natively_on_search_or_first_use() {
     assert!(offered(2).contains(&"control_port_status".to_owned()));
     let last = serde_json::to_string(&host.0.requests[3]["messages"]).unwrap();
     assert!(last.contains("unknown tool"), "{last}");
+    // The loaded schema is a function tool; the search result only names it.
+    let seen = host.0.requests[2]["messages"].as_array().unwrap().iter().rev().find(|m| m["role"] == "tool").unwrap()["content"].as_str().unwrap().to_owned();
+    assert_eq!(seen, r#"{"tools":[{"description":"control_port_status schema","name":"control_port_status"}]}"#);
+}
+
+#[test]
+fn a_search_result_names_loaded_tools_instead_of_repeating_their_schemas() {
+    let schemas = crate::tool_registry::worker_definitions(false).into_iter()
+        .filter(|t| matches!(t["name"].as_str(), Some("control_service_exec" | "control_watch_stop" | "control_port_status")))
+        .collect::<Vec<_>>();
+    assert_eq!(schemas.len(), 3);
+    let note = "Host note: one more thing.";
+    let mut full = crate::toolbox::result(Ok(json!({"tools":schemas,"next":"These tools are now callable directly by name."})));
+    full["content"].as_array_mut().unwrap().push(json!({"type":"text","text":note}));
+    let before = result_text(&full).0.len();
+    let shown = searched(full);
+    let (text, failed) = result_text(&shown);
+    assert!(!failed && !text.contains("inputSchema") && text.ends_with(note), "{text}");
+    assert!(text.contains(r#""name":"control_service_exec""#) && text.contains("callable directly"));
+    for line in shown["structuredContent"]["data"]["tools"].as_array().unwrap() {
+        assert!(line["description"].as_str().unwrap().len() <= 160, "{line}");
+    }
+    eprintln!("local search result: before {before} after {} bytes", text.len());
+    assert!(text.len() * 3 < before, "before {before} after {}", text.len());
+    // Errors and empty results pass through unchanged.
+    let refused = json!({"content":[{"type":"text","text":"refused"}],"isError":true});
+    assert_eq!(searched(refused.clone()), refused);
 }
 
 fn used(mut value: Value, usage: Value) -> Value {

@@ -25,7 +25,7 @@ fn role_core_sets_follow_catalog_metadata_and_stay_below_ten_kilobytes() {
                 want.push(CALL);
             }
             assert_eq!(names(&listed), want, "{role:?}");
-            assert!(bytes(&listed) < 10_000, "{role:?} shell={shell}: {}", bytes(&listed));
+            assert!(bytes(&listed) < 9_600, "{role:?} shell={shell}: {}", bytes(&listed));
             // Every listed schema is callable through the same host path.
             assert!(listed.iter().all(|t| t["inputSchema"]["type"] == "object"));
         }
@@ -57,10 +57,45 @@ fn core_schemas_are_compacted_and_search_returns_the_full_ones() {
     assert_eq!(handoff["inputSchema"]["required"], json!(["disposition"]));
     assert_eq!(handoff["inputSchema"]["properties"]["payload"]["description"], "see control_tool_search");
     assert!(listed.iter().all(|t| t.get("annotations").is_none()));
-    let full = search(&f, &json!({"names":["turn_handoff"]})).unwrap();
-    let full = &full["tools"][0];
-    assert_eq!(full, offered(&f).iter().find(|t| t["name"] == "control_turn_handoff").unwrap());
-    assert!(full["inputSchema"]["properties"]["payload"]["properties"]["subgoal"].is_object() && full["annotations"].is_object());
+    // Neither the closed-object flag nor a type-sized bound is listed; the host enforces both.
+    let text = serde_json::to_string(&listed).unwrap();
+    assert!(listed.iter().all(|t| t["inputSchema"].get("additionalProperties").is_none()));
+    assert!(!text.contains("4294967295"), "{text}");
+    // A listed tool asked for by name returns only what the listing left out.
+    let found = search(&f, &json!({"names":["turn_handoff"]})).unwrap();
+    assert!(found["tools"].as_array().unwrap().is_empty());
+    let full = offered(&f).into_iter().find(|t| t["name"] == "control_turn_handoff").unwrap();
+    let rest = &found["already_listed"][0];
+    assert_eq!(rest["name"], "control_turn_handoff");
+    assert_eq!(rest["about"], control_context::mcp("control_turn_handoff").unwrap().phrase);
+    assert!(rest.get("description").is_none(), "the listing has its brief");
+    assert_eq!(rest["properties"]["payload"], full["inputSchema"]["properties"]["payload"]);
+    assert!(rest["properties"].get("disposition").is_none(), "already in the listing");
+    assert!(rest["properties"]["payload"]["properties"]["subgoal"].is_object());
+}
+
+#[test]
+fn search_returns_full_schemas_only_for_tools_not_already_listed() {
+    let f = facts(Audience::Member);
+    let core = ["control_service_status", "control_service_exec", "control_room_read"];
+    let schemas = offered(&f).into_iter().filter(|t| core.contains(&name(t))).collect::<Vec<_>>();
+    let before = json!({"tools":schemas}).to_string().len();
+    let by_name = search(&f, &json!({"names":core})).unwrap();
+    assert!(by_name["tools"].as_array().unwrap().is_empty());
+    assert_eq!(by_name["already_listed"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect::<Vec<_>>(), core);
+    let after = by_name.to_string().len();
+    eprintln!("tool search for listed tools: before {before} after {after} bytes");
+    assert!(after * 2 < before, "before {before} after {after}");
+    // A query names listed hits by phrase and returns schemas for the rest.
+    let query = search(&f, &json!({"query":"service status watch stop"})).unwrap();
+    for hit in query["already_listed"].as_array().unwrap() {
+        assert_eq!(hit.as_object().unwrap().keys().collect::<Vec<_>>(), ["about", "name"], "{hit}");
+        assert!(control_context::loaded(hit["name"].as_str().unwrap(), f.role));
+    }
+    for tool in query["tools"].as_array().unwrap() {
+        assert!(!control_context::loaded(name(tool), f.role) && tool["inputSchema"].is_object(), "{tool}");
+    }
+    assert!(names(query["tools"].as_array().unwrap()).contains(&"control_watch_stop"));
 }
 
 #[test]
@@ -80,7 +115,11 @@ fn the_index_names_every_deferred_tool_once_and_no_core_tool() {
             assert!(text.lines().skip(1).all(|line| line.starts_with("- ")));
         }
     }
-    assert!(index(&facts(Audience::Member)).len() <= 2_048);
+    // Family titles were about 300 bytes of a 1.9 KB index; names and phrases remain.
+    let member = index(&facts(Audience::Member));
+    assert!(member.len() <= 1_700 && !member.contains("- Watches:") && member.contains("- watch_status (inspect watches); "), "{member}");
+    let local = index(&Facts { local: true, shell: true, ..facts(Audience::Member) });
+    assert!(local.starts_with("More tools (names omit control_; call by full name; the schema loads on first use):\n"), "{local}");
 }
 
 #[test]

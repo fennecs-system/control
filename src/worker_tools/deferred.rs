@@ -91,21 +91,45 @@ pub(crate) fn offered(facts: &Facts) -> Vec<Value> {
 pub(crate) fn listed(facts: &Facts) -> Vec<Value> {
     let mut tools = offered(facts).into_iter()
         .filter(|tool| control_context::loaded(name(tool), facts.role))
-        .map(|mut tool| {
-            // A judge's few core tools keep their full, judge-specific text.
-            if let Some(brief) = control_context::mcp(name(&tool)).map(|m| m.brief).filter(|b| !b.is_empty() && !facts.judge) {
-                tool["description"] = json!(brief);
-            }
-            compact(&mut tool["inputSchema"]);
-            // Hints only (execution policy is the host's); the search returns them.
-            if let Some(tool) = tool.as_object_mut() {
-                tool.remove("annotations");
-            }
-            tool
-        })
+        .map(|tool| as_listed(facts, tool))
         .collect::<Vec<_>>();
-    tools.extend(definitions(facts.local));
+    tools.extend(definitions(facts.local).into_iter().map(|mut tool| {
+        compact(&mut tool["inputSchema"]);
+        tool
+    }));
     tools
+}
+/// A core tool as the session's listing shows it.
+fn as_listed(facts: &Facts, mut tool: Value) -> Value {
+    // A judge's few core tools keep their full, judge-specific text.
+    if let Some(brief) = control_context::mcp(name(&tool)).map(|m| m.brief).filter(|b| !b.is_empty() && !facts.judge) {
+        tool["description"] = json!(brief);
+    }
+    compact(&mut tool["inputSchema"]);
+    // Hints only (execution policy is the host's); the search returns them.
+    if let Some(tool) = tool.as_object_mut() {
+        tool.remove("annotations");
+    }
+    tool
+}
+/// A search hit the listing already carries: its name and index phrase.
+/// Asked for by name, it adds only the properties the listing shows as
+/// "see control_tool_search".
+fn known(facts: &Facts, tool: &Value, named: bool) -> Value {
+    let about = control_context::mcp(name(tool)).map_or("", |m| m.phrase);
+    let mut value = json!({"name":name(tool),"about":about});
+    if !named {
+        return value;
+    }
+    let shown = as_listed(facts, tool.clone());
+    let omitted = shown["inputSchema"]["properties"].as_object().into_iter().flatten()
+        .filter(|(_, p)| p["description"] == "see control_tool_search")
+        .map(|(key, _)| (key.clone(), tool["inputSchema"]["properties"][key].clone()))
+        .collect::<serde_json::Map<_, _>>();
+    if !omitted.is_empty() {
+        value["properties"] = Value::Object(omitted);
+    }
+    value
 }
 /// A top-level property whose compacted schema exceeds this is listed by type.
 const PROPERTY_BYTES: usize = 250;
@@ -128,11 +152,19 @@ fn compact(schema: &mut Value) {
                         map.remove(key);
                     }
                 }
+                // A type's own range (u32::MAX and above) says nothing.
+                if map.get("maximum").and_then(Value::as_u64).is_some_and(|max| max >= u64::from(u32::MAX)) {
+                    map.remove("maximum");
+                }
                 map.values_mut().for_each(strip);
             }
             Value::Array(items) => items.iter_mut().for_each(strip),
             _ => {}
         }
+    }
+    // The host refuses unknown fields itself.
+    if let Some(map) = schema.as_object_mut() {
+        map.remove("additionalProperties");
     }
     let required = schema["required"].as_array().cloned().unwrap_or_default();
     let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) else { return };
@@ -178,13 +210,14 @@ pub(crate) fn index(facts: &Facts) -> String {
         }
     }
     let how = if facts.local {
-        "call one by its full name; its schema loads on first use, or read it first with control_tool_search {\"names\":[...]}"
+        "call by full name; the schema loads on first use"
     } else {
         "schemas: control_tool_search {\"names\":[...]}; call: control_call {\"tool\":\"control_<name>\",\"arguments\":{...}}"
     };
     let mut text = format!("More tools (names omit control_; {how}):\n");
-    for (title, lines) in groups {
-        text.push_str(&format!("- {title}: {}\n", lines.join("; ")));
+    // One line per family; the names and phrases carry its meaning.
+    for (_, lines) in groups {
+        text.push_str(&format!("- {}\n", lines.join("; ")));
     }
     text
 }
@@ -214,6 +247,17 @@ pub(crate) fn search(facts: &Facts, args: &Value) -> std::io::Result<Value> {
         }
         kept
     };
+    // Tools the session lists already have a schema in the request: name them
+    // with their index phrase, plus (when asked by name) only what the
+    // listing left out.
+    let split = |found: Vec<&Value>, named: bool| {
+        let (listed, new): (Vec<&Value>, Vec<&Value>) = found.into_iter().partition(|t| control_context::loaded(name(t), facts.role));
+        let mut value = json!({"tools":bounded(new),"next":next});
+        if !listed.is_empty() {
+            value["already_listed"] = json!(listed.iter().map(|t| known(facts, t, named)).collect::<Vec<_>>());
+        }
+        value
+    };
     if let Some(names) = input.names.filter(|n| !n.is_empty()) {
         if names.len() > NAMED_RESULTS {
             return Err(std::io::Error::other(format!("At most {NAMED_RESULTS} names per search; split the request.")));
@@ -221,7 +265,7 @@ pub(crate) fn search(facts: &Facts, args: &Value) -> std::io::Result<Value> {
         let wanted = names.iter().map(|n| spelled(n)).collect::<Vec<_>>();
         let found = wanted.iter().filter_map(|w| tools.iter().find(|t| name(t) == w)).collect::<Vec<_>>();
         let unknown = wanted.iter().filter(|w| !tools.iter().any(|t| name(t) == w.as_str())).collect::<Vec<_>>();
-        let mut value = json!({"tools":bounded(found),"next":next});
+        let mut value = split(found, true);
         if !unknown.is_empty() {
             value["unknown"] = json!(unknown);
             value["fix"] = json!("These names are not callable in this session. Call control_tool_search {} to list the deferred tools, or search with {\"query\":\"<task words>\"}.");
@@ -249,8 +293,8 @@ pub(crate) fn search(facts: &Facts, args: &Value) -> std::io::Result<Value> {
     let mut ranked = tools.iter().map(|t| (score(t), t)).filter(|(s, _)| *s > 0).collect::<Vec<_>>();
     ranked.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
     let found = ranked.into_iter().take(QUERY_RESULTS).map(|(_, t)| t).collect::<Vec<_>>();
-    let mut value = json!({"tools":bounded(found),"next":next});
-    if value["tools"].as_array().is_some_and(Vec::is_empty) {
+    let mut value = split(found, false);
+    if value["tools"].as_array().is_some_and(Vec::is_empty) && value.get("already_listed").is_none() {
         value["fix"] = json!("No callable tool matched. Call control_tool_search {} to list the deferred tools.");
     }
     Ok(value)

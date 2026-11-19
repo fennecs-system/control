@@ -53,7 +53,7 @@ pub fn prompt(context: &Resolved, role: Audience) -> String {
     let names = context.roots.iter().map(|id| context.lenses.iter()
         .find(|lens| &lens.id == id).map_or(id.as_str(), |lens| lens.name.as_str()))
         .collect::<Vec<_>>().join(" + ");
-    let mut text = format!("Selected context lenses: {names}. Tool descriptors are a preview, not additional capabilities.\nResolved lens snapshot: {}\n",
+    let mut text = format!("Selected context lenses: {names} (snapshot {}); tool descriptors are a preview, not capabilities.\n",
         context.lenses.iter().map(|lens| format!("{}@{}", lens.id, lens.revision)).collect::<Vec<_>>().join(", "));
     let inline = context.inline(role).collect::<Vec<_>>();
     if !inline.is_empty() {

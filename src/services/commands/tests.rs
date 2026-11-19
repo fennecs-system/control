@@ -560,6 +560,56 @@ fn capture_publishes_output_before_command_exit() {
     assert!(result.output.text().contains("final output"));
     assert_eq!(result.exit_code, Some(0));
 }
+/// Status and attach show a caller its service, its ports and watches and its
+/// own latest executions; node capacity and other callers' executions need
+/// `detail: "node"`.
+#[test]
+fn agent_status_omits_node_capacity_and_other_chats_executions() {
+    let (mut state, run, node, id) = fixture();
+    for n in 0..14 {
+        admit(&mut state, &run, "attempt-a", &format!("command-{n}"), &node, input(&id, "echo test"), |_| Ok(())).unwrap();
+    }
+    for execution in &mut state.services[0].executions[..4] {
+        execution.run = "another-run".into();
+    }
+    // An earlier turn of the same chat counts as the caller's own.
+    let mut earlier = state.runtime.runs[0].clone();
+    earlier.id = "earlier-run".into();
+    state.runtime.runs.push(earlier);
+    state.services[0].executions[4].run = "earlier-run".into();
+    let generation = state.services[0].resource.generation.get();
+    state.watches.push(serde_json::from_value(json!({"id":"watch-a","name":"log","chat":"c","service":id,"generation":generation,"permanent":false,"command":"tail -f log","stopped":false})).unwrap());
+    let owned = |_: &&Service| true;
+    // The former result: every summary field, every caller's executions, node capacity.
+    let before = json!({"compute":super::super::compute::status(&state.services),"services":[state.services[0].summary()]}).to_string();
+    let listed = super::super::listing(&state, owned, &run, false);
+    let after = listed.to_string();
+    let service = &listed["services"][0];
+    assert!(listed.get("compute").is_none(), "{after}");
+    assert_eq!(service["executions"].as_array().unwrap().len(), super::super::OWN_EXECUTIONS);
+    assert_eq!(service["older_executions"], 2);
+    assert_eq!(service["other_chats_executions"], 4);
+    assert_eq!(service["watches"], json!([{"watch_id":"watch-a","name":"log","active":true}]));
+    assert_eq!(service["workspace"], "/workspace (retained volume)");
+    assert_eq!(service["phase"], "Running");
+    for gone in ["scope", "storage", "diagnostic", "output", "exit_code"] {
+        assert!(service.get(gone).is_none(), "{gone}: {after}");
+    }
+    for kept in ["service_id", "phase", "platform", "limits", "pids_limit", "expires_unix", "workspace_executable"] {
+        assert!(service.get(kept).is_some(), "{kept}: {after}");
+    }
+    eprintln!("service status bytes: before {} after {}", before.len(), after.len());
+    assert!(before.len() > 1800 && after.len() * 2 < before.len(), "before {} after {}", before.len(), after.len());
+    // Operators and capacity planning still get everything on request.
+    let full = super::super::listing(&state, owned, &run, true);
+    assert_eq!(full["compute"], super::super::compute::status(&state.services));
+    assert_eq!(full["services"][0]["executions"].as_array().unwrap().len(), 14);
+    assert!(full["services"][0]["workspace"]["volume"].is_string());
+    // Only this run's executions; another run sees none of these as its own.
+    let other = state.services[0].view(&state, "another-run", false);
+    assert_eq!(other["executions"].as_array().unwrap().len(), 4);
+    assert_eq!(other["other_chats_executions"], 10);
+}
 #[path = "tests/dispatch_profile.rs"]
 mod dispatch_profile;
 #[path = "tests/concurrency.rs"]

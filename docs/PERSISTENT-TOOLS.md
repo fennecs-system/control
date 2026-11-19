@@ -63,8 +63,8 @@ not expose service management.
 | Tool | Result |
 | --- | --- |
 | `control_service_start` | Checkpoint a command and return its durable handle; startup is asynchronous. |
-| `control_service_status` | Inspect one handle, or list active services, ten recent completed handles, shapes and the remaining node budget. |
-| `control_service_attach` | Read status and bounded logs for an owned handle; does not extend its lease. |
+| `control_service_status` | Inspect one handle, or list active services and ten recent completed handles. Each shows its state, limits, ports, watches and this chat's latest executions. `detail: "node"` adds shapes, the remaining node budget, the volume name and other chats' executions. |
+| `control_service_attach` | Read the same status and bounded logs for an owned handle; does not extend its lease. |
 | `control_service_stop` | Record stop intent. Wait for `Stopped` before assuming removal succeeded. |
 | `control_service_exec` | Run a bounded command in an owned running service. Waits up to `wait_seconds` for the result, else returns an `execution_id`. |
 | `control_service_exec_status` | Read a command's live output, durable status and exit code; `wait_seconds` long-polls. |
@@ -89,7 +89,7 @@ No image is modified or committed from an agent's writable state.
   are derived by Control, never taken from tool input. There is no Control disk
   cap; the engine's disk applies. Attempt checkpoints do not include these
   files, and a volume is not a backup against disk loss. `status.workspace`
-  names the volume; null means an older service with the legacy in-container
+  is set for a retained volume (its name with `detail: "node"`); absent means an older service with the legacy in-container
   layout, which is never migrated silently.
 - `/home/agent` and other writable-layer files are lost when the container is
   removed. `/tmp` is a 128 MiB tmpfs counted against the memory limit; use a

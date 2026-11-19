@@ -122,6 +122,10 @@ impl Execution {
     pub(super) fn request(&self) -> (&str, &str, Option<&copy::Transfer>) {
         (&self.command, &self.display_command, self.copy.as_ref())
     }
+    /// The run that requested it.
+    pub(super) fn run(&self) -> &str {
+        &self.run
+    }
     /// The first line of a command still running, for operator views.
     pub(super) fn running_label(&self) -> Option<String> {
         let command = if self.display_command.is_empty() { &self.command } else { &self.display_command };

@@ -180,6 +180,20 @@ pub struct Port {
     #[serde(skip)]
     ready: bool,
 }
+/// A service's live ports, briefly, for its status: name, direction, the
+/// service-side port and whether it is usable yet.
+pub(crate) fn of_service(ports: &[Port], service: &ResourceId) -> Vec<Value> {
+    ports.iter().filter(|p| p.service == *service && p.status != Status::Stopped).map(|p| {
+        let full = p.summary();
+        let mut value = json!({"port_id":p.id,"name":p.name,"direction":p.direction,"service_port":p.service_port,"status":p.status,"ready":p.ready});
+        for key in ["local_address", "target", "next"] {
+            if !full[key].is_null() {
+                value[key] = full[key].clone();
+            }
+        }
+        value
+    }).collect()
+}
 impl Port {
     fn summary(&self) -> Value {
         let mut value = json!({"port_id":self.id,"service_id":self.service,"name":self.name,"direction":self.direction,"service_port":self.service_port,"target":self.target,"peer_port_id":self.peer,"status":self.status,"ready":self.ready,"local_address":self.approval.as_ref().filter(|_|self.direction==Direction::Ingress).filter(|a|a.host_port!=0).map(|a|format!("127.0.0.1:{}",a.host_port)),"pinned_target":self.approval.as_ref().and_then(|a|a.pinned),"expires_unix":self.approval.as_ref().map(|a|a.expires).filter(|expires|*expires!=u64::MAX),"until_stopped":self.approval.as_ref().is_some_and(|a|a.expires==u64::MAX),"diagnostic":self.diagnostic,"approval_url":"/tools/ports"});

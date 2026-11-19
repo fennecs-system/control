@@ -723,7 +723,7 @@ pub(crate) fn prompt_prefix(run:&crate::runtime::Run,session:&Session)->String {
     } else if names.is_empty() {
         String::new()
     } else {
-        format!("Selected context lenses: {}. Tool descriptors are a preview, not additional capabilities.\n{}\n",names.iter().map(|s|crate::lens_ui::title(s)).collect::<Vec<_>>().join(" + "),control_context::inspect_composed(&refs,&[]))
+        format!("Selected context lenses: {}; tool descriptors are a preview, not capabilities.\n{}\n",names.iter().map(|s|crate::lens_ui::title(s)).collect::<Vec<_>>().join(" + "),control_context::inspect_composed(&refs,&[]))
     };
     let discussion=session.design_context.as_deref().and_then(design_topic).map(|(_,label)|format!("Design discussion: the {label} page of Control. This is context only, not permission to change source or deploy.\n")).unwrap_or_default();
     let mode = if run.action == Action::Improve {
@@ -736,7 +736,7 @@ pub(crate) fn prompt_prefix(run:&crate::runtime::Run,session:&Session)->String {
     } else if run.persona.as_ref().is_some_and(|p|p.depth >= crate::delegation::MAX_DEPTH) {
         "This worker is at the maximum child depth. Perform the assigned work directly; do not call control_agent_spawn or control_agent_spawn_blocking. Report concrete blockers to your parent. Persistent services keep running after you finish your turn.\n"
     } else if session.continuity.is_some() {
-        "Use control_agent_spawn for independent background work; it does not require ending your active session while other useful work remains. Use control_agent_spawn_blocking only for a bounded dependency or isolated judge review; after its acknowledgement, allow the paused checkpoint to complete.\n"
+        "Use control_agent_spawn for independent background work. Use control_agent_spawn_blocking only for a bounded dependency or isolated judge review; after its acknowledgement, allow the paused checkpoint to complete.\n"
     } else {
         "Use control_agent_spawn for independent or background work, including bots. Spawn returns immediately; continue other useful work in this session, and yield when genuinely waiting. Control queues completion updates automatically; do not poll in a loop or block merely to wait. Persistent services keep running between turns. Use control_agent_spawn_blocking only when this turn must await a bounded dependency or an isolated read-only judge review. Blocking spawn reserves this conversation until the child returns; stop after its acknowledgement.\n"
     };

@@ -214,6 +214,27 @@ fn load(result: &Value, tools: &mut Vec<Value>, names: &mut BTreeSet<String>) {
         }
     }
 }
+/// A search result as the model reads it: every found schema is now one of
+/// the request's function tools, so each is named with its first sentence.
+fn searched(mut result: Value) -> Value {
+    let Some(data) = result.get_mut("structuredContent").and_then(|s| s.get_mut("data")) else { return result };
+    let Some(found) = data.get("tools").and_then(Value::as_array).filter(|t| !t.is_empty()) else { return result };
+    let lines = found.iter().map(|tool| {
+        let text = tool["description"].as_str().unwrap_or("");
+        let mut end = text.find(". ").map_or(text.len(), |at| at + 1).min(160);
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        json!({"name":tool["name"],"description":&text[..end]})
+    }).collect::<Vec<_>>();
+    data["tools"] = json!(lines);
+    let text = data.to_string();
+    // The first item is the data; host notes follow it unchanged.
+    if result["content"][0]["type"] == "text" {
+        result["content"][0]["text"] = json!(text);
+    }
+    result
+}
 fn result_text(result: &Value) -> (String, bool) {
     let failed = result["isError"] == true || result.is_null();
     let mut text: String = result["content"]
@@ -498,9 +519,10 @@ pub(crate) fn run(
                         // Digits and dashes: room posts key idempotency on the run and this nonce.
                         let nonce = format!("{steps}-{index}");
                         host.record("mcp_tool_call", &format!("local-{nonce}"), &call.name, "", "in_progress");
-                        let result = host.call(&call.name, arguments, &nonce);
-                        if call.name == SEARCH {
+                        let mut result = host.call(&call.name, arguments, &nonce);
+                        if call.name == SEARCH && result["isError"] != true {
                             load(&result, &mut tools, &mut names);
+                            result = searched(result);
                         }
                         let (text, error) = result_text(&result);
                         host.record("mcp_tool_call", &format!("local-{nonce}"), &call.name, &text, if error { "failed" } else { "completed" });
