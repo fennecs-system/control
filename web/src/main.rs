@@ -624,28 +624,169 @@ fn attach_navigation(document:&web_sys::Document)->Result<(),JsValue> {
     Ok(())
 }
 
-// One authenticated, payload-free stream per page. Reconnects refresh the
-// authoritative HTML; a slow recovery poll is used only while disconnected.
+/// Dispatched on the document whenever the page should re-read its
+/// authoritative HTML: a state-change hint, a (re)connection, or recovery.
+const REFRESH: &str = "control-transcript-refresh";
+fn request_refresh(document: &web_sys::Document) {
+    if let Ok(event) = web_sys::Event::new(REFRESH) { let _ = document.dispatch_event(&event); }
+}
+
+/// Milliseconds before reopening a live stream the browser gave up on, after
+/// `failures` consecutive attempts: 1 s, doubling to at most 30 s.
+fn reconnect_delay(failures: u32) -> i32 {
+    1000i32.saturating_mul(1 << failures.min(5)).min(30_000)
+}
+
+/// The module that loads this client. It names the hashed WASM bundle, so it
+/// changes exactly when a deploy changes the client, with or without a
+/// recorded Git revision.
+const CLIENT: &str = "/tool-window/chat-bootstrap.js";
+
+/// Whether the server now serves a different client from the one this page
+/// runs. An unknown first reading never counts as a change.
+fn client_changed(loaded: Option<&str>, current: &str) -> bool {
+    loaded.is_some_and(|loaded| loaded != current)
+}
+
+/// A stale page reloads itself only when no typing could be lost: nothing is
+/// being edited and the composer, if any, holds no draft.
+fn reload_is_quiet(editing: bool, draft: &str) -> bool {
+    !editing && draft.trim().is_empty()
+}
+
+/// The page's single live connection and what it knows about the server.
+struct Live {
+    document: web_sys::Document,
+    stream: RefCell<Option<web_sys::EventSource>>,
+    /// Consecutive connections the browser abandoned (a non-200 answer such as
+    /// `503 Control is stopping` while the server restarts ends EventSource's
+    /// own retries for good).
+    failures: Cell<u32>,
+    /// The connection dropped since the last open: check the client on reopen.
+    interrupted: Cell<bool>,
+    /// The client bootstrap as first read by this page.
+    client: RefCell<Option<String>>,
+    /// The server was redeployed; reload once nothing would be lost.
+    stale: Cell<bool>,
+}
+
+impl Live {
+    fn open(self: &Rc<Self>) -> Result<(), JsValue> {
+        let stream = web_sys::EventSource::new("/events")?;
+        let live = self.clone();
+        let changed = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
+            if live.stale.get() && live.reload_if_quiet() { return; }
+            request_refresh(&live.document);
+        });
+        stream.add_event_listener_with_callback("message", changed.as_ref().unchecked_ref())?;
+        changed.forget();
+        let live = self.clone();
+        let opened = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
+            live.failures.set(0);
+            // Every connection starts with a hint, so the page re-reads its
+            // state; after an interruption also learn whether the client changed.
+            if live.interrupted.replace(false) { live.check_client(); }
+        });
+        stream.add_event_listener_with_callback("open", opened.as_ref().unchecked_ref())?;
+        opened.forget();
+        let live = self.clone();
+        let failed = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
+            live.interrupted.set(true);
+            // While CONNECTING the browser retries by itself. A closed stream
+            // is reopened here, quietly and with backoff, for the page's life.
+            if !live.closed() { return; }
+            let failures = live.failures.get();
+            live.failures.set(failures.saturating_add(1));
+            let again = live.clone();
+            let retry = Closure::once_into_js(move || { let _ = again.open(); });
+            if let Some(window) = web_sys::window() {
+                let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(retry.unchecked_ref(), reconnect_delay(failures));
+            }
+        });
+        stream.add_event_listener_with_callback("error", failed.as_ref().unchecked_ref())?;
+        failed.forget();
+        if let Some(previous) = self.stream.replace(Some(stream)) { previous.close(); }
+        Ok(())
+    }
+
+    fn state(&self) -> Option<u16> {
+        self.stream.borrow().as_ref().map(web_sys::EventSource::ready_state)
+    }
+    fn connected(&self) -> bool { self.state() == Some(web_sys::EventSource::OPEN) }
+    fn closed(&self) -> bool { self.state().is_none_or(|state| state == web_sys::EventSource::CLOSED) }
+
+    /// Reads the client bootstrap. The first reading is this page's client; a
+    /// later different one (a redeploy with a new client) marks the page stale.
+    fn check_client(self: &Rc<Self>) {
+        let Ok(request) = web_sys::XmlHttpRequest::new() else { return; };
+        if request.open("GET", CLIENT).is_err() { return; }
+        request.set_timeout(10_000);
+        let (response, live) = (request.clone(), self.clone());
+        let finished = Closure::once_into_js(move |_: web_sys::Event| {
+            if response.status().ok() != Some(200) { return; }
+            let Some(current) = response.response_text().ok().flatten() else { return; };
+            let loaded = live.client.borrow().clone();
+            if loaded.is_none() { *live.client.borrow_mut() = Some(current); return; }
+            if client_changed(loaded.as_deref(), &current) {
+                live.stale.set(true);
+                live.reload_if_quiet();
+            }
+        });
+        request.set_onloadend(Some(finished.unchecked_ref()));
+        let _ = request.send();
+    }
+
+    /// A page from an earlier deploy runs that deploy's client against the new
+    /// server's routes and markup. Load the current page instead, unless the
+    /// operator is typing; the next hint tries again.
+    fn reload_if_quiet(&self) -> bool {
+        let editing = self.document.active_element().is_some_and(|element| {
+            matches!(element.tag_name().as_str(), "INPUT" | "TEXTAREA" | "SELECT")
+                || element.dyn_ref::<web_sys::HtmlElement>().is_some_and(|element| element.is_content_editable())
+        });
+        let draft = self.document.query_selector(".conversation-composer textarea[name=message]").ok().flatten()
+            .and_then(|input| input.dyn_into::<web_sys::HtmlTextAreaElement>().ok())
+            .map(|input| input.value()).unwrap_or_default();
+        if !reload_is_quiet(editing, &draft) { return false; }
+        web_sys::window().is_some_and(|window| window.location().reload().is_ok())
+    }
+}
+
+// One authenticated, payload-free stream per page. Every (re)connection and
+// hint refreshes the authoritative HTML; a slow recovery poll runs only while
+// disconnected. A server restart can answer the browser's own retry with a
+// non-200 status, which ends EventSource's retries for good, so a closed
+// stream is reopened here; a redeployed client reloads a quiet page.
 fn attach_updates(document: &web_sys::Document) -> Result<(), JsValue> {
-    let stream = web_sys::EventSource::new("/events")?;
-    let target = document.clone();
-    let changed = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
-        if let Ok(event) = web_sys::Event::new("control-transcript-refresh") { let _ = target.dispatch_event(&event); }
+    let live = Rc::new(Live {
+        document: document.clone(),
+        stream: RefCell::new(None),
+        failures: Cell::new(0),
+        interrupted: Cell::new(false),
+        client: RefCell::new(None),
+        stale: Cell::new(false),
     });
-    stream.add_event_listener_with_callback("message", changed.as_ref().unchecked_ref())?;
-    changed.forget();
-    let recovery = stream.clone();
-    let target = document.clone();
+    live.check_client();
+    live.open()?;
+    let recovery = live.clone();
     let fallback = Closure::<dyn FnMut()>::new(move || {
-        if recovery.ready_state() != web_sys::EventSource::OPEN && let Ok(event) = web_sys::Event::new("control-transcript-refresh") {
-            let _ = target.dispatch_event(&event);
-        }
+        if recovery.connected() { return; }
+        if recovery.stale.get() && recovery.reload_if_quiet() { return; }
+        request_refresh(&recovery.document);
     });
-    let window = web_sys::window().unwrap();
+    let window = web_sys::window().ok_or_else(|| JsValue::from_str("No window"))?;
     window.set_interval_with_callback_and_timeout_and_arguments_0(fallback.as_ref().unchecked_ref(), 10_000)?;
     fallback.forget();
-    // The page owns the connection. Let the browser close/suspend it with the
-    // document so returning through the back/forward cache can reconnect.
+    // The page owns the connection. The browser closes/suspends it with the
+    // document; returning through the back/forward cache reopens it.
+    let restored = live.clone();
+    let shown = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
+        if !restored.closed() { return; }
+        restored.interrupted.set(true);
+        let _ = restored.open();
+    });
+    window.add_event_listener_with_callback("pageshow", shown.as_ref().unchecked_ref())?;
+    shown.forget();
     Ok(())
 }
 
@@ -655,21 +796,34 @@ fn attach_updates(document: &web_sys::Document) -> Result<(), JsValue> {
 /// while the page is visible, one request at a time; a hidden or closed page
 /// reads nothing. A slot's `data-live-fallback` replaces the default text
 /// shown when its fragment is missing.
+///
+/// A region marked `data-live-refresh` is itself rendered from state: on each
+/// state-change hint from the page's live stream it is read again from the
+/// page's own URL and replaced when it changed, keeping the usage already
+/// shown in slots that remain. Fragments are read again only for new slots.
 fn attach_live(document: &web_sys::Document) -> Result<bool, JsValue> {
     let Some(root) = document.query_selector("[data-live-src]")? else { return Ok(false); };
     let Some(url) = root.get_attribute("data-live-src") else { return Ok(false); };
     let every = root.get_attribute("data-live-every").and_then(|s| s.parse::<i32>().ok()).filter(|s| (1..=3600).contains(s));
+    let refreshed = root.has_attribute("data-live-refresh").then(|| root.inner_html());
     let busy = Rc::new(Cell::new(false));
+    let again = Rc::new(Cell::new(false));
     let target = document.clone();
-    let read = Rc::new(move || {
-        if busy.get() || target.hidden() { return; }
+    let this = Rc::new(RefCell::new(None::<std::rc::Weak<dyn Fn()>>));
+    let (myself, region) = (this.clone(), root.clone());
+    let read: Rc<dyn Fn()> = Rc::new(move || {
+        let (this, root) = (myself.clone(), region.clone());
+        if target.hidden() { return; }
+        if busy.get() { again.set(true); return; }
         let Ok(request) = web_sys::XmlHttpRequest::new() else { return; };
         if request.open("GET", &url).is_err() { return; }
         request.set_timeout(15_000);
         busy.set(true);
-        let (response, root, done) = (request.clone(), root.clone(), busy.clone());
+        let (response, root, done, again, this) = (request.clone(), root.clone(), busy.clone(), again.clone(), this.clone());
         let finished = Closure::once_into_js(move |_: web_sys::Event| {
             done.set(false);
+            // Slots added while this read was in flight need their own read.
+            if again.replace(false) && let Some(read) = this.borrow().as_ref().and_then(std::rc::Weak::upgrade) { read(); }
             let fragments = (response.status().ok() == Some(200))
                 .then(|| response.response_text().ok().flatten())
                 .flatten()
@@ -691,14 +845,83 @@ fn attach_live(document: &web_sys::Document) -> Result<bool, JsValue> {
         request.set_onloadend(Some(finished.unchecked_ref()));
         if request.send().is_err() { busy.set(false); }
     });
+    *this.borrow_mut() = Some(Rc::downgrade(&read));
     read();
+    if let Some(previous) = refreshed {
+        attach_region_refresh(document, root, previous, read.clone())?;
+        attach_updates(document)?;
+    }
     if let Some(seconds) = every {
         let tick = Closure::<dyn FnMut()>::new(move || read());
         web_sys::window().ok_or_else(|| JsValue::from_str("No window"))?
             .set_interval_with_callback_and_timeout_and_arguments_0(tick.as_ref().unchecked_ref(), seconds * 1000)?;
         tick.forget();
+    } else {
+        // Held for the page's life by the refresh and timers that use it.
+        std::mem::forget(read);
     }
     Ok(true)
+}
+
+/// Whether a refreshed region has `data-live` slots the shown one lacked, so
+/// their fragments must be read.
+fn slots_added(shown: &[String], incoming: &[String]) -> bool {
+    incoming.iter().any(|id| !shown.contains(id))
+}
+
+fn slot_ids(root: &web_sys::Element) -> Vec<String> {
+    root.query_selector_all("[data-live]").map(|slots| (0..slots.length())
+        .filter_map(|index| slots.item(index)?.dyn_into::<web_sys::Element>().ok()?.get_attribute("data-live"))
+        .collect()).unwrap_or_default()
+}
+
+/// Re-reads a `data-live-refresh` region from the page's own URL on each
+/// refresh hint, one request at a time; a hint during a read reads once more.
+/// `previous` is the region as last rendered by the server.
+fn attach_region_refresh(document: &web_sys::Document, root: web_sys::Element, previous: String, read: Rc<dyn Fn()>) -> Result<(), JsValue> {
+    let busy = Rc::new(Cell::new(false));
+    let pending = Rc::new(Cell::new(false));
+    let previous = Rc::new(RefCell::new(previous));
+    let target = document.clone();
+    let refresh = Closure::<dyn FnMut()>::new(move || {
+        if busy.replace(true) { pending.set(true); return; }
+        let Some(location) = web_sys::window().map(|window| window.location()) else { busy.set(false); return; };
+        let url = format!("{}{}", location.pathname().unwrap_or_default(), location.search().unwrap_or_default());
+        let Ok(request) = web_sys::XmlHttpRequest::new() else { busy.set(false); return; };
+        if request.open("GET", &url).is_err() { busy.set(false); return; }
+        request.set_timeout(15_000);
+        let (response, root, done, pending, previous, read, target) =
+            (request.clone(), root.clone(), busy.clone(), pending.clone(), previous.clone(), read.clone(), target.clone());
+        let finished = Closure::once_into_js(move |_: web_sys::Event| {
+            done.set(false);
+            if pending.replace(false) { request_refresh(&target); }
+            if response.status().ok() != Some(200) { return; }
+            let Some(text) = response.response_text().ok().flatten() else { return; };
+            let Ok(parser) = web_sys::DomParser::new() else { return; };
+            let Ok(parsed) = parser.parse_from_string(&text, web_sys::SupportedType::TextHtml) else { return; };
+            let Ok(Some(incoming)) = parsed.query_selector("[data-live-src][data-live-refresh]") else { return; };
+            let html = incoming.inner_html();
+            if *previous.borrow() == html { return; }
+            *previous.borrow_mut() = html;
+            // Keep the usage already shown until the next fragment read.
+            let shown = slot_ids(&root);
+            if let Ok(slots) = incoming.query_selector_all("[data-live]") {
+                for index in 0..slots.length() {
+                    let Some(slot) = slots.item(index).and_then(|node| node.dyn_into::<web_sys::Element>().ok()) else { continue; };
+                    let Some(id) = slot.get_attribute("data-live") else { continue; };
+                    let selector = format!("[data-live=\"{}\"]", id.replace(['\\', '"'], ""));
+                    if let Ok(Some(current)) = root.query_selector(&selector) { slot.set_inner_html(&current.inner_html()); }
+                }
+            }
+            root.set_inner_html(&incoming.inner_html());
+            if slots_added(&shown, &slot_ids(&root)) { read(); }
+        });
+        request.set_onloadend(Some(finished.unchecked_ref()));
+        if request.send().is_err() { busy.set(false); }
+    });
+    document.add_event_listener_with_callback(REFRESH, refresh.as_ref().unchecked_ref())?;
+    refresh.forget();
+    Ok(())
 }
 
 /// Whether a next-page slot whose top is at `top` (viewport pixels) should

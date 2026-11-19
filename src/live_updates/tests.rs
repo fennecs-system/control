@@ -49,3 +49,14 @@ fn subscription_limit_is_released_on_drop() {
     drop(guards);
     assert!(Subscriber::acquire().is_some());
 }
+
+#[test]
+fn in_memory_progress_hints_at_most_once_per_interval() {
+    let start = Instant::now();
+    let mut last = None;
+    assert!(progress(&mut last, start), "the first progress is shown at once");
+    assert!(!progress(&mut last, start + PROGRESS_INTERVAL / 2));
+    assert_eq!(last, Some(start), "a suppressed hint keeps the last time");
+    assert!(progress(&mut last, start + PROGRESS_INTERVAL));
+    assert_eq!(last, Some(start + PROGRESS_INTERVAL));
+}

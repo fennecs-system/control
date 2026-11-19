@@ -754,6 +754,29 @@ fn approval_responds_at_once_imports_in_the_background_and_returns_to_the_chat()
     assert_eq!(fs::read_to_string(seed.join("mc-pi-skills/README.md")).unwrap(), "tool");
     assert!(seed.join("mc263-client/README.md").exists());
 }
+/// The in-chat request panel shows a copy's entry count, which no checkpoint
+/// records. Without its own hint the page stayed on the first count until a
+/// manual reload (regressed when approval moved to the background, f5458c6).
+#[test]
+fn copied_entries_hint_open_pages_at_a_bounded_rate() {
+    let _reader = crate::live_updates::fixture_subscriber().expect("reader slot");
+    let entries = Arc::new(AtomicUsize::new(0));
+    IMPORT_PROGRESS.with(|progress| *progress.borrow_mut() = Some(entries.clone()));
+    IMPORT_HINTED.with(|hinted| hinted.set(None));
+    let before = crate::live_updates::generation();
+    copied_entry().unwrap();
+    let hinted = IMPORT_HINTED.with(|hinted| hinted.get()).expect("the first entry is shown at once");
+    assert!(crate::live_updates::generation() > before, "connected pages are told to re-read");
+    copied_entry().unwrap();
+    assert_eq!(IMPORT_HINTED.with(|hinted| hinted.get()), Some(hinted), "a burst of entries shares one hint");
+    assert_eq!(entries.load(Ordering::Relaxed), 2);
+    IMPORT_PROGRESS.with(|progress| *progress.borrow_mut() = None);
+    // Ending an import (here, its registry entry) hints readers again, so a
+    // failure saved while it still showed as running is not left stale.
+    let before = crate::live_updates::generation();
+    drop(Registered { chat: "c-none".into(), request: "p-0".into() });
+    assert!(crate::live_updates::generation() > before);
+}
 #[test]
 fn in_chat_folder_decisions_answer_like_port_decisions() {
     let fixture = Fixture::new();

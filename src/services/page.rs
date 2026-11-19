@@ -95,7 +95,10 @@ struct Live {
 }
 
 /// The page renders from state at once; engine reads arrive through `live`,
-/// which the web client fetches after the page is shown.
+/// which the web client fetches after the page is shown. Everything derived
+/// from state sits inside the `data-live-refresh` region, which the client
+/// re-reads from this page on each state-change hint (a stop that finishes,
+/// a new service), so actions such as Delete appear without a reload.
 fn render(shared: &Arc<Mutex<State>>) -> io::Result<String> {
     let state = shared.lock().map_err(|_| fail("State unavailable"))?;
     let services = listed(&state);
@@ -106,7 +109,7 @@ fn render(shared: &Arc<Mutex<State>>) -> io::Result<String> {
     let cleanup = if stopped == 0 { String::new() } else {
         format!("<form class='decision-form' method='post' action='/tools/services'><input type='hidden' name='action' value='cleanup'><button>Clean up {stopped} stopped service{}</button><span class='muted'> Removes their records and each DM's retained /workspace once no service of that DM remains.</span></form>", if stopped == 1 { "" } else { "s" })
     };
-    let page = crate::render(&state, "tool-page", "none", &format!("<h2>Persistent services</h2>{compute}{cleanup}<div data-live-src='/tools/services/live'>{empty}{cards}</div>"));
+    let page = crate::render(&state, "tool-page", "none", &format!("<h2>Persistent services</h2><div data-live-src='/tools/services/live' data-live-refresh>{compute}{cleanup}{empty}{cards}</div>"));
     Ok(crate::web_assets::with_client(&page))
 }
 fn listed(state: &State) -> Vec<Service> {
