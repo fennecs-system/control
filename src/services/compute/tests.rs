@@ -39,12 +39,9 @@ fn admission_counts_pending_and_fenced_resources_retries_do_not_charge_again() {
     );
     assert!(request(&mut state, &run, time, "one", Some(Shape::Small)).is_err());
     let before = serde_json::to_vec(&state).unwrap();
-    assert!(
-        request(&mut state, &run, time, "three", None)
-            .unwrap_err()
-            .to_string()
-            .contains("compute capacity")
-    );
+    let refused = request(&mut state, &run, time, "three", None).unwrap_err().to_string();
+    assert!(refused.contains("compute capacity"));
+    assert!(refused.contains("3 reserving service(s) are not running (Requested, Requested, Requested)"), "{refused}");
     assert_eq!(serde_json::to_vec(&state).unwrap(), before);
     state.services[0].resource.phase = Phase::Fenced {
         fault: Fault::UnexpectedEngineState,

@@ -74,6 +74,29 @@ pub(crate) fn create(arguments: &[String]) -> io::Result<String> {
     crate::runtime::engine_output_diagnostic(cli().args(arguments), Duration::from_secs(5), true)
 }
 
+/// Whether the storage driver can cap a container's writable layer
+/// (`--storage-opt size=`). Probed once per process; a failed probe is retried.
+pub(crate) fn storage_quota() -> io::Result<bool> {
+    static PROBED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if let Some(known) = PROBED.get() {
+        return Ok(*known);
+    }
+    let info = query(&["info", "--format", "{{.Driver}} {{json .DriverStatus}}"])?;
+    Ok(*PROBED.get_or_init(|| quota_capable(&info)))
+}
+/// Drivers Docker documents size quotas for; overlay2 only over xfs. `info`
+/// does not report xfs's required pquota mount option, so creation can still
+/// refuse. Docker Desktop's containerd snapshotter (`overlayfs`) has none.
+fn quota_capable(info: &str) -> bool {
+    let (driver, status) = info.trim().split_once(' ').unwrap_or((info.trim(), ""));
+    match driver {
+        "btrfs" | "zfs" | "devicemapper" | "windowsfilter" => true,
+        "overlay2" => serde_json::from_str::<Vec<[String; 2]>>(status)
+            .is_ok_and(|status| status.iter().any(|[key, value]| key == "Backing Filesystem" && value == "xfs")),
+        _ => false,
+    }
+}
+
 /// A point-in-time resource sample for one container, as reported by the engine.
 pub struct Stats {
     pub cpu: String,

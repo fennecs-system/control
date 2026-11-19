@@ -96,8 +96,14 @@ No image is modified or committed from an agent's writable state.
   scratch folder in `/workspace` for larger temporary data.
 - Optional `storage_limit_mb` asks Docker to cap the private writable layer
   (not `/workspace` or other mounts). It needs a quota-capable storage driver
-  such as overlay2 on XFS with project quotas. Unsupported caps fail creation
-  with a diagnostic; Control never drops them silently.
+  such as overlay2 on XFS with project quotas. When `docker info` shows a
+  driver without quotas, the start is refused before anything is reserved; a
+  cap the engine still rejects ends the service like any refused creation.
+  Control never drops a cap silently.
+- If the engine refuses to create a service's container, the service ends
+  `Stopped` with reason `Failed` and keeps the engine's diagnostic in status
+  and on the Services page. It is not retried, and its reservation is released
+  once inspection confirms no container exists. Its chat's `/workspace` stays.
 
 Keep task programs, worktrees, downloads and durable data under `/workspace`.
 Commands start there. This is a storage contract, not a write jail: files
