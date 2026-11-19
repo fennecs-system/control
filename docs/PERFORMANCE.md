@@ -517,7 +517,12 @@ CONTROL_STATE_DIR=/scratch/http-bench CONTROL_PROFILE_CONVERSATIONS=40 cargo tes
 **Live updates.** Web and TUI clients receive coalesced, authenticated,
 payload-free change hints over a stream instead of polling the transcript. Idle
 streams wait on the effect generation signal with 15 s heartbeats and never
-wake agents; reconnects force a fresh read. In one comparison with direct
+wake agents; reconnects force a fresh read. A web page reopens a stream the
+browser abandoned (for example after a non-200 answer while the server
+restarts) with 1–30 s backoff, and reloads itself after a redeploy changes the
+web client unless the operator is typing. In-memory progress (folder import
+entry counts) hints at most every 0.5 s. Pages whose state-derived region is
+marked `data-live-refresh` (Services) re-read it on each hint. In one comparison with direct
 Codex, this brought Control's time to first message text within about 0.4 s of
 running Codex directly, from about 2.5 s with polling. Five turns cannot
 establish population latency.

@@ -208,3 +208,27 @@ fn preview_mixed_images_and_sizes() {
         std::fs::write(path, page).unwrap();
     }
 }
+
+/// The client re-reads the `data-live-refresh` region on each state-change
+/// hint, so every state-derived control must be inside it: when the last
+/// service finishes stopping, its Delete and the page-wide cleanup appear
+/// without a reload.
+#[test]
+fn state_derived_controls_sit_inside_the_refreshed_region() {
+    let (mut state, run, _chat, time) = super::super::tests::fixture();
+    admit(&mut state, Request { run: &run, generation: "attempt-a", nonce: "only" },
+        Input { command: "sleep 30".to_owned().try_into().unwrap(), lease_seconds: -1, storage_limit_mb: None, shape: None },
+        "node-a".to_owned().try_into().unwrap(), time, |_| Ok(())).unwrap();
+    let shared = Arc::new(Mutex::new(state));
+    let region = || {
+        let page = render(&shared).unwrap();
+        let (outside, inside) = page.split_once("<div data-live-src='/tools/services/live' data-live-refresh>").expect("one refreshable region");
+        assert!(!outside.contains("decision-form") && !outside.contains("<table"), "state-derived content is inside the region");
+        inside.to_owned()
+    };
+    let running = region();
+    assert!(running.contains("Stop service") && !running.contains("value='delete'"));
+    shared.lock().unwrap().services[0].resource.phase = Phase::Stopped(StopReason::Requested);
+    let stopped = region();
+    assert!(stopped.contains("value='delete'") && stopped.contains("Clean up 1 stopped service"), "{stopped}");
+}

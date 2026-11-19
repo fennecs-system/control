@@ -37,6 +37,36 @@ fn folder_approval_uses_the_in_chat_decision_path_but_folder_changes_navigate() 
     assert!(!decision_action("/dm/a/b/project", Some("approve")));
     assert!(!decision_action("/dm/c-1/preview/stop", Some("approve")));
 }
+/// After `launchctl kickstart`, the browser's own EventSource retry can meet
+/// `503 Control is stopping`, which closes the stream for good; the page then
+/// sat on a 10 s fallback with no live connection until reloaded. The client
+/// reopens it with bounded backoff for the page's life.
+#[test]
+fn closed_live_streams_reopen_with_bounded_backoff() {
+    assert_eq!(reconnect_delay(0), 1000, "the first reopen is quick");
+    assert_eq!((1..=4).map(reconnect_delay).collect::<Vec<_>>(), [2000, 4000, 8000, 16_000]);
+    assert_eq!(reconnect_delay(5), 30_000);
+    assert_eq!(reconnect_delay(u32::MAX), 30_000, "never overflows, never gives up");
+}
+#[test]
+fn a_redeployed_client_reloads_only_a_quiet_page() {
+    let client = "import init from '/tool-window/control-tool-window-5b9e1c7c2f52f8e9.js';";
+    assert!(!client_changed(None, client), "an unknown first reading is the page's own client");
+    assert!(!client_changed(Some(client), client), "a plain restart keeps the page");
+    assert!(client_changed(Some(client), &client.replace("5b9e", "77aa")));
+    assert!(reload_is_quiet(false, ""));
+    assert!(reload_is_quiet(false, " \n"));
+    assert!(!reload_is_quiet(false, "half a message"), "a draft is never lost");
+    assert!(!reload_is_quiet(true, ""), "nor a field being edited");
+}
+#[test]
+fn refreshed_regions_read_fragments_only_for_new_slots() {
+    let shown = ["svc-a".to_owned(), "svc-b".to_owned()];
+    assert!(!slots_added(&shown, &shown[..1]), "a service that stopped needs no read");
+    assert!(!slots_added(&shown, &[]), "nor does the last one stopping");
+    assert!(slots_added(&shown, &["svc-c".to_owned()]));
+    assert!(slots_added(&[], &["svc-a".to_owned()]));
+}
 #[test]
 fn paged_lists_load_the_next_page_within_a_screen_of_view() {
     assert!(near_viewport(0.0, 800.0));

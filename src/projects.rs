@@ -597,12 +597,24 @@ static IMPORTS: Mutex<Vec<Import>> = Mutex::new(Vec::new());
 static IMPORT_THREADS: Mutex<Vec<std::thread::JoinHandle<()>>> = Mutex::new(Vec::new());
 thread_local! {
     static IMPORT_PROGRESS: std::cell::RefCell<Option<Arc<AtomicUsize>>> = const { std::cell::RefCell::new(None) };
+    /// When this thread's import last hinted readers about its progress.
+    static IMPORT_HINTED: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
 }
 /// Counts entries copied by this thread's import; stopping Control abandons it.
+/// The count is in memory only, so open pages are hinted (throttled) to re-read
+/// the request panel that shows it.
 fn copied_entry() -> io::Result<()> {
     IMPORT_PROGRESS.with(|progress| match progress.borrow().as_ref() {
         Some(_) if crate::shutdown::requested() => Err(fail("Control is stopping; folder access was not granted")),
-        Some(entries) => { entries.fetch_add(1, Ordering::Relaxed); Ok(()) }
+        Some(entries) => {
+            entries.fetch_add(1, Ordering::Relaxed);
+            IMPORT_HINTED.with(|hinted| {
+                let mut last = hinted.get();
+                crate::live_updates::progress(&mut last, std::time::Instant::now());
+                hinted.set(last);
+            });
+            Ok(())
+        }
         None => Ok(()),
     })
 }
@@ -631,6 +643,9 @@ impl Drop for Registered {
         if let Ok(mut imports) = IMPORTS.lock() {
             imports.retain(|import| !(import.chat == self.chat && import.request == self.request));
         }
+        // An import that ended without a checkpoint, or whose error was saved
+        // while it still showed as running, must not leave pages on its progress.
+        crate::live_updates::notify();
     }
 }
 
@@ -729,6 +744,7 @@ fn accept(shared: &Arc<Mutex<State>>, id: &str, request: &str) -> io::Result<Opt
     crate::identity::authorize(&chat.actor, Action::Task).map_err(fail)?;
     let entries = Arc::new(AtomicUsize::new(0));
     imports.push(Import { chat: id.into(), request: request.into(), started: std::time::Instant::now(), entries: entries.clone() });
+    crate::live_updates::notify();
     Ok(Some((project, entries)))
 }
 /// Slow copies/Git run without holding the shared state lock; the approval is
