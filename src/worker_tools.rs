@@ -23,6 +23,13 @@ fn direct(envelope: &Value) -> Result<std::borrow::Cow<'_, Value>, Value> {
 fn rpc_at(
     shared:&Arc<Mutex<State>>,run_id:&str,envelope:&Value,workspace:Option<&Path>,
 )->Value {
+    rpc_for(shared,run_id,envelope,workspace,false)
+}
+/// `local`: Control's own loop ends each model request with the inbox, so
+/// its tool results carry neither the inbox nor a conversation hint.
+fn rpc_for(
+    shared:&Arc<Mutex<State>>,run_id:&str,envelope:&Value,workspace:Option<&Path>,local:bool,
+)->Value {
     let envelope = match direct(envelope) { Ok(envelope) => envelope, Err(refused) => return refused };
     let envelope = envelope.as_ref();
     let mut response=dispatch_at(shared,run_id,envelope,workspace);
@@ -46,8 +53,14 @@ fn rpc_at(
     media_visible(result);
     if name!="control_turn_handoff" && let Ok(mut state)=shared.lock() {
         let mut notes=Vec::new();
-        if name!="control_turn_context" && crate::turn_context::callback_notice(&mut state,run_id) {
-            notes.push("New callbacks: read them with control_turn_context at the next action boundary.".to_owned());
+        if name!="control_turn_context" {
+            // A CLI agent's next request ends with this result: new
+            // conversation callbacks ride on it, delivered once.
+            let inbox=if local {None} else {crate::turn_context::inbox(&mut state,run_id,crate::storage::save)};
+            if crate::turn_context::callback_notice(&mut state,run_id,!local) && inbox.is_none() {
+                notes.push("New callbacks: read them with control_turn_context at the next action boundary.".to_owned());
+            }
+            notes.extend(inbox);
         }
         if !refused {
             notes.extend(nudges::notes(&mut state,run_id,name,nudges::now()));
@@ -442,7 +455,7 @@ pub(crate) fn prompt_index(state: &State, run: &crate::runtime::Run) -> String {
 /// The in-process equivalent of one mailbox request, for Control's own tool
 /// loop: identical fencing, policy, nudges and idempotency nonces.
 pub(crate) fn local_rpc(state: &Arc<Mutex<State>>, run: &str, envelope: &Value, workspace: &Path, managed: bool) -> Value {
-    let mut response = if managed { rpc_at(state, run, envelope, Some(workspace)) } else { dispatch_at(state, run, envelope, Some(workspace)) };
+    let mut response = if managed { rpc_for(state, run, envelope, Some(workspace), true) } else { dispatch_at(state, run, envelope, Some(workspace)) };
     // The loop itself ends each request with the observation, so results do not repeat it.
     observed(state, run, envelope, &mut response, false);
     response

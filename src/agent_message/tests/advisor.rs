@@ -92,8 +92,8 @@ fn an_active_lead_gets_one_callback_hint_per_note() {
     mailbox.baseline.push(control_context::turn_mailbox::Range::Conversation { chat: lead.clone(), after: 0, through });
     target.attempts.push(crate::usage::Attempt { workspace_id: Some("lead-attempt".into()), turn_mailbox: Some(Box::new(mailbox)).into(), ..Default::default() });
     let target = target.id.clone();
-    assert!(!crate::turn_context::callback_notice(&mut state, &target));
+    assert!(!crate::turn_context::callback_notice(&mut state, &target, true));
     note(&mut state, &run, "n1", &lead, "Schema claim was released; the tester can proceed").unwrap();
-    assert!(crate::turn_context::callback_notice(&mut state, &target), "the note reaches the active lead");
-    assert!(!crate::turn_context::callback_notice(&mut state, &target), "once");
+    assert!(crate::turn_context::callback_notice(&mut state, &target, true), "the note reaches the active lead");
+    assert!(!crate::turn_context::callback_notice(&mut state, &target, true), "once");
 }

@@ -697,8 +697,9 @@ fn tool_failures_are_results_and_protocol_faults_stay_errors() {
         assert_eq!((response["id"].clone(), response["error"]["code"].clone()), (request["id"].clone(), json!(code)), "{response}");
         assert!(response.get("result").is_none());
     }
-    // A managed session's callback hint joins a failed tool's content, and a
+    // A managed session's inbox joins a failed tool's content, and a
     // protocol error never gains a "result" member beside its "error".
+    std::fs::create_dir_all(crate::config::state_directory().unwrap()).unwrap();
     let mut state = State::default();
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Carry out the assigned work", "test").unwrap();
@@ -708,7 +709,7 @@ fn tool_failures_are_results_and_protocol_faults_stay_errors() {
     let managed_state = Arc::new(Mutex::new(state));
     let failed = rpc(&managed_state, &managed, &json!({"nonce":"8-1","request":{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"control_room_post","arguments":{"room":"general","message":"x","delivery":"shout"}}}}));
     assert!(crate::toolbox::failure_text(&failed).is_some_and(|text| text.starts_with("Expected delivery=record or notify. Next: call control_room_read {}")), "{failed}");
-    assert!(failed["result"]["content"][1]["text"].as_str().unwrap().contains("control_turn_context"), "{failed}");
+    assert!(failed["result"]["content"][1]["text"].as_str().unwrap().contains("Keep the public API"), "{failed}");
     let fault = rpc(&managed_state, &managed, &json!({"nonce":"8-2","request":{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{}}}));
     assert_eq!(fault["error"]["code"], -32602);
     assert!(fault.get("result").is_none(), "{fault}");
@@ -1147,4 +1148,22 @@ fn an_approved_antibody_reads_every_team_notes_other_leads_and_notifies_the_oper
     let state = shared.lock().unwrap();
     assert_eq!(state.bots.notices.len(), 1);
     assert!(state.collective.posts.is_empty() && state.services.is_empty());
+}
+#[test]
+fn a_cli_agent_gets_new_conversation_once_on_its_next_tool_result() {
+    // The inbox saves its delivery like a callback read.
+    std::fs::create_dir_all(crate::config::state_directory().unwrap()).unwrap();
+    let mut state = State::default();
+    let chat = crate::chat::create(&mut state);
+    crate::chat::send(&mut state, &chat, "Carry out the assigned work", "test").unwrap();
+    crate::worker::checkpoint_next(&mut state, |_| Ok(())).unwrap();
+    let id = state.runtime.runs[0].id.clone();
+    crate::chat::send(&mut state, &chat, "/steer Use the north gate", "test").unwrap();
+    let shared = Arc::new(Mutex::new(state));
+    let call = |nonce: &str| rpc_at(&shared, &id, &json!({"nonce":nonce,"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_room_list","arguments":{}}}}), None);
+    let first = call("1-0");
+    let texts = first["result"]["content"].as_array().unwrap().iter().filter_map(|item| item["text"].as_str()).collect::<Vec<_>>();
+    assert!(texts.last().unwrap().starts_with("Inbox (1 new") && texts.last().unwrap().contains("Use the north gate"), "{first}");
+    assert!(!first.to_string().contains("New callbacks"), "the inbox replaces the hint");
+    assert!(!call("1-1").to_string().contains("north gate"), "shown once");
 }
