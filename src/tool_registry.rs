@@ -21,7 +21,7 @@ pub trait AttemptTools: Sync {
     fn known(&self, name: &str) -> bool;
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value>;
 }
-static ATTEMPT_TOOLS: [&dyn AttemptTools; 15] = [
+static ATTEMPT_TOOLS: [&dyn AttemptTools; 16] = [
     &crate::github::inspection::Tools,
     &crate::compaction::Tools,
     &crate::recovery::Tools,
@@ -37,6 +37,7 @@ static ATTEMPT_TOOLS: [&dyn AttemptTools; 15] = [
     &crate::guidance::Tools,
     &crate::scores::Tools,
     &crate::intel::Tools,
+    &crate::mcp_chat::AgentTools,
 ];
 pub fn attempt_tools(name: &str) -> Option<&'static dyn AttemptTools> {
     ATTEMPT_TOOLS.iter().copied().find(|tools| tools.known(name))
@@ -86,6 +87,8 @@ fn session_definitions() -> Vec<Value> {
             {"name":"control.run.scores","description":"Read the workload score series of a run: the score probes declared anywhere in the chat's team (root chat and descendants), each with its samples (time, trigger, values), plus the team's milestone count. Values are the workload's own claims, not verified by Control.","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}},
             {"name":"control.intel.brief","description":"Render the Markdown intel brief for the last 24 hours: per team its goal, progress (claims, score probe changes), cost in tokens, observed pathologies and requests waiting on the operator. Omit chat for the whole node. save=true also writes it to intel/brief-DATE.md under the state directory. Read-only over node state.","inputSchema":{"type":"object","properties":{"chat":{"type":"string"},"save":{"type":"boolean","default":false}}}},
             {"name":"control.requests.list","description":"List pending operator decisions across all chats: design questions, bot requests and port approvals, grouped by top-level chat in the same shape as control.chat.read. Decide them in that chat.","inputSchema":{"type":"object","properties":{}}},
+            {"name":"control.services.list","description":"List the live persistent services a chat owns; team=true includes every chat spawned from it.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"team":{"type":"boolean","default":false}},"required":["id"]}},
+            {"name":"control.services.stop","description":"Stop the live persistent services a chat owns (team=true: and every chat spawned from it), or only service_id. The same stop as the services page; ports bound to a stopped service lose authorization.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"team":{"type":"boolean","default":false},"service_id":{"type":"string","maxLength":128}},"required":["id"]}},
             {"name":"control.chat.send","description":"Send as the chat's original actor. Optional mode changes persist; improve requires architect access.","inputSchema":{"type":"object","properties":{"mode":{"type":"string","enum":["chat","improve"]},"id":{"type":"string"},"message":{"type":"string","minLength":1,"maxLength":control_context::limits::CHAT_MESSAGE_CHARS}},"required":["id","message"]}}
         ]})["tools"].as_array().unwrap().clone()
 }

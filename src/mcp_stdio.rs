@@ -189,10 +189,16 @@ pub fn run(args: &[String]) -> io::Result<()> {
         [flag, directory] if flag == "--root" && Path::new(directory).is_absolute() => {
             fs::canonicalize(directory)?
         }
-        _ => return Err(fail("control mcp [--root /absolute/preview/directory]")),
+        [flag] if flag == "--chat" => return crate::mcp_chat::run(),
+        _ => return Err(fail("control mcp [--root /absolute/preview/directory | --chat]")),
     };
     // Codex launches this native host application; worker containers never receive its credential.
     let mut connection = None;
+    serve(|request| dispatch(&mut connection, &root, request))
+}
+/// Newline-delimited JSON-RPC over stdio, shared by every `control mcp` mode:
+/// bounded lines, parse errors answered, notifications ignored.
+pub(crate) fn serve(mut dispatch: impl FnMut(&Value) -> Value) -> io::Result<()> {
     let mut input = io::stdin().lock();
     let mut output = io::stdout().lock();
     loop {
@@ -228,7 +234,7 @@ pub fn run(args: &[String]) -> io::Result<()> {
         if request.get("id").is_none() {
             continue;
         }
-        writeln!(output, "{}", dispatch(&mut connection, &root, &request))?;
+        writeln!(output, "{}", dispatch(&request))?;
         output.flush()?;
     }
 }

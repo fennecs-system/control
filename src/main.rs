@@ -48,6 +48,7 @@ mod lens_ui;
 mod lifecycle;
 mod attempt_control;
 mod recovery;
+mod mcp_chat;
 mod mcp_stdio;
 mod navigation;
 #[cfg(test)]
@@ -58,6 +59,7 @@ mod model_calls;
 mod local_agent;
 mod compaction;
 mod packages;
+mod permissions_page;
 mod projects;
 mod ports;
 mod previews;
@@ -185,6 +187,7 @@ fn render_with_content(state: &State, view: &str, lens: &str, channel: &str, sup
         .replace("{{section_navigation}}", &navigation::secondary(view))
         .replace("{{layout_class}}", if chat_navigation { "chat-workspace" } else if view == "rooms" { "rooms-workspace" } else if navigation::managed(view) { "with-section-nav" } else { "" })
         .replace("{{page_title}}", &navigation::heading(view));
+    let supplied = supplied.or_else(|| (view == "authority").then(|| format!("{}{}", permissions_page::render(state), state.collective.render(view, channel).unwrap_or_default())));
     let content = supplied.or_else(|| if view == "monitor" { Some(usage::render(state)) } else if view == "agents" { Some(bots::page(state, &graveyard::Query::default())) } else { state.runtime.render(view,lens) }).or_else(|| state.collective.render(view, channel)).unwrap_or_else(|| match view {
         "providers" => providers::render(&state.runtime),
         "tools" => tool_catalog::render(state, if channel == "general" { "" } else { channel }),
@@ -365,6 +368,7 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
     if ports::http(&mut stream, &state, method, path, &data[header_end..header_end + length]) { return; }
     if bots::http(&mut stream, &state, method, path, &data[header_end..header_end + length]) { return; }
     if channel_settings::http(&mut stream, method, path, &data[header_end..header_end + length]) { return; }
+    if permissions_page::http(&mut stream, method, path, &data[header_end..header_end + length]) { return; }
     if services::http(&mut stream, &state, method, path, &data[header_end..header_end + length]) { return; }
     if web_access::http(&mut stream, &state, method, path, &data[header_end..header_end + length]) { return; }
     if github::http(&mut stream,&state,method,path,&data[header_end..header_end+length]) {return;}
@@ -620,7 +624,7 @@ fn run() -> std::io::Result<()> {
         return packages::cli(&args[2..]);
     }
     if args.get(1).is_some_and(|s| s == "--help" || s == "help") {
-        println!("control [serve | tui | mcp | discord | doctor | config | open | browser | federation | package]\nserve: local web/MCP server on CONTROL_ADDR (default 127.0.0.1:8080)\ntui: Rust terminal client\nmcp [--root DIRECTORY]: local tools for an external harness\ndiscord --enable: listen to this node's configured DMs\ndoctor: offline prerequisites; no model calls\nconfig init | path: initialize or locate personal configuration\nopen: sign in to the local website\nbrowser capture FILE [WIDTH HEIGHT]: offline Nix Firefox capture\nfederation help: signed offline lens exchange\npackage import | revoke | list | show: admit and inspect reusable tool packages\n--check-worker: one authenticated sandbox test (uses model usage)\n--version [--json]: version, platform and optional build identification");
+        println!("control [serve | tui | mcp | discord | doctor | config | open | browser | federation | package]\nserve: local web/MCP server on CONTROL_ADDR (default 127.0.0.1:8080)\ntui: Rust terminal client\nmcp [--root DIRECTORY]: local tools for an external harness\nmcp --chat: drive chats as the local operator from an external harness\ndiscord --enable: listen to this node's configured DMs\ndoctor: offline prerequisites; no model calls\nconfig init | path: initialize or locate personal configuration\nopen: sign in to the local website\nbrowser capture FILE [WIDTH HEIGHT]: offline Nix Firefox capture\nfederation help: signed offline lens exchange\npackage import | revoke | list | show: admit and inspect reusable tool packages\n--check-worker: one authenticated sandbox test (uses model usage)\n--version [--json]: version, platform and optional build identification");
         println!("claude login | check: container login or offline tool isolation check\nconfig init [--provider codex|claude] [--source-root PATH]: initialize private configuration without replacing saved choices\nconfig path: show the node configuration directory\n--bind-discord LABEL ID: bind a configured principal locally");
         println!("open --link: print a one-use local browser sign-in link");
         println!("github configure: bind improvement PR publication to a repository and private credential reference");

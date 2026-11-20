@@ -69,7 +69,8 @@ fn attempt_tools_route_each_name_to_exactly_one_group() {
     let mut seen = std::collections::HashSet::new();
     for &tools in &ATTEMPT_TOOLS {
         let definitions = tools.definitions();
-        assert!(!definitions.is_empty());
+        // The agent chat tool is listed only when the operator enables it.
+        assert!(!definitions.is_empty() || tools.known("control_chat"));
         for definition in definitions {
             let name = definition["name"].as_str().unwrap();
             assert_eq!(
