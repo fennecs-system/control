@@ -217,3 +217,68 @@ fn every_pending_kind_reaches_the_channel_notification_path() {
     let folder = control::client::operator::pending(group).into_iter().find(|p| p.kind == Kind::Folder).unwrap();
     assert!(control::client::operator::reply(&folder, "allow").is_err(), "folders are approved in Control, not by reply");
 }
+
+fn question(text: &str) -> String {
+    text.strip_prefix("Asked question ").unwrap().split(' ').next().unwrap().to_owned()
+}
+
+#[test]
+fn design_ask_from_outside_a_run_raises_an_operator_question_on_the_decisions_desk() {
+    use control::client::operator::{self, Command, Kind};
+    let mut remote = Local::new();
+    let before = crate::design::decision_revision(&remote.state);
+    let asked = run(&mut remote, "control_design_ask", &json!({"question":"Ship the parser now?","options":["Ship","Wait a day"],"recommended":0})).unwrap();
+    let first = question(&asked);
+    let desk = crate::design::desk(&remote.state).unwrap().to_owned();
+    assert!(asked.contains(&format!("in chat {desk}")) && asked.contains("approves nothing"), "{asked}");
+    // One desk, reused: a second question lands in the same DM.
+    let second = question(&run(&mut remote, "control_design_ask", &json!({"question":"Which name?","options":["alpha","beta","gamma"]})).unwrap());
+    assert_eq!(remote.state.chats.len(), 1);
+    assert_ne!(crate::design::decision_revision(&remote.state), before, "channels re-read requests on this revision");
+
+    // Listed like an agent's question, and in the kinds the Discord notifier forwards.
+    let listed = run(&mut remote, "chat_requests", &json!({"id":desk})).unwrap();
+    assert!(listed.contains(&format!("question {first} (chat {desk})")) && listed.contains(&format!("question {second}")), "{listed}");
+    let groups = remote.tool("control.requests.list", json!({})).unwrap();
+    let group = groups.as_array().unwrap().iter().find(|g| g["chat_id"] == desk.as_str()).unwrap();
+    let pending = operator::pending(group);
+    assert!(pending.iter().filter(|p| p.kind == Kind::Question).count() == 2 && pending[0].body.contains("Ship the parser now?"), "{pending:?}");
+    assert!(crate::chat::requests(&remote.state, &desk).unwrap().contains("Wait a day"));
+    // Plain text to a chat waiting on a question still stays with the operator.
+    assert!(run(&mut remote, "chat_send", &json!({"id":desk,"message":"Ship"})).unwrap_err().to_string().contains("design question"));
+
+    // The operator replies on Discord to the second question first: option 2.
+    let reply = pending.iter().find(|p| p.id == second).unwrap();
+    let Command::Send(command) = operator::reply(reply, "2").unwrap() else { panic!("a question reply is a chat command") };
+    remote.tool("control.chat.send", json!({"id":desk,"message":command})).unwrap();
+    let read = run(&mut remote, "chat_read", &json!({"id":desk})).unwrap();
+    assert!(read.contains("beta") && read.contains(&format!("Decision recorded for {second}")), "{read}");
+    // Then their own direction for the first, typed in the DM (web or TUI).
+    remote.tool("control.chat.send", json!({"id":desk,"message":format!("/answer {first} Ship it after the benchmarks")})).unwrap();
+    let read = run(&mut remote, "chat_read", &json!({"id":desk})).unwrap();
+    assert!(read.contains("Ship it after the benchmarks") && read.contains(&format!("Decision recorded for {first}")), "{read}");
+    // Answering records the choice and starts nothing.
+    assert!(remote.state.runtime.runs.iter().all(|r| r.status == "completed" && r.attempts.is_empty()));
+    assert!(run(&mut remote, "chat_requests", &json!({"id":desk})).unwrap().contains("Nothing"));
+}
+
+#[test]
+fn design_ask_in_a_named_chat_never_pauses_a_turn() {
+    let mut remote = Local::new();
+    let busy = created(&run(&mut remote, "chat_create", &json!({})).unwrap());
+    run(&mut remote, "chat_send", &json!({"id":busy,"message":"Build the parser"})).unwrap();
+    let refused = run(&mut remote, "control_design_ask", &json!({"id":busy,"question":"Now?","options":["Yes","No"]})).unwrap_err();
+    assert!(refused.to_string().contains("Decisions DM"), "{refused}");
+    let idle = created(&run(&mut remote, "chat_create", &json!({})).unwrap());
+    let asked = question(&run(&mut remote, "control_design_ask", &json!({"id":idle,"question":"Now?","options":["Yes","No"]})).unwrap());
+    assert!(crate::design::desk(&remote.state).is_none());
+    assert!(run(&mut remote, "chat_requests", &json!({"id":idle})).unwrap().contains(&asked));
+    // Invalid input is refused before anything is recorded.
+    assert!(run(&mut remote, "control_design_ask", &json!({"question":"Only one?","options":["Yes"]})).is_err());
+    // A cancelled question ends without an answer and is never retried as a turn.
+    remote.tool("control.chat.send", json!({"id":idle,"message":"/cancel"})).unwrap();
+    assert!(!run(&mut remote, "chat_requests", &json!({"id":idle})).unwrap().contains(&asked));
+    let run_id = remote.state.runtime.runs.iter().find(|r| crate::design::asked(r)).unwrap().id.clone();
+    remote.state.runtime.action("/retry-run", &[("id".to_owned(), run_id.clone())].into());
+    assert_eq!(remote.state.runtime.runs.iter().find(|r| r.id == run_id).unwrap().status, "cancelled");
+}

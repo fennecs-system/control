@@ -1089,6 +1089,7 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
         }
         "control.intel.brief" => crate::intel::tool(state, arguments),
         "control.personas.list" | "control.persona.read" | "control.chat.persona" => crate::personas::tool(state, name, arguments),
+        "control.chat.ask" => crate::design::tool(state, name, arguments),
         "control.chat.rename" => {
             let id = id()?;
             rename(state, id, arguments["name"].as_str().unwrap_or(""))?;

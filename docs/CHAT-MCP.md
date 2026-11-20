@@ -47,6 +47,7 @@ Read tools have `readOnlyHint: true`.
 | `chat_open` | write | Requests host folders, as an agent's folder request does. The request waits for the operator. |
 | `chat_cancel` | write | Cancels the current turn, or `run_id`. With `all: true` it cancels the whole task tree and its bots (`/cancel all`). |
 | `chat_stop_services` | write | Stops the chat's live services. `team: true` includes its spawned chats; `service_id` stops one. |
+| `control_design_ask` | write | The same decision tool Control's agents use: `question`, 2–4 `options`, optional zero-based `recommended`, plus an optional chat `id`. Returns the question ID. See [Asking the operator](#asking-the-operator). |
 | `chat_decide` | write, opt-in | Decides a listed request, for the kinds enabled in Manage → Permissions. Only listed when at least one kind is enabled. |
 
 A typical run:
@@ -70,6 +71,7 @@ application functions under its state lock:
 - `control.chat.create`, `.send`, `.read`, `.lenses`, `.rename` and `.persona`;
 - `control.chats.list` and `control.requests.list`;
 - `control.project.request`;
+- `control.chat.ask` (`control_design_ask` for a caller with no run);
 - `control.services.list` and `control.services.stop`.
 
 `control.services.stop` makes the same stop transition as the services page.
@@ -99,6 +101,34 @@ You answer questions, bots and ports by Discord reply. Folder requests open the
 DM instead: approve them in Control, where the exact path is shown. Discord
 settings saved before folder requests were forwarded still forward them along
 with ports.
+
+## Asking the operator
+
+`control_design_ask` is the decision tool Control's agents already use; the
+chat MCP offers it under the same name and arguments, so there is one way to ask.
+Asked from outside a run, it is an ordinary design question (`control.chat.ask` on the server), so it shows up in the same
+places as an agent's question: `chat_requests`, the DM's Requests drawer,
+Manage → Permissions, the TUI and the Discord notifications.
+
+- **Where it lives.** Without `id`, the question goes to your **Decisions** DM.
+  That DM is a top-level operator DM named `Decisions`. It's created on the first
+  question and reused after that, and it can hold several questions at once.
+  With `id`, the question goes in that DM instead. The DM must be yours, in chat
+  mode and idle (nothing queued, running or waiting). Otherwise it
+  refuses, so a question never pauses or queues behind a turn.
+- **Answering.** Answer it the usual way: a Discord reply, the buttons in
+  Control, or `/answer QUESTION_ID CHOICE` in the web UI or TUI. You can also
+  type plain text in that DM, which answers its oldest question. No agent run
+  waits on the question, so answering only records the answer. Nothing resumes,
+  and a cancelled question can't be retried as a turn.
+- **Reading the answer.** While it waits, `chat_requests` lists it. The answer is
+  appended to the DM it was asked in, as "Decision recorded for QUESTION_ID", so
+  `chat_read` on that DM shows it.
+- **Limits.** At most 8 operator-side questions can wait at once. Each also counts
+  toward the 32 pending tasks.
+
+Asking never approves anything. It's only a question to you, and
+`chat_send` still refuses plain text to a DM that's waiting on a question.
 
 ## Safety model
 
