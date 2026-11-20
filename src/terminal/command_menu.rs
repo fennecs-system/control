@@ -103,8 +103,7 @@ pub(super) fn highlight(input: &str) -> Option<std::ops::Range<usize>> {
     // The longest entry equal to the input up to a word boundary.
     let index = index();
     let exact = input.char_indices().filter(|(_, c)| c.is_whitespace()).map(|(at, _)| at).chain([input.len()])
-        .filter(|&end| index.sorted[prefixed(index, &input[..end])].iter().any(|&p| index.entries[usize::from(p)].text.len() == end))
-        .last();
+        .rev().find(|&end| index.sorted[prefixed(index, &input[..end])].iter().any(|&p| index.entries[usize::from(p)].text.len() == end));
     if let Some(end) = exact {
         return Some(0..end);
     }
