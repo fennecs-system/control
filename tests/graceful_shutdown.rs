@@ -102,7 +102,7 @@ fn printed_browser_link_is_private_single_use_and_needs_no_browser_opener() {
         let url = reqwest::Url::parse(text.trim()).expect("link must be a URL");
         assert!(
             url.scheme() == "http"
-                && url.host_str() == Some("localhost")
+                && url.host_str() == Some(addr.ip().to_string().as_str())
                 && url.port() == Some(addr.port())
         );
         let token = url.path().strip_prefix("/unlock/").expect("unlock path");
