@@ -149,4 +149,20 @@ impl Record {
         let nanos = u128::from_str_radix(self.id.split('-').next()?, 16).ok()?;
         u64::try_from(nanos / 1_000_000).ok()
     }
+    /// Retires this queued turn: the active run `active` of its chat already
+    /// delivered and processed its message.
+    pub(crate) fn absorb(&mut self, active: &str) {
+        self.status = "completed".into();
+        self.result = format!("{ABSORBED}{active}; see that session's response.").into();
+    }
+    /// The run that processed this turn's message while it was active, when
+    /// this turn never ran itself.
+    pub(crate) fn absorbed_by(&self) -> Option<&str> {
+        if !self.attempts.is_empty() || self.status != "completed" {
+            return None;
+        }
+        self.result.strip_prefix(ABSORBED)?.split_once(';').map(|(active, _)| active)
+    }
 }
+/// The result prefix of a queued turn that an active run processed instead.
+const ABSORBED: &str = "Processed in active run ";

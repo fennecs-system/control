@@ -142,8 +142,10 @@ Do not poll a pending request. Its `next` field says to hand off with:
 ```
 
 A `port:` topic needs no subscription and is accepted only for a pending request
-from this chat (an unknown one is dropped; an already decided one continues at
-once). Naming only port topics is a narrow wait, not a wait on every subscription.
+from this chat (an unknown one is dropped; an already decided one records
+`continue` in a continuing bot, and elsewhere refuses the handoff so the agent acts
+on the decision in the same turn). Naming only port topics is a narrow wait, not a
+wait on every subscription.
 
 When the operator decides, Control queues one decision turn in the requesting
 conversation, bot or not, once it is idle. The turn lists each decision and, for
@@ -154,7 +156,9 @@ from the Control process that recorded it. A decision that cannot be delivered i
 retired: its requester ended without a checkpoint, the operator cancelled that
 work (`/cancel`, or `/cancel all` here or in a parent chat) after the request, or
 an approved port has since stopped. Decisions still undelivered at restart are
-retired too, so a redeploy never resumes a conversation. A persistent bot with a
+retired too, so a redeploy never resumes a conversation. An operator message
+delivered into the requesting turn while it ran was seen by that turn, so it does
+not count as later steering that turns the decision into a note. A persistent bot with a
 pending request gets no automatic recovery turn; it sleeps until the decision.
 
 When a `control_service_exec` or `control_service_exec_status` result shows a

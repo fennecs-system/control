@@ -925,9 +925,7 @@ fn commit(
         session.revision = session.revision.saturating_add(1);
     }
     for (index,_,_) in &retired {
-        let run=&mut s.runtime.runs[*index];
-        run.status="completed".into();
-        run.result=format!("Processed in active run {id}; see that session's response.").into();
+        s.runtime.runs[*index].absorb(id);
     }
     if save(s).is_err() {
         if let Some((i, inbox)) = previous_inbox { s.collective.room_watches[i] = inbox; }
