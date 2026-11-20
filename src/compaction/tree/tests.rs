@@ -131,6 +131,7 @@ fn selecting_a_block_lazily_expands_its_children_summary_and_source() {
     assert!(root.contains("node?block=0.3") && root.contains("node?block=8.3"), "two children");
     assert!(root.contains("Regenerate summary"));
     assert!(root.contains("<td>automatic</td>"));
+    assert!(root.contains("<dt>Compression</dt><dd>") && root.contains("bits/char"), "the detail scores its summary");
     // Descend to a leaf: its entries and original source link.
     let leaf = page("block=4.2");
     assert!(leaf.contains("0–16</a> › ") && leaf.contains("node?entry=4"));
@@ -432,4 +433,18 @@ fn civil_time_is_utc() {
     assert_eq!(when(0), "1970-01-01 00:00 UTC");
     assert_eq!(when(1_763_380_800), "2025-11-17 12:00 UTC");
     assert_eq!(when(951_782_400), "2000-02-29 00:00 UTC");
+}
+
+#[test]
+fn compression_scores_reward_terse_facts_and_count_lost_ones() {
+    // Padded prose carries less information per character than a fact list.
+    assert!(entropy("aaaaaaaaaaaaaaaa") < 0.01);
+    assert!(entropy("chest19,71,-47 opened; beds5; wall110/110") > entropy("the the the the the the the the"));
+    // Hard tokens: digits, paths and IDs, with trailing punctuation trimmed.
+    let found = facts("Placed bed at x14,71,-48. See /workspace/castle/evidence/bed.json and svc_5011; done.");
+    assert!(found.contains("x14") && found.contains("-48") && found.contains("/workspace/castle/evidence/bed.json") && found.contains("svc_5011"));
+    assert!(!found.contains("Placed") && !found.contains("done"));
+    // A parent that keeps one of three child facts reports it.
+    assert_eq!(kept("wall at z-54 done", &["north wall z-54 110/110", "chest 19,71"]), (1, 4));
+    assert_eq!(kept("nothing", &["no facts here"]), (0, 0));
 }

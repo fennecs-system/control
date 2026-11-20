@@ -151,6 +151,11 @@ verbatim entries share one cell), so its cost does not grow with history.
 Selecting a block loads its detail lazily into a frame: its two children (or
 leaf entries), summary text, versions, sizes and a link to the original source.
 The detail reads one root-to-block path of node files outside the state lock.
+Its **Compression** row scores the summary: how many times smaller it is than
+its input, its character entropy in bits per character (padded or repetitive
+prose scores low, terse fact lists high) and, for a summary of two summaries,
+how many of their hard tokens (numbers, IDs, paths, coordinates) it kept. A
+low kept share shows where a fold lost facts the agent may need.
 Inspection makes no model calls.
 
 Measured on an Apple M-series laptop (release build, 200 renders each, every
