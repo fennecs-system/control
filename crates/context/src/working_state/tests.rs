@@ -34,3 +34,16 @@ fn notes_cannot_replace_control_owned_fields_or_claim_reference_resolution() {
     assert!(saved["tried"][0].get("evidence").is_none());
     assert!(saved["pending"][0].get("resources").is_none());
 }
+
+#[test]
+fn omitted_lists_are_empty_and_common_confidence_words_are_accepted() {
+    // Run D: 163 handoffs failed on a missing `tried` and 23 on `reported`/`observed`.
+    let payload: Payload = serde_json::from_str(r#"{"subgoal":"Place the fifth bed","findings":[{"claim":"chest opens","confidence":"observed"},{"claim":"bed placed","confidence":"reported"}]}"#).unwrap();
+    assert!(payload.tried.is_empty() && payload.pending.is_empty() && payload.next.is_empty());
+    assert_eq!(payload.findings[0].confidence, Confidence::Supported);
+    assert_eq!(payload.findings[1].confidence, Confidence::Tentative);
+    payload.validate().unwrap();
+    // The subgoal stays required, and unknown fields still fail closed.
+    assert!(serde_json::from_str::<Payload>(r#"{"findings":[]}"#).is_err());
+    assert!(serde_json::from_str::<Payload>(r#"{"subgoal":"x","notes":[]}"#).is_err());
+}

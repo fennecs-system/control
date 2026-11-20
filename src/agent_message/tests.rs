@@ -260,9 +260,10 @@ fn peers_cannot_route_to_the_operator_or_cross_tasks_actors_and_broken_lineage()
             |_| panic!("rejected messages must not save"),
         )
     };
+    let refused = send_to(&mut state, &lead).unwrap_err().to_string();
     assert!(
-        send_to(&mut state, &lead).is_err(),
-        "steering is not an automatic peer relay"
+        refused.contains("control_room_post"),
+        "steering is not an automatic peer relay; the refusal points at the task room: {refused}"
     );
     assert!(send_to(&mut state, &alice).is_err());
     assert!(send_to(&mut state, &outsider).is_err());

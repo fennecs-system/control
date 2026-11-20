@@ -744,8 +744,8 @@ fn malformed_handoffs_name_the_field_to_fix() {
     let (mut state, id, generation) = fixture();
     let missing = hand_off(&mut state, &id, &generation, "missing", json!({"progress":"x"})).unwrap_err().to_string();
     assert!(missing.contains("Expected a handoff with a disposition"), "{missing}");
-    // A payload missing required notes is named rather than blamed on the disposition.
-    let payload = hand_off(&mut state, &id, &generation, "payload", json!({"disposition":"continue","payload":{"subgoal":"x"}})).unwrap_err().to_string();
+    // A payload missing its required subgoal is named rather than blamed on the disposition.
+    let payload = hand_off(&mut state, &id, &generation, "payload", json!({"disposition":"continue","payload":{"findings":[]}})).unwrap_err().to_string();
     assert!(payload.contains("payload") && payload.contains("missing field") && !payload.contains("Expected a handoff"), "{payload}");
     let unknown = hand_off(&mut state, &id, &generation, "unknown", json!({"disposition":"continue","summary":"x"})).unwrap_err().to_string();
     assert!(unknown.contains("arguments did not match") && unknown.contains("summary"), "{unknown}");
