@@ -352,23 +352,20 @@ fn unlinked_chats_discover_rooms_and_posting_links_them() {
         &run,
         &call("control_room_list", json!({}), "1-1"),
     ));
+    let thread = format!("general/{id}");
     assert_eq!(
         (
             list["attached"].clone(),
             list["rooms"].as_array().unwrap().len()
         ),
-        (Value::Null, NAMES.len())
+        (json!(thread), NAMES.len()),
+        "an unlinked task defaults to its own #general thread"
     );
-    assert!(
-        crate::toolbox::failure_text(&worker_rpc(
-            &mut state,
-            &run,
-            &call("control_room_post", json!({"message":"hi"}), "1-2")
-        )).unwrap()
-            .contains("control_room_list")
-    );
+    let empty = text(worker_rpc(&mut state, &run, &call("control_room_read", json!({}), "1-2")));
+    assert_eq!((&empty["room"], &empty["note"]), (&json!(thread), &json!("No posts, claims or linked chats in this room yet.")));
+    assert_eq!(state.chats[0].room, None, "reading links nothing");
     let unknown = worker_rpc(&mut state, &run, &call("control_room_read", json!({"room":"lobby"}), "1-3"));
-    assert_eq!(crate::toolbox::failure_text(&unknown), Some("Unknown room. Call control_room_list."));
+    assert_eq!(crate::toolbox::failure_text(&unknown), Some(format!("Unknown room lobby. This chat's team room is {thread}; omit room to use it.").as_str()));
     let failed = checkpoint(
         &mut state,
         &run,
@@ -395,7 +392,6 @@ fn unlinked_chats_discover_rooms_and_posting_links_them() {
         ),
         |_| Ok(()),
     );
-    let thread = format!("general/{id}");
     assert_eq!(state.chats[0].room.as_deref(), Some(thread.as_str()));
     checkpoint(
         &mut state,
@@ -505,13 +501,32 @@ fn omitted_room_uses_the_team_room_and_unknown_names_point_to_it() {
     let posted = room_call(&mut state, &child_run, "control_room_post", json!({"message":"joined"}), "2-4");
     assert_eq!(posted["room"], team);
     assert_eq!(state.chats.iter().find(|chat| chat.id == child).unwrap().room.as_deref(), Some(team.as_str()), "posting links it to hear replies");
-    // Neither an unrelated task nor another actor's descendant inherits the link.
-    let (_, other_run) = active(&mut state, None);
-    assert!(room_failure(&mut state, &other_run, "control_room_read", json!({})).contains("No room attached"));
-    assert_eq!(room_failure(&mut state, &other_run, "control_room_post", json!({"room":"castle","message":"x"})), "Unknown room. Call control_room_list.");
+    // Neither an unrelated task nor another actor's descendant inherits the link;
+    // an unlinked task defaults to its own #general thread.
+    let (other, other_run) = active(&mut state, None);
+    assert_eq!(room_call(&mut state, &other_run, "control_room_read", json!({}), "2-7")["room"], format!("general/{other}"));
+    assert_eq!(room_failure(&mut state, &other_run, "control_room_post", json!({"room":"castle","message":"x"})), format!("Unknown room castle. This chat's team room is general/{other}; omit room to use it."));
     let (_, foreign_run) = active(&mut state, Some(&lead));
     state.chats[0].actor = crate::identity::Actor::Unknown;
     assert!(room_failure(&mut state, &foreign_run, "control_room_read", json!({})).contains("No room attached"));
+}
+
+#[test]
+fn an_unlinked_team_shares_its_general_thread_for_claim_read_and_post() {
+    // A root chat started without a room, with a worker spawned before anyone posts.
+    let mut state = State::default();
+    let (lead, lead_run) = active(&mut state, None);
+    let (child, child_run) = active(&mut state, Some(&lead));
+    let team = format!("general/{lead}");
+    let claim = room_call(&mut state, &lead_run, "control_room_claim", json!({"key":"server","action":"acquire"}), "4-1");
+    assert_eq!((claim["applied"].clone(), state.collective.claims[0].room.as_str()), (json!(true), team.as_str()), "{claim}");
+    assert_eq!(room_call(&mut state, &lead_run, "control_room_post", json!({"message":"backlog"}), "4-2")["room"], team);
+    assert_eq!(state.chats[0].room.as_deref(), Some(team.as_str()), "posting links the lead");
+    let read = room_call(&mut state, &child_run, "control_room_read", json!({}), "4-3");
+    assert_eq!((&read["room"], &read["posts"][0]["text"], &read["claims"][0]["key"]), (&json!(team), &json!("backlog"), &json!("server")));
+    let list = room_call(&mut state, &child_run, "control_room_list", json!({}), "4-4");
+    assert_eq!((&list["attached"], &list["rooms"][0]["posts"], &list["rooms"][0]["chats"]), (&json!(team), &json!(1), &json!(1)));
+    assert_eq!(state.chats.iter().find(|chat| chat.id == child).unwrap().room, None, "reading links nothing");
 }
 
 #[test]
@@ -543,7 +558,7 @@ fn the_room_plan_follows_room_access_rules() {
     let plan = room_call(&mut state, &lead_run, "control_room_plan", json!({}), "3-2");
     assert_eq!((&plan["room"], &plan["critical_path"]), (&json!(team), &json!(["axe"])));
     assert!(state.collective.claim_seq == 1, "planning changes nothing");
-    let (_, other_run) = active(&mut state, None);
+    let (other, other_run) = active(&mut state, None);
     assert!(room_failure(&mut state, &other_run, "control_room_plan", json!({"room":team})).contains("another task"));
-    assert!(room_failure(&mut state, &other_run, "control_room_plan", json!({})).contains("No room attached"));
+    assert_eq!(room_call(&mut state, &other_run, "control_room_plan", json!({}), "3-3")["room"], format!("general/{other}"));
 }
