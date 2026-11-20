@@ -1,5 +1,5 @@
 
-use super::local_server;
+use super::{local_server, rejection};
 
 #[test]
 fn project_confirmation_requires_the_same_request_redirect_and_grant() {
@@ -29,4 +29,16 @@ fn remote_urls_and_embedded_credentials_are_rejected() {
     ] {
         assert!(local_server(url).is_err());
     }
+}
+
+#[test]
+fn refused_requests_say_why_without_echoing_html() {
+    assert!(rejection(401, "<!doctype html>…").contains("CONTROL_STATE_DIR"));
+    assert!(rejection(413, "").contains("too large"));
+    assert_eq!(
+        rejection(400, "Unsupported MCP protocol version.\n"),
+        "Control rejected the request (HTTP 400): Unsupported MCP protocol version."
+    );
+    assert_eq!(rejection(500, "<html>boom</html>"), "Control rejected the request (HTTP 500).");
+    assert_eq!(rejection(400, &"x".repeat(500)).len(), "Control rejected the request (HTTP 400): ".len() + 200);
 }

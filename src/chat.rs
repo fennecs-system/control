@@ -70,7 +70,7 @@ pub fn design_topic(value: &str) -> Option<(&'static str, &'static str)> {
         "monitor" => ("monitor", "Usage"),
         "tools" | "browser" | "tool-page" => ("tools", "Tools"),
         "nodes" => ("nodes", "Nodes"),
-        "authority" => ("authority", "Access requests"),
+        "authority" => ("authority", "Permissions"),
         "personas" | "persona-page" => ("personas", "Personas"),
         "discord-access" => ("discord-access", "Discord access"),
         "evolution" => ("evolution", "Self-improvement"),
@@ -867,10 +867,37 @@ pub fn list(state: &State) -> Value {
     let port_revision=crate::ports::decision_revision(state);
     let bot_revision=crate::bots::decision_revision(state);
     let callsigns=crate::callsigns::all(&state.chats);
+    let status=statuses(state);
     json!(crate::conversations::ordered(state).into_iter().map(|entry| {
         let s=entry.session;
-        json!({"id":s.id,"title":crate::callsigns::label(s,callsigns[entry.position]),"lens":s.lens,"lenses":selected_lenses(s),"persona":s.persona,"revision":s.revision,"messages":s.messages.len(),"parent_chat":entry.parent,"depth":entry.depth,"activity_order":s.activity_order,"decision_revision":decision_revision,"port_revision":port_revision,"bot_revision":bot_revision})
+        json!({"id":s.id,"title":crate::callsigns::label(s,callsigns[entry.position]),"lens":s.lens,"lenses":selected_lenses(s),"persona":s.persona,"revision":s.revision,"messages":s.messages.len(),"parent_chat":entry.parent,"depth":entry.depth,"activity_order":s.activity_order,"decision_revision":decision_revision,"port_revision":port_revision,"bot_revision":bot_revision,"status":status(s),"mode":if s.improve_mode {"improve"} else {"chat"},"project_pending":s.project.as_ref().is_some_and(|p|p.pending)})
     }).collect::<Vec<_>>())
+}
+/// A chat's run status for listings: its most pressing unfinished run
+/// (running, waiting, cancelling, queued), else its latest message's run
+/// status, else `idle`. One pass over the runs, whatever the chat count.
+fn statuses<'a>(state: &'a State) -> impl Fn(&Session) -> &'a str + 'a {
+    let rank = |status: &str| ["queued", "cancelling", "waiting", "running"].iter().position(|s| *s == status);
+    let mut active: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    let mut by_run = std::collections::HashMap::new();
+    for run in &state.runtime.runs {
+        by_run.insert(run.id.as_str(), run.status.as_str());
+        if let (Some(chat), Some(r)) = (run.chat_id.as_deref(), rank(&run.status)) {
+            let current = active.entry(chat).or_insert(run.status.as_str());
+            if rank(current) < Some(r) { *current = run.status.as_str(); }
+        }
+    }
+    move |session: &Session| active.get(session.id.as_str()).copied()
+        .or_else(|| session.messages.iter().rev().find_map(|m| m.run_id.as_deref()).and_then(|run| by_run.get(run).copied()))
+        .unwrap_or("idle")
+}
+/// Folder (`/open`) requests awaiting the operator in `root`'s same-actor
+/// tree. Each is approved or dismissed in its own chat.
+fn pending_folders(state: &State, root: &str, actor: &Actor) -> Vec<Value> {
+    let tree = subtree(state, [root]);
+    state.chats.iter().filter(|s| tree.contains(s.id.as_str()) && &s.actor == actor)
+        .filter_map(|s| s.project.as_ref().filter(|p| p.pending).map(|p| json!({"chat_id":s.id,"request":p.request,"path":p.path,"name":p.name})))
+        .collect()
 }
 /// Pending operator decisions across the node, grouped by top-level chat in
 /// the `pending_*` shape of `detail`. Each group is decided in its chat, the
@@ -879,7 +906,8 @@ pub fn pending_requests(state: &State) -> Value {
     let waiting = state.runtime.runs.iter()
         .filter(|run| run.status == "waiting" && run.question.as_ref().is_some_and(|q| q.answer.is_none()))
         .filter_map(|run| run.chat_id.as_deref());
-    let chats = waiting.chain(crate::bots::pending_chats(state)).chain(crate::ports::pending_chats(state)).chain(crate::intel::pending_chats(state));
+    let folders = state.chats.iter().filter(|s| s.project.as_ref().is_some_and(|p| p.pending)).map(|s| s.id.as_str());
+    let chats = waiting.chain(crate::bots::pending_chats(state)).chain(crate::ports::pending_chats(state)).chain(crate::intel::pending_chats(state)).chain(folders);
     let mut roots = Vec::new();
     for chat in chats {
         let root = lineage(state, chat).last().unwrap_or(chat);
@@ -889,8 +917,8 @@ pub fn pending_requests(state: &State) -> Value {
     json!(roots.into_iter().filter_map(|id| {
         let session = state.chats.iter().find(|s| s.id == id && valid_id(&s.id))?;
         authorize(&session.actor, Action::Task).ok()?;
-        let entry = json!({"chat_id":id,"title":crate::callsigns::name_or_id(&state.chats,id),"pending_questions":crate::design::pending_json(state,id),"pending_bots":crate::bots::pending_json(state,id),"pending_ports":crate::ports::pending_json(state,id),"pending_notices":crate::intel::pending_json_tree(state,id)});
-        ["pending_questions","pending_bots","pending_ports","pending_notices"].iter().any(|k| entry[k].as_array().is_some_and(|a| !a.is_empty())).then_some(entry)
+        let entry = json!({"chat_id":id,"title":crate::callsigns::name_or_id(&state.chats,id),"pending_questions":crate::design::pending_json(state,id),"pending_bots":crate::bots::pending_json(state,id),"pending_ports":crate::ports::pending_json(state,id),"pending_notices":crate::intel::pending_json_tree(state,id),"pending_folders":pending_folders(state,id,&session.actor)});
+        ["pending_questions","pending_bots","pending_ports","pending_notices","pending_folders"].iter().any(|k| entry[k].as_array().is_some_and(|a| !a.is_empty())).then_some(entry)
     }).collect::<Vec<_>>())
 }
 pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
@@ -1085,6 +1113,17 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
         "control.requests.list" => Ok(pending_requests(state)),
         "control.chat.read" => detail(state, id()?),
         "control.run.scores" => crate::scores::read(state, id()?),
+        "control.services.list" => crate::services::operator::list(state, id()?, arguments["team"] == true)
+            .map_err(|_| "Chat not found."),
+        "control.services.stop" => {
+            let service = match arguments.get("service_id") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(service)) => Some(service.as_str()),
+                _ => return Err("Invalid service ID."),
+            };
+            crate::services::operator::stop(state, id()?, arguments["team"] == true, service, crate::storage::save)
+                .map_err(|error| if error.to_string().contains("No live service") { "No live service with that ID in this chat." } else { "Could not stop the services. Check the services page." })
+        }
         "control.intel.brief" => crate::intel::tool(state, arguments),
         "control.personas.list" | "control.persona.read" | "control.chat.persona" => crate::personas::tool(state, name, arguments),
         "control.chat.rename" => {

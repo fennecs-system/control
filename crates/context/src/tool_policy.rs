@@ -71,6 +71,8 @@ policies! {
     "control.run.scores" => (Chat,false,Read,true),
     "control.intel.brief" => (Chat,false,Read,true),
     "control.chat.send" => (Chat,true,Hidden,true),
+    "control.services.list" => (Chat,false,Hidden,true),
+    "control.services.stop" => (Chat,true,Hidden,true),
     "control.lenses.list" => (Lens,false,Read,true),
     "control.lens.read" => (Lens,false,Read,true),
     "control.lenses.resolve" => (Lens,false,Read,true),

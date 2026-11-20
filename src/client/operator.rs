@@ -18,15 +18,19 @@ pub enum Kind {
     /// A notice from an opted-in agent (an antibody or a lead): no decision
     /// is requested; a reply steers the chat it came from.
     Notice,
+    /// A folder (`/open`) request: host paths for the task. Approved or
+    /// dismissed in Control (web or TUI `/open`), never by a channel reply.
+    Folder,
 }
 impl Kind {
-    pub const ALL: [Kind; 4] = [Kind::Question, Kind::Bot, Kind::Port, Kind::Notice];
+    pub const ALL: [Kind; 5] = [Kind::Question, Kind::Bot, Kind::Port, Kind::Notice, Kind::Folder];
     pub fn as_str(self) -> &'static str {
         match self {
             Kind::Question => "question",
             Kind::Bot => "bot",
             Kind::Port => "port",
             Kind::Notice => "notice",
+            Kind::Folder => "folder",
         }
     }
 }
@@ -113,8 +117,20 @@ pub fn pending(view: &Value) -> Vec<Pending<'_>> {
             loopback: false,
         });
     }
+    for folder in list("pending_folders") {
+        items.push(Pending {
+            kind: Kind::Folder,
+            id: text(&folder["request"]),
+            heading: Cow::Owned(format!("Folder request · {} ({})", Clean(text(&folder["path"])), Clean(text(&folder["chat_id"])))),
+            body: "",
+            usage: Some(FOLDER_USAGE.into()),
+            loopback: false,
+        });
+    }
     items
 }
+/// Folder access is reviewed where the exact path is shown, not by reply.
+pub const FOLDER_USAGE: &str = "Review the exact path and approve or dismiss it in Control: /open in that DM (web or TUI).";
 
 /// What a client sends to decide a request or talk to a chat.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -170,6 +186,9 @@ pub fn reply(pending: &Pending<'_>, text: &str) -> Result<Command, &'static str>
         _ => "",
     };
     let loopback = pending.kind == Kind::Port && verdict == "allow" && words.len() == 2 && words[1] == "--loopback";
+    if pending.kind == Kind::Folder {
+        return Err(FOLDER_USAGE);
+    }
     let command = if named(text) == Some((pending.kind, id)) {
         text.to_owned()
     } else {
@@ -181,6 +200,7 @@ pub fn reply(pending: &Pending<'_>, text: &str) -> Result<Command, &'static str>
             _ if verdict.is_empty() || (words.len() > 1 && !loopback) => return Err("Reply allow or deny."),
             Kind::Bot => format!("/bot {verdict} {id}"),
             Kind::Port => format!("/port {verdict} {id}{}", if loopback { " --loopback" } else { "" }),
+            Kind::Folder => return Err(FOLDER_USAGE),
         }
     };
     match pending.kind {

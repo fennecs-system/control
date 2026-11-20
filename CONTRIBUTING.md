@@ -23,8 +23,14 @@ The Nix environment also supplies the wasm-bindgen CLI matching `web/Cargo.lock`
 so Trunk uses the installed tool instead of downloading a GitHub release archive.
 Keep that CLI version aligned when updating the web lockfile.
 
+`hosting/dev-env.sh` is a cached `nix develop`: it evaluates the dev shell once
+into the gitignored `.nix/` (kept as a GC root) and reuses it until `flake.nix` or
+`flake.lock` changes, so later shells start without contacting the Nix daemon.
+`hosting/dev-env.sh -- CMD` runs one command; `CONTROL_DEV_REFRESH=1` rebuilds;
+with direnv, `direnv allow` loads it through `.envrc`.
+
 ```sh
-nix develop
+nix develop    # or: hosting/dev-env.sh
 cargo test --locked --workspace
 cargo test --locked --manifest-path web/Cargo.toml
 cargo clippy --locked --workspace --all-targets -- -D warnings

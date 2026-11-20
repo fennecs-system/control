@@ -42,6 +42,21 @@ impl ProjectApproval {
 fn failure(message: impl std::fmt::Display) -> io::Error {
     io::Error::other(message.to_string())
 }
+/// Explains a refused request; the server's plain-text reason is short and never holds credentials.
+fn rejection(status: u16, body: &str) -> String {
+    match status {
+        401 => "Control refused this machine's operator credential (HTTP 401). This command and `control serve` must use the same CONTROL_STATE_DIR; if the server's state was reset or moved, restart `control serve`.".into(),
+        413 => "Control rejected the request as too large (HTTP 413).".into(),
+        _ => {
+            let reason: String = body.trim().chars().take(200).collect();
+            if reason.is_empty() || reason.starts_with('<') {
+                format!("Control rejected the request (HTTP {status}).")
+            } else {
+                format!("Control rejected the request (HTTP {status}): {reason}")
+            }
+        }
+    }
+}
 pub(crate) fn local_server(value: &str) -> io::Result<Url> {
     let url = Url::parse(value).map_err(|_| failure("Invalid server URL."))?;
     if url.scheme() != "http"
@@ -226,9 +241,9 @@ impl Hive {
             .send()
             .map_err(|_| failure("Control is unavailable. Reconnecting on the next refresh."))?;
         if !response.status().is_success() {
-            return Err(failure(
-                "Control rejected the request. Check local operator access.",
-            ));
+            let status = response.status().as_u16();
+            let body = response.text().unwrap_or_default();
+            return Err(failure(rejection(status, &body)));
         }
         let data: Value = response
             .json()

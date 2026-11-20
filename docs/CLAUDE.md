@@ -27,6 +27,10 @@ Browser capture needs the browser image (`nix run .#setup -- --browser`, or see
 [the browser tool README](../tools/browser/README.md)). Pass
 `--root /absolute/preview/directory` after `mcp` to choose its input directory.
 
+To let Claude Code drive chats as the operator (create DMs, send prompts, read
+progress, cancel runs, stop services; approvals only by opt-in), register the separate
+[chat MCP](CHAT-MCP.md) (`control mcp --chat`).
+
 ## Control runs Claude Code
 
 Codex remains the default backend. The Claude adapter runs the unmodified Claude

@@ -188,16 +188,28 @@ pub fn server_addr() -> String {
     std::env::var("CONTROL_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".into())
 }
 
-/// Client origin for the local server. Uses `localhost`, where the operator cookie is scoped.
+/// Client origin for the local server: the address it is bound to, never `localhost`.
+/// `localhost` may resolve to `::1`, where another program can be listening, so
+/// links, the operator cookie and the clients all use the bound loopback address.
 pub fn server_url() -> String {
     url_for(&server_addr())
 }
 fn url_for(addr: &str) -> String {
-    let port = addr
-        .rsplit_once(':')
-        .and_then(|(_, p)| p.parse::<u16>().ok())
-        .unwrap_or(8080);
-    format!("http://localhost:{port}")
+    match addr.parse::<std::net::SocketAddr>() {
+        Ok(mut bound) => {
+            if bound.ip().is_unspecified() {
+                bound.set_ip(match bound {
+                    std::net::SocketAddr::V4(_) => std::net::Ipv4Addr::LOCALHOST.into(),
+                    std::net::SocketAddr::V6(_) => std::net::Ipv6Addr::LOCALHOST.into(),
+                });
+            }
+            format!("http://{bound}")
+        }
+        Err(_) => {
+            let port = addr.rsplit_once(':').and_then(|(_, p)| p.parse::<u16>().ok()).unwrap_or(8080);
+            format!("http://127.0.0.1:{port}")
+        }
+    }
 }
 
 /// Model run time limit: `CONTROL_WORKER_TIMEOUT_SECS` or `worker-timeout-secs` in the

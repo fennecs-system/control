@@ -92,7 +92,10 @@ Configuration and state have independent roots.
   [watches](WATCHES.md) and [room notifications](ROOM-NOTIFICATIONS.md).
 - **External harnesses.** `control mcp` gives an independently run Claude Code
   or Codex CLI read access and approval-gated requests; it cannot submit jobs or
-  administer Control (see [Claude](CLAUDE.md)).
+  administer Control (see [Claude](CLAUDE.md)). `control mcp --chat` is a
+  separate opt-in server that drives chats as the local operator through the
+  same server functions; approvals and an agent-scoped variant are opt-ins in
+  Manage → Permissions (see [chat MCP](CHAT-MCP.md)).
 
 The [threat model](THREAT-MODEL.md) records the enforced boundaries and known
 gaps. Live workspace disk quotas and some ambiguous container-creation recovery

@@ -39,3 +39,32 @@ fn public_build_probe_reports_the_compiled_binary_without_operator_state() {
     let build: control::build_info::BuildInfo = serde_json::from_str(body).unwrap();
     assert_eq!(build, control::build_info::current());
 }
+
+fn gate_response(access: &Access, target: &str, header: &str) -> (bool, String) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    client.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
+    let (mut server, _) = listener.accept().unwrap();
+    let handled = access.gate(&mut server, "GET", target, header);
+    drop(server);
+    let mut response = String::new();
+    client.read_to_string(&mut response).unwrap();
+    (handled, response)
+}
+
+#[test]
+fn used_or_malformed_sign_in_links_never_fall_through_to_a_404() {
+    let access = Access { session: "b".repeat(64) };
+    let signed_in = format!("Cookie: control_operator={}", "b".repeat(64));
+    for target in [format!("/unlock/{}", "0".repeat(64)), "/unlock/short".into(), "/unlock".into()] {
+        let (handled, response) = gate_response(&access, &target, &signed_in);
+        assert!(handled, "{target}");
+        assert!(response.starts_with("HTTP/1.1 303") && response.to_ascii_lowercase().contains("location: /\r\n"), "{target}: {response}");
+        assert!(!response.to_ascii_lowercase().contains("set-cookie"), "{target}");
+        let (handled, response) = gate_response(&access, &target, "");
+        assert!(handled && response.starts_with("HTTP/1.1 401"), "{target}");
+        assert!(response.contains("already used or has expired") && !response.contains(&access.session));
+    }
+    let (handled, response) = gate_response(&access, "/dms", "");
+    assert!(handled && response.starts_with("HTTP/1.1 401") && !response.contains("already used"));
+}

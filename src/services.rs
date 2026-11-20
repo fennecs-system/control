@@ -4,6 +4,7 @@ mod commands;
 mod compute;
 mod copy;
 mod page;
+pub(crate) mod operator;
 pub use page::http;
 pub(crate) use page::command;
 #[cfg(test)]

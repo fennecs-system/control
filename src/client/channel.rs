@@ -120,7 +120,10 @@ impl Default for Settings {
 }
 impl Settings {
     pub fn forwards(&self, chat: &str, kind: Kind) -> bool {
-        self.enabled && self.kinds.contains(&kind) && (self.chats.is_empty() || self.chats.iter().any(|c| c == chat))
+        // Settings saved before folder requests were forwarded list the four
+        // older kinds; folder access follows port access.
+        let listed = self.kinds.contains(&kind) || (kind == Kind::Folder && self.kinds.contains(&Kind::Port));
+        self.enabled && listed && (self.chats.is_empty() || self.chats.iter().any(|c| c == chat))
     }
     /// Valid prefixes are 1–3 visible ASCII punctuation characters.
     pub fn valid_prefix(prefix: &str) -> bool {

@@ -78,25 +78,35 @@ impl Access {
             return true;
         }
         if method == "GET"
-            && let Some(token) = target
-                .strip_prefix("/unlock/")
-                .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
-            {
-                let unlocked = crate::config::state("operator-unlock").is_ok_and(|path| {
+            && let Some(rest) = target.strip_prefix("/unlock")
+        {
+            let token = rest.strip_prefix('/').filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()));
+            let unlocked = token.is_some_and(|token| {
+                crate::config::state("operator-unlock").is_ok_and(|path| {
                     fs::read_to_string(&path).is_ok_and(|expected| equal(token, &expected))
                         && fs::remove_file(path).is_ok()
-                });
-                if unlocked {
-                    respond(stream,"303 See Other","text/plain","",&format!("Location: /\r\nSet-Cookie: control_operator={}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict\r\n",self.session));
-                    return true;
-                }
+                })
+            });
+            if unlocked {
+                respond(stream,"303 See Other","text/plain","",&format!("Location: /\r\nSet-Cookie: control_operator={}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict\r\n",self.session));
+            } else if self.authorized(header) {
+                // A used or stale link from a browser that is already signed in.
+                respond(stream, "303 See Other", "text/plain", "", "Location: /\r\n");
+            } else {
+                denied(stream, "This sign-in link was already used or has expired. Links work once.");
             }
+            return true;
+        }
         if self.authorized(header) {
             return false;
         }
-        respond(stream,"401 Unauthorized","text/html; charset=utf-8","<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><title>Control / operator access</title></head><body><h1>Operator access required</h1><p>On this laptop, run <code>./target/release/control open</code> to open an authenticated browser session.</p><p>Discord users and worker containers cannot obtain operator access from the website.</p></body></html>","");
+        denied(stream, "");
         true
     }
+}
+fn denied(stream: &mut TcpStream, reason: &str) {
+    let reason = if reason.is_empty() { String::new() } else { format!("<p>{reason}</p>") };
+    respond(stream,"401 Unauthorized","text/html; charset=utf-8",&format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><title>Control / operator access</title></head><body><h1>Operator access required</h1>{reason}<p>On this laptop, run <code>control open</code> to open an authenticated browser session.</p><p>Discord users and worker containers cannot obtain operator access from the website.</p></body></html>"),"");
 }
 fn respond(stream: &mut TcpStream, status: &str, mime: &str, body: &str, extra: &str) {
     let _ = control_http::respond(stream, status, mime, body.as_bytes(), extra, control_http::Policy::Access);
@@ -108,7 +118,7 @@ fn sign_in_link() -> io::Result<String> {
         &crate::config::state("operator-unlock").map_err(io::Error::other)?,
         &unlock,
     )?;
-    // Match Discord's localhost links so browser cookies use the same host.
+    // Match Discord's links (the bound address) so browser cookies use the same host.
     Ok(format!("{}/unlock/{unlock}", crate::config::server_url()))
 }
 
