@@ -325,6 +325,31 @@ fn plan(state: &State, chat: &str, query: &HashMap<String, String>) -> Result<De
     })
 }
 
+/// Character entropy of `text` in bits per character: low for padded or
+/// repetitive prose, high for terse, information-dense prose.
+fn entropy(text: &str) -> f64 {
+    let mut counts = std::collections::HashMap::<char, u32>::new();
+    let mut total = 0u32;
+    for c in text.chars() {
+        *counts.entry(c).or_default() += 1;
+        total += 1;
+    }
+    counts.values().map(|&n| { let p = f64::from(n) / f64::from(total.max(1)); -p * p.log2() }).sum()
+}
+/// Hard tokens: words carrying a digit or a path, ID or coordinate separator,
+/// the facts a summary most often loses.
+fn facts(text: &str) -> std::collections::BTreeSet<&str> {
+    text.split(|c: char| c.is_whitespace() || ",;()[]{}\"'`".contains(c))
+        .map(|word| word.trim_matches(|c: char| c == '.' || c == ':'))
+        .filter(|word| word.len() >= 2 && word.chars().any(|c| c.is_ascii_digit() || c == '/' || c == '_'))
+        .collect()
+}
+/// Hard tokens of `sources` that survive into `summary`: (kept, total).
+fn kept(summary: &str, sources: &[&str]) -> (usize, usize) {
+    let wanted = sources.iter().flat_map(|text| facts(text)).collect::<std::collections::BTreeSet<_>>();
+    let found = facts(summary);
+    (wanted.iter().filter(|word| found.contains(*word)).count(), wanted.len())
+}
 fn clip(text: &str) -> (&str, bool) {
     if text.len() <= TEXT_BYTES {
         return (text, false);
@@ -446,10 +471,10 @@ fn detail_page(d: &Detail, nodes: io::Result<Loaded>) -> String {
                     let refs: Vec<_> = children.iter().map(|(b, n)| (*b, n.as_ref())).collect();
                     body.push_str(&subtree(chat, block, &refs, &d.edits));
                     let active = d.edits.active(block);
-                    let _ = write!(body, "<dl class='mt-dl'><dt>Range</dt><dd>{}–{} · level {} · {} entries</dd><dt>Model</dt><dd>{} ({}) · revision {}</dd><dt>Created</dt><dd>{}</dd><dt>Input</dt><dd>{} bytes from {}</dd><dt>Summary</dt><dd>{} bytes{}</dd><dt>Node</dt><dd>{}</dd></dl>",
+                    let _ = write!(body, "<dl class='mt-dl'><dt>Range</dt><dd>{}–{} · level {} · {} entries</dd><dt>Model</dt><dd>{} ({}) · revision {}</dd><dt>Created</dt><dd>{}</dd><dt>Input</dt><dd>{} bytes from {}</dd><dt>Summary</dt><dd>{} bytes{}</dd><dt>Compression</dt><dd>{}</dd><dt>Node</dt><dd>{}</dd></dl>",
                         block.start, block.end(), block.level, block.len(), esc(&node.model.id), esc(&node.model.model), esc(&node.model.revision), when(node.created_unix), node.input_bytes,
                         if node.children.is_empty() { "original entries" } else { "two child summaries" }, node.response.text.len(),
-                        node.response.tokens.map(|t| format!(" · {} input / {} output tokens", t.input_tokens, t.output_tokens)).unwrap_or_default(), &node.key[..16.min(node.key.len())]);
+                        node.response.tokens.map(|t| format!(" · {} input / {} output tokens", t.input_tokens, t.output_tokens)).unwrap_or_default(), compression(&node, &children), &node.key[..16.min(node.key.len())]);
                     body.push_str("<h3>Versions</h3><table class='mt-versions'><thead><tr><th>Version</th><th>Emphasis</th><th>Model</th><th>Written</th><th></th></tr></thead><tbody>");
                     let selected = d.edits.selection(block);
                     let row = |id: u32, emphasis: &str, model: &str, at: u64| {
@@ -498,6 +523,22 @@ fn detail_page(d: &Detail, nodes: io::Result<Loaded>) -> String {
     format!(
         "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><title>Control · Memory Tree block</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'></head><body class='mt-frame'><main>{body}</main></body></html>"
     )
+}
+
+/// Ratio, character entropy and, for a summary of two summaries, how many of
+/// their hard tokens it kept.
+fn compression(node: &Node, children: &[(Block, Option<Node>)]) -> String {
+    let text = node.response.text.as_str();
+    let ratio = node.input_bytes as f64 / text.len().max(1) as f64;
+    let mut line = format!("{ratio:.1}× smaller · {:.2} bits/char", entropy(text));
+    let sources = children.iter().filter_map(|(_, child)| child.as_ref().map(|child| child.response.text.as_str())).collect::<Vec<_>>();
+    if !sources.is_empty() {
+        let (kept, total) = kept(text, &sources);
+        if let Some(share) = (kept * 100).checked_div(total) {
+            let _ = write!(line, " · facts kept {kept}/{total} ({share}%)");
+        }
+    }
+    line
 }
 
 /// Load the selected node and its children (one root-to-block path).
