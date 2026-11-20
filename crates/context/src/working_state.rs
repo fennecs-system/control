@@ -8,7 +8,9 @@ pub const MAX_PAYLOAD_BYTES: usize = 12 * 1024;
 #[serde(rename_all = "snake_case")]
 pub enum Confidence {
     Unknown,
+    #[serde(alias = "reported")]
     Tentative,
+    #[serde(alias = "observed", alias = "verified")]
     Supported,
 }
 
@@ -47,9 +49,14 @@ pub struct Next {
 #[serde(deny_unknown_fields)]
 pub struct Payload {
     pub subgoal: String,
+    // Lists an agent has nothing for may be omitted rather than failing the handoff.
+    #[serde(default)]
     pub findings: Vec<Finding>,
+    #[serde(default)]
     pub tried: Vec<Tried>,
+    #[serde(default)]
     pub pending: Vec<Pending>,
+    #[serde(default)]
     pub next: Vec<Next>,
 }
 

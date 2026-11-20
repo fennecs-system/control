@@ -128,7 +128,9 @@ string `"done"`.
   a recorded `continue` would start no turn, so such a wait is refused instead
   and the agent acts on the resolution in the same turn.
 - Arguments that do not deserialize are refused naming the failing field: a
-  `payload` needs all of `subgoal`, `findings`, `tried`, `pending` and `next`.
+  `payload` needs a `subgoal`; omitted `findings`, `tried`, `pending` and
+  `next` are empty, and the confidence aliases `reported` (tentative) and
+  `observed`/`verified` (supported) are accepted.
 - `recheck_seconds` omitted or `0` means events only; a positive value is a
   fallback recheck. An over-long `progress` (over 1,000 characters) is truncated.
 - Every adjustment is listed in `adjusted`. Only the accepted draft is kept.

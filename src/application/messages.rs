@@ -373,9 +373,14 @@ pub(crate) fn plan(
             .and_then(|session| ancestry(state.chats, session, sender))
             .is_some_and(|(sender_root, _)| sender_root == root);
     if call.chat_id == sender || (session.actor != run.actor && !antibody) || !(descendant || peer || advisor) {
-        return Err(
-            "Message descendants or fellow workers in your own task; use control_design_ask for operator decisions",
-        );
+        // The lead reads the task room; say so instead of a bare refusal.
+        let lead = session.parent_chat.is_none() && state.chats.iter().find(|session| session.id == sender)
+            .and_then(|session| ancestry(state.chats, session, &call.chat_id)).is_some_and(|(sender_root, _)| sender_root == root);
+        return Err(if lead {
+            "Your lead is not a relay: work it out with your peers directly (control_agent_message) and post outcomes to the task room (control_room_post, delivery=record). Only for a blocker you and your peers cannot resolve, mark your claim blocked (control_room_claim with blocked_on); observers escalate it to the lead"
+        } else {
+            "Message descendants or fellow workers in your own task; use control_design_ask for operator decisions"
+        });
     }
     let from =
         latest(state.runs, &call.chat_id, &run.actor).ok_or("That chat has no task to continue")?;
