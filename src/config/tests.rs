@@ -92,10 +92,13 @@ fn bot_and_local_turn_deadlines_default_clamp_and_can_be_unlimited() {
     }
 }
 #[test]
-fn client_url_uses_localhost_and_the_bound_port() {
-    assert_eq!(url_for("127.0.0.1:9090"), "http://localhost:9090");
-    assert_eq!(url_for("[::1]:8181"), "http://localhost:8181");
-    assert_eq!(url_for("bad"), "http://localhost:8080");
+fn client_url_uses_the_bound_loopback_address_not_localhost() {
+    assert_eq!(url_for("127.0.0.1:9090"), "http://127.0.0.1:9090");
+    assert_eq!(url_for("[::1]:8181"), "http://[::1]:8181");
+    assert_eq!(url_for("0.0.0.0:8080"), "http://127.0.0.1:8080");
+    assert_eq!(url_for("[::]:8080"), "http://[::1]:8080");
+    assert_eq!(url_for("localhost:7070"), "http://127.0.0.1:7070");
+    assert_eq!(url_for("bad"), "http://127.0.0.1:8080");
 }
 #[test]
 fn initialization_preserves_existing_configuration_and_rejects_symlinks() {

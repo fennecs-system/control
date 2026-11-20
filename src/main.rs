@@ -568,7 +568,17 @@ fn serve_stylesheet(stream: &mut impl Write, path: &str) -> bool {
     true
 }
 
-fn main() -> std::io::Result<()> {
+fn main() -> std::process::ExitCode {
+    // Print the message, not io::Error's Debug form ("Custom { kind: Other, … }").
+    match run() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+fn run() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).is_some_and(|s| s == "models") { return model_calls::command(&args[2..]); }
     if args.get(1).is_some_and(|s| s == "claude") {

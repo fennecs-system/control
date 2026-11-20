@@ -118,7 +118,7 @@ fn sign_in_link() -> io::Result<String> {
         &crate::config::state("operator-unlock").map_err(io::Error::other)?,
         &unlock,
     )?;
-    // Match Discord's localhost links so browser cookies use the same host.
+    // Match Discord's links (the bound address) so browser cookies use the same host.
     Ok(format!("{}/unlock/{unlock}", crate::config::server_url()))
 }
 
