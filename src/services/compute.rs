@@ -134,8 +134,16 @@ pub(super) fn admit_within(services: &[Service], requested: Limits, capacity: Ca
     if used.memory_bytes.saturating_add(requested.memory_bytes) > capacity.memory_bytes
         || used.cpus.saturating_add(requested.cpus) > capacity.admitted_cpus()
     {
+        // Reservations that are not running are easy to miss: name their phases.
+        let pending = services.iter()
+            .filter(|s| s.resource.phase.reserves_capacity() && !matches!(s.resource.phase, Phase::Running(_)))
+            .map(|s| s.phase_name())
+            .collect::<Vec<_>>();
+        let held = if pending.is_empty() { String::new() } else {
+            format!(" {} reserving service(s) are not running ({}); control_service_status shows yours and their diagnostics.", pending.len(), pending.join(", "))
+        };
         return Err(fail(format!(
-            "Service compute capacity reached ({} GiB, {} CPUs x{} oversubscription per node); stop a service and wait for Stopped, or request a smaller shape",
+            "Service compute capacity reached ({} GiB, {} CPUs x{} oversubscription per node); stop a service and wait for Stopped, or request a smaller shape.{held}",
             capacity.memory_bytes / GIB, capacity.cpus, capacity.cpu_oversubscription,
         )));
     }

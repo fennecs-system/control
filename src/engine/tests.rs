@@ -2,6 +2,15 @@
 use super::*;
 
 #[test]
+fn storage_quota_follows_the_driver_and_backing_filesystem() {
+    assert!(quota_capable("overlay2 [[\"Backing Filesystem\",\"xfs\"],[\"Supports d_type\",\"true\"]]"));
+    assert!(!quota_capable("overlay2 [[\"Backing Filesystem\",\"extfs\"]]"));
+    assert!(!quota_capable("overlayfs [[\"driver-type\",\"io.containerd.snapshotter.v1\"]]"));
+    assert!(quota_capable("btrfs null\n"));
+    assert!(!quota_capable(""));
+}
+
+#[test]
 fn stats_and_processes_parse_engine_output_and_stay_bounded() {
     let stats = parse_stats("abc\t1.25%\t200MiB / 2GiB\t12\nbad line\n");
     assert_eq!(stats.len(), 1);

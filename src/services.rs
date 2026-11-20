@@ -357,6 +357,7 @@ fn start(shared: &Arc<Mutex<State>>, run: &str, generation: &str, nonce: &str, n
         ));
     }
     let profile = crate::worker_profile::Profile::inspect(image.as_str())?;
+    quota_supported(&input, crate::engine::storage_quota)?;
     let mut s = shared.lock().map_err(|_| fail("State unavailable"))?;
     // Revalidate the captured image after the engine query outside the state lock.
     if caller(&s, run, generation)?.0.attempts.last().and_then(|a| a.image.as_deref()) != Some(image.as_str()) {
@@ -375,6 +376,14 @@ fn start(shared: &Arc<Mutex<State>>, run: &str, generation: &str, nonce: &str, n
         profile,
         crate::storage::save,
     )
+}
+/// A writable-layer cap the engine cannot enforce is refused before admission,
+/// so it never reserves capacity and is never silently dropped.
+fn quota_supported(input: &Input, quota: impl FnOnce() -> io::Result<bool>) -> io::Result<()> {
+    if input.storage_limit_mb.is_some() && !quota()? {
+        return Err(fail("storage_limit_mb is unsupported on this node: its container storage driver cannot cap a writable layer. Nothing was started or reserved; retry without storage_limit_mb"));
+    }
+    Ok(())
 }
 #[derive(Clone, Copy)]
 struct Request<'a> {
@@ -538,8 +547,10 @@ fn transition(
     let resource = &s.services[index].resource;
     let decision = decide(resource, resource.stamp(), event, time).map_err(fail)?;
     if resource.phase != decision.phase || (observed && !s.services[index].diagnostic.is_empty()) {
+        // A refused creation keeps the engine's reason for status and the page.
+        let failed = matches!(decision.phase, Phase::Stopping { reason: StopReason::Failed, .. } | Phase::Stopped(StopReason::Failed));
         let previous = std::mem::replace(&mut s.services[index].resource.phase, decision.phase);
-        let diagnostic = std::mem::take(&mut s.services[index].diagnostic);
+        let diagnostic = if failed { s.services[index].diagnostic.clone() } else { std::mem::take(&mut s.services[index].diagnostic) };
         if let Err(error) = save(s) {
             s.services[index].resource.phase = previous;
             s.services[index].diagnostic = diagnostic;
@@ -920,12 +931,7 @@ fn drive(
         };
         let result = (|| -> io::Result<()> {
             match effect {
-                Effect::Create => {
-                    if eligible(shared, &service, time)? {
-                        let id = engine.create(&service)?;
-                        apply(shared, &service, Event::Created(id), time, &save)?;
-                    }
-                }
+                Effect::Create => create(shared, engine, &service, time, &save)?,
                 Effect::Inspect => {
                     let observation = service
                         .resource
@@ -960,12 +966,7 @@ fn drive(
                     };
                     if let Some((next, effect)) = apply(shared, &service, event, time, &save)? {
                         match effect {
-                            Effect::Create => {
-                                if eligible(shared, &next, time)? {
-                                    let id = engine.create(&next)?;
-                                    apply(shared, &next, Event::Created(id), time, &save)?;
-                                }
-                            }
+                            Effect::Create => create(shared, engine, &next, time, &save)?,
                             Effect::Start => {
                                 if eligible(shared, &next, time)? {
                                     engine.start(&verify(
@@ -994,6 +995,20 @@ fn drive(
         }
     }
     Ok(())
+}
+/// An engine refusal is final for this record: the agent sees the reason and
+/// starts a corrected service instead of a retry loop holding its reservation.
+/// The stop still inspects before releasing, so a container a refused request
+/// left behind is verified and removed. The chat's workspace is never touched.
+fn create(shared: &Arc<Mutex<State>>, engine: &mut impl Engine, service: &Service, time: u64, save: &impl Fn(&State) -> io::Result<()>) -> io::Result<()> {
+    if !eligible(shared, service, time)? { return Ok(()); }
+    match engine.create(service) {
+        Ok(id) => apply(shared, service, Event::Created(id), time, save).map(drop),
+        Err(error) => {
+            diagnose(shared, Some(&service.resource.id), &error, save)?;
+            apply(shared, service, Event::Stop(StopReason::Failed), time, save).map(drop)
+        }
+    }
 }
 fn eligible(shared: &Arc<Mutex<State>>, expected: &Service, time: u64) -> io::Result<bool> {
     identity::authorize(&expected.actor, Action::Task).map_err(fail)?;

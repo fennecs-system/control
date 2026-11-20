@@ -95,6 +95,9 @@ struct Fake {
     records: HashMap<String, Inspection>,
     hide_inventory: bool,
     unavailable: bool,
+    /// Refuse creation; `leave` also leaves a dormant container behind.
+    refuse: bool,
+    leave: bool,
     creates: usize,
     starts: usize,
     removes: usize,
@@ -121,7 +124,12 @@ impl Engine for Fake {
     fn create(&mut self, s: &Service) -> io::Result<ContainerId> {
         self.creates += 1;
         let id = "b".repeat(64);
-        self.records.insert(id.clone(), inspection(s, &id));
+        if !self.refuse || self.leave {
+            self.records.insert(id.clone(), inspection(s, &id));
+        }
+        if self.refuse {
+            return Err(fail("Could not create capped service: --storage-opt is supported only for overlay over xfs"));
+        }
         id.try_into().map_err(fail)
     }
     fn start(&mut self, binding: &Verified<'_>) -> io::Result<()> {
@@ -646,6 +654,44 @@ fn scope_or_identity_mismatch_never_authorizes_start_or_removal() {
         s.services[0].resource.phase.container().is_some(),
         "Fencing must retain the known container identity"
     );
+}
+#[test]
+fn refused_creation_fails_once_keeps_its_diagnostic_and_releases_capacity() {
+    for (leave, stuck) in [(false, false), (true, false), (false, true)] {
+        let (mut s, run, _, time) = fixture();
+        admit_fixture(&mut s, &run, time, |_| Ok(())).unwrap();
+        if stuck {
+            // A record an earlier build left retrying in Creating.
+            s.services[0].resource.phase = Phase::Creating;
+            s.services[0].diagnostic = "Could not create capped service: old".into();
+        }
+        let shared = Arc::new(Mutex::new(s));
+        let mut engine = Fake { refuse: true, leave, ..Fake::default() };
+        drive(&shared, &mut engine, "node-a", time, |_| Ok(())).unwrap();
+        assert_eq!(
+            shared.lock().unwrap().services[0].resource.phase,
+            Phase::Stopping { container: None, reason: StopReason::Failed }
+        );
+        drive(&shared, &mut engine, "node-a", time, |_| Ok(())).unwrap();
+        drive(&shared, &mut engine, "node-a", time, |_| Ok(())).unwrap();
+        assert_eq!(engine.creates, 1, "A refusal is never retried");
+        assert_eq!((engine.starts, engine.removes), (0, usize::from(leave)));
+        assert!(engine.records.is_empty(), "A container the refusal left is removed");
+        let state = shared.lock().unwrap();
+        let service = &state.services[0];
+        assert_eq!(service.resource.phase, Phase::Stopped(StopReason::Failed));
+        assert_eq!(service.phase_name(), "Failed");
+        assert!(service.summary()["diagnostic"].as_str().unwrap().contains("--storage-opt is supported only"));
+        assert_eq!(compute::reserved(&state.services).memory_bytes, 0);
+    }
+}
+#[test]
+fn unsupported_storage_quota_is_refused_before_admission() {
+    let capped: Input = serde_json::from_value(json!({"command":"sleep 30","storage_limit_mb":16000})).unwrap();
+    let error = quota_supported(&capped, || Ok(false)).unwrap_err().to_string();
+    assert!(error.contains("Nothing was started or reserved"), "{error}");
+    assert!(quota_supported(&capped, || Ok(true)).is_ok());
+    assert!(quota_supported(&input("sleep 30"), || panic!("Uncapped starts never probe")).is_ok());
 }
 #[test]
 fn idle_supervision_does_not_query_the_engine() {

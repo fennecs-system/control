@@ -159,6 +159,8 @@ pub enum StopReason {
     Revoked,
     Exited,
     Lost,
+    /// The engine refused to create the container; nothing was started.
+    Failed,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

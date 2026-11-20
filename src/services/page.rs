@@ -223,6 +223,7 @@ pub(super) fn phase(phase: &Phase) -> &'static str {
         Phase::Starting(_) => "Starting",
         Phase::Running(_) => "Running",
         Phase::Stopping { .. } => "Stopping",
+        Phase::Stopped(StopReason::Failed) => "Failed",
         Phase::Stopped(_) => "Stopped",
         Phase::Fenced { .. } => "Fenced",
     }

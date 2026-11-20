@@ -49,7 +49,8 @@ The service defaults above are floors. With more RAM (for example a service
 [persistent tools](PERSISTENT-TOOLS.md). New services keep task data in a
 disk-backed `/workspace` volume with no default disk cap; `/tmp` is 128 MiB of
 RAM-backed scratch. An optional `storage_limit_mb` caps only the private writable
-layer (not mounts) and needs Docker storage-driver quota support. Nix store
+layer (not mounts) and needs Docker storage-driver quota support; other nodes
+refuse it before reserving anything. Nix store
 additions count toward that layer. Existing services keep the storage policy they
 started with.
 
