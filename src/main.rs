@@ -4,6 +4,7 @@ mod backend;
 mod agent_message;
 mod application;
 mod approvals;
+mod auto_approval;
 mod bots;
 #[path = "../tools/service-runner/frame.rs"]
 #[allow(dead_code)]
@@ -118,6 +119,9 @@ struct State {
     lens_library: control_context::Library,
     personas: control_context::persona::Library,
     packages: Vec<packages::Manifest>,
+    /// Requests the node's policy approved, newest last and bounded.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    auto_decisions: Vec<auto_approval::Record>,
     messages: Vec<String>,
     agents: Vec<String>,
     note: String,

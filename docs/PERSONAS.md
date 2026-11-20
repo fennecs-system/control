@@ -41,6 +41,16 @@ rather than falling back.
   standing decides the role: read-only personas are judges (`role`, if given,
   must agree). There is no separate `control_bot_spawn`: spawn the persona, then
   `control_bot_request` (or a schedule behaviour) makes it a bot.
+  The operator approves `control_bot_request`. With the node's automatic
+  approval in Auto ([ports](PORTS.md#automatic-approval)), the request is
+  approved at once and recorded with the policy as decider when all of these hold:
+  - the requester's top-level chat is an authorized operator's task;
+  - the tree is within its spawn limit (`max_agents_per_root`);
+  - the tree runs fewer than 8 bots, and the node fewer than 32;
+  - the chat is not a read-only advisor or antibody.
+
+  Anything else asks. `/bot off` stops the bot as usual. Bot requests filed by
+  a schedule behaviour at spawn time always ask.
 - **Root DM:** `/persona lead` in the terminal, `!persona lead` on Discord, or
   `control.chat.persona`. The persona's genes become the DM's DNA (the gene
   picker can still change them) and each message captures the persona. Its body

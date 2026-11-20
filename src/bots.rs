@@ -9,6 +9,7 @@ pub use lifecycle::Facts;
 pub use tools::{BotCall, BotOps, Tools};
 use crate::runtime::RunKind;
 use crate::{State, identity, tool_registry::AttemptRef};
+use control::permissions::{AutoApproval, Mode};
 use control_bot::{BotId, Budget, ChatId, Definition, Event, Restart, Source, Status, Topic, TurnId};
 use control_effect::machine::{Machine, Now, Planned};
 use serde::{Deserialize, Serialize};
@@ -1282,10 +1283,16 @@ fn related(state: &State, chat: &str, requester: &str, actor: &identity::Actor) 
 
 /// Worker tool entry point: agents request bots and read their state.
 pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call: BotCall) -> io::Result<Value> {
+    // Read outside the state lock.
+    let policy = control::permissions::read().auto_approval;
     let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
-    handle(&mut state, attempt, call, crate::storage::save)
+    handle_with(&mut state, attempt, call, crate::storage::save, &policy)
 }
+#[cfg(test)]
 fn handle(state: &mut State, attempt: &AttemptRef<'_>, call: BotCall, save: impl Fn(&State) -> io::Result<()>) -> io::Result<Value> {
+    handle_with(state, attempt, call, save, &AutoApproval::default())
+}
+fn handle_with(state: &mut State, attempt: &AttemptRef<'_>, call: BotCall, save: impl Fn(&State) -> io::Result<()>, policy: &AutoApproval) -> io::Result<Value> {
     let run = state.runtime.runs.iter()
         .find(|run| run.id == attempt.run && run.status == "running"
             && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation))
@@ -1364,14 +1371,28 @@ fn handle(state: &mut State, attempt: &AttemptRef<'_>, call: BotCall, save: impl
                 return Err(fail("Too many pending bot requests; wait for the operator"));
             }
             let previous = state.bots.clone();
+            // An automatic approval starts the bot, which touches the chats and rooms too.
+            let checkpoint = (policy.mode == Mode::Auto).then(|| crate::chat::Checkpoint::capture(state, &[requester.as_str(), chat_id.as_str()].into_iter().collect()));
+            let decisions = state.auto_decisions.clone();
             state.bots.approvals.retain(|a| !(a.acknowledged && a.decision != Decision::Pending));
             let approval = Approval { id, chat: chat_id, requester: requester.clone(), origin, every_minutes, room: room && linked && !advisor, decision: Decision::Pending, acknowledged: false };
+            let id = approval.id.clone();
             let mut value = approval.summary();
             value["approval"] = json!(format!("Waiting for the operator: approve in this chat or with /bot allow {} (also over Discord). End your turn; you will be resumed with the decision.", approval.id));
             state.bots.approvals.push(approval);
             bump(state, &requester);
+            if let Some(rule) = auto_decide(state, &id, policy, Now(now_ms())) {
+                value = state.bots.approvals.iter().find(|a| a.id == id).map_or(value, Approval::summary);
+                value["decided_by"] = json!("policy");
+                value["rule"] = json!(rule);
+                value["approval"] = json!("Approved automatically by the node's policy: the chat now runs as a persistent bot. Continue your task.");
+            }
             if let Err(error) = save(state) {
-                state.bots = previous;
+                match checkpoint {
+                    Some(checkpoint) => checkpoint.restore(state),
+                    None => state.bots = previous,
+                }
+                state.auto_decisions = decisions;
                 return Err(error);
             }
             Ok(value)
@@ -1428,6 +1449,50 @@ fn decide(state: &mut State, id: &str, allow: bool, chat: Option<&str>, now: Now
     state.bots.approvals[index].decision = if allow { Decision::Approved } else { Decision::Denied };
     bump(state, &approval.requester);
     Ok(if allow { "Bot request approved; the chat now runs as a bot." } else { "Bot request denied." })
+}
+
+/// Persistent bots running now (approved and not stopping), by chat.
+pub(crate) fn active(state: &State) -> Vec<&str> {
+    state.bots.supervisor.definitions().map(|definition| definition.chat.0.as_str()).filter(|chat| state.bots.persists(chat)).collect()
+}
+/// What the approval policy decides a bot request on.
+fn facts<'a>(state: &'a State, approval: &Approval) -> Option<crate::auto_approval::BotFacts<'a>> {
+    let session = state.chats.iter().find(|session| session.id == approval.requester)?;
+    let top = root(state, &approval.requester)?;
+    let lead = state.chats.iter().find(|session| session.id == top)?;
+    let tree = crate::chat::tree(state, top);
+    let bots = active(state);
+    Some(crate::auto_approval::BotFacts {
+        actor: &session.actor,
+        operator_tree: lead.parent_chat.is_none() && lead.actor == session.actor && identity::authorize(&lead.actor, identity::Action::Task).is_ok(),
+        observer: judge_chat(state, &approval.chat),
+        task_chats: tree.len(),
+        spawn_limit: state.runtime.execution.max_agents_per_root,
+        task_bots: bots.iter().filter(|chat| tree.contains(**chat)).count(),
+        node_bots: bots.len(),
+    })
+}
+/// Applies the node's automatic approval policy (`crate::auto_approval`) to
+/// the pending request `id`. When the rules approve, the operator's decision
+/// is made at once and recorded with the policy as decider; the requester
+/// learns it from its tool result, so no decision turn follows. Returns the
+/// rule, or `None` when the request stays with the operator.
+fn auto_decide(state: &mut State, id: &str, policy: &AutoApproval, now: Now) -> Option<&'static str> {
+    use crate::auto_approval::{Request, Verdict, classify};
+    if policy.mode != Mode::Auto {
+        return None;
+    }
+    let approval = state.bots.approvals.iter().find(|a| a.id == id && a.decision == Decision::Pending)?.clone();
+    let Verdict::Approve(rule) = classify(policy, &Request::Bot(facts(state, &approval)?)) else { return None };
+    let checkpoint = crate::chat::Checkpoint::capture(state, &[approval.requester.as_str(), approval.chat.as_str()].into_iter().collect());
+    if decide(state, id, true, None, now).is_err() {
+        checkpoint.restore(state);
+        return None;
+    }
+    state.bots.approvals.iter_mut().filter(|a| a.id == id).for_each(|a| a.acknowledged = true);
+    let what = format!("persistent bot {} ({})", crate::callsigns::name_or_id(&state.chats, &approval.chat), approval.chat);
+    crate::auto_approval::record(state, policy, "bot", id, &approval.requester, what, rule);
+    Some(rule)
 }
 
 /// Resumes each requesting agent once all its requests are decided, if the

@@ -2331,3 +2331,5 @@ mod recovery;
 mod timeout;
 #[path = "tests/handoff_cost.rs"]
 mod handoff_cost;
+#[path = "tests/auto_approval.rs"]
+mod auto_approval;

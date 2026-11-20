@@ -481,9 +481,21 @@ fn admit(
 pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call: PortCall) -> io::Result<Value> {
     let (run, generation) = (attempt.run, attempt.generation);
     let node = NodeId::try_from(crate::config::node_id().map_err(fail)?).map_err(fail)?;
+    let call = match call {
+        PortCall::Request(input) => {
+            let value = admit(&mut *shared.lock().map_err(|_| fail("State unavailable"))?, run, generation, attempt.nonce, input, node, crate::storage::save)?;
+            // The policy is read and the endpoint pinned without the state lock.
+            let policy = control::permissions::read().auto_approval;
+            let Some(id) = value["port_id"].as_str().filter(|_| value["status"] == "pending") else { return Ok(value) };
+            return Ok(auto_approve(shared, id, &policy, crate::storage::save,
+                |service, container| crate::services::port_binding(service, container).map(|_| ()),
+                |endpoint, loopback| endpoint.pin(loopback)).unwrap_or(value));
+        }
+        other => other,
+    };
     let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
     let (stop, port_id) = match call {
-        PortCall::Request(input) => return admit(&mut state, run, generation, attempt.nonce, input, node, crate::storage::save),
+        PortCall::Request(_) => unreachable!("handled above"),
         PortCall::Status(port_id) => (None, port_id),
         PortCall::Stop(Selection::Port(port_id)) => (Some(None), Some(port_id)),
         PortCall::Stop(Selection::Matching { service, direction }) => (Some(Some((service, direction))), None),
@@ -600,6 +612,103 @@ fn approve(
     }
     Ok(())
 }
+/// What every approval checks first: the pending request, a snapshot of its
+/// service and, for a peer route, the peer ingress endpoint.
+fn review(state: &State, id: &str) -> io::Result<(Port, Service, Option<SocketAddr>)> {
+    let p = state
+        .ports
+        .iter()
+        .find(|p| p.id.as_str() == id && p.status == Status::Pending)
+        .ok_or_else(|| fail("Pending port not found"))?;
+    let peer = p.peer.is_some().then(|| peer_endpoint(state, p, now())).transpose()?;
+    Ok((p.clone(), service(state, p, now())?.binding_snapshot(), peer))
+}
+/// The chat whose agent asked: the requesting run's chat, else the owner.
+fn requester<'a>(state: &'a State, port: &'a Port) -> &'a str {
+    state.runtime.runs.iter().find(|run| run.id == port.origin_run).and_then(|run| run.chat_id.as_deref()).unwrap_or(&port.chat)
+}
+/// The facts the approval policy decides on.
+fn facts<'a>(state: &'a State, port: &'a Port) -> crate::auto_approval::PortFacts<'a> {
+    let root = crate::chat::team_root(state, requester(state, port));
+    let in_task = |chat: &str| crate::chat::team_root(state, chat) == root;
+    crate::auto_approval::PortFacts {
+        actor: &port.actor,
+        ingress: port.direction == Direction::Ingress,
+        service_port: port.service_port.get(),
+        target: port.target.as_ref().map(|target| (target.host.as_str(), target.port.get())),
+        peer_in_task: port.peer.as_ref().map(|peer| state.ports.iter().any(|p| &p.id == peer && p.status == Status::Approved && in_task(&p.chat))),
+        service_in_task: in_task(&port.chat),
+        task_ports: state.ports.iter().filter(|p| p.status != Status::Stopped && in_task(&p.chat)).count(),
+    }
+}
+/// Plain text for records and notices.
+fn describe(port: &Port) -> String {
+    let route = match (&port.target, &port.peer) {
+        (Some(target), _) => format!("service :{} → {}:{}", port.service_port, target.host, target.port),
+        (None, Some(peer)) => format!("service :{} → peer ingress {}", port.service_port, peer.as_str()),
+        (None, None) => format!("host 127.0.0.1 → service :{}", port.service_port),
+    };
+    format!("{} {} ({route})", match port.direction { Direction::Ingress => "ingress", Direction::Egress => "egress" }, port.name.0)
+}
+/// Applies the node's automatic approval policy (`crate::auto_approval`) to
+/// the pending request `id`. An approval makes the operator's transition for
+/// the service's lifetime, after the same service and endpoint checks; it
+/// returns the approved summary. Anything else, including a failed check or
+/// a name that pins to a private address, leaves the request with the
+/// operator and returns `None`.
+fn auto_approve(
+    shared: &Arc<Mutex<State>>,
+    id: &str,
+    policy: &control::permissions::AutoApproval,
+    save: impl FnOnce(&State) -> io::Result<()>,
+    verify: impl FnOnce(&Service, &ContainerId) -> io::Result<()>,
+    pin: impl FnOnce(&Endpoint, bool) -> io::Result<SocketAddr>,
+) -> Option<Value> {
+    use crate::auto_approval::{Request, Verdict, classify};
+    let (rule, request, service, peer) = {
+        let state = shared.lock().ok()?;
+        let port = state.ports.iter().find(|p| p.id.as_str() == id && p.status == Status::Pending)?;
+        let Verdict::Approve(rule) = classify(policy, &Request::Port(facts(&state, port))) else { return None };
+        let (request, service, peer) = review(&state, id).ok()?;
+        (rule, request, service, peer)
+    };
+    verify(&service, &request.container).ok()?;
+    // Only a listed standing target may be a literal loopback address.
+    let loopback = rule == "standing-target"
+        && request.target.as_ref().is_some_and(|target| target.host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback()));
+    let pinned = match peer {
+        Some(peer) => Some(peer),
+        None => match request.target.as_ref() {
+            Some(target) => Some(pin(target, loopback).ok()?),
+            None => None,
+        },
+    };
+    let mut state = shared.lock().ok()?;
+    let index = state.ports.iter().position(|p| p.id.as_str() == id)?;
+    let (old, decisions, notices) = (state.ports[index].clone(), state.auto_decisions.clone(), state.bots.notices.clone());
+    approve(&mut state, id, -1, loopback, pinned, now(), |_| Ok(())).ok()?;
+    // The tool result carries the decision, so no decision turn follows.
+    state.ports[index].decision = Some(decisions::Receipt::settled(true));
+    let chat = requester(&state, &old).to_owned();
+    crate::auto_approval::record(&mut state, policy, "port", id, &chat, describe(&old), rule);
+    if save(&state).is_err() {
+        state.ports[index] = old;
+        state.auto_decisions = decisions;
+        state.bots.notices = notices;
+        return None;
+    }
+    let mut value = state.ports[index].summary();
+    value["decided_by"] = json!("policy");
+    value["rule"] = json!(rule);
+    Some(value)
+}
+/// Open ports, one line each, for the Permissions page.
+pub(crate) fn overview(state: &State) -> Vec<String> {
+    state.ports.iter().filter(|p| p.status != Status::Stopped).map(|p| {
+        let auto = crate::auto_approval::rule(state, p.id.as_str()).map(|rule| format!(" <span class='tag'>auto · {}</span>", crate::escape(&rule))).unwrap_or_default();
+        format!("<p>{} · {} · {:?}{auto}</p>", crate::escape(&p.name.0), route(state, p), p.status)
+    }).collect()
+}
 pub fn http(
     stream: &mut TcpStream,
     shared: &Arc<Mutex<State>>,
@@ -648,16 +757,7 @@ pub(crate) fn http_with_save(
                     return Err(e);
                 }
             } else {
-                let (request, service, peer) = {
-                    let state = shared.lock().map_err(|_| fail("State unavailable"))?;
-                    let p = state
-                        .ports
-                        .iter()
-                        .find(|p| p.id.as_str() == id && p.status == Status::Pending)
-                        .ok_or_else(|| fail("Pending port not found"))?;
-                    let peer = p.peer.is_some().then(|| peer_endpoint(&state, p, now())).transpose()?;
-                    (p.clone(), service(&state, p, now())?.binding_snapshot(), peer)
-                };
+                let (request, service, peer) = review(&*shared.lock().map_err(|_| fail("State unavailable"))?, id)?;
                 if request.node.as_str() != crate::config::node_id().map_err(fail)? {
                     return Err(fail("Port belongs to another node"));
                 }
@@ -697,7 +797,8 @@ pub(crate) fn http_with_save(
             let detail=route(&state,p);
             let action=if p.status==Status::Pending{format!("<label>Allow for<select name='seconds'><option value='-1'>Service lifetime</option><option value='900'>Up to 15 minutes</option><option value='3600'>Up to 1 hour</option></select></label><p class='muted'>Access ends when this service stops. You can revoke it at any time.</p>{}<button class='primary'>Allow port</button><button name='revoke' value='yes' formnovalidate>Deny</button>",if p.target.is_some(){"<label><input type='checkbox' name='loopback' value='yes'> Allow this exact literal loopback target</label>"}else{""})}else{"<button name='revoke' value='yes'>Revoke</button>".into()};
             let address=p.approval.as_ref().filter(|a|a.host_port!=0).map(|a|format!(" · 127.0.0.1:{}",a.host_port)).unwrap_or_default();
-            format!("<article><h3>{}</h3><p>{detail}{address}</p><p>{:?} · {} · {} · {}</p><p>{}</p><form class='decision-form' method='post' action='/tools/ports'><input type='hidden' name='id' value='{}'>{action}</form></article>",crate::escape(&p.name.0),p.status,crate::escape(&p.chat),if p.ready{"ready"}else{"waiting"},crate::escape(p.service.as_str()),crate::escape(&p.diagnostic),crate::escape(p.id.as_str()))
+            let auto=crate::auto_approval::rule(&state,p.id.as_str()).map(|rule|format!("<span class='tag'>auto · {}</span>",crate::escape(&rule))).unwrap_or_default();
+            format!("<article>{auto}<h3>{}</h3><p>{detail}{address}</p><p>{:?} · {} · {} · {}</p><p>{}</p><form class='decision-form' method='post' action='/tools/ports'><input type='hidden' name='id' value='{}'>{action}</form></article>",crate::escape(&p.name.0),p.status,crate::escape(&p.chat),if p.ready{"ready"}else{"waiting"},crate::escape(p.service.as_str()),crate::escape(&p.diagnostic),crate::escape(p.id.as_str()))
         }).collect::<String>();
         Ok(crate::render(
             &state,
@@ -1306,3 +1407,7 @@ mod live_tests;
 #[cfg(test)]
 #[path = "ports/tests/restore_tests.rs"]
 mod restore_tests;
+
+#[cfg(test)]
+#[path = "ports/tests/auto_tests.rs"]
+mod auto_tests;
