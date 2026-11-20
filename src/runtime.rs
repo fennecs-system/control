@@ -251,6 +251,7 @@ impl Runtime {
             if let Some(run) = self.runs.iter_mut().find(|r| {
                 r.id == id
                     && crate::application::runs::status::resumable(&r.status)
+                    && !crate::design::asked(r)
             }) {
                 if let Err(message) = identity::authorize(&run.actor, run.action) {
                     self.notice = message.into();

@@ -80,6 +80,8 @@ const TOOLS: &[Tool] = &[
         schema: || json!({"type":"object","properties":{"id":{"type":"string","description":ID},"team":{"type":"boolean","default":false},"service_id":{"type":"string","maxLength":128}},"required":["id"]}) },
     Tool { name: "chat_open", write: true, description: "Request host folders for a chat (as /open, or an agent's folder request). Each request waits for the operator, who is pinged on Discord when forwarding is on. A chat holds one pending request at a time, so several paths need folder approvals enabled in Manage → Permissions; then each is requested and approved in turn.",
         schema: || json!({"type":"object","properties":{"id":{"type":"string","description":ID},"paths":{"type":"array","items":{"type":"string","maxLength":4096},"minItems":1,"maxItems":16,"description":"Absolute folder paths on the Control node."}},"required":["id","paths"]}) },
+    Tool { name: "control_design_ask", write: true, description: "The decision tool Control's agents use, for this caller: ask the operator a consequential choice with 2–4 options and optionally a recommended index. The question is listed by chat_requests, shown in the web UI and TUI and forwarded to Discord; the operator answers it there. Asking approves nothing and pauses nothing. With id it is asked in that DM, which must be an idle operator DM; otherwise in the operator's Decisions DM. The answer is appended to that DM: read it with chat_read.",
+        schema: || { let mut schema = crate::design::definition()["inputSchema"].clone(); schema["properties"]["id"] = json!({"type":"string","description":"Optional idle operator DM to ask in (default: the Decisions DM)."}); schema } },
     Tool { name: "chat_decide", write: true, description: "Decide a pending request that chat_requests listed, for the kinds the operator enabled in Manage → Permissions (listed only when one is). kind folder or port: decision allow|deny (loopback=true for a loopback port target); bot: allow|deny; question: answer text.",
         schema: || json!({"type":"object","properties":{"id":{"type":"string","description":"The chat chat_requests names for this request."},"kind":{"type":"string","enum":Approvals::KINDS},"request":{"type":"string","maxLength":128},"decision":{"type":"string","enum":["allow","deny"]},"loopback":{"type":"boolean","default":false},"answer":{"type":"string","maxLength":2000}},"required":["id","kind","request"]}) },
 ];
@@ -332,6 +334,15 @@ fn chat_decide(remote: &mut impl Remote, args: &Value, approvals: Approvals) -> 
     }
 }
 
+fn design_ask(remote: &mut impl Remote, args: &Value) -> io::Result<String> {
+    let mut arguments = json!({"question":args["question"],"options":args["options"]});
+    if !args["recommended"].is_null() { arguments["recommended"] = args["recommended"].clone(); }
+    if !args["id"].is_null() { arguments["id"] = json!(chat_id(args)?); }
+    let asked = remote.tool("control.chat.ask", arguments)?;
+    Ok(format!("Asked question {} in chat {}. The operator answers it in Control (web, TUI) or by Discord reply; asking approves nothing. Its answer is appended to that chat: read it with chat_read.",
+        text(&asked, "question_id"), text(&asked, "chat_id")))
+}
+
 fn chat_create(remote: &mut impl Remote, args: &Value) -> io::Result<String> {
     let title = match args.get("title") {
         None | Some(Value::Null) => None,
@@ -433,6 +444,7 @@ pub(crate) fn call(remote: &mut impl Remote, name: &str, args: &Value, approvals
         "chat_cancel" => chat_cancel(remote, args),
         "chat_stop_services" => chat_stop_services(remote, args),
         "chat_open" => chat_open(remote, args, approvals),
+        "control_design_ask" => design_ask(remote, args),
         "chat_decide" => chat_decide(remote, args, approvals),
         _ => Err(fail("Unknown tool. This bridge serves chat tools only.")),
     }?;
@@ -444,7 +456,7 @@ fn dispatch<R: Remote>(connect: &mut impl FnMut() -> io::Result<R>, connection: 
     let result = match request["method"].as_str().unwrap_or("") {
         _ if request["jsonrpc"] != "2.0" => Err((-32600, "Invalid JSON-RPC request".to_owned())),
         "initialize" => Ok(json!({"protocolVersion":control_context::tool_policy::negotiate(request["params"]["protocolVersion"].as_str()),"capabilities":{"tools":{}},"serverInfo":{"name":"control-chat","version":env!("CARGO_PKG_VERSION")},
-            "instructions":"Drive Control chats as the local operator: chats_list, chat_create, chat_send, chat_read. chat_open raises folder requests; decisions stay with the operator unless enabled in Manage → Permissions (then chat_decide)."})),
+            "instructions":"Drive Control chats as the local operator: chats_list, chat_create, chat_send, chat_read. chat_open raises folder requests and control_design_ask asks the operator a decision (its answer appears in that chat); decisions stay with the operator unless enabled in Manage → Permissions (then chat_decide)."})),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({"tools":definitions(false, control::permissions::read().mcp_approvals)})),
         "tools/call" => {

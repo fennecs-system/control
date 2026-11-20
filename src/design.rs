@@ -146,19 +146,7 @@ fn ask_with_save(
                 Err("This attempt already has a design question.")
             };
         }
-    let digest = ring::digest::digest(
-        &ring::digest::SHA256,
-        format!("{generation}:{nonce}").as_bytes(),
-    );
-    let id = format!(
-        "q-{}",
-        digest
-            .as_ref()
-            .iter()
-            .take(16)
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>()
-    );
+    let id = question_id(&generation, nonce);
     let previous = state.runtime.runs[index].question.clone();
     let revision = state.chats[chat_index].revision;
     state.runtime.runs[index].question = Some(Question {
@@ -179,12 +167,118 @@ fn ask_with_save(
         json!({"question_id":id,"status":"pausing","instruction":"Stop work. Control will resume this task when the user answers."}),
     )
 }
-pub fn waiting<'a>(state: &'a State, chat_id: &str) -> Option<&'a runtime::Run> {
+fn question_id(generation: &str, nonce: &str) -> String {
+    let digest = ring::digest::digest(
+        &ring::digest::SHA256,
+        format!("{generation}:{nonce}").as_bytes(),
+    );
+    format!(
+        "q-{}",
+        digest
+            .as_ref()
+            .iter()
+            .take(16)
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    )
+}
+
+/// Source of a question the operator's chat MCP caller raised (`control_design_ask` with no run).
+/// No attempt waits on it: answering only records the answer.
+pub const ASKED: &str = "chat-ask";
+/// The operator-desk DM that holds operator-side questions raised without a chat.
+pub const DESK: &str = "Decisions";
+/// Unanswered operator-side questions at once; each also counts toward admission.
+const MAX_ASKED: usize = 8;
+pub fn asked(run: &runtime::Run) -> bool {
+    run.source == ASKED && run.attempts.is_empty()
+}
+/// The operator's root DM named [`DESK`], if one exists.
+pub fn desk(state: &State) -> Option<&str> {
+    state.chats.iter()
+        .find(|c| c.parent_chat.is_none() && c.actor == identity::Actor::LocalOperator && !c.improve_mode && c.name.as_deref() == Some(DESK))
+        .map(|c| c.id.as_str())
+}
+/// Records a question for the operator from the chat MCP caller, in `chat` or
+/// else the desk DM (created once). It is an ordinary waiting design question,
+/// so every request list and notification shows it, but no run resumes from it
+/// and it approves nothing. A named chat must be an idle operator chat, so the
+/// question never pauses or queues behind a turn.
+pub fn ask_operator(state: &mut State, chat: Option<&str>, input: Input) -> Result<Value, &'static str> {
+    validate_input(&input)?;
+    identity::authorize(&identity::Actor::LocalOperator, identity::Action::Task)?;
+    if state.runtime.runs.iter().filter(|r| asked(r) && r.status == "waiting").count() >= MAX_ASKED {
+        return Err("8 questions already wait for the operator; wait for their answers before asking more.");
+    }
+    crate::scheduler::admit(&state.runtime)?;
+    let chat_id = match chat {
+        Some(id) => {
+            let session = state.chats.iter().find(|c| c.id == id).ok_or("Chat not found.")?;
+            if session.actor != identity::Actor::LocalOperator || session.improve_mode {
+                return Err("Ask only in the operator's own chat-mode DMs.");
+            }
+            if state.runtime.runs.iter().any(|r| r.chat_id.as_deref() == Some(id) && crate::application::runs::status::active(&r.status)) {
+                return Err("That chat has a turn in progress or waiting; ask without id to use the Decisions DM.");
+            }
+            id.to_owned()
+        }
+        None => match desk(state) {
+            Some(id) => id.to_owned(),
+            None => {
+                let id = chat::create(state);
+                chat::rename(state, &id, DESK)?;
+                id
+            }
+        },
+    };
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
+    let run_id = format!("{stamp:x}-{}", state.runtime.runs.len());
+    let order = state.runtime.runs.iter().map(|r| r.queue_order).max().unwrap_or(0).saturating_add(1);
+    let mut run = crate::application::runs::Submission {
+        objective: input.question.clone(), kind: RunKind::AgentMessage, source: ASKED.into(),
+        actor: identity::Actor::LocalOperator, action: identity::Action::Task,
+    }.into_run(run_id.clone(), order, state.runtime.backend, None);
+    let question = Question { id: question_id(&run_id, ASKED), generation: run_id.clone(), nonce: ASKED.into(), input, answer: None, continuation: None };
+    let id = question.id.clone();
+    run.status = "waiting".into();
+    run.chat_id = Some(chat_id.clone());
+    *run.result = summary(&question);
+    run.question = Some(question);
+    state.runtime.runs.push(run);
+    chat::touch(state, &chat_id);
+    let session = state.chats.iter_mut().find(|c| c.id == chat_id).unwrap();
+    session.messages.push(chat::Message::notice("Decision requested by the chat MCP caller", Some(run_id)));
+    session.revision = session.revision.saturating_add(1);
+    Ok(json!({"question_id":id,"chat_id":chat_id}))
+}
+/// `control.chat.ask` on the operator endpoint: `control_design_ask` for a caller with no run.
+pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &'static str> {
+    match name {
+        "control.chat.ask" => {
+            let mut fields = arguments.as_object().cloned().ok_or("Arguments must be an object.")?;
+            let chat = match fields.remove("id") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(id)) if chat::valid_id(&id) => Some(id),
+                _ => return Err("Invalid chat ID."),
+            };
+            ask_operator(state, chat.as_deref(), parse_input(Value::Object(fields))?)
+        }
+        _ => Err("Unknown tool."),
+    }
+}
+
+/// The unanswered question waiting in `chat_id`: `question_id` when given,
+/// else the oldest. An agent's question holds its chat alone; the desk DM
+/// may hold several.
+fn waiting_for<'a>(state: &'a State, chat_id: &str, question_id: Option<&str>) -> Option<&'a runtime::Run> {
     state.runtime.runs.iter().find(|r| {
         r.chat_id.as_deref() == Some(chat_id)
             && r.status == "waiting"
-            && r.question.as_ref().is_some_and(|q| q.answer.is_none())
+            && r.question.as_ref().is_some_and(|q| q.answer.is_none() && question_id.is_none_or(|id| id == q.id))
     })
+}
+pub fn waiting<'a>(state: &'a State, chat_id: &str) -> Option<&'a runtime::Run> {
+    waiting_for(state, chat_id, None)
 }
 
 /// Another chat's decisions surface through recorded delegation edges or a
@@ -260,12 +354,12 @@ pub fn answer(
 ) -> Result<(), &'static str> {
     let target = question_id.map(|question|answer_target(state, chat_id, question).map(str::to_owned)).transpose()?;
     let chat_id = target.as_deref().unwrap_or(chat_id);
-    let run = waiting(state, chat_id)
-        .ok_or("No design question is ready for an answer in this chat.")?;
+    let run = waiting_for(state, chat_id, question_id).ok_or(if question_id.is_some() {
+        "That design question is no longer pending."
+    } else {
+        "No design question is ready for an answer in this chat."
+    })?;
     let question = run.question.as_ref().unwrap();
-    if question_id.is_some_and(|id| id != question.id) {
-        return Err("That design question is no longer pending.");
-    }
     let session_index = state
         .chats
         .iter()
@@ -285,6 +379,19 @@ pub fn answer(
             .clone(),
         Err(_) => text.into(),
     };
+    if asked(run) {
+        // Nothing resumes from an operator-side question; the answer stays in the DM.
+        let index = state.runtime.runs.iter().position(|r| r.id == run.id).unwrap();
+        let run = &mut state.runtime.runs[index];
+        run.question.as_mut().unwrap().answer = Some(answer.clone());
+        run.status = "completed".into();
+        *run.result = summary(run.question.as_ref().unwrap());
+        let session = &mut state.chats[session_index];
+        session.messages.push(chat::Message { speaker: Default::default(), text: answer, run_id: None,
+            reply: format!("Decision recorded for {}.", run.question.as_ref().unwrap().id) });
+        session.revision = session.revision.saturating_add(1);
+        return Ok(());
+    }
     let attempt = run
         .attempts
         .last()
