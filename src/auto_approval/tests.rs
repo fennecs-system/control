@@ -85,7 +85,10 @@ fn bots_within_limits_are_automatic_and_over_limits_ask() {
     assert_eq!(bot(BotFacts { node_bots: BOTS_PER_NODE, ..bot_facts(&actor) }), Verdict::Human("bot or spawn limit"));
     assert_eq!(bot(BotFacts { task_chats: 65, ..bot_facts(&actor) }), Verdict::Human("bot or spawn limit"));
     assert_eq!(bot(BotFacts { operator_tree: false, ..bot_facts(&actor) }), Verdict::Human("not an operator task"));
-    assert_eq!(bot(BotFacts { observer: true, ..bot_facts(&actor) }), Verdict::Ask("advisor or antibody"));
+    assert_eq!(bot(BotFacts { observer: true, ..bot_facts(&actor) }), Verdict::Approve("observer-in-limits"));
+    // Observers use their own allowance: a full team still gets one.
+    assert_eq!(bot(BotFacts { observer: true, task_bots: BOTS_PER_TASK, task_chats: 65, ..bot_facts(&actor) }), Verdict::Approve("observer-in-limits"));
+    assert_eq!(bot(BotFacts { observer: true, node_bots: BOTS_PER_NODE, ..bot_facts(&actor) }), Verdict::Human("bot or spawn limit"));
     assert_eq!(classify(&AutoApproval { bot: KindMode::Ask, ..auto() }, &Request::Bot(bot_facts(&actor))), Verdict::Human("bots set to ask"));
 }
 

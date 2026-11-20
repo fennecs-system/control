@@ -57,7 +57,8 @@ pub struct Sent {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) urgent: bool,
     /// A non-urgent message that would once have queued its non-bot
-    /// recipient's turn; it is delivered as a digest after the bound instead.
+    /// recipient's turn; it is delivered as a digest after the bound instead
+    /// (an observer's note to a non-bot lead, at once).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) digest: bool,
     /// When it was sent (Unix ms), for the digest bound.
@@ -524,7 +525,9 @@ pub(crate) fn plan(
         peer_cursor: retained_only.then_some((session.messages.len() + 1) as u64),
         note: advisor,
         urgent: call.urgent,
-        digest: descendant && !bot && !call.urgent,
+        // An observer's note reports back to an idle lead that is not a bot as
+        // a turn of its own, like a background agent's completion.
+        digest: ((descendant && !call.urgent) || advisor) && !bot,
         at_ms: 0,
     };
     let result = MessageResult::from(&receipt);

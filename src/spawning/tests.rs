@@ -575,6 +575,30 @@ fn a_judge_batch_starts_one_advisor_within_its_own_allowance_beside_the_review_j
     assert!(!delegation::is_judge(s.runtime.runs.last().unwrap()), "omitting the role keeps workers");
 }
 #[test]
+fn an_advisor_never_uses_the_teams_member_capacity() {
+    // Run 149: an advisor spawned up front took a player's place. Observers
+    // run in the background on their own allowance.
+    let (mut s, id) = active();
+    s.chats[0].lenses = Some(vec!["advisor".into()]);
+    s.runtime.execution.max_agents_per_root = 3;
+    let judge = |n| Input { role: Some(Role::Judge), ..input(n) };
+    request(&mut s, &id, "parent-attempt", "advisor", judge(1), |_| Ok(())).unwrap();
+    // The whole member budget is still free for players.
+    request(&mut s, &id, "parent-attempt", "players", input(3), |_| Ok(())).unwrap();
+    assert_eq!(s.runtime.runs.iter().filter(|run| run.kind == RunKind::Spawned && !delegation::is_judge(run)).count(), 3);
+    assert!(request(&mut s, &id, "parent-attempt", "fourth", input(1), |_| panic!("over budget")).is_err());
+    // A full team does not hold back its advisor either; only the advisor
+    // allowance does.
+    let (mut s, id) = active();
+    s.chats[0].lenses = Some(vec!["advisor".into()]);
+    s.runtime.execution.max_agents_per_root = 2;
+    request(&mut s, &id, "parent-attempt", "players", input(2), |_| Ok(())).unwrap();
+    request(&mut s, &id, "parent-attempt", "advisor", judge(1), |_| Ok(())).unwrap();
+    assert!(delegation::is_judge(s.runtime.runs.last().unwrap()));
+    // Spawning it returned at once: the lead's turn keeps running.
+    assert_eq!(s.runtime.runs.iter().find(|run| run.id == id).unwrap().status, "running");
+}
+#[test]
 fn spawned_workers_join_the_team_room_within_one_actor_and_tree() {
     // A depth-1 worker without its own link spawns under a linked lead.
     let (mut s, id) = active();

@@ -100,7 +100,7 @@ pub(crate) fn budget_for(state: &State, run: &runtime::Run, role: Role, addition
             matches!(r.kind, RunKind::Delegated | RunKind::Spawned) && r.persona.as_ref().is_some_and(|p| p.root == persona.root)
         })
         .collect();
-    let reservations=state.runtime.runs.iter().filter(|candidate|root(candidate)==persona.root).map(|candidate|candidate.spawns.iter().map(|batch|batch.reserved()).sum::<usize>() + usize::from(candidate.delegation.as_ref().is_some_and(|d|d.child.is_none()))).sum::<usize>();
+    let reservations=state.runtime.runs.iter().filter(|candidate|root(candidate)==persona.root).map(|candidate|candidate.spawns.iter().map(crate::spawning::Batch::worker_reserved).sum::<usize>() + usize::from(candidate.delegation.as_ref().is_some_and(|d|d.child.is_none()))).sum::<usize>();
     let delegated=children.iter().filter(|child|child.kind==RunKind::Delegated).count();
     if delegated.saturating_add(reservations).saturating_add(additional)>state.runtime.execution.max_agents_per_root {
         return Err("Configured per-root agent budget exhausted.");
@@ -125,10 +125,11 @@ fn spawn_rate(state: &State, run: &runtime::Run, additional: usize, now: u64) ->
     let cutoff = now.saturating_sub(SPAWN_WINDOW_MS);
     let mine = |candidate: &runtime::Run| candidate.chat_id.as_deref().is_some_and(|id| tree.contains(id));
     let automatic = |kind: &RunKind| kind.speaker() == control_context::agent_policy::MessageSpeaker::Control;
+    // Observers (spawned judges) have their own allowance and never count here.
     let recent = state.runtime.runs.iter()
-        .filter(|candidate| matches!(candidate.kind, RunKind::Delegated | RunKind::Spawned) && candidate.created_ms().is_some_and(|at| at >= cutoff) && mine(candidate))
+        .filter(|candidate| matches!(candidate.kind, RunKind::Delegated | RunKind::Spawned) && !(candidate.kind == RunKind::Spawned && is_judge(candidate)) && candidate.created_ms().is_some_and(|at| at >= cutoff) && mine(candidate))
         .collect::<Vec<_>>();
-    let reserved = |candidate: &runtime::Run| candidate.spawns.iter().map(crate::spawning::Batch::pending).sum::<usize>() + usize::from(candidate.delegation.as_ref().is_some_and(|d| d.child.is_none()));
+    let reserved = |candidate: &runtime::Run| candidate.spawns.iter().map(crate::spawning::Batch::worker_pending).sum::<usize>() + usize::from(candidate.delegation.as_ref().is_some_and(|d| d.child.is_none()));
     let pending = state.runtime.runs.iter().filter(|candidate| (!candidate.spawns.is_empty() || candidate.delegation.is_some()) && mine(candidate)).map(reserved).sum::<usize>();
     if recent.len().saturating_add(pending).saturating_add(additional) > state.runtime.execution.max_agents_per_root {
         return Err("Spawn limit for this conversation reached for the past hour. Report the blocker to the operator, or continue an existing child with control_agent_message.");

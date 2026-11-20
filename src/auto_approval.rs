@@ -155,11 +155,16 @@ fn bot(policy: &AutoApproval, facts: &BotFacts<'_>) -> Verdict {
     if !facts.operator_tree {
         return Verdict::Human("not an operator task");
     }
-    if facts.task_chats > facts.spawn_limit || facts.task_bots >= BOTS_PER_TASK || facts.node_bots >= BOTS_PER_NODE {
+    if facts.node_bots >= BOTS_PER_NODE {
         return Verdict::Human("bot or spawn limit");
     }
+    // A read-only observer is a background helper with its own allowance
+    // (`max_advisors_per_root`, checked at spawn); it never uses member capacity.
     if facts.observer {
-        return Verdict::Ask("advisor or antibody");
+        return Verdict::Approve("observer-in-limits");
+    }
+    if facts.task_chats > facts.spawn_limit || facts.task_bots >= BOTS_PER_TASK {
+        return Verdict::Human("bot or spawn limit");
     }
     Verdict::Approve("bot-in-task-limits")
 }
