@@ -12,7 +12,7 @@ const PRIMARY: &[(&str, &str, &str, &str)] = &[
 ];
 const MANAGE: &[(&str, &str)] = &[
     ("nodes", "Nodes"),
-    ("authority", "Access requests"),
+    ("authority", "Permissions"),
     ("providers", "Models &amp; providers"),
     ("discord-access", "Discord access"),
     ("integrations", "Integrations"),

@@ -513,7 +513,10 @@ container lifecycle behind one backend interface over the existing service
 
 - **External bridge writes:** `control mcp` hides room posting and chat sends;
   expose them only with the same durable run service and no inherited
-  worker/operator authority.
+  worker/operator authority. The separate operator-started
+  [chat MCP](CHAT-MCP.md) (`control mcp --chat`) sends and cancels through the
+  server's own chat functions; it decides requests only for the kinds the
+  operator enables in Manage → Permissions.
 - **Remote transport:** scoped, revocable remote MCP or preview access (for
   example over Tailscale/SSH) when a user needs it. Private networking is not
   authentication.

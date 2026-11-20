@@ -166,6 +166,7 @@ fn item<'a>(view: &'a Value, pending: &Pending<'_>) -> &'a Value {
         Kind::Bot => ("pending_bots", "/request_id"),
         Kind::Port => ("pending_ports", "/port_id"),
         Kind::Notice => ("pending_notices", "/notice_id"),
+        Kind::Folder => ("pending_folders", "/request"),
     };
     view[list].as_array().into_iter().flatten()
         .find(|item| item.pointer(key).and_then(Value::as_str) == Some(pending.id))
@@ -276,6 +277,22 @@ pub fn request(settings: &Settings, title: &str, link: &str, pending: &Pending<'
                 actions: vec![Action { id: "answer", label: "Reply…".into(), style: Style::Primary, act: Act::Prompt }, open],
                 link: link.into(),
                 hint: "No decision is needed; reply to steer the team that sent it.".into(),
+            }
+        }
+        Kind::Folder => {
+            for (label, key, max) in [("Folder", "path", 300), ("Name", "name", 100), ("Chat", "chat_id", 100)] {
+                if let Some(value) = item[key].as_str().filter(|value| !value.is_empty()) {
+                    fields.push((label, clean(value, max, false)));
+                }
+            }
+            Request {
+                title: "Folder request".into(),
+                body: "A task asks for access to a host folder. Review the exact path in Control before approving.".into(),
+                fields,
+                severity: Severity::Warning,
+                actions: vec![open],
+                link: link.into(),
+                hint: crate::client::operator::FOLDER_USAGE.into(),
             }
         }
     };
