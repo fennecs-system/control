@@ -170,3 +170,15 @@ fn a_quiet_patrol_settles_without_a_model_turn_and_activity_still_wakes_one() {
     let last = bot_runs(&state).into_iter().filter(|run| run.chat_id.as_deref() == Some(judge.as_str())).last().unwrap();
     assert_eq!(last.status, "queued", "activity on the node wakes a real patrol");
 }
+
+#[test]
+fn a_flagged_team_keeps_patrols_real_while_it_sits_idle() {
+    let mut state = State::default();
+    let (_, judge) = observer(&mut state);
+    command_at(&mut state, &judge, "on every 1", Now(1)).unwrap();
+    // An idle team still flagged as stalled: no new activity, no new facts.
+    state.bots.teams.insert("c-idle-team".into(), lifecycle::Team { stalled: true, ..Default::default() });
+    reconcile_at(&mut state, 61_000, ok).unwrap();
+    let patrol = bot_runs(&state).into_iter().filter(|run| run.chat_id.as_deref() == Some(judge.as_str())).last().unwrap();
+    assert_eq!(patrol.status, "queued", "only the patrol can see an idle stalled team");
+}
