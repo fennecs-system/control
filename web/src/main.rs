@@ -1020,10 +1020,28 @@ fn attach_disclosures(document: &web_sys::Document) -> Result<bool, JsValue> {
     Ok(true)
 }
 
+/// Forms marked `data-confirm` (destructive actions such as stopping a service
+/// or deleting a workspace) submit only after the browser's confirmation.
+/// Without the client they submit directly, as before.
+fn attach_confirmations(document: &web_sys::Document) -> Result<(), JsValue> {
+    let submit = Closure::<dyn FnMut(web_sys::SubmitEvent)>::new(move |event: web_sys::SubmitEvent| {
+        let Some(form) = event.target().map(|target| target.unchecked_into::<web_sys::Element>()) else { return };
+        let Some(message) = form.get_attribute("data-confirm") else { return };
+        let confirmed = web_sys::window().and_then(|window| window.confirm_with_message(&message).ok()).unwrap_or(true);
+        if !confirmed {
+            event.prevent_default();
+            event.stop_immediate_propagation();
+        }
+    });
+    document.add_event_listener_with_callback_and_bool("submit", submit.as_ref().unchecked_ref(), true)?;
+    submit.forget();
+    Ok(())
+}
 fn main() -> Result<(), JsValue> {
     let document = web_sys::window()
         .and_then(|w| w.document())
         .ok_or_else(|| JsValue::from_str("No document"))?;
+    attach_confirmations(&document)?;
     if attach_live(&document)? {
         return Ok(());
     }

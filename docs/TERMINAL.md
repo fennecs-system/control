@@ -4,8 +4,12 @@ The TUI is a client of the same server the website uses. It has no separate agen
 loop or terminal-only tools. Start the server, then run `control tui`. Use
 `/improve REQUEST` to ask agents to develop Control; the node must already have
 improvement authority, a source root, a provider and tool containers configured.
-`/open /absolute/path` requests another project folder, `/trust` approves the
-exact request shown and `/dismiss` rejects it. Agents work in isolated [workspaces](WORKSPACES.md).
+`/open /absolute/path` requests another project folder (list several, one per
+line with Alt+Enter or separated by spaces or commas, to request them together),
+`/trust` approves the exact request shown and `/dismiss` rejects it. Agents work
+in isolated [workspaces](WORKSPACES.md). `/services` lists this DM's and its
+team's running services and `/services stop ID` (or `all`) stops them, as on the
+[Services page](PERSISTENT-TOOLS.md#stopping-from-a-chat).
 
 ## Composer
 

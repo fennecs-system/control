@@ -46,6 +46,7 @@
 .project-picker button.secondary{background:transparent;color:var(--purple);border-color:#484052}
 .project-picker button.secondary:hover{background:#b5a0ff17;border-color:var(--purple)}
 .project-picker button+button{margin-left:6px}
+.project-picker .project-folders{margin:8px 0;padding-left:18px;color:var(--muted);overflow-wrap:anywhere}
 .project-picker textarea{display:block;width:100%;min-height:6em;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:0;padding:7px 9px;font:inherit}
 .room-tabs{display:inline-flex;flex-shrink:0;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--panel)}
 .room-tab{position:relative;margin:0!important;font-size:12px!important;cursor:pointer}

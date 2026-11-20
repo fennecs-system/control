@@ -51,3 +51,16 @@ fn memory_parses_its_switches_and_compact_is_its_status_alias() {
     let names = completions("/mem").into_iter().map(|i| DEFINITIONS[i].text).collect::<Vec<_>>();
     assert_eq!(names, ["/memory", "/memory on", "/memory off"]);
 }
+
+#[test]
+fn services_lists_and_highlights_its_stop_subcommand() {
+    let text = "/services stop svc-1a2b";
+    let command = parse(text).unwrap();
+    assert_eq!((command.kind, &text[command.highlight]), (Kind::Services, "/services stop"));
+    assert_eq!(command.tail, " stop svc-1a2b");
+    assert_eq!(tail("/services", Kind::Services), Some(""));
+    assert_eq!(&"/services stopping"[parse("/services stopping").unwrap().highlight], "/services");
+    assert!(parse("/serviced").is_none());
+    let names = completions("/serv").into_iter().map(|i| DEFINITIONS[i].text).collect::<Vec<_>>();
+    assert_eq!(names, ["/services", "/services stop"]);
+}

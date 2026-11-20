@@ -63,15 +63,76 @@ pub(crate) fn stop(state: &mut State, id: &str, time: u64, save: impl FnOnce(&St
     transition(state, index, Event::Stop(StopReason::Requested), time, save).map(|_| ())
 }
 
-/// Removes stopped service records: one by ID, or all. Live services are never
-/// touched. Returns the chats that still have services, whose workspaces stay,
-/// and the deleted service's chat when one was named.
+/// `/services [stop ID|all]` in a chat: lists or stops the live services of the
+/// chat's task tree (its top-level chat and every chat spawned beneath it), as
+/// the services page would. Only services of the chat's actor; the operator
+/// sees all of the tree's. IDs match exactly or by a unique prefix, with or
+/// without `svc-`. Workspaces are always kept.
+pub(crate) fn command(state: &mut State, chat: &str, option: &str, time: u64, save: impl Fn(&State) -> io::Result<()>) -> Result<String, &'static str> {
+    let session = state.chats.iter().find(|session| session.id == chat).ok_or("Chat not found.")?;
+    identity::authorize(&session.actor, Action::Task)?;
+    let actor = session.actor.clone();
+    let team = crate::chat::team(state, chat);
+    let live = state.services.iter()
+        .filter(|service| service.live() && team.contains(service.resource.owner.chat.as_str()))
+        .filter(|service| actor == Actor::LocalOperator || service.actor == actor)
+        .collect::<Vec<_>>();
+    let mut words = option.split_whitespace();
+    let ids = match (words.next(), words.next(), words.next()) {
+        (None | Some("list"), None, _) => return Ok(team_list(state, chat, &live)),
+        (Some("stop"), Some("all"), None) => live.iter().filter(|service| !matches!(service.resource.phase, Phase::Stopping { .. }))
+            .map(|service| service.resource.id.as_str().to_owned()).collect::<Vec<_>>(),
+        (Some("stop"), Some(wanted), None) => {
+            let wanted = wanted.strip_prefix("svc-").unwrap_or(wanted);
+            let found = live.iter().filter(|service| service.resource.id.as_str().trim_start_matches("svc-").starts_with(wanted)).collect::<Vec<_>>();
+            match found.as_slice() {
+                [service] => vec![service.resource.id.as_str().to_owned()],
+                [] => return Err("No running service of this DM's team has that ID. Use /services to list them."),
+                _ => return Err("That ID prefix matches several services. Use more of the ID shown by /services."),
+            }
+        }
+        _ => return Err("Use /services, /services stop ID or /services stop all."),
+    };
+    if ids.is_empty() {
+        return Ok("No running services to stop in this DM's team.".into());
+    }
+    for id in &ids {
+        stop(state, id, time, &save).map_err(|_| "Could not save the stop. Try again.")?;
+    }
+    Ok(format!("Stopping {}. Containers are removed; each DM's /workspace is kept. /services shows progress.", ids.join(", ")))
+}
+fn team_list(state: &State, chat: &str, live: &[&Service]) -> String {
+    if live.is_empty() {
+        return "No running services in this DM's team. Stopped services free their capacity automatically; /tools/services lists recent ones.".into();
+    }
+    let rows = live.iter().map(|service| {
+        let owner = service.resource.owner.chat.as_str();
+        let owner = if owner == chat { "this DM".to_owned() } else { crate::callsigns::name_or_id(&state.chats, owner).into_owned() };
+        format!("- {} · {} · {} · {owner} · {}", service.resource.id.as_str(), service.phase_name(), service.shape_name(), service.label())
+    }).collect::<Vec<_>>().join("\n");
+    format!("Services of this DM's team ({}):\n{rows}\nStop one with /services stop ID (a unique prefix is enough) or all with /services stop all. /workspace volumes are kept.", live.len())
+}
+
+/// Removes stopped service records before their workspaces are deleted: every
+/// stopped record of the named stopped service's DM, or all stopped records.
+/// Live services are never touched, and a DM with a live service keeps its
+/// workspace in use, so naming one of its services is refused. Returns the
+/// chats that still have services, whose workspaces stay, and the named DM.
+/// Stopped records need no other clean-up: they hold no capacity and the
+/// oldest are dropped automatically when records run out.
 pub(crate) fn forget(state: &mut State, id: Option<&str>, save: impl FnOnce(&State) -> io::Result<()>) -> io::Result<(HashSet<String>, Option<String>)> {
-    let removable = |service: &Service| !service.resource.phase.reserves_capacity() && id.is_none_or(|id| service.resource.id.as_str() == id);
     let chat = match id {
-        Some(_) => Some(state.services.iter().find(|s| removable(s)).ok_or_else(|| fail("Only a stopped service can be deleted"))?.resource.owner.chat.as_str().to_owned()),
+        Some(id) => {
+            let chat = state.services.iter().find(|s| !s.live() && s.resource.id.as_str() == id)
+                .ok_or_else(|| fail("Only a stopped service's workspace can be deleted"))?.resource.owner.chat.as_str().to_owned();
+            if state.services.iter().any(|s| s.live() && s.resource.owner.chat.as_str() == chat) {
+                return Err(fail("This DM still has a running service using its /workspace; stop it first"));
+            }
+            Some(chat)
+        }
         None => None,
     };
+    let removable = |service: &Service| !service.live() && chat.as_deref().is_none_or(|chat| service.resource.owner.chat.as_str() == chat);
     let previous = state.services.clone();
     state.services.retain(|service| !removable(service));
     if let Err(error) = save(state) {
@@ -86,8 +147,11 @@ fn clean_up(shared: &Arc<Mutex<State>>, id: Option<&str>) -> io::Result<()> {
     let (keep, chat) = forget(&mut *shared.lock().map_err(|_| fail("State unavailable"))?, id, crate::storage::save)?;
     let node = crate::config::node_id().map_err(fail)?;
     let (_, failures) = workspace::remove_unused(&node, &keep, chat.as_deref());
-    if failures.is_empty() { Ok(()) } else { Err(fail(format!("Records were removed, but some workspaces remain: {}", failures.join("; ")))) }
+    if failures.is_empty() { Ok(()) } else { Err(fail(format!("Stopped records were removed, but some workspaces remain: {}", failures.join("; ")))) }
 }
+const STOP_CONFIRM: &str = "Stop this service? Its container and any files outside /workspace are removed. The DM's /workspace is kept.";
+const DELETE_CONFIRM: &str = "Delete this DM's retained /workspace? Its files are lost and cannot be recovered.";
+const CLEANUP_CONFIRM: &str = "Delete the retained /workspace of every DM with no running service? Their files are lost and cannot be recovered.";
 
 struct Live {
     stats: Option<crate::engine::Stats>,
@@ -98,19 +162,39 @@ struct Live {
 /// which the web client fetches after the page is shown. Everything derived
 /// from state sits inside the `data-live-refresh` region, which the client
 /// re-reads from this page on each state-change hint (a stop that finishes,
-/// a new service), so actions such as Delete appear without a reload.
+/// a new service), so a finished stop moves its card to the stopped list
+/// without a reload. Stopped services need no clean-up step: they leave the
+/// cards, hold no capacity, and old records are dropped automatically.
 fn render(shared: &Arc<Mutex<State>>) -> io::Result<String> {
     let state = shared.lock().map_err(|_| fail("State unavailable"))?;
     let services = listed(&state);
-    let cards = services.iter().map(card).collect::<String>();
+    let cards = services.iter().filter(|s| s.live()).map(card).collect::<String>();
     let compute = compute_panel(&state.services);
-    let empty = if services.is_empty() { "<p class='muted'>No persistent services yet. Agents start them from a DM.</p>" } else { "" };
-    let stopped = state.services.iter().filter(|s| !s.resource.phase.reserves_capacity()).count();
-    let cleanup = if stopped == 0 { String::new() } else {
-        format!("<form class='decision-form' method='post' action='/tools/services'><input type='hidden' name='action' value='cleanup'><button>Clean up {stopped} stopped service{}</button><span class='muted'> Removes their records and each DM's retained /workspace once no service of that DM remains.</span></form>", if stopped == 1 { "" } else { "s" })
-    };
-    let page = crate::render(&state, "tool-page", "none", &format!("<h2>Persistent services</h2><div data-live-src='/tools/services/live' data-live-refresh>{compute}{cleanup}{empty}{cards}</div>"));
+    let empty = if cards.is_empty() { "<p class='muted'>No running services. Agents start them from a DM.</p>" } else { "" };
+    let busy = state.services.iter().filter(|s| s.live()).map(|s| s.resource.owner.chat.as_str()).collect::<HashSet<_>>();
+    let stopped = stopped_list(&services, &busy);
+    let page = crate::render(&state, "tool-page", "none", &format!("<h2>Persistent services</h2><div data-live-src='/tools/services/live' data-live-refresh>{compute}{empty}{cards}{stopped}</div>"));
     Ok(crate::web_assets::with_client(&page))
+}
+/// Recent stopped services as compact rows. A DM's retained /workspace can be
+/// deleted from its newest stopped row once none of its services runs.
+fn stopped_list(services: &[Service], busy: &HashSet<&str>) -> String {
+    let mut offered = HashSet::new();
+    let rows = services.iter().filter(|s| !s.live()).map(|service| {
+        let resource = &service.resource;
+        let chat = resource.owner.chat.as_str();
+        let link = if crate::chat::valid_id(chat) { format!(" · <a href='/dm/{chat}'>Conversation</a>") } else { String::new() };
+        let diagnostic = if service.diagnostic.is_empty() { String::new() } else { format!(" · {}", crate::escape(&service.diagnostic)) };
+        let delete = if workspace::Workspace::of(service).is_some() && !busy.contains(chat) && offered.insert(chat) {
+            format!("<form class='decision-form' method='post' action='/tools/services' data-confirm=\"{DELETE_CONFIRM}\"><input type='hidden' name='action' value='delete'><input type='hidden' name='id' value='{}'><button>Delete /workspace</button></form>", crate::escape(resource.id.as_str()))
+        } else { String::new() };
+        format!("<li id='{}'><code>{}</code> <span class='muted'>· {} · {}{link}{diagnostic}</span>{delete}</li>",
+            crate::escape(resource.id.as_str()), crate::escape(&service.label()), phase(&resource.phase), crate::escape(resource.id.as_str()))
+    }).collect::<String>();
+    if rows.is_empty() {
+        return String::new();
+    }
+    format!("<section class='record service-record service-stopped'><h3>Recently stopped</h3><p class='muted'>Stopped services hold no capacity and need no clean-up; older records are dropped automatically. Each DM's /workspace is kept for its next service until you delete it.</p><ul>{rows}</ul><form class='decision-form' method='post' action='/tools/services' data-confirm=\"{CLEANUP_CONFIRM}\"><input type='hidden' name='action' value='cleanup'><button>Delete unused workspaces</button><span class='muted'> Every DM with no running service loses its /workspace.</span></form></section>")
 }
 fn listed(state: &State) -> Vec<Service> {
     shown(state).map(snapshot).collect()
@@ -292,10 +376,9 @@ fn card(service: &Service) -> String {
     let image = resource.image.as_str().trim_start_matches("sha256:").chars().take(12).collect::<String>();
     let live = if matches!(resource.phase, Phase::Running(_)) { format!("<div class='service-live' data-live='{}'><p class='muted'>Live usage loading…</p></div>", crate::escape(resource.id.as_str())) } else { String::new() };
     let diagnostic = if service.diagnostic.is_empty() { String::new() } else { format!("<p class='muted'>{}</p>", crate::escape(&service.diagnostic)) };
+    // Stopped services are listed by `stopped_list`, not as cards.
     let action = if resource.phase.reserves_capacity() && !matches!(resource.phase, Phase::Stopping { .. }) {
-        format!("<form class='decision-form' method='post' action='/tools/services'><input type='hidden' name='id' value='{}'><button>Stop service</button></form>", crate::escape(resource.id.as_str()))
-    } else if !resource.phase.reserves_capacity() {
-        format!("<form class='decision-form' method='post' action='/tools/services'><input type='hidden' name='action' value='delete'><input type='hidden' name='id' value='{}'><button>Delete</button></form>", crate::escape(resource.id.as_str()))
+        format!("<form class='decision-form' method='post' action='/tools/services' data-confirm=\"{STOP_CONFIRM}\"><input type='hidden' name='id' value='{}'><button>Stop service</button></form>", crate::escape(resource.id.as_str()))
     } else {
         String::new()
     };

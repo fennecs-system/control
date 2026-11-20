@@ -18,6 +18,8 @@ pub enum Kind {
     Memory,
     /// `/compact`: the older spelling of a bare `/memory`.
     Compact,
+    /// `/services [stop ID | all]`: list or stop the services of this DM's team.
+    Services,
 }
 
 pub struct Definition {
@@ -87,6 +89,8 @@ pub const DEFINITIONS: &[Definition] = &[
     Definition { id:"memory", text:"/memory", description:"Show this DM's Memory Tree status (alias /compact)", architect:false },
     Definition { id:"memory-on", text:"/memory on", description:"Opt this DM into the Memory Tree (operator)", architect:false },
     Definition { id:"memory-off", text:"/memory off", description:"Opt this DM out of the Memory Tree (operator)", architect:false },
+    Definition { id:"services", text:"/services", description:"List the running services of this DM and its team", architect:false },
+    Definition { id:"services-stop", text:"/services stop", description:"Stop a service by ID (or all); /workspace is kept", architect:false },
 ];
 
 #[derive(Debug, PartialEq, Eq)]
@@ -114,21 +118,23 @@ pub fn parse(text: &str) -> Option<Parsed<'_>> {
         "/rename" => Kind::Rename,
         "/memory" => Kind::Memory,
         "/compact" => Kind::Compact,
+        "/services" => Kind::Services,
         _ => return None,
     };
     let tail = &trimmed[end..];
-    let suffix = if matches!(kind, Kind::Improve | Kind::Memory) {
-        [" off", " on"]
-            .into_iter()
-            .find(|suffix| {
-                tail.strip_prefix(suffix)
-                    .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
-            })
-            .map(str::len)
-            .unwrap_or(0)
-    } else {
-        0
+    let suffixes: &[&str] = match kind {
+        Kind::Improve | Kind::Memory => &[" off", " on"],
+        Kind::Services => &[" stop"],
+        _ => &[],
     };
+    let suffix = suffixes
+        .iter()
+        .copied()
+        .find(|suffix| {
+            tail.strip_prefix(suffix)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+        })
+        .map_or(0, str::len);
     let start = text.len() - trimmed.len();
     Some(Parsed {
         kind,

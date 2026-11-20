@@ -5,6 +5,7 @@ mod compute;
 mod copy;
 mod page;
 pub use page::http;
+pub(crate) use page::command;
 #[cfg(test)]
 pub(crate) use page::stop;
 mod tools;
@@ -37,7 +38,7 @@ const OWN_EXECUTIONS: usize = 8;
 fn fail(s: impl ToString) -> io::Error {
     io::Error::other(s.to_string())
 }
-fn now() -> u64 {
+pub(crate) fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -136,6 +137,31 @@ pub(crate) fn accessible(service: &Service, node: &NodeId, run: &crate::runtime:
         && !crate::delegation::is_judge(run)
         && (run.chat_id.as_deref() == Some(service.resource.owner.chat.as_str())
             || run.resource_grants.iter().any(|grant|grant.matches(service)))
+}
+/// Stop authority without a grant: a teammate in the same task tree (its
+/// top-level chat and every chat spawned beneath it), with the same actor and
+/// node. Stopping only releases capacity; it reads no output and keeps the
+/// owner's /workspace, so it needs no exec grant. Judges never stop.
+pub(crate) fn teammate(state: &State, service: &Service, node: &NodeId, run: &crate::runtime::Run) -> bool {
+    service.resource.owner.node == *node && service.actor == run.actor
+        && !crate::delegation::is_judge(run)
+        && run.chat_id.as_deref().is_some_and(|chat|
+            crate::chat::team_root(state, chat) == crate::chat::team_root(state, service.resource.owner.chat.as_str()))
+}
+/// The index of service `id` that `run` may act on: accessible services for
+/// every call, and also its team's services for a stop.
+fn target(state: &State, node: &NodeId, run: &crate::runtime::Run, id: &str, stop: bool) -> io::Result<usize> {
+    state.services.iter()
+        .position(|service| service.resource.id.as_str() == id
+            && (accessible(service, node, run) || (stop && teammate(state, service, node, run))))
+        .ok_or_else(|| fail(if stop { "Service is not owned by this chat or its team" } else { "Service is not owned by this chat" }))
+}
+/// Live services of `run`'s team that it can stop but not use.
+fn team_listing(state: &State, node: &NodeId, run: &crate::runtime::Run) -> Vec<Value> {
+    state.services.iter()
+        .filter(|service| service.live() && !accessible(service, node, run) && teammate(state, service, node, run))
+        .map(|service| json!({"service_id":service.resource.id,"chat_id":service.resource.owner.chat,"phase":service.phase_name(),"command":service.label()}))
+        .collect()
 }
 pub(crate) fn grants(state: &State, run: &crate::runtime::Run) -> Vec<Grant> {
     state.services.iter().filter(|service|
@@ -298,17 +324,20 @@ pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
     let owned = |service: &&Service| accessible(service, &node, active);
     let Some(id) = id else {
         return if list {
-            Ok(listing(&s, owned, run, detail))
+            let mut value = listing(&s, owned, run, detail);
+            let team = team_listing(&s, &node, active);
+            if !team.is_empty() {
+                value["team_services"] = json!(team);
+                value["team_services_note"] = json!("Teammates' services: control_service_stop accepts these; use them only through a grant from their owner.");
+            }
+            Ok(value)
         } else {
             Err(fail("service_id is required"))
         };
     };
-    let index = s
-        .services
-        .iter()
-        .position(|service| service.resource.id.as_str() == id && owned(&service))
-        .ok_or_else(|| fail("Service is not owned by this chat"))?;
+    let index = target(&s, &node, active, &id, stop)?;
     if stop {
+        let own = accessible(&s.services[index], &node, active);
         transition(
             &mut s,
             index,
@@ -316,7 +345,11 @@ pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
             now(),
             crate::storage::save,
         )?;
-        return Ok(s.services[index].view(&s, run, false));
+        let service = &s.services[index];
+        // A teammate's stop reveals no output or executions of the owner's chat.
+        return Ok(if own { service.view(&s, run, false) } else {
+            json!({"service_id":service.resource.id,"chat_id":service.resource.owner.chat,"phase":service.phase_name(),"workspace_retained":workspace::Workspace::of(service).is_some()})
+        });
     }
     let service = s.services[index].binding_snapshot();
     let mut value = s.services[index].view(&s, run, detail);

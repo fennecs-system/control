@@ -128,18 +128,77 @@ fn operators_forget_stopped_services_and_keep_workspaces_of_live_chats() {
     }
     let (live, old) = (state.services[0].resource.id.as_str().to_owned(), state.services[1].resource.id.as_str().to_owned());
     assert!(forget(&mut state, Some(&live), |_| Ok(())).is_err(), "live services are stopped first, never deleted");
+    assert!(forget(&mut state, Some(&old), |_| Ok(())).is_err(), "a DM with a running service keeps its /workspace in use");
+    assert_eq!(state.services.len(), 3);
+    let busy = HashSet::from([chat.as_str()]);
+    let shown = listed(&state);
+    assert!(!stopped_list(&shown, &busy).contains("value='delete'"), "no workspace deletion while the DM runs a service");
+
+    state.services[0].resource.phase = Phase::Stopped(StopReason::Requested);
+    let list = stopped_list(&listed(&state), &HashSet::new());
+    assert_eq!(list.matches("value='delete'").count(), 1, "one deletion per DM, on its newest stopped row");
+    assert!(list.contains(&format!("data-confirm=\"{DELETE_CONFIRM}\"")) && list.contains(&format!("data-confirm=\"{CLEANUP_CONFIRM}\"")));
     assert!(forget(&mut state, Some(&old), |_| Err(io::Error::other("disk full"))).is_err());
     assert_eq!(state.services.len(), 3, "a failed save restores the records");
-
     let (keep, target) = forget(&mut state, Some(&old), |_| Ok(())).unwrap();
-    assert_eq!(state.services.len(), 2);
+    assert!(state.services.is_empty(), "every stopped record of that DM goes with its workspace");
     assert_eq!(target.as_deref(), Some(chat.as_str()));
-    assert!(keep.contains(&chat), "the chat still has services, so its workspace stays");
-    assert!(card(&state.services[1].binding_snapshot()).contains("value='delete'"));
+    assert!(!keep.contains(&chat), "no record remains, so the volume may be removed");
+}
 
+#[test]
+fn unused_workspace_cleanup_keeps_live_services_and_their_workspaces() {
+    let (mut state, run, chat, time) = super::super::tests::fixture();
+    for nonce in ["live", "old"] {
+        admit(&mut state, Request { run: &run, generation: "attempt-a", nonce },
+            Input { command: "sleep 30".to_owned().try_into().unwrap(), lease_seconds: -1, storage_limit_mb: None, shape: None },
+            "node-a".to_owned().try_into().unwrap(), time, |_| Ok(())).unwrap();
+    }
+    state.services[1].resource.phase = Phase::Stopped(StopReason::Requested);
     let (keep, target) = forget(&mut state, None, |_| Ok(())).unwrap();
     assert_eq!(state.services.len(), 1, "cleanup removes every stopped record and only those");
     assert!(target.is_none() && keep.contains(&chat));
+}
+
+#[test]
+fn chat_command_lists_and_stops_the_team_services() {
+    let (mut state, run, lead, time) = super::super::tests::fixture();
+    for nonce in ["a", "b"] {
+        admit(&mut state, Request { run: &run, generation: "attempt-a", nonce },
+            Input { command: format!("serve {nonce}").try_into().unwrap(), lease_seconds: -1, storage_limit_mb: None, shape: None },
+            "node-a".to_owned().try_into().unwrap(), time, |_| Ok(())).unwrap();
+    }
+    let worker = crate::chat::create(&mut state);
+    state.chats.last_mut().unwrap().parent_chat = Some(lead.clone());
+    state.services[1].resource.owner.chat = worker.clone().try_into().unwrap();
+    let stranger = crate::chat::create(&mut state);
+    let (a, b) = (state.services[0].resource.id.as_str().to_owned(), state.services[1].resource.id.as_str().to_owned());
+
+    // From the worker's DM, the whole task tree is listed: the lead's and its own.
+    let listing = command(&mut state, &worker, "", time, |_| Ok(())).unwrap();
+    assert!(listing.contains(&a) && listing.contains(&b) && listing.contains("this DM") && listing.contains("serve a"), "{listing}");
+    assert!(command(&mut state, &stranger, "list", time, |_| Ok(())).unwrap().starts_with("No running services"));
+    assert!(command(&mut state, &stranger, &format!("stop {a}"), time, |_| Ok(())).is_err(), "other teams' services are out of reach");
+    assert!(command(&mut state, &lead, "stop", time, |_| Ok(())).is_err());
+    assert!(command(&mut state, &lead, "halt everything", time, |_| Ok(())).is_err());
+
+    // A unique prefix, with or without svc-, stops exactly one.
+    let common = a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count();
+    if common > "svc-".len() {
+        assert!(command(&mut state, &lead, &format!("stop {}", &a[..common]), time, |_| Ok(())).is_err(), "an ambiguous prefix stops nothing");
+    }
+    let prefix = &a["svc-".len()..=common.max("svc-".len())];
+    assert!(command(&mut state, &lead, &format!("stop {prefix}"), time, |_| Err(io::Error::other("disk full"))).is_err());
+    assert!(state.services.iter().all(|s| !matches!(s.resource.phase, Phase::Stopped(_) | Phase::Stopping { .. })), "a failed save stops nothing");
+    let reply = command(&mut state, &lead, &format!("stop {prefix}"), time, |_| Ok(())).unwrap();
+    assert!(reply.contains(&a) && reply.contains("/workspace is kept"), "{reply}");
+    assert!(matches!(state.services[0].resource.phase, Phase::Stopped(_)), "a requested service stops at once");
+    assert!(state.services[1].live());
+
+    let reply = command(&mut state, &worker, "stop all", time, |_| Ok(())).unwrap();
+    assert!(reply.contains(&b) && !reply.contains(&a), "{reply}");
+    assert!(state.services.iter().all(|s| !s.live()));
+    assert!(command(&mut state, &lead, "stop all", time, |_| Ok(())).unwrap().starts_with("No running services to stop"));
 }
 
 #[test]
@@ -163,6 +222,9 @@ fn card_actions_return_to_their_card_or_its_neighbour() {
     assert_eq!(fragment(&state, &place), format!("#{}", ids[1]), "a stopped service's card stays in view");
 
     state.services[1].resource.phase = Phase::Stopped(StopReason::Requested);
+    // Deleting a workspace removes its DM's stopped records; give this one its own DM.
+    let other = crate::chat::create(&mut state);
+    state.services[1].resource.owner.chat = other.try_into().unwrap();
     let place = nearby(&state, &ids[1]);
     forget(&mut state, Some(&ids[1]), |_| Ok(())).unwrap();
     assert_eq!(fragment(&state, &place), format!("#{}", ids[0]), "a deleted card returns to the card that takes its place");
@@ -227,8 +289,12 @@ fn state_derived_controls_sit_inside_the_refreshed_region() {
         inside.to_owned()
     };
     let running = region();
-    assert!(running.contains("Stop service") && !running.contains("value='delete'"));
+    assert!(running.contains("Stop service") && running.contains(&format!("data-confirm=\"{STOP_CONFIRM}\"")) && !running.contains("value='delete'"));
+    assert!(!running.contains("Recently stopped"));
     shared.lock().unwrap().services[0].resource.phase = Phase::Stopped(StopReason::Requested);
     let stopped = region();
-    assert!(stopped.contains("value='delete'") && stopped.contains("Clean up 1 stopped service"), "{stopped}");
+    // A stopped service leaves the cards by itself: no collection step.
+    assert!(!stopped.contains("<article") && !stopped.contains("Stop service"), "{stopped}");
+    assert!(stopped.contains("Recently stopped") && stopped.contains("need no clean-up") && stopped.contains("No running services"), "{stopped}");
+    assert!(stopped.contains("value='delete'") && stopped.contains("Delete unused workspaces") && !stopped.contains("Clean up"), "{stopped}");
 }

@@ -43,14 +43,22 @@ pub struct Project {
     /// The turn that asked for a pending request, told if it is dismissed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
+    /// More folders a pending operator `/open` list requested with this one,
+    /// opened beside it by the same approval.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub also: Vec<Mount>,
 }
 impl Project {
     fn needs_approval(&self)->bool {self.pending||self.grant.is_none()}
+    /// Every folder this request opens, as (name, path): its own, then `also`.
+    fn folders(&self) -> impl Iterator<Item = (&str, &str)> {
+        std::iter::once((self.name.as_str(), self.path.as_str())).chain(self.also.iter().map(|m| (m.name.as_str(), m.path.as_str())))
+    }
     pub fn approved(&self)->Option<Self> {
         self.grant.as_ref()?;
         let mut inherited=self.clone();
         inherited.pending=false;inherited.error=None;inherited.message_index=None;
-        inherited.previous=None;inherited.origin=None;
+        inherited.previous=None;inherited.origin=None;inherited.also.clear();
         if let Some(mount)=inherited.mounts.last() {inherited.path=mount.path.clone();inherited.name=mount.name.clone();}
         for mount in &mut inherited.mounts {mount.message_index=None;}
         Some(inherited)
@@ -102,12 +110,19 @@ pub fn request_named(state: &mut State, id: &str, path: &str, name:Option<&str>,
     {
         return Err("Use /open followed by an absolute path on the Control node.");
     }
-    let chat = state
-        .chats
-        .iter()
-        .find(|c| c.id == id)
-        .ok_or("Chat not found.")?;
+    let chat = state.chats.iter().find(|c| c.id == id).ok_or("Chat not found.")?;
     crate::identity::authorize(&chat.actor, Action::Task)?;
+    let folder = folder(path, name, requester)?;
+    file(state, id, vec![folder], requester)
+}
+/// One folder of a request, checked alone: an absolute path (probed only for
+/// the operator) and its workspace name.
+fn folder(path: &str, name: Option<&str>, requester: Requester<'_>) -> Result<Mount, &'static str> {
+    let path = path.trim();
+    if path.len() > 4096 || !Path::new(path).is_absolute() || path.contains(['\n', '\r', '\0', ','])
+    {
+        return Err("Use /open followed by an absolute path on the Control node.");
+    }
     if matches!(requester, Requester::Operator) {
         match fs::metadata(path) {
             Ok(metadata) if metadata.is_dir() => {}
@@ -117,18 +132,60 @@ pub fn request_named(state: &mut State, id: &str, path: &str, name:Option<&str>,
     }
     let name=name.filter(|s|!s.is_empty()).or_else(||Path::new(path).file_name().and_then(|s|s.to_str())).ok_or("Choose a named project folder.")?;
     if !valid_name(name) {return Err("Folder names must use letters, numbers, dots, dashes or underscores, without a leading dot. Use /open --as NAME /absolute/path.");}
+    Ok(Mount { name: name.into(), path: path.into(), message_index: None })
+}
+/// The operator's `/open` with several folders: each path is checked alone and
+/// reported on its own line. When all pass they become one request, reviewed and
+/// trusted once; each opens at its own `/workspace/NAME`. Returns the reply
+/// lines and whether a request was made.
+pub fn request_list(state: &mut State, id: &str, paths: &[String]) -> Result<(String, bool), &'static str> {
+    let chat = state.chats.iter().find(|c| c.id == id).ok_or("Chat not found.")?;
+    crate::identity::authorize(&chat.actor, Action::Task)?;
+    let open = chat.project.as_ref().map(|p| p.mounts.iter().map(|m| m.name.clone()).collect::<Vec<_>>()).unwrap_or_default();
+    let mut folders: Vec<Mount> = Vec::new();
+    let mut lines = Vec::new();
+    for path in paths {
+        let checked = folder(path, None, Requester::Operator).and_then(|folder| {
+            if open.contains(&folder.name) || folders.iter().any(|f| f.name == folder.name) {
+                Err("That workspace name is already used; open this one alone with /open --as NAME /absolute/path.")
+            } else if open.len() + folders.len() >= 16 {
+                Err("A chat holds at most 16 open folders.")
+            } else { Ok(folder) }
+        });
+        lines.push(match checked {
+            Ok(folder) => { let line = format!("- {} → /workspace/{}", folder.path, folder.name); folders.push(folder); line }
+            Err(error) => format!("- {}: {error}", path.trim()),
+        });
+    }
+    // All or nothing: a later `/open` replaces the pending request, so a partial one
+    // would be lost when the refused paths are sent again.
+    let made = folders.len() == paths.len();
+    if made {
+        file(state, id, folders, Requester::Operator)?;
+    }
+    Ok((lines.join("\n"), made))
+}
+/// Replaces the chat's pending request with `folders` (at least one): the
+/// first is the request's own path and name, the rest open with it.
+fn file(state: &mut State, id: &str, folders: Vec<Mount>, requester: Requester<'_>) -> Result<Value, &'static str> {
+    let chat = state.chats.iter().find(|c| c.id == id).ok_or("Chat not found.")?;
+    let message_index = chat.messages.len().checked_sub(1);
+    let mut folders = folders.into_iter();
+    let first = folders.next().ok_or("Use /open followed by an absolute path on the Control node.")?;
+    let also = folders.map(|folder| Mount { message_index, ..folder }).collect::<Vec<_>>();
     let mut mounts=chat.project.as_ref().map(|p|p.mounts.clone()).unwrap_or_default();
     if let Some(previous)=chat.project.as_ref().filter(|p|p.grant.is_some()&&!p.named&&p.mounts.is_empty()) {
         let name=Path::new(&previous.path).file_name().and_then(|s|s.to_str()).filter(|s|valid_name(s)).unwrap_or("project");
         mounts.push(Mount{name:name.into(),path:previous.path.clone(),message_index:previous.message_index});
     }
-    if mounts.len()>=16 {return Err("This chat already has 16 open folders.");}
+    if mounts.len() + also.len() >= 16 {return Err("This chat already has 16 open folders.");}
+    let title = Path::new(&first.path).file_name().unwrap_or_default().to_string_lossy().into_owned();
     let project = Project {
         request: nonce(),
-        path: path.into(),
-        message_index: chat.messages.len().checked_sub(1),
+        path: first.path,
+        message_index,
         pending:true,
-        name:name.into(),
+        name:first.name,
         grant:chat.project.as_ref().and_then(|p|p.grant.clone()),
         head:chat.project.as_ref().and_then(|p|p.head.clone()),
         mounts,
@@ -136,20 +193,52 @@ pub fn request_named(state: &mut State, id: &str, path: &str, name:Option<&str>,
         // A replaced request restores what preceded it, not itself.
         previous:chat.project.as_ref().and_then(|p|if p.needs_approval() {p.previous.clone()} else {Some(Box::new(p.clone()))}),
         origin:match requester {Requester::Agent{run}=>run.map(str::to_owned),Requester::Operator=>None},
+        also,
         ..Project::default()
     };
     let result = json!({"approval_required":true,"request":project.request,"path":project.path,"mount":format!("/workspace/{}",project.name),"url":format!("/dm/{id}/project")});
     let chat = state.chats.iter_mut().find(|c| c.id == id).unwrap();
     if chat.messages.is_empty() {
-        chat.title = Path::new(path)
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned();
+        chat.title = title;
     }
     chat.project = Some(project);
     chat.revision = chat.revision.saturating_add(1);
     Ok(result)
+}
+/// The folders of an operator's `/open`. Commas or new lines separate paths,
+/// and each item is one path, spaces included. On one line without commas, a
+/// space separates paths only before the next path's `/` or `~`, so a path with
+/// spaces still opens alone; quote a path ('…' or "…") whose name has a space
+/// before a `/`. `~` and `~/…` name the Control node user's home.
+pub fn paths(tail: &str, home: Option<&str>) -> Vec<String> {
+    let unquote = |item: &str| {
+        let item = item.trim();
+        ['"', '\''].into_iter().find_map(|quote| item.strip_prefix(quote)?.strip_suffix(quote)).unwrap_or(item).to_owned()
+    };
+    let items = if tail.contains(['\n', ',']) {
+        tail.split(['\n', ',']).map(unquote).collect::<Vec<_>>()
+    } else {
+        let mut items = Vec::new();
+        let mut current = String::new();
+        let mut chars = tail.trim().chars().peekable();
+        while let Some(c) = chars.next() {
+            if matches!(c, '"' | '\'') && current.trim().is_empty() {
+                items.push(chars.by_ref().take_while(|&next| next != c).collect::<String>());
+                current.clear();
+            } else if c.is_whitespace() && chars.peek().is_some_and(|next| matches!(next, '/' | '~' | '"' | '\'')) {
+                items.push(std::mem::take(&mut current));
+            } else {
+                current.push(c);
+            }
+        }
+        items.push(current);
+        items.into_iter().map(|item| item.trim().to_owned()).collect()
+    };
+    items.into_iter().filter(|item| !item.is_empty()).map(|item| match (item.as_str(), home) {
+        ("~", Some(home)) => home.to_owned(),
+        (_, Some(home)) if item.starts_with("~/") => format!("{}/{}", home.trim_end_matches('/'), &item[2..]),
+        _ => item,
+    }).collect()
 }
 pub fn definition(worker: bool) -> Value {
     json!({"name":if worker {"control_project_request"} else {"control.project.request"},"description":"Request an operator-approved folder at /workspace/name on this node. Existing approved folders remain available. Does not read or authorize the path; the operator must confirm in Control. Supply name to resolve duplicate folder names.","annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false},"inputSchema":{"type":"object","properties":{"id":{"type":"string"},"path":{"type":"string","maxLength":4096},"name":{"type":"string","maxLength":128}},"required":if worker {json!(["path"])}else{json!(["id","path"])},"additionalProperties":false}})
@@ -193,7 +282,13 @@ pub fn panel(state: &State, id: &str) -> String {
                 ));
             }
         } else {
+            if project.also.is_empty() {
             html.push_str(&format!("<p>Open as <code>/workspace/{}</code></p><form class='decision-form' method='post' action='/dm/{id}/project' target='_top'><input type='hidden' name='request' value='{}'><p>Trust this folder’s code for this chat and allow local previews? Control will copy its files into an isolated worktree. Credentials, generated directories and symlinks are excluded. The original folder stays unchanged.</p><button class='primary' name='approve' value='yes'>Trust folder and open</button><button class='secondary' name='dismiss' value='yes'>Dismiss</button><p role='alert' hidden></p></form><form method='post' action='/dm/{id}/project' target='_top'><label>Folder on this node<input name='path' value='{}' required></label><label>Workspace name<input name='name' value='{}' required></label><button>Change folder</button></form>",crate::escape(&project.name),crate::escape(&project.request),crate::escape(&project.path),crate::escape(&project.name)));
+            } else {
+                // A list from one `/open`: one decision for all; changing it is a new /open.
+                let rows = project.folders().map(|(name, path)| format!("<li><code>{}</code> → <code>/workspace/{}</code></li>", crate::escape(path), crate::escape(name))).collect::<String>();
+                html.push_str(&format!("<ul class='project-folders'>{rows}</ul><form class='decision-form' method='post' action='/dm/{id}/project' target='_top'><input type='hidden' name='request' value='{}'><p>Trust these {} folders’ code for this chat and allow local previews? Control will copy their files into an isolated worktree. Credentials, generated directories and symlinks are excluded. The original folders stay unchanged.</p><button class='primary' name='approve' value='yes'>Trust folders and open</button><button class='secondary' name='dismiss' value='yes'>Dismiss</button><p role='alert' hidden></p></form><p class='muted'>To change the list, dismiss it and use /open again.</p>",crate::escape(&project.request),project.also.len()+1));
+            }
         }
     } else {
         html.push_str(&format!("<form method='post' action='/dm/{id}/project' target='_top'><label>Folder on this node<input name='path' value='{}' placeholder='/absolute/path' required></label><button>Continue</button></form>",crate::escape(path)));
@@ -224,7 +319,7 @@ pub fn dismiss(state: &mut State, id: &str, request: &str) -> Result<Option<crat
         Some(mut previous) => { previous.head = pending.head.clone(); Some(*previous) }
         // Requests saved before predecessors were recorded keep their folders.
         None => pending.grant.is_some().then(|| {
-            let mut kept = Project { request: nonce(), pending: false, error: None, previous: None, origin: None, ..pending.clone() };
+            let mut kept = Project { request: nonce(), pending: false, error: None, previous: None, origin: None, also: Vec::new(), ..pending.clone() };
             if let Some(mount) = kept.mounts.last() { (kept.path, kept.name, kept.message_index) = (mount.path.clone(), mount.name.clone(), mount.message_index); }
             kept
         }),
@@ -599,8 +694,10 @@ fn prepare_in(
     copy_tree_with(&source, workspace, true, Durability::WorkingCopy)
 }
 fn compose(root: &Path, project: &Project, directory: &Path) -> io::Result<()> {
-    if !valid_name(&project.name) {return Err(fail("Invalid workspace folder name"));}
-    if project.mounts.iter().any(|m|m.name==project.name) {return Err(fail("That workspace name is already open. Change the name below and try again."));}
+    for (name, _) in project.folders() {
+        if !valid_name(name) {return Err(fail("Invalid workspace folder name"));}
+        if project.mounts.iter().any(|m|m.name==name) {return Err(fail("That workspace name is already open. Change the name below and try again."));}
+    }
     let combined=directory.join("combined");
     if let Some(grant)=&project.grant {
         if !crate::chat::valid_id(grant) {return Err(fail("Invalid project grant"));}
@@ -616,10 +713,13 @@ fn compose(root: &Path, project: &Project, directory: &Path) -> io::Result<()> {
         }
     }else{fs::create_dir(&combined)?;}
     let incoming=directory.join("incoming");fs::create_dir(&incoming)?;
-    seed(Path::new(&project.path),&incoming.join("project"))?;
-    // Refuse collisions with scratch files as well as previously opened folders.
-    if combined.join(&project.name).try_exists()? {return Err(fail("That name is already used in the workspace. Choose another name."));}
-    fs::rename(incoming.join("project"),combined.join(&project.name))?;
+    for (index, (name, path)) in project.folders().enumerate() {
+        let staged = incoming.join(if index == 0 { "project".to_owned() } else { format!("project-{index}") });
+        seed(Path::new(path),&staged)?;
+        // Refuse collisions with scratch files as well as previously opened folders.
+        if combined.join(name).try_exists()? {return Err(fail("That name is already used in the workspace. Choose another name."));}
+        fs::rename(staged,combined.join(name))?;
+    }
     // Each input was already copied and validated. Publish without another full
     // tree copy; the grant's parent is synced before attachment below.
     fs::rename(combined,directory.join("seed"))?;
@@ -901,6 +1001,7 @@ fn import_in(root: &Path, shared: &Arc<Mutex<State>>, id: &str, request: &str, p
     let approved=chat.project.as_mut().unwrap();
     approved.head=None;approved.pending=false;approved.named=true;approved.previous=None;approved.origin=None;
     approved.mounts.push(Mount{name:approved.name.clone(),path:approved.path.clone(),message_index:approved.message_index});
+    let also=std::mem::take(&mut approved.also);approved.mounts.extend(also);
     chat.workspace = None;
     chat.improve_mode = false;
     chat.revision = chat.revision.saturating_add(1);

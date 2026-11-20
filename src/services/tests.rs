@@ -1266,3 +1266,64 @@ fn default_slots() -> usize {
 fn live_services_are_bounded_by_the_compute_budget_not_a_fixed_count() {
     assert_eq!(default_slots(), 16, "more than the former fixed eight");
 }
+
+#[test]
+fn process_tree_services_link_to_their_own_card() {
+    let (mut s, run, _chat, time) = fixture();
+    admit_fixture(&mut s, &run, time, |_| Ok(())).unwrap();
+    let id = s.services[0].resource.id.as_str().to_owned();
+    let tree = crate::process_tree::render(&s, "").unwrap();
+    assert!(tree.contains(&format!("<a href='/tools/services#{id}'>")), "{tree}");
+}
+
+/// A chat spawned under `parent`, with a running run like the fixture's.
+fn member(s: &mut State, parent: &str, run: &str) -> (String, crate::runtime::Run) {
+    let chat = crate::chat::create(s);
+    s.chats.last_mut().unwrap().parent_chat = Some(parent.to_owned());
+    let mut member = s.runtime.runs.iter().find(|r| r.id == run).unwrap().clone();
+    member.id = format!("run-{chat}");
+    member.chat_id = Some(chat.clone());
+    member.resource_grants.clear();
+    (chat, member)
+}
+
+#[test]
+fn teammates_stop_but_do_not_use_each_others_services() {
+    let (mut s, run, lead, time) = fixture();
+    admit_fixture(&mut s, &run, time, |_| Ok(())).unwrap();
+    let node: NodeId = "node-a".to_owned().try_into().unwrap();
+    let id = s.services[0].resource.id.as_str().to_owned();
+    let (worker, worker_run) = member(&mut s, &lead, &run);
+    let (_, grandchild_run) = member(&mut s, &worker, &run);
+    for teammate_run in [&worker_run, &grandchild_run] {
+        assert!(!accessible(&s.services[0], &node, teammate_run), "no grant, no exec");
+        assert!(target(&s, &node, teammate_run, &id, false).is_err(), "attach, exec and logs still need a grant");
+        assert_eq!(target(&s, &node, teammate_run, &id, true).unwrap(), 0, "any member of the task tree may stop it");
+        let listed = team_listing(&s, &node, teammate_run);
+        assert_eq!((listed.len(), listed[0]["service_id"].as_str()), (1, Some(id.as_str())));
+        assert!(listed[0].get("output").is_none() && listed[0].get("executions").is_none());
+    }
+    // The lead stops a worker's service the same way.
+    let lead_run = s.runtime.runs[0].clone();
+    s.services[0].resource.owner.chat = worker.clone().try_into().unwrap();
+    assert!(target(&s, &node, &lead_run, &id, true).is_ok());
+    assert!(team_listing(&s, &node, &lead_run).len() == 1);
+
+    // Outside the tree, another actor, another node or a judge: refused.
+    let stranger = crate::chat::create(&mut s);
+    let mut outsider = worker_run.clone();
+    outsider.chat_id = Some(stranger);
+    let mut other_actor = worker_run.clone();
+    other_actor.actor = crate::identity::Actor::DiscordDm { user_id: "7".parse().unwrap(), channel_id: "8".parse().unwrap() };
+    let mut judge = worker_run.clone();
+    judge.persona = Some(crate::delegation::Persona { role: crate::delegation::Role::Judge, root: lead.clone(), depth: 1, parent: Some(run.clone()), bundle: None });
+    for refused in [&outsider, &other_actor, &judge] {
+        assert!(target(&s, &node, refused, &id, true).is_err());
+        assert!(team_listing(&s, &node, refused).is_empty());
+    }
+    let elsewhere: NodeId = "node-b".to_owned().try_into().unwrap();
+    assert!(target(&s, &elsewhere, &worker_run, &id, true).is_err());
+    // Stopped services are no longer listed for teammates.
+    s.services[0].resource.phase = Phase::Stopped(StopReason::Requested);
+    assert!(team_listing(&s, &node, &lead_run).is_empty());
+}

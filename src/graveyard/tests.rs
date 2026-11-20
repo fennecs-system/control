@@ -448,6 +448,9 @@ fn every_toolbar_control_shares_one_height() {
     // The tree canvas takes the drawing's proportions (the client sets them;
     // without it the SVG's own), bounded per depth and by 70% of the viewport.
     assert!(runtime.contains(".process-tree{--tree-max:min(1400px,70dvh);") && runtime.contains(".process-tree svg{display:block;flex:none;width:100%;height:auto;min-height:0;max-height:var(--tree-max);"));
+    // Even a one-level tree gets room to read (bounded on short phone screens).
+    assert!(runtime.contains("min-height:min(240px,45dvh);overflow:hidden") && runtime.contains(".process-tree[data-levels=\"1\"]{--tree-max:min(240px,45dvh)}"));
+    assert!(runtime.contains(".process-tree.live svg{min-height:min(240px,45dvh)}") && !runtime.contains("136px"));
     for (css, rule) in [(runtime, ".canvas-controls button{"), (runtime, ".bots-search input{"), (runtime, ".bots-search button{")] {
         let body = css.split(rule).nth(1).unwrap().split('}').next().unwrap();
         assert!(!format!(";{body}").contains(";height") && !body.contains("padding:8px"), "{rule}{body}");

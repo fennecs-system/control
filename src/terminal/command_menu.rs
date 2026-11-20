@@ -42,11 +42,12 @@ fn entries() -> impl Iterator<Item = Entry> {
             "btw" => "/btw QUESTION",
             "spawn" => "/spawn TASK",
             "answer" => "/answer QUESTION_ID CHOICE",
-            "open" => "/open [--as NAME] /absolute/path",
+            "open" => "/open /absolute/path [/another/path …] | /open --as NAME /absolute/path",
             "bot" => "/bot on [every N]",
             "model" => "/model [PROVIDER:MODEL | default]",
             "rename" => "/rename NAME",
             "memory-on" => "/memory on [MODEL]",
+            "services-stop" => "/services stop ID | all",
             _ => entry.text,
         }, description: entry.description,
     }))
@@ -74,7 +75,7 @@ pub(super) fn help() -> String {
         text.push_str(entry.description);
         text.push_str("\n\n");
     }
-    text.push_str("Keyboard\n\nTab completes the selected command; it does not execute it.\n↑ ↓ choose a command · Esc dismisses suggestions or returns to chat\nEnter sends · Alt+Enter inserts a newline\nPageUp / PageDown scroll · End follows new output\nCtrl+↑ / Ctrl+↓ switch conversations\nCtrl+N starts a chat · Ctrl+Q exits\n\n/improve REQUEST asks agents to develop Control using the server's configured tools and permissions.\n/open /absolute/path requests a project folder; review it before /trust, or /dismiss it.\n");
+    text.push_str("Keyboard\n\nTab completes the selected command; it does not execute it.\n↑ ↓ choose a command · Esc dismisses suggestions or returns to chat\nEnter sends · Alt+Enter inserts a newline\nPageUp / PageDown scroll · End follows new output\nCtrl+↑ / Ctrl+↓ switch conversations\nCtrl+N starts a chat · Ctrl+Q exits\n\n/improve REQUEST asks agents to develop Control using the server's configured tools and permissions.\n/open /absolute/path requests a project folder; review it before /trust, or /dismiss it.\n/open takes several folders: separate paths with spaces or commas, or put one per line (Alt+Enter); quote a path that has a space before a /. ~ is the node user's home.\n/services lists this DM's team services; /services stop ID or all stops them.\n");
     text
 }
 

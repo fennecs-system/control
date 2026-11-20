@@ -143,6 +143,15 @@ pub(crate) fn tree<'a>(state: &'a State, chat: &'a str) -> std::collections::Has
 fn lineage<'a>(state: &'a State, chat: &'a str) -> impl Iterator<Item = &'a str> {
     std::iter::successors(Some(chat), |id| state.chats.iter().find(|session| session.id == *id).and_then(|session| session.parent_chat.as_deref())).take(64)
 }
+/// The top-level chat of `chat`'s task tree: itself when it has no lead.
+pub(crate) fn team_root<'a>(state: &'a State, chat: &'a str) -> &'a str {
+    lineage(state, chat).last().unwrap_or(chat)
+}
+/// Every chat in `chat`'s task tree: its top-level chat and all chats spawned
+/// beneath it.
+pub(crate) fn team<'a>(state: &'a State, chat: &'a str) -> std::collections::HashSet<&'a str> {
+    subtree(state, [team_root(state, chat)])
+}
 /// Latest task in scheduler order. Design answers are appended later but keep
 /// the interrupted task's queue position; append order is not continuation order.
 pub(crate) fn latest_task(state: &State, chat: &str, actor: &Actor) -> Option<usize> {
@@ -460,6 +469,14 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
         session.revision=session.revision.saturating_add(1);
         return Ok(());
     }
+    if let Some(option)=commands::tail(text.trim(),Kind::Services) {
+        // Each stop saves at once, like the services page; the reply is checkpointed by the caller.
+        let reply=crate::services::command(state,id,option,crate::services::now(),crate::storage::save)?;
+        let session=state.chats.iter_mut().find(|session|session.id==id).ok_or("Chat not found.")?;
+        session.messages.push(Message { speaker: Default::default(), text:text.trim().into(),run_id:None,reply});
+        session.revision=session.revision.saturating_add(1);
+        return Ok(());
+    }
     if let Some(option)=commands::tail(text.trim(),Kind::Bot) {
         let reply=crate::bots::command(state,id,option)?;
         let session=state.chats.iter_mut().find(|session|session.id==id).unwrap();
@@ -490,13 +507,33 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
         return Ok(());
     }
     if let Some(path) = commands::tail(text.trim(), Kind::Open) {
+        // `~` is the Control node user's home: paths are read on the node.
+        let home = std::env::var("HOME").ok();
+        let mut reply = format!("Review and approve folder access: /dm/{id}/project");
+        let mut made = true;
         if let Some(named)=path.trim().strip_prefix("--as ") {
             let (name,path)=named.split_once(char::is_whitespace).ok_or("Use /open --as NAME /absolute/path.")?;
-            crate::projects::request_named(state,id,path,Some(name),crate::projects::Requester::Operator)?;
-        }else{crate::projects::request(state,id,path,crate::projects::Requester::Operator)?;}
+            let [path] = crate::projects::paths(path, home.as_deref()).try_into().map_err(|_| "Use /open --as NAME with one absolute path.")?;
+            crate::projects::request_named(state,id,&path,Some(name),crate::projects::Requester::Operator)?;
+        } else {
+            match crate::projects::paths(path, home.as_deref()).as_slice() {
+                [] => return Err("Use /open followed by an absolute path on the Control node."),
+                [path] => { crate::projects::request(state,id,path,crate::projects::Requester::Operator)?; }
+                paths => {
+                    let (lines, requested) = crate::projects::request_list(state, id, paths)?;
+                    reply = if requested { format!("{reply}\n{lines}") } else { format!("No folder was requested; correct the refused paths and send the list again.\n{lines}") };
+                    made = requested;
+                }
+            }
+        }
         let session = state.chats.iter_mut().find(|s| s.id == id).unwrap();
-        session.messages.push(Message { speaker: Default::default(), text: text.trim().into(), run_id: None, reply: format!("Review and approve folder access: /dm/{id}/project") });
-        session.project.as_mut().unwrap().message_index=Some(session.messages.len()-1);
+        session.messages.push(Message { speaker: Default::default(), text: text.trim().into(), run_id: None, reply });
+        if made {
+            let (index, project) = (session.messages.len()-1, session.project.as_mut().unwrap());
+            project.message_index = Some(index);
+            for folder in &mut project.also { folder.message_index = Some(index); }
+        }
+        session.revision = session.revision.saturating_add(1);
         return Ok(());
     }
     if let Some(answer) = commands::tail(text.trim(), Kind::Answer) {
@@ -525,7 +562,7 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
             let session = state.chats.iter_mut().find(|s| s.id == id).unwrap();
             session.messages.push(Message { speaker: Default::default(),
                 text: text.trim().into(), run_id: None,
-                reply: format!("Cancelled {} run(s) and stopped {bots} bot(s) across {} chat(s). Services keep running; stop them on the services page.", runs.len(), chats.len()),
+                reply: format!("Cancelled {} run(s) and stopped {bots} bot(s) across {} chat(s). Services keep running; /services lists them and /services stop all stops them.", runs.len(), chats.len()),
             });
             session.revision = session.revision.saturating_add(1);
             return Ok(());
