@@ -151,3 +151,22 @@ fn a_captured_observer_persona_decides_its_mode_and_keeps_its_gene_gate() {
     state.chats.iter_mut().find(|chat| chat.id == root).unwrap().lenses = Some(Vec::new());
     assert_eq!(command_at(&mut state, &judge, "on", Now(3)).unwrap_err(), ANTIBODY_OFF);
 }
+
+#[test]
+fn a_quiet_patrol_settles_without_a_model_turn_and_activity_still_wakes_one() {
+    let mut state = State::default();
+    let (_, judge) = observer(&mut state);
+    command_at(&mut state, &judge, "on every 1", Now(1)).unwrap();
+    // Nothing happens on the node: the timer fires, but the turn settles at once.
+    reconcile_at(&mut state, 61_000, ok).unwrap();
+    let patrols = bot_runs(&state).into_iter().filter(|run| run.chat_id.as_deref() == Some(judge.as_str())).collect::<Vec<_>>();
+    assert_eq!(patrols.len(), 1);
+    assert_eq!((patrols[0].status.as_str(), patrols[0].attempts.len()), ("completed", 0), "no model call");
+    assert!(patrols[0].result.contains("Patrol skipped"));
+    // Another team starts work: the next patrol is a real turn.
+    let other = crate::chat::create(&mut state);
+    crate::chat::send(&mut state, &other, "Build the wall", "test").unwrap();
+    reconcile_at(&mut state, 122_000, ok).unwrap();
+    let last = bot_runs(&state).into_iter().filter(|run| run.chat_id.as_deref() == Some(judge.as_str())).last().unwrap();
+    assert_eq!(last.status, "queued", "activity on the node wakes a real patrol");
+}

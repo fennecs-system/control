@@ -255,7 +255,7 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert!(planning.instructions.contains("Check it once when claiming the milestone done"));
     assert!(planning.instructions.contains("treat reaching its done-condition as the tool's test"));
     let advisor = Library::default().get("advisor").unwrap().clone();
-    assert_eq!(advisor.revision, 5);
+    assert_eq!(advisor.revision, 6);
     assert!(advisor.instructions.contains("members marked claims blocked"));
     assert!(advisor.instructions.contains("several members report a similar blocker"));
     assert!(advisor.instructions.contains("(busy but stalled)"));
@@ -370,7 +370,7 @@ fn summaries_and_roles_make_lenses_on_demand_and_role_scoped() {
     assert_eq!(resolved.inline(Audience::Advisor).count(), 2);
     assert_eq!(resolved.inline(Audience::Member).count(), 1);
     assert!(resolved.guidance_for("advisor", Audience::Member).is_none());
-    assert_eq!(resolved.guidance_for("Team advisor", Audience::Lead).unwrap().revision, 5);
+    assert_eq!(resolved.guidance_for("Team advisor", Audience::Lead).unwrap().revision, 6);
     // Role-scoped lenses without a summary are inline only for their roles.
     library.definitions.push(Definition { id: "lead-only".into(), name: "Lead only".into(), revision: 1, instructions: "Lead text".into(), roles: vec![Audience::Lead], ..Default::default() });
     let scoped = library.resolve(&["lead-only".into()], &[]).unwrap();

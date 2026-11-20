@@ -55,6 +55,26 @@ fn an_approved_advisor_notes_only_the_lead_and_posts_nothing_to_the_room() {
 }
 
 #[test]
+fn an_observer_note_reports_back_to_an_idle_lead_as_a_turn_at_once() {
+    // Like a background agent's completion: the lead (not a bot, its turn
+    // finished) is woken by the note without waiting for the digest bound,
+    // and that turn is the observer's echo, not team activity.
+    let (mut state, lead, _, advisor, run) = team();
+    crate::bots::command(&mut state, &advisor, "on").unwrap();
+    note(&mut state, &run, "n1", &lead, "The chest is covered by a block; mine it, then reassign the chest claim.").unwrap();
+    assert!(state.agent_messages.last().unwrap().digest, "the idle lead is owed a turn");
+    let sent_ms = state.agent_messages.last().unwrap().at_ms;
+    crate::agent_message::digest::reconcile(&mut state, sent_ms, &mut |_| Ok(())).unwrap();
+    let reports = state.runtime.runs.iter().filter(|r| r.chat_id.as_deref() == Some(lead.as_str()) && r.source == crate::agent_message::digest::NOTE_DIGEST).collect::<Vec<_>>();
+    assert_eq!(reports.len(), 1, "woken at once");
+    assert_eq!((reports[0].status.as_str(), reports[0].kind), ("queued", RunKind::AgentMessage));
+    assert!(reports[0].objective.starts_with("Observer report") && reports[0].objective.contains("mine it"), "{}", reports[0].objective);
+    // Delivered once.
+    crate::agent_message::digest::reconcile(&mut state, sent_ms + 1_000_000, &mut |_| Ok(())).unwrap();
+    assert_eq!(state.runtime.runs.iter().filter(|r| r.source == crate::agent_message::digest::NOTE_DIGEST).count(), 1);
+}
+
+#[test]
 fn advisor_notes_refuse_members_judges_repeats_and_services() {
     let (mut state, lead, builder, advisor, run) = team();
     crate::bots::command(&mut state, &advisor, "on").unwrap();

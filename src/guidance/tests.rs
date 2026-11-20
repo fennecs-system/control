@@ -21,7 +21,7 @@ fn lists_topics_for_the_role_and_reads_the_captured_text() {
     assert_eq!(read(Some(&context), Audience::Member, Some("task autonomy")).unwrap()["topic"], "autonomy");
     assert!(read(Some(&context), Audience::Member, Some("advisor")).is_err());
     let lead = read(Some(&context), Audience::Lead, Some("advisor")).unwrap();
-    assert!(lead["text"].as_str().unwrap().contains("start one advisor"));
+    assert!(lead["text"].as_str().unwrap().contains("an advisor is a background helper"));
     assert!(read(Some(&context), Audience::Lead, Some("unknown")).is_err());
     let session = read(None, Audience::Member, Some("session")).unwrap();
     assert_eq!(session["text"], agent_policy::SESSION_GUIDANCE_DETAIL);

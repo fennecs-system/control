@@ -90,6 +90,14 @@ impl Batch {
                 .saturating_sub(self.children.len())
         }
     }
+    /// Observer (judge) batches use the root's advisor allowance, never its
+    /// worker budget, so an advisor never takes a member's place.
+    pub(crate) fn worker_reserved(&self) -> usize {
+        if self.input.role() == Role::Judge { 0 } else { self.reserved() }
+    }
+    pub(crate) fn worker_pending(&self) -> usize {
+        if self.input.role() == Role::Judge { 0 } else { self.pending() }
+    }
     fn id(&self, parent: &str) -> String {
         format!("{parent}:{}:{}", self.generation, self.nonce)
     }
@@ -231,9 +239,16 @@ pub fn request(
             }
         }
     }
-    // A spawned judge is a team advisor candidate: it uses the root's advisor
-    // allowance, not the one blocking judge review.
-    delegation::budget_for(state, run, Role::Worker, input.objectives.len(), false)?;
+    // A spawned judge is a team advisor candidate: a background observer that
+    // uses the root's advisor allowance (checked above), not the one blocking
+    // judge review nor the team's worker budget or spawn rate.
+    if input.role() == Role::Judge {
+        if delegation::lineage(run).depth >= delegation::MAX_DEPTH {
+            return Err("Delegation depth limit reached (2).");
+        }
+    } else {
+        delegation::budget_for(state, run, Role::Worker, input.objectives.len(), false)?;
+    }
     let pending = state
         .runtime
         .runs

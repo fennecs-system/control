@@ -814,6 +814,14 @@ pub(crate) fn patrol(woke: &str) -> String {
     let woke = woke.chars().take(2000).collect::<String>();
     format!("You are this node's read-only antibody, woken by: {woke}. Following the Antibodies guidance, check the named teams (or the whole node on a patrol) with control_intel_brief. For a team working against its goal, send its lead's steering chat at most one concise note with control_agent_message; escalate with control_operator_notify only when the lead is not fixing it or the operator is needed. Send nothing when evidence is unchanged. End the turn when done.")
 }
+/// Whether any team outside `antibody`'s own tree has a queued or running turn,
+/// or started one after `since` (unix ms).
+fn active_since(state: &State, antibody: &str, since: u64) -> bool {
+    let own = root(state, antibody);
+    let tree = state.chats.iter().filter(|chat| root(state, &chat.id) == own).map(|chat| chat.id.as_str()).collect::<std::collections::HashSet<_>>();
+    state.runtime.runs.iter().rev().filter(|run| run.chat_id.as_deref().is_none_or(|chat| !tree.contains(chat)))
+        .any(|run| matches!(run.status.as_str(), "queued" | "running") || run.created_ms().is_some_and(|at| at > since))
+}
 /// Queues one bot turn in its chat, reusing the chat's latest task context like
 /// room listening does. Errors leave the request for a later attempt.
 fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
@@ -851,8 +859,16 @@ fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
         _ => objective,
     };
     let woke = match &note { Some(note) => format!("{woke}. {note}"), None => woke };
+    // A timer-only antibody patrol with nothing new on the node settles
+    // without a model turn: no cost, and the cached prompt stays warm for real work.
+    let quiet = antibody && note.is_none() && !reasons.is_empty() && reasons.iter().all(|reason| *reason == Reason::Timer)
+        && !active_since(state, chat, latest.created_ms().unwrap_or(0));
     let run = follow_up.enqueue(state, chat, objective, RunKind::BotWake, "bot")?;
     run.bot_turn = Some(Box::new(Turn { bot: request.bot.0.clone(), turn: request.turn.0, reasons:request.reasons.clone(), recovery }));
+    if quiet {
+        run.status = "completed".into();
+        *run.result = "Patrol skipped: no team activity since the last patrol.".into();
+    }
     let id = run.id.clone();
     let session = state.chats.iter_mut().find(|session| session.id == chat).unwrap();
     session.messages.push(crate::chat::Message { speaker: Default::default(), text: format!("Bot woke: {woke}"), run_id: Some(id), reply: String::new() });
