@@ -861,8 +861,11 @@ fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
     let woke = match &note { Some(note) => format!("{woke}. {note}"), None => woke };
     // A timer-only antibody patrol with nothing new on the node settles
     // without a model turn: no cost, and the cached prompt stays warm for real work.
+    // A team still flagged (stalled, looping, burning) keeps patrols real: an
+    // idle stalled team produces no new activity or facts, only the patrol sees it.
     let quiet = antibody && note.is_none() && !reasons.is_empty() && reasons.iter().all(|reason| *reason == Reason::Timer)
-        && !active_since(state, chat, latest.created_ms().unwrap_or(0));
+        && !active_since(state, chat, latest.created_ms().unwrap_or(0))
+        && state.bots.teams.values().all(|team| team.conditions().is_empty());
     let run = follow_up.enqueue(state, chat, objective, RunKind::BotWake, "bot")?;
     run.bot_turn = Some(Box::new(Turn { bot: request.bot.0.clone(), turn: request.turn.0, reasons:request.reasons.clone(), recovery }));
     if quiet {
