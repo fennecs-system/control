@@ -17,6 +17,59 @@ that comes first. The **TCP ports** section of the web tools page lists endpoint
 and revocation controls. **Deny** works even without a valid duration. Neither
 deny nor revoke stops the owning service.
 
+### Automatic approval
+
+**Manage → Permissions** holds a node-wide switch, stored in `permissions.json`
+in the node configuration directory.
+
+- **Strict**, the default for new and existing nodes, is the behaviour above:
+  every request waits for a person.
+- **Auto** approves routine requests at once. Ports and persistent bots each
+  have their own mode, `auto` (the default once the node is in Auto) or `ask`.
+  Principals the operator marks as strict always ask, even in Auto. These are
+  the local operator, or a Discord user listed in `discord-access.json`.
+
+In Auto, a port request is approved automatically only when all of these hold:
+
+- the service belongs to the requester's task tree;
+- the tree's services then hold at most 16 active ports;
+- the request is one of these:
+  - egress to a public host name on 80 or 443;
+  - egress to an exact `host:port` the operator listed as a standing target,
+    such as a testbed at `127.0.0.1:25565`;
+  - a peer route to an approved ingress in the same task;
+  - ingress above port 1024, which still binds only host loopback.
+
+Literal loopback, private-network, link-local and other special addresses
+always ask unless listed. So do obviously local names such as `localhost`,
+`*.local` and `*.internal`. Approval still pins the name to public addresses, as a
+manual approval does. A public-looking name that resolves privately fails
+that check and stays pending for the operator. List loopback standing targets as
+literal IPs: a listed target is the only way a loopback grant is automatic. LAN
+addresses stay unreachable, whether approved by hand or automatically.
+
+An automatic approval is the operator's transition, for the service's lifetime,
+after the same service and relay checks. Its effects:
+
+- The requester gets the approved record, with `"decided_by":"policy"` and the
+  matching `rule`, in its tool result. No decision turn follows.
+- The decision is recorded with the policy as decider. The **TCP ports** page
+  and Manage → Permissions tag it `auto · RULE`.
+- Unless switched off, a notice that needs no action goes through the operator
+  channels, at most six per hour. Agents keep their own notice budget.
+- Revoke it like any other port.
+
+Manage → Permissions also shows **Running now**: live services, open ports with
+their targets, persistent bots, and the latest automatic decisions.
+
+The rules are the first stage of a classifier pipeline (`src/auto_approval.rs`).
+A later stage, such as a model-based classifier, could decide only the
+borderline `ask` cases in Auto mode, such as an unusual port on a public name.
+It could never approve what the rules mark for a person: strict mode or
+principal, unlisted private targets, exhausted quotas. None is installed.
+Folder access and credentials have no request kind in that pipeline, so neither
+the rules nor a later stage can see or approve them.
+
 Relays need a worker image whose `dev.control.tcp-relay` label matches the
 version this Control build speaks (currently `5`). Services on older images are
 refused with a rebuild instruction: rerun Nix setup, then start a new service.

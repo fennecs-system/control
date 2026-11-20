@@ -141,7 +141,9 @@ requests. That includes opening host folders to a task, if folder is enabled.
 This switch is a policy for the bridge, not a security boundary: anything that
 holds the operator credential could post the same forms itself.
 
-The same page lists every pending request with a link to its DM.
+The same page lists every pending request with a link to its DM. It also has
+the node's [automatic approval](PORTS.md#automatic-approval) policy, which is
+strict by default, and a view of what is running now.
 
 **What it can always do.** It can start model turns, which use the operator's
 model quota. It can cancel runs and stop services in any operator chat. These

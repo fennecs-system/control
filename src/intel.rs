@@ -288,7 +288,7 @@ pub(crate) fn notify(state: &mut State, chat: &str, team: Option<&str>, text: &s
         return Err("This notice was already sent; notices are never repeated");
     }
     let limit = state.runtime.execution.operator_notices_per_hour;
-    if state.bots.notices.iter().filter(|notice| notice.unix + 3600 > at).count() >= limit {
+    if state.bots.notices.iter().filter(|notice| !notice.id.starts_with(POLICY_PREFIX) && notice.unix + 3600 > at).count() >= limit {
         return Err("The operator notice limit for this hour is reached; record the evidence and try again later only if it still matters");
     }
     let notice = Notice { id: id.to_owned(), chat: chat.to_owned(), team, text: text.to_owned(), unix: at };
@@ -299,6 +299,27 @@ pub(crate) fn notify(state: &mut State, chat: &str, team: Option<&str>, text: &s
         session.revision = session.revision.saturating_add(1);
     }
     Ok(notice)
+}
+
+/// FYI notices of automatic approvals forwarded per hour; beyond it the
+/// decisions are still recorded and shown, just not forwarded. They have their
+/// own budget, so they never use up agents' `operator_notices_per_hour`.
+pub(crate) const POLICY_NOTICES_PER_HOUR: usize = 6;
+const POLICY_PREFIX: &str = "policy-";
+
+/// Records the FYI notice of an automatic approval (`id` starts with
+/// `policy-`) from `chat`, unless this hour's policy budget is spent.
+pub(crate) fn policy_notice(state: &mut State, chat: &str, text: &str, id: &str, at: u64) -> bool {
+    debug_assert!(id.starts_with(POLICY_PREFIX));
+    let sent = state.bots.notices.iter().filter(|notice| notice.id.starts_with(POLICY_PREFIX) && notice.unix + 3600 > at).count();
+    if sent >= POLICY_NOTICES_PER_HOUR || state.bots.notices.iter().any(|notice| notice.id == id) {
+        return false;
+    }
+    let team = Some(Tree::new(state).root(chat).to_owned());
+    state.bots.notices.push(Notice { id: id.to_owned(), chat: chat.to_owned(), team, text: shorten(text, NOTICE_CHARS), unix: at });
+    let excess = state.bots.notices.len().saturating_sub(NOTICES);
+    state.bots.notices.drain(..excess);
+    true
 }
 
 pub struct Tools;

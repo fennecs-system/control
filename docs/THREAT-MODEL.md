@@ -147,6 +147,35 @@ arbitrary downloaded code safe.
   cookies from reaching the tool. HTTP content uses the guarded preview path.
   See [port scope and regression checks](PORTS.md).
 
+- **Automatic approval.** The node's policy (Manage → Permissions, strict by
+  default) can approve routine port and bot requests instead of the operator.
+  It decides from host-gathered facts, never from model text.
+
+  It never does these:
+  - grant folder access or anything involving credentials, which have no
+    request kind in its pipeline;
+  - approve loopback, private-network or link-local targets the operator has
+    not listed;
+  - approve beyond the task's port quota or spawn and bot limits;
+  - act for strict principals or untrusted identities.
+
+  An approval makes the operator's own checked transition: service ownership,
+  relay verification and public-address pinning. The decision is recorded with
+  the policy as decider, sent as a rate-limited FYI and revocable like a
+  manual one.
+
+  Residual risk: in Auto, a prompt-injected agent can open egress to any
+  public web host on 80/443 without a person seeing it first. That allows
+  exfiltration of what the task's workspace holds and downloads of arbitrary
+  code into its offline service. It can also expose a service on host loopback
+  above 1024 to local processes, and keep bots spending model quota within
+  their limits. Strict mode and strict principals remove this. Evidence:
+  [auto_approval.rs](../src/auto_approval.rs),
+  `private_and_unlisted_loopback_targets_always_ask`,
+  `folder_access_is_never_automatic`;
+  [ports](../src/ports/tests/auto_tests.rs),
+  `private_unlisted_loopback_and_privately_resolving_targets_stay_pending`.
+
 ## Guidance is not enforcement
 
 Instructions to avoid secrets, ignore prompt injection, prefer Rust, ask design

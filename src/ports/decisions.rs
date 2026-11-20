@@ -20,6 +20,9 @@ pub(super) struct Receipt {
 }
 impl Receipt {
     pub(super) fn pending(allowed: bool) -> Self { Self { allowed, acknowledged:false, live:true } }
+    /// A decision the requester already received in its tool result (an
+    /// automatic approval), so no decision turn is queued for it.
+    pub(super) fn settled(allowed: bool) -> Self { Self { allowed, acknowledged:true, live:true } }
 }
 
 fn target<'a>(state: &'a State, port: &Port) -> Option<&'a crate::runtime::Run> {
