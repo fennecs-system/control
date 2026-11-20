@@ -117,7 +117,8 @@ These chat commands work on the web, in the TUI and in authorized Discord DMs:
 | `/btw question` | Ask in a linked side conversation. |
 | `/spawn task` | Start a linked agent conversation. |
 | `/listen` / `/listen off` | Enable or stop room-triggered turns in a linked chat. |
-| `/open /absolute/path` | Add an approved folder at `/workspace/<name>`; use `--as NAME` for duplicate names. [Workspaces →](docs/WORKSPACES.md) |
+| `/open /absolute/path` | Add an approved folder at `/workspace/<name>`; list several paths (spaces, commas or one per line) to request them together; use `--as NAME` for duplicate names. [Workspaces →](docs/WORKSPACES.md) |
+| `/services` / `/services stop ID` | List or stop the running services of this DM and its team (`stop all` stops every one); `/workspace` is kept. [Persistent tools →](docs/PERSISTENT-TOOLS.md#stopping-from-a-chat) |
 | `/cancel` | Stop the active or oldest queued task in this DM. |
 | `/rename NAME` | Name this DM (up to 32 characters). DMs are otherwise shown by a callsign such as Bravo or Indigo. |
 | `/answer QUESTION_ID answer` | Answer an agent's pending design question. |

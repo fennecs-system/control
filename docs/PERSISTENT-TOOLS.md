@@ -31,10 +31,35 @@ To share a service created after spawning, attach it to a
   separate operator decision. Omitting `services` transfers no authority.
 - Retries are idempotent; a failed checkpoint rolls back the message and grants.
 
+Stopping needs no grant inside a team. Any non-judge attempt can stop a service
+owned by a same-actor chat in its own task tree (the top-level chat and every
+chat spawned beneath it), so a lead can stop its workers' services and a worker
+its lead's or a sibling's. Stop releases capacity and reads nothing; the owner's
+`/workspace` is retained. `control_service_status` without `service_id` lists
+those teammates' live services as `team_services`. Exec, copy, attach and logs
+still need ownership or a grant, and a teammate's stop result omits the owner's
+output and executions.
+
 Delivery, wake and urgency rules for peer messages are in
 [room notifications](ROOM-NOTIFICATIONS.md). Peer messages are coordination
 evidence, not operator steering: they cannot bypass a bot's pause/stop, revive
 cancelled work, change action scope or continue a judge.
+
+## Stopping from a chat
+
+The operator lists and stops services from any DM, on the web and in the TUI:
+
+| Command | Effect |
+| --- | --- |
+| `/services` | List the running services of this DM's task tree: ID, phase, size, owning DM and command. |
+| `/services stop ID` | Stop one. A unique prefix of the ID is enough, with or without `svc-` (the process tree shows the first six characters). |
+| `/services stop all` | Stop every running service of the task tree. |
+
+These are the same stop as the Services page: containers are removed, each DM's
+`/workspace` is kept, and ports bound to a stopped service lose authorization.
+A non-operator DM lists only its own actor's services. `/cancel all` stops runs and
+bots but leaves services running; follow it with `/services stop all` to free
+their capacity as well.
 
 ## Task coordination threads
 
@@ -65,7 +90,7 @@ not expose service management.
 | `control_service_start` | Checkpoint a command and return its durable handle; startup is asynchronous. |
 | `control_service_status` | Inspect one handle, or list active services and ten recent completed handles. Each shows its state, limits, ports, watches and this chat's latest executions. `detail: "node"` adds shapes, the remaining node budget, the volume name and other chats' executions. |
 | `control_service_attach` | Read the same status and bounded logs for an owned handle; does not extend its lease. |
-| `control_service_stop` | Record stop intent. Wait for `Stopped` before assuming removal succeeded. |
+| `control_service_stop` | Record stop intent for an owned, granted or teammate's service. Wait for `Stopped` before assuming removal succeeded. In the core worker tool set; no tool search needed. |
 | `control_service_exec` | Run a bounded command in an owned running service. Waits up to `wait_seconds` for the result, else returns an `execution_id`. |
 | `control_service_exec_status` | Read a command's live output, durable status and exit code; `wait_seconds` long-polls. |
 | `control_service_copy` | Copy a file or tree from the task workspace into the service's `/workspace`; waits like exec. |
@@ -118,10 +143,18 @@ docker volume ls --filter label=dev.control.purpose=service-workspace
 
 and check their `dev.control.node` and `dev.control.chat` labels. Delete a volume
 only after confirming its data is no longer needed; `docker volume prune` can
-destroy retained workspaces. The Services page can delete stopped services one at
-a time or with **Clean up stopped services**. Once no service record of a chat
-remains, that also removes the chat's volume; only volumes carrying this node's
-Control labels are removed, and the engine refuses one still mounted.
+destroy retained workspaces.
+
+On the Services page each running service's card has **Stop service**; the web
+client asks for confirmation first. The process tree links each service straight
+to its card. Stopped services need no clean-up: they leave the cards for a
+compact **Recently stopped** list, hold no capacity, and the oldest records are
+dropped automatically when records run out. Deleting a workspace stays explicit:
+**Delete /workspace** on a stopped row deletes that DM's retained volume once
+none of its services runs, and **Delete unused workspaces** deletes the volume of
+every DM with no running service. Both ask for confirmation, remove the matching
+stopped records, and touch only volumes carrying this node's Control labels; the
+engine refuses one still mounted.
 
 Control does not restart application processes or replay commands after a
 Docker restart. Start a replacement service and inspect its workspace before

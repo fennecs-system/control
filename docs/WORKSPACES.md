@@ -15,6 +15,24 @@ and enter `/trust` (or `/trust REQUEST`). `/open` alone shows the current reques
 `/open /another/path` replaces it. Your `/open` checks that the path is an
 existing folder and fails at once if not, so a typo never becomes a request.
 
+`/open` also takes a list. Separate paths with spaces (`/open /a/api /b/web`),
+commas, or put one per line (Shift+Enter on the web, Alt+Enter in the TUI). A
+space separates paths only when the next path starts with `/` or `~`, so a single
+path with spaces such as `/open /Users/me/My Project` still opens as one folder;
+quote a path whose name has a space before a `/` (`/open "/data/a /b" /c`). With
+commas or new lines each item is one path, spaces included. The reply lists every
+path with its result: `→ /workspace/NAME`, or why it was refused (missing, not a
+folder, a name already in use). When every path passes they become one request
+with one **Trust folders and open** decision, and each opens at its own
+`/workspace/<name>`. If any path is refused nothing is requested, because a later
+`/open` replaces the pending request; correct the list and send it again. Dismiss
+a request and `/open` again to change its list. `--as NAME` takes a single path.
+
+`~` and `~/path` mean the home directory of the user running Control on the node,
+because paths are read on the node, not on the device you type from (the TUI can
+connect to a remote server). Other relative paths are refused. Agents'
+`control_project_request` still takes one absolute path and is never expanded.
+
 **Dismiss** in the web request (or `/dismiss [REQUEST]` in the TUI) rejects the
 displayed request. The chat returns to the folders it had before the request,
 including agents' edits since; already approved folders keep working. Dismissal

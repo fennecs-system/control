@@ -556,6 +556,10 @@ impl App {
         if let Some(project)=pending_project(&self.detail) {
             lines.push(Line::styled(format!("Folder access requested · {}",clean(project["path"].as_str().unwrap_or(""))),Style::default().fg(Color::Rgb(181,160,255))));
             lines.push(Line::from(format!("Open as /workspace/{}",clean(project["name"].as_str().unwrap_or("")))));
+            // The rest of an `/open` list, trusted with the same decision.
+            for folder in project["also"].as_array().into_iter().flatten() {
+                lines.push(Line::from(format!("Also {} as /workspace/{}",clean(folder["path"].as_str().unwrap_or("")),clean(folder["name"].as_str().unwrap_or("")))));
+            }
             lines.push(Line::from("Trust this folder’s code and allow local previews? Control copies it into an isolated worktree; credentials, generated directories and symlinks are excluded. The original stays unchanged."));
             if let Some(error)=project["error"].as_str() {lines.push(Line::from(clean(error)));}
             let request=clean(project["request"].as_str().unwrap_or(""));
@@ -584,7 +588,7 @@ fn resume_selection(args:&[String])->io::Result<Option<&str>> {
 pub fn run() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|s| s == "--help") {
-        println!("control tui [--server {}] [--resume ID] [--directory PATH] [--check]\nAlso available as control-harness. Starts a fresh DM; --resume ID (or --session ID) explicitly resumes one. CONTROL_ADDR sets the default server.\n\n/resume · /open /absolute/path · /trust [REQUEST] · /dismiss [REQUEST] · /port allow|deny ID · /answer QUESTION_ID choice · /genes · /use GENE GENE · /use none · /personas · /persona NAME · /context · /chat · /help", crate::config::server_url());
+        println!("control tui [--server {}] [--resume ID] [--directory PATH] [--check]\nAlso available as control-harness. Starts a fresh DM; --resume ID (or --session ID) explicitly resumes one. CONTROL_ADDR sets the default server.\n\n/resume · /open /absolute/path [/another/path …] · /trust [REQUEST] · /dismiss [REQUEST] · /port allow|deny ID · /services [stop ID|all] · /answer QUESTION_ID choice · /genes · /use GENE GENE · /use none · /personas · /persona NAME · /context · /chat · /help", crate::config::server_url());
         return Ok(());
     }
     let option = |name: &str| {

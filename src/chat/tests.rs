@@ -1098,3 +1098,17 @@ fn chats_show_callsigns_and_every_client_sees_the_same_rename() {
     assert!(tool(&mut state, "control.chat.rename", &serde_json::json!({"id":chat,"name":"a\u{7}b"})).is_err());
     assert_eq!(state.chats[0].name.as_deref(), Some("player1"));
 }
+
+/// Web and TUI both send `/services` as chat text; it is answered in place and
+/// starts no model turn.
+#[test]
+fn services_command_replies_in_the_chat_without_a_turn() {
+    let mut state = State::default();
+    let chat = create(&mut state);
+    send(&mut state, &chat, "/services", "test").unwrap();
+    let message = state.chats[0].messages.last().unwrap();
+    assert!(message.run_id.is_none() && message.reply.starts_with("No running services in this DM's team"), "{}", message.reply);
+    assert!(state.runtime.runs.is_empty());
+    assert!(send(&mut state, &chat, "/services stop", "test").is_err());
+    assert!(send(&mut state, &chat, "/services stop svc-missing", "test").unwrap_err().contains("No running service"));
+}

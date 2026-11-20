@@ -29,3 +29,25 @@ fn ordinary_text_unknown_commands_and_arguments_do_not_offer_completions() {
         assert_eq!(highlight(text), None, "{text}");
     }
 }
+
+/// The indexed lookup returns exactly what a full scan in menu order would.
+#[test]
+fn indexed_lookup_matches_a_full_scan() {
+    let all = build().collect::<Vec<_>>();
+    let scan = |input: &str| all.iter().filter(|e| input.starts_with('/') && !input.contains('\n') && e.text.starts_with(input)).map(|e| e.text).collect::<Vec<_>>();
+    let longest = |input: &str| all.iter().filter(|e| input.strip_prefix(e.text).is_some_and(|t| t.is_empty() || t.starts_with(char::is_whitespace))).map(|e| e.text.len()).max();
+    let mut inputs = vec!["".to_owned(), "/".into(), "ordinary text".into(), "/zzz".into(), "/port\nallow".into(), "/port  allow 7".into()];
+    for entry in &all {
+        for end in 1..=entry.text.len() {
+            inputs.push(entry.text[..end].to_owned());
+        }
+        inputs.push(format!("{} arg", entry.text));
+        inputs.push(format!("{}x", entry.text));
+    }
+    for input in &inputs {
+        assert_eq!(matching(input).map(|e| e.text).collect::<Vec<_>>(), scan(input), "{input:?}");
+        if input.starts_with('/') && let Some(end) = longest(input) {
+            assert_eq!(highlight(input), Some(0..end), "{input:?}");
+        }
+    }
+}

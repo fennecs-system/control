@@ -152,7 +152,8 @@ pub const TOOLS: [Tool; 34] = [
                 .brief("Start a chat-owned offline container that survives turns. Keep ALL task data in /workspace (persistent); other paths are lost. Foreground command; confirm with control_service_status."),
             w("control_service_attach", "use a granted service"),
             w("control_service_status", "list services and their leases").core(WORKERS).brief("Service status and bounded logs; without service_id, list services. detail node: node capacity."),
-            w("control_service_stop", "stop a service"),
+            w("control_service_stop", "stop this chat's or a teammate's service").core(WORKERS)
+                .brief("Stop this chat's or a teammate's service (status: team_services); /workspace is kept."),
             w("control_service_exec", "run a command in a service").core(WORKERS)
                 .brief("Run a bounded command in a chat-owned service; inline result within wait_seconds, else an execution_id. Killed at timeout_seconds; repeated or long work belongs in control_watch_start."),
             w("control_service_exec_status", "await or read a service command").core(WORKERS)

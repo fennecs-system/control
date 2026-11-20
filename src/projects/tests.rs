@@ -926,11 +926,14 @@ fn operator_open_checks_the_folder_but_agent_requests_are_never_probed() {
     fs::write(&file, "text").unwrap();
     let mut state = State::default();
     let id = crate::chat::create(&mut state);
-    let typo = format!("/open /open {}", folder.display());
-    assert!(crate::chat::send(&mut state, &id, &typo, "test").unwrap_err().contains("No readable folder"));
     assert!(crate::chat::send(&mut state, &id, &format!("/open {}", file.display()), "test").unwrap_err().contains("not a folder"));
     assert!(crate::chat::send(&mut state, &id, &format!("/open --as other {}/missing", folder.display()), "test").is_err());
     assert!(state.chats[0].project.is_none() && state.chats[0].messages.is_empty(), "nothing is requested or recorded");
+    // A doubled command reads as a list; its refused part requests nothing.
+    let typo = format!("/open /open {}", folder.display());
+    crate::chat::send(&mut state, &id, &typo, "test").unwrap();
+    assert!(state.chats[0].messages[0].reply.contains("- /open: No readable folder"));
+    assert!(state.chats[0].project.is_none(), "a typo never becomes a request");
     crate::chat::send(&mut state, &id, &format!("/open {}", folder.display()), "test").unwrap();
     assert!(state.chats[0].project.as_ref().unwrap().origin.is_none());
     // An agent learns nothing about the host: a folder, a file and a missing
@@ -1127,4 +1130,71 @@ fn failed_or_interrupted_imports_publish_nothing() {
     discard_interrupted_in(&root).unwrap();
     assert_eq!(published(), [grant]);
     discard_interrupted_in(&fixture.0.join("absent")).unwrap();
+}
+
+#[test]
+fn open_lists_split_on_commas_lines_or_a_space_before_the_next_path() {
+    let home = Some("/home/me");
+    assert_eq!(paths(" /a/api /b/web", home), ["/a/api", "/b/web"]);
+    assert_eq!(paths("/Users/me/My Project", home), ["/Users/me/My Project"], "one path with spaces still opens alone");
+    assert_eq!(paths("/Users/me/My Project /srv/web", home), ["/Users/me/My Project", "/srv/web"]);
+    assert_eq!(paths("/a, /b c ,/d", home), ["/a", "/b c", "/d"]);
+    assert_eq!(paths("/a /x\n/b /y\n\n", home), ["/a /x", "/b /y"], "each line is one path");
+    assert_eq!(paths("\"/data/a /b\" '/c d' /e", home), ["/data/a /b", "/c d", "/e"], "quotes keep a space before a /");
+    assert_eq!(paths("~ ~/code/api /x", home), ["/home/me", "/home/me/code/api", "/x"]);
+    assert_eq!(paths("~/code", None), ["~/code"], "no home, no expansion: refused later as relative");
+    assert_eq!(paths("relative/path", home), ["relative/path"]);
+    assert!(paths("  ", home).is_empty());
+}
+
+#[test]
+fn operator_open_list_reports_each_path_and_requests_the_valid_folders_together() {
+    let fixture = Fixture::new();
+    let api = fixture.0.join("api");
+    let web = fixture.0.join("my web");
+    fs::create_dir_all(&api).unwrap();
+    fs::create_dir_all(&web).unwrap();
+    fs::write(fixture.0.join("notes.txt"), "text").unwrap();
+    let mut state = State::default();
+    let id = crate::chat::create(&mut state);
+    let base = fixture.0.display();
+    // One per line, a space inside a name, a duplicate name, a file and a
+    // missing folder: each path gets its own result, and any refusal requests
+    // nothing, so the corrected list is sent again whole.
+    crate::chat::send(&mut state, &id, &format!("/open {base}/api\n{base}/my web\n{base}/api\n{base}/notes.txt\n{base}/gone"), "test").unwrap();
+    let lines = state.chats[0].messages[0].reply.lines().collect::<Vec<_>>();
+    assert!(lines[0].starts_with("No folder was requested"), "{lines:?}");
+    assert!(lines[1].ends_with("/api → /workspace/api"), "{lines:?}");
+    assert!(lines[2].contains("my web: Folder names must use letters"), "names come from the folder; {lines:?}");
+    assert!(lines[3].contains("already used"), "{lines:?}");
+    assert!(lines[4].contains("notes.txt: That path is not a folder"), "{lines:?}");
+    assert!(lines[5].contains("gone: No readable folder"), "{lines:?}");
+    assert!(state.chats[0].project.is_none());
+    // Valid folders become one request with a mount each.
+    let other = fixture.0.join("other");
+    fs::create_dir_all(&other).unwrap();
+    crate::chat::send(&mut state, &id, &format!("/open {base}/api {base}/other"), "test").unwrap();
+    let index = state.chats[0].messages.len() - 1;
+    let lines = state.chats[0].messages[index].reply.lines().collect::<Vec<_>>();
+    assert!(lines[0].starts_with("Review and approve folder access") && lines[2].ends_with("/other → /workspace/other"), "{lines:?}");
+    let project = state.chats[0].project.clone().unwrap();
+    assert!(project.pending && project.name == "api" && project.message_index == Some(index));
+    assert_eq!(project.also.iter().map(|m| (m.name.as_str(), m.message_index)).collect::<Vec<_>>(), [("other", Some(index))]);
+    let panel = panel(&state, &id);
+    assert!(panel.contains("Trust these 2 folders") && panel.contains("<code>/workspace/other</code>") && !panel.contains("Change folder"), "{panel}");
+    // `--as` names exactly one folder.
+    assert!(crate::chat::send(&mut state, &id, &format!("/open --as x {base}/api {base}/other"), "test").is_err());
+
+    // One approval copies both folders, each to its own mount.
+    let root = fixture.0.join("projects");
+    let shared = Arc::new(Mutex::new(state));
+    fs::write(api.join("a.txt"), "a").unwrap();
+    fs::write(other.join("b.txt"), "b").unwrap();
+    import_in(&root, &shared, &id, &project.request, project.clone(), no_save).unwrap();
+    let state = shared.lock().unwrap();
+    let opened = state.chats[0].project.as_ref().unwrap();
+    assert!(!opened.pending && opened.also.is_empty());
+    assert_eq!(opened.mounts.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["api", "other"]);
+    let seed = root.join("grants").join(opened.grant.as_ref().unwrap()).join("seed");
+    assert_eq!((fs::read_to_string(seed.join("api/a.txt")).unwrap(), fs::read_to_string(seed.join("other/b.txt")).unwrap()), ("a".into(), "b".into()));
 }

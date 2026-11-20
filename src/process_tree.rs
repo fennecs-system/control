@@ -297,7 +297,8 @@ fn add_chat(state: &State, index: &Index<'_>, names: &Names<'_>, tree: &mut Tree
             kind: Kind::Service,
             title: format!("{shape} service {}", id.trim_start_matches("svc-").chars().take(6).collect::<String>()),
             detail: format!("{} · {}", service.phase_name(), service.label()),
-            href: Some("/tools/services".into()),
+            // Straight to its card, where it stops in one click.
+            href: Some(format!("/tools/services#{id}")),
             active: running,
             matched: false,
         });
