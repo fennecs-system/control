@@ -8,7 +8,9 @@
 //! - **Repetition loop:** one member's same command (digits folded) failed
 //!   several times among its retained commands.
 //! - **Polling:** one member's retained commands are mostly status-only reads.
-//! - **Cost burn:** the team spent many tokens since it last advanced.
+//! - **Cost burn:** the team spent many fresh tokens (uncached input plus
+//!   output) since it last advanced. Cached input is nearly free and would
+//!   trip the threshold during a team's first minutes.
 //!
 //! Inputs are each service's retained finished commands (a bounded window,
 //! `services::finished_commands`), run token counts and score probe samples.

@@ -252,9 +252,14 @@ pub(crate) fn search(facts: &Facts, args: &Value) -> std::io::Result<Value> {
     // listing left out.
     let split = |found: Vec<&Value>, named: bool| {
         let (listed, new): (Vec<&Value>, Vec<&Value>) = found.into_iter().partition(|t| control_context::loaded(name(t), facts.role));
+        let found_new = !new.is_empty();
         let mut value = json!({"tools":bounded(new),"next":next});
         if !listed.is_empty() {
             value["already_listed"] = json!(listed.iter().map(|t| known(facts, t, named)).collect::<Vec<_>>());
+            // Say so plainly: agents otherwise look the same loaded tools up
+            // again every turn and get nothing for the round trip.
+            let direct = "already_listed tools are in your tool list with their schemas: call them directly by name and do not search for them again.";
+            value["next"] = json!(if found_new { format!("{next} The {direct}") } else { format!("Nothing new: the {direct}") });
         }
         value
     };

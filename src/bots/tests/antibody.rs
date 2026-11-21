@@ -116,7 +116,8 @@ fn cost_burn_reaches_the_antibody_and_progress_rearms_it() {
     command_at(&mut state, &judge, "on", Now(0)).unwrap();
     reconcile_at(&mut state, 1, ok).unwrap();
     let spent = turn(&mut state, &worker, "completed");
-    state.runtime.runs[spent].attempts[0].tokens = Some(control_ai::Tokens { input_tokens: 9_000, output_tokens: 2_000, ..Default::default() });
+    // Cached input is nearly free and is not counted: 9,000 fresh input + 2,000 output.
+    state.runtime.runs[spent].attempts[0].tokens = Some(control_ai::Tokens { input_tokens: 904_000, cached_input_tokens: 895_000, output_tokens: 2_000 });
     reconcile_at(&mut state, 100_000, ok).unwrap();
     let heard = node_facts(&state, &judge);
     assert_eq!(heard.last().unwrap()[&team].burn, Some(pathology::Burn { tokens: 11_000 }));
