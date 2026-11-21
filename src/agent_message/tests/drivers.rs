@@ -32,7 +32,6 @@ async fn asynchronous(
     let decision = prepare(state, attempt, call(target), "fixed-message-id".into())?;
     let delivery = match decision {
         Decision::Existing(result) => return Ok(result),
-        Decision::Record { .. } => unreachable!("these drivers message descendants"),
         Decision::Deliver(delivery) => delivery,
     };
     let mut flight = InFlight::new(state, *delivery);
@@ -317,8 +316,6 @@ fn transport_encodes_the_typed_result_and_can_use_a_host_without_global_state() 
                 services: call.services,
                 retained: Some(true),
                 urgent: None,
-                recorded_in_room: None,
-                note: None,
             })
         }
     }
