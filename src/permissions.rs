@@ -17,20 +17,23 @@ pub struct Approvals {
     pub bot: bool,
     /// Design questions (answering steers a paused task).
     pub question: bool,
+    /// Shared-knowledge proposals (accept or reject, as in Knowledge → Review).
+    pub knowledge: bool,
 }
 impl Approvals {
-    pub const KINDS: [&'static str; 4] = ["folder", "port", "bot", "question"];
+    pub const KINDS: [&'static str; 5] = ["folder", "port", "bot", "question", "knowledge"];
     pub fn allows(&self, kind: &str) -> bool {
         match kind {
             "folder" => self.folder,
             "port" => self.port,
             "bot" => self.bot,
             "question" => self.question,
+            "knowledge" => self.knowledge,
             _ => false,
         }
     }
     pub fn any(&self) -> bool {
-        self.folder || self.port || self.bot || self.question
+        self.folder || self.port || self.bot || self.question || self.knowledge
     }
     pub fn set(&mut self, kind: &str, allowed: bool) {
         match kind {
@@ -38,6 +41,7 @@ impl Approvals {
             "port" => self.port = allowed,
             "bot" => self.bot = allowed,
             "question" => self.question = allowed,
+            "knowledge" => self.knowledge = allowed,
             _ => {}
         }
     }

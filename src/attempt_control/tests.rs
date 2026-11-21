@@ -60,3 +60,16 @@ fn accepted_handoff_finishes_even_at_explicit_deadline_without_model_reply() {
         Decision::Finish("saved".into())
     );
 }
+#[test]
+fn requested_handoff_replies_with_the_last_message_and_wakes_keep_progress() {
+    let said = |id: &str, kind: &str, text: &str| crate::usage::Activity { id: id.into(), kind: kind.into(), text: text.into(), output: String::new(), status: "completed".into() };
+    let activity = [said("1", "message", "Report: the fix and its diff."), said("2", "mcp_tool_call", "control_turn_handoff"), said("3", "message", "  ")];
+    // An operator-prompted turn shows what the agent said, not the placeholder or its progress line.
+    assert_eq!(reply(true, &activity, None), "Report: the fix and its diff.");
+    assert_eq!(reply(true, &activity, Some("staged")), "Report: the fix and its diff.");
+    // A wake, delegation or agent message keeps the staged progress or placeholder.
+    assert_eq!(reply(false, &activity, Some("staged")), "staged");
+    assert_eq!(reply(false, &activity, None), "Agent yielded with a committed handoff.");
+    // A requested turn that said nothing falls back the same way.
+    assert_eq!(reply(true, &activity[1..], None), "Agent yielded with a committed handoff.");
+}

@@ -792,11 +792,11 @@ fn optional_guidance_survives_child_wake_and_library_edits_without_retroactive_c
     };
     for run in [&parent, &child, &wake] {
         let text = prompt(&restored, run).unwrap();
-        assert!(text.contains("investigation@3") && text.contains("- investigation: "));
-        assert!(text.contains("coordination@14") && text.contains("autonomy@9"));
-        assert!(text.contains("planning@5"));
-        assert!(!text.contains("smallest authorized probe"));
-        assert!(guidance(&restored, run, "investigation").contains("smallest authorized probe"));
+        assert!(text.contains("investigation@4") && text.contains("- investigation: "));
+        assert!(text.contains("coordination@15") && text.contains("autonomy@9"));
+        assert!(text.contains("planning@6"));
+        assert!(!text.contains("change one relevant thing per try"));
+        assert!(guidance(&restored, run, "investigation").contains("change one relevant thing per try"));
         assert!(!guidance(&restored, run, "coordination").contains("Future coordination guidance only"));
         assert!(!guidance(&restored, run, "planning").contains("Future planning guidance only"));
         assert!(!text.contains("Future investigation guidance only"));
@@ -804,7 +804,7 @@ fn optional_guidance_survives_child_wake_and_library_edits_without_retroactive_c
     send(&mut state, &id, "Start a new authorized step", "test").unwrap();
     let last = state.runtime.runs.last().unwrap().id.clone();
     let next = prompt(&state, &last).unwrap();
-    assert!(next.contains("investigation@4") && next.contains("coordination@15") && next.contains("planning@6"));
+    assert!(next.contains("investigation@5") && next.contains("coordination@16") && next.contains("planning@7"));
     assert_eq!(guidance(&state, &last, "investigation"), "Future investigation guidance only");
     assert_eq!(guidance(&state, &last, "coordination"), "Future coordination guidance only");
     assert_eq!(guidance(&state, &last, "planning"), "Future planning guidance only");
@@ -822,7 +822,7 @@ fn optional_guidance_survives_child_wake_and_library_edits_without_retroactive_c
     )
     .unwrap();
     let plain = prompt(&state, &state.runtime.runs.last().unwrap().id).unwrap();
-    assert!(!plain.contains("Captured lens guidance") && !plain.contains("three distinct probes"));
+    assert!(!plain.contains("Captured lens guidance") && !plain.contains("three distinct tries"));
     assert!(!plain.contains("Future coordination guidance only"));
 }
 #[test]

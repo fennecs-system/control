@@ -21,6 +21,12 @@ fn concrete_call(message: &str) -> bool {
         name > prefix.len() && rest[name..].trim_start_matches(' ').starts_with('{')
     })
 }
+/// An argument-shape refusal: the decoder's own error, which names the
+/// unknown, missing or mistyped field, then one minimal valid call (itself
+/// the callable fix).
+pub(crate) fn shape(tool: &str, error: impl std::fmt::Display, example: &str) -> String {
+    format!("Invalid {tool} arguments: {error}. Example: {tool} {example}")
+}
 /// The families this contract covers, by tool name.
 pub(crate) fn covered(tool: &str) -> bool {
     default_fix(tool).is_some()

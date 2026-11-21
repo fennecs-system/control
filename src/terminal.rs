@@ -266,6 +266,11 @@ impl App {
                 self.set_detail(hive.tool("control.chat.read",json!({"id":self.active}))?);
                 self.status="Port decision saved".into();
             }
+            _ if text.starts_with("/knowledge ") => {
+                operator::execute(hive,&self.active,&operator::knowledge(&text).map_err(failure)?)?;
+                self.set_detail(hive.tool("control.chat.read",json!({"id":self.active}))?);
+                self.status="Knowledge review saved".into();
+            }
             "/open" => {
                 if !self.active.is_empty() {
                     self.set_detail(hive.tool("control.chat.read",json!({"id":self.active}))?);

@@ -54,7 +54,8 @@ fn run(ops: &dyn MessageOps, attempt: &AttemptRef<'_>, args: &Value) -> io::Resu
         #[serde(default)]
         urgent: bool,
     }
-    let input = serde_json::from_value::<Input>(args.clone()).map_err(|_| io::Error::other("Expected chat_id and text"))?;
+    let input = serde_json::from_value::<Input>(args.clone()).map_err(|error|
+        io::Error::other(crate::worker_tools::fixes::shape("control_agent_message", error, r#"{"chat_id":"c-<participant>","text":"<message>"}"#)))?;
     serde_json::to_value(ops.message(attempt, MessageCall { chat_id: input.chat_id, text: input.text, services: input.services, urgent: input.urgent })?).map_err(io::Error::other)
 }
 

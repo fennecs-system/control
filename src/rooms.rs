@@ -47,8 +47,14 @@ pub struct Post {
 pub fn read(state: &State, room: &str) -> Value {
     let posts = state.collective.posts.iter().filter(|p| p.room == room).rev().take(50)
         .map(|p| json!({"text":p.text,"chat":p.chat,"run":p.run,"delivery":p.delivery,"author":if p.run.is_some(){"agent"}else{"operator"}}));
-    json!({"room":room,"posts":posts.collect::<Vec<_>>(),"claims":claims::listed(state, room),
-        "chats":state.chats.iter().zip(crate::callsigns::all(&state.chats)).rev().filter(|(c, _)| c.room.as_deref()==Some(room)).take(50).map(|(c, callsign)|json!({"id":c.id,"title":crate::callsigns::label(c, callsign)})).collect::<Vec<_>>()})
+    let mut read = json!({"room":room,"posts":posts.collect::<Vec<_>>(),"claims":claims::listed(state, room),
+        "chats":state.chats.iter().zip(crate::callsigns::all(&state.chats)).rev().filter(|(c, _)| c.room.as_deref()==Some(room)).take(50).map(|(c, callsign)|json!({"id":c.id,"title":crate::callsigns::label(c, callsign)})).collect::<Vec<_>>()});
+    // Members find their team's approved advisor here: it is for asking, not
+    // coordination, and is not itself linked to the room.
+    if let Some(advisor) = state.chats.iter().filter(|c| c.room.as_deref() == Some(room)).find_map(|c| state.bots.team_advisor(&c.id)) {
+        read["advisor"] = json!({"id":advisor,"ask":"read-only; ask it about your method with control_agent_message"});
+    }
+    read
 }
 pub fn tool(state: &mut State, name: &str, args: &Value) -> Result<Value, &'static str> {
     if name == "control.rooms.list" {
@@ -255,10 +261,10 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
                         let room = room()?;
                         let delivery = args.get("delivery").map(|value| serde_json::from_value::<Delivery>(value.clone()))
                             .transpose().map_err(|_| "Expected delivery=record or notify.")?.unwrap_or_default();
-                        // An advisor only steers: its one output is a note to the lead, who
-                        // decides what reaches the team. It never posts to rooms.
+                        // An advisor's one output is a note to the member a fact is about
+                        // or to the lead. It never posts to rooms.
                         if crate::delegation::is_judge(run) && state.bots.advises(&chat.id) {
-                            return Err("An advisor does not post to rooms; send the lead a note with control_agent_message.".into());
+                            return Err("An advisor does not post to rooms; send the member or lead concerned a note with control_agent_message.".into());
                         }
                         let text = args["message"]
                             .as_str()

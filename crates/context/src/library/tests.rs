@@ -85,12 +85,12 @@ fn optional_procedures_compose_without_adding_tools_or_authority() {
     assert!(
         !ordinary
             .guidance.iter().map(|g| &g.text)
-            .any(|s| s.contains("three distinct probes"))
+            .any(|s| s.contains("three distinct tries"))
     );
     assert_eq!(
         selected
             .guidance.iter().map(|g| &g.text)
-            .filter(|s| s.contains("three distinct probes"))
+            .filter(|s| s.contains("three distinct tries"))
             .count(),
         1
     );
@@ -110,7 +110,7 @@ fn optional_procedures_compose_without_adding_tools_or_authority() {
     assert!(
         selected
             .guidance.iter().map(|g| &g.text)
-            .any(|s| s.contains("not a host-enforced experiment counter"))
+            .any(|s| s.contains("a host-enforced counter"))
     );
 }
 #[test]
@@ -221,7 +221,7 @@ fn newer_built_in_revisions_reach_nodes_unless_the_lens_was_edited_locally() {
 #[test]
 fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     let investigation = Library::default().get("investigation").unwrap().clone();
-    assert_eq!(investigation.revision, 3);
+    assert_eq!(investigation.revision, 4);
     assert_eq!(investigation.includes, ["evidence"]);
     assert!(investigation.tools.is_empty());
     let autonomy = Library::default().get("autonomy").unwrap().clone();
@@ -235,7 +235,7 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert!(autonomy.instructions.contains("Weigh risk by reversibility"));
     assert!(autonomy.instructions.contains("Guards should bound damage"));
     let coordination = Library::default().get("coordination").unwrap().clone();
-    assert_eq!(coordination.revision, 14);
+    assert_eq!(coordination.revision, 15);
     assert!(coordination.instructions.contains("the outcome, not evidence paths or measurements"));
     assert!(coordination.instructions.chars().count() <= 4000);
     assert!(coordination.instructions.contains("keeping its turns short to stay responsive: it delegates implementation, long work and ongoing infrastructure to members, spawned or assigned"));
@@ -250,12 +250,18 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert!(coordination.instructions.contains("Coordinate only over consumable or exclusive resources"));
     assert!(coordination.instructions.contains("never invent locks or turn-taking"));
     let planning = Library::default().get("planning").unwrap().clone();
-    assert_eq!(planning.revision, 5);
+    assert_eq!(planning.revision, 6);
     assert!(planning.instructions.contains("observable outcome cheap to check"));
     assert!(planning.instructions.contains("Check it once when claiming the milestone done"));
     assert!(planning.instructions.contains("treat reaching its done-condition as the tool's test"));
+    // Run E: role slices never finished and nobody re-sliced; slice by outcome instead.
+    assert!(planning.instructions.contains("Slice by outcome, not by role or resource"));
+    assert!(planning.instructions.contains("A milestone still open after several turns is too big"));
+    assert!(coordination.instructions.contains("a peer may join a slow or stuck one without taking it over"));
+    assert!(coordination.instructions.contains("split stalled milestones smaller"));
+    assert!(!investigation.instructions.contains("hypothesis"), "no per-probe record ritual");
     let advisor = Library::default().get("advisor").unwrap().clone();
-    assert_eq!(advisor.revision, 6);
+    assert_eq!(advisor.revision, 7);
     assert!(advisor.instructions.contains("members marked claims blocked"));
     assert!(advisor.instructions.contains("several members report a similar blocker"));
     assert!(advisor.instructions.contains("(busy but stalled)"));
@@ -291,15 +297,17 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert_eq!((advisor.roles.as_slice(), advisor.inline.as_slice()), ([Audience::Lead, Audience::Advisor].as_slice(), [Audience::Advisor].as_slice()));
     assert!(advisor.instructions.contains("For a turn stopped at its time limit, suggest splitting the work into smaller turns or, for the lead, delegating it to a member."));
     let previous: Vec<Definition> = serde_json::from_str(include_str!("../builtin-lens-history.json")).unwrap();
-    assert!(previous.iter().any(|d| d.id == "investigation" && d.revision == 2));
+    for revision in 1..=3 {
+        assert!(previous.iter().any(|d| d.id == "investigation" && d.revision == revision));
+    }
     assert!(previous.iter().any(|d| d.id == "ganglia" && d.revision == 1));
     for revision in 1..=8 {
         assert!(previous.iter().any(|d| d.id == "autonomy" && d.revision == revision));
     }
-    for revision in 1..=13 {
+    for revision in 1..=14 {
         assert!(previous.iter().any(|d| d.id == "coordination" && d.revision == revision));
     }
-    for revision in 1..=4 {
+    for revision in 1..=5 {
         assert!(previous.iter().any(|d| d.id == "planning" && d.revision == revision));
     }
     assert!(previous.iter().any(|d| d.id == "swarm" && d.revision == 1));
@@ -370,7 +378,7 @@ fn summaries_and_roles_make_lenses_on_demand_and_role_scoped() {
     assert_eq!(resolved.inline(Audience::Advisor).count(), 2);
     assert_eq!(resolved.inline(Audience::Member).count(), 1);
     assert!(resolved.guidance_for("advisor", Audience::Member).is_none());
-    assert_eq!(resolved.guidance_for("Team advisor", Audience::Lead).unwrap().revision, 6);
+    assert_eq!(resolved.guidance_for("Team advisor", Audience::Lead).unwrap().revision, 7);
     // Role-scoped lenses without a summary are inline only for their roles.
     library.definitions.push(Definition { id: "lead-only".into(), name: "Lead only".into(), revision: 1, instructions: "Lead text".into(), roles: vec![Audience::Lead], ..Default::default() });
     let scoped = library.resolve(&["lead-only".into()], &[]).unwrap();

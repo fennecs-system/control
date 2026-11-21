@@ -836,3 +836,50 @@ fn the_inbox_delivers_new_conversation_once_and_cut_entries_point_to_their_full_
     crate::chat::send(&mut state, &chat, "/steer Too late", "test").unwrap();
     assert!(inbox(&mut state, &id, |_| Ok(())).is_none(), "nothing after a staged handoff");
 }
+/// Run E: agents started a short transient routine, then named it in the same
+/// turn's wait. It had already exited, so its subscription was retired with
+/// its exit queued for the chat. The drop says so instead of implying the
+/// wait tried to create a subscription; a never-subscribed name keeps the
+/// general reason.
+#[test]
+fn a_wait_on_a_finished_routine_says_its_queued_exit_wakes_the_chat() {
+    let (mut state, id, generation) = fixture();
+    let chat = state.chats[0].id.clone();
+    crate::bots::command(&mut state, &chat, "on").unwrap();
+    let watch: crate::watches::Watch = serde_json::from_value(json!({
+        "id":"w-1","name":"dig","chat":chat,"service":"svc-a","generation":1,"permanent":false,"command":"node dig.js","stopped":true
+    })).unwrap();
+    state.watches.push(watch);
+    assert!(!crate::bots::wait_topics(&state, &chat).iter().any(|t| t.starts_with("watch:")));
+    let wait = hand_off(&mut state, &id, &generation, "finished", json!({"disposition":{"kind":"wait","topics":["watch:w-1","w-2"]}})).unwrap();
+    let adjusted = wait["adjusted"].to_string();
+    assert!(adjusted.contains("dropped watch:w-1: that routine already finished") && adjusted.contains("wake this chat without a wait topic"), "{adjusted}");
+    assert!(adjusted.contains("dropped w-2: not a current subscription"), "{adjusted}");
+    // Nothing named remains, so the wait keeps every subscription; the queued
+    // exit is urgent and releases it.
+    assert!(adjusted.contains("every current subscription"), "{adjusted}");
+}
+#[test]
+fn an_operator_turn_handoff_replies_with_the_agents_last_message() {
+    let (mut state, id, generation) = fixture();
+    state.runtime.runs[0].attempts.last_mut().unwrap().activity.push(crate::usage::Activity {
+        id: "m1".into(), kind: "message".into(), text: "Root cause and diff.".into(), output: String::new(), status: "completed".into(),
+    });
+    // The operator is told the last message is the reply, not that none is needed.
+    let staged = hand_off(&mut state, &id, &generation, "done", json!({"disposition":"done"})).unwrap();
+    assert!(staged["next"].as_str().unwrap().contains("end with your full answer"), "{staged}");
+    let attempt = state.runtime.runs[0].attempts.last().unwrap().clone();
+    let shared = std::sync::Arc::new(std::sync::Mutex::new(state));
+    let poll = |shared: &std::sync::Arc<std::sync::Mutex<State>>| crate::attempt_control::poll(Some((shared, &id)), &attempt, std::time::Duration::ZERO);
+    assert_eq!(poll(&shared), crate::attempt_control::Decision::Finish("Root cause and diff.".into()));
+    // A wake keeps the placeholder and the stop instruction.
+    shared.lock().unwrap().runtime.runs[0].kind = crate::runtime::RunKind::BotWake;
+    assert_eq!(poll(&shared), crate::attempt_control::Decision::Finish("Agent yielded with a committed handoff.".into()));
+}
+#[test]
+fn a_wake_handoff_still_needs_no_further_response() {
+    let (mut state, id, generation) = fixture();
+    state.runtime.runs[0].kind = crate::runtime::RunKind::BotWake;
+    let staged = hand_off(&mut state, &id, &generation, "done", json!({"disposition":"done"})).unwrap();
+    assert!(staged["next"].as_str().unwrap().starts_with("Stop:"), "{staged}");
+}

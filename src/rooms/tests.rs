@@ -542,6 +542,9 @@ fn an_advisor_does_not_post_through_its_inherited_team_room() {
     session.persona = Some(crate::delegation::Persona { role: crate::delegation::Role::Judge, root: "root".into(), depth: 1, parent: None, bundle: None });
     crate::bots::command(&mut state, &advisor, "on").unwrap();
     assert!(state.bots.advises(&advisor));
+    // The room tells members whom to ask, though the advisor is not linked to it.
+    assert_eq!(read(&state, &format!("general/{lead}"))["advisor"]["id"], advisor.as_str());
+    assert!(read(&state, "general/another")["advisor"].is_null());
     assert!(room_failure(&mut state, &run, "control_room_post", json!({"message":"Build claim looks abandoned"})).contains("does not post to rooms"));
     assert!(state.collective.posts.is_empty());
     assert_eq!(state.chats[1].room, None, "a refused post links nothing");

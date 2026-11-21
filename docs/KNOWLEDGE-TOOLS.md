@@ -7,7 +7,7 @@ dotted names; workers use the underscore aliases.
 | --- | --- |
 | `control.knowledge.search` | Up to 10 matches. Every whitespace-separated query word (1–200 characters in total, case-insensitive, any order) must appear in the title or body. Results keep stable document/claim order. |
 | `control.knowledge.read` | Read a search result by ID, in pages of at most 4,000 Unicode characters (offset up to 32,000). |
-| `control.knowledge.propose` | Submit one claim for operator review. |
+| `control.knowledge.propose` | Submit one verified, reusable claim for operator review. Returns at once. |
 
 ## What a worker can read
 
@@ -32,8 +32,16 @@ worker mailboxes cannot propose.
 
 ## Review
 
-Pending proposals appear under **Knowledge → Review**. Only an authenticated local
-operator can accept or reject them. Admission is final and does not overwrite
+Pending proposals appear under **Knowledge → Review** and, like a design
+question, as an operator request: in `chat_requests`, the DM's Requests drawer,
+Manage → Permissions, the TUI and Discord notifications. The proposing agent
+never waits: proposing returns at once and its turn carries on. Only an
+authenticated local operator can accept or reject a proposal: on the Review page,
+with `/knowledge accept|reject claim:N` in the TUI, by replying accept or reject on
+Discord, or with the chat MCP's `chat_decide` when Manage → Permissions enables
+knowledge decisions (off by default). Every surface posts the same Review form,
+so they share one state, and a decision on a proposal that is no longer pending
+is refused. Admission is final and does not overwrite
 documents; a failed review checkpoint restores the pending state. Accepted claims
 keep their evidence, scope, recheck condition and compact provenance. Evidence is
 for the reviewer; the tool does not verify it. No background model calls occur.

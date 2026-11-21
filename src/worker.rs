@@ -1712,8 +1712,15 @@ fn execute(
     }
     let _ = diagnostics.join();
     finish_codex_tools(attempt, bridge, id, handoff.is_some(), unfinished)?;
-    let output = handoff.or_else(|| read_report(&workspace.join(".control-result")).ok())
-        .unwrap_or_else(|| "Worker finished without a safe final report.".into());
+    let report = || read_report(&workspace.join(".control-result"));
+    let requested = bridge.is_some_and(|(state, run)| state.lock()
+        .is_ok_and(|s| s.runtime.runs.iter().any(|r| r.id == run && crate::attempt_control::requested(r))));
+    // A requested turn that ended itself replies with its full last message,
+    // not the handoff's clipped one.
+    let output = match handoff {
+        Some(reply) if requested => report().ok().filter(|text| !text.trim().is_empty()).unwrap_or(reply),
+        handoff => handoff.or_else(|| report().ok()).unwrap_or_else(|| "Worker finished without a safe final report.".into()),
+    };
     let summary: String = output.chars().take(16000).collect();
     if let Some((state,run))=bridge {crate::command_jobs::quiesce(state,run,id).map_err(|e|failed(&e.to_string()))?;}
     if !attempt.review_only { publish_workspace(attempt,&workspace, id, bridge)

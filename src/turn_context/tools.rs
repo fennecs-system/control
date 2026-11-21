@@ -422,7 +422,14 @@ fn disposition(state: &State, chat: &str, value: Value, adjusted: &mut Vec<Strin
             let (kind, name) = a.split_once(':').unwrap_or(("", a));
             (name == bare && wanted.is_none_or(|wanted| wanted == kind)) || kind == topic
         }).collect();
-        if matches.is_empty() {
+        // A finished routine (often a short transient one started this turn)
+        // leaves the subscriptions once its exit is queued for this chat; that
+        // queued exit is urgent and releases any wait.
+        let finished = wanted.is_none_or(|kind| kind == "watch")
+            && state.watches.iter().any(|w| w.id == bare && w.chat == chat && !w.active());
+        if matches.is_empty() && finished {
+            adjusted.push(format!("dropped {topic}: that routine already finished, so it is no longer a subscription; its unprocessed exit and notifications wake this chat without a wait topic"));
+        } else if matches.is_empty() {
             adjusted.push(format!("dropped {topic}: not a current subscription (waits cannot create subscriptions)"));
         } else {
             adjusted.push(format!("read {topic} as {}", matches.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(", ")));
@@ -524,6 +531,7 @@ fn respond(
         .ok_or_else(|| err(format!("Chat owner changed. {OPERATOR_FIX}")))?;
     let continuity = chat.continuity.as_ref().ok_or_else(|| err(format!("This attempt predates agent continuity; it is available at the next admission. {OPERATOR_FIX}")))?;
     let continuation_enabled = crate::bots::continuation_enabled(state, &chat.id);
+    let operator_turn = crate::attempt_control::requested(run);
     let revision = continuity.working.as_ref().map_or(0, |w| w.revision);
     let original = run.attempts.last().unwrap().turn_mailbox.as_ref();
     let mut mailbox = original
@@ -598,7 +606,8 @@ fn respond(
         // left pending and every adjustment, with the disposition when the
         // host adjusted the request.
         let mut staged = json!({"staged":true,"continuation_enabled":continuation_enabled,"processed":accepted.processed.len(),
-            "next":"Stop: the host commits this handoff and the workspace; no further response is needed."});
+            "next":if operator_turn { "The host commits this handoff and the workspace. Your last message is the operator's reply: end with your full answer unless you already gave it." }
+                else { "Stop: the host commits this handoff and the workspace; no further response is needed." }});
         if !left_pending.is_empty() {
             staged["left_pending"] = json!(left_pending);
         }

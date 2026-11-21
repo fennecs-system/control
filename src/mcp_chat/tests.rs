@@ -60,6 +60,9 @@ fn tool_set_offers_decisions_only_when_the_operator_enables_them() {
 #[test]
 fn operator_loop_creates_sends_reads_and_cancels_through_the_server() {
     let mut remote = Local::new();
+    // A name /rename would refuse is refused before any chat exists.
+    let error = run(&mut remote, "chat_create", &json!({"title":"A title that is longer than thirty-two characters"})).unwrap_err();
+    assert!(error.to_string().contains("at most 32") && remote.state.chats.is_empty(), "{error}");
     let text = run(&mut remote, "chat_create", &json!({"title":"Run A","genes":["coordination"],"model":"default"})).unwrap();
     let id = created(&text);
     assert!(text.contains("Future turns use"), "{text}");
@@ -200,6 +203,10 @@ fn folder_requests_wait_for_the_operator_unless_folder_approvals_are_enabled() {
     let ports = Approvals { port: true, ..Default::default() };
     call(&mut remote, "chat_decide", &json!({"id":id,"kind":"port","request":"p-1","decision":"deny"}), ports).unwrap();
     assert_eq!(remote.decisions.last().unwrap(), "port p-1 false false");
+    // Knowledge proposals are their own switch, off by default (reviewed in Control).
+    assert!(call(&mut remote, "chat_decide", &json!({"id":id,"kind":"knowledge","request":"claim:0","decision":"allow"}), ports).is_err());
+    call(&mut remote, "chat_decide", &json!({"id":id,"kind":"knowledge","request":"claim:0","decision":"allow"}), Approvals { knowledge: true, ..Default::default() }).unwrap();
+    assert_eq!(remote.decisions.last().unwrap(), "knowledge claim:0 true false");
 }
 
 #[test]
