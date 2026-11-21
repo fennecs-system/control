@@ -261,7 +261,7 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert!(coordination.instructions.contains("split stalled milestones smaller"));
     assert!(!investigation.instructions.contains("hypothesis"), "no per-probe record ritual");
     let advisor = Library::default().get("advisor").unwrap().clone();
-    assert_eq!(advisor.revision, 7);
+    assert_eq!(advisor.revision, 8);
     assert!(advisor.instructions.contains("members marked claims blocked"));
     assert!(advisor.instructions.contains("several members report a similar blocker"));
     assert!(advisor.instructions.contains("(busy but stalled)"));
@@ -270,7 +270,7 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert_eq!(swarm.revision, 2);
     assert!(swarm.includes.contains(&"planning".to_string()));
     let ganglia = Library::default().get("ganglia").unwrap().clone();
-    assert_eq!((ganglia.name.as_str(), ganglia.revision), ("Ganglia", 3));
+    assert_eq!((ganglia.name.as_str(), ganglia.revision), ("Ganglia", 4));
     assert!(ganglia.instructions.starts_with("Reflexes and routines run locally; turns are strategy."));
     assert!(ganglia.instructions.contains("long-running work on systems that change faster than a turn, not one-off tasks"));
     // Reuse an existing package first; build or extend only for a demonstrated gap.
@@ -282,7 +282,7 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert!(ganglia.instructions.contains("weigh every active condition, preempt only for urgent ones"));
     assert!(ganglia.instructions.contains("pause routines rather than cancel them"));
     assert!(ganglia.instructions.contains("escalate only milestones, failures and conditions they cannot handle"));
-    assert!(ganglia.instructions.contains("A layer that blocks the task is bypassed or removed, not patched again and again"));
+    assert!(ganglia.instructions.contains("A layer that blocks the task or keeps undoing your work is a gap in the tool"));
     assert!(ganglia.instructions.contains("save as a tool package"));
     assert!(ganglia.instructions.chars().count() <= 1200);
     // Domain-independent: examples belong in docs, not in the lens.
@@ -300,7 +300,7 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     for revision in 1..=3 {
         assert!(previous.iter().any(|d| d.id == "investigation" && d.revision == revision));
     }
-    for revision in 1..=2 {
+    for revision in 1..=3 {
         assert!(previous.iter().any(|d| d.id == "ganglia" && d.revision == revision));
     }
     for revision in 1..=10 {
@@ -380,7 +380,7 @@ fn summaries_and_roles_make_lenses_on_demand_and_role_scoped() {
     assert_eq!(resolved.inline(Audience::Advisor).count(), 2);
     assert_eq!(resolved.inline(Audience::Member).count(), 1);
     assert!(resolved.guidance_for("advisor", Audience::Member).is_none());
-    assert_eq!(resolved.guidance_for("Team advisor", Audience::Lead).unwrap().revision, 7);
+    assert_eq!(resolved.guidance_for("Team advisor", Audience::Lead).unwrap().revision, 8);
     // Role-scoped lenses without a summary are inline only for their roles.
     library.definitions.push(Definition { id: "lead-only".into(), name: "Lead only".into(), revision: 1, instructions: "Lead text".into(), roles: vec![Audience::Lead], ..Default::default() });
     let scoped = library.resolve(&["lead-only".into()], &[]).unwrap();
