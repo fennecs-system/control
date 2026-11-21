@@ -126,7 +126,7 @@ fn private_limits_are_validated_and_do_not_come_from_saved_runtime_state() {
             .max_parallel_runs,
         1
     );
-    for invalid in ["0", "9", "wrong"] {
+    for invalid in ["0", "33", "wrong"] {
         assert!(load_limits_in(&file, Some(invalid.into())).is_err());
     }
     for invalid in [

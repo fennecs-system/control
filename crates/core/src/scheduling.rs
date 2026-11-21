@@ -1,7 +1,9 @@
 use std::{collections::HashSet, num::NonZeroU8};
 
 pub const MAX_PENDING: usize = 32;
-pub const MAX_PARALLEL: usize = 8;
+/// A swarm of persistent agents plus its observers and helpers needs more
+/// than a handful of slots, or every turn queues behind the others.
+pub const MAX_PARALLEL: usize = 32;
 
 /// An adapter projection, not a persisted status or provider event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
