@@ -137,6 +137,12 @@ fn median(values: &mut [u64]) -> Option<u64> {
 fn member_table(state: &State, team: &Team<'_>, activity: &HashMap<&str, Member<'_>>, callsigns: &[crate::callsigns::Callsign], at: u64, out: &mut String) {
     let none = Member::default();
     let mut rows = team.chats.iter().map(|&i| (&state.chats[i], callsigns[i], activity.get(state.chats[i].id.as_str()).unwrap_or(&none))).collect::<Vec<_>>();
+    // One-off helpers that are not working now would crowd the members out:
+    // they are one count, not a row each.
+    let standing = |chat: &crate::chat::Session, member: &Member<'_>| chat.id == team.root || member.judge || member.now.is_some()
+        || state.bots.advises(&chat.id) || state.bots.persists(&chat.id) || !member.live.is_empty() || member.routines > 0;
+    let (helpers, spent) = rows.iter().filter(|(chat, _, member)| !standing(chat, member)).fold((0usize, 0u64), |(count, fresh), (_, _, member)| (count + 1, fresh + member.fresh));
+    rows.retain(|(chat, _, member)| standing(chat, member));
     rows.sort_by_key(|(chat, _, member)| (chat.id != team.root, std::cmp::Reverse(member.last)));
     out.push_str("- Per member (24 h turns · since last turn · now · claims · routines · median turn/queue · fresh tokens):\n");
     for (chat, callsign, member) in rows.iter().take(MEMBER_ROWS) {
@@ -160,6 +166,9 @@ fn member_table(state: &State, team: &Team<'_>, activity: &HashMap<&str, Member<
     }
     if rows.len() > MEMBER_ROWS {
         let _ = writeln!(out, "  - {} more member(s) not listed", rows.len() - MEMBER_ROWS);
+    }
+    if helpers > 0 {
+        let _ = writeln!(out, "  - {helpers} finished helper(s): {} tok", crate::history_view::compact(spent));
     }
 }
 
