@@ -93,7 +93,7 @@ impl Limits {
     fn validate(self) -> io::Result<Self> {
         if !(1..=MAX_PARALLEL).contains(&self.max_parallel_runs) {
             return Err(io::Error::other(
-                "max_parallel_runs must be between 1 and 8",
+                "max_parallel_runs must be between 1 and 32",
             ));
         }
         if !(1..=65536).contains(&self.max_agents_per_root)
@@ -145,7 +145,7 @@ fn load_limits_in(
     if let Some(value) = override_limit {
         limits.max_parallel_runs =
             value.to_str().and_then(|s| s.parse().ok()).ok_or_else(|| {
-                io::Error::other("CONTROL_MAX_PARALLEL_RUNS must be an integer from 1 to 8")
+                io::Error::other("CONTROL_MAX_PARALLEL_RUNS must be an integer from 1 to 32")
             })?;
     }
     limits.validate()

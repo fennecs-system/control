@@ -44,7 +44,7 @@ pub fn run() -> io::Result<()> {
     check(
         "execution limits",
         crate::scheduler::load_limits().is_ok(),
-        "execution.json must be private valid JSON; max_parallel_runs must be 1–8",
+        "execution.json must be private valid JSON; max_parallel_runs must be 1–32",
     );
     check(
         "node identity",

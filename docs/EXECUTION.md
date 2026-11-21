@@ -34,7 +34,7 @@ taken from saved run state, model output or tool arguments.
 
 | Key | Default | Range | Meaning |
 | --- | --- | --- | --- |
-| `max_parallel_runs` | 3 | 1–8 | Concurrent model attempts; 1 is serial. |
+| `max_parallel_runs` | 3 | 1–32 | Concurrent model attempts; 1 is serial. A swarm wants at least one slot per persistent agent plus its observers, or turns queue. |
 | `max_agents_per_root` | 64 | 1–65,536 | Agents one root task may spawn or delegate ([delegation](DELEGATION.md)). |
 | `max_pending_agent_intents` | 256 | 1–65,536 | Node-wide backlog of accepted, not yet started agents. |
 | `max_advisors_per_root` | 1 | 0–8 | [Team advisors](LENSES.md#team-advisor) per root task; 0 disables. |
