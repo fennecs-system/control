@@ -531,6 +531,7 @@ fn respond(
         .ok_or_else(|| err(format!("Chat owner changed. {OPERATOR_FIX}")))?;
     let continuity = chat.continuity.as_ref().ok_or_else(|| err(format!("This attempt predates agent continuity; it is available at the next admission. {OPERATOR_FIX}")))?;
     let continuation_enabled = crate::bots::continuation_enabled(state, &chat.id);
+    let operator_turn = crate::attempt_control::requested(run);
     let revision = continuity.working.as_ref().map_or(0, |w| w.revision);
     let original = run.attempts.last().unwrap().turn_mailbox.as_ref();
     let mut mailbox = original
@@ -605,7 +606,8 @@ fn respond(
         // left pending and every adjustment, with the disposition when the
         // host adjusted the request.
         let mut staged = json!({"staged":true,"continuation_enabled":continuation_enabled,"processed":accepted.processed.len(),
-            "next":"Stop: the host commits this handoff and the workspace; no further response is needed."});
+            "next":if operator_turn { "The host commits this handoff and the workspace. Your last message is the operator's reply: end with your full answer unless you already gave it." }
+                else { "Stop: the host commits this handoff and the workspace; no further response is needed." }});
         if !left_pending.is_empty() {
             staged["left_pending"] = json!(left_pending);
         }

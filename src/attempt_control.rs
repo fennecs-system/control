@@ -48,9 +48,21 @@ pub fn poll(bridge: Option<(&Arc<Mutex<State>>, &str)>, attempt: &Attempt, elaps
     let Ok(state) = shared.lock() else { return Decision::Continue; };
     let Some(run) = state.runtime.runs.iter().find(|r| r.id == id) else { return Decision::Continue; };
     let handoff = run.attempts.last().filter(|live| live.workspace_id == attempt.workspace_id)
-        .and_then(|live| live.turn_mailbox.as_ref()).and_then(|m| m.accepted())
-        .map(|h| h.progress.clone().unwrap_or_else(|| "Agent yielded with a committed handoff.".into()));
+        .and_then(|live| Some((live, live.turn_mailbox.as_ref()?.accepted()?)))
+        .map(|(live, h)| reply(requested(run), &live.activity, h.progress.as_deref()));
     decide(deadline(&state, run, attempt), elapsed, handoff)
+}
+/// An operator asked for this turn and reads its reply in the chat; a wake,
+/// delegation or agent message has no one waiting on its wording.
+pub fn requested(run: &crate::runtime::Run) -> bool {
+    use crate::runtime::RunKind;
+    matches!(run.kind, RunKind::Chat | RunKind::Steering | RunKind::DesignAnswer)
+}
+/// The reply an accepted handoff publishes. A requested turn answers with the
+/// agent's last message; any other turn keeps its progress line.
+pub fn reply(requested: bool, activity: &[crate::usage::Activity], progress: Option<&str>) -> String {
+    let said = activity.iter().rev().filter(|_| requested).find(|a| a.kind == "message" && !a.text.trim().is_empty());
+    said.map(|a| a.text.as_str()).or(progress).unwrap_or("Agent yielded with a committed handoff.").to_owned()
 }
 /// Stop all attempt-owned writers using current durable job identities. Persistent
 /// services are separate resources and intentionally survive a model yield.

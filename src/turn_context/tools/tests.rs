@@ -859,3 +859,27 @@ fn a_wait_on_a_finished_routine_says_its_queued_exit_wakes_the_chat() {
     // exit is urgent and releases it.
     assert!(adjusted.contains("every current subscription"), "{adjusted}");
 }
+#[test]
+fn an_operator_turn_handoff_replies_with_the_agents_last_message() {
+    let (mut state, id, generation) = fixture();
+    state.runtime.runs[0].attempts.last_mut().unwrap().activity.push(crate::usage::Activity {
+        id: "m1".into(), kind: "message".into(), text: "Root cause and diff.".into(), output: String::new(), status: "completed".into(),
+    });
+    // The operator is told the last message is the reply, not that none is needed.
+    let staged = hand_off(&mut state, &id, &generation, "done", json!({"disposition":"done"})).unwrap();
+    assert!(staged["next"].as_str().unwrap().contains("end with your full answer"), "{staged}");
+    let attempt = state.runtime.runs[0].attempts.last().unwrap().clone();
+    let shared = std::sync::Arc::new(std::sync::Mutex::new(state));
+    let poll = |shared: &std::sync::Arc<std::sync::Mutex<State>>| crate::attempt_control::poll(Some((shared, &id)), &attempt, std::time::Duration::ZERO);
+    assert_eq!(poll(&shared), crate::attempt_control::Decision::Finish("Root cause and diff.".into()));
+    // A wake keeps the placeholder and the stop instruction.
+    shared.lock().unwrap().runtime.runs[0].kind = crate::runtime::RunKind::BotWake;
+    assert_eq!(poll(&shared), crate::attempt_control::Decision::Finish("Agent yielded with a committed handoff.".into()));
+}
+#[test]
+fn a_wake_handoff_still_needs_no_further_response() {
+    let (mut state, id, generation) = fixture();
+    state.runtime.runs[0].kind = crate::runtime::RunKind::BotWake;
+    let staged = hand_off(&mut state, &id, &generation, "done", json!({"disposition":"done"})).unwrap();
+    assert!(staged["next"].as_str().unwrap().starts_with("Stop:"), "{staged}");
+}
