@@ -408,7 +408,8 @@ cannot checkpoint, and four pathologies:
 - **polling**: `pathology_poll_commands` (default 6) of one member's retained
   commands only read status (the same classifier as the polling nudge); a
   routine (`control_watch_start`) should report instead;
-- **cost burn**: `pathology_burn_tokens` (default 2,000,000) tokens spent by the
+- **cost burn**: `pathology_burn_tokens` (default 2,000,000) fresh tokens (uncached
+  input plus output; cached input is not counted) spent by the
   team's turns since its claims last advanced or a score last rose.
 
 Inputs are records the host already keeps: each service's retained finished

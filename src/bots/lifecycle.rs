@@ -729,7 +729,7 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
             let Some(&position) = run.chat_id.as_deref().and_then(|chat| member.get(chat)) else { continue };
             let scan = &mut sick[team_at[position]];
             if scan.recount && !crate::delegation::is_judge(run) {
-                scan.tokens += run.attempts.iter().filter_map(|attempt| attempt.tokens).map(|t| t.input_tokens.saturating_add(t.output_tokens)).sum::<u64>();
+                scan.tokens += run.attempts.iter().filter_map(|attempt| attempt.tokens).map(|t| t.input_tokens.saturating_sub(t.cached_input_tokens).saturating_add(t.output_tokens)).sum::<u64>();
             }
         }
     }
