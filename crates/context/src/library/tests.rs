@@ -261,7 +261,9 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert!(coordination.instructions.contains("split stalled milestones smaller"));
     assert!(!investigation.instructions.contains("hypothesis"), "no per-probe record ritual");
     let advisor = Library::default().get("advisor").unwrap().clone();
-    assert_eq!(advisor.revision, 8);
+    assert_eq!(advisor.revision, 9);
+    // Run V: a small ring was called a finished castle and nobody compared it with the request.
+    assert!(advisor.instructions.contains("a goal called done at a scope the operator would not accept"));
     assert!(advisor.instructions.contains("members marked claims blocked"));
     assert!(advisor.instructions.contains("several members report a similar blocker"));
     assert!(advisor.instructions.contains("(busy but stalled)"));
@@ -380,7 +382,7 @@ fn summaries_and_roles_make_lenses_on_demand_and_role_scoped() {
     assert_eq!(resolved.inline(Audience::Advisor).count(), 2);
     assert_eq!(resolved.inline(Audience::Member).count(), 1);
     assert!(resolved.guidance_for("advisor", Audience::Member).is_none());
-    assert_eq!(resolved.guidance_for("Team advisor", Audience::Lead).unwrap().revision, 8);
+    assert_eq!(resolved.guidance_for("Team advisor", Audience::Lead).unwrap().revision, 9);
     // Role-scoped lenses without a summary are inline only for their roles.
     library.definitions.push(Definition { id: "lead-only".into(), name: "Lead only".into(), revision: 1, instructions: "Lead text".into(), roles: vec![Audience::Lead], ..Default::default() });
     let scoped = library.resolve(&["lead-only".into()], &[]).unwrap();
