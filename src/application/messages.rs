@@ -31,6 +31,7 @@ pub struct MessageCall {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct MessageResult {
     pub chat_id: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub run_id: String,
     pub queued: bool,
     pub services: Vec<ResourceId>,
@@ -38,6 +39,11 @@ pub struct MessageResult {
     pub retained: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub urgent: Option<bool>,
+    /// A member's message to its own lead, recorded in this team room instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recorded_in_room: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<&'static str>,
 }
 /// Existing persisted receipt format is unchanged.
 #[derive(Clone, Serialize, Deserialize)]
@@ -78,6 +84,8 @@ impl From<&Sent> for MessageResult {
             services: sent.services.clone(),
             retained: peer.then_some(true),
             urgent: sent.urgent.then_some(true),
+            recorded_in_room: None,
+            note: None,
         }
     }
 }
@@ -105,7 +113,12 @@ pub(crate) enum Effect {
 pub(crate) enum Decision {
     Existing(MessageResult),
     Deliver(Box<Delivery>),
+    /// A member's message to its own lead: the driver posts it to the team
+    /// room with delivery=record. No run is queued and the lead is not woken.
+    Record { lead: String, text: String },
 }
+pub(crate) const NOT_A_RELAY: &str = "Your lead is not a relay: work it out with your peers directly (control_agent_message) and post outcomes to the task room (control_room_post, delivery=record). Only for a blocker you and your peers cannot resolve, mark your claim blocked (control_room_claim with blocked_on); observers escalate it to the lead";
+pub(crate) const RECORDED: &str = "Your lead is not woken by member messages; this was recorded in the team room, which it reads. Urgent requests to the lead are not delivered: for a blocker you and your peers cannot resolve, mark your claim blocked.";
 pub(crate) struct Delivery {
     pub run: Run,
     pub result: MessageResult,
@@ -377,8 +390,14 @@ pub(crate) fn plan(
         // The lead reads the task room; say so instead of a bare refusal.
         let lead = session.parent_chat.is_none() && state.chats.iter().find(|session| session.id == sender)
             .and_then(|session| ancestry(state.chats, session, &call.chat_id)).is_some_and(|(sender_root, _)| sender_root == root);
+        if lead && !advisor && !antibody && call.chat_id != sender {
+            if !call.services.is_empty() {
+                return Err("Service grants are not transferable through the team room; your lead is not messaged. Share them with a peer, or omit services");
+            }
+            return Ok(Decision::Record { lead: call.chat_id, text: text.to_owned() });
+        }
         return Err(if lead {
-            "Your lead is not a relay: work it out with your peers directly (control_agent_message) and post outcomes to the task room (control_room_post, delivery=record). Only for a blocker you and your peers cannot resolve, mark your claim blocked (control_room_claim with blocked_on); observers escalate it to the lead"
+            NOT_A_RELAY
         } else {
             "Message descendants or fellow workers in your own task; use control_design_ask for operator decisions"
         });

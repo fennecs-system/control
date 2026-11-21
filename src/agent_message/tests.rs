@@ -260,11 +260,6 @@ fn peers_cannot_route_to_the_operator_or_cross_tasks_actors_and_broken_lineage()
             |_| panic!("rejected messages must not save"),
         )
     };
-    let refused = send_to(&mut state, &lead).unwrap_err().to_string();
-    assert!(
-        refused.contains("control_room_post"),
-        "steering is not an automatic peer relay; the refusal points at the task room: {refused}"
-    );
     assert!(send_to(&mut state, &alice).is_err());
     assert!(send_to(&mut state, &outsider).is_err());
     for chat in &mut state.chats {
@@ -294,6 +289,29 @@ fn peers_cannot_route_to_the_operator_or_cross_tasks_actors_and_broken_lineage()
     );
     state.chats[0].parent_chat = Some("missing-root".into());
     assert!(send_to(&mut state, &cass).is_err());
+}
+
+#[test]
+fn a_message_to_the_lead_is_recorded_in_the_team_room_without_waking_it() {
+    let (mut state, lead, alice, _) = family();
+    let alice_run = activate(&mut state, &alice);
+    let lead_runs = |state: &State| state.runtime.runs.iter().filter(|run| run.chat_id.as_deref() == Some(&lead)).count();
+    let (runs, messages, sent) = (lead_runs(&state), state.chats[0].messages.len(), state.agent_messages.len());
+    let send = |state: &mut State, nonce: &str, services: Vec<ResourceId>| handle(state, &AttemptRef { run: &alice_run, generation: "peer-attempt", nonce },
+        MessageCall { chat_id: lead.clone(), text: "Wall is done".into(), services, urgent: true }, |_| Ok(()));
+    let result = send(&mut state, "7-1", vec![]).unwrap();
+    assert_eq!((result["recorded_in_room"].clone(), result["note"].as_str()), (json!(true), Some(operation::RECORDED)));
+    let post = state.collective.posts.last().unwrap();
+    assert_eq!((post.text.as_str(), post.chat.as_deref(), post.delivery), ("Wall is done", Some(alice.as_str()), crate::rooms::Delivery::Record));
+    assert_eq!(Some(post.room.clone()), crate::rooms::team_room(&state, &alice));
+    assert_eq!((lead_runs(&state), state.chats[0].messages.len(), state.agent_messages.len()), (runs, messages, sent), "the lead is not woken or queued");
+    send(&mut state, "7-1", vec![]).unwrap();
+    assert_eq!(state.collective.posts.len(), 1, "a retried request posts once");
+    let service = late_service(&mut state, &alice);
+    state.runtime.runs.iter_mut().find(|run| run.id == alice_run).unwrap().attempts[0].node_id = Some("node-a".into());
+    let refused = send(&mut state, "7-2", vec![service]).unwrap_err().to_string();
+    assert!(refused.contains("not transferable"), "{refused}");
+    assert_eq!(state.collective.posts.len(), 1);
 }
 
 #[test]

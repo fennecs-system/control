@@ -22,7 +22,8 @@ To share a service created after spawning, attach it to a
 
 - The sender must already have access. The recipient must be a same-actor
   descendant or another worker under the same top-level spawned task; the
-  steering chat is not a peer destination.
+  steering chat is not a peer destination (a member's message to it becomes a
+  team-room `record` post and cannot carry grants).
 - The message and its exact owner/generation grants commit together. Grants
   activate in the recipient's next authorized attempt, not an active one. A
   replacement service generation needs a new grant.
