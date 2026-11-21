@@ -557,17 +557,23 @@ fn spawns_are_capped_per_conversation_tree_per_window() {
 #[test]
 fn agents_woken_by_control_events_cannot_keep_respawning() {
     let now = 10 * SPAWN_WINDOW_MS;
-    let (s, _) = tree_with_children(
+    let (mut s, lead) = tree_with_children(
         AUTOMATIC_SPAWN_TURNS_PER_WINDOW,
         now - 1_000,
         RunKind::AgentCompletion,
     );
+    let member = chat::create(&mut s);
+    s.chats.last_mut().unwrap().parent_chat = Some(lead);
     let mut woken = s.runtime.runs[0].clone();
     woken.kind = RunKind::AgentCompletion;
     assert!(
         spawn_rate(&s, &woken, 1, now).is_err(),
         "a completion-woken controller re-spawning is capped"
     );
+    // The cap is each chat's own: a peer bot in the same team still spawns.
+    let mut peer = woken.clone();
+    (peer.id, peer.chat_id) = ("peer-turn".into(), Some(member));
+    assert!(spawn_rate(&s, &peer, 1, now).is_ok(), "one member's helpers do not spend its peers'");
     let mut asked = woken.clone();
     asked.kind = RunKind::Chat;
     assert!(

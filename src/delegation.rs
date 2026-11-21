@@ -117,8 +117,9 @@ pub(crate) fn budget_for(state: &State, run: &runtime::Run, role: Role, addition
 
 /// Caps agents spawned under one top-level conversation per window, across
 /// turns and lineages: the team budget overall, and few spawning turns woken by
-/// Control events, so a blocked controller woken by child completions cannot
-/// fork forever.
+/// Control events per chat, so a blocked controller woken by child completions
+/// cannot fork forever. The event-woken cap is each chat's own: a team of bots
+/// is always event-woken, and one member's helpers must not spend its peers'.
 fn spawn_rate(state: &State, run: &runtime::Run, additional: usize, now: u64) -> Result<(), &'static str> {
     let Some(chat) = run.chat_id.as_deref() else { return Ok(()) };
     let tree = chat::tree(state, chat);
@@ -138,7 +139,7 @@ fn spawn_rate(state: &State, run: &runtime::Run, additional: usize, now: u64) ->
         let parent = |child: &&runtime::Run| child.persona.as_ref().and_then(|persona| persona.parent.as_deref())
             .and_then(|id| state.runtime.runs.iter().find(|candidate| candidate.id == id));
         let holding = state.runtime.runs.iter().filter(|candidate| reserved(candidate) > 0 && mine(candidate));
-        let turns = recent.iter().filter_map(parent).chain(holding).filter(|parent| automatic(&parent.kind) && parent.id != run.id).map(|parent| parent.id.as_str()).collect::<std::collections::HashSet<_>>();
+        let turns = recent.iter().filter_map(parent).chain(holding).filter(|parent| automatic(&parent.kind) && parent.id != run.id && parent.chat_id == run.chat_id).map(|parent| parent.id.as_str()).collect::<std::collections::HashSet<_>>();
         if turns.len() >= AUTOMATIC_SPAWN_TURNS_PER_WINDOW {
             return Err(HELPERS_SPENT);
         }
@@ -146,7 +147,7 @@ fn spawn_rate(state: &State, run: &runtime::Run, additional: usize, now: u64) ->
     Ok(())
 }
 /// Too many event-woken turns of one team spawned helpers this hour.
-pub(crate) const HELPERS_SPENT: &str = "Agents woken by Control events have spawned enough helpers this hour. Report the blocker to the operator, or continue an existing child with control_agent_message.";
+pub(crate) const HELPERS_SPENT: &str = "This chat, woken by Control events, has spawned enough helpers this hour. Report the blocker to the operator, or continue an existing child with control_agent_message.";
 /// How both spawn-rate refusals end for a chat whose team has no advisor.
 const REPORT: &str = " Report the blocker to the operator, or continue an existing child with control_agent_message.";
 /// A spawn refusal as `chat` reads it. A spawn-rate refusal sends a member of

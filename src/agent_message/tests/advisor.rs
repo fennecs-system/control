@@ -172,7 +172,7 @@ fn a_spawn_rate_refusal_sends_members_to_their_approved_advisor() {
     crate::bots::command(&mut state, &advisor, "on").unwrap();
     for chat in [&builder, &lead] {
         let shown = crate::delegation::refusal(&state, Some(chat), limit);
-        assert!(shown.starts_with("Agents woken by Control events have spawned enough helpers this hour."), "{shown}");
+        assert!(shown.starts_with("This chat, woken by Control events, has spawned enough helpers this hour."), "{shown}");
         assert!(shown.contains(&format!("control_agent_message {{\"chat_id\":\"{advisor}\"")) && !shown.contains("operator"), "{shown}");
         assert!(crate::worker_tools::fixes::names_fix(&shown));
     }
