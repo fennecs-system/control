@@ -42,7 +42,7 @@ pub struct Mcp {
 pub enum Judge {
     Denied,
     Allowed,
-    /// Only an approved advisor judge (its one effect: notes to the lead).
+    /// Only an approved advisor judge (its one effect: notes to its team).
     Advisor,
 }
 /// Role bits for `Mcp::core`.
@@ -189,7 +189,7 @@ pub const TOOLS: [Tool; 34] = [
     // Offered only by the `advisor` lens. Selecting it makes the option exist
     // for that task tree; the operator's bot approval is still the authority.
     Tool {
-        name: "team.advisor", title: "Team advisor", description: "Opt-in read-only judge that notes the lead · operator approval",
+        name: "team.advisor", title: "Team advisor", description: "Opt-in read-only judge that notes its team · operator approval",
         href: None, aliases: "advisor judge steer stall gaps lead swarm",
         mcp_names: &[], execution: "Rust lifecycle facts / judge bot", surface: "control_agent_spawn role=judge · control_bot_request", available: true,
     },

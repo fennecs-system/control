@@ -258,8 +258,9 @@ workload should be measured in opt-in trials.
 
 ## Team advisor
 
-The team advisor helps the lead steer by catching gaps the lead could miss. It is
-not a supervisor, planner, relay or churn monitor, and it holds no authority.
+The team advisor catches gaps the team could miss and answers members'
+questions about method. It is not a supervisor, planner, relay or churn monitor,
+and it holds no authority.
 
 **Strictly opt-in.** Select **Team advisor** on the root chat (tick it, or
 `/use advisor`), usually alongside `swarm`, which does not include it. The lens
@@ -342,16 +343,22 @@ bot approval.
    alternative. For a bottleneck it suggests adding members, splitting it or
    re-routing dependents. It sends nothing when evidence is unchanged.
 
-The advisor only steers the lead. A note is retained peer evidence with source
-`advisor-note`, shown as "Advisor note from …" in its own box. An active lead
-gets one callback hint at its next tool response; a lead running as an approved
-bot wakes within its own budget; otherwise the lead sees it at its next turn. The
-lead decides what reaches the team. The advisor never messages members or posts
-to rooms.
+Issues rise through the team, not through the lead. The advisor notes the
+member a fact is about; it notes the lead only for what members cannot settle
+themselves (the plan, a reassignment, a blocker spanning several members, or a
+member that did not act on an earlier note). A note is retained peer evidence
+with source `advisor-note`, shown as "Advisor note from …" in its own box. An
+active recipient gets one callback hint at its next tool response; one running
+as an approved bot wakes within its own budget; an idle one is woken by the note
+at once. The advisor never posts to rooms.
+
+Members ask the advisor directly with `control_agent_message` (no services)
+instead of spawning a reviewer; the question wakes it, and it answers that
+member with one note. Judges that are not approved advisors take no messages.
 
 The host refuses notes from judges that are not approved advisors, notes to any
-chat but the advised team's steering chat, notes that share services, and a note
-identical to one already delivered. A note to a lead whose latest turn failed or
+chat outside the advised team, notes to other judges, notes that share services,
+and a note identical to one already delivered. A note to a lead whose latest turn failed or
 was cancelled is refused by the peer rule that messages cannot restart stopped
 work, unless the lead is itself an approved persistent bot whose turn failed or
 was interrupted: the note then waits for its next supervised wake.

@@ -273,9 +273,10 @@ pub(crate) fn plan(
     let run = active(state.runs, attempt)?;
     let sender = run.chat_id.as_deref().ok_or("A chat is required")?;
     // Whom a run may steer is its standing (`crate::personas`). A read-only
-    // observer speaks only once approved, and only in evidence notes to a
-    // steering chat, which filters them for its team: never to members, judges
-    // or other advisors, and with no services.
+    // observer speaks only once approved, and only in evidence notes with no
+    // services. An advisor notes its own team: the member a fact is about, or
+    // the steering chat for what members cannot settle; never judges or other
+    // advisors. Issues rise through the tree instead of through the lead.
     let standing = crate::personas::of(state.bots, run);
     let advisor = standing.read_only();
     // An antibody notes any other team's steering chat: a top-level chat with
@@ -287,9 +288,6 @@ pub(crate) fn plan(
     }
     if standing.standing.steers == control_context::persona::Steers::None {
         return Err("This persona's standing steers no one; report through your result");
-    }
-    if advised.is_some_and(|lead| lead != call.chat_id) {
-        return Err("An advisor notes only its team's steering chat; the lead decides what reaches members");
     }
     if antibody {
         let lead = state.chats.iter().find(|session| session.id == call.chat_id && session.parent_chat.is_none())
@@ -363,6 +361,9 @@ pub(crate) fn plan(
     let session = &state.chats[target];
     let (root, descendant) =
         ancestry(state.chats, session, sender).ok_or("Task lineage is unavailable")?;
+    if advised.is_some_and(|lead| lead != root) {
+        return Err("An advisor notes only its own team: the member a fact is about, or its lead's steering chat");
+    }
     let peer = !descendant
         && session.parent_chat.is_some()
         && state
@@ -384,8 +385,11 @@ pub(crate) fn plan(
     }
     let from =
         latest(state.runs, &call.chat_id, &run.actor).ok_or("That chat has no task to continue")?;
-    if crate::delegation::is_judge(from) {
-        return Err("Read-only judges cannot be continued");
+    // A team's approved advisor takes questions from its own team: members
+    // ask it instead of spawning a reviewer, and it answers with a note.
+    let asked = !advisor && crate::delegation::is_judge(from) && state.bots.advised_team(&call.chat_id) == Some(root);
+    if crate::delegation::is_judge(from) && !(asked && call.services.is_empty()) {
+        return Err("Read-only judges cannot be continued; ask your team's approved advisor, without services");
     }
     // A note is retained evidence in the lead's own scope, so the advisor's
     // read-only review scope does not have to match the lead's action.
@@ -397,7 +401,7 @@ pub(crate) fn plan(
         "queued" | "running" | "waiting" | "continued" | "completed"
     ) || (matches!(from.status.as_str(), "interrupted" | "failed")
         && state.bots.persists(&call.chat_id));
-    if !descendant && ((from.action != run.action && !advisor) || !open) {
+    if !descendant && ((from.action != run.action && !advisor && !asked) || !open) {
         return Err("Peer messages cannot restart stopped work or change its action scope");
     }
     let title = state
@@ -411,6 +415,8 @@ pub(crate) fn plan(
         .map_or(title.len(), |(end, _)| end)];
     let mut objective = if antibody {
         format!("Antibody note from {sender} ({title}); read-only evidence from the node's observer about your team, not operator steering. Verify it, then decide whether and how to steer your team; no reply is needed:\n{text}")
+    } else if advisor && session.parent_chat.is_some() {
+        format!("Advisor note from {sender} ({title}); read-only evidence about your own work from your team's observer, not operator steering. Verify it, then act on it within your claim; settle it with the peers it involves, and mark the claim blocked only if you and they cannot. No reply is needed:\n{text}")
     } else if advisor {
         format!("Advisor note from {sender} ({title}); read-only evidence and suggested steering for the lead, not operator steering. Verify it, then decide whether and how to steer your team; no reply is needed:\n{text}")
     } else {
