@@ -150,7 +150,7 @@ pub const TOOLS: [Tool; 34] = [
         mcp_names: &[
             w("control_service_start", "start a persistent offline service").core(WORKERS)
                 .brief("Start a chat-owned offline container that survives turns. Keep ALL task data in /workspace (persistent); other paths are lost. Foreground command; confirm with control_service_status."),
-            w("control_service_attach", "use a granted service"),
+            w("control_service_attach", "one service's status, logs"),
             w("control_service_status", "list services and their leases").core(WORKERS).brief("Service status and bounded logs; without service_id, list services. detail node: node capacity."),
             w("control_service_stop", "stop this chat's or a teammate's service").core(WORKERS)
                 .brief("Stop this chat's or a teammate's service (status: team_services); /workspace is kept."),
