@@ -83,6 +83,7 @@ fn search_returns_full_schemas_only_for_tools_not_already_listed() {
     let by_name = search(&f, &json!({"names":core})).unwrap();
     assert!(by_name["tools"].as_array().unwrap().is_empty());
     assert_eq!(by_name["already_listed"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect::<Vec<_>>(), core);
+    assert!(by_name["next"].as_str().unwrap().contains("call them directly"), "a look-up of loaded tools says not to repeat it: {}", by_name["next"]);
     let after = by_name.to_string().len();
     eprintln!("tool search for listed tools: before {before} after {after} bytes");
     assert!(after * 2 < before, "before {before} after {after}");
