@@ -107,6 +107,20 @@ impl Hive {
         Ok(())
     }
 
+    /// Accept or reject proposal `claim:N` through the Knowledge → Review form,
+    /// which refuses one that is no longer pending.
+    pub fn review_knowledge(&self, id: &str, accept: bool) -> io::Result<()> {
+        let endpoint = Url::parse(&self.endpoint).map_err(failure)?;
+        let index = id.strip_prefix("claim:").ok_or_else(|| failure("Knowledge proposal IDs look like claim:N"))?;
+        let response = self.client.post(endpoint.join("/review").map_err(failure)?).timeout(Duration::from_secs(15))
+            .header("Origin", endpoint.origin().ascii_serialization())
+            .form(&[("id", index), ("decision", if accept { "accepted" } else { "rejected" }), ("response", "json")]).send().map_err(failure)?;
+        let status = response.status();
+        let value: Value = response.json().map_err(failure)?;
+        if !status.is_success() { return Err(failure(value["error"].as_str().unwrap_or("Knowledge review failed"))); }
+        Ok(())
+    }
+
     /// Confirm the exact displayed request and read back its current result.
     /// A redirect by itself is not proof that access was granted.
     pub fn approve_project(&mut self, chat: &str, request: &str) -> io::Result<ProjectApproval> {

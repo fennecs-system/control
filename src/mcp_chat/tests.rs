@@ -203,6 +203,10 @@ fn folder_requests_wait_for_the_operator_unless_folder_approvals_are_enabled() {
     let ports = Approvals { port: true, ..Default::default() };
     call(&mut remote, "chat_decide", &json!({"id":id,"kind":"port","request":"p-1","decision":"deny"}), ports).unwrap();
     assert_eq!(remote.decisions.last().unwrap(), "port p-1 false false");
+    // Knowledge proposals are their own switch, off by default (reviewed in Control).
+    assert!(call(&mut remote, "chat_decide", &json!({"id":id,"kind":"knowledge","request":"claim:0","decision":"allow"}), ports).is_err());
+    call(&mut remote, "chat_decide", &json!({"id":id,"kind":"knowledge","request":"claim:0","decision":"allow"}), Approvals { knowledge: true, ..Default::default() }).unwrap();
+    assert_eq!(remote.decisions.last().unwrap(), "knowledge claim:0 true false");
 }
 
 #[test]

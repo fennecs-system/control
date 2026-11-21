@@ -95,6 +95,8 @@ pub fn reply(kind: Kind, action: &str) -> Option<&'static str> {
         (Kind::Bot | Kind::Port, "allow") => Some("allow"),
         (Kind::Bot | Kind::Port, "deny") => Some("deny"),
         (Kind::Port, "loopback") => Some("allow --loopback"),
+        (Kind::Knowledge, "allow") => Some("accept"),
+        (Kind::Knowledge, "deny") => Some("reject"),
         (Kind::Question, option) => OPTION_IDS.iter().position(|id| *id == option).map(|n| NUMBERS[n]),
         _ => None,
     }
@@ -167,6 +169,7 @@ fn item<'a>(view: &'a Value, pending: &Pending<'_>) -> &'a Value {
         Kind::Port => ("pending_ports", "/port_id"),
         Kind::Notice => ("pending_notices", "/notice_id"),
         Kind::Folder => ("pending_folders", "/request"),
+        Kind::Knowledge => ("pending_knowledge", "/claim_id"),
     };
     view[list].as_array().into_iter().flatten()
         .find(|item| item.pointer(key).and_then(Value::as_str) == Some(pending.id))
@@ -293,6 +296,20 @@ pub fn request(settings: &Settings, title: &str, link: &str, pending: &Pending<'
                 actions: vec![open],
                 link: link.into(),
                 hint: crate::client::operator::FOLDER_USAGE.into(),
+            }
+        }
+        Kind::Knowledge => {
+            for (label, key, max) in [("Evidence", "evidence", 1000), ("Scope", "scope", 300), ("Recheck when", "validity", 300)] {
+                fields.push((label, clean(item[key].as_str().unwrap_or(""), max, false)));
+            }
+            Request {
+                title: "Knowledge proposal".into(),
+                body: clean(item["claim"].as_str().unwrap_or(pending.body), 300, false),
+                fields,
+                severity: Severity::Attention,
+                actions: vec![decide("allow", "Accept entry", Style::Success), decide("deny", "Reject", Style::Secondary), open],
+                link: link.into(),
+                hint: format!("Or reply accept or reject, or /knowledge accept {id}"),
             }
         }
     };

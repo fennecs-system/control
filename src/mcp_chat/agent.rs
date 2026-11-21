@@ -79,7 +79,7 @@ impl Remote for Scoped<'_> {
                 let mine = |item: &Value| item["chat_id"].as_str().is_some_and(|c| team.contains(c))
                     || item["service_id"].as_str().is_some_and(|s| services.contains(s));
                 let mut group = json!({"chat_id":self.own});
-                for key in ["pending_questions", "pending_bots", "pending_ports", "pending_notices", "pending_folders"] {
+                for key in ["pending_questions", "pending_bots", "pending_ports", "pending_notices", "pending_folders", "pending_knowledge"] {
                     group[key] = json!(data.as_array().into_iter().flatten()
                         .flat_map(|g| g[key].as_array().into_iter().flatten()).filter(|item| mine(item)).collect::<Vec<_>>());
                 }

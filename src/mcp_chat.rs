@@ -33,6 +33,7 @@ impl Remote for Hive {
             ("folder", false) => self.dismiss_project(chat, request),
             ("port", _) => self.decide_port(chat, request, if allow { PortDecision::Allow } else { PortDecision::Deny }, loopback)
                 .map(|()| if allow { "Port allowed." } else { "Port denied." }.to_owned()),
+            ("knowledge", _) => self.review_knowledge(request, allow).map(|()| if allow { "Proposal accepted." } else { "Proposal rejected." }.to_owned()),
             _ => Err(fail("Unknown decision.")),
         }
     }
@@ -64,7 +65,7 @@ const TOOLS: &[Tool] = &[
         schema: || json!({"type":"object","properties":{"id":{"type":"string","description":ID},"before":{"type":"integer","minimum":0,"description":"Show messages before this index (default: the end)."},"limit":{"type":"integer","minimum":1,"maximum":20,"default":5},"activity":{"type":"integer","minimum":0,"maximum":40,"default":5,"description":"Latest activity events shown per message."},"max_chars":{"type":"integer","minimum":200,"maximum":8000,"default":1500,"description":"Clip each text field to this many characters."}},"required":["id"]}) },
     Tool { name: "chat_team", write: false, description: "List a task's team: the chat and every agent chat spawned from it, with status, plus the live persistent services they own.",
         schema: || json!({"type":"object","properties":{"id":{"type":"string","description":ID}},"required":["id"]}) },
-    Tool { name: "chat_requests", write: false, description: "List what a task is waiting on the operator for: design questions, bot requests, port approvals, notices and folder (/open) requests across its team. Read only: the operator decides them in Control.",
+    Tool { name: "chat_requests", write: false, description: "List what a task is waiting on the operator for: design questions, bot requests, port approvals, notices, folder (/open) requests and knowledge proposals across its team. Read only: the operator decides them in Control.",
         schema: || json!({"type":"object","properties":{"id":{"type":"string","description":ID}},"required":["id"]}) },
     Tool { name: "chat_create", write: true, description: "Create a DM as the local operator, optionally with a title, model (as /model accepts, e.g. codex:MODEL or claude:opus), genes (lens IDs; its DNA) and persona. Returns its ID. Send the prompt with chat_send.",
         schema: || json!({"type":"object","properties":{"title":{"type":"string","minLength":1,"maxLength":32},"model":{"type":"string","maxLength":128},"genes":{"type":"array","items":{"type":"string"},"maxItems":32},"persona":{"type":"string","maxLength":128}}}) },
@@ -82,7 +83,7 @@ const TOOLS: &[Tool] = &[
         schema: || json!({"type":"object","properties":{"id":{"type":"string","description":ID},"paths":{"type":"array","items":{"type":"string","maxLength":4096},"minItems":1,"maxItems":16,"description":"Absolute folder paths on the Control node."}},"required":["id","paths"]}) },
     Tool { name: "control_design_ask", write: true, description: "The decision tool Control's agents use, for this caller: ask the operator a consequential choice with 2–4 options and optionally a recommended index. The question is listed by chat_requests, shown in the web UI and TUI and forwarded to Discord; the operator answers it there. Asking approves nothing and pauses nothing. With id it is asked in that DM, which must be an idle operator DM; otherwise in the operator's Decisions DM. The answer is appended to that DM: read it with chat_read.",
         schema: || { let mut schema = crate::design::definition()["inputSchema"].clone(); schema["properties"]["id"] = json!({"type":"string","description":"Optional idle operator DM to ask in (default: the Decisions DM)."}); schema } },
-    Tool { name: "chat_decide", write: true, description: "Decide a pending request that chat_requests listed, for the kinds the operator enabled in Manage → Permissions (listed only when one is). kind folder or port: decision allow|deny (loopback=true for a loopback port target); bot: allow|deny; question: answer text.",
+    Tool { name: "chat_decide", write: true, description: "Decide a pending request that chat_requests listed, for the kinds the operator enabled in Manage → Permissions (listed only when one is). kind folder or port: decision allow|deny (loopback=true for a loopback port target); bot: allow|deny; knowledge: allow (accept) or deny (reject); question: answer text.",
         schema: || json!({"type":"object","properties":{"id":{"type":"string","description":"The chat chat_requests names for this request."},"kind":{"type":"string","enum":Approvals::KINDS},"request":{"type":"string","maxLength":128},"decision":{"type":"string","enum":["allow","deny"]},"loopback":{"type":"boolean","default":false},"answer":{"type":"string","maxLength":2000}},"required":["id","kind","request"]}) },
 ];
 
@@ -201,7 +202,7 @@ fn chat_read(remote: &mut impl Remote, args: &Value) -> io::Result<String> {
         let state = if project.get("pending") == Some(&json!(true)) { "pending operator approval" } else if project.get("grant").is_some_and(Value::is_string) { "open" } else { "not open" };
         out.push(format!("Folder {}: {state}", project.get("path").and_then(Value::as_str).unwrap_or("?")));
     }
-    let pending = ["pending_questions", "pending_ports", "pending_bots"].iter()
+    let pending = ["pending_questions", "pending_ports", "pending_bots", "pending_knowledge"].iter()
         .map(|k| (k.trim_start_matches("pending_"), detail[*k].as_array().map_or(0, Vec::len))).filter(|(_, n)| *n > 0)
         .map(|(k, n)| format!("{n} {k}")).collect::<Vec<_>>();
     if !pending.is_empty() { out.push(format!("Waiting on the operator: {} (chat_requests lists them).", pending.join(", "))); }

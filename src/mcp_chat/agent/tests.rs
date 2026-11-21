@@ -35,9 +35,10 @@ fn agents_drive_only_dms_below_their_own_chat() {
     assert!(call(&mut scoped, "chat_send", &json!({"id":own,"message":"hi"}), Approvals::default()).is_err());
     assert!(call(&mut scoped, "chat_cancel", &json!({"id":own,"all":true}), Approvals::default()).is_err());
     // No decisions or folders, even when the operator lets the external bridge decide.
-    let all = Approvals { folder: true, port: true, bot: true, question: true };
+    let all = Approvals { folder: true, port: true, bot: true, question: true, knowledge: true };
     assert!(call(&mut scoped, "chat_open", &json!({"id":child,"paths":["/srv"]}), all).is_err());
     assert!(call(&mut scoped, "chat_decide", &json!({"id":child,"kind":"bot","request":"b-1","decision":"allow"}), all).is_err());
+    assert!(call(&mut scoped, "chat_decide", &json!({"id":child,"kind":"knowledge","request":"claim:0","decision":"allow"}), all).is_err());
     assert!(shared.lock().unwrap().chats.iter().all(|c| c.project.is_none()));
 }
 

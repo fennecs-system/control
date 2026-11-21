@@ -21,9 +21,12 @@ pub enum Kind {
     /// A folder (`/open`) request: host paths for the task. Approved or
     /// dismissed in Control (web or TUI `/open`), never by a channel reply.
     Folder,
+    /// A worker's shared-knowledge proposal: accepted or rejected through the
+    /// same review as Knowledge → Review. The worker never waits on it.
+    Knowledge,
 }
 impl Kind {
-    pub const ALL: [Kind; 5] = [Kind::Question, Kind::Bot, Kind::Port, Kind::Notice, Kind::Folder];
+    pub const ALL: [Kind; 6] = [Kind::Question, Kind::Bot, Kind::Port, Kind::Notice, Kind::Folder, Kind::Knowledge];
     pub fn as_str(self) -> &'static str {
         match self {
             Kind::Question => "question",
@@ -31,6 +34,7 @@ impl Kind {
             Kind::Port => "port",
             Kind::Notice => "notice",
             Kind::Folder => "folder",
+            Kind::Knowledge => "knowledge",
         }
     }
 }
@@ -127,6 +131,17 @@ pub fn pending(view: &Value) -> Vec<Pending<'_>> {
             loopback: false,
         });
     }
+    for proposal in list("pending_knowledge") {
+        let id = text(&proposal["claim_id"]);
+        items.push(Pending {
+            kind: Kind::Knowledge,
+            heading: Cow::Owned(format!("Knowledge proposal · {}", Clean(text(&proposal["chat_id"])))),
+            body: text(&proposal["summary"]),
+            usage: Some(format!("/knowledge accept {0} · /knowledge reject {0}", Clean(id))),
+            id,
+            loopback: false,
+        });
+    }
     items
 }
 /// Folder access is reviewed where the exact path is shown, not by reply.
@@ -139,6 +154,8 @@ pub enum Command {
     Send(String),
     /// The port decision form the web panel posts.
     Port { id: String, decision: PortDecision, loopback: bool },
+    /// Accept or reject a knowledge proposal through the Knowledge → Review form.
+    Knowledge { id: String, accept: bool },
 }
 
 /// `/port allow ID [--loopback]` or `/port deny ID` against what is displayed:
@@ -157,11 +174,20 @@ pub fn port(text: &str, loopback_required: impl Fn(&str) -> Option<bool>) -> Res
     Ok(Command::Port { id: parts[2].into(), decision, loopback })
 }
 
+/// `/knowledge accept|reject ID`.
+pub fn knowledge(text: &str) -> Result<Command, &'static str> {
+    match text.split_whitespace().collect::<Vec<_>>().as_slice() {
+        ["/knowledge", verdict @ ("accept" | "reject"), id] => Ok(Command::Knowledge { id: (*id).into(), accept: *verdict == "accept" }),
+        _ => Err("Use /knowledge accept ID or /knowledge reject ID."),
+    }
+}
+
 /// Decision commands, for help text.
 pub const COMMANDS: &[(&str, &str)] = &[
     ("/answer ID ANSWER", "Answer a design question"),
     ("/bot allow|deny ID", "Decide a bot request"),
     ("/port allow|deny ID [--loopback]", "Decide a port request"),
+    ("/knowledge accept|reject ID", "Review a knowledge proposal"),
 ];
 
 /// The request a typed decision command names: `/answer ID ANSWER`,
@@ -171,6 +197,7 @@ pub fn named(text: &str) -> Option<(Kind, &str)> {
         ["/answer", id, _, ..] => Some((Kind::Question, id)),
         ["/bot", "allow" | "deny", id] => Some((Kind::Bot, id)),
         ["/port", "allow" | "deny", id] | ["/port", "allow", id, "--loopback"] => Some((Kind::Port, id)),
+        ["/knowledge", "accept" | "reject", id] => Some((Kind::Knowledge, id)),
         _ => None,
     }
 }
@@ -181,7 +208,7 @@ pub fn reply(pending: &Pending<'_>, text: &str) -> Result<Command, &'static str>
     let (text, id) = (text.trim(), pending.id);
     let words = text.to_lowercase().split_whitespace().map(str::to_owned).collect::<Vec<_>>();
     let verdict = match words.first().map(String::as_str) {
-        Some("allow" | "approve" | "yes" | "y") => "allow",
+        Some("allow" | "approve" | "accept" | "yes" | "y") => "allow",
         Some("deny" | "reject" | "no" | "n") => "deny",
         _ => "",
     };
@@ -200,11 +227,13 @@ pub fn reply(pending: &Pending<'_>, text: &str) -> Result<Command, &'static str>
             _ if verdict.is_empty() || (words.len() > 1 && !loopback) => return Err("Reply allow or deny."),
             Kind::Bot => format!("/bot {verdict} {id}"),
             Kind::Port => format!("/port {verdict} {id}{}", if loopback { " --loopback" } else { "" }),
+            Kind::Knowledge => format!("/knowledge {} {id}", if verdict == "allow" { "accept" } else { "reject" }),
             Kind::Folder => return Err(FOLDER_USAGE),
         }
     };
     match pending.kind {
         Kind::Port => port(&command, |shown| (shown == id).then_some(pending.loopback)),
+        Kind::Knowledge => knowledge(&command),
         _ => Ok(Command::Send(command)),
     }
 }
@@ -214,6 +243,7 @@ pub fn execute(hive: &mut Hive, chat: &str, command: &Command) -> io::Result<()>
     match command {
         Command::Send(message) => hive.tool("control.chat.send", json!({"id":chat,"message":message})).map(drop),
         Command::Port { id, decision, loopback } => hive.decide_port(chat, id, *decision, *loopback),
+        Command::Knowledge { id, accept } => hive.review_knowledge(id, *accept),
     }
 }
 

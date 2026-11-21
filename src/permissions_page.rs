@@ -47,7 +47,7 @@ fn auto_fieldset(policy: &AutoApproval) -> String {
 /// The opt-ins form, what is running, recent automatic decisions and the node's pending requests.
 pub(crate) fn render(state: &crate::State) -> String {
     let current = permissions::read();
-    let kinds = [("folder", "Folder access (/open: host paths)"), ("port", "Network ports"), ("bot", "Persistent bots"), ("question", "Design questions")]
+    let kinds = [("folder", "Folder access (/open: host paths)"), ("port", "Network ports"), ("bot", "Persistent bots"), ("question", "Design questions"), ("knowledge", "Knowledge proposals")]
         .iter().map(|(kind, label)| check(&format!("mcp_{kind}"), label, current.mcp_approvals.allows(kind))).collect::<String>();
     let mut html = format!("<h2>Permissions</h2><p class='muted'>Strict and off by default. Requests wait for a decision unless the automatic approval policy below takes them; the other settings only choose who else may decide.</p>\
         <form class='decision-form permissions' method='post' action='{PATH}'>{}\

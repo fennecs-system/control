@@ -309,12 +309,15 @@ pub fn pending_json(state: &State, chat_id: &str) -> Vec<Value> {
     }).collect()
 }
 
+/// Changes when a question or a knowledge proposal is asked or decided, so
+/// request views (TUI, Discord forwarding) re-read.
 pub fn decision_revision(state: &State) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     for run in state.runtime.runs.iter().filter(|run|run.question.is_some()) {
         (&run.id, &run.status, &run.question.as_ref().unwrap().answer).hash(&mut hash);
     }
+    state.collective.proposals.iter().for_each(|p| p.status.hash(&mut hash));
     hash.finish()
 }
 
