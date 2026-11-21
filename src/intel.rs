@@ -273,7 +273,7 @@ pub fn brief(state: &State, scope: Option<&str>, at: u64) -> Result<String, &'st
         let session = state.chats.iter().find(|session| session.id == team.root);
         let title = inert(&crate::callsigns::name_or_id(&state.chats, team.root));
         let _ = writeln!(out, "## {title} ({})\n", team.root);
-        if let Some(goal) = session.and_then(|session| session.messages.first()).map(|message| shorten(&inert(&message.text), 200)) {
+        if let Some(goal) = session.and_then(|session| session.messages.iter().find(|message| !message.text.trim_start().starts_with('/'))).map(|message| shorten(&inert(&message.text), 200)) {
             let _ = writeln!(out, "- Goal: {goal}");
         }
         let _ = writeln!(out, "- Members: {} · active runs: {} · model turns: {}", team.members, team.active, team.turns);
@@ -289,7 +289,11 @@ pub fn brief(state: &State, scope: Option<&str>, at: u64) -> Result<String, &'st
         }
         let _ = writeln!(out, "- Progress: {progress}");
         let _ = writeln!(out, "- Cost: {} tokens over {} measured attempt(s)", team.tokens, team.measured);
-        member_table(state, team, &activity, &callsigns, at, &mut out);
+        // The node-wide brief lists every team of the day: only one asked for
+        // by name, or one working now, gets its per-member table.
+        if scope.is_some() || team.active > 0 {
+            member_table(state, team, &activity, &callsigns, at, &mut out);
+        }
         match crate::bots::conditions(state, team.root) {
             Some(found) if found.is_empty() => out.push_str("- Pathologies: none observed\n"),
             Some(found) => { let _ = writeln!(out, "- Pathologies: {}", inert(&found.join("; "))); }
