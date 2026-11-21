@@ -464,7 +464,8 @@ Reuse first: when an admitted or available [tool package](TOOL-PACKAGES.md)
 already provides reflexes or skills, use it and read its README and notification
 contract. Build or extend a layer only for a gap a run has demonstrated, keep
 every layer minimal, and keep new layers in one folder ready to save as a tool
-package. Reflexes commit; skills are bounded routines toward a target (including
+package. Reflexes commit; skills are routines that carry a whole target to its done-condition, not a small
+batch (including
 timed sequences the model parameterises) that escalate only what they cannot
 handle; turns set goals and re-plan. The lens adds no tool or authority.
 

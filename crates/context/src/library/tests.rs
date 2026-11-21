@@ -225,7 +225,7 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert_eq!(investigation.includes, ["evidence"]);
     assert!(investigation.tools.is_empty());
     let autonomy = Library::default().get("autonomy").unwrap().clone();
-    assert_eq!(autonomy.revision, 9);
+    assert_eq!(autonomy.revision, 10);
     assert!(autonomy.instructions.contains("routine steps need no evidence files, read-backs or proof records"));
     assert!(autonomy.instructions.contains("Never claim an outcome you have not observed"));
     assert!(autonomy.instructions.contains("when tooling work stops advancing the goal, stop and use what exists"));
@@ -270,7 +270,7 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert_eq!(swarm.revision, 2);
     assert!(swarm.includes.contains(&"planning".to_string()));
     let ganglia = Library::default().get("ganglia").unwrap().clone();
-    assert_eq!((ganglia.name.as_str(), ganglia.revision), ("Ganglia", 2));
+    assert_eq!((ganglia.name.as_str(), ganglia.revision), ("Ganglia", 3));
     assert!(ganglia.instructions.starts_with("Reflexes and routines run locally; turns are strategy."));
     assert!(ganglia.instructions.contains("long-running work on systems that change faster than a turn, not one-off tasks"));
     // Reuse an existing package first; build or extend only for a demonstrated gap.
@@ -300,8 +300,10 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     for revision in 1..=3 {
         assert!(previous.iter().any(|d| d.id == "investigation" && d.revision == revision));
     }
-    assert!(previous.iter().any(|d| d.id == "ganglia" && d.revision == 1));
-    for revision in 1..=8 {
+    for revision in 1..=2 {
+        assert!(previous.iter().any(|d| d.id == "ganglia" && d.revision == revision));
+    }
+    for revision in 1..=9 {
         assert!(previous.iter().any(|d| d.id == "autonomy" && d.revision == revision));
     }
     for revision in 1..=14 {
