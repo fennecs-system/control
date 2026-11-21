@@ -85,6 +85,7 @@ fn live_command_evidence_reaches_parent_and_terminal_clients_without_reordering(
     let restored: State = serde_json::from_slice(&serde_json::to_vec(&*state).unwrap()).unwrap();
     let event = activity(&restored, &run).next().unwrap();
     assert_eq!(event.text, "printf '<progress>'");
+    assert_eq!(finished(&restored).next().unwrap().command, "printf '<progress>'", "pathology compares the command text");
     assert_eq!(event.status, "completed");
     assert!(event.output.contains("second\n\nExit 0"));
     assert!(activity(&restored, "other-run").next().is_none());

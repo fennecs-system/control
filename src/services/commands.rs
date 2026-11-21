@@ -271,7 +271,8 @@ pub(crate) fn finished(state: &State) -> impl Iterator<Item = Finished<'_>> {
         .map(|execution| Finished {
             run: &execution.run,
             id: &execution.id,
-            command: &execution.command,
+            // A launched command keeps only its display text (`command` is cleared).
+            command: if execution.display_command.is_empty() { &execution.command } else { &execution.display_command },
             failed: !matches!(execution.status, Status::Completed) || execution.exit_code.is_some_and(|code| code != 0),
         })
 }
