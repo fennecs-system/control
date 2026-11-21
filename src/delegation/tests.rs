@@ -412,7 +412,7 @@ fn persistent_resources_follow_real_delegation_and_return_to_parent() {
     pause(&mut state, Role::Worker);
     reconcile(&mut state, |_| Ok(())).unwrap();
     let node = state.services[0].resource.owner.node.clone();
-    assert!(crate::services::accessible(
+    assert!(crate::services::direct(
         &state.services[0],
         &node,
         &state.runtime.runs[1]
@@ -430,7 +430,7 @@ fn persistent_resources_follow_real_delegation_and_return_to_parent() {
     reconcile(&mut state, |_| Ok(())).unwrap();
     let parent = state.runtime.runs.last().unwrap();
     assert_eq!(parent.chat_id, state.runtime.runs[0].chat_id);
-    assert!(crate::services::accessible(
+    assert!(crate::services::direct(
         &state.services[1],
         &node,
         parent

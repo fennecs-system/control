@@ -37,7 +37,7 @@ impl AttemptTools for Tools {
             ),
             (
                 "control_service_stop",
-                "Request stop of an exact service: one this chat owns or was granted, or a teammate's in the same task tree (its lead, spawned workers and their workers; listed by control_service_status as team_services). Stopping releases its capacity; the owner's /workspace volume is retained. Stopping is not confirmation of removal; inspect status until Stopped. Does not cancel the model turn.",
+                "Request stop of an exact service: one this chat owns or was granted, or a teammate's in the same task tree (its lead, spawned workers and their workers). Stopping releases its capacity; the owner's /workspace volume is retained. Stopping is not confirmation of removal; inspect status until Stopped. Does not cancel the model turn.",
                 false,
             ),
         ] {

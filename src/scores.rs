@@ -373,8 +373,8 @@ fn execute(host: &LocalHost<'_>, attempt: &AttemptRef<'_>, call: ScoreCall) -> i
                     return Err(fail("This node already keeps the maximum number of score probes"));
                 }
                 state.services.iter()
-                    .find(|service| service.resource.id.as_str() == service_id && crate::services::accessible(service, &node, &caller))
-                    .ok_or_else(|| fail("Service is not owned by or granted to this chat"))?
+                    .find(|service| service.resource.id.as_str() == service_id && crate::services::accessible(&state, service, &node, &caller))
+                    .ok_or_else(|| fail("Service is not owned by this chat or its team"))?
                     .binding_snapshot()
             };
             // Test before accepting: a probe that cannot score is rejected now,

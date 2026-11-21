@@ -1288,7 +1288,7 @@ fn member(s: &mut State, parent: &str, run: &str) -> (String, crate::runtime::Ru
 }
 
 #[test]
-fn teammates_stop_but_do_not_use_each_others_services() {
+fn teammates_use_and_stop_their_teams_services_without_a_grant() {
     let (mut s, run, lead, time) = fixture();
     admit_fixture(&mut s, &run, time, |_| Ok(())).unwrap();
     let node: NodeId = "node-a".to_owned().try_into().unwrap();
@@ -1296,18 +1296,14 @@ fn teammates_stop_but_do_not_use_each_others_services() {
     let (worker, worker_run) = member(&mut s, &lead, &run);
     let (_, grandchild_run) = member(&mut s, &worker, &run);
     for teammate_run in [&worker_run, &grandchild_run] {
-        assert!(!accessible(&s.services[0], &node, teammate_run), "no grant, no exec");
-        assert!(target(&s, &node, teammate_run, &id, false).is_err(), "attach, exec and logs still need a grant");
-        assert_eq!(target(&s, &node, teammate_run, &id, true).unwrap(), 0, "any member of the task tree may stop it");
-        let listed = team_listing(&s, &node, teammate_run);
-        assert_eq!((listed.len(), listed[0]["service_id"].as_str()), (1, Some(id.as_str())));
-        assert!(listed[0].get("output").is_none() && listed[0].get("executions").is_none());
+        assert!(!direct(&s.services[0], &node, teammate_run), "it holds no grant to share onward");
+        assert!(accessible(&s, &s.services[0], &node, teammate_run), "a team's service belongs to the team");
+        assert_eq!(target(&s, &node, teammate_run, &id).unwrap(), 0, "exec, attach, logs and stop need no grant");
     }
-    // The lead stops a worker's service the same way.
+    // The lead uses a service a worker started after it was spawned.
     let lead_run = s.runtime.runs[0].clone();
     s.services[0].resource.owner.chat = worker.clone().try_into().unwrap();
-    assert!(target(&s, &node, &lead_run, &id, true).is_ok());
-    assert!(team_listing(&s, &node, &lead_run).len() == 1);
+    assert!(target(&s, &node, &lead_run, &id).is_ok());
 
     // Outside the tree, another actor, another node or a judge: refused.
     let stranger = crate::chat::create(&mut s);
@@ -1318,12 +1314,8 @@ fn teammates_stop_but_do_not_use_each_others_services() {
     let mut judge = worker_run.clone();
     judge.persona = Some(crate::delegation::Persona { role: crate::delegation::Role::Judge, root: lead.clone(), depth: 1, parent: Some(run.clone()), bundle: None });
     for refused in [&outsider, &other_actor, &judge] {
-        assert!(target(&s, &node, refused, &id, true).is_err());
-        assert!(team_listing(&s, &node, refused).is_empty());
+        assert!(target(&s, &node, refused, &id).is_err());
     }
     let elsewhere: NodeId = "node-b".to_owned().try_into().unwrap();
-    assert!(target(&s, &elsewhere, &worker_run, &id, true).is_err());
-    // Stopped services are no longer listed for teammates.
-    s.services[0].resource.phase = Phase::Stopped(StopReason::Requested);
-    assert!(team_listing(&s, &node, &lead_run).is_empty());
+    assert!(target(&s, &elsewhere, &worker_run, &id).is_err());
 }
