@@ -47,8 +47,14 @@ pub struct Post {
 pub fn read(state: &State, room: &str) -> Value {
     let posts = state.collective.posts.iter().filter(|p| p.room == room).rev().take(50)
         .map(|p| json!({"text":p.text,"chat":p.chat,"run":p.run,"delivery":p.delivery,"author":if p.run.is_some(){"agent"}else{"operator"}}));
-    json!({"room":room,"posts":posts.collect::<Vec<_>>(),"claims":claims::listed(state, room),
-        "chats":state.chats.iter().zip(crate::callsigns::all(&state.chats)).rev().filter(|(c, _)| c.room.as_deref()==Some(room)).take(50).map(|(c, callsign)|json!({"id":c.id,"title":crate::callsigns::label(c, callsign)})).collect::<Vec<_>>()})
+    let mut read = json!({"room":room,"posts":posts.collect::<Vec<_>>(),"claims":claims::listed(state, room),
+        "chats":state.chats.iter().zip(crate::callsigns::all(&state.chats)).rev().filter(|(c, _)| c.room.as_deref()==Some(room)).take(50).map(|(c, callsign)|json!({"id":c.id,"title":crate::callsigns::label(c, callsign)})).collect::<Vec<_>>()});
+    // Members find their team's approved advisor here: it is for asking, not
+    // coordination, and is not itself linked to the room.
+    if let Some(advisor) = state.chats.iter().filter(|c| c.room.as_deref() == Some(room)).find_map(|c| state.bots.team_advisor(&c.id)) {
+        read["advisor"] = json!({"id":advisor,"ask":"read-only; ask it about your method with control_agent_message"});
+    }
+    read
 }
 pub fn tool(state: &mut State, name: &str, args: &Value) -> Result<Value, &'static str> {
     if name == "control.rooms.list" {

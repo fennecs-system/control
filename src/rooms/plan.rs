@@ -112,6 +112,8 @@ pub(crate) fn plan(state: &State, room: &str) -> Value {
     let active = claims::active_owners(state);
     let mut members = state.chats.iter().zip(crate::callsigns::all(&state.chats))
         .filter(|(chat, _)| chat.room.as_deref() == Some(room) || open.iter().any(|claim| claim.owner == chat.id))
+        // An advisor answers questions; it is not a member to assign work to.
+        .filter(|(chat, _)| !state.bots.advises(&chat.id))
         .filter(|(chat, _)| !open.iter().any(|claim| claim.owner == chat.id && claim.status == Status::Working && !claim.abandoned))
         .map(|(chat, callsign)| {
             let waiting = open.iter().filter(|claim| claim.owner == chat.id && claim.status == Status::Blocked).filter_map(|claim| claim.blocked_on.as_deref()).collect::<Vec<_>>();
