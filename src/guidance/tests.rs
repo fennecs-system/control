@@ -15,7 +15,7 @@ fn lists_topics_for_the_role_and_reads_the_captured_text() {
     }
     assert!(!topics.contains(&"advisor"), "members do not see lead/advisor procedure");
     let coordination = read(Some(&context), Audience::Member, Some("Coordination")).unwrap();
-    assert_eq!(coordination["revision"], 17);
+    assert_eq!(coordination["revision"], 18);
     assert!(coordination["text"].as_str().unwrap().starts_with("Whoever steers a team posts the milestone backlog"));
     // Lookup by display name, any case.
     assert_eq!(read(Some(&context), Audience::Member, Some("task autonomy")).unwrap()["topic"], "autonomy");
@@ -39,7 +39,7 @@ fn a_run_reads_the_revision_it_captured_not_the_current_library() {
     let current = library.resolve(&["swarm".into()], &[]).unwrap();
     assert_eq!(read(Some(&current), Audience::Member, Some("coordination")).unwrap()["text"], "Local coordination edit");
     let old = read(Some(&captured), Audience::Member, Some("coordination")).unwrap();
-    assert_eq!(old["revision"], 17);
+    assert_eq!(old["revision"], 18);
     assert_ne!(old["text"], "Local coordination edit");
     // A context captured before guidance on demand inlines everything and lists only built-ins.
     let mut legacy = captured.clone();

@@ -793,8 +793,8 @@ fn optional_guidance_survives_child_wake_and_library_edits_without_retroactive_c
     for run in [&parent, &child, &wake] {
         let text = prompt(&restored, run).unwrap();
         assert!(text.contains("investigation@4") && text.contains("- investigation: "));
-        assert!(text.contains("coordination@17") && text.contains("autonomy@10"));
-        assert!(text.contains("planning@8"));
+        assert!(text.contains("coordination@18") && text.contains("autonomy@10"));
+        assert!(text.contains("planning@9"));
         assert!(!text.contains("change one relevant thing per try"));
         assert!(guidance(&restored, run, "investigation").contains("change one relevant thing per try"));
         assert!(!guidance(&restored, run, "coordination").contains("Future coordination guidance only"));
@@ -804,7 +804,7 @@ fn optional_guidance_survives_child_wake_and_library_edits_without_retroactive_c
     send(&mut state, &id, "Start a new authorized step", "test").unwrap();
     let last = state.runtime.runs.last().unwrap().id.clone();
     let next = prompt(&state, &last).unwrap();
-    assert!(next.contains("investigation@5") && next.contains("coordination@18") && next.contains("planning@9"));
+    assert!(next.contains("investigation@5") && next.contains("coordination@19") && next.contains("planning@10"));
     assert_eq!(guidance(&state, &last, "investigation"), "Future investigation guidance only");
     assert_eq!(guidance(&state, &last, "coordination"), "Future coordination guidance only");
     assert_eq!(guidance(&state, &last, "planning"), "Future planning guidance only");

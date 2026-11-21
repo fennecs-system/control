@@ -677,3 +677,46 @@ fn the_room_plan_reports_the_advisor_bottlenecks() {
         assert_eq!(advisor, planned, "threshold {threshold}");
     }
 }
+
+#[test]
+fn a_member_idle_with_a_working_claim_while_peers_work_is_one_fact_per_idle_spell() {
+    let (mut state, root) = fixture();
+    let (idler, worker) = (spawned(&mut state, &root, "Builder"), spawned(&mut state, &root, "Worker"));
+    let (watcher, queued, waiter) = (spawned(&mut state, &root, "Watcher"), spawned(&mut state, &root, "Queued"), spawned(&mut state, &root, "Waiter"));
+    state.runtime.execution.advisor_stall_turns = 12;
+    claim(&mut state, &idler, "castle", "working", None);
+    // A running watch or a queued turn will wake its member; a blocked claim is the blocked fact's.
+    claim(&mut state, &watcher, "farm", "working", None);
+    watching(&mut state, &watcher, "w-farm");
+    claim(&mut state, &queued, "mine", "working", None);
+    turn(&mut state, &queued, "queued");
+    claim(&mut state, &waiter, "smelt", "working", None);
+    claim(&mut state, &waiter, "smelt", "blocked", Some("castle"));
+    let advisor = advisor(&mut state, &root);
+    reconcile_at(&mut state, 1, ok).unwrap();
+    let work = |state: &mut State, turns: usize| for _ in 0..turns { turn(state, &worker, "completed"); };
+    work(&mut state, 3);
+    reconcile_at(&mut state, 2, ok).unwrap();
+    assert!(advisor_runs(&state, &advisor).is_empty(), "below the window of 12 / 3 team turns");
+    work(&mut state, 1);
+    reconcile_at(&mut state, 3, ok).unwrap();
+    let runs = advisor_runs(&state, &advisor);
+    assert_eq!(runs.len(), 1);
+    let idle = vec![lifecycle::Waiter { key: "castle".into(), chat: idler.clone() }];
+    assert_eq!(facts(runs[0]), [Facts { idle: idle.clone(), chats: vec![idler.clone()], ..Facts::default() }]);
+    assert_eq!(facts(runs[0])[0].pathological().idle, idle, "antibodies hear it too");
+    assert!(runs[0].objective.contains(&format!("idle claim holder: member {idler} holds working claim castle")));
+    finish(&mut state, &advisor);
+    work(&mut state, 4);
+    reconcile_at(&mut state, 40_000, ok).unwrap();
+    assert_eq!(advisor_runs(&state, &advisor).len(), 1, "one fact per idle spell");
+    // The member's next turn re-arms it; a new idle spell is a new fact.
+    turn(&mut state, &idler, "completed");
+    reconcile_at(&mut state, 80_000, ok).unwrap();
+    assert_eq!(advisor_runs(&state, &advisor).len(), 1);
+    work(&mut state, 4);
+    reconcile_at(&mut state, 120_000, ok).unwrap();
+    let runs = advisor_runs(&state, &advisor);
+    assert_eq!(runs.len(), 2);
+    assert_eq!(facts(runs[1])[0].idle, idle);
+}

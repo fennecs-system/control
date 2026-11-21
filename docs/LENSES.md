@@ -311,6 +311,13 @@ bot approval.
      posting is not progress. A stall is reported once; an advance, or open
      claims appearing or clearing, restarts the window. The window counts turns,
      not time. Teams that do not use claims never stall;
+   - an idle claim holder: a member holds a `working` claim and has no turn
+     running or queued and no running watch while a third of
+     `advisor_stall_turns` (default 8, at least 4) other team turns settled since
+     its own latest turn. Unlike a quiet team, peers are still busy, so only
+     this member sits with nothing that will wake it. The fact names the member
+     and one such claim; it is reported once per idle spell, and the member's
+     next turn re-arms it;
    - a bottleneck: one live (working or blocked) claim that the claims of
      `advisor_bottleneck_members` (default 2) or more members other than its
      owner wait on, directly or transitively through `blocked_on`. The fact
@@ -394,8 +401,8 @@ team on the node.
 pass observes every team (a root chat with spawned members, except antibody
 trees) in the same single pass the advisor uses, and offers one coalesced event
 of the facts that suggest a team is off course: repeated failures, retired
-restart loops, stalls, shared blockers, bottlenecks, timeouts, members that
-cannot checkpoint, and four pathologies:
+restart loops, stalls, idle claim holders, shared blockers, bottlenecks,
+timeouts, members that cannot checkpoint, and four pathologies:
 
 - **harness churn**: `pathology_churn_commands` (default 12) file- or
   tool-building commands (redirects into files, `tee`, in-place edits,

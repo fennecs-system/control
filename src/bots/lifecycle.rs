@@ -4,13 +4,13 @@
 //! They are gaps a lead could miss (the team went quiet, a member keeps
 //! failing, a restart loop was retired, a claim lost its owner, members became
 //! blocked on a claim, members report a similar blocker, turns keep settling
-//! while open claims do not advance, one claim holds up several members, a
-//! member's turns keep ending without an accepted handoff, a turn reached
-//! its time limit), never other single failures. Judge turns, retained peer
-//! evidence (runs without an attempt) and turns woken only by advisor notes,
-//! including the lead's, are not team activity, so an advisor cannot wake
-//! itself through the team it advises. The model interprets; the host only
-//! observes.
+//! while open claims do not advance, a claim holder sits idle while peers
+//! work, one claim holds up several members, a member's turns keep ending
+//! without an accepted handoff, a turn reached its time limit), never other
+//! single failures. Judge turns, retained peer evidence (runs without an
+//! attempt) and turns woken only by advisor notes, including the lead's, are
+//! not team activity, so an advisor cannot wake itself through the team it
+//! advises. The model interprets; the host only observes.
 use super::{Message, Reason};
 use super::pathology::{self, Burn, Churn, Loop, Polling};
 use crate::State;
@@ -48,6 +48,11 @@ pub struct Facts {
     /// The last active member yielded with nothing queued or running.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub quiescent: bool,
+    /// Members holding a working claim with no turn running or queued and no
+    /// running watch while other team turns kept settling: idle with nothing
+    /// that will wake them. One entry per member, naming one such claim.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub idle: Vec<Waiter>,
     /// Team turns kept settling while claims stayed open and none advanced.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stalled: Option<Stall>,
@@ -312,6 +317,11 @@ impl Facts {
             self.block(blocked);
         }
         self.quiescent |= newer.quiescent;
+        for idle in &newer.idle {
+            if self.idle.len() < CHATS && !self.idle.iter().any(|known| known.chat == idle.chat) {
+                self.idle.push(idle.clone());
+            }
+        }
         self.stalled = newer.stalled.or(self.stalled);
         for shared in &newer.shared {
             self.share(shared);
@@ -399,7 +409,7 @@ impl Facts {
         }
     }
     fn is_empty(&self) -> bool {
-        self.repeated == 0 && self.retired == 0 && self.abandoned == 0 && self.blocked.is_empty() && !self.quiescent
+        self.repeated == 0 && self.retired == 0 && self.abandoned == 0 && self.blocked.is_empty() && !self.quiescent && self.idle.is_empty()
             && self.stalled.is_none() && self.shared.is_empty() && self.bottlenecks.is_empty() && self.uncheckpointed.is_empty()
             && self.timed_out.is_empty() && self.churn.is_none() && self.loops.is_empty() && self.polling.is_empty() && self.burn.is_none()
     }
@@ -431,6 +441,9 @@ impl Facts {
         }
         for shared in &self.shared {
             parts.push(format!("{} members report a similar blocker ({}): \"{}\"", shared.members.len(), shared.members.join(", "), shared.reason));
+        }
+        for idle in &self.idle {
+            parts.push(format!("idle claim holder: member {} holds working claim {} but has no turn running or queued and no running routine while other team turns kept settling", idle.chat, idle.key));
         }
         if let Some(stall) = self.stalled {
             parts.push(format!("busy but stalled: {} team turns settled while {} claim(s) stayed open and none became done or resumed from blocked", stall.turns, stall.open));
@@ -511,6 +524,10 @@ pub(super) struct Team {
     /// otherwise.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) timed: Vec<String>,
+    /// Members currently idle with a working claim, sorted and bounded; a
+    /// member is reported again only after it takes a turn.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) idle: Vec<String>,
     /// Pathology observations (`pathology`).
     #[serde(default, skip_serializing_if = "is_default")]
     pub(super) pathology: pathology::Snapshot,
@@ -523,6 +540,7 @@ impl Team {
         if !self.sharing.is_empty() { found.push(format!("{} member(s) report a similar blocker", self.sharing.len())); }
         if !self.necks.is_empty() { found.push(format!("{} bottleneck claim(s)", self.necks.len())); }
         if self.stalled { found.push("busy but stalled".into()); }
+        if !self.idle.is_empty() { found.push(format!("idle claim holder(s): {}", self.idle.join(", "))); }
         if !self.timed.is_empty() { found.push(format!("{} member(s) whose latest turn timed out", self.timed.len())); }
         let sick = &self.pathology;
         if !sick.loops.is_empty() { found.push(format!("{} repetition loop(s)", sick.loops.len())); }
@@ -639,11 +657,17 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
     let mut timed = vec![None; state.chats.len()];
     struct Scan { active: bool, settled: usize }
     let mut scans = roots.iter().map(|_| Scan { active: false, settled: 0 }).collect::<Vec<_>>();
+    // Per member: team turns settled after its newest turn, and whether a
+    // turn of its own is running or queued.
+    let mut since = vec![None; state.chats.len()];
+    let mut busy = vec![false; state.chats.len()];
     for (index, run) in state.runtime.runs.iter().enumerate().rev() {
         let Some(&position) = run.chat_id.as_deref().and_then(|chat| member.get(chat)) else { continue };
         if crate::delegation::is_judge(run) {
             continue;
         }
+        since[position].get_or_insert(scans[team_at[position]].settled);
+        busy[position] |= matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling");
         // Commands come from recent runs; the newest-first walk stops looking
         // once every one is resolved.
         if unresolved > 0 && let Some(slot) = by_run.get_mut(run.id.as_str()).filter(|slot| **slot == usize::MAX) {
@@ -672,7 +696,22 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
         }
     }
     for request in &state.bots.requests {
-        if let Some(&position) = member.get(request.chat.0.as_str()) { scans[team_at[position]].active = true; }
+        if let Some(&position) = member.get(request.chat.0.as_str()) { (scans[team_at[position]].active, busy[position]) = (true, true); }
+    }
+    // Per team: members holding a working claim with no turn running or
+    // queued and no running watch while `idle_turns` other team turns settled.
+    let idle_turns = (state.runtime.execution.advisor_stall_turns / 3).max(4);
+    let mut idle = roots.iter().map(|_| Vec::new()).collect::<Vec<Vec<Waiter>>>();
+    for claim in state.collective.claims.iter().filter(|claim| claim.status == Status::Working && !claim.abandoned) {
+        let Some(&position) = member.get(claim.owner.as_str()) else { continue };
+        let team = &mut idle[team_at[position]];
+        if !busy[position] && since[position].unwrap_or(scans[team_at[position]].settled) >= idle_turns && team.len() < FAILING
+            && !team.iter().any(|known| known.chat == claim.owner) && !state.watches.iter().any(|watch| watch.chat == claim.owner && watch.active()) {
+            team.push(Waiter { key: claim.key.clone(), chat: claim.owner.clone() });
+        }
+    }
+    for team in &mut idle {
+        team.sort_by(|a, b| a.chat.cmp(&b.chat));
     }
     // Per team: live member claims blocked on another claim, open (working or
     // blocked) claims, the latest claim advance, reported blocker reasons and
@@ -747,7 +786,7 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
     let limits = pathology::Limits::of(&state.runtime.execution);
     let window = state.runtime.execution.advisor_stall_turns.max(4);
     let crowd = state.runtime.execution.advisor_bottleneck_members.max(2);
-    roots.into_iter().zip(scans).zip(failing).zip(held).zip(timing).zip(sick).enumerate().filter_map(|(slot, (((((root, scan), failing), held), timing), sick))| {
+    roots.into_iter().zip(scans).zip(failing).zip(held).zip(timing).zip(sick).zip(idle).enumerate().filter_map(|(slot, ((((((root, scan), failing), held), timing), sick), idle))| {
         let Claims { blocked, open, progress, reasons, revisions } = held;
         let newest = blocked.iter().map(|claim| claim.blocked_at).max().unwrap_or(0);
         // Reasons are compared only when two members could share one and the
@@ -779,8 +818,9 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
             let sharing = sharing.into_iter().map(str::to_owned).collect();
             let necks = identities(necks.as_deref().unwrap_or_default());
             let timed = timing.into_iter().map(str::to_owned).collect();
+            let idle = idle.into_iter().map(|idle| idle.chat).collect();
             let (pathology, _) = pathology::fold(None, &sick, false, limits);
-            return Some((root.to_owned(), Team { cursor: 0, failing, settled: scan.settled, blocked: newest, progress, since: scan.settled, open: open > 0, stalled: false, sharing, reasons: fingerprint, claims: revisions, necks, timed, pathology }, Facts::default()));
+            return Some((root.to_owned(), Team { cursor: 0, failing, settled: scan.settled, blocked: newest, progress, since: scan.settled, open: open > 0, stalled: false, sharing, reasons: fingerprint, claims: revisions, necks, timed, idle, pathology }, Facts::default()));
         };
         let mut team = known.clone();
         let mut facts = Facts::default();
@@ -847,6 +887,12 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
             facts.stalled = Some(Stall { turns: u32::try_from(scan.settled - known.since).unwrap_or(u32::MAX), open });
             team.stalled = true;
         }
+        // An idle claim holder is reported once, until it takes a turn.
+        for idle in idle.iter().filter(|idle| known.idle.binary_search(&idle.chat).is_err()) {
+            facts.concern(&idle.chat);
+            facts.idle.push(idle.clone());
+        }
+        team.idle = idle.into_iter().map(|idle| idle.chat).collect();
         if !scan.active && scan.settled > team.settled {
             facts.quiescent = true;
             team.settled = scan.settled;

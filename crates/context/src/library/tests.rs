@@ -235,7 +235,7 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert!(autonomy.instructions.contains("Weigh risk by reversibility"));
     assert!(autonomy.instructions.contains("Guards should bound damage"));
     let coordination = Library::default().get("coordination").unwrap().clone();
-    assert_eq!(coordination.revision, 17);
+    assert_eq!(coordination.revision, 18);
     assert!(coordination.instructions.contains("the outcome, not evidence paths or measurements"));
     assert!(coordination.instructions.chars().count() <= 4000);
     assert!(coordination.instructions.contains("keeping its turns short to stay responsive: it delegates implementation, long work and ongoing infrastructure to members, spawned or assigned"));
@@ -250,7 +250,7 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert!(coordination.instructions.contains("Coordinate only over consumable or exclusive resources"));
     assert!(coordination.instructions.contains("never invent locks or turn-taking"));
     let planning = Library::default().get("planning").unwrap().clone();
-    assert_eq!(planning.revision, 8);
+    assert_eq!(planning.revision, 9);
     assert!(planning.instructions.contains("observable outcome cheap to check"));
     assert!(planning.instructions.contains("Check it once when claiming the milestone done"));
     assert!(planning.instructions.contains("treat reaching its done-condition as the tool's test"));
@@ -306,10 +306,10 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     for revision in 1..=9 {
         assert!(previous.iter().any(|d| d.id == "autonomy" && d.revision == revision));
     }
-    for revision in 1..=16 {
+    for revision in 1..=17 {
         assert!(previous.iter().any(|d| d.id == "coordination" && d.revision == revision));
     }
-    for revision in 1..=7 {
+    for revision in 1..=8 {
         assert!(previous.iter().any(|d| d.id == "planning" && d.revision == revision));
     }
     assert!(previous.iter().any(|d| d.id == "swarm" && d.revision == 1));
