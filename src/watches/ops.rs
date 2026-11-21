@@ -47,7 +47,7 @@ fn wakes(armed: bool, bot: bool) -> &'static str {
     match (armed, bot) {
         (true, _) => "The next policy-selected line, exit or source gap wakes this chat once, after the current turn. Keep working while useful independent actions remain; yield when genuinely waiting rather than busy-polling.",
         (false, true) => "Policy-selected lines, exits and source gaps already wake this chat.",
-        (false, false) => "This chat is not a bot; pass wake=true or call control_watch_wake to be woken once, or read events with control_watch_events.",
+        (false, false) => "This chat is not a bot, so this routine will not wake it: for ongoing work request persistence with control_bot_request {} so every event wakes you; otherwise pass wake=true or call control_watch_wake to be woken once, or read events with control_watch_events.",
     }
 }
 
