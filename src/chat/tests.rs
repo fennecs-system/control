@@ -793,7 +793,7 @@ fn optional_guidance_survives_child_wake_and_library_edits_without_retroactive_c
     for run in [&parent, &child, &wake] {
         let text = prompt(&restored, run).unwrap();
         assert!(text.contains("investigation@4") && text.contains("- investigation: "));
-        assert!(text.contains("coordination@15") && text.contains("autonomy@9"));
+        assert!(text.contains("coordination@15") && text.contains("autonomy@10"));
         assert!(text.contains("planning@6"));
         assert!(!text.contains("change one relevant thing per try"));
         assert!(guidance(&restored, run, "investigation").contains("change one relevant thing per try"));
