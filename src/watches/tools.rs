@@ -73,6 +73,8 @@ fn run(ops: &dyn WatchOps, attempt: &AttemptRef<'_>, name: &str, args: &Value) -
     ops.watch(attempt, decode(name, args)?)
 }
 fn default_wake_policy() -> WakePolicy { WakePolicy::ExitOnly {} }
+/// One minimal valid start: finite work, reporting through notifications.
+const START_EXAMPLE: &str = r#"{"service_id":"svc-<id>","name":"<routine>","command":"<shell command>","restart":"transient","notifications":true}"#;
 fn decode(name: &str, args: &Value) -> io::Result<WatchCall> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -114,11 +116,12 @@ fn decode(name: &str, args: &Value) -> io::Result<WatchCall> {
     let invalid = |message: &str| io::Error::other(message.to_owned());
     match name {
         "control_watch_start" => {
-            let start = serde_json::from_value::<Start>(args.clone()).map_err(|error| invalid(&format!("Expected service_id, name, command and optional restart, wake, wake_policy, notifications and salience: {error}")))?;
+            let shape = |error: &dyn std::fmt::Display| invalid(&crate::worker_tools::fixes::shape("control_watch_start", error, START_EXAMPLE));
+            let start = serde_json::from_value::<Start>(args.clone()).map_err(|error| shape(&error))?;
             let permanent = match start.restart.as_deref() {
                 None | Some("permanent") => true,
                 Some("transient") => false,
-                _ => return Err(invalid("restart must be permanent or transient")),
+                Some(other) => return Err(shape(&format!("restart is \"permanent\" (default) or \"transient\", not {:?}", other.chars().take(32).collect::<String>()))),
             };
             if start.name.trim().is_empty() || start.name.chars().count() > 48 || start.command.trim().is_empty() || start.command.len() > 16000 {
                 return Err(invalid("A watch needs a name (1–48 characters) and a command"));

@@ -138,7 +138,7 @@ fn watch_tools_decode_typed_calls_against_only_their_capability() {
     let invalid = decode("control_watch_start", &json!({"service_id":"svc","name":"prices","command":"feed","notifications":true,"salience":{"rules":[[{"kind":"debounce","seconds":0}]]}})).err().unwrap();
     assert!(invalid.to_string().starts_with("Invalid salience"), "{invalid}");
     let unknown = decode("control_watch_start", &json!({"service_id":"svc","name":"prices","command":"feed","notifications":true,"salience":{"rules":[[{"kind":"summarise"}]]}})).err().unwrap();
-    assert!(unknown.to_string().contains("salience"), "{unknown}");
+    assert!(unknown.to_string().contains("summarise"), "{unknown}");
 }
 
 #[test]
@@ -156,4 +156,22 @@ fn watch_descriptions_present_routines_and_keep_their_limits() {
     let events = description("control_watch_events");
     assert!(events.starts_with("Read events from your routines:"));
     assert!(events.contains("instead of re-checking the world each step") && events.contains("Foreign watches return observations without receipts"));
+}
+
+/// Run E's start refusals: each names the field the agent got wrong and
+/// shows one valid start, which is itself the fix (not the generic advice to
+/// list watches and retry with a watch_id).
+#[test]
+fn a_wrong_start_shape_names_the_field_and_shows_a_valid_start() {
+    let error = |args: Value| decode("control_watch_start", &args).err().unwrap().to_string();
+    for (args, names) in [
+        (json!({"service_id":"svc","command":"node r.js"}), "missing field `name`"),
+        (json!({"service_id":"svc","name":"r","command":"node r.js","mode":"transient"}), "unknown field `mode`"),
+        (json!({"service_id":"svc","name":"r","command":"node r.js","transient":true}), "unknown field `transient`"),
+        (json!({"service_id":"svc","name":"r","command":"node r.js","restart":"once"}), "not \"once\""),
+    ] {
+        let shown = error(args);
+        assert!(shown.contains(names) && shown.contains(r#"Example: control_watch_start {"service_id":"#), "{shown}");
+        assert_eq!(crate::worker_tools::fixes::actionable("control_watch_start", &shown), shown);
+    }
 }

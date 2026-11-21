@@ -237,8 +237,12 @@ pub(crate) struct Resolved {
 
 /// Applies one claim operation for `chat`. Returns a resolution, if any, so
 /// the caller can notify waiters inside its checkpoint.
-pub(crate) fn call(state: &mut State, chat: &str, room: &str, args: &Value) -> Result<(Value, Option<Resolved>), &'static str> {
-    let call: Call = serde_json::from_value(args.clone()).map_err(|_| "Expected key, action and optional status, blocked_on, note and revision.")?;
+pub(crate) fn call(state: &mut State, chat: &str, room: &str, args: &Value) -> Result<(Value, Option<Resolved>), std::borrow::Cow<'static, str>> {
+    let call: Call = serde_json::from_value(args.clone()).map_err(|error|
+        crate::worker_tools::fixes::shape("control_room_claim", error, r#"{"key":"<deliverable>","action":"acquire","note":"<plan>"}"#))?;
+    apply(state, chat, room, call).map_err(Into::into)
+}
+fn apply(state: &mut State, chat: &str, room: &str, call: Call) -> Result<(Value, Option<Resolved>), &'static str> {
     if !valid_key(&call.key) {
         return Err(KEY_RULE);
     }

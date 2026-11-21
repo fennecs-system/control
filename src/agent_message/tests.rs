@@ -803,3 +803,23 @@ mod advisor;
 mod persistent;
 #[path = "tests/urgency.rs"]
 mod urgency;
+
+/// A wrong argument shape names the field and shows one valid call, which is
+/// itself the fix (so the generic room-read hint is not appended).
+#[test]
+fn a_wrong_argument_shape_names_the_field_and_shows_a_valid_call() {
+    struct Unreached;
+    impl MessageOps for Unreached {
+        fn message(&self, _: &AttemptRef<'_>, _: MessageCall) -> io::Result<MessageResult> { unreachable!("decoding fails first") }
+    }
+    let attempt = AttemptRef { run: "r", generation: "g", nonce: "n" };
+    let error = |args: Value| run(&Unreached, &attempt, &args).unwrap_err().to_string();
+    let unknown = error(json!({"chat_id":"c-1","message":"hi"}));
+    assert!(unknown.contains("unknown field `message`") && unknown.contains("`text`"), "{unknown}");
+    let missing = error(json!({"text":"hi"}));
+    assert!(missing.contains("missing field `chat_id`"), "{missing}");
+    for shown in [unknown, missing] {
+        assert!(shown.contains(r#"Example: control_agent_message {"chat_id":"#), "{shown}");
+        assert_eq!(crate::worker_tools::fixes::actionable("control_agent_message", &shown), shown);
+    }
+}

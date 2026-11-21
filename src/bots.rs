@@ -225,6 +225,13 @@ impl Bots {
             .filter(|definition| definition.chat.0 == chat && definition.restart == Restart::Permanent)
             .find_map(lifecycle::team)
     }
+    /// The approved advisor of the team rooted at `root`, if one runs: the
+    /// chat its members may ask (see `application::messages`).
+    pub(crate) fn team_advisor(&self, root: &str) -> Option<&str> {
+        self.supervisor.definitions()
+            .find(|definition| definition.restart == Restart::Permanent && lifecycle::team(definition) == Some(root))
+            .map(|definition| definition.chat.0.as_str())
+    }
 }
 
 pub(crate) fn now_ms() -> u64 {

@@ -222,17 +222,19 @@ fn dispatch_raw(
                 let Some(generation)=run.attempts.last().and_then(|a|a.workspace_id.clone()) else {return error("Missing attempt identity");};
                 let Some(nonce)=envelope["nonce"].as_str() else {return error("Missing request identity");};
                 let input=match serde_json::from_value(request["params"]["arguments"].clone()) {Ok(input)=>input,Err(_)=>return error("Expected a bounded list of agent objectives")};
+                let chat=run.chat_id.clone();
                 return match crate::spawning::request(&mut state,run_id,&generation,nonce,input,crate::storage::save) {
                     Ok(value)=>json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(Ok(value))}),
-                    Err(message)=>error(message),
+                    Err(message)=>error(&crate::delegation::refusal(&state,chat.as_deref(),message)),
                 };
             }
             if blocking_spawn {
                 let Some(nonce)=envelope["nonce"].as_str() else {return error("Missing request identity");};
                 let Ok(input)=serde_json::from_value(request["params"]["arguments"].clone()) else{return error("Expected a delegation objective and role");};
+                let chat=run.chat_id.clone();
                 return match crate::delegation::request(&mut state,run_id,nonce,input) {
                     Ok(value)=>json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":value.to_string()}],"isError":false}}),
-                    Err(message)=>error(message),
+                    Err(message)=>error(&crate::delegation::refusal(&state,chat.as_deref(),message)),
                 };
             }
             if request["params"]["name"]!="control_design_ask" && run.question.as_ref().is_some_and(|q|q.answer.is_none()&&run.attempts.last().is_some_and(|a|a.workspace_id.as_deref()==Some(&q.generation))) {return error("This attempt is pausing for a design answer; no more tools may run.");}
