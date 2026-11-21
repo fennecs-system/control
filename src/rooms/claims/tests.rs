@@ -186,3 +186,20 @@ fn a_claim_advances_when_it_becomes_done_or_resumes_from_blocked() {
     claim(&mut state, &a, json!({"key":"house","action":"acquire"}));
     assert_eq!(at(&state), 0, "a new incarnation starts unadvanced");
 }
+
+/// A wrong argument shape names the field or value and shows one valid
+/// acquire, which is itself the fix.
+#[test]
+fn a_wrong_claim_shape_names_the_field_and_shows_a_valid_acquire() {
+    let (mut state, a, _) = setup();
+    for (args, names) in [
+        (json!({"key":"wall","action":"claim"}), "unknown variant `claim`"),
+        (json!({"key":"wall","action":"acquire","owner":"me"}), "unknown field `owner`"),
+        (json!({"action":"acquire"}), "missing field `key`"),
+    ] {
+        let shown = call(&mut state, &a, "general", &args).unwrap_err().into_owned();
+        assert!(shown.contains(names) && shown.contains(r#"Example: control_room_claim {"key":"#), "{shown}");
+        assert_eq!(crate::worker_tools::fixes::actionable("control_room_claim", &shown), shown);
+    }
+    assert!(state.collective.claims.is_empty());
+}

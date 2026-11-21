@@ -422,7 +422,14 @@ fn disposition(state: &State, chat: &str, value: Value, adjusted: &mut Vec<Strin
             let (kind, name) = a.split_once(':').unwrap_or(("", a));
             (name == bare && wanted.is_none_or(|wanted| wanted == kind)) || kind == topic
         }).collect();
-        if matches.is_empty() {
+        // A finished routine (often a short transient one started this turn)
+        // leaves the subscriptions once its exit is queued for this chat; that
+        // queued exit is urgent and releases any wait.
+        let finished = wanted.is_none_or(|kind| kind == "watch")
+            && state.watches.iter().any(|w| w.id == bare && w.chat == chat && !w.active());
+        if matches.is_empty() && finished {
+            adjusted.push(format!("dropped {topic}: that routine already finished, so it is no longer a subscription; its unprocessed exit and notifications wake this chat without a wait topic"));
+        } else if matches.is_empty() {
             adjusted.push(format!("dropped {topic}: not a current subscription (waits cannot create subscriptions)"));
         } else {
             adjusted.push(format!("read {topic} as {}", matches.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(", ")));

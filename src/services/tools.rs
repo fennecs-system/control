@@ -89,7 +89,7 @@ fn decode(name: &str, args: &Value) -> io::Result<ServiceCall> {
         "control_service_stop" => Ok(ServiceCall::Stop(id())),
         "control_service_exec" => serde_json::from_value(args.clone())
             .map(ServiceCall::Exec)
-            .map_err(|_| io::Error::other("Expected service_id, command and optional timeout_seconds and wait_seconds")),
+            .map_err(|error| io::Error::other(crate::worker_tools::fixes::shape("control_service_exec", error, r#"{"service_id":"svc-<id>","command":"<shell command>"}"#))),
         "control_service_exec_status" => serde_json::from_value(args.clone())
             .map(ServiceCall::ExecStatus)
             .map_err(|_| io::Error::other("Expected service_id, execution_id and optional wait_seconds")),

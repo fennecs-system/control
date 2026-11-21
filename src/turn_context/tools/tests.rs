@@ -836,3 +836,26 @@ fn the_inbox_delivers_new_conversation_once_and_cut_entries_point_to_their_full_
     crate::chat::send(&mut state, &chat, "/steer Too late", "test").unwrap();
     assert!(inbox(&mut state, &id, |_| Ok(())).is_none(), "nothing after a staged handoff");
 }
+/// Run E: agents started a short transient routine, then named it in the same
+/// turn's wait. It had already exited, so its subscription was retired with
+/// its exit queued for the chat. The drop says so instead of implying the
+/// wait tried to create a subscription; a never-subscribed name keeps the
+/// general reason.
+#[test]
+fn a_wait_on_a_finished_routine_says_its_queued_exit_wakes_the_chat() {
+    let (mut state, id, generation) = fixture();
+    let chat = state.chats[0].id.clone();
+    crate::bots::command(&mut state, &chat, "on").unwrap();
+    let watch: crate::watches::Watch = serde_json::from_value(json!({
+        "id":"w-1","name":"dig","chat":chat,"service":"svc-a","generation":1,"permanent":false,"command":"node dig.js","stopped":true
+    })).unwrap();
+    state.watches.push(watch);
+    assert!(!crate::bots::wait_topics(&state, &chat).iter().any(|t| t.starts_with("watch:")));
+    let wait = hand_off(&mut state, &id, &generation, "finished", json!({"disposition":{"kind":"wait","topics":["watch:w-1","w-2"]}})).unwrap();
+    let adjusted = wait["adjusted"].to_string();
+    assert!(adjusted.contains("dropped watch:w-1: that routine already finished") && adjusted.contains("wake this chat without a wait topic"), "{adjusted}");
+    assert!(adjusted.contains("dropped w-2: not a current subscription"), "{adjusted}");
+    // Nothing named remains, so the wait keeps every subscription; the queued
+    // exit is urgent and releases it.
+    assert!(adjusted.contains("every current subscription"), "{adjusted}");
+}

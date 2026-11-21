@@ -160,3 +160,23 @@ fn a_member_asks_its_teams_advisor_and_the_question_wakes_it() {
     let woken = state.runtime.runs.iter().rfind(|r| r.chat_id.as_deref() == Some(advisor.as_str()) && r.status == "queued").expect("the advisor is woken");
     assert!(woken.objective.contains("read-only advisor") && woken.objective.contains("one long routine better"), "{}", woken.objective);
 }
+
+/// Run E refused 31 helper spawns from players wanting a second opinion and
+/// told them to report to the operator. With an approved advisor the refusal
+/// names it as a callable message instead; without one it is unchanged.
+#[test]
+fn a_spawn_rate_refusal_sends_members_to_their_approved_advisor() {
+    let (mut state, lead, builder, advisor, _) = team();
+    let limit = crate::delegation::HELPERS_SPENT;
+    assert_eq!(crate::delegation::refusal(&state, Some(&builder), limit), limit, "no approved advisor yet");
+    crate::bots::command(&mut state, &advisor, "on").unwrap();
+    for chat in [&builder, &lead] {
+        let shown = crate::delegation::refusal(&state, Some(chat), limit);
+        assert!(shown.starts_with("Agents woken by Control events have spawned enough helpers this hour."), "{shown}");
+        assert!(shown.contains(&format!("control_agent_message {{\"chat_id\":\"{advisor}\"")) && !shown.contains("operator"), "{shown}");
+        assert!(crate::worker_tools::fixes::names_fix(&shown));
+    }
+    let other = "Delegation depth limit reached (2).";
+    assert_eq!(crate::delegation::refusal(&state, Some(&builder), other), other);
+    // The advisor takes that question: see a_member_asks_its_teams_advisor_and_the_question_wakes_it.
+}

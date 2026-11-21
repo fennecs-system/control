@@ -140,10 +140,25 @@ fn spawn_rate(state: &State, run: &runtime::Run, additional: usize, now: u64) ->
         let holding = state.runtime.runs.iter().filter(|candidate| reserved(candidate) > 0 && mine(candidate));
         let turns = recent.iter().filter_map(parent).chain(holding).filter(|parent| automatic(&parent.kind) && parent.id != run.id).map(|parent| parent.id.as_str()).collect::<std::collections::HashSet<_>>();
         if turns.len() >= AUTOMATIC_SPAWN_TURNS_PER_WINDOW {
-            return Err("Agents woken by Control events have spawned enough helpers this hour. Report the blocker to the operator, or continue an existing child with control_agent_message.");
+            return Err(HELPERS_SPENT);
         }
     }
     Ok(())
+}
+/// Too many event-woken turns of one team spawned helpers this hour.
+pub(crate) const HELPERS_SPENT: &str = "Agents woken by Control events have spawned enough helpers this hour. Report the blocker to the operator, or continue an existing child with control_agent_message.";
+/// How both spawn-rate refusals end for a chat whose team has no advisor.
+const REPORT: &str = " Report the blocker to the operator, or continue an existing child with control_agent_message.";
+/// A spawn refusal as `chat` reads it. A spawn-rate refusal sends a member of
+/// a team with an approved advisor to that advisor for its second opinion
+/// (members may ask it; see `application::messages`), not to the operator.
+/// Every other refusal is unchanged.
+pub(crate) fn refusal(state: &State, chat: Option<&str>, message: &'static str) -> std::borrow::Cow<'static, str> {
+    let advisor = chat.and_then(|chat| state.bots.team_advisor(chat::team_root(state, chat)).filter(|advisor| *advisor != chat));
+    match (message.strip_suffix(REPORT), advisor) {
+        (Some(limit), Some(advisor)) => format!("{limit} For a second opinion ask your team's advisor: control_agent_message {{\"chat_id\":\"{advisor}\",\"text\":\"<question>\"}}. Or continue an existing child with control_agent_message.").into(),
+        _ => message.into(),
+    }
 }
 
 pub fn request(

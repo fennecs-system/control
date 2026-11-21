@@ -77,10 +77,19 @@ fn service_tools_decode_typed_calls_and_keep_lenient_service_ids() {
         error("control_service_start", json!({"command":"true","extra":1}))
             .contains("unknown field")
     );
-    assert_eq!(
-        error("control_service_exec", json!({"command":"true"})),
-        "Expected service_id, command and optional timeout_seconds and wait_seconds"
-    );
+    // A wrong exec shape names the field (or the command's own bound) and
+    // shows one valid call, which is itself the fix.
+    let example = r#"Example: control_service_exec {"service_id":"svc-<id>","command":"<shell command>"}"#;
+    for (args, names) in [
+        (json!({"command":"true"}), "missing field `service_id`"),
+        (json!({"service_id":"svc-a","cmd":"true"}), "unknown field `cmd`"),
+        (json!({"service_id":"svc-a","command":["ls"]}), "invalid type: sequence"),
+        (json!({"service_id":"svc-a","command":"x".repeat(16_001)}), "1–16000 bytes"),
+    ] {
+        let shown = error("control_service_exec", args);
+        assert!(shown.contains(names) && shown.ends_with(example), "{shown}");
+        assert_eq!(crate::worker_tools::fixes::actionable("control_service_exec", &shown), shown);
+    }
     assert_eq!(
         error("control_service_exec_status", json!({"service_id":"svc-a"})),
         "Expected service_id, execution_id and optional wait_seconds"
