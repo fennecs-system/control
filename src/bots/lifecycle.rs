@@ -670,7 +670,11 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
         if crate::delegation::is_judge(run) {
             continue;
         }
-        since[position].get_or_insert(scans[team_at[position]].settled);
+        // Retained peer evidence (a completed run without an attempt) is not
+        // a turn of its own: a member messaged every minute is still idle.
+        if !(run.attempts.is_empty() && run.status == "completed") {
+            since[position].get_or_insert(scans[team_at[position]].settled);
+        }
         busy[position] |= matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling");
         // Commands come from recent runs; the newest-first walk stops looking
         // once every one is resolved.

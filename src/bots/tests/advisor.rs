@@ -698,6 +698,10 @@ fn a_member_idle_with_a_working_claim_while_peers_work_is_one_fact_per_idle_spel
     work(&mut state, 3);
     reconcile_at(&mut state, 2, ok).unwrap();
     assert!(advisor_runs(&state, &advisor).is_empty(), "below the window of 12 / 3 team turns");
+    // A peer's message landing in the idler's chat is not a turn of its own.
+    let mut message = state.runtime.runs.iter().rfind(|run| run.chat_id.as_deref() == Some(idler.as_str())).unwrap().clone();
+    (message.id, message.status, message.kind, message.attempts) = ("peer-message-1".into(), "completed".into(), RunKind::AgentMessage, Vec::new());
+    state.runtime.runs.push(message);
     work(&mut state, 1);
     reconcile_at(&mut state, 3, ok).unwrap();
     let runs = advisor_runs(&state, &advisor);
