@@ -92,7 +92,6 @@ pub fn request_fault(request: &Value) -> Option<Value> {
     }
 }
 /// The message of a failed tool result; None for successes and protocol errors.
-#[cfg(test)]
 pub fn failure_text(response: &Value) -> Option<&str> {
     (response.get("error").is_none() && response["result"]["isError"] == true)
         .then(|| response["result"]["content"][0]["text"].as_str())
