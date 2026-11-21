@@ -140,5 +140,7 @@ fn a_team_brief_lists_each_member_s_activity() {
     member(&mut state, &root, 300);
     let markdown = brief(&state, Some(&root), now()).unwrap();
     let table = markdown.lines().filter(|line| line.starts_with("- Per member") || line.starts_with("  - ")).map(|line| line.len() + 1).sum::<usize>();
-    assert!(markdown.matches("\n  - ").count() == 6 && table < 1_200, "{table} bytes: {markdown}");
+    assert!(markdown.matches("\n  - ").count() == 5 && table < 1_200, "{table} bytes: {markdown}");
+    // A helper with nothing live is a count, not a row.
+    assert!(markdown.contains("\n  - 2 finished helper(s): 3.0k tok"), "{markdown}");
 }
