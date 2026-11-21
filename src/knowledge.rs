@@ -332,9 +332,17 @@ pub fn handle(
 ) -> bool {
     if ["/propose", "/review"].contains(&path) && method == "POST" {
         let fields=crate::fields(&String::from_utf8_lossy(body));
-        match crate::knowledge_tools::review_action(state,path,&fields,crate::storage::save) {
+        let result = crate::knowledge_tools::review_action(state,path,&fields,crate::storage::save);
+        let status = |error: &str| if error == crate::knowledge_tools::STALE {"409 Conflict"} else {"500 Internal Server Error"};
+        // Request replies (`Hive::review_knowledge`) read the outcome as JSON.
+        if fields.get("response").is_some_and(|r| r == "json") {
+            let (status,value) = match result {Ok(())=>("200 OK",serde_json::json!({"ok":true})),Err(error)=>(status(error),serde_json::json!({"error":error}))};
+            let _ = control_http::respond(stream,status,"application/json",value.to_string().as_bytes(),"",control_http::Policy::Page);
+            return true;
+        }
+        match result {
             Ok(())=>respond(stream,"303 See Other","","Location: /knowledge?mode=review\r\n"),
-            Err(message)=>respond(stream,"500 Internal Server Error",&crate::error_page(message,"/knowledge?mode=review"),""),
+            Err(message)=>respond(stream,status(message),&crate::error_page(message,"/knowledge?mode=review"),""),
         }
         return true;
     }

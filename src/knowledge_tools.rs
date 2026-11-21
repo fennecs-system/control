@@ -46,7 +46,7 @@ pub fn definitions() -> Vec<Value> {
     vec![
         json!({"name":"control.knowledge.search","description":"Search admitted claims and documents. Workers see their captured lens documents; ordinary notes are not verified facts. At most 10 concise results.","inputSchema":{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":200},"limit":{"type":"integer","minimum":1,"maximum":10}},"required":["query"],"additionalProperties":false},"annotations":{"readOnlyHint":true}}),
         json!({"name":"control.knowledge.read","description":"Read an admitted claim or selected document by search result ID. Text is paged in Unicode characters, at most 4000 per call. Notes are not verified facts.","inputSchema":{"type":"object","properties":{"id":{"type":"string","maxLength":200},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":4000}},"required":["id"],"additionalProperties":false},"annotations":{"readOnlyHint":true}}),
-        json!({"name":"control.knowledge.propose","description":"Propose one concise claim with evidence, scope and recheck condition. Pending until a local operator reviews it in Knowledge → Review. Does not edit documents or accepted facts. Local MCP callers supply their own local operator chat ID; workers use their bound chat.","inputSchema":{"type":"object","properties":{"claim":{"type":"string","minLength":1,"maxLength":280},"evidence":{"type":"string","minLength":1,"maxLength":1000},"scope":{"type":"string","minLength":1,"maxLength":300},"validity":{"type":"string","minLength":1,"maxLength":300},"chat":{"type":"string","maxLength":128}},"required":["claim","evidence","scope","validity"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
+        json!({"name":"control.knowledge.propose","description":"Propose one concise claim with evidence, scope and recheck condition. Propose only a verified finding other tasks can reuse. Pending until the operator reviews it; returns at once, so carry on. Does not edit documents or accepted facts. Local MCP callers supply their own local operator chat ID; workers use their bound chat.","inputSchema":{"type":"object","properties":{"claim":{"type":"string","minLength":1,"maxLength":280},"evidence":{"type":"string","minLength":1,"maxLength":1000},"scope":{"type":"string","minLength":1,"maxLength":300},"validity":{"type":"string","minLength":1,"maxLength":300},"chat":{"type":"string","maxLength":128}},"required":["claim","evidence","scope","validity"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
     ]
 }
 fn canonical(name: &str) -> &str {
@@ -335,13 +335,45 @@ pub fn local(
     propose(state, args, source, save)
 }
 
+/// Pending worker proposals from `chat` and the chats spawned below it, as
+/// operator requests (`pending_knowledge`). Decided only through [`review_action`].
+pub(crate) fn pending_json(state: &State, chat: &str) -> Vec<Value> {
+    state.collective.proposals.iter().enumerate().filter(|(_, p)| p.status == "pending")
+        .filter_map(|(index, p)| p.source.as_ref().filter(|s| crate::chat::within(state, &s.chat, chat)).map(|s| (index, p, s)))
+        .map(|(index, p, s)| json!({"claim_id":format!("claim:{index}"),"chat_id":s.chat,"claim":p.claim,"evidence":p.evidence,"scope":p.scope,"validity":p.validity,
+            "summary":format!("{}\nEvidence: {}\nScope: {}\nRecheck when: {}", p.claim, p.evidence, p.scope, p.validity)}))
+        .collect()
+}
+/// Chats with a pending proposal, for the node-wide request view.
+pub(crate) fn pending_chats(state: &State) -> impl Iterator<Item = &str> {
+    state.collective.proposals.iter().filter(|p| p.status == "pending").filter_map(|p| p.source.as_ref().map(|s| s.chat.as_str()))
+}
+/// The in-chat request panel: the same `/review` form as Knowledge → Review.
+pub(crate) fn pending_panel(pending: &[Value]) -> String {
+    pending.iter().map(|p| {
+        let text = |key: &str| crate::escape(p[key].as_str().unwrap_or(""));
+        format!("<article class='assistant-message pending-decision'><p class='message-status'>Knowledge proposal · <a target='_top' href='/knowledge?mode=review'>Review ↗</a></p><h3>{}</h3><dl><dt>Evidence</dt><dd>{}</dd><dt>Scope</dt><dd>{}</dd><dt>Recheck when</dt><dd>{}</dd></dl><form class='actions' method='post' action='/review' target='_top'><input type='hidden' name='id' value='{}'><button class='primary' name='decision' value='accepted'>Accept entry</button><button name='decision' value='rejected'>Reject</button></form></article>",
+            text("claim"), text("evidence"), text("scope"), text("validity"), text("claim_id").trim_start_matches("claim:"))
+    }).collect()
+}
+
+/// Why a review of a proposal that is not pending (or an invalid decision) is refused.
+pub(crate) const STALE: &str = "That proposal is no longer pending; see Knowledge → Review.";
 /// Local web admission is checkpointed separately from ordinary chat mutations.
+/// Knowledge → Review and request replies both decide here; a proposal that is
+/// no longer pending is refused.
 pub fn review_action(
     state: &mut State,
     path: &str,
     fields: &std::collections::HashMap<String, String>,
     save: impl FnOnce(&State) -> io::Result<()>,
 ) -> Result<(), &'static str> {
+    if path == "/review" {
+        let pending = fields.get("id").and_then(|id| id.parse::<usize>().ok()).and_then(|index| state.collective.proposals.get(index)).is_some_and(|p| p.status == "pending");
+        if !pending || !fields.get("decision").is_some_and(|d| d == "accepted" || d == "rejected") {
+            return Err(STALE);
+        }
+    }
     let count = state.collective.proposals.len();
     let old = fields
         .get("id")

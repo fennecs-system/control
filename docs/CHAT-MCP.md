@@ -39,7 +39,7 @@ Read tools have `readOnlyHint: true`.
 | `chats_list` | read | Lists chats, most recent first. Shows each chat's status, mode, parent and any pending folder request. Takes `limit` and `roots_only`. |
 | `chat_read` | read | Shows recent messages, replies and the latest activity events of each turn, as plain text. Page back with `before`. Set the page size with `limit` (at most 20), the events per turn with `activity` and the clipping with `max_chars`. A result is capped at 48 KiB. |
 | `chat_team` | read | Lists the chat and every agent chat spawned from it, with status, plus the live services they own. |
-| `chat_requests` | read | Lists everything the task waits on the operator for: design questions, bot and port requests, notices and folder requests. Each line has its ID and the chat to decide it in. |
+| `chat_requests` | read | Lists everything the task waits on the operator for: design questions, bot and port requests, notices, folder requests and knowledge proposals. Each line has its ID and the chat to decide it in. |
 | `chat_create` | write | Creates a DM. Takes an optional `title`, `model` (as `/model` accepts), `genes` (lens IDs) and `persona`. Returns the chat ID. |
 | `chat_send` | write | Sends a plain-text prompt as the local operator. |
 | `chat_model` | write | Selects the model for future turns (`/model`). With no model, it lists the choices. |
@@ -78,6 +78,7 @@ application functions under its state lock:
 
 Folder and port decisions use the same confirmed forms as the TUI. Bot and
 question decisions are the chat's own `/bot allow|deny` and `/answer` commands.
+Knowledge decisions post the Knowledge → Review form.
 Model selection and cancellation are `/model` and `/cancel`. The bridge builds
 these commands from validated single-word arguments.
 
@@ -87,20 +88,25 @@ TUI and Discord.
 ## Requests and notifications
 
 An MCP caller may *raise* folder requests (`chat_open`). Its runs' agents raise
-port, bot and folder requests and design questions as usual. Every kind appears
+port, bot and folder requests, design questions and knowledge proposals
+(`control_knowledge_propose`) as usual. Every kind appears
 in `control.requests.list`, and so in the same places:
 
 - `chat_requests`;
 - Manage → Permissions;
+- the DM's Requests drawer and the TUI;
 - the Discord adapter's notifications.
 
-The Discord notifications cover questions, bots, ports, notices and folder
-requests. Turn on forwarding in Manage → Integrations to get them.
+The Discord notifications cover questions, bots, ports, notices, folder
+requests and knowledge proposals. Turn on forwarding in Manage → Integrations to get them.
 
-You answer questions, bots and ports by Discord reply. Folder requests open the
+You answer questions, bots and ports by Discord reply, and accept or reject
+knowledge proposals the same way (`allow`/`accept` or `deny`/`reject`). A
+proposal is decided by the same review as Knowledge → Review, so a decision on
+one already reviewed is refused; the proposing agent never waits on it. Folder requests open the
 DM instead: approve them in Control, where the exact path is shown. Discord
 settings saved before folder requests were forwarded still forward them along
-with ports.
+with ports, and knowledge proposals along with questions.
 
 ## Asking the operator
 
@@ -146,7 +152,8 @@ anything:
 - folder access (`/open` grants host paths);
 - ports;
 - bots;
-- design questions.
+- design questions;
+- knowledge proposals.
 
 `chat_send` refuses these before contacting the server:
 
@@ -162,7 +169,8 @@ one switch per kind:
 - folder;
 - port;
 - bot;
-- question.
+- question;
+- knowledge.
 
 The bridge rereads the file on every call.
 

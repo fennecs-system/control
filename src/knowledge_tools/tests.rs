@@ -387,3 +387,39 @@ fn search_result_count_and_proposal_storage_are_bounded() {
     );
     assert_eq!(state.collective.proposals.len(), MAX_PROPOSALS);
 }
+#[test]
+fn a_proposal_is_an_operator_request_decided_only_through_review() {
+    use control::client::{channel, operator::{self, Command, Kind}};
+    let (mut state, id) = fixture();
+    let chat = state.runtime.runs[0].chat_id.clone().unwrap();
+    worker(&mut state, &id, "control_knowledge_propose", &input(), "request-1", |_| Ok(())).unwrap();
+    // Proposing pauses nothing: the worker's turn keeps running and asks no question.
+    assert!(state.runtime.runs[0].status == "running" && state.runtime.runs[0].question.is_none());
+    let groups = crate::chat::pending_requests(&state);
+    let group = groups.as_array().unwrap().iter().find(|g| g["chat_id"] == chat.as_str()).unwrap();
+    let pending = operator::pending(group);
+    let request = pending.iter().find(|p| p.kind == Kind::Knowledge).unwrap();
+    assert!(request.id == "claim:0" && request.body.contains("artifact:checked-result"), "{request:?}");
+    // The TUI reads the chat view; Discord forwards it with older settings too.
+    assert_eq!(operator::pending(&crate::chat::detail(&state, &chat).unwrap())[0].kind, Kind::Knowledge);
+    assert!(channel::Settings { enabled: true, kinds: vec![Kind::Question], ..Default::default() }.forwards(&chat, Kind::Knowledge));
+    let structured = channel::request::request(&channel::Settings::default(), "DM", "/dm", request, group);
+    assert_eq!(structured.actions.iter().map(|a| a.id).collect::<Vec<_>>(), ["allow", "deny", "open"]);
+    assert_eq!(channel::request::reply(Kind::Knowledge, "allow"), Some("accept"));
+    assert_eq!(operator::reply(request, "accept").unwrap(), Command::Knowledge { id: "claim:0".into(), accept: true });
+    assert_eq!(operator::reply(request, "deny").unwrap(), operator::knowledge("/knowledge reject claim:0").unwrap());
+    // A reply posts the Knowledge → Review form, so both change one state.
+    let review = |state: &mut State, body: &str| {
+        let mut out = Vec::new();
+        assert!(crate::knowledge::handle(&mut out, state, "POST", "/review", &Default::default(), "general", body.as_bytes()));
+        String::from_utf8(out).unwrap()
+    };
+    assert!(review(&mut state, "id=0&decision=rejected&response=json").starts_with("HTTP/1.1 200"));
+    assert_eq!(state.collective.proposals[0].status, "rejected");
+    assert!(crate::chat::pending_requests(&state).as_array().unwrap().is_empty());
+    // A stale or double decision is refused from either surface.
+    let again = review(&mut state, "id=0&decision=accepted&response=json");
+    assert!(again.starts_with("HTTP/1.1 409") && again.contains("no longer pending"), "{again}");
+    assert!(review(&mut state, "id=0&decision=accepted").starts_with("HTTP/1.1 409"));
+    assert_eq!(state.collective.proposals[0].status, "rejected");
+}
