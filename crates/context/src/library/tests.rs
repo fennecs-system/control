@@ -225,7 +225,7 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert_eq!(investigation.includes, ["evidence"]);
     assert!(investigation.tools.is_empty());
     let autonomy = Library::default().get("autonomy").unwrap().clone();
-    assert_eq!(autonomy.revision, 10);
+    assert_eq!(autonomy.revision, 11);
     assert!(autonomy.instructions.contains("routine steps need no evidence files, read-backs or proof records"));
     assert!(autonomy.instructions.contains("Never claim an outcome you have not observed"));
     assert!(autonomy.instructions.contains("when tooling work stops advancing the goal, stop and use what exists"));
@@ -303,7 +303,7 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     for revision in 1..=2 {
         assert!(previous.iter().any(|d| d.id == "ganglia" && d.revision == revision));
     }
-    for revision in 1..=9 {
+    for revision in 1..=10 {
         assert!(previous.iter().any(|d| d.id == "autonomy" && d.revision == revision));
     }
     for revision in 1..=17 {

@@ -720,3 +720,23 @@ fn a_member_idle_with_a_working_claim_while_peers_work_is_one_fact_per_idle_spel
     assert_eq!(runs.len(), 2);
     assert_eq!(facts(runs[1])[0].idle, idle);
 }
+
+#[test]
+fn a_persistent_member_with_no_claim_while_the_team_has_open_work_is_an_idle_fact() {
+    let (mut state, root) = fixture();
+    let (finished, worker, helper) = (spawned(&mut state, &root, "Finished"), spawned(&mut state, &root, "Worker"), spawned(&mut state, &root, "Helper"));
+    state.runtime.execution.advisor_stall_turns = 12;
+    // Finished did its slice and holds nothing; Worker still has open work.
+    claim(&mut state, &finished, "wall", "working", None);
+    claim(&mut state, &finished, "wall", "done", None);
+    claim(&mut state, &worker, "tower", "working", None);
+    command_at(&mut state, &finished, "on", Now(0)).unwrap();
+    let advisor = advisor(&mut state, &root);
+    reconcile_at(&mut state, 1, ok).unwrap();
+    for _ in 0..4 { turn(&mut state, &worker, "completed"); }
+    reconcile_at(&mut state, 2, ok).unwrap();
+    let runs = advisor_runs(&state, &advisor);
+    assert_eq!(runs.len(), 1);
+    assert_eq!(facts(runs[0])[0].idle, vec![lifecycle::Waiter { key: String::new(), chat: finished.clone() }], "a one-off helper that is not a bot is not reported: {helper}");
+    assert!(runs[0].objective.contains(&format!("idle member: member {finished} holds no claim")));
+}

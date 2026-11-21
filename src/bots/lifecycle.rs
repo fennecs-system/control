@@ -443,7 +443,11 @@ impl Facts {
             parts.push(format!("{} members report a similar blocker ({}): \"{}\"", shared.members.len(), shared.members.join(", "), shared.reason));
         }
         for idle in &self.idle {
-            parts.push(format!("idle claim holder: member {} holds working claim {} but has no turn running or queued and no running routine while other team turns kept settling", idle.chat, idle.key));
+            if idle.key.is_empty() {
+                parts.push(format!("idle member: member {} holds no claim and has no turn running or queued and no running routine while the team's claims are still open", idle.chat));
+            } else {
+                parts.push(format!("idle claim holder: member {} holds working claim {} but has no turn running or queued and no running routine while other team turns kept settling", idle.chat, idle.key));
+            }
         }
         if let Some(stall) = self.stalled {
             parts.push(format!("busy but stalled: {} team turns settled while {} claim(s) stayed open and none became done or resumed from blocked", stall.turns, stall.open));
@@ -708,6 +712,21 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
         if !busy[position] && since[position].unwrap_or(scans[team_at[position]].settled) >= idle_turns && team.len() < FAILING
             && !team.iter().any(|known| known.chat == claim.owner) && !state.watches.iter().any(|watch| watch.chat == claim.owner && watch.active()) {
             team.push(Waiter { key: claim.key.clone(), chat: claim.owner.clone() });
+        }
+    }
+    // And persistent members holding no live claim at all (a finished slice,
+    // nothing picked up) while their team still has working claims: an empty
+    // key. One-off helpers, the lead and observers are not members to nudge.
+    let open_teams = state.collective.claims.iter().filter(|claim| claim.status == Status::Working && !claim.abandoned)
+        .filter_map(|claim| member.get(claim.owner.as_str()).map(|&position| team_at[position])).collect::<std::collections::HashSet<_>>();
+    for chat in state.chats.iter().filter(|chat| chat.parent_chat.is_some()) {
+        let Some(&position) = member.get(chat.id.as_str()) else { continue };
+        let team = &mut idle[team_at[position]];
+        if open_teams.contains(&team_at[position]) && !busy[position] && since[position].unwrap_or(scans[team_at[position]].settled) >= idle_turns
+            && team.len() < FAILING && state.bots.persists(&chat.id) && !state.bots.advises(&chat.id)
+            && !state.collective.claims.iter().any(|claim| claim.owner == chat.id && !claim.abandoned && matches!(claim.status, Status::Working | Status::Blocked))
+            && !state.watches.iter().any(|watch| watch.chat == chat.id && watch.active()) {
+            team.push(Waiter { key: String::new(), chat: chat.id.clone() });
         }
     }
     for team in &mut idle {

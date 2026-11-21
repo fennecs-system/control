@@ -317,7 +317,10 @@ bot approval.
      its own latest turn. Unlike a quiet team, peers are still busy, so only
      this member sits with nothing that will wake it. The fact names the member
      and one such claim; it is reported once per idle spell, and the member's
-     next turn re-arms it;
+     next turn re-arms it; A persistent member
+     that holds no live claim at all while its team still has working claims is
+     reported the same way, as an idle member (one-off helpers, the lead and
+     observers are not);
    - a bottleneck: one live (working or blocked) claim that the claims of
      `advisor_bottleneck_members` (default 2) or more members other than its
      owner wait on, directly or transitively through `blocked_on`. The fact
