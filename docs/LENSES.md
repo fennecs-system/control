@@ -142,11 +142,15 @@ lens library is the procedure mechanism: there is no separate planner API, task
 queue, scheduler or provider-specific skill loader.
 
 Keep a short rolling backlog of milestones in the task's notes or shared room,
-and reference it instead of repeating it. Give each milestone a done-condition
-that is an observable outcome cheap to check (a count, size or state), and check
-it once when claiming the milestone done. For each active milestone record its
-done-condition, owner, real prerequisites and next action or release signal. Add,
-split, re-prioritise or drop milestones as evidence changes.
+and reference it instead of repeating it. Slice by outcome, not by role or
+resource: a milestone is a small piece of the finished result that one member
+can complete alone in a few turns, getting its own common inputs. Give each a
+done-condition that is an observable outcome cheap to check (a count, size or
+state), and check it once when claiming it done. Keep more open milestones than
+members so whoever finishes pulls the next; a milestone still open after several
+turns is too big, so split it or have a peer join it. A team that sliced by role
+(one builder, one supplier) finished nothing: builders waited on the supplier
+for material they could have fetched themselves.
 
 Build the smallest tool the current milestone needs, test it by reaching the
 done-condition, and extend it only when the next milestone needs more. Start with
@@ -167,10 +171,13 @@ Planning has no single point of failure:
 - The backlog is shared state; any member may revise it. A worker that finishes
   a milestone claims the next. If the backlog is empty or stale, or the steering
   chat is quiet, the worker proposes the next milestone in the room and claims it.
-- Claims, not permission or a central planner, keep two workers off the same
-  milestone. Claim shared deliverables, not personal roles. Claims are advisory
-  (see [Room notifications](ROOM-NOTIFICATIONS.md#claims)) and only help when
-  agents check them.
+- Claims, not permission or a central planner, prevent accidental duplicate
+  work. Claim shared deliverables, not personal roles. The claimant stays
+  accountable, but a peer may join a slow or stuck milestone without taking it
+  over. For an uncertain problem, two members may deliberately try different
+  approaches to one milestone, and a judge or whoever steers picks the result.
+  Claims are advisory (see [Room notifications](ROOM-NOTIFICATIONS.md#claims))
+  and only help when agents check them.
 
 Dependencies:
 
@@ -200,8 +207,10 @@ Communication:
   finding), briefly, stating the outcome without evidence paths. Routine outcomes
   stay in the agent's notes.
 - When several members report one blocker or milestones stall, whoever steers
-  re-plans or reassigns around it and escalates once. An operator question opens
-  with what is blocked, the impact and the requested decision.
+  splits stalled milestones smaller, moves members onto them or routes around
+  the blocker, and escalates once. Refreshing the backlog or only asking owners
+  to diagnose is not a response. An operator question opens with what is
+  blocked, the impact and the requested decision.
 - The steering chat stays responsive: it assigns goals, resolves consequential
   choices and unblocks, keeping turns short, and delegates implementation, long
   work and ongoing services to members peers can contact directly. A lead that
@@ -210,8 +219,10 @@ Communication:
   results (see [turn continuity](TURN-CONTINUITY.md#deadline-and-steering-notes))
   and a `timed_out` advisor fact.
 - Check existing task tools and peer findings before reimplementing a common
-  capability. Share a working implementation with its invocation and version
-  through existing artifacts or an explicitly shared service. Reuse does not
+  capability. Share a reusable finding (a working tool with its invocation and
+  version, a method or a proof step) once, where the team will find it: existing
+  artifacts, an explicitly shared service or knowledge review (proposals are not
+  admitted automatically). Reuse does not
   require sharing a process or mutable state, and existing access controls still
   apply.
 
@@ -225,36 +236,25 @@ interventions) before claiming it.
 
 ## Bounded investigation
 
-The optional `investigation` lens includes `evidence` and supplies a procedure
-over existing tools. It adds no scheduler, experiment executor or tool API. When
-an assumption or repeated failed action blocks a plan:
+The optional `investigation` lens includes `evidence` and is prompt guidance
+over existing tools, not a scheduler, experiment executor or host-enforced
+counter. When a failed action or an unchanged observation blocks a plan:
 
-1. Read prior task notes and state the blocker with evidence references.
-2. Form a hypothesis and choose the smallest authorized probe, recording the
-   expected observation and what would disconfirm it.
-3. Run the probe with existing tools; record the result and next decision.
-   Repeating an unchanged rejected action is not a new experiment.
-4. Use at most three distinct probes per approach unless the operator sets
-   another allowance, then stop repeating it and compare established
-   alternatives. A materially different adapter, proxy or tool starts a fresh
-   allowance; record why it addresses the failure. Renaming the investigation,
-   changing a minor parameter or handing it to another worker does not.
-   Overall effort, resource and model budgets apply across approaches. Do not
-   present this default as an operator-imposed limit.
-5. Check known alternatives and peer findings before escalating. Reaching three
-   probes alone does not require operator permission: continue an authorized,
-   reversible alternative that preserves the requested outcome. Use the
-   design-question path when no justified alternative remains, or before
-   changing the goal, broadening access, exceeding the user's budget or taking a
-   consequential action outside the mandate. Otherwise do independent useful
-   work or wait on a real dependency.
+- Do not repeat the identical action; a status query or the same rejected retry
+  is not a new try. Check notes for earlier failures, then change one relevant
+  thing per try.
+- After about three distinct tries at one approach, switch to a materially
+  different approach or ask a peer. Renaming it, changing a minor parameter or
+  handing it to another worker is not a new approach.
+- Prefer an authorized, reversible alternative that preserves the requested
+  outcome. Escalate once through the design-question path when none remains, or
+  before changing the goal, broadening access, exceeding the user's budget or
+  acting outside the mandate; otherwise do independent useful work or wait on a
+  real dependency.
 
-Keep the record (blocker, hypothesis, probe, expected and actual evidence, next
-decision) in the task's notes and handoff. On restart, inspect uncertain outcomes
-before retrying. Verified reusable findings can be proposed for knowledge review;
-they are not admitted automatically. The allowance is prompt guidance, not a
-host-enforced counter, and grants no authority. Whether it helps a given model or
-workload should be measured in opt-in trials.
+Earlier revisions asked for a written hypothesis, expected observation and
+disconfirming result per probe. Models followed that literally, writing one
+micro-probe per turn instead of acting, so the record-keeping was dropped.
 
 ## Team advisor
 
