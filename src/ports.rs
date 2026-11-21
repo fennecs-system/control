@@ -223,7 +223,7 @@ fn accessible(state: &State, port: &Port, run: &crate::runtime::Run, node: &Node
     port.node == *node && port.actor == run.actor && state.services.iter().any(|service|
         service.resource.id == port.service && service.resource.generation == port.generation
         && service.resource.owner.chat.as_str() == port.chat
-        && crate::services::accessible(service,node,run))
+        && crate::services::accessible(state,service,node,run))
 }
 fn service<'a>(state: &'a State, port: &Port, time: u64) -> io::Result<&'a Service> {
     identity::authorize(&port.actor, Action::Task).map_err(fail)?;
@@ -369,7 +369,7 @@ fn admit(
         .iter()
         .find(|s| {
             s.resource.id == input.service_id
-                && crate::services::accessible(s, &node, run)
+                && crate::services::accessible(state, s, &node, run)
                 && matches!(s.resource.phase, Phase::Running(_))
                 && !s.resource.lease.expired(now())
         })

@@ -341,7 +341,7 @@ pub(crate) fn plan(
                         == Some(service.resource.owner.node.as_str())
                 })
                 .filter(|service| {
-                    crate::services::accessible(service, &service.resource.owner.node, run)
+                    crate::services::direct(service, &service.resource.owner.node, run)
                 })
                 .ok_or("Share only services this attempt can access")?;
             if matches!(
@@ -503,7 +503,7 @@ pub(crate) fn plan(
     queued.resource_grants = state
         .services
         .iter()
-        .filter(|service| crate::services::accessible(service, &service.resource.owner.node, from))
+        .filter(|service| crate::services::direct(service, &service.resource.owner.node, from))
         .map(Service::grant)
         .collect::<Vec<Grant>>();
     // Peer messages, any message to an approved persistent bot, and every

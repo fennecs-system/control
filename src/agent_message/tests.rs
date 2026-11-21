@@ -446,7 +446,7 @@ fn peer_messages_share_only_explicitly_selected_accessible_service_generations()
     handle(&mut state, &attempt, call(), |_| Ok(())).unwrap();
     let queued = state.runtime.runs.last().unwrap();
     assert_eq!(queued.resource_grants, vec![state.services[0].grant()]);
-    assert!(crate::services::accessible(
+    assert!(crate::services::direct(
         &state.services[0],
         &state.services[0].resource.owner.node,
         queued
@@ -566,14 +566,14 @@ fn explicit_late_service_grants_reach_only_the_queued_turn_and_survive_continuat
         .find(|run| run.chat_id.as_deref() == Some(&child))
         .unwrap()
         .clone();
-    assert!(!crate::services::accessible(
+    assert!(!crate::services::direct(
         &state.services[0],
         &node,
         &before_child
     ));
     send(&mut state, "plain", &child).unwrap();
     assert!(
-        !crate::services::accessible(
+        !crate::services::direct(
             &state.services[0],
             &node,
             state.runtime.runs.last().unwrap()
@@ -592,13 +592,13 @@ fn explicit_late_service_grants_reach_only_the_queued_turn_and_survive_continuat
         nonce: "share",
     };
     let response = handle(&mut state, &attempt, call(), |_| Ok(())).unwrap();
-    assert!(crate::services::accessible(
+    assert!(crate::services::direct(
         &state.services[0],
         &node,
         state.runtime.runs.last().unwrap()
     ));
     assert!(
-        !crate::services::accessible(&state.services[0], &node, &before_child),
+        !crate::services::direct(&state.services[0], &node, &before_child),
         "running or finished attempts are immutable"
     );
     let count = state.runtime.runs.len();
@@ -625,14 +625,14 @@ fn explicit_late_service_grants_reach_only_the_queued_turn_and_survive_continuat
     )
     .unwrap();
     restored.runtime.runs.push(continuation);
-    assert!(crate::services::accessible(
+    assert!(crate::services::direct(
         &restored.services[0],
         &node,
         restored.runtime.runs.last().unwrap()
     ));
     restored.services[0].resource.generation = serde_json::from_value(json!(2)).unwrap();
     assert!(
-        !crate::services::accessible(
+        !crate::services::direct(
             &restored.services[0],
             &node,
             restored.runtime.runs.last().unwrap()
@@ -747,7 +747,7 @@ fn late_grants_survive_design_answers_inserted_before_the_grant_turn() {
             }
         }
         assert!(
-            crate::services::accessible(
+            crate::services::direct(
                 &restored.services[0],
                 &restored.services[0].resource.owner.node,
                 restored.runtime.runs.last().unwrap()

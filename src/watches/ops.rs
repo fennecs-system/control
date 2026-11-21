@@ -109,7 +109,7 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
     };
     let chat = caller.chat_id.clone().unwrap_or_default();
     let reachable = |state: &State, watch: &Watch| watch.chat == chat
-        || state.services.iter().any(|service| service.resource.id.as_str() == watch.service && crate::services::accessible(service, &node, &caller));
+        || state.services.iter().any(|service| service.resource.id.as_str() == watch.service && crate::services::accessible(state, service, &node, &caller));
     match call {
         WatchCall::Start { service_id, name, command, permanent, wake, wake_policy, notifications, salience } => {
             let id = format!("w-{}", digest(&[attempt.run, attempt.generation, attempt.nonce, &service_id, &name]));
@@ -122,8 +122,8 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
                     return Err(fail("This chat already runs 8 watches; stop one first"));
                 }
                 let service = state.services.iter()
-                    .find(|service| service.resource.id.as_str() == service_id && crate::services::accessible(service, &node, &caller))
-                    .ok_or_else(|| fail("Service is not owned by or granted to this chat"))?
+                    .find(|service| service.resource.id.as_str() == service_id && crate::services::accessible(&state, service, &node, &caller))
+                    .ok_or_else(|| fail("Service is not owned by this chat or its team"))?
                     .binding_snapshot();
                 let proxy = crate::ports::proxy_exports(&state, &service);
                 (service, proxy)

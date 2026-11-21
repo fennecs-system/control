@@ -296,7 +296,7 @@ fn one_shot_retains_grants_received_after_arming() {
     reconcile(&mut state, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.len(), 3);
     assert_eq!(state.runtime.runs[2].kind, RunKind::RoomNotification);
-    assert!(crate::services::accessible(
+    assert!(crate::services::direct(
         &state.services[0],
         &state.services[0].resource.owner.node,
         &state.runtime.runs[2]
@@ -372,7 +372,7 @@ fn one_shot_waits_for_idle_and_survives_failed_checkpoint_and_restart() {
     reconcile(&mut state, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.len(), 2);
     assert!(
-        crate::services::accessible(
+        crate::services::direct(
             &state.services[0],
             &state.services[0].resource.owner.node,
             &state.runtime.runs[1]
@@ -400,7 +400,7 @@ fn one_shot_waits_for_idle_and_survives_failed_checkpoint_and_restart() {
     assert_eq!(restored.collective.room_watches[0].delivered, delivered);
     restored.services[0].resource.generation = serde_json::from_value(json!(2)).unwrap();
     assert!(
-        !crate::services::accessible(
+        !crate::services::direct(
             &restored.services[0],
             &restored.services[0].resource.owner.node,
             &restored.runtime.runs[1]

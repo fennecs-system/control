@@ -350,13 +350,13 @@ fn captured_resource_handoff_is_exact_and_does_not_reown_ports() {
     child.id = "child-run".into();
     child.chat_id = Some(child_chat);
     state.runtime.runs.push(child);
-    assert!(!crate::services::accessible(
+    assert!(!crate::services::direct(
         &state.services[0],
         &node,
         &state.runtime.runs[1]
     ));
     state.runtime.runs[1].resource_grants = grants;
-    assert!(crate::services::accessible(
+    assert!(crate::services::direct(
         &state.services[0],
         &node,
         &state.runtime.runs[1]
@@ -399,7 +399,7 @@ fn captured_resource_handoff_is_exact_and_does_not_reown_ports() {
     ));
     let mut denied = restored.runtime.runs[1].clone();
     denied.actor = Actor::Unknown;
-    assert!(!crate::services::accessible(
+    assert!(!crate::services::direct(
         &restored.services[0],
         &node,
         &denied
@@ -408,12 +408,12 @@ fn captured_resource_handoff_is_exact_and_does_not_reown_ports() {
     let mut persona = crate::delegation::lineage(&denied);
     persona.role = crate::delegation::Role::Judge;
     denied.persona = Some(persona);
-    assert!(!crate::services::accessible(
+    assert!(!crate::services::direct(
         &restored.services[0],
         &node,
         &denied
     ));
-    assert!(!crate::services::accessible(
+    assert!(!crate::services::direct(
         &restored.services[0],
         &"other-node".to_owned().try_into().unwrap(),
         &restored.runtime.runs[1]
@@ -425,7 +425,7 @@ fn captured_resource_handoff_is_exact_and_does_not_reown_ports() {
         &state.runtime.runs[1],
         &node
     ));
-    assert!(!crate::services::accessible(
+    assert!(!crate::services::direct(
         &state.services[0],
         &node,
         &state.runtime.runs[1]

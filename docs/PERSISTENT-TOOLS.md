@@ -31,14 +31,14 @@ To share a service created after spawning, attach it to a
   separate operator decision. Omitting `services` transfers no authority.
 - Retries are idempotent; a failed checkpoint rolls back the message and grants.
 
-Stopping needs no grant inside a team. Any non-judge attempt can stop a service
-owned by a same-actor chat in its own task tree (the top-level chat and every
-chat spawned beneath it), so a lead can stop its workers' services and a worker
-its lead's or a sibling's. Stop releases capacity and reads nothing; the owner's
-`/workspace` is retained. `control_service_status` without `service_id` lists
-those teammates' live services as `team_services`. Exec, copy, attach and logs
-still need ownership or a grant, and a teammate's stop result omits the owner's
-output and executions.
+A service belongs to its team, not to the chat that started it. Any non-judge
+attempt can use (exec, copy, attach, logs, watches, observations, ports) and stop
+a service owned by a same-actor chat in its own task tree (the top-level chat and
+every chat spawned beneath it), whenever either was started, with no grant.
+`control_service_status` lists them with the chat's own. Grants remain for
+sharing a service a chat owns or was granted with a chat outside that tree; a
+teammate's stop result omits the owner's output and executions. Other actors,
+other nodes and judges are refused.
 
 Delivery, wake and urgency rules for peer messages are in
 [room notifications](ROOM-NOTIFICATIONS.md). Peer messages are coordination

@@ -122,7 +122,7 @@ fn declared(state: &State, run: &str) -> Option<(String, Declaration)> {
 fn target(state: &State, chat: &str, service: &str) -> Option<Service> {
     let session = state.chats.iter().find(|session| session.id == chat)?;
     let latest = &state.runtime.runs[crate::chat::latest_task(state, chat, &session.actor)?];
-    crate::services::probe_target(state, service, |s| s.live() && crate::services::accessible(s, &s.resource.owner.node, latest))
+    crate::services::probe_target(state, service, |s| s.live() && crate::services::accessible(state, s, &s.resource.owner.node, latest))
 }
 /// A watch's newest explicit notification, else its latest lines, and whether
 /// it has ended. No engine query: these are already in state.
@@ -454,14 +454,14 @@ fn set_with(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, input: Input, 
                     return Err(fail("command must be 1–4000 bytes"));
                 }
                 if !state.services.iter().any(|s| s.resource.id.as_str() == service && s.live()
-                    && crate::services::accessible(s, &s.resource.owner.node, run)) {
+                    && crate::services::accessible(&state, s, &s.resource.owner.node, run)) {
                     return Err(fail("Observe only a running service this chat can use"));
                 }
                 Some(Source::Command { service, command })
             }
             (None, None, Some(watch), false) => {
                 let owned = state.watches.iter().find(|w| w.id == watch).is_some_and(|w| w.chat == chat
-                    || state.services.iter().any(|s| s.resource.id.as_str() == w.service && crate::services::accessible(s, &s.resource.owner.node, run)));
+                    || state.services.iter().any(|s| s.resource.id.as_str() == w.service && crate::services::accessible(&state, s, &s.resource.owner.node, run)));
                 if !owned {
                     return Err(fail("Observe only a watch of this chat or of a service it can use"));
                 }

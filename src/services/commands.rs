@@ -382,8 +382,8 @@ pub(super) fn owned(
     state
         .services
         .iter()
-        .position(|s| s.resource.id.as_str() == service && accessible(s, node, active))
-        .ok_or_else(|| fail("Service is not owned by this chat"))
+        .position(|s| s.resource.id.as_str() == service && accessible(state, s, node, active))
+        .ok_or_else(|| fail("Service is not owned by this chat or its team"))
 }
 pub(super) fn exec(shared: &Arc<Mutex<State>>, run: &str, generation: &str, nonce: &str, node: &NodeId, input: Input) -> io::Result<Value> {
     // An invalid wait refuses the request before anything is submitted.

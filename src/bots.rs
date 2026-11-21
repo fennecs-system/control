@@ -1072,7 +1072,7 @@ fn reconcile_with_wake_at(state: &mut State, now: u64, mut save: impl FnMut(&Sta
             crate::chat::latest_task(state, chat, &published.actor).is_none_or(|latest|
                 state.runtime.runs[latest].resource_grants.iter().all(|grant|
                     state.services.iter().filter(|service| grant.matches(service)).all(|service|
-                        crate::services::accessible(service, &service.resource.owner.node, published))))
+                        crate::services::accessible(state, service, &service.resource.owner.node, published))))
         });
         for range in &working.processed {
             let topic=match range {
