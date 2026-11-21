@@ -60,6 +60,7 @@ non-Rust runtimes stay inside explicitly configured tool/agent containers.
 | P1 | [V1 Vault](#v1-manage-vault-and-scoped-secret-injection) | Agents use secrets by opaque reference; values never reach model context. |
 | P2 | [U2 interactive browser](#u2-computer-use-starting-with-an-interactive-browser); [W2 recipes](#w2-a-small-workflow-layer) | Scoped browser sessions; validated recipes over spawn/wait/message. |
 | P2 | [M1 follow-ups](#m1-model-follow-ups) | Hosted API adapters; local parallel tools; multi-model review turns. |
+| Later | [M2 `/dream`](#m2-dream-an-entropy-step-for-the-memory-tree) | Direction only: compress a chat's Memory Tree back into its useful region, judged by the compression scores. |
 | P2 | [L1 personas](#l1-versioned-personas-and-soulmd) (first slice shipped); [L2/L3 self-improvement](#l2l3-a-reviewed-self-improvement-loop) | Host-installed behaviours, procedure revisions; evaluation and admission. |
 | P2 | [H1 layered control](#h1-layered-control) | Fewer model turns per milestone in a paired trial. |
 | P2 | [I1 immune system](#i1-immune-system--antibodies-and-intel): antibodies, pathology facts, intel briefs | First slice in review; next a Google Workspace `Transport` and a paired trial of antibody notes. |
@@ -317,6 +318,28 @@ Every new attempt is a fresh provider session rebuilt from Control's committed
 journal. Provider caches are optimisations, never the authority for task state.
 Benchmark hardware, latency, memory and quality before choosing a runtime; do not
 add a host Python/Node adapter.
+
+## M2: `/dream`, an entropy step for the Memory Tree
+
+A note of direction, not scheduled work.
+
+An agent is useful inside a bounded region of context. With too little it cannot
+find a good trajectory; with too much it forgets, repeats itself and drifts.
+Between the two is a region where the context is compressed enough to hold the
+objective, the facts that matter and the next step. Long runs leave that region:
+Run D and Run E both spent tens of millions of tokens while claims stalled.
+
+`/dream` would be the step that brings a chat back into it: an offline pass over
+its [Memory Tree](LOCAL-MODELS.md#memory-tree-model) that lowers entropy by
+merging summaries into strict fact lists, dropping what later turns superseded
+and keeping lookups instead of copies. Being lossy is acceptable when the loss is
+measured: the Memory Tree compression scores are the yardstick, and a dream that
+lowers them is rejected.
+
+Open questions before any of it is built: what triggers a dream (idle time, a
+size or score threshold, the operator), whether a polluted worker restarts from
+its objectives plus the dreamed facts, and how much loss a task tolerates. It
+must reuse the Memory Tree and its scores, not add a second memory.
 
 ## L1: versioned personas and SOUL.md
 
