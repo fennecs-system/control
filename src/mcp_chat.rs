@@ -67,7 +67,7 @@ const TOOLS: &[Tool] = &[
     Tool { name: "chat_requests", write: false, description: "List what a task is waiting on the operator for: design questions, bot requests, port approvals, notices and folder (/open) requests across its team. Read only: the operator decides them in Control.",
         schema: || json!({"type":"object","properties":{"id":{"type":"string","description":ID}},"required":["id"]}) },
     Tool { name: "chat_create", write: true, description: "Create a DM as the local operator, optionally with a title, model (as /model accepts, e.g. codex:MODEL or claude:opus), genes (lens IDs; its DNA) and persona. Returns its ID. Send the prompt with chat_send.",
-        schema: || json!({"type":"object","properties":{"title":{"type":"string","minLength":1,"maxLength":80},"model":{"type":"string","maxLength":128},"genes":{"type":"array","items":{"type":"string"},"maxItems":32},"persona":{"type":"string","maxLength":128}}}) },
+        schema: || json!({"type":"object","properties":{"title":{"type":"string","minLength":1,"maxLength":32},"model":{"type":"string","maxLength":128},"genes":{"type":"array","items":{"type":"string"},"maxItems":32},"persona":{"type":"string","maxLength":128}}}) },
     Tool { name: "chat_send", write: true, description: "Send a prompt to a chat as the local operator, starting or queueing a turn. Plain text only: slash commands are refused (use chat_model, chat_genes, chat_cancel), as are improve-mode chats and chats waiting on a design question.",
         schema: || json!({"type":"object","properties":{"id":{"type":"string","description":ID},"message":{"type":"string","minLength":1,"maxLength":control_context::limits::CHAT_MESSAGE_CHARS}},"required":["id","message"]}) },
     Tool { name: "chat_model", write: true, description: "Select the model for a chat's future turns (as /model does); active turns keep theirs. Omit model to list the configured choices.",
@@ -346,7 +346,8 @@ fn design_ask(remote: &mut impl Remote, args: &Value) -> io::Result<String> {
 fn chat_create(remote: &mut impl Remote, args: &Value) -> io::Result<String> {
     let title = match args.get("title") {
         None | Some(Value::Null) => None,
-        Some(Value::String(title)) if !title.trim().is_empty() => Some(title.trim()),
+        // Refuse a name /rename would refuse before the chat exists, not after.
+        Some(Value::String(title)) if !title.trim().is_empty() => Some(crate::callsigns::validate(title).map_err(fail)?),
         _ => return Err(fail("title must be non-empty text.")),
     };
     let model = token(args, "model")?;
