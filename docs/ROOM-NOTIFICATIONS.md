@@ -63,10 +63,6 @@ blockers in `record` posts.
 `control_agent_message` reaches a descendant or a worker in the same spawned
 task tree. Messages are retained conversation evidence, not executable
 continuations, and wake nobody unless the sender sets `urgent: true`.
-A member's message to its own lead (the task root) is instead posted as that
-member's `record` post in the team room, which the lead reads; it never wakes
-the lead or queues a turn, even when urgent, and cannot carry service grants.
-The escalation path for an unresolvable blocker is a blocked claim.
 
 - **Non-urgent.** A running recipient gets it once at the end of its next
   model request ([inbox](TURN-CONTINUITY.md#control_turn_context)), and it is
@@ -89,7 +85,6 @@ The escalation path for an unresolvable blocker is a blocked claim.
 | [Advisor note](LENSES.md#team-advisor) to the lead | yes |
 | Urgent message to a bot or a descendant | yes |
 | Non-urgent message | no; carried by the next wake |
-| Member message to its lead | no; a team-room `record` post |
 
 Retained messages are never starved. A persistent bot's supervisor defers them:
 they ride with whatever wakes the bot next, and if nothing does within

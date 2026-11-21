@@ -90,3 +90,55 @@ fn the_operator_call_saves_the_brief_under_the_state_directory() {
     assert!(tool(&state, &json!({})).unwrap()["path"].is_null(), "reading does not write");
     assert!(tool(&state, &json!({"chat":"../x"})).is_err());
 }
+
+/// A member chat of `root` whose one turn started `ago` seconds before now.
+fn member(state: &mut State, root: &str, ago: u64) -> String {
+    let chat = crate::chat::create(state);
+    state.chats.iter_mut().find(|session| session.id == chat).unwrap().parent_chat = Some(root.to_owned());
+    crate::chat::send(state, &chat, "Work", "test").unwrap();
+    let run = state.runtime.runs.last_mut().unwrap();
+    run.status = "completed".into();
+    run.id = format!("{:x}-t", u128::from(now() - ago - 40) * 1_000_000_000);
+    run.attempts = vec![crate::usage::Attempt { started_unix: now() - ago, elapsed_ms: 90_000,
+        tokens: Some(control_ai::Tokens { input_tokens: 5_000, cached_input_tokens: 4_000, output_tokens: 500 }), ..Default::default() }];
+    chat
+}
+fn claim(state: &mut State, owner: &str, key: &str, status: &str) {
+    state.collective.claims.push(serde_json::from_value(json!({"room":"general","key":key,"owner":owner,"status":status,"revision":1})).unwrap());
+}
+
+#[test]
+fn a_team_brief_lists_each_member_s_activity() {
+    let mut state = State::default();
+    let (root, _) = team(&mut state, "Build a castle");
+    let active = member(&mut state, &root, 60);
+    crate::chat::send(&mut state, &active, "Next", "test").unwrap();
+    state.runtime.runs.last_mut().unwrap().status = "running".into();
+    claim(&mut state, &active, "wall", "working");
+    let holder = member(&mut state, &root, 900);
+    claim(&mut state, &holder, "gate", "working");
+    // A peer's message is retained as a completed run with no attempt: not a turn.
+    crate::chat::send(&mut state, &holder, "Peer note", "test").unwrap();
+    state.runtime.runs.last_mut().unwrap().status = "completed".into();
+    let free = member(&mut state, &root, 1_200);
+    claim(&mut state, &free, "roof", "done");
+    state.watches.push(serde_json::from_value(json!({"id":"w","name":"n","chat":free,"service":"s","generation":1,"permanent":true,"command":"c","stopped":false})).unwrap());
+    let markdown = brief(&state, Some(&root), now()).unwrap();
+    let line = |chat: &str| {
+        let name = crate::callsigns::name_or_id(&state.chats, chat).into_owned();
+        markdown.lines().find(|line| line.starts_with(&format!("  - {name} ("))).unwrap_or_else(|| panic!("{name}: {markdown}")).to_owned()
+    };
+    assert!(line(&root).contains("(lead): 0 turns · no turn · idle · no claim"), "{markdown}");
+    assert_eq!(line(&active), format!("  - {} (helper): 1 turns · 1m ago · running · wall working · 90s/40s · 1.5k tok", crate::callsigns::name_or_id(&state.chats, &active)));
+    assert!(line(&holder).contains(": 1 turns · 15m ago · idle · gate working · 90s/40s"), "a peer message is not a turn: {markdown}");
+    assert!(line(&free).contains(": 1 turns · 20m ago · idle · no claim, 1 done · 1 routine(s) ·"), "{markdown}");
+    // The lead first, then the most recently active.
+    let order = [&root, &active, &holder, &free].map(|chat| markdown.find(&line(chat)).unwrap());
+    assert!(order.is_sorted(), "{markdown}");
+    // It stays small: models read it on every patrol.
+    claim(&mut state, &free, "a-long-deliverable-name-for-the-north-tower", "working");
+    member(&mut state, &root, 300);
+    let markdown = brief(&state, Some(&root), now()).unwrap();
+    let table = markdown.lines().filter(|line| line.starts_with("- Per member") || line.starts_with("  - ")).map(|line| line.len() + 1).sum::<usize>();
+    assert!(markdown.matches("\n  - ").count() == 6 && table < 1_200, "{table} bytes: {markdown}");
+}

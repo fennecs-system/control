@@ -577,7 +577,7 @@ fn when(seconds: u64) -> String {
     format!("{} {:02}:{:02}", crate::usage::day_label(seconds), day / 3600, day % 3600 / 60)
 }
 /// `1234567` as `1.2M`.
-fn compact(n: u64) -> String {
+pub(crate) fn compact(n: u64) -> String {
     match n {
         0..1_000 => n.to_string(),
         1_000..1_000_000 => format!("{:.1}k", n as f64 / 1e3),

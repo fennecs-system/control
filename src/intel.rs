@@ -5,8 +5,10 @@
 //!
 //! - `control.intel.brief` (operator) and `control_intel_brief` (worker)
 //!   render an **intel brief** in Markdown: per team its goal, progress (claims
-//!   and score deltas), cost (tokens), observed pathologies and open operator
-//!   requests, over the last 24 hours. A worker reads its own team; an approved
+//!   and score deltas), cost (tokens), a bounded per-member activity table
+//!   (turns, idle time, claims, routines, median turn and queue time, fresh
+//!   tokens), observed pathologies and open operator requests, over the last
+//!   24 hours. A worker reads its own team; an approved
 //!   antibody reads any team or the whole node. The operator call can save the
 //!   brief under the state directory (`intel/brief-YYYY-MM-DD.md`).
 //! - `control_operator_notify` (opt-in through the `operator.notify` lens tool,
@@ -104,6 +106,61 @@ struct Team<'a> {
     done: usize,
     open: usize,
     requests: (usize, usize, usize),
+    /// Its chats, as positions in `state.chats`.
+    chats: Vec<usize>,
+}
+
+/// Rows of a team's member table.
+const MEMBER_ROWS: usize = 12;
+/// One member chat's activity: turns in the window, its newest turn of its
+/// own, what runs now, its claims and routines, and per-turn timings.
+#[derive(Default)]
+struct Member<'a> {
+    turns: usize,
+    last: Option<u64>,
+    now: Option<&'static str>,
+    judge: bool,
+    live: Vec<(&'a str, &'static str)>,
+    done: usize,
+    routines: usize,
+    seconds: Vec<u64>,
+    waits: Vec<u64>,
+    fresh: u64,
+}
+fn median(values: &mut [u64]) -> Option<u64> {
+    values.sort_unstable();
+    values.get(values.len() / 2).copied()
+}
+
+/// The member table: the lead first, then the most recently active. A
+/// retained peer message (a run with no attempt) is not a turn of its own.
+fn member_table(state: &State, team: &Team<'_>, activity: &HashMap<&str, Member<'_>>, callsigns: &[crate::callsigns::Callsign], at: u64, out: &mut String) {
+    let none = Member::default();
+    let mut rows = team.chats.iter().map(|&i| (&state.chats[i], callsigns[i], activity.get(state.chats[i].id.as_str()).unwrap_or(&none))).collect::<Vec<_>>();
+    rows.sort_by_key(|(chat, _, member)| (chat.id != team.root, std::cmp::Reverse(member.last)));
+    out.push_str("- Per member (24 h turns · since last turn · now · claims · routines · median turn/queue · fresh tokens):\n");
+    for (chat, callsign, member) in rows.iter().take(MEMBER_ROWS) {
+        let role = if chat.id == team.root { "lead" } else if member.judge || state.bots.advises(&chat.id) { "advisor" }
+            else if state.bots.persists(&chat.id) { "member" } else { "helper" };
+        let last = member.last.map_or("no turn".into(), |last| format!("{}m ago", at.saturating_sub(last) / 60));
+        let mut claims = member.live.iter().take(2).map(|(key, status)| format!("{} {status}", shorten(&inert(key), 24))).collect::<Vec<_>>();
+        if member.live.len() > 2 { claims.push(format!("+{}", member.live.len() - 2)); }
+        if claims.is_empty() { claims.push("no claim".into()); }
+        if member.done > 0 { claims.push(format!("{} done", member.done)); }
+        let _ = write!(out, "  - {} ({role}): {} turns · {last} · {} · {}", shorten(&inert(&crate::callsigns::label(chat, *callsign)), 24),
+            member.turns, member.now.unwrap_or("idle"), claims.join(", "));
+        if member.routines > 0 { let _ = write!(out, " · {} routine(s)", member.routines); }
+        let (mut seconds_taken, mut waits) = (member.seconds.clone(), member.waits.clone());
+        let seconds = |value: Option<u64>| value.map_or("-".into(), |value| format!("{value}s"));
+        let (turn, wait) = (median(&mut seconds_taken), median(&mut waits));
+        if turn.is_some() || wait.is_some() {
+            let _ = write!(out, " · {}/{}", seconds(turn), seconds(wait));
+        }
+        let _ = writeln!(out, " · {} tok", crate::history_view::compact(member.fresh));
+    }
+    if rows.len() > MEMBER_ROWS {
+        let _ = writeln!(out, "  - {} more member(s) not listed", rows.len() - MEMBER_ROWS);
+    }
 }
 
 /// Renders the brief for `scope` (a team root or any chat in it; `None` for
@@ -120,7 +177,7 @@ pub fn brief(state: &State, scope: Option<&str>, at: u64) -> Result<String, &'st
     };
     let mut teams: Vec<Team<'_>> = Vec::new();
     let mut slot: HashMap<&str, usize> = HashMap::new();
-    for chat in &state.chats {
+    for (position, chat) in state.chats.iter().enumerate() {
         let root = tree.root(&chat.id);
         if wanted.is_some_and(|wanted| wanted != root) {
             continue;
@@ -130,6 +187,7 @@ pub fn brief(state: &State, scope: Option<&str>, at: u64) -> Result<String, &'st
             teams.len() - 1
         });
         let team = &mut teams[index];
+        team.chats.push(position);
         if chat.id != root {
             team.members += 1;
         }
@@ -137,22 +195,50 @@ pub fn brief(state: &State, scope: Option<&str>, at: u64) -> Result<String, &'st
         team.requests.1 += crate::bots::pending_count(state, &chat.id);
         team.requests.2 += crate::ports::pending_for_chat(state, &chat.id).len();
     }
+    let mut activity: HashMap<&str, Member<'_>> = HashMap::new();
     for run in &state.runtime.runs {
-        let Some(&index) = run.chat_id.as_deref().and_then(|chat| slot.get(tree.root(chat))) else { continue };
+        let Some(chat) = run.chat_id.as_deref() else { continue };
+        let Some(&index) = slot.get(tree.root(chat)) else { continue };
         let team = &mut teams[index];
+        let member = activity.entry(chat).or_default();
+        member.judge |= crate::delegation::is_judge(run);
+        match run.status.as_str() {
+            "running" | "waiting" | "cancelling" => member.now = Some("running"),
+            "queued" => { member.now.get_or_insert("queued"); }
+            _ => {}
+        }
         if matches!(run.status.as_str(), "queued" | "running" | "waiting") {
             team.active += 1;
         }
+        member.last = member.last.max(run.attempts.iter().map(|attempt| attempt.started_unix).max());
+        // Queue wait: the run's creation (its ID) to its first attempt.
+        if let (Some(first), Some(created)) = (run.attempts.first().filter(|attempt| attempt.started_unix >= since), run.created_ms()) {
+            member.waits.push((first.started_unix * 1000).saturating_sub(created) / 1000);
+        }
         for attempt in run.attempts.iter().filter(|attempt| attempt.started_unix >= since) {
             team.turns += 1;
+            member.turns += 1;
+            if attempt.elapsed_ms > 0 { member.seconds.push(attempt.elapsed_ms / 1000); }
             if let Some(tokens) = attempt.tokens {
                 team.tokens += tokens.input_tokens.saturating_add(tokens.output_tokens);
                 team.measured += 1;
+                // Fresh tokens, as cost burn counts them: uncached input and output.
+                member.fresh += tokens.input_tokens.saturating_sub(tokens.cached_input_tokens).saturating_add(tokens.output_tokens);
             }
         }
     }
+    for watch in state.watches.iter().filter(|watch| watch.active()) {
+        activity.entry(watch.chat.as_str()).or_default().routines += 1;
+    }
     for claim in &state.collective.claims {
         let Some(&index) = slot.get(tree.root(&claim.owner)) else { continue };
+        let member = activity.entry(&claim.owner).or_default();
+        match claim.status {
+            crate::rooms::claims::Status::Done => member.done += 1,
+            crate::rooms::claims::Status::Working if !claim.abandoned => member.live.push((&claim.key, "working")),
+            crate::rooms::claims::Status::Blocked if !claim.abandoned => member.live.push((&claim.key, "blocked")),
+            _ => {}
+        }
         match claim.status {
             crate::rooms::claims::Status::Done => teams[index].done += 1,
             crate::rooms::claims::Status::Working | crate::rooms::claims::Status::Blocked if !claim.abandoned => teams[index].open += 1,
@@ -182,11 +268,12 @@ pub fn brief(state: &State, scope: Option<&str>, at: u64) -> Result<String, &'st
     if teams.is_empty() {
         out.push_str("No team activity.\n");
     }
+    let callsigns = if teams.is_empty() { Vec::new() } else { crate::callsigns::all(&state.chats) };
     for team in &teams {
         let session = state.chats.iter().find(|session| session.id == team.root);
         let title = inert(&crate::callsigns::name_or_id(&state.chats, team.root));
         let _ = writeln!(out, "## {title} ({})\n", team.root);
-        if let Some(goal) = session.and_then(|session| session.messages.first()).map(|message| shorten(&inert(&message.text), 200)) {
+        if let Some(goal) = session.and_then(|session| session.messages.iter().find(|message| !message.text.trim_start().starts_with('/'))).map(|message| shorten(&inert(&message.text), 200)) {
             let _ = writeln!(out, "- Goal: {goal}");
         }
         let _ = writeln!(out, "- Members: {} · active runs: {} · model turns: {}", team.members, team.active, team.turns);
@@ -202,6 +289,11 @@ pub fn brief(state: &State, scope: Option<&str>, at: u64) -> Result<String, &'st
         }
         let _ = writeln!(out, "- Progress: {progress}");
         let _ = writeln!(out, "- Cost: {} tokens over {} measured attempt(s)", team.tokens, team.measured);
+        // The node-wide brief lists every team of the day: only one asked for
+        // by name, or one working now, gets its per-member table.
+        if scope.is_some() || team.active > 0 {
+            member_table(state, team, &activity, &callsigns, at, &mut out);
+        }
         match crate::bots::conditions(state, team.root) {
             Some(found) if found.is_empty() => out.push_str("- Pathologies: none observed\n"),
             Some(found) => { let _ = writeln!(out, "- Pathologies: {}", inert(&found.join("; "))); }

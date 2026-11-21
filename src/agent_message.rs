@@ -128,11 +128,7 @@ fn transact_at(state: &mut State, attempt: &AttemptRef<'_>, call: MessageCall, (
     archive: impl FnOnce(&mut crate::runtime::Run) -> io::Result<()>, save: impl FnOnce(&State) -> io::Result<()>, wake: impl FnOnce()) -> io::Result<MessageResult> {
     use operation::{Decision, Effect};
     let decision = prepare(state, attempt, call, id)?;
-    let mut delivery = match decision {
-        Decision::Existing(result) => return Ok(result),
-        Decision::Record { lead, text } => return record(state, attempt, lead, &text, save),
-        Decision::Deliver(delivery) => delivery,
-    };
+    let mut delivery = match decision {Decision::Existing(result)=>return Ok(result),Decision::Deliver(delivery)=>delivery};
     delivery.sent_at(at_ms);
     let mut flight = InFlight::new(state, *delivery);
     let (mut archive,mut save,mut wake) = (Some(archive),Some(save),Some(wake));
@@ -148,19 +144,6 @@ fn transact_at(state: &mut State, attempt: &AttemptRef<'_>, call: MessageCall, (
     Ok(flight.result())
 }
 
-/// A member's message to its own lead becomes its own team-room post with
-/// delivery=record, through the room tool itself: same room resolution, limits,
-/// request-identity idempotency and checkpoint. Nothing wakes the lead.
-fn record(state: &mut State, attempt: &AttemptRef<'_>, lead: String, text: &str, save: impl FnOnce(&State) -> io::Result<()>) -> io::Result<MessageResult> {
-    let post = json!({"nonce":attempt.nonce,"request":{"jsonrpc":"2.0","id":0,"method":"tools/call","params":{"name":"control_room_post","arguments":{"message":text,"delivery":"record"}}}});
-    let response = crate::rooms::checkpoint(state, attempt.run, &post, save);
-    if let Some(error) = crate::toolbox::failure_text(&response) {
-        // Without a resolvable team room, the original refusal stands.
-        return Err(fail(if error.starts_with("No room attached") { operation::NOT_A_RELAY } else { error }));
-    }
-    Ok(MessageResult { chat_id: lead, run_id: String::new(), queued: false, services: Vec::new(), retained: None, urgent: None,
-        recorded_in_room: Some(true), note: Some(operation::RECORDED) })
-}
 /// Bounded receipt metadata supplies deferred private events. Actual admission
 /// happens after published processing receipts, never inside a tool call.
 pub(crate) fn peer_cursors(state: &State) -> impl Iterator<Item = (&str, u64, bool, bool)> {
