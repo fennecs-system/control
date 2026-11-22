@@ -518,6 +518,10 @@ pub(super) struct Team {
     /// The current stall was reported; progress or clearing claims re-arms it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(super) stalled: bool,
+    /// This completion was reported; a claim advancing or opening re-arms it,
+    /// so idle check-ins by a finished team do not announce it again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(super) finished: bool,
     /// Members currently in a reported shared blocker, sorted and bounded; a
     /// member is reported again only after it leaves every such group.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -863,7 +867,7 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
             let timed = timing.into_iter().map(str::to_owned).collect();
             let idle = idle.into_iter().map(|idle| idle.chat).collect();
             let (pathology, _) = pathology::fold(None, &sick, false, limits);
-            return Some((root.to_owned(), Team { cursor: 0, failing, settled: scan.settled, blocked: newest, progress, since: scan.settled, open: open > 0, stalled: false, sharing, reasons: fingerprint, claims: revisions, necks, timed, idle, pathology }, Facts::default()));
+            return Some((root.to_owned(), Team { cursor: 0, failing, settled: scan.settled, blocked: newest, progress, since: scan.settled, open: open > 0, stalled: false, finished: false, sharing, reasons: fingerprint, claims: revisions, necks, timed, idle, pathology }, Facts::default()));
         };
         let mut team = known.clone();
         let mut facts = Facts::default();
@@ -925,7 +929,7 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
         // restarts the window; a stall is reported once until then.
         let open_now = open > 0;
         if progress > known.progress || open_now != known.open || scan.settled < known.since {
-            (team.progress, team.open, team.since, team.stalled) = (progress.max(known.progress), open_now, scan.settled, false);
+            (team.progress, team.open, team.since, team.stalled, team.finished) = (progress.max(known.progress), open_now, scan.settled, false, false);
         } else if open_now && !known.stalled && scan.settled - known.since >= window {
             facts.stalled = Some(Stall { turns: u32::try_from(scan.settled - known.since).unwrap_or(u32::MAX), open });
             team.stalled = true;
@@ -938,7 +942,8 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
         team.idle = idle.into_iter().map(|idle| idle.chat).collect();
         if !scan.active && scan.settled > team.settled {
             facts.quiescent = true;
-            facts.finished = done && open == 0;
+            facts.finished = done && open == 0 && !team.finished;
+            team.finished |= facts.finished;
             team.settled = scan.settled;
         }
         (team != *known).then(|| (root.to_owned(), team, facts))

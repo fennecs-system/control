@@ -817,6 +817,13 @@ fn an_acceptance_check_wakes_only_when_the_team_goes_quiet_with_every_claim_done
     reconcile_at(&mut state, 160_000, ok).unwrap();
     assert_eq!(advisor_runs(&state, &check).len(), 1, "its own turn is not team activity");
 
+    // Run AA: finished members kept checking in on timers, and each quiet
+    // moment announced the same completion again (seven wakes).
+    turn(&mut state, &builder, "completed");
+    reconcile_at(&mut state, 180_000, ok).unwrap();
+    assert_eq!(advisor_runs(&state, &check).len(), 1, "an unchanged completion is announced once");
+    finish(&mut state, &advisor);
+
     // Reopened work that finishes again is a new completion.
     claim(&mut state, &builder, "keep", "working", None);
     turn(&mut state, &builder, "completed");
