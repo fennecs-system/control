@@ -277,7 +277,7 @@ bot approval.
 1. The lead starts it with `control_agent_spawn` and `role: "judge"`, with one
    objective naming the shared outcome. It gets no resources. It uses the root
    task's advisor allowance (`max_advisors_per_root` in `execution.json`,
-   default 1, range 0–8), which is separate from the root's one blocking judge
+   default 2, range 0–8), which is separate from the root's one blocking judge
    review. `persona: "advisor"` instead of the role spawns the built-in
    [advisor persona](PERSONAS.md): the same judge, with the `advisor` gene as
    its DNA and its purpose first in its prompt.
@@ -287,7 +287,8 @@ bot approval.
 3. The approved judge sleeps on its task tree's lifecycle topic,
    `task:<root chat>`. Control publishes host facts there, edge-triggered from
    records reconciliation already reads. Facts are gaps, not churn:
-   - the team went quiet, with no member turn running or queued;
+   - the team went quiet, with no member turn running or queued (and, when
+     every claim is done, that it considers its goal finished);
    - a member's latest turns failed or were blocked several times in a row
      (`advisor_failure_streak`, default 3; interrupted and cancelled turns
      neither extend nor break a streak), reported once per streak;
@@ -378,6 +379,26 @@ advisor notes (the lead's included) are not team activity, so the advisor cannot
 re-trigger itself. Stopping the advisor (`/bot off`) drops its team snapshot; a
 later advisor reports only facts after its own subscription. Nodes without an
 opted-in advisor or antibody do no lifecycle work.
+
+## Acceptance check
+
+A specialised team observer, separate from the advisor: a read-only judge that
+compares what the team calls finished with what was asked. Select **Acceptance
+check** on the root chat (`/use acceptance`); the gene offers `team.advisor`
+(the team-observer gate) and `team.acceptance`. The lead, or the operator,
+starts one in the background with `control_agent_spawn` and
+`persona: "acceptance"`, one objective quoting the request, then
+`control_bot_request` with no interval. It uses the advisor allowance, so the
+default of 2 fits an advisor and an acceptance check.
+
+A judge whose persona's DNA offers `team.acceptance` subscribes to
+`done:<root chat>` instead of `task:<root chat>`. Control publishes one fact
+there, `finished`: the team went quiet with no open claim and at least one done.
+No other team fact, question or timer wakes it. The advisor hears the same
+moment as part of its quiet fact, without an extra wake. If the result falls
+short, the check notes the member who closed the claim (the lead only when no
+member owns it); otherwise it sends nothing. Members still ask the advisor, never
+the acceptance check.
 
 ## Antibodies
 
@@ -506,8 +527,8 @@ no packages, so leave it out when a run should rebuild a tool from scratch.
 
 Tool hints contribute to context and catalogue discovery. They do not filter
 callable worker tools, and deselecting a hint revokes no grant. The exceptions
-are `team.advisor` and `node.antibody`, which decide whether the advisor or
-antibody option exists for a task tree, and `operator.notify`, which a lead needs
+are `team.advisor`, `team.acceptance` and `node.antibody`, which decide whether
+the advisor, acceptance check or antibody option exists for a task tree, and `operator.notify`, which a lead needs
 to send operator notices (availability gates, not grants). Host operations enforce execution
 authority independently. Captured documents are attributed evidence, not
 instructions or accepted facts. Inspect the captured context to check what a

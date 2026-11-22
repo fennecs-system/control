@@ -23,6 +23,8 @@ use std::collections::BTreeMap;
 use std::hash::Hasher;
 
 pub(super) const KIND: &str = "task";
+/// The topic an acceptance check hears: only its team's `finished` fact.
+pub(super) const DONE_KIND: &str = "done";
 /// Chats named in one coalesced fact; the advisor reads the rest itself.
 const CHATS: usize = 8;
 
@@ -48,6 +50,10 @@ pub struct Facts {
     /// The last active member yielded with nothing queued or running.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub quiescent: bool,
+    /// The team went quiet with no open claim and at least one done: it
+    /// considers its goal finished. Also offered alone on the `done` topic.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub finished: bool,
     /// Members holding a working claim with no turn running or queued and no
     /// running watch while other team turns kept settling: idle with nothing
     /// that will wake them. One entry per member, naming one such claim.
@@ -317,6 +323,7 @@ impl Facts {
             self.block(blocked);
         }
         self.quiescent |= newer.quiescent;
+        self.finished |= newer.finished;
         for idle in &newer.idle {
             if self.idle.len() < CHATS && !self.idle.iter().any(|known| known.chat == idle.chat) {
                 self.idle.push(idle.clone());
@@ -409,7 +416,7 @@ impl Facts {
         }
     }
     fn is_empty(&self) -> bool {
-        self.repeated == 0 && self.retired == 0 && self.abandoned == 0 && self.blocked.is_empty() && !self.quiescent && self.idle.is_empty()
+        self.repeated == 0 && self.retired == 0 && self.abandoned == 0 && self.blocked.is_empty() && !self.quiescent && !self.finished && self.idle.is_empty()
             && self.stalled.is_none() && self.shared.is_empty() && self.bottlenecks.is_empty() && self.uncheckpointed.is_empty()
             && self.timed_out.is_empty() && self.churn.is_none() && self.loops.is_empty() && self.polling.is_empty() && self.burn.is_none()
     }
@@ -417,7 +424,7 @@ impl Facts {
     /// Quiet teams, single blocked claims and abandoned claims are ordinary
     /// coordination its lead or advisor handles.
     pub(super) fn pathological(&self) -> Self {
-        let facts = Self { quiescent: false, blocked: Vec::new(), abandoned: 0, ..self.clone() };
+        let facts = Self { quiescent: false, finished: false, blocked: Vec::new(), abandoned: 0, ..self.clone() };
         if facts.is_empty() { Self::default() } else { facts }
     }
     pub(super) fn describe(&self, root: &str) -> String {
@@ -474,7 +481,11 @@ impl Facts {
         if let Some(burn) = self.burn {
             parts.push(format!("cost burn: {} tokens spent since a claim last advanced or a score last rose", burn.tokens));
         }
-        if self.quiescent { parts.push("the team went quiet: no member turn is running or queued".into()); }
+        if self.finished {
+            parts.push("the team went quiet with every claim done: it considers its goal finished".into());
+        } else if self.quiescent {
+            parts.push("the team went quiet: no member turn is running or queued".into());
+        }
         let chats = if self.chats.is_empty() { String::new() } else { format!(" (chats: {})", self.chats.join(", ")) };
         format!("host facts for task {root}: {}{chats}", parts.join("; "))
     }
@@ -569,14 +580,17 @@ pub(super) fn topic(root: &str) -> Topic {
 pub(super) fn source(root: &str) -> Source {
     Source::Topic(topic(root))
 }
-/// Roots with an advisor subscribed whose root chat still selects the advisor
-/// lens, without allocating when there are none. With the lens off, a tree's
-/// topic is not computed at all.
+pub(super) fn done_topic(root: &str) -> Topic {
+    Topic::new(DONE_KIND, root)
+}
+pub(super) fn done_source(root: &str) -> Source {
+    Source::Topic(done_topic(root))
+}
+/// Roots with an advisor or acceptance check subscribed whose root chat still
+/// selects the opt-in lens, without allocating when there are none. With the
+/// lens off, a tree's topic is not computed at all.
 fn advised(state: &State) -> Vec<&str> {
-    let mut roots = state.bots.supervisor.definitions().flat_map(|definition| &definition.sources).filter_map(|source| match source {
-        Source::Topic(topic) if topic.kind == KIND => Some(topic.name.as_str()),
-        _ => None,
-    }).collect::<Vec<_>>();
+    let mut roots = state.bots.supervisor.definitions().filter_map(team).collect::<Vec<_>>();
     if roots.is_empty() {
         return roots;
     }
@@ -588,12 +602,17 @@ fn advised(state: &State) -> Vec<&str> {
 pub(super) fn advises(definition: &control_bot::Definition) -> bool {
     team(definition).is_some()
 }
-/// The task tree an advisor's definition subscribes to.
+/// The task tree a team observer's definition subscribes to: an advisor's
+/// facts or an acceptance check's completion.
 pub(super) fn team(definition: &control_bot::Definition) -> Option<&str> {
     definition.sources.iter().find_map(|source| match source {
-        Source::Topic(topic) if topic.kind == KIND => Some(topic.name.as_str()),
+        Source::Topic(topic) if topic.kind == KIND || topic.kind == DONE_KIND => Some(topic.name.as_str()),
         _ => None,
     })
+}
+/// Whether a definition is an acceptance check's: it hears only completion.
+pub(super) fn accepts(definition: &control_bot::Definition) -> bool {
+    definition.sources.iter().any(|source| matches!(source, Source::Topic(topic) if topic.kind == DONE_KIND))
 }
 
 /// A turn woken only by advisor notes is the advisor's echo, not new activity.
@@ -740,13 +759,14 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
     // blocked) claims, the latest claim advance, reported blocker reasons and
     // a fingerprint of every member claim revision.
     #[derive(Default)]
-    struct Claims<'a> { blocked: Vec<&'a Claim>, open: u32, progress: u64, reasons: Vec<(&'a str, &'a str, u64)>, revisions: Fx }
+    struct Claims<'a> { blocked: Vec<&'a Claim>, open: u32, done: bool, progress: u64, reasons: Vec<(&'a str, &'a str, u64)>, revisions: Fx }
     let mut held = roots.iter().map(|_| Claims::default()).collect::<Vec<_>>();
     for claim in &state.collective.claims {
         let Some(&position) = member.get(claim.owner.as_str()) else { continue };
         let team = &mut held[team_at[position]];
         team.progress = team.progress.max(claim.advanced_at);
         team.revisions.add(claim.revision);
+        team.done |= claim.status == Status::Done;
         if claim.abandoned || !matches!(claim.status, Status::Working | Status::Blocked) {
             continue;
         }
@@ -810,7 +830,7 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
     let window = state.runtime.execution.advisor_stall_turns.max(4);
     let crowd = state.runtime.execution.advisor_bottleneck_members.max(2);
     roots.into_iter().zip(scans).zip(failing).zip(held).zip(timing).zip(sick).zip(idle).enumerate().filter_map(|(slot, ((((((root, scan), failing), held), timing), sick), idle))| {
-        let Claims { blocked, open, progress, reasons, revisions } = held;
+        let Claims { blocked, open, done, progress, reasons, revisions } = held;
         let newest = blocked.iter().map(|claim| claim.blocked_at).max().unwrap_or(0);
         // Reasons are compared only when two members could share one and the
         // reasons changed since the last observation (claim revisions and run
@@ -918,6 +938,7 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
         team.idle = idle.into_iter().map(|idle| idle.chat).collect();
         if !scan.active && scan.settled > team.settled {
             facts.quiescent = true;
+            facts.finished = done && open == 0;
             team.settled = scan.settled;
         }
         (team != *known).then(|| (root.to_owned(), team, facts))
@@ -953,6 +974,11 @@ pub(super) fn offer(state: &mut State, pending: BTreeMap<String, Facts>, now: co
                 node.insert(root.clone(), sick);
             }
         }
+        // An acceptance check hears completion alone, at the team's cursor.
+        if facts.finished {
+            let done = Facts { finished: true, ..Facts::default() };
+            effects.extend(state.bots.supervisor.step(control_bot::Event::Info { topic: done_topic(&root), cursor, from: None, info: Message::Lifecycle(Box::new(done)) }, now));
+        }
         effects.extend(state.bots.supervisor.step(control_bot::Event::Info { topic: topic(&root), cursor, from: None, info: Message::Lifecycle(Box::new(facts)) }, now));
     }
     if !node.is_empty() {
@@ -978,7 +1004,8 @@ pub(super) fn immune(definition: &control_bot::Definition) -> bool {
 }
 
 /// A stopped advisor's snapshot is dropped, so a later advisor for the same
-/// team starts from its own subscription rather than an old observation.
+/// team starts from its own subscription rather than an old observation. It
+/// stays while another observer of that team still runs.
 pub(super) fn forget(state: &mut State, chat: &str) {
     // The last antibody's snapshots of teams no advisor watches go with it.
     let last = state.bots.supervisor.definitions().filter(|definition| immune(definition)).all(|definition| definition.chat.0 == chat);
@@ -986,11 +1013,10 @@ pub(super) fn forget(state: &mut State, chat: &str) {
         let advised = advised(state).into_iter().map(str::to_owned).collect::<Vec<_>>();
         state.bots.teams.retain(|root, _| advised.contains(root));
     }
-    let roots = state.bots.supervisor.definitions().filter(|definition| definition.chat.0 == chat)
-        .flat_map(|definition| &definition.sources).filter_map(|source| match source {
-            Source::Topic(topic) if topic.kind == KIND => Some(topic.name.clone()),
-            _ => None,
-        }).collect::<Vec<_>>();
+    let roots = state.bots.supervisor.definitions().filter(|definition| definition.chat.0 == chat).filter_map(team)
+        .filter(|root| !state.bots.supervisor.definitions().any(|other| other.chat.0 != chat && team(other) == Some(*root)
+            && state.bots.supervisor.status(&other.bot) != Some(control_bot::Status::Stopping)))
+        .map(str::to_owned).collect::<Vec<_>>();
     for root in roots {
         state.bots.teams.remove(&root);
     }
