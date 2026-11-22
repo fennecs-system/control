@@ -649,4 +649,19 @@ fn a_lead_with_an_advisor_still_reads_its_workers_results() {
     // Receipts still bind: a child whose role differs from its batch is refused.
     s.runtime.runs.last_mut().unwrap().persona.as_mut().unwrap().role = Role::Worker;
     assert_eq!(status(&s, &worker).unwrap_err(), "Spawned child provenance mismatch.");
+    s.runtime.runs.last_mut().unwrap().persona.as_mut().unwrap().role = Role::Judge;
+    // The advisor's batch aborted the completion scan too, so no parent on the
+    // node heard that its workers had finished.
+    for run in s.runtime.runs.iter_mut().filter(|run| run.kind == RunKind::Spawned) {
+        run.status = "completed".into();
+    }
+    for _ in 0..3 {
+        reconcile(&mut s, |_| Ok(())).unwrap();
+    }
+    assert!(s.runtime.runs.iter().any(|run| run.kind == RunKind::AgentCompletion));
+    // Once the workers are announced the scan reaches the advisor's batch.
+    for run in &mut s.runtime.runs {
+        run.status = "completed".into();
+    }
+    reconcile(&mut s, |_| Ok(())).unwrap();
 }

@@ -66,7 +66,10 @@ pub(super) fn reconcile(
     let mut candidate = None;
     for (index, parent) in state.runtime.runs.iter().enumerate() {
         for (batch_index, batch) in parent.spawns.iter().enumerate() {
+            // An advisor is a standing observer, not a result: its batch
+            // announces nothing and must not hold up the workers' completions.
             if !batch.notify
+                || batch.input.role() == Role::Judge
                 || batch.cancelled
                 || batch.completions.len() == batch.children.len()
                 || fenced(
