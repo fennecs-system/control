@@ -159,6 +159,9 @@ pub(crate) fn scope<'a>(
             .ok_or("Delegation lineage is unavailable.")?;
         for child in crate::spawning::children(state,from)? {
             if !same_scope(from,child) {return Err("Spawned child scope mismatch.");}
+            // A spawned advisor's receipt is verified above, but an observer is
+            // read-only and may see beyond its lead: it is not a readable result.
+            if delegation::is_judge(child) {continue;}
             descendants.insert(child.id.as_str());
             queue.push_back(child.id.as_str());
         }

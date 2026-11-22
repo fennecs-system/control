@@ -786,6 +786,10 @@ pub fn children<'a>(
         .iter()
         .flat_map(|batch| batch.children.iter().map(move |id| (batch, id)))
         .map(|(batch, id)| {
+            // A child is bound to its own batch: a judge batch records one
+            // read-only advisor, materialized at the task-level review scope.
+            let role = batch.input.role();
+            let action = if role == Role::Judge { identity::Action::Task } else { parent.action };
             if !parent
                 .attempts
                 .iter()
@@ -801,12 +805,12 @@ pub fn children<'a>(
                     run.id == *id
                         && run.kind == RunKind::Spawned
                         && run.actor == parent.actor
-                        && run.action == parent.action
+                        && run.action == action
                         && run.persona.as_ref().is_some_and(|p| {
                             p.parent.as_deref() == Some(&parent.id)
                                 && p.root == lineage.root
                                 && p.depth == lineage.depth + 1
-                                && p.role == Role::Worker
+                                && p.role == role
                         })
                 })
                 .ok_or("Spawned child provenance mismatch.")
