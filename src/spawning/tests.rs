@@ -624,3 +624,44 @@ fn spawned_workers_join_the_team_room_within_one_actor_and_tree() {
     request(&mut s, &id, "parent-attempt", "unrelated", input(1), |_| Ok(())).unwrap();
     assert_eq!(s.chats.last().unwrap().room, None);
 }
+#[test]
+fn a_lead_with_an_advisor_still_reads_its_workers_results() {
+    // Live run: a lead with four workers and one advisor could not read any
+    // worker's files; the advisor's judge batch failed every provenance walk.
+    let (mut s, id) = active();
+    s.chats[0].lenses = Some(vec!["advisor".into()]);
+    request(&mut s, &id, "parent-attempt", "workers", input(2), |_| Ok(())).unwrap();
+    let worker = s.runtime.runs.last().unwrap().id.clone();
+    let status = |s: &State, child: &str| {
+        crate::delegated_results::prepare(s, &id, json!({"child":child,"section":"status"}))
+            .and_then(crate::delegated_results::execute)
+            .map(|value| value["status"].clone())
+    };
+    assert_eq!(status(&s, &worker).unwrap(), "queued");
+    let judge = Input { role: Some(Role::Judge), ..input(1) };
+    request(&mut s, &id, "parent-attempt", "advisor", judge, |_| Ok(())).unwrap();
+    let advisor = s.runtime.runs.last().unwrap().id.clone();
+    assert!(delegation::is_judge(s.runtime.runs.last().unwrap()));
+    assert_eq!(status(&s, &worker).unwrap(), "queued");
+    // The advisor's receipt is checked under its own batch's role, but an
+    // observer is not a readable result: nothing new becomes readable.
+    assert_eq!(status(&s, &advisor).unwrap_err(), "Result is not from this parent's delegated descendants.");
+    // Receipts still bind: a child whose role differs from its batch is refused.
+    s.runtime.runs.last_mut().unwrap().persona.as_mut().unwrap().role = Role::Worker;
+    assert_eq!(status(&s, &worker).unwrap_err(), "Spawned child provenance mismatch.");
+    s.runtime.runs.last_mut().unwrap().persona.as_mut().unwrap().role = Role::Judge;
+    // The advisor's batch aborted the completion scan too, so no parent on the
+    // node heard that its workers had finished.
+    for run in s.runtime.runs.iter_mut().filter(|run| run.kind == RunKind::Spawned) {
+        run.status = "completed".into();
+    }
+    for _ in 0..3 {
+        reconcile(&mut s, |_| Ok(())).unwrap();
+    }
+    assert!(s.runtime.runs.iter().any(|run| run.kind == RunKind::AgentCompletion));
+    // Once the workers are announced the scan reaches the advisor's batch.
+    for run in &mut s.runtime.runs {
+        run.status = "completed".into();
+    }
+    reconcile(&mut s, |_| Ok(())).unwrap();
+}
