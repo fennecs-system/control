@@ -99,6 +99,7 @@ order matters: a gate before `hysteresis` hides the values it needs to re-arm.
 | Stage | Passes when |
 | --- | --- |
 | `threshold` `field`, `at_least`/`at_most` | the number is at or past a bound; alone in a rule it is a severity passthrough |
+| `one_of` `field`, `values` | the value, as text, is one of up to 16 listed strings; with `"unmatched":"retain"` a routine that reports many outcomes wakes only for the named ones |
 | `change` `field`, `percent`/`absolute` | the value moved that much from the last *woken* value; with neither, any different value (dedup, also for strings and objects) |
 | `rate` `field`, `seconds`, `at_least` | \|Δvalue\| per second over the window reaches `at_least` |
 | `zscore` `field`, `samples`, `at_least` | the value is `at_least` standard deviations from the previous `samples` (5–64) values |

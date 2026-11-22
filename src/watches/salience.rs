@@ -24,6 +24,7 @@ use std::collections::VecDeque;
 const MAX_RULES: usize = 4;
 const MAX_STAGES: usize = 6;
 const MAX_KEYS: usize = 8;
+const MAX_ONE_OF: usize = 16;
 const MAX_SAMPLES: usize = 64;
 const RATE_SAMPLES: usize = 16;
 const MIN_ZSCORE_SAMPLES: usize = 5;
@@ -53,6 +54,9 @@ pub enum Unmatched {
 pub enum Stage {
     /// Passes when the number is at least / at most a bound (severity passthrough).
     Threshold { field: String, #[serde(default, skip_serializing_if = "Option::is_none")] at_least: Option<f64>, #[serde(default, skip_serializing_if = "Option::is_none")] at_most: Option<f64> },
+    /// Passes when the value, as text, is one of `values`: wake only for the
+    /// named outcomes of a routine that reports many.
+    OneOf { field: String, values: Vec<String> },
     /// Passes on a change from the last woken value: by percent or absolute
     /// amount for numbers, or any difference (dedup) when neither is given.
     Change { field: String, #[serde(default, skip_serializing_if = "Option::is_none")] percent: Option<f64>, #[serde(default, skip_serializing_if = "Option::is_none")] absolute: Option<f64> },
@@ -72,7 +76,7 @@ pub enum Stage {
 impl Stage {
     fn field(&self) -> Option<&str> {
         match self {
-            Self::Threshold { field, .. } | Self::Change { field, .. } | Self::Rate { field, .. } | Self::Zscore { field, .. } | Self::Hysteresis { field, .. } => Some(field),
+            Self::Threshold { field, .. } | Self::OneOf { field, .. } | Self::Change { field, .. } | Self::Rate { field, .. } | Self::Zscore { field, .. } | Self::Hysteresis { field, .. } => Some(field),
             Self::Debounce { .. } | Self::RateLimit { .. } => None,
         }
     }
@@ -110,6 +114,11 @@ impl Filter {
                 Stage::Threshold { at_least, at_most, .. } => {
                     if at_least.is_none() && at_most.is_none() || [at_least, at_most].into_iter().flatten().any(|v| !v.is_finite()) {
                         return Err("threshold needs a finite at_least or at_most".into());
+                    }
+                }
+                Stage::OneOf { values, .. } => {
+                    if values.is_empty() || values.len() > MAX_ONE_OF || values.iter().any(|v| v.is_empty() || v.len() > 64) {
+                        return Err(format!("one_of needs 1–{MAX_ONE_OF} values of 1–64 bytes"));
                     }
                 }
                 Stage::Change { percent, absolute, .. } => { positive(*percent)?; positive(*absolute)?; }
@@ -333,13 +342,18 @@ fn run(stages: &[Stage], rule: usize, base: usize, from: usize, fields: &[&str],
     for (index, stage) in stages.iter().enumerate().skip(from) {
         let current = stage.field().and_then(|field| values.get(slot(field))).and_then(Option::as_ref);
         let number = current.and_then(Last::number);
-        if stage.field().is_some() && (current.is_none() || number.is_none() && !matches!(stage, Stage::Change { percent: None, absolute: None, .. })) {
+        if stage.field().is_some() && (current.is_none() || number.is_none() && !matches!(stage, Stage::OneOf { .. } | Stage::Change { percent: None, absolute: None, .. })) {
             return Outcome::Missing;
         }
         let v = number.unwrap_or_default();
         let state = &mut partition.stages[base + index];
         let pass = match stage {
             Stage::Threshold { at_least, at_most, .. } => at_least.is_some_and(|a| v >= a) || at_most.is_some_and(|b| v <= b),
+            Stage::OneOf { values, .. } => match current {
+                Some(Last::Text(text)) => values.contains(text),
+                Some(Last::Number(n)) => values.contains(&n.to_string()),
+                None => false,
+            },
             Stage::Change { field, percent, absolute } => match partition.woken.get(slot(field)).and_then(Option::as_ref) {
                 None => true,
                 Some(last) if percent.is_none() && absolute.is_none() => Some(last) != current,

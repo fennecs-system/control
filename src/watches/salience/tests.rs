@@ -30,6 +30,24 @@ fn threshold_passes_bounds_and_serves_as_severity_passthrough() {
 }
 
 #[test]
+fn one_of_wakes_only_for_the_named_outcomes() {
+    // Run AE: a routine reported idle, shelter and retreat alongside done and
+    // failed, and every one woke its owner (122 wakes in an hour).
+    let mut s = salience(json!({"unmatched":"retain","rules":[[{"kind":"one_of","field":"/outcome","values":["queue_empty","exhausted","decision","2"]}]]}));
+    let woke = feed(&mut s, &[(0.0, json!({"outcome":"idle"})), (1.0, json!({"outcome":"exhausted","tried":["a"]})), (2.0, json!({"outcome":"retreat"})),
+        (3.0, json!({"outcome":"decision"})), (4.0, json!({"note":"no outcome"})), (5.0, json!({"outcome":2})), (6.0, json!({"outcome":{"nested":true}}))]);
+    assert_eq!(woke, [2, 4, 6]);
+    assert_eq!((s.counters.woke, s.counters.retained), (3, 4));
+    // Without unmatched=retain a payload lacking the field still wakes.
+    let mut s = salience(json!({"rules":[[{"kind":"one_of","field":"/outcome","values":["failed"]}]]}));
+    assert_eq!(feed(&mut s, &[(0.0, json!({"outcome":"idle"})), (1.0, json!({"exit":1}))]), [2]);
+    for bad in [json!([]), json!([""]), json!(vec!["x"; 17])] {
+        let filter: Filter = serde_json::from_value(json!({"rules":[[{"kind":"one_of","field":"/outcome","values":bad}]]})).unwrap();
+        assert!(filter.validate().is_err());
+    }
+}
+
+#[test]
 fn change_compares_with_the_last_woken_value_not_the_last_seen() {
     let mut s = salience(json!({"rules":[[{"kind":"change","field":"/price","percent":2}]]}));
     // 1.5% steps: each is small, but they accumulate past 2% from the baseline.

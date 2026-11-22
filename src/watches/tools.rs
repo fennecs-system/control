@@ -42,6 +42,7 @@ impl AttemptTools for Tools {
         };
         let stages = json!([
             stage("threshold", json!({"field":field,"at_least":number,"at_most":number}), &["field"]),
+            stage("one_of", json!({"field":field,"values":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"string","minLength":1,"maxLength":64}}}), &["field","values"]),
             stage("change", json!({"field":field,"percent":number,"absolute":number}), &["field"]),
             stage("rate", json!({"field":field,"seconds":seconds,"at_least":number}), &["field","seconds","at_least"]),
             stage("zscore", json!({"field":field,"samples":{"type":"integer","minimum":5,"maximum":64},"at_least":number}), &["field","samples","at_least"]),
@@ -49,7 +50,7 @@ impl AttemptTools for Tools {
             stage("debounce", json!({"seconds":seconds}), &["seconds"]),
             stage("rate_limit", json!({"seconds":seconds}), &["seconds"]),
         ]);
-        definitions[0]["inputSchema"]["properties"]["salience"] = json!({"type":"object","description":"Perception filter for notifications (requires notifications=true): a notification wakes you when any rule passes; stages in a rule run in order and each sees only what passed before it. threshold: number at_least/at_most (severity passthrough). change: vs the last woken value, by percent/absolute, or any difference (dedup) if neither. rate: |Δ|/s over seconds. zscore: deviations from the previous samples. hysteresis: fire at trigger, re-arm after staying past clear for clear_seconds. debounce: wake with the latest after seconds of quiet. rate_limit: at most one wake per seconds. key partitions all state (e.g. /symbol). Payloads no rule can read wake unless unmatched=retain. Filtered notifications stay readable in control_watch_events; counts appear in control_watch_status.","properties":{
+        definitions[0]["inputSchema"]["properties"]["salience"] = json!({"type":"object","description":"Perception filter for notifications (requires notifications=true): a notification wakes you when any rule passes; stages in a rule run in order and each sees only what passed before it. threshold: number at_least/at_most (severity passthrough). one_of: the value is one of the listed strings, e.g. wake only for /outcome queue_empty, exhausted or decision with unmatched=retain. change: vs the last woken value, by percent/absolute, or any difference (dedup) if neither. rate: |Δ|/s over seconds. zscore: deviations from the previous samples. hysteresis: fire at trigger, re-arm after staying past clear for clear_seconds. debounce: wake with the latest after seconds of quiet. rate_limit: at most one wake per seconds. key partitions all state (e.g. /symbol). Payloads no rule can read wake unless unmatched=retain. Filtered notifications stay readable in control_watch_events; counts appear in control_watch_status.","properties":{
             "key":field,
             "rules":{"type":"array","minItems":1,"maxItems":4,"items":{"type":"array","minItems":1,"maxItems":6,"items":{"oneOf":stages}}},
             "unmatched":{"type":"string","enum":["wake","retain"],"default":"wake"}
