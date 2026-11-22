@@ -180,3 +180,24 @@ fn a_spawn_rate_refusal_sends_members_to_their_approved_advisor() {
     assert_eq!(crate::delegation::refusal(&state, Some(&builder), other), other);
     // The advisor takes that question: see a_member_asks_its_teams_advisor_and_the_question_wakes_it.
 }
+
+#[test]
+fn an_acceptance_check_notes_a_member_of_its_team_and_takes_no_questions() {
+    let (mut state, lead, builder, check, run) = team();
+    state.chats[0].lenses = Some(vec!["acceptance".into()]);
+    let index = state.runtime.runs.iter().position(|r| r.id == run).unwrap();
+    let captured = control_context::persona::Captured::of(&control_context::persona::builtin("acceptance").unwrap(), &[]).unwrap();
+    state.runtime.runs[index].persona.as_mut().unwrap().bundle = Some(Box::new(captured));
+    assert!(note(&mut state, &run, "unapproved", &builder, "The wall is one block high").is_err());
+    crate::bots::command(&mut state, &check, "on").unwrap();
+    assert!(state.bots.accepts(&check));
+    let before = state.chats.iter().find(|chat| chat.id == lead).unwrap().messages.len();
+    note(&mut state, &run, "n0", &builder, "The request was a castle; claim wall closed with a ring three blocks high. Reopen it as a claim.").unwrap();
+    let delivered = state.runtime.runs.last().unwrap();
+    assert_eq!((delivered.chat_id.as_deref(), delivered.source.as_str()), (Some(builder.as_str()), "advisor-note"));
+    assert_eq!(state.chats.iter().find(|chat| chat.id == lead).unwrap().messages.len(), before, "the lead is not a relay");
+    // Members ask the advisor; a question would wake the check outside completion.
+    let asking = activate(&mut state, &builder);
+    assert!(handle(&mut state, &AttemptRef { run: &asking, generation: "peer-attempt", nonce: "q0" },
+        MessageCall { chat_id: check.clone(), text: "Is this enough?".into(), services: vec![], urgent: false }, |_| Ok(())).is_err());
+}

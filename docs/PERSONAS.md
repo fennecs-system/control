@@ -25,6 +25,7 @@ capture; spawned children get their own persona, never a copy of the parent's.
 | `lead` | Plan, assign, unblock, keep turns short; delegate long work | `swarm` | own team | its team | operator | full worker tools | inherits (set a strong hosted model) |
 | `worker` | Complete claimed work; coordinate with peers; report to the lead | `swarm` | own team | its team | lead | full worker tools | inherits (set a local model if wanted) |
 | `advisor` | Catch the lead's gaps; one concise evidence note | `advisor` | own team | its lead (notes) | lead | read-only judge set | inherits |
+| `acceptance` | Compare what the team calls finished with what was asked; note the member whose claim falls short | `acceptance` | own team | its lead (notes) | lead | read-only judge set | inherits |
 | `antibody` | Patrol every team for pathologies; note leads; escalate | `antibody` | the node | other teams' leads (notes) | operator | read-only judge set | inherits (a local model once reliable) |
 | `judge` | Independent review; report defects with evidence | none | own team | no one | lead | read-only judge set | inherits |
 
@@ -68,12 +69,14 @@ brief scope, operator notices and the advisor/antibody bot mode all ask it.
 A run without a captured persona (every run before personas, and every spawn
 without `persona`) gets the shipped built-in for its position: `lead` at the
 root, `worker` below it, and for read-only judges `antibody` (approved on the
-node topic), `advisor` (approved on its team topic) or `judge`. Tests prove the
+node topic), `advisor` (approved on its team topic) or `judge`. An
+`acceptance` check is always a captured persona: its DNA decides that it hears
+only its team's completion. Tests prove the
 resulting policy is identical to the earlier scattered checks.
 
 A standing is a profile, not a grant. Every existing gate still applies:
 
-- Observers need their opt-in gene on the root: `advisor` for team observers,
+- Observers need their opt-in gene on the root: `advisor` (or `acceptance`) for team observers,
   `antibody` on an operator-owned root for node observers, and the root's
   advisor allowance. Operator bot approval still decides whether one runs, and
   only an approved observer may send notes or notices.

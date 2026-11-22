@@ -387,7 +387,7 @@ pub(crate) fn plan(
         latest(state.runs, &call.chat_id, &run.actor).ok_or("That chat has no task to continue")?;
     // A team's approved advisor takes questions from its own team: members
     // ask it instead of spawning a reviewer, and it answers with a note.
-    let asked = !advisor && crate::delegation::is_judge(from) && state.bots.advised_team(&call.chat_id) == Some(root);
+    let asked = !advisor && crate::delegation::is_judge(from) && state.bots.advised_team(&call.chat_id) == Some(root) && !state.bots.accepts(&call.chat_id);
     if crate::delegation::is_judge(from) && !(asked && call.services.is_empty()) {
         return Err("Read-only judges cannot be continued; ask your team's approved advisor, without services");
     }

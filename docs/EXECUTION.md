@@ -37,7 +37,7 @@ taken from saved run state, model output or tool arguments.
 | `max_parallel_runs` | 3 | 1–32 | Concurrent model attempts; 1 is serial. A swarm wants at least one slot per persistent agent plus its observers, or turns queue. |
 | `max_agents_per_root` | 64 | 1–65,536 | Agents one root task may spawn or delegate ([delegation](DELEGATION.md)). |
 | `max_pending_agent_intents` | 256 | 1–65,536 | Node-wide backlog of accepted, not yet started agents. |
-| `max_advisors_per_root` | 1 | 0–8 | [Team advisors](LENSES.md#team-advisor) per root task; 0 disables. |
+| `max_advisors_per_root` | 2 | 0–8 | Team observers ([advisors](LENSES.md#team-advisor) and [acceptance checks](LENSES.md#acceptance-check)) per root task; 0 disables. |
 | `advisor_failure_streak` | 3 | 2–64 | Consecutive failed or blocked turns of one member before its advisor hears. |
 | `advisor_stall_turns` | 24 | 4–4,096 | Settled team turns with no claim advancing before a stall fact. |
 | `advisor_bottleneck_members` | 2 | 2–64 | Members waiting on one claim before a bottleneck fact. |

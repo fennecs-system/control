@@ -261,9 +261,21 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert!(coordination.instructions.contains("split stalled milestones smaller"));
     assert!(!investigation.instructions.contains("hypothesis"), "no per-probe record ritual");
     let advisor = Library::default().get("advisor").unwrap().clone();
-    assert_eq!(advisor.revision, 9);
-    // Run V: a small ring was called a finished castle and nobody compared it with the request.
-    assert!(advisor.instructions.contains("a goal called done at a scope the operator would not accept"));
+    assert_eq!(advisor.revision, 10);
+    // Run V: comparing a finished result with the request is the acceptance gene's, not the advisor's.
+    assert!(!advisor.instructions.contains("a goal called done at a scope the operator would not accept"));
+    let acceptance = Library::default().get("acceptance").unwrap().clone();
+    assert_eq!((acceptance.name.as_str(), acceptance.revision), ("Acceptance check", 1));
+    assert_eq!(acceptance.tools, ["team.advisor", "team.acceptance"]);
+    assert_eq!((acceptance.roles.as_slice(), acceptance.inline.as_slice()), ([Audience::Lead, Audience::Advisor].as_slice(), [Audience::Advisor].as_slice()));
+    assert!(acceptance.instructions.chars().count() <= 1100 && !acceptance.summary.is_empty() && acceptance.summary.chars().count() <= MAX_SUMMARY);
+    assert!(acceptance.instructions.contains("woken only when the team goes quiet with every claim done"));
+    assert!(acceptance.instructions.contains("Judge the result as the requester would"));
+    assert!(acceptance.instructions.contains("to the member who closed the claim that falls short (the lead only if no member owns it)"));
+    let lowered = format!("{} {}", acceptance.instructions, acceptance.summary).to_lowercase();
+    for word in ["game", "player", "minecraft", "castle", "block", "build"] {
+        assert!(!lowered.contains(word), "Acceptance lens mentions {word}");
+    }
     assert!(advisor.instructions.contains("members marked claims blocked"));
     assert!(advisor.instructions.contains("several members report a similar blocker"));
     assert!(advisor.instructions.contains("(busy but stalled)"));
@@ -315,9 +327,11 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
         assert!(previous.iter().any(|d| d.id == "planning" && d.revision == revision));
     }
     assert!(previous.iter().any(|d| d.id == "swarm" && d.revision == 1));
-    for revision in 1..=4 {
+    for revision in 1..=9 {
         assert!(previous.iter().any(|d| d.id == "advisor" && d.revision == revision));
     }
+    // Revision 10 restores revision 8's wording.
+    assert_eq!(previous.iter().find(|d| d.id == "advisor" && d.revision == 8).unwrap().instructions, advisor.instructions);
     for earlier in previous {
         let shipped = Library::default().get(&earlier.id).unwrap().clone();
         assert!(earlier.revision < shipped.revision, "{} history must predate the shipped revision", earlier.id);
@@ -382,7 +396,7 @@ fn summaries_and_roles_make_lenses_on_demand_and_role_scoped() {
     assert_eq!(resolved.inline(Audience::Advisor).count(), 2);
     assert_eq!(resolved.inline(Audience::Member).count(), 1);
     assert!(resolved.guidance_for("advisor", Audience::Member).is_none());
-    assert_eq!(resolved.guidance_for("Team advisor", Audience::Lead).unwrap().revision, 9);
+    assert_eq!(resolved.guidance_for("Team advisor", Audience::Lead).unwrap().revision, 10);
     // Role-scoped lenses without a summary are inline only for their roles.
     library.definitions.push(Definition { id: "lead-only".into(), name: "Lead only".into(), revision: 1, instructions: "Lead text".into(), roles: vec![Audience::Lead], ..Default::default() });
     let scoped = library.resolve(&["lead-only".into()], &[]).unwrap();

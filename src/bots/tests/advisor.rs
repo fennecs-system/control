@@ -744,3 +744,119 @@ fn a_persistent_member_with_no_claim_while_the_team_has_open_work_is_an_idle_fac
     assert_eq!(facts(runs[0])[0].idle, vec![lifecycle::Waiter { key: String::new(), chat: finished.clone() }], "a one-off helper that is not a bot is not reported: {helper}");
     assert!(runs[0].objective.contains(&format!("idle member: member {finished} holds no claim")));
 }
+
+/// A judge child of `root` capturing the acceptance persona, started as its
+/// team's acceptance check.
+fn acceptance(state: &mut State, root: &str) -> String {
+    let chat = judge(state, root);
+    let captured = control_context::persona::Captured::of(&control_context::persona::builtin("acceptance").unwrap(), &[]).unwrap();
+    state.runtime.runs.last_mut().unwrap().persona.as_mut().unwrap().bundle = Some(Box::new(captured));
+    assert_eq!(command_at(state, &chat, "on", Now(0)).unwrap(), "Acceptance check started. It sleeps until its team goes quiet with every claim done.");
+    chat
+}
+
+#[test]
+fn an_acceptance_check_wakes_only_when_the_team_goes_quiet_with_every_claim_done() {
+    // Run V: a member called the goal complete, the team went quiet and
+    // nobody compared the result with the request.
+    let (mut state, root) = fixture();
+    let (builder, miner) = (spawned(&mut state, &root, "Builder"), spawned(&mut state, &root, "Miner"));
+    let advisor = advisor(&mut state, &root);
+    state.chats[0].lenses = Some(vec!["advisor".into(), "acceptance".into()]);
+    let check = acceptance(&mut state, &root);
+    let definition = state.bots.supervisor.definitions().find(|d| d.chat.0 == check).unwrap();
+    assert_eq!(definition.sources, [lifecycle::done_source(&root)], "completion only: no team facts, room, watch or timer");
+    assert!(status(&state, &check).unwrap().starts_with("Acceptance check · sleeping · team completion"));
+    assert!(command_at(&mut state, &check, "on every 5", Now(1)).is_err(), "no timer");
+    // It has an advisor's standing in its own team, but members ask the advisor.
+    assert_eq!(state.bots.advised_team(&check), Some(root.as_str()));
+    assert!(state.bots.advises(&check) && state.bots.accepts(&check) && !state.bots.accepts(&advisor));
+    assert_eq!(state.bots.team_advisor(&root), Some(advisor.as_str()));
+    reconcile_at(&mut state, 1, ok).unwrap();
+
+    // Quiet with no claims: nothing was called finished.
+    turn(&mut state, &builder, "completed");
+    reconcile_at(&mut state, 2, ok).unwrap();
+    let runs = advisor_runs(&state, &advisor);
+    assert_eq!(runs.len(), 1);
+    assert_eq!(facts(runs[0]), [Facts { quiescent: true, ..Facts::default() }]);
+    assert!(advisor_runs(&state, &check).is_empty());
+    finish(&mut state, &advisor);
+
+    // Quiet with a blocked claim: the advisor's facts, not completion.
+    claim(&mut state, &builder, "wall", "working", None);
+    claim(&mut state, &miner, "mine", "working", None);
+    claim(&mut state, &miner, "mine", "blocked", Some("wall"));
+    turn(&mut state, &miner, "completed");
+    reconcile_at(&mut state, 40_000, ok).unwrap();
+    let runs = advisor_runs(&state, &advisor);
+    assert_eq!(runs.len(), 2);
+    let heard = &facts(runs[1])[0];
+    assert!(heard.quiescent && !heard.finished && heard.blocked.len() == 1, "{heard:?}");
+    assert!(advisor_runs(&state, &check).is_empty(), "other team facts never wake it");
+    finish(&mut state, &advisor);
+
+    // Every claim done and the team quiet: both hear it, each on its own topic.
+    claim(&mut state, &builder, "wall", "done", None);
+    claim(&mut state, &miner, "mine", "done", None);
+    turn(&mut state, &builder, "completed");
+    reconcile_at(&mut state, 80_000, ok).unwrap();
+    let runs = advisor_runs(&state, &advisor);
+    assert_eq!(runs.len(), 3, "no extra advisor wake: the quiet fact carries it");
+    assert!(facts(runs[2])[0].quiescent && facts(runs[2])[0].finished);
+    let runs = advisor_runs(&state, &check);
+    assert_eq!(runs.len(), 1);
+    assert_eq!(facts(runs[0]), [Facts { finished: true, ..Facts::default() }], "completion alone");
+    assert!(crate::delegation::is_judge(runs[0]) && runs[0].resource_grants.is_empty());
+    assert!(runs[0].objective.contains("read-only acceptance check") && runs[0].objective.contains("went quiet with every claim done")
+        && runs[0].objective.contains(&root), "{}", runs[0].objective);
+    assert!(Facts { finished: true, ..Facts::default() }.pathological() == Facts::default(), "not a pathology");
+    finish(&mut state, &advisor);
+    finish(&mut state, &check);
+    reconcile_at(&mut state, 120_000, ok).unwrap();
+    reconcile_at(&mut state, 160_000, ok).unwrap();
+    assert_eq!(advisor_runs(&state, &check).len(), 1, "its own turn is not team activity");
+
+    // Reopened work that finishes again is a new completion.
+    claim(&mut state, &builder, "keep", "working", None);
+    turn(&mut state, &builder, "completed");
+    reconcile_at(&mut state, 200_000, ok).unwrap();
+    assert_eq!(advisor_runs(&state, &check).len(), 1, "an open claim is not finished");
+    claim(&mut state, &builder, "keep", "done", None);
+    turn(&mut state, &builder, "completed");
+    reconcile_at(&mut state, 240_000, ok).unwrap();
+    assert_eq!(advisor_runs(&state, &check).len(), 2);
+
+    // Stopping one observer keeps the team's snapshot for the other.
+    for step in 1..=3 {
+        finish(&mut state, &advisor);
+        finish(&mut state, &check);
+        reconcile_at(&mut state, 240_000 + step * 40_000, ok).unwrap();
+    }
+    command_at(&mut state, &advisor, "off", Now(400_001)).unwrap();
+    assert!(state.bots.teams.contains_key(&root));
+    assert_eq!(state.bots.team_advisor(&root), None, "an acceptance check takes no questions");
+    command_at(&mut state, &check, "off", Now(400_002)).unwrap();
+    assert!(!state.bots.teams.contains_key(&root));
+}
+
+#[test]
+fn the_acceptance_gene_alone_offers_an_acceptance_check() {
+    let (mut state, root) = fixture();
+    let builder = spawned(&mut state, &root, "Builder");
+    state.chats[0].lenses = Some(vec!["swarm".into()]);
+    let chat = judge(&mut state, &root);
+    let captured = control_context::persona::Captured::of(&control_context::persona::builtin("acceptance").unwrap(), &[]).unwrap();
+    state.runtime.runs.last_mut().unwrap().persona.as_mut().unwrap().bundle = Some(Box::new(captured));
+    assert_eq!(command_at(&mut state, &chat, "on", Now(0)).unwrap_err(), ADVISOR_OFF, "opt-in");
+    state.chats[0].lenses = Some(vec!["swarm".into(), "acceptance".into()]);
+    command_at(&mut state, &chat, "on", Now(1)).unwrap();
+    assert!(state.bots.accepts(&chat));
+    reconcile_at(&mut state, 2, ok).unwrap();
+    assert!(state.bots.teams.contains_key(&root), "facts are computed for a team with only an acceptance check");
+    claim(&mut state, &builder, "wall", "working", None);
+    claim(&mut state, &builder, "wall", "done", None);
+    turn(&mut state, &builder, "completed");
+    reconcile_at(&mut state, 3, ok).unwrap();
+    assert_eq!(advisor_runs(&state, &chat).len(), 1);
+}

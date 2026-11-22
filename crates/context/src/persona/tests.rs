@@ -5,7 +5,10 @@ fn builtins_are_valid_and_name_existing_genes() {
     let library = Library::default();
     library.validate().unwrap();
     let ids = library.current().iter().map(|d| d.id.as_str()).collect::<Vec<_>>();
-    assert_eq!(ids, ["advisor", "antibody", "judge", "lead", "worker"]);
+    assert_eq!(ids, ["acceptance", "advisor", "antibody", "judge", "lead", "worker"]);
+    let (acceptance, advisor) = (builtin("acceptance").unwrap(), builtin("advisor").unwrap());
+    assert_eq!((acceptance.standing, acceptance.lenses), (advisor.standing, vec!["acceptance".to_owned()]));
+    assert!(acceptance.purpose.chars().count() <= 600);
     let genes = crate::Library::default();
     for persona in library.current() {
         for gene in &persona.lenses {

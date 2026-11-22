@@ -24,6 +24,14 @@
     "standing": {"sees": "team", "steers": "lead", "answers_to": "lead", "acts": "read_only"}
   },
   {
+    "id": "acceptance",
+    "name": "Acceptance check",
+    "revision": 1,
+    "purpose": "Compare what your team calls finished with what was asked. Woken when the team goes quiet with every claim done, read the request and the room's evidence and judge the result as the requester would. Note the member whose claim falls short with what is missing; send nothing when the result is acceptable. Never do the work or assign it.",
+    "lenses": ["acceptance"],
+    "standing": {"sees": "team", "steers": "lead", "answers_to": "lead", "acts": "read_only"}
+  },
+  {
     "id": "antibody",
     "name": "Antibody",
     "revision": 1,

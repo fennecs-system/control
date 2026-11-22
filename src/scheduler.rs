@@ -70,7 +70,7 @@ impl Default for Limits {
             max_parallel_runs: 3,
             max_agents_per_root: 64,
             max_pending_agent_intents: 256,
-            max_advisors_per_root: 1,
+            max_advisors_per_root: 2,
             advisor_failure_streak: 3,
             advisor_stall_turns: 24,
             advisor_bottleneck_members: 2,
