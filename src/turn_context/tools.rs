@@ -20,7 +20,7 @@ fn payload_schema() -> Value {
 fn disposition_schema() -> Value {
     json!({"oneOf":[
         {"type":"object","properties":{"kind":{"type":"string","enum":["continue","done"]}},"required":["kind"],"additionalProperties":false},
-        {"type":"object","properties":{"kind":{"const":"wait"},"topics":{"type":"array","maxItems":16,"items":{"type":"string","maxLength":128},"description":"Choose only relevant dependencies from wake_topics, or claim:<room>/<key> to wake once when that live claim resolves as done, released or abandoned; progress updates do not wake. A key nobody has claimed cannot be awaited. port:<port_id> waits for a pending port request: the operator's decision starts the next turn. An explicit wait suspends periodic check-ins. Empty topics wake on urgent failures or direct messages; selected topics wake only on those topics and urgent failures, retaining other messages for the next turn, so include this chat's conversation topic to be woken by direct messages. Omit topics to keep every current subscription. Bare names (a room or watch id) are matched to wake_topics; names that match no subscription are dropped and reported. Omit recheck_seconds to sleep until then."},"recheck_seconds":{"type":["integer","null"],"minimum":1,"maximum":u32::MAX,"description":"Optional fallback when a callback cannot establish readiness. Omit/null for event-only waiting; no implicit polling deadline."}},"required":["kind"],"additionalProperties":false}
+        {"type":"object","properties":{"kind":{"const":"wait"},"topics":{"type":"array","maxItems":16,"items":{"type":"string","maxLength":128},"description":"Choose only relevant dependencies from wake_topics, or claim:<room>/<key> to wake once when that live claim resolves as done, released or abandoned; progress updates do not wake. A key nobody has claimed cannot be awaited. port:<port_id> waits for a pending port request: the operator's decision starts the next turn. An explicit wait suspends periodic check-ins. Empty topics wake on urgent failures or direct messages; selected topics wake only on those topics and urgent failures, retaining other messages for the next turn, so include this chat's conversation topic to be woken by direct messages. Omit topics to keep every current subscription. Bare names (a room or watch id) are matched to wake_topics; names that match no subscription are dropped and reported. Omit recheck_seconds to sleep until then."},"recheck_seconds":{"type":["integer","null"],"minimum":1,"maximum":u32::MAX,"description":"Fallback timer, only for teams that selected the timers gene (dropped otherwise) and only when no event can report readiness. It backs off while it finds nothing. Omit/null for event-only waiting; no implicit polling deadline."}},"required":["kind"],"additionalProperties":false}
     ]})
 }
 impl AttemptTools for Tools {
@@ -357,6 +357,13 @@ fn disposition(state: &State, chat: &str, value: Value, adjusted: &mut Vec<Strin
         },
         _ => return Err(err("recheck_seconds must be a positive whole number of seconds: retry control_turn_handoff {\"disposition\":{\"kind\":\"wait\",\"topics\":[],\"recheck_seconds\":300}} or omit it")),
     };
+    let recheck_seconds = recheck_seconds.filter(|_| {
+        let timers = crate::bots::offered_for(state, chat, crate::bots::TIMER_TOOL);
+        if !timers {
+            adjusted.push("recheck_seconds dropped: this team did not select the timers gene, so the wait is for events only (messages, claims, and a routine's notifications or exit still wake you)".into());
+        }
+        timers
+    });
     let allowed = crate::bots::wait_topics(state, chat);
     let everything = || {
         let mut topics = allowed.clone();

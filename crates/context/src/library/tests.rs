@@ -268,12 +268,14 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert!(advisor.instructions.contains("it hears no host facts and sends nothing unasked"));
     assert!(advisor.instructions.chars().count() <= 1300);
     let monitor = Library::default().get("monitor").unwrap().clone();
-    assert_eq!((monitor.name.as_str(), monitor.revision), ("Team monitor", 1));
+    assert_eq!((monitor.name.as_str(), monitor.revision), ("Team monitor", 2));
     assert_eq!(monitor.tools, ["team.monitor"]);
     assert_eq!((monitor.roles.as_slice(), monitor.inline.as_slice()), ([Audience::Lead, Audience::Advisor].as_slice(), [Audience::Advisor].as_slice()));
     assert!(monitor.instructions.len() <= 3_000 && !monitor.summary.is_empty() && monitor.summary.chars().count() <= MAX_SUMMARY);
     assert!(monitor.instructions.contains("you are a read-only judge woken only by host facts about your task tree"));
     assert!(monitor.instructions.contains("Members do not ask it; they ask the advisor."));
+    // Runs X and Y: members whose own piece was done idled while the team's work stayed open.
+    assert!(monitor.instructions.contains("A member idle with no claim while the team's claims are open is a gap even when its own work is done"));
     let lowered = format!("{} {} {} {}", monitor.instructions, monitor.summary, advisor.instructions, advisor.summary).to_lowercase();
     for word in ["game", "player", "minecraft", "castle", "block "] {
         assert!(!lowered.contains(word), "Observer lens mentions {word}");

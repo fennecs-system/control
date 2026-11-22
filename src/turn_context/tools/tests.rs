@@ -669,6 +669,14 @@ fn only_a_disposition_is_required_and_wait_topics_are_normalised_not_refused() {
     assert!(wait["disposition"]["recheck_seconds"].is_null());
     let adjusted = wait["adjusted"].to_string();
     assert!(adjusted.contains("read #general as room:general") && adjusted.contains("dropped nope") && adjusted.contains("recheck_seconds 0"), "{adjusted}");
+    // A recheck is a timer: dropped, and said so, unless the team selected the gene.
+    let dropped = hand_off(&mut state, &id, &generation, "no-gene", json!({"disposition":{"kind":"wait","topics":[],"recheck_seconds":300}})).unwrap();
+    assert!(dropped["disposition"]["recheck_seconds"].is_null(), "{dropped}");
+    assert!(dropped["adjusted"].to_string().contains("did not select the timers gene"), "{dropped}");
+    state.chats[0].lenses = Some(vec!["timers".into()]);
+    let kept = hand_off(&mut state, &id, &generation, "gene", json!({"disposition":{"kind":"wait","topics":[],"recheck_seconds":300}})).unwrap();
+    assert!(!kept.to_string().contains("timers gene"), "kept as asked: {kept}");
+    state.chats[0].lenses = None;
     // Nothing matches, or nothing is named: keep every subscription.
     for (nonce, disposition) in [("none", json!({"kind":"wait","topics":["elsewhere"]})), ("omitted", json!({"kind":"wait"}))] {
         let widest = hand_off(&mut state, &id, &generation, nonce, json!({"disposition":disposition})).unwrap();
