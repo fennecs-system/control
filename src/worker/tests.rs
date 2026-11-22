@@ -100,7 +100,7 @@ fn codex_tool_outcome_survives_activity_truncation_and_drains_final_results() {
             append("mcp1", "mcp_tool_call", status);
         }
         let mut tail = std::collections::VecDeque::new();
-        let (_, unfinished) = capture_codex(lines.as_bytes(), |event| {
+        let (_, unfinished, _) = capture_codex(lines.as_bytes(), |event| {
             tail.push_back(event);
             if tail.len() > 64 {
                 tail.pop_front();
@@ -2080,6 +2080,23 @@ fn diagnostics_return_fixed_messages_without_echoing_secret_text() {
         worker_failure(b"unexpected raw text fake-secret-for-test"),
         UNKNOWN_FAILURE
     );
+}
+
+#[test]
+fn a_usage_limit_reported_only_in_the_event_stream_is_named() {
+    // 2026-11-22: every run failed with the unknown-failure text while Codex
+    // was saying, on stdout only, that the account had hit its usage limit.
+    let stream = concat!(
+        "{\"type\":\"turn.started\"}\n",
+        "{\"type\":\"error\",\"message\":\"You\u{2019}ve hit your usage limit. Visit https://example.invalid/usage or try again at Nov 26th.\"}\n",
+        "{\"type\":\"turn.failed\",\"error\":{\"message\":\"You\u{2019}ve hit your usage limit.\"}}\n",
+    );
+    let (_, _, reported) = capture_codex(stream.as_bytes(), |_| {});
+    assert_eq!(reported, Some("The signed-in Codex account reached a usage or rate limit."));
+    // Only the provider's error events count, and unknown ones stay unknown.
+    let reply = "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"we hit the usage limit of the quarry\"}}\n";
+    assert_eq!(capture_codex(reply.as_bytes(), |_| {}).2, None);
+    assert_eq!(capture_codex("{\"type\":\"error\",\"message\":\"something odd\"}\n".as_bytes(), |_| {}).2, None);
 }
 
 #[test]

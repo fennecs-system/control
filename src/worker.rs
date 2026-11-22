@@ -1350,13 +1350,39 @@ fn project_operation<T>(bridge: Option<(&Arc<Mutex<State>>, &str)>, generation: 
 /// A successful CLI exit is not a completed tool exchange. Check after the
 /// stdout reader joins, so a buffered completion cannot be mistaken for loss.
 /// No timeout or automatic retry: a host effect may already have happened.
+/// Keeps the end of the provider's event stream so its own error events can
+/// be classified: Codex reports a usage limit only there, not on stderr.
+struct Tail<R> {
+    inner: R,
+    kept: Vec<u8>,
+}
+impl<R: std::io::Read> std::io::Read for &mut Tail<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let length = self.inner.read(buffer)?;
+        self.kept.extend_from_slice(&buffer[..length]);
+        if self.kept.len() > 32_768 {
+            let cut = self.kept.len() - 16_384;
+            self.kept.drain(..cut);
+        }
+        Ok(length)
+    }
+}
+/// The fixed message for the provider's `error` and `turn.failed` events in
+/// `stream`, if they name a known failure. Raw text is never returned.
+fn reported_failure(stream: &[u8]) -> Option<&'static str> {
+    let errors = stream.split(|byte| *byte == b'\n')
+        .filter(|line| [&b"\"type\":\"error\""[..], b"\"type\":\"turn.failed\""].iter().any(|kind| line.windows(kind.len()).any(|window| window == *kind)))
+        .collect::<Vec<_>>().join(&b'\n');
+    Some(worker_failure(&errors)).filter(|message| !errors.is_empty() && *message != UNKNOWN_FAILURE)
+}
 fn capture_codex(
     reader: impl std::io::Read,
     mut update: impl FnMut(crate::usage::Activity),
-) -> (control_ai::Usage, bool) {
+) -> (control_ai::Usage, bool, Option<&'static str>) {
+    let mut reader = Tail { inner: reader, kept: Vec::new() };
     // Completion is adapter state, independent of the bounded UI activity tail.
     let mut pending = std::collections::HashSet::new();
-    let usage = crate::usage::capture_with(reader, |event| {
+    let usage = crate::usage::capture_with(&mut reader, |event| {
         if event.kind == "mcp_tool_call" {
             if matches!(event.status.as_str(), "in_progress" | "running") {
                 pending.insert(event.id.clone());
@@ -1366,7 +1392,7 @@ fn capture_codex(
         }
         update(event);
     });
-    (usage, !pending.is_empty())
+    (usage, !pending.is_empty(), reported_failure(&reader.kept))
 }
 /// How long a provider may keep running after its handoff was accepted, so it
 /// can end the turn itself and report the turn's usage (Codex reports usage
@@ -1688,7 +1714,7 @@ fn execute(
         if let Err(message) = crate::attempt_control::stop(bridge, attempt) {
             return Err(("interrupted", message.into()));
         }
-        if let Ok((usage, _)) = accounting.join() {
+        if let Ok((usage, _, _)) = accounting.join() {
             attempt.record_usage(usage);
         }
         return Err(if crate::lifecycle::cancelled(bridge) {
@@ -1704,11 +1730,11 @@ fn execute(
             failed("Worker stopped after its deadline or a process error.")
         });
     }
-    let (usage, unfinished) = accounting.join().map_err(|_| failed("Could not read the provider's final tool results."))?;
+    let (usage, unfinished, reported) = accounting.join().map_err(|_| failed("Could not read the provider's final tool results."))?;
     attempt.record_usage(usage);
     if !result.unwrap_or(false) {
         let stderr = diagnostics.join().unwrap_or(UNKNOWN_FAILURE);
-        return Err(failed(stderr));
+        return Err(failed(if stderr == UNKNOWN_FAILURE { reported.unwrap_or(stderr) } else { stderr }));
     }
     let _ = diagnostics.join();
     finish_codex_tools(attempt, bridge, id, handoff.is_some(), unfinished)?;
