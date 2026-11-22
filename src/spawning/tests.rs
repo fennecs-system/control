@@ -554,6 +554,10 @@ fn a_judge_batch_starts_one_advisor_within_its_own_allowance_beside_the_review_j
     assert_eq!(error, crate::bots::ADVISOR_OFF);
     s.chats[0].lenses = Some(vec!["swarm".into()]);
     assert!(request(&mut s, &id, "parent-attempt", "swarm", judge(1), |_| panic!("swarm excludes it")).is_err());
+    // Each gene offers only its own observer: a plain judge is an advisor.
+    s.chats[0].lenses = Some(vec!["swarm".into(), "acceptance".into()]);
+    let error = request(&mut s, &id, "parent-attempt", "other-gene", judge(1), |_| panic!("no advisor gene")).unwrap_err();
+    assert_eq!(error, crate::bots::ADVISOR_OFF);
     s.chats[0].lenses = Some(vec!["swarm".into(), "advisor".into()]);
     assert!(request(&mut s, &id, "parent-attempt", "two", judge(2), |_| panic!("one advisor per batch")).is_err());
     request(&mut s, &id, "parent-attempt", "advisor", judge(1), |_| Ok(())).unwrap();
@@ -561,15 +565,16 @@ fn a_judge_batch_starts_one_advisor_within_its_own_allowance_beside_the_review_j
     assert!(delegation::is_judge(child), "spawned with the existing judge persona, not a new role");
     assert_eq!((child.kind, child.action), (RunKind::Spawned, Action::Task));
     assert!(child.resource_grants.is_empty(), "a judge receives no services");
-    // The default allowance fits two observers: an advisor and an acceptance check.
+    // The default allowance fits three observers: an advisor, a monitor and an acceptance check.
     request(&mut s, &id, "parent-attempt", "second", judge(1), |_| Ok(())).unwrap();
-    let error = request(&mut s, &id, "parent-attempt", "third", judge(1), |_| panic!("two observers per root")).unwrap_err();
+    request(&mut s, &id, "parent-attempt", "monitor", judge(1), |_| Ok(())).unwrap();
+    let error = request(&mut s, &id, "parent-attempt", "third", judge(1), |_| panic!("three observers per root")).unwrap_err();
     assert!(error.contains("max_advisors_per_root"), "{error}");
     // The advisor does not consume the root's one blocking judge review.
     let parent = s.runtime.runs.iter().find(|run| run.id == id).unwrap();
     assert!(delegation::budget_for(&s, parent, Role::Judge, 1, false).is_ok());
     // The cap is configuration: raise it for another, or 0 disables them.
-    s.runtime.execution.max_advisors_per_root = 3;
+    s.runtime.execution.max_advisors_per_root = 4;
     request(&mut s, &id, "parent-attempt", "third", judge(1), |_| Ok(())).unwrap();
     s.runtime.execution.max_advisors_per_root = 0;
     assert!(request(&mut s, &id, "parent-attempt", "fourth", judge(1), |_| panic!("advisors disabled")).is_err());

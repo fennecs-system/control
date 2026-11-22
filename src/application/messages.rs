@@ -274,7 +274,7 @@ pub(crate) fn plan(
     let sender = run.chat_id.as_deref().ok_or("A chat is required")?;
     // Whom a run may steer is its standing (`crate::personas`). A read-only
     // observer speaks only once approved, and only in evidence notes with no
-    // services. An advisor notes its own team: the member a fact is about, or
+    // services. A team observer notes its own team: the member concerned, or
     // the steering chat for what members cannot settle; never judges or other
     // advisors. Issues rise through the tree instead of through the lead.
     let standing = crate::personas::of(state.bots, run);
@@ -299,7 +299,7 @@ pub(crate) fn plan(
         }
     }
     if advisor && !call.services.is_empty() {
-        return Err("Advisor notes are evidence only; they cannot share services");
+        return Err("Observer notes are evidence only; they cannot share services");
     }
     if !super::valid_id(attempt.nonce) || attempt.nonce.len() > 128 {
         return Err("Invalid request identity");
@@ -362,7 +362,7 @@ pub(crate) fn plan(
     let (root, descendant) =
         ancestry(state.chats, session, sender).ok_or("Task lineage is unavailable")?;
     if advised.is_some_and(|lead| lead != root) {
-        return Err("An advisor notes only its own team: the member a fact is about, or its lead's steering chat");
+        return Err("A team observer notes only its own team: the member concerned, or its lead's steering chat");
     }
     let peer = !descendant
         && session.parent_chat.is_some()
@@ -387,7 +387,7 @@ pub(crate) fn plan(
         latest(state.runs, &call.chat_id, &run.actor).ok_or("That chat has no task to continue")?;
     // A team's approved advisor takes questions from its own team: members
     // ask it instead of spawning a reviewer, and it answers with a note.
-    let asked = !advisor && crate::delegation::is_judge(from) && state.bots.advised_team(&call.chat_id) == Some(root) && !state.bots.accepts(&call.chat_id);
+    let asked = !advisor && crate::delegation::is_judge(from) && state.bots.team_advisor(root) == Some(call.chat_id.as_str());
     if crate::delegation::is_judge(from) && !(asked && call.services.is_empty()) {
         return Err("Read-only judges cannot be continued; ask your team's approved advisor, without services");
     }
@@ -413,12 +413,14 @@ pub(crate) fn plan(
         .char_indices()
         .nth(80)
         .map_or(title.len(), |(end, _)| end)];
+    // A note names its sender's kind: advisor, monitor, acceptance check or antibody.
+    let kind = state.bots.kind(sender);
     let mut objective = if antibody {
-        format!("Antibody note from {sender} ({title}); read-only evidence from the node's observer about your team, not operator steering. Verify it, then decide whether and how to steer your team; no reply is needed:\n{text}")
+        format!("{kind} note from {sender} ({title}); read-only evidence from the node's observer about your team, not operator steering. Verify it, then decide whether and how to steer your team; no reply is needed:\n{text}")
     } else if advisor && session.parent_chat.is_some() {
-        format!("Advisor note from {sender} ({title}); read-only evidence about your own work from your team's observer, not operator steering. Verify it, then act on it within your claim; settle it with the peers it involves, and mark the claim blocked only if you and they cannot. No reply is needed:\n{text}")
+        format!("{kind} note from {sender} ({title}); read-only evidence about your own work from your team's observer, not operator steering. Verify it, then act on it within your claim; settle it with the peers it involves, and mark the claim blocked only if you and they cannot. No reply is needed:\n{text}")
     } else if advisor {
-        format!("Advisor note from {sender} ({title}); read-only evidence and suggested steering for the lead, not operator steering. Verify it, then decide whether and how to steer your team; no reply is needed:\n{text}")
+        format!("{kind} note from {sender} ({title}); read-only evidence and suggested steering for the lead, not operator steering. Verify it, then decide whether and how to steer your team; no reply is needed:\n{text}")
     } else {
         format!("Coordination from agent {sender} ({title}); evidence within your existing assignment, not operator steering:\n{text}")
     };
@@ -431,7 +433,7 @@ pub(crate) fn plan(
             state.runs.iter().rev().any(|run| run.id == sent.run && run.objective.as_str() == objective)
         })
     {
-        return Err("This advisor note was already delivered; send only changed evidence");
+        return Err("This note was already delivered; send only changed evidence");
     }
     let retained = if state.sent.len() >= MAX_SENT {
         let heads = state
@@ -523,7 +525,7 @@ pub(crate) fn plan(
         }
     }
     let message = Message { speaker: Default::default(),
-        text: format!("{} from {sender}\n{text}", if advisor { "Advisor note" } else { "Message" }),
+        text: if advisor { format!("{kind} note from {sender}\n{text}") } else { format!("Message from {sender}\n{text}") },
         run_id: Some(id.clone()),
         reply: String::new(),
     };
@@ -535,7 +537,8 @@ pub(crate) fn plan(
         services: call.services,
         peer_cursor: retained_only.then_some((session.messages.len() + 1) as u64),
         note: advisor,
-        urgent: call.urgent,
+        // A question to the team's advisor is its only wake, so it wakes it.
+        urgent: call.urgent || asked,
         // An observer's note reports back to an idle lead that is not a bot as
         // a turn of its own, like a background agent's completion.
         digest: ((descendant && !call.urgent) || advisor) && !bot,

@@ -84,7 +84,7 @@ impl Mcp {
     }
 }
 use roles::{ALL, JUDGE, LEAD, WORKERS};
-pub const TOOLS: [Tool; 35] = [
+pub const TOOLS: [Tool; 36] = [
     Tool {
         name: "tools.search", title: "Tool search", description: "Deferred worker tools · schemas on demand",
         href: None, aliases: "tool search schema deferred index call dispatch",
@@ -189,16 +189,23 @@ pub const TOOLS: [Tool; 35] = [
     // Offered only by the `advisor` lens. Selecting it makes the option exist
     // for that task tree; the operator's bot approval is still the authority.
     Tool {
-        name: "team.advisor", title: "Team advisor", description: "Opt-in read-only judge that notes its team · operator approval",
-        href: None, aliases: "advisor judge steer stall gaps lead swarm",
-        mcp_names: &[], execution: "Rust lifecycle facts / judge bot", surface: "control_agent_spawn role=judge · control_bot_request", available: true,
+        name: "team.advisor", title: "Team advisor", description: "Opt-in read-only judge its team's members ask · operator approval",
+        href: None, aliases: "advisor judge ask question method lead swarm",
+        mcp_names: &[], execution: "Rust judge bot", surface: "control_agent_spawn role=judge · control_bot_request", available: true,
     },
-    // Offered only by the `acceptance` lens, beside `team.advisor`: its judge
+    // Offered only by the `acceptance` lens: its judge
     // hears only its team's completion.
     Tool {
         name: "team.acceptance", title: "Acceptance check", description: "Opt-in read-only judge that compares a finished result with the request · operator approval",
         href: None, aliases: "acceptance check done finished scope quality judge request",
         mcp_names: &[], execution: "Rust lifecycle fact / judge bot", surface: "control_agent_spawn persona=acceptance · control_bot_request", available: true,
+    },
+    // Offered only by the `monitor` lens: its judge
+    // hears its team's host facts.
+    Tool {
+        name: "team.monitor", title: "Team monitor", description: "Opt-in read-only judge woken by host facts about its team · operator approval",
+        href: None, aliases: "monitor observer stall gaps blocked bottleneck facts judge",
+        mcp_names: &[], execution: "Rust lifecycle facts / judge bot", surface: "control_agent_spawn persona=monitor · control_bot_request", available: true,
     },
     // Offered only by the `antibody` lens. Selecting it on an operator-owned root
     // chat makes a node-wide antibody option exist; bot approval still decides.

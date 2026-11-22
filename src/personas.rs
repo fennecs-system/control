@@ -100,12 +100,12 @@ pub(crate) fn observes_node(state: &State, chat: &str) -> bool {
     }
 }
 /// The opt-in gate for an observer persona in `chat`'s tree: node observers
-/// need the antibody gene on an operator-owned root, team observers the advisor
-/// gene. `None` for runs without a captured persona (their legacy gate applies).
+/// need the antibody gene on an operator-owned root, team observers one of the
+/// team-observer genes (each kind's own gene is checked where it starts). `None` for runs without a captured persona (their legacy gate applies).
 pub(crate) fn observer_offered(state: &State, chat: &str) -> Option<bool> {
     captured(state, chat).filter(|b| b.standing.acts.read_only()).map(|bundle| match bundle.standing.sees {
         Sees::Node => crate::bots::antibody_offered_for(state, chat),
-        Sees::Team => crate::bots::advisor_offered_for(state, chat),
+        Sees::Team => crate::bots::team_observer_offered_for(state, chat),
     })
 }
 /// The schedule `chat`'s persona asks for: the default `every_minutes` of a bot

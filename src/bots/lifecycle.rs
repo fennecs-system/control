@@ -8,7 +8,7 @@
 //! work, one claim holds up several members, a member's turns keep ending
 //! without an accepted handoff, a turn reached its time limit), never other
 //! single failures. Judge turns, retained peer evidence (runs without an
-//! attempt) and turns woken only by advisor notes, including the lead's, are
+//! attempt) and turns woken only by observer notes, including the lead's, are
 //! not team activity, so an advisor cannot wake itself through the team it
 //! advises. The model interprets; the host only observes.
 use super::{Message, Reason};
@@ -25,7 +25,10 @@ use std::hash::Hasher;
 pub(super) const KIND: &str = "task";
 /// The topic an acceptance check hears: only its team's `finished` fact.
 pub(super) const DONE_KIND: &str = "done";
-/// Chats named in one coalesced fact; the advisor reads the rest itself.
+/// The topic an ask-only advisor holds: it names the advisor's team and
+/// carries no events, so only its members' questions wake it.
+pub(super) const ASK_KIND: &str = "ask";
+/// Chats named in one coalesced fact; the monitor reads the rest itself.
 const CHATS: usize = 8;
 
 /// One coalescing, non-urgent, non-direct reason for an advisor turn. Facts are
@@ -590,36 +593,54 @@ pub(super) fn done_topic(root: &str) -> Topic {
 pub(super) fn done_source(root: &str) -> Source {
     Source::Topic(done_topic(root))
 }
-/// Roots with an advisor or acceptance check subscribed whose root chat still
+pub(super) fn ask_source(root: &str) -> Source {
+    Source::Topic(Topic::new(ASK_KIND, root))
+}
+/// Roots with a monitor or acceptance check subscribed whose root chat still
 /// selects the opt-in lens, without allocating when there are none. With the
-/// lens off, a tree's topic is not computed at all.
+/// lens off, or only an ask-only advisor, a tree's facts are not computed.
 fn advised(state: &State) -> Vec<&str> {
-    let mut roots = state.bots.supervisor.definitions().filter_map(team).collect::<Vec<_>>();
-    if roots.is_empty() {
-        return roots;
-    }
+    let mut roots = state.bots.supervisor.definitions()
+        .filter_map(|definition| heard(definition).filter(|root| super::offered(state, root, gene(definition)))).collect::<Vec<_>>();
     roots.sort_unstable();
     roots.dedup();
-    roots.retain(|root| super::advisor_offered(state, root));
     roots
 }
 pub(super) fn advises(definition: &control_bot::Definition) -> bool {
     team(definition).is_some()
 }
-/// The task tree a team observer's definition subscribes to: an advisor's
-/// facts or an acceptance check's completion.
+/// The task tree a team observer's definition belongs to: a monitor's facts,
+/// an acceptance check's completion or an ask-only advisor's team.
 pub(super) fn team(definition: &control_bot::Definition) -> Option<&str> {
     definition.sources.iter().find_map(|source| match source {
-        Source::Topic(topic) if topic.kind == KIND || topic.kind == DONE_KIND => Some(topic.name.as_str()),
+        Source::Topic(topic) if topic.kind == KIND || topic.kind == DONE_KIND || topic.kind == ASK_KIND => Some(topic.name.as_str()),
         _ => None,
     })
+}
+/// The task tree whose host facts a definition hears: a monitor's or an
+/// acceptance check's, never an ask-only advisor's.
+fn heard(definition: &control_bot::Definition) -> Option<&str> {
+    team(definition).filter(|_| !asks(definition))
+}
+/// The gene whose selection on the root keeps a fact-hearing definition
+/// subscribed: the acceptance check's for completion, else the monitor's.
+fn gene(definition: &control_bot::Definition) -> &'static str {
+    if accepts(definition) { super::ACCEPTANCE_TOOL } else { super::MONITOR_TOOL }
+}
+/// Whether a definition is an ask-only advisor's: the one members may ask.
+pub(super) fn asks(definition: &control_bot::Definition) -> bool {
+    definition.sources.iter().any(|source| matches!(source, Source::Topic(topic) if topic.kind == ASK_KIND))
+}
+/// Whether a definition is a monitor's: it hears its team's host facts.
+pub(super) fn monitors(definition: &control_bot::Definition) -> bool {
+    definition.sources.iter().any(|source| matches!(source, Source::Topic(topic) if topic.kind == KIND))
 }
 /// Whether a definition is an acceptance check's: it hears only completion.
 pub(super) fn accepts(definition: &control_bot::Definition) -> bool {
     definition.sources.iter().any(|source| matches!(source, Source::Topic(topic) if topic.kind == DONE_KIND))
 }
 
-/// A turn woken only by advisor notes is the advisor's echo, not new activity.
+/// A turn woken only by observer notes is the observer's echo, not new activity.
 fn echo(run: &crate::runtime::Run) -> bool {
     run.bot_turn.as_ref().is_some_and(|turn| !turn.reasons.is_empty()
         && turn.reasons.iter().all(|reason| matches!(reason, Reason::Info { info: Message::Note, .. })))
@@ -954,7 +975,7 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
 /// Teams without a recorded snapshot have not started their subscription.
 pub(super) fn concern(state: &State, pending: &mut BTreeMap<String, Facts>, chat: &str, add: impl FnOnce(&mut Facts)) {
     let Some(root) = super::root(state, chat) else { return };
-    if !state.bots.teams.contains_key(root) || !(super::advisor_offered(state, root) || super::antibodies_active(state)) {
+    if !state.bots.teams.contains_key(root) || !(super::offered(state, root, super::MONITOR_TOOL) || super::offered(state, root, super::ACCEPTANCE_TOOL) || super::antibodies_active(state)) {
         return;
     }
     let facts = pending.entry(root.to_owned()).or_default();
@@ -970,6 +991,8 @@ pub(super) fn offer(state: &mut State, pending: BTreeMap<String, Facts>, now: co
     let immune = super::antibodies_active(state);
     let mut node = BTreeMap::new();
     for (root, facts) in pending {
+        // Each topic is published only while the root still selects its gene.
+        let (monitored, accepted) = (super::offered(state, &root, super::MONITOR_TOOL), super::offered(state, &root, super::ACCEPTANCE_TOOL));
         let Some(team) = state.bots.teams.get_mut(&root).filter(|_| !facts.is_empty()) else { continue };
         team.cursor += 1;
         let cursor = team.cursor;
@@ -980,11 +1003,13 @@ pub(super) fn offer(state: &mut State, pending: BTreeMap<String, Facts>, now: co
             }
         }
         // An acceptance check hears completion alone, at the team's cursor.
-        if facts.finished {
+        if facts.finished && accepted {
             let done = Facts { finished: true, ..Facts::default() };
             effects.extend(state.bots.supervisor.step(control_bot::Event::Info { topic: done_topic(&root), cursor, from: None, info: Message::Lifecycle(Box::new(done)) }, now));
         }
-        effects.extend(state.bots.supervisor.step(control_bot::Event::Info { topic: topic(&root), cursor, from: None, info: Message::Lifecycle(Box::new(facts)) }, now));
+        if monitored {
+            effects.extend(state.bots.supervisor.step(control_bot::Event::Info { topic: topic(&root), cursor, from: None, info: Message::Lifecycle(Box::new(facts)) }, now));
+        }
     }
     if !node.is_empty() {
         state.bots.node_cursor += 1;
@@ -1018,8 +1043,8 @@ pub(super) fn forget(state: &mut State, chat: &str) {
         let advised = advised(state).into_iter().map(str::to_owned).collect::<Vec<_>>();
         state.bots.teams.retain(|root, _| advised.contains(root));
     }
-    let roots = state.bots.supervisor.definitions().filter(|definition| definition.chat.0 == chat).filter_map(team)
-        .filter(|root| !state.bots.supervisor.definitions().any(|other| other.chat.0 != chat && team(other) == Some(*root)
+    let roots = state.bots.supervisor.definitions().filter(|definition| definition.chat.0 == chat).filter_map(heard)
+        .filter(|root| !state.bots.supervisor.definitions().any(|other| other.chat.0 != chat && heard(other) == Some(*root)
             && state.bots.supervisor.status(&other.bot) != Some(control_bot::Status::Stopping)))
         .map(str::to_owned).collect::<Vec<_>>();
     for root in roots {

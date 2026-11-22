@@ -11,7 +11,7 @@ pub(super) const CARD: Color = Color::Rgb(31, 31, 38);
 pub(super) const PURPLE: Color = Color::Rgb(181, 160, 255);
 /// The theme's cyan accent, as `--cyan` in the web stylesheet.
 pub(super) const CYAN: Color = Color::Rgb(140, 218, 203);
-/// An advisor note as a boxed card: a cyan rule and label over the card
+/// An observer's note as a boxed card: a cyan rule and label over the card
 /// background, distinct from user input and Control events.
 pub(super) fn advisor_note(text: &str) -> Vec<Line<'static>> {
     let (label, note) = text.split_once('\n').unwrap_or((text, ""));

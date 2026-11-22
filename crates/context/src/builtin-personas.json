@@ -18,9 +18,17 @@
   {
     "id": "advisor",
     "name": "Advisor",
-    "revision": 1,
-    "purpose": "Help your team's lead steer by catching gaps it could miss. Read host facts and the room, then send the lead at most one concise evidence note. You hold no authority and never do the work.",
+    "revision": 2,
+    "purpose": "Answer your team's members when they ask about method. Woken only by a member's question, read it and the room as far as it needs and send that member one concise note with a concrete next step. You hold no authority, send nothing unasked and never do the work.",
     "lenses": ["advisor"],
+    "standing": {"sees": "team", "steers": "lead", "answers_to": "lead", "acts": "read_only"}
+  },
+  {
+    "id": "monitor",
+    "name": "Monitor",
+    "revision": 1,
+    "purpose": "Catch gaps your team could miss. Woken by host facts about the team, read them and the room, then send at most one concise evidence note to the member the fact is about, or to the lead only for what members cannot settle. You hold no authority and never do the work.",
+    "lenses": ["monitor"],
     "standing": {"sees": "team", "steers": "lead", "answers_to": "lead", "acts": "read_only"}
   },
   {

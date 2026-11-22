@@ -1,5 +1,6 @@
-//! The advisor: a read-only judge persona run as a persistent bot whose only
-//! source is its task tree's host lifecycle facts.
+//! Team observers: read-only judge personas run as persistent bots. The
+//! monitor's only source is its task tree's host lifecycle facts; the advisor
+//! hears none and wakes on its members' questions.
 use super::*;
 
 /// Appends one executed member turn with `status`.
@@ -14,9 +15,9 @@ pub(super) fn turn(state: &mut State, chat: &str, status: &str) -> usize {
     state.runtime.runs.push(run);
     state.runtime.runs.len() - 1
 }
-/// Ticks (or unticks) the advisor lens on the root chat.
+/// Ticks (or unticks) the advisor and monitor genes on the root chat.
 pub(super) fn opt_in(state: &mut State, root: &str, on: bool) {
-    state.chats.iter_mut().find(|chat| chat.id == root).unwrap().lenses = Some(if on { vec!["advisor".into()] } else { Vec::new() });
+    state.chats.iter_mut().find(|chat| chat.id == root).unwrap().lenses = Some(if on { vec!["advisor".into(), "monitor".into()] } else { Vec::new() });
 }
 /// A completed read-only judge child of `root`, before it runs as a bot.
 fn judge(state: &mut State, root: &str) -> String {
@@ -30,6 +31,16 @@ fn judge(state: &mut State, root: &str) -> String {
 pub(super) fn advisor(state: &mut State, root: &str) -> String {
     opt_in(state, root, true);
     let chat = judge(state, root);
+    command_at(state, &chat, "on", Now(0)).unwrap();
+    chat
+}
+/// A judge child of `root` with the monitor persona, started as its team's
+/// monitor: the observer that hears host facts.
+pub(super) fn monitor(state: &mut State, root: &str) -> String {
+    opt_in(state, root, true);
+    let chat = judge(state, root);
+    let captured = control_context::persona::Captured::of(&control_context::persona::builtin("monitor").unwrap(), &[]).unwrap();
+    state.runtime.runs.last_mut().unwrap().persona.as_mut().unwrap().bundle = Some(Box::new(captured));
     command_at(state, &chat, "on", Now(0)).unwrap();
     chat
 }
@@ -55,14 +66,12 @@ fn finish(state: &mut State, chat: &str) {
 #[test]
 fn a_judge_advises_on_team_facts_only_without_timers_rooms_or_grants() {
     let (mut state, root) = fixture();
-    let advisor = advisor(&mut state, &root);
+    let advisor = monitor(&mut state, &root);
     let definition = state.bots.supervisor.definitions().find(|d| d.chat.0 == advisor).unwrap();
     assert_eq!(definition.sources, [lifecycle::source(&root)], "no room inbox, watch or timer");
     assert!(state.bots.advises(&advisor) && !state.bots.advises(&root));
-    // Standing parity: the pre-persona judge reads as the built-in advisor.
-    let run = state.runtime.runs.iter().rev().find(|run| run.chat_id.as_deref() == Some(advisor.as_str())).unwrap();
-    assert_eq!(crate::personas::of(&state.bots, run), crate::personas::Effective::builtin("advisor", true));
-    assert!(status(&state, &advisor).unwrap().starts_with("Advisor · sleeping · team facts"));
+    assert!(state.bots.monitors(&advisor) && state.bots.team_advisor(&root).is_none(), "members do not ask a monitor");
+    assert!(status(&state, &advisor).unwrap().starts_with("Monitor · sleeping · team facts"));
     assert!(state.collective.room_watches.iter().all(|watch| watch.chat != advisor));
     assert!(command_at(&mut state, &advisor, "on every 5", Now(1)).is_err(), "facts trigger; no clock rule");
     // A judge that is not an approved advisor still cannot take a bot turn.
@@ -80,14 +89,16 @@ fn advisors_are_strictly_opt_in_through_the_advisor_lens() {
     let worker = spawned(&mut state, &root, "Builder");
     // The swarm preset does not include the advisor.
     state.chats[0].lenses = Some(vec!["swarm".into()]);
-    assert!(!advisor_offered(&state, &root));
+    assert!(!team_observer_offered(&state, &root));
     let judge = judge(&mut state, &root);
     let error = command_at(&mut state, &judge, "on", Now(0)).unwrap_err();
     assert_eq!(error, ADVISOR_OFF, "without the lens there is no advisor option");
     assert!(!state.bots.advises(&judge));
     // Ticking the lens (with or beside swarm) makes the option exist; approval runs it.
-    state.chats[0].lenses = Some(vec!["swarm".into(), "advisor".into()]);
-    assert!(advisor_offered(&state, &root) && advisor_offered_for(&state, &worker));
+    state.chats[0].lenses = Some(vec!["swarm".into(), "advisor".into(), "monitor".into()]);
+    assert!(team_observer_offered(&state, &root) && team_observer_offered_for(&state, &worker));
+    let captured = control_context::persona::Captured::of(&control_context::persona::builtin("monitor").unwrap(), &[]).unwrap();
+    state.runtime.runs.last_mut().unwrap().persona.as_mut().unwrap().bundle = Some(Box::new(captured));
     command_at(&mut state, &judge, "on", Now(1)).unwrap();
     reconcile_at(&mut state, 2, ok).unwrap();
     assert!(state.bots.teams.contains_key(&root));
@@ -104,7 +115,7 @@ fn quiescence_fires_once_per_settled_activity_and_history_before_subscription_is
     let (mut state, root) = fixture();
     let worker = spawned(&mut state, &root, "Builder");
     turn(&mut state, &worker, "failed");
-    let advisor = advisor(&mut state, &root);
+    let advisor = monitor(&mut state, &root);
     reconcile_at(&mut state, 1, ok).unwrap();
     assert!(state.bots.teams.contains_key(&root), "the subscription snapshot is recorded");
     let mut saves = 0;
@@ -121,7 +132,7 @@ fn quiescence_fires_once_per_settled_activity_and_history_before_subscription_is
     assert_eq!(runs.len(), 1, "the edge wakes the advisor once");
     assert_eq!(facts(runs[0]), [Facts { quiescent: true, ..Facts::default() }]);
     assert!(crate::delegation::is_judge(runs[0]) && runs[0].resource_grants.is_empty());
-    assert!(runs[0].objective.contains("read-only advisor") && runs[0].objective.contains("team went quiet"));
+    assert!(runs[0].objective.contains("read-only monitor") && runs[0].objective.contains("team went quiet"));
     finish(&mut state, &advisor);
     reconcile_at(&mut state, 40_000, ok).unwrap();
     reconcile_at(&mut state, 80_000, ok).unwrap();
@@ -134,7 +145,7 @@ fn notes_and_lead_turns_woken_only_by_notes_do_not_re_trigger_the_advisor() {
     let worker = spawned(&mut state, &root, "Builder");
     // The lead runs as a bot, so a note to its steering chat wakes it.
     command_at(&mut state, &root, "on", Now(0)).unwrap();
-    let advisor = advisor(&mut state, &root);
+    let advisor = monitor(&mut state, &root);
     reconcile_at(&mut state, 1, ok).unwrap();
     turn(&mut state, &worker, "completed");
     reconcile_at(&mut state, 2, ok).unwrap();
@@ -158,7 +169,7 @@ fn notes_and_lead_turns_woken_only_by_notes_do_not_re_trigger_the_advisor() {
     let woken = bot_runs(&state).into_iter().filter(|run| run.chat_id.as_deref() == Some(&root)).collect::<Vec<_>>();
     assert_eq!(woken.len(), 1);
     assert!(matches!(woken[0].bot_turn.as_ref().unwrap().reasons.as_slice(), [Reason::Info { info: Message::Note, .. }]));
-    assert!(woken[0].objective.contains("advisor note"));
+    assert!(woken[0].objective.contains("an observer's note"));
     let id = woken[0].id.clone();
     let woken = state.runtime.runs.iter_mut().find(|run| run.id == id).unwrap();
     woken.status = "completed".into();
@@ -177,7 +188,7 @@ fn facts_coalesce_into_one_reason_and_respect_the_advisor_budget() {
     state.collective.claim_seq += 1;
     state.collective.claims.push(crate::rooms::claims::Claim { room: "general".into(), key: "build".into(), owner: worker.clone(),
         status: crate::rooms::claims::Status::Working, blocked_on: None, note: String::new(), revision: 1, incarnation: 1, abandoned: false, blocked_at: 0, advanced_at: 0 });
-    let advisor = advisor(&mut state, &root);
+    let advisor = monitor(&mut state, &root);
     let mut definition = state.bots.supervisor.definitions().find(|d| d.chat.0 == advisor).unwrap().clone();
     definition.budget.turns_per_window = 1;
     state.bots.supervisor.step(Event::Define(definition), Now(0));
@@ -220,7 +231,7 @@ fn single_failures_and_exits_are_not_facts_but_a_retired_restart_loop_is() {
     let worker = spawned(&mut state, &root, "Builder");
     let tester = spawned(&mut state, &root, "Tester");
     watching(&mut state, &worker, "w-build");
-    let advisor = advisor(&mut state, &root);
+    let advisor = monitor(&mut state, &root);
     // A running member keeps the team from going quiet.
     turn(&mut state, &tester, "running");
     reconcile_at(&mut state, 1, ok).unwrap();
@@ -245,7 +256,7 @@ fn the_failure_streak_is_configurable() {
     let worker = spawned(&mut state, &root, "Builder");
     let tester = spawned(&mut state, &root, "Tester");
     state.runtime.execution.advisor_failure_streak = 2;
-    let advisor = advisor(&mut state, &root);
+    let advisor = monitor(&mut state, &root);
     turn(&mut state, &tester, "running");
     reconcile_at(&mut state, 1, ok).unwrap();
     turn(&mut state, &worker, "failed");
@@ -262,7 +273,7 @@ fn the_failure_streak_is_configurable() {
 fn failed_saves_restore_the_team_snapshot_and_restart_keeps_the_cursor() {
     let (mut state, root) = fixture();
     let worker = spawned(&mut state, &root, "Builder");
-    let advisor = advisor(&mut state, &root);
+    let advisor = monitor(&mut state, &root);
     reconcile_at(&mut state, 1, ok).unwrap();
     turn(&mut state, &worker, "completed");
     let before = state.bots.teams[&root].clone();
@@ -299,12 +310,74 @@ fn a_lead_requests_its_judge_as_advisor_and_the_operator_approves_it() {
     assert!(ask(&mut state, "timer", &judge, Some(5)).is_err(), "an advisor takes no interval");
     let request = ask(&mut state, "advisor", &judge, None).unwrap();
     assert!(!state.bots.advises(&judge), "a request grants nothing");
-    assert!(pending_panel(&state, &lead).contains("team facts (read-only advisor)"));
+    assert!(pending_panel(&state, &lead).contains("its team (read-only observer)"));
     let id = request["request_id"].as_str().unwrap().to_owned();
     decide(&mut state, &id, true, Some(&lead), Now(1)).unwrap();
     assert!(state.bots.advises(&judge));
     let definition = state.bots.supervisor.definitions().find(|d| d.chat.0 == judge).unwrap();
-    assert_eq!(definition.sources, [lifecycle::source(&lead)]);
+    assert_eq!(definition.sources, [lifecycle::ask_source(&lead)], "a plain judge is the advisor members ask");
+}
+
+#[test]
+fn an_advisor_approved_before_the_split_keeps_hearing_facts_under_the_monitor_gene() {
+    // Its persisted definition holds the task topic and no monitor persona.
+    let (mut state, root) = fixture();
+    let worker = spawned(&mut state, &root, "Builder");
+    let old = advisor(&mut state, &root);
+    let definition = state.bots.supervisor.definitions().find(|d| d.chat.0 == old).unwrap().clone();
+    let effects = state.bots.supervisor.step(Event::Define(Definition { sources: vec![lifecycle::source(&root)], ..definition }), Now(1));
+    record(&mut state, effects);
+    assert!(status(&state, &old).unwrap().starts_with("Monitor · sleeping · team facts"));
+    assert!(state.bots.monitors(&old) && state.bots.team_advisor(&root).is_none());
+    reconcile_at(&mut state, 2, ok).unwrap();
+    turn(&mut state, &worker, "completed");
+    reconcile_at(&mut state, 3, ok).unwrap();
+    let runs = advisor_runs(&state, &old);
+    assert_eq!(runs.len(), 1);
+    assert!(runs[0].objective.contains("read-only monitor") && runs[0].objective.contains("team went quiet"), "{}", runs[0].objective);
+    // Without the monitor gene on the root its facts stop, as for any monitor.
+    finish(&mut state, &old);
+    state.chats[0].lenses = Some(vec!["advisor".into()]);
+    turn(&mut state, &worker, "completed");
+    reconcile_at(&mut state, 40_000, ok).unwrap();
+    assert_eq!(advisor_runs(&state, &old).len(), 1);
+}
+
+#[test]
+fn an_advisor_hears_no_host_facts_and_a_monitor_hears_them() {
+    // Runs E and Y: most of the advisor's fact wakes did nothing. Asking and
+    // interjecting are separate observers, each with its own gene.
+    let (mut state, root) = fixture();
+    let worker = spawned(&mut state, &root, "Builder");
+    let advisor = advisor(&mut state, &root);
+    let definition = state.bots.supervisor.definitions().find(|d| d.chat.0 == advisor).unwrap();
+    assert_eq!(definition.sources, [lifecycle::ask_source(&root)], "no facts, room, watch or timer");
+    assert!(status(&state, &advisor).unwrap().starts_with("Advisor · sleeping · questions from team"));
+    assert!(command_at(&mut state, &advisor, "on every 5", Now(1)).is_err(), "no timer");
+    // Standing parity: the pre-persona judge reads as the built-in advisor.
+    let run = state.runtime.runs.iter().rev().find(|run| run.chat_id.as_deref() == Some(advisor.as_str())).unwrap();
+    assert_eq!(crate::personas::of(&state.bots, run), crate::personas::Effective::builtin("advisor", true));
+    assert!(state.bots.advises(&advisor) && !state.bots.monitors(&advisor));
+    assert_eq!(state.bots.team_advisor(&root), Some(advisor.as_str()));
+    // With only an advisor nobody hears facts, so none are computed.
+    reconcile_at(&mut state, 1, ok).unwrap();
+    assert!(lifecycle::observe(&state).is_empty() && !state.bots.teams.contains_key(&root));
+    turn(&mut state, &worker, "completed");
+    reconcile_at(&mut state, 2, ok).unwrap();
+    assert!(advisor_runs(&state, &advisor).is_empty(), "a quiet team does not wake it");
+    // A monitor beside it hears the same quiet moment; members still ask the advisor.
+    let monitor = monitor(&mut state, &root);
+    reconcile_at(&mut state, 40_000, ok).unwrap();
+    turn(&mut state, &worker, "completed");
+    reconcile_at(&mut state, 80_000, ok).unwrap();
+    let runs = advisor_runs(&state, &monitor);
+    assert_eq!(runs.len(), 1);
+    assert!(runs[0].objective.contains("read-only monitor") && runs[0].objective.contains("team went quiet"), "{}", runs[0].objective);
+    assert!(advisor_runs(&state, &advisor).is_empty());
+    assert_eq!(state.bots.team_advisor(&root), Some(advisor.as_str()));
+    // Stopping the advisor leaves the monitor's snapshot alone.
+    command_at(&mut state, &advisor, "off", Now(90_000)).unwrap();
+    assert!(state.bots.teams.contains_key(&root) && state.bots.team_advisor(&root).is_none());
 }
 
 /// Acquires `key` for `chat` in `general`, or updates it to `status`.
@@ -330,7 +403,7 @@ fn a_member_becoming_blocked_is_one_fact_per_transition() {
     let miner = spawned(&mut state, &root, "Miner");
     claim(&mut state, &producer, "wood-tools", "working", None);
     claim(&mut state, &miner, "mine", "working", None);
-    let advisor = advisor(&mut state, &root);
+    let advisor = monitor(&mut state, &root);
     reconcile_at(&mut state, 1, ok).unwrap();
     // working → blocked: one fact naming the claim, its producer and status.
     claim(&mut state, &miner, "mine", "blocked", Some("wood-tools"));
@@ -338,7 +411,7 @@ fn a_member_becoming_blocked_is_one_fact_per_transition() {
     let runs = advisor_runs(&state, &advisor);
     assert_eq!(runs.len(), 1);
     assert_eq!(facts(runs[0]), [Facts { blocked: vec![blocked("wood-tools", &producer, "working", &[("mine", &miner)])], chats: vec![miner.clone()], ..Facts::default() }]);
-    assert!(runs[0].objective.contains("1 claim(s) newly blocked on general/wood-tools") && runs[0].objective.contains("following the Team advisor guidance"));
+    assert!(runs[0].objective.contains("1 claim(s) newly blocked on general/wood-tools") && runs[0].objective.contains("following the Team monitor guidance"));
     finish(&mut state, &advisor);
     // Staying blocked, even with a new note and revision, is the same state.
     let since = crate::rooms::claims::find(&state, "general", "mine").unwrap().blocked_at;
@@ -364,7 +437,7 @@ fn members_blocked_on_one_claim_coalesce_into_one_bottleneck() {
     for (member, key) in members.iter().zip(["mine", "build", "smelt", "scout"]) {
         claim(&mut state, member, key, "working", None);
     }
-    let advisor = advisor(&mut state, &root);
+    let advisor = monitor(&mut state, &root);
     reconcile_at(&mut state, 1, ok).unwrap();
     for (member, key) in members.iter().zip(["mine", "build", "smelt"]) {
         claim(&mut state, member, key, "blocked", Some("wood-tools"));
@@ -404,7 +477,7 @@ fn blocked_members_are_not_observed_with_the_lens_off() {
     let miner = spawned(&mut state, &root, "Miner");
     claim(&mut state, &producer, "wood-tools", "working", None);
     claim(&mut state, &miner, "mine", "working", None);
-    let advisor = advisor(&mut state, &root);
+    let advisor = monitor(&mut state, &root);
     reconcile_at(&mut state, 1, ok).unwrap();
     let before = state.bots.teams[&root].clone();
     opt_in(&mut state, &root, false);
@@ -421,7 +494,7 @@ fn turns_without_claim_progress_are_one_stall_fact_until_a_claim_advances() {
     let miner = spawned(&mut state, &root, "Miner");
     let smith = spawned(&mut state, &root, "Smith");
     state.runtime.execution.advisor_stall_turns = 4;
-    let advisor = advisor(&mut state, &root);
+    let advisor = monitor(&mut state, &root);
     // A running member keeps the team from going quiet.
     turn(&mut state, &smith, "running");
     reconcile_at(&mut state, 1, ok).unwrap();
@@ -494,7 +567,7 @@ fn members_reporting_a_similar_blocker_are_one_shared_fact() {
     for (member, key) in members.iter().zip(["mine", "build", "smelt", "scout"]) {
         claim(&mut state, member, key, "working", None);
     }
-    let advisor = advisor(&mut state, &root);
+    let advisor = monitor(&mut state, &root);
     turn(&mut state, &members[3], "running");
     reconcile_at(&mut state, 1, ok).unwrap();
     let host = "Host error 502: the shared service at 10.0.0.5 refused the connection";
@@ -529,7 +602,7 @@ fn members_failing_with_the_same_error_share_a_blocker() {
     let miner = spawned(&mut state, &root, "Miner");
     let smith = spawned(&mut state, &root, "Smith");
     let scout = spawned(&mut state, &root, "Scout");
-    let advisor = advisor(&mut state, &root);
+    let advisor = monitor(&mut state, &root);
     turn(&mut state, &scout, "running");
     reconcile_at(&mut state, 1, ok).unwrap();
     for member in [&miner, &smith] {
@@ -558,7 +631,7 @@ fn a_claim_several_members_wait_on_transitively_is_one_bottleneck_fact() {
     for (member, key) in [(&owner, "covered-chest-access"), (&recovery, "player5-drop-recovery"), (&stone, "stone-stock"), (&builder, "m3")] {
         claim(&mut state, member, key, "working", None);
     }
-    let advisor = advisor(&mut state, &root);
+    let advisor = monitor(&mut state, &root);
     turn(&mut state, &owner, "running");
     reconcile_at(&mut state, 1, ok).unwrap();
     // One member waits directly: a dependency, not yet a bottleneck.
@@ -614,7 +687,7 @@ fn a_circular_wait_is_reported_without_looping() {
     for (member, key) in members.iter().zip(keys) {
         claim(&mut state, member, key, "working", None);
     }
-    let advisor = advisor(&mut state, &root);
+    let advisor = monitor(&mut state, &root);
     turn(&mut state, &members[0], "running");
     reconcile_at(&mut state, 1, ok).unwrap();
     // ore ← ingots ← tools ← ore.
@@ -636,7 +709,7 @@ fn the_bottleneck_threshold_counts_distinct_members_other_than_the_owner() {
     for (member, key) in [(&owner, "wood-tools"), (&owner, "own-follow-up"), (&miner, "mine"), (&miner, "mine-2"), (&smith, "smelt"), (&scout, "scout")] {
         claim(&mut state, member, key, "working", None);
     }
-    let advisor = advisor(&mut state, &root);
+    let advisor = monitor(&mut state, &root);
     turn(&mut state, &owner, "running");
     reconcile_at(&mut state, 1, ok).unwrap();
     // Four dependent claims, but only two members besides the owner.
@@ -692,7 +765,7 @@ fn a_member_idle_with_a_working_claim_while_peers_work_is_one_fact_per_idle_spel
     turn(&mut state, &queued, "queued");
     claim(&mut state, &waiter, "smelt", "working", None);
     claim(&mut state, &waiter, "smelt", "blocked", Some("castle"));
-    let advisor = advisor(&mut state, &root);
+    let advisor = monitor(&mut state, &root);
     reconcile_at(&mut state, 1, ok).unwrap();
     let work = |state: &mut State, turns: usize| for _ in 0..turns { turn(state, &worker, "completed"); };
     work(&mut state, 3);
@@ -735,7 +808,7 @@ fn a_persistent_member_with_no_claim_while_the_team_has_open_work_is_an_idle_fac
     claim(&mut state, &finished, "wall", "done", None);
     claim(&mut state, &worker, "tower", "working", None);
     command_at(&mut state, &finished, "on", Now(0)).unwrap();
-    let advisor = advisor(&mut state, &root);
+    let advisor = monitor(&mut state, &root);
     reconcile_at(&mut state, 1, ok).unwrap();
     for _ in 0..4 { turn(&mut state, &worker, "completed"); }
     reconcile_at(&mut state, 2, ok).unwrap();
@@ -761,8 +834,8 @@ fn an_acceptance_check_wakes_only_when_the_team_goes_quiet_with_every_claim_done
     // nobody compared the result with the request.
     let (mut state, root) = fixture();
     let (builder, miner) = (spawned(&mut state, &root, "Builder"), spawned(&mut state, &root, "Miner"));
-    let advisor = advisor(&mut state, &root);
-    state.chats[0].lenses = Some(vec!["advisor".into(), "acceptance".into()]);
+    let advisor = monitor(&mut state, &root);
+    state.chats[0].lenses = Some(vec!["advisor".into(), "monitor".into(), "acceptance".into()]);
     let check = acceptance(&mut state, &root);
     let definition = state.bots.supervisor.definitions().find(|d| d.chat.0 == check).unwrap();
     assert_eq!(definition.sources, [lifecycle::done_source(&root)], "completion only: no team facts, room, watch or timer");
@@ -771,7 +844,7 @@ fn an_acceptance_check_wakes_only_when_the_team_goes_quiet_with_every_claim_done
     // It has an advisor's standing in its own team, but members ask the advisor.
     assert_eq!(state.bots.advised_team(&check), Some(root.as_str()));
     assert!(state.bots.advises(&check) && state.bots.accepts(&check) && !state.bots.accepts(&advisor));
-    assert_eq!(state.bots.team_advisor(&root), Some(advisor.as_str()));
+    assert!(state.bots.team_advisor(&root).is_none(), "neither a monitor nor a check takes questions");
     reconcile_at(&mut state, 1, ok).unwrap();
 
     // Quiet with no claims: nothing was called finished.
@@ -855,8 +928,18 @@ fn the_acceptance_gene_alone_offers_an_acceptance_check() {
     let chat = judge(&mut state, &root);
     let captured = control_context::persona::Captured::of(&control_context::persona::builtin("acceptance").unwrap(), &[]).unwrap();
     state.runtime.runs.last_mut().unwrap().persona.as_mut().unwrap().bundle = Some(Box::new(captured));
-    assert_eq!(command_at(&mut state, &chat, "on", Now(0)).unwrap_err(), ADVISOR_OFF, "opt-in");
+    assert_eq!(command_at(&mut state, &chat, "on", Now(0)).unwrap_err(), ACCEPTANCE_OFF, "opt-in");
+    // Each gene offers only its own observer.
+    state.chats[0].lenses = Some(vec!["swarm".into(), "advisor".into()]);
+    assert_eq!(command_at(&mut state, &chat, "on", Now(0)).unwrap_err(), ACCEPTANCE_OFF, "the advisor gene offers no acceptance check");
+    let watcher = judge(&mut state, &root);
+    let captured = control_context::persona::Captured::of(&control_context::persona::builtin("monitor").unwrap(), &[]).unwrap();
+    state.runtime.runs.last_mut().unwrap().persona.as_mut().unwrap().bundle = Some(Box::new(captured));
+    assert_eq!(command_at(&mut state, &watcher, "on", Now(0)).unwrap_err(), MONITOR_OFF, "nor a monitor");
+    let plain = judge(&mut state, &root);
     state.chats[0].lenses = Some(vec!["swarm".into(), "acceptance".into()]);
+    assert_eq!(command_at(&mut state, &plain, "on", Now(0)).unwrap_err(), ADVISOR_OFF, "the acceptance gene offers no advisor");
+    assert_eq!(command_at(&mut state, &watcher, "on", Now(0)).unwrap_err(), MONITOR_OFF);
     command_at(&mut state, &chat, "on", Now(1)).unwrap();
     assert!(state.bots.accepts(&chat));
     reconcile_at(&mut state, 2, ok).unwrap();

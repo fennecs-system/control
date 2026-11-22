@@ -265,14 +265,14 @@ rejection (a storage failure is not a rejection). For a persistent bot:
   `bot_recovery_recheck_seconds` (default 300, range 30–86,400), doubling with
   each further failed turn up to 64 times that or one day.
 - Past the allowance, once per streak, the node notice, the bot status
-  (`cannot checkpoint`) and the team advisor report it with the last rejection.
+  (`cannot checkpoint`) and the team monitor report it with the last rejection.
 - A published handoff ends the streak.
 
 See `bots::tests::recovery` and `bots::tests::handoff_cost`.
 
 A timed-out turn fails like any other. Claims of an owner that is not an approved
 persistent bot are marked abandoned so dependents wake; the owner keeps them and
-can resume one with `update`, which clears the flag. The team advisor hears of it
+can resume one with `update`, which clears the flag. The team monitor hears of it
 once (`timed_out`). The next wake says the previous turn hit its limit, points to
 `control_recovery` and the claims, and suggests splitting or delegating the work.
 See `bots::tests::timeout`.

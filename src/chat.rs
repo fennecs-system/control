@@ -1000,10 +1000,10 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
         let body = question.map(|q|if run_status=="waiting" {"<p class='message-status'>Decision requested · see Requests</p>".to_owned()}else{crate::design::render(q,id,false)})
             .unwrap_or_else(||format!("<p class='preserve'>{reply}</p>"));
         let body = if project_message==Some(position) {format!("{}{}",if folder_request {String::new()}else{body},if session.project.as_ref().is_some_and(|p|p.pending || p.grant.is_none()) {if crate::projects::importing(id).is_some() {"<p class='message-status' role='status'>Importing folder… · see Requests</p>"} else {"<p class='message-status'>Folder request · see Requests</p>"}.to_owned()}else{crate::projects::panel(state,id)})}else{body};
-        // An advisor's note is retained evidence with no reply: one distinct box.
+        // An observer's note is retained evidence with no reply: one distinct box.
         if run.is_some_and(|r| r.source.as_str() == "advisor-note") {
             let (label, note) = message.text.split_once('\n').unwrap_or((message.text.as_str(), ""));
-            html.push_str(&format!("<article class='advisor-note' aria-label='Advisor note'><p class='advisor-note-label'>{} · read-only evidence</p><p class='preserve'>{}</p></article>", escape(label), escape(note)));
+            html.push_str(&format!("<article class='advisor-note' aria-label='Observer note'><p class='advisor-note-label'>{} · read-only evidence</p><p class='preserve'>{}</p></article>", escape(label), escape(note)));
             continue;
         }
         // A Control notice without a run (operator decisions): one status line.

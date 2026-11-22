@@ -102,7 +102,7 @@ fn reconcile_profile() {
                 reconcile_at(&mut state, 1, |_| Ok(())).unwrap();
             }
             if advised {
-                super::advisor::advisor(&mut state, &root);
+                super::advisor::monitor(&mut state, &root);
                 reconcile_at(&mut state, 1, |_| Ok(())).unwrap();
                 if lens_off {
                     super::advisor::opt_in(&mut state, &root, false);

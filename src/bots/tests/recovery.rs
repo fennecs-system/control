@@ -217,7 +217,7 @@ fn recovery_wake_text_carries_the_last_rejection_not_a_generic_continue() {
 fn a_member_that_cannot_checkpoint_is_reported_to_the_advisor_once() {
     let (mut state, root) = fixture();
     let member = spawned(&mut state, &root, "Farmer");
-    let advisor = super::advisor::advisor(&mut state, &root);
+    let advisor = super::advisor::monitor(&mut state, &root);
     reconcile_at(&mut state, 1, ok).unwrap();
     managed_bot(&mut state, &member);
     post(&mut state, Some("peer"), "The farm needs checking");

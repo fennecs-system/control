@@ -131,7 +131,7 @@ fn wake_policy_is_a_short_core_with_guidance_on_demand() {
     let text = |id: &str| project(&team.state, id).unwrap().text;
     let (lead, member) = (text(&team.lead), text(&team.member));
     let advisor = crate::chat::prompt(&team.state, &team.advisor).unwrap();
-    let procedure = "Advisor: you are a read-only judge woken only by host facts";
+    let procedure = "Advisor: you are a read-only judge woken only by a team member's question";
     assert!(!member.contains("start one advisor") && !member.contains(procedure));
     assert!(lead.contains("- advisor: Lead: after spawning the team") && !lead.contains(procedure));
     assert!(advisor.contains(procedure));

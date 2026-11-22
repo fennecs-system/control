@@ -35,7 +35,7 @@ fn prompts_scope_lenses_by_role_and_inline_only_where_marked() {
     let state = State::default();
     let resolved = resolve(&state, &["swarm".into(), "advisor".into()]).unwrap();
     let [lead, member, advisor] = Audience::ALL.map(|role| prompt(&resolved, role));
-    let procedure = "you are a read-only judge woken only by host facts";
+    let procedure = "you are a read-only judge woken only by a team member's question";
     assert!(!member.contains("advisor:") && !member.contains(procedure), "{member}");
     assert!(lead.contains("- advisor: Lead: after spawning the team") && !lead.contains(procedure));
     assert!(advisor.contains(procedure) && !advisor.contains("- advisor:"));

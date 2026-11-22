@@ -207,8 +207,9 @@ impl Bots {
     pub(crate) fn retains_watch(&self, id: &str) -> bool {
         self.supervisor.retains(&watch(id))
     }
-    /// Whether `chat` runs as an approved advisor: a persistent read-only judge
-    /// woken by its team's lifecycle facts. Only advisors may send notes.
+    /// Whether `chat` runs as an approved observer: a persistent read-only
+    /// judge (advisor, monitor, acceptance check or antibody). Only these may
+    /// send notes.
     pub(crate) fn advises(&self, chat: &str) -> bool {
         self.advised_team(chat).is_some() || self.antibody(chat)
     }
@@ -225,16 +226,25 @@ impl Bots {
             .filter(|definition| definition.chat.0 == chat && definition.restart == Restart::Permanent)
             .find_map(lifecycle::team)
     }
-    /// The approved advisor of the team rooted at `root`, if one runs: the
-    /// chat its members may ask (see `application::messages`). Never an
-    /// acceptance check, which hears only completion.
     /// Whether `chat` runs as an approved acceptance check.
     pub(crate) fn accepts(&self, chat: &str) -> bool {
         self.supervisor.definitions().any(|definition| definition.chat.0 == chat && definition.restart == Restart::Permanent && lifecycle::accepts(definition))
     }
+    /// What `chat`'s approved persistent bot runs as: "Advisor", "Monitor",
+    /// "Acceptance check", "Antibody" or "Bot". A note names its sender by it.
+    pub(crate) fn kind(&self, chat: &str) -> &'static str {
+        self.supervisor.definitions().find(|definition| definition.chat.0 == chat && definition.restart == Restart::Permanent).map_or("Bot", kind)
+    }
+    /// Whether `chat` runs as an approved monitor, woken by its team's host facts.
+    pub(crate) fn monitors(&self, chat: &str) -> bool {
+        self.supervisor.definitions().any(|definition| definition.chat.0 == chat && definition.restart == Restart::Permanent && lifecycle::monitors(definition))
+    }
+    /// The approved advisor of the team rooted at `root`, if one runs: the
+    /// chat its members may ask (see `application::messages`). Never a
+    /// monitor or an acceptance check, which hear host facts instead.
     pub(crate) fn team_advisor(&self, root: &str) -> Option<&str> {
         self.supervisor.definitions()
-            .find(|definition| definition.restart == Restart::Permanent && !lifecycle::accepts(definition) && lifecycle::team(definition) == Some(root))
+            .find(|definition| definition.restart == Restart::Permanent && lifecycle::asks(definition) && lifecycle::team(definition) == Some(root))
             .map(|definition| definition.chat.0.as_str())
     }
 }
@@ -280,12 +290,12 @@ impl Bots {
             && self.supervisor.definitions().any(|definition| definition.chat.0 == chat && definition.restart == Restart::Permanent)
     }
 }
-/// The latest pending peer message and advisor note per chat, in cursor order,
+/// The latest pending peer message and observer note per chat, in cursor order,
 /// so a turn woken by both is never mistaken for an advisor echo.
 fn peer_events(state: &State) -> Vec<(&str, u64, Message)> {
     let mut latest = std::collections::BTreeMap::new();
     for (chat, cursor, note, urgent) in crate::agent_message::peer_cursors(state) {
-        // Advisor notes keep waking: they are the host-facts escalation path.
+        // Observer notes keep waking: they are the host-facts escalation path.
         let kind = if note { 2 } else if urgent { 1 } else { 0 };
         latest.entry((chat, kind)).and_modify(|head: &mut u64| *head = (*head).max(cursor)).or_insert(cursor);
     }
@@ -395,6 +405,7 @@ pub(crate) fn status(state: &State, chat: &str) -> Option<String> {
         Source::Topic(Topic { kind, name }) if kind == "room" => format!("room #{name}"),
         Source::Topic(Topic { kind, name }) if kind == lifecycle::KIND => format!("team facts for {name}"),
         Source::Topic(Topic { kind, name }) if kind == lifecycle::DONE_KIND => format!("team completion for {name}"),
+        Source::Topic(Topic { kind, name }) if kind == lifecycle::ASK_KIND => format!("questions from team {name}"),
         Source::Topic(Topic { kind, .. }) if kind == lifecycle::NODE_KIND => "node pathology facts".into(),
         Source::Topic(Topic { kind, name }) => format!("{kind} {name}"),
         Source::Timer { every_ms } => format!("every {} min", every_ms / 60_000),
@@ -426,8 +437,14 @@ pub(crate) fn status(state: &State, chat: &str) -> Option<String> {
         Status::Paused => "paused",
         Status::Stopping => "stopping",
     };
-    let label = if definition.restart == Restart::Temporary { "Wake once" } else if lifecycle::immune(definition) { "Antibody" } else if lifecycle::accepts(definition) { "Acceptance check" } else if lifecycle::advises(definition) { "Advisor" } else { "Bot" };
+    let label = if definition.restart == Restart::Temporary { "Wake once" } else { kind(definition) };
     Some(format!("{label} · {state} · {sources}{stuck}"))
+}
+
+/// What a persistent bot's definition runs as, by what it hears: the name its
+/// status and its notes carry.
+fn kind(definition: &Definition) -> &'static str {
+    if lifecycle::immune(definition) { "Antibody" } else if lifecycle::accepts(definition) { "Acceptance check" } else if lifecycle::monitors(definition) { "Monitor" } else if lifecycle::advises(definition) { "Advisor" } else { "Bot" }
 }
 
 pub(crate) fn background_allowed(state: &State, chat: &str) -> bool {
@@ -588,18 +605,18 @@ fn advise(state: &mut State, chat: &str, minutes: Option<u64>, now: Now) -> Resu
     // each mode keeps its own opt-in gene gate.
     let antibody = crate::personas::observes_node(state, chat);
     if minutes.is_some() && !antibody {
-        return Err("An advisor wakes only on its team's host facts; it takes no timer.");
+        return Err("A team observer wakes on its team's questions, facts or completion; it takes no timer.");
     }
-    if crate::personas::observer_offered(state, chat) == Some(false) {
-        return Err(if antibody { ANTIBODY_OFF } else { ADVISOR_OFF });
-    }
-    if !antibody && !advisor_offered(state, &team) {
-        return Err(ADVISOR_OFF);
+    if antibody && crate::personas::observer_offered(state, chat) == Some(false) {
+        return Err(ANTIBODY_OFF);
     }
     // An acceptance persona (its DNA offers `team.acceptance`) hears only
-    // its team's completion, never the other team facts.
-    let acceptance = !antibody && crate::personas::captured(state, chat).is_some_and(|bundle| crate::lens_library::offers(state, &bundle.lenses, ACCEPTANCE_TOOL));
-    let mut sources = if antibody { vec![lifecycle::node_source()] } else if acceptance { vec![lifecycle::done_source(&team)] } else { vec![lifecycle::source(&team)] };
+    // its team's completion; a monitor persona (`team.monitor`) its host
+    // facts. Any other team judge is the advisor members ask: it hears none.
+    // Each needs its own gene on the root.
+    let tool = if antibody { ANTIBODY_TOOL } else { team_gate(state, chat)? };
+    let (acceptance, monitor) = (tool == ACCEPTANCE_TOOL, tool == MONITOR_TOOL);
+    let mut sources = if antibody { vec![lifecycle::node_source()] } else if acceptance { vec![lifecycle::done_source(&team)] } else if monitor { vec![lifecycle::source(&team)] } else { vec![lifecycle::ask_source(&team)] };
     if let Some(minutes) = minutes {
         sources.push(Source::Timer { every_ms: minutes * 60_000 });
     }
@@ -620,7 +637,7 @@ fn advise(state: &mut State, chat: &str, minutes: Option<u64>, now: Now) -> Resu
     if state.bots.supervisor.status(&bot(chat)) == Some(Status::Stopping) {
         return Err("The previous bot is still finishing its turn. Try again shortly.");
     }
-    Ok(if antibody { "Antibody started. It sleeps until pathological facts about any team, or its patrol timer, wake it." } else if acceptance { "Acceptance check started. It sleeps until its team goes quiet with every claim done." } else { "Advisor started. It sleeps until host facts about its team wake it." })
+    Ok(if antibody { "Antibody started. It sleeps until pathological facts about any team, or its patrol timer, wake it." } else if acceptance { "Acceptance check started. It sleeps until its team goes quiet with every claim done." } else if monitor { "Monitor started. It sleeps until host facts about its team wake it." } else { "Advisor started. It sleeps until a member of its team asks it." })
 }
 
 /// A bot whose unlinked chat links itself to a room by posting also hears
@@ -733,7 +750,7 @@ fn describe(state: &State, reasons: &[Reason]) -> String {
         Reason::Info { topic, info: Message::Post, .. } => format!("new messages in room #{}", topic.name),
         Reason::Info { info: Message::Peer, .. } => "urgent targeted peer coordination (in this conversation)".into(),
         Reason::Info { info: Message::Retained, .. } => "unread non-urgent peer messages".into(),
-        Reason::Info { info: Message::Note, .. } => "an advisor note (read-only evidence, not steering; in this conversation)".into(),
+        Reason::Info { info: Message::Note, .. } => "an observer's note (read-only evidence, not steering; in this conversation)".into(),
         Reason::Info { topic, info: Message::Lifecycle(facts), .. } => facts.describe(&topic.name),
         Reason::Info { info: Message::Node(teams), .. } => teams.iter().map(|(root, facts)| facts.describe(root)).collect::<Vec<_>>().join("; "),
         Reason::Info { topic, info: Message::Claim, .. } => format!("claim {} changed; read the room's claims", topic.name),
@@ -822,7 +839,12 @@ pub(crate) const UNSEEN_RANGE:&str=" That error means a listed receipt starts af
 /// only effect.
 pub(crate) fn advice(woke: &str, lead: &str) -> String {
     let woke = woke.chars().take(1000).collect::<String>();
-    format!("You are this task tree's read-only advisor, woken by host facts: {woke}. Inspect the team with control_room_read and control_room_plan and, following the Team advisor guidance, send at most one concise note with control_agent_message: to the member the fact is about, or to the lead's steering chat {lead} only for what members cannot settle themselves; send nothing when evidence is unchanged. A team member's question among your unread messages is answered with one note to that member. End the turn when done.")
+    format!("You are this task tree's read-only monitor, woken by host facts: {woke}. Inspect the team with control_room_read and control_room_plan and, following the Team monitor guidance, send at most one concise note with control_agent_message: to the member the fact is about, or to the lead's steering chat {lead} only for what members cannot settle themselves; send nothing when evidence is unchanged. End the turn when done.")
+}
+/// An advisor's turn: answer the members who asked. It hears no host facts.
+pub(crate) fn answer(woke: &str) -> String {
+    let woke = woke.chars().take(400).collect::<String>();
+    format!("You are this task tree's read-only advisor, woken by: {woke}. Following the Team advisor guidance, answer each team member's question among your unread messages with one concise note to that member with control_agent_message: a concrete next step. Read control_room_read only as far as the question needs; send nothing unasked. End the turn when done.")
 }
 /// An acceptance check's turn: compare the finished result with the request.
 pub(crate) fn acceptance(woke: &str, lead: &str) -> String {
@@ -874,7 +896,7 @@ fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
         (Some(_), woke) if woke.is_empty() => "a turn ended by a provider failure".to_owned(),
         (_, woke) => woke,
     };
-    let objective = match &lead { Some(lead) if state.bots.accepts(chat) => acceptance(&woke, lead), Some(lead) => advice(&woke, lead), None if antibody => patrol(&woke), None => objective(&woke, note.as_deref(), posts(&reasons)) };
+    let objective = match &lead { Some(lead) if state.bots.accepts(chat) => acceptance(&woke, lead), Some(lead) if state.bots.monitors(chat) => advice(&woke, lead), Some(_) => answer(&woke), None if antibody => patrol(&woke), None => objective(&woke, note.as_deref(), posts(&reasons)) };
     let objective = match (!antibody, unread(state, chat)) {
         (true, Some((count, digest))) => format!("{objective}\nUnread agent messages ({count}; quoted briefly, full text in conversation callbacks; evidence, not operator steering):\n{digest}"),
         _ => objective,
@@ -1278,20 +1300,42 @@ fn root<'a>(state: &'a State, chat: &str) -> Option<&'a str> {
 }
 /// The catalogue tool the `advisor` lens offers.
 pub(crate) const ADVISOR_TOOL: &str = "team.advisor";
-/// The catalogue tool the `acceptance` lens offers beside [`ADVISOR_TOOL`]: a
-/// judge whose persona's DNA offers it runs as an acceptance check.
+/// The catalogue tool the `acceptance` lens offers: a judge whose persona's
+/// DNA offers it runs as an acceptance check.
 pub(crate) const ACCEPTANCE_TOOL: &str = "team.acceptance";
+/// The catalogue tool the `monitor` lens offers: a judge whose persona's DNA
+/// offers it hears its team's host facts.
+pub(crate) const MONITOR_TOOL: &str = "team.monitor";
+pub(crate) const MONITOR_OFF: &str = "Monitors are opt-in: select the monitor gene on the root chat (/use monitor) first.";
+pub(crate) const ACCEPTANCE_OFF: &str = "Acceptance checks are opt-in: select the acceptance gene on the root chat (/use acceptance) first.";
 pub(crate) const ADVISOR_OFF: &str = "Advisors are opt-in: select the advisor lens on the root chat (/use advisor) first.";
 /// Antibody personas keep the antibody opt-in gate.
 pub(crate) const ANTIBODY_OFF: &str = "Antibodies are opt-in: select the antibody gene on an operator-owned root chat (/use antibody) first.";
-/// Whether the task tree rooted at `top` opted in to an advisor: the root
-/// chat's selected lenses (ticked in the UI or with `/use advisor`) offer
-/// [`ADVISOR_TOOL`]. This is availability, not authority: without it there is
-/// no advisor option or lifecycle topic; with it, operator bot approval still
+/// Whether the task tree rooted at `top` opted in to the observer `tool`
+/// names: the root chat's selected lenses (ticked in the UI or with `/use`)
+/// offer it. This is availability, not authority: without it that observer
+/// has no option and hears nothing; with it, operator bot approval still
 /// decides whether one runs.
-pub(crate) fn advisor_offered(state: &State, top: &str) -> bool {
+pub(crate) fn offered(state: &State, top: &str, tool: &str) -> bool {
     state.chats.iter().find(|session| session.id == top && session.parent_chat.is_none())
-        .is_some_and(|session| crate::lens_library::offers(state, &crate::chat::selected_lenses(session), ADVISOR_TOOL))
+        .is_some_and(|session| crate::lens_library::offers(state, &crate::chat::selected_lenses(session), tool))
+}
+/// Whether the tree rooted at `top` opted in to any team observer: an
+/// advisor, a monitor or an acceptance check.
+pub(crate) fn team_observer_offered(state: &State, top: &str) -> bool {
+    [ADVISOR_TOOL, MONITOR_TOOL, ACCEPTANCE_TOOL].iter().any(|tool| offered(state, top, tool))
+}
+/// The gene a team observer with this DNA needs on its root, as its tool and
+/// the refusal that names it. A judge without observer DNA is the advisor.
+pub(crate) fn team_gene(state: &State, lenses: &[String]) -> (&'static str, &'static str) {
+    let offers = |tool| crate::lens_library::offers(state, lenses, tool);
+    if offers(ACCEPTANCE_TOOL) { (ACCEPTANCE_TOOL, ACCEPTANCE_OFF) } else if offers(MONITOR_TOOL) { (MONITOR_TOOL, MONITOR_OFF) } else { (ADVISOR_TOOL, ADVISOR_OFF) }
+}
+/// The tool of the team observer `chat`'s judge would run as, once its root
+/// offers that observer's own gene.
+pub(crate) fn team_gate(state: &State, chat: &str) -> Result<&'static str, &'static str> {
+    let (tool, off) = team_gene(state, crate::personas::captured(state, chat).map_or(&[][..], |bundle| &bundle.lenses));
+    if offered_for(state, chat, tool) { Ok(tool) } else { Err(off) }
 }
 /// The catalogue tool the `antibody` lens offers.
 pub(crate) const ANTIBODY_TOOL: &str = "node.antibody";
@@ -1314,9 +1358,13 @@ pub(crate) fn antibodies_active(state: &State) -> bool {
     state.bots.supervisor.definitions().any(|definition| definition.restart == Restart::Permanent && lifecycle::immune(definition)
         && antibody_offered_for(state, &definition.chat.0))
 }
-/// [`advisor_offered`] for the task tree `chat` belongs to.
-pub(crate) fn advisor_offered_for(state: &State, chat: &str) -> bool {
-    root(state, chat).is_some_and(|top| advisor_offered(state, top))
+/// [`offered`] for the task tree `chat` belongs to.
+pub(crate) fn offered_for(state: &State, chat: &str, tool: &str) -> bool {
+    root(state, chat).is_some_and(|top| offered(state, top, tool))
+}
+/// [`team_observer_offered`] for the task tree `chat` belongs to.
+pub(crate) fn team_observer_offered_for(state: &State, chat: &str) -> bool {
+    root(state, chat).is_some_and(|top| team_observer_offered(state, top))
 }
 /// Whether two chats of one actor belong to the same top-level conversation:
 /// a lead, its helpers and every agent they spawned.
@@ -1389,14 +1437,14 @@ fn handle_with(state: &mut State, attempt: &AttemptRef<'_>, call: BotCall, save:
             // A read-only judge becomes its team's advisor: host facts, no timer or room.
             let advisor = judge_chat(state, &chat_id);
             let antibody = advisor && crate::personas::observes_node(state, &chat_id);
-            if advisor && crate::personas::observer_offered(state, &chat_id) == Some(false) {
-                return Err(fail(if antibody { ANTIBODY_OFF } else { ADVISOR_OFF }));
+            if antibody && crate::personas::observer_offered(state, &chat_id) == Some(false) {
+                return Err(fail(ANTIBODY_OFF));
             }
-            if advisor && !antibody && !advisor_offered_for(state, &chat_id) {
-                return Err(fail(ADVISOR_OFF));
+            if advisor && !antibody {
+                team_gate(state, &chat_id).map_err(fail)?;
             }
             if advisor && !antibody && every_minutes.is_some() {
-                return Err(fail("An advisor wakes only on its team's host facts; omit every_minutes"));
+                return Err(fail("A team observer wakes on its team's questions, facts or completion; omit every_minutes"));
             }
             if !advisor && !(room && linked) && every_minutes.is_none() && watch_sources(state, &chat_id).is_empty() {
                 return Err(fail("The chat has no room or watch to wake it; give every_minutes or start a watch"));
@@ -1601,7 +1649,7 @@ pub(crate) fn pending_panel(state: &State, chat: &str) -> String {
         let title = crate::callsigns::name_or_id(&state.chats, &a.chat);
         let mut sources = Vec::new();
         if a.room { sources.push("room messages".to_owned()); }
-        if judge_chat(state, &a.chat) { sources.push("team facts (read-only advisor)".to_owned()); }
+        if judge_chat(state, &a.chat) { sources.push("its team (read-only observer)".to_owned()); }
         if let Some(minutes) = a.every_minutes { sources.push(format!("every {minutes} min")); }
         format!("<article class='assistant-message port-request' data-transcript-key='bot-{}'><h3>Bot request · {}</h3><p>{} · up to {TURNS_PER_WINDOW} turns/hour</p><form class='decision-form' method='post' action='/tools/bots' target='_top'><input type='hidden' name='id' value='{}'><input type='hidden' name='return_chat' value='{}'><button class='primary' name='allow' value='yes'>Allow bot</button><button name='deny' value='yes' formnovalidate>Deny</button><p role='alert' hidden></p></form></article>",
             crate::escape(&a.id), crate::escape(&title), crate::escape(&sources.join(" and ")), crate::escape(&a.id), crate::escape(chat))
