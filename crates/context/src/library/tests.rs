@@ -306,7 +306,7 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert_eq!(swarm.revision, 2);
     assert!(swarm.includes.contains(&"planning".to_string()));
     let ganglia = Library::default().get("ganglia").unwrap().clone();
-    assert_eq!((ganglia.name.as_str(), ganglia.revision), ("Ganglia", 4));
+    assert_eq!((ganglia.name.as_str(), ganglia.revision), ("Ganglia", 5));
     assert!(ganglia.instructions.starts_with("Reflexes and routines run locally; turns are strategy."));
     assert!(ganglia.instructions.contains("long-running work on systems that change faster than a turn, not one-off tasks"));
     // Reuse an existing package first; build or extend only for a demonstrated gap.
@@ -319,6 +319,8 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert!(ganglia.instructions.contains("pause routines rather than cancel them"));
     assert!(ganglia.instructions.contains("escalate only milestones, failures and conditions they cannot handle"));
     assert!(ganglia.instructions.contains("A layer that blocks the task or keeps undoing your work is a gap in the tool"));
+    // Run AE: reflex and progress notifications were most of 122 routine wakes in an hour.
+    assert!(ganglia.instructions.contains("Reflex and progress events are not escalations: keep them from waking you with watch salience."));
     assert!(ganglia.instructions.contains("save as a tool package"));
     assert!(ganglia.instructions.chars().count() <= 1200);
     // Domain-independent: examples belong in docs, not in the lens.

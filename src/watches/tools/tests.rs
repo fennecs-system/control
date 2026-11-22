@@ -152,7 +152,7 @@ fn watch_descriptions_present_routines_and_keep_their_limits() {
     }
     assert!(start.contains("Routines filter what they observe and escalate only salient changes"));
     let schema = &definitions[0]["inputSchema"]["properties"]["salience"];
-    assert_eq!(schema["properties"]["rules"]["items"]["items"]["oneOf"].as_array().map(Vec::len), Some(7));
+    assert_eq!(schema["properties"]["rules"]["items"]["items"]["oneOf"].as_array().map(Vec::len), Some(8));
     let events = description("control_watch_events");
     assert!(events.starts_with("Read events from your routines:"));
     assert!(events.contains("instead of re-checking the world each step") && events.contains("Foreign watches return observations without receipts"));
