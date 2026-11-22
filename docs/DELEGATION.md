@@ -131,10 +131,11 @@ When the root chat selects the advisor lens, `control_agent_spawn` accepts
 without pausing the parent, with no services and the task-level review scope. It
 uses the root's advisor allowance (`max_advisors_per_root`), not its blocking
 review. An operator-approved judge bot becomes the team's
-[advisor](LENSES.md#team-advisor): it wakes on the `task:<root>` lifecycle
-topic and on its own team's questions, and its only effect is evidence notes
-sent with `control_agent_message` to the member concerned or the lead's steering
-chat. It never messages judges or advisors, never posts to rooms and never sends
+[advisor](LENSES.md#team-advisor): it wakes only on its own team's questions.
+With `persona: "monitor"` it is the team's [monitor](LENSES.md#team-monitor)
+instead and wakes on the `task:<root>` lifecycle topic. Either way its only
+effect is evidence notes sent with `control_agent_message` to the member
+concerned or the lead's steering chat. It never messages judges or advisors, never posts to rooms and never sends
 services. Other judges cannot run as bots or message agents.
 
 `control_agent_spawn` also accepts `persona` (and explicit `lenses`): children

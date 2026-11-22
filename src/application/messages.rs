@@ -387,7 +387,7 @@ pub(crate) fn plan(
         latest(state.runs, &call.chat_id, &run.actor).ok_or("That chat has no task to continue")?;
     // A team's approved advisor takes questions from its own team: members
     // ask it instead of spawning a reviewer, and it answers with a note.
-    let asked = !advisor && crate::delegation::is_judge(from) && state.bots.advised_team(&call.chat_id) == Some(root) && !state.bots.accepts(&call.chat_id);
+    let asked = !advisor && crate::delegation::is_judge(from) && state.bots.team_advisor(root) == Some(call.chat_id.as_str());
     if crate::delegation::is_judge(from) && !(asked && call.services.is_empty()) {
         return Err("Read-only judges cannot be continued; ask your team's approved advisor, without services");
     }
@@ -535,7 +535,8 @@ pub(crate) fn plan(
         services: call.services,
         peer_cursor: retained_only.then_some((session.messages.len() + 1) as u64),
         note: advisor,
-        urgent: call.urgent,
+        // A question to the team's advisor is its only wake, so it wakes it.
+        urgent: call.urgent || asked,
         // An observer's note reports back to an idle lead that is not a bot as
         // a turn of its own, like a background agent's completion.
         digest: ((descendant && !call.urgent) || advisor) && !bot,

@@ -145,7 +145,7 @@ fn a_member_asks_its_teams_advisor_and_the_question_wakes_it() {
     let (mut state, _, builder, advisor, run) = team();
     let asking = activate(&mut state, &builder);
     let ask = |state: &mut State, nonce: &str, services: Vec<ResourceId>| handle(state, &AttemptRef { run: &asking, generation: "peer-attempt", nonce },
-        MessageCall { chat_id: advisor.clone(), text: "My wall routine keeps stopping on a support check; is one long routine better?".into(), services, urgent: true }, |_| Ok(()));
+        MessageCall { chat_id: advisor.clone(), text: "My wall routine keeps stopping on a support check; is one long routine better?".into(), services, urgent: false }, |_| Ok(()));
     assert!(ask(&mut state, "q0", vec![]).is_err(), "an unapproved judge takes no questions");
     crate::bots::command(&mut state, &advisor, "on").unwrap();
     assert!(ask(&mut state, "q1", vec![ResourceId::try_from("svc".to_owned()).unwrap()]).is_err(), "a question carries no services");
@@ -154,7 +154,8 @@ fn a_member_asks_its_teams_advisor_and_the_question_wakes_it() {
     let asked = state.runtime.runs.last().unwrap();
     assert_eq!((asked.chat_id.as_deref(), asked.source.as_str()), (Some(advisor.as_str()), "peer-message"));
     assert!(crate::delegation::is_judge(asked), "the advisor stays a read-only judge");
-    // Once its current turn settles, the question wakes the advisor.
+    // Once its current turn settles, the question wakes the advisor at once,
+    // though it was not sent urgent: a question is the advisor's only wake.
     state.runtime.runs.iter_mut().find(|r| r.id == run).unwrap().status = "completed".into();
     crate::bots::reconcile_after_cooldown(&mut state).unwrap();
     let woken = state.runtime.runs.iter().rfind(|r| r.chat_id.as_deref() == Some(advisor.as_str()) && r.status == "queued").expect("the advisor is woken");
@@ -200,4 +201,20 @@ fn an_acceptance_check_notes_a_member_of_its_team_and_takes_no_questions() {
     let asking = activate(&mut state, &builder);
     assert!(handle(&mut state, &AttemptRef { run: &asking, generation: "peer-attempt", nonce: "q0" },
         MessageCall { chat_id: check.clone(), text: "Is this enough?".into(), services: vec![], urgent: false }, |_| Ok(())).is_err());
+}
+
+#[test]
+fn a_monitor_notes_its_team_and_takes_no_questions() {
+    let (mut state, _, builder, monitor, run) = team();
+    let index = state.runtime.runs.iter().position(|r| r.id == run).unwrap();
+    let captured = control_context::persona::Captured::of(&control_context::persona::builtin("monitor").unwrap(), &[]).unwrap();
+    state.runtime.runs[index].persona.as_mut().unwrap().bundle = Some(Box::new(captured));
+    crate::bots::command(&mut state, &monitor, "on").unwrap();
+    assert!(state.bots.monitors(&monitor) && state.bots.team_advisor(&state.chats[0].id.clone()).is_none());
+    note(&mut state, &run, "n0", &builder, "Claim wall is blocked on a claim that is already done.").unwrap();
+    assert_eq!(state.runtime.runs.last().unwrap().source.as_str(), "advisor-note");
+    // Members ask the advisor; a question would wake the monitor outside its facts.
+    let asking = activate(&mut state, &builder);
+    assert!(handle(&mut state, &AttemptRef { run: &asking, generation: "peer-attempt", nonce: "q0" },
+        MessageCall { chat_id: monitor.clone(), text: "Is one long routine better?".into(), services: vec![], urgent: false }, |_| Ok(())).is_err());
 }

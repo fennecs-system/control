@@ -1,6 +1,6 @@
 //! Turns stopped at their attempt time limit: the advisor hears of them once,
 //! the owner keeps its claims and their notes, and a bot's next wake says so.
-use super::advisor::{advisor, turn};
+use super::advisor::{monitor, turn};
 use super::*;
 
 fn ok(_: &State) -> io::Result<()> {
@@ -34,7 +34,7 @@ fn a_timed_out_turn_is_one_advisor_fact_until_the_member_settles_otherwise() {
     let (mut state, root) = fixture();
     let worker = spawned(&mut state, &root, "Builder");
     let tester = spawned(&mut state, &root, "Tester");
-    let advisor = advisor(&mut state, &root);
+    let advisor = monitor(&mut state, &root);
     // A running member keeps the team from going quiet.
     turn(&mut state, &tester, "running");
     reconcile_at(&mut state, 1, ok).unwrap();
@@ -68,11 +68,11 @@ fn a_timed_out_turn_is_one_advisor_fact_until_the_member_settles_otherwise() {
     let text = facts[1].describe(&root);
     assert!(text.contains(&format!("the lead {root}'s turn reached its time limit and was stopped before it checkpointed")), "{text}");
     assert!(text.contains(&format!("member {worker}'s turn reached its time limit")), "{text}");
-    // The advisor lens (inline for the advisor) carries the split-or-delegate
+    // The monitor lens (inline for the monitor) carries the split-or-delegate
     // suggestion; the wake names the facts and points at that procedure.
     let run = bot_runs(&state).into_iter().rfind(|run| run.chat_id.as_deref() == Some(advisor.as_str())).unwrap();
-    assert!(run.objective.contains("turn reached its time limit") && run.objective.contains("following the Team advisor guidance"), "{}", run.objective);
-    assert!(state.lens_library.get("advisor").unwrap().instructions.contains("For a turn stopped at its time limit, suggest splitting the work"));
+    assert!(run.objective.contains("turn reached its time limit") && run.objective.contains("following the Team monitor guidance"), "{}", run.objective);
+    assert!(state.lens_library.get("monitor").unwrap().instructions.contains("For a turn stopped at its time limit, suggest splitting the work"));
 }
 
 #[test]

@@ -90,7 +90,7 @@ and steering) and `environment` (worker images, profiles, Nix builds and network
 scope).
 
 Per-wake text does not restate lenses. The bot wake objective is one line naming
-its trigger; the advisor wake names its facts and points at its procedure; a
+its trigger; the monitor wake names its facts and points at its procedure; a
 new-callback notice on a tool result is one line. Notes tied to a concrete event
 are one line each, at most once per attempt: the attempt deadline, a steering
 chat doing work itself, a turn stopped at its time limit, and a rejected or
@@ -258,17 +258,17 @@ micro-probe per turn instead of acting, so the record-keeping was dropped.
 
 ## Team advisor
 
-The team advisor catches gaps the team could miss and answers members'
-questions about method. It is not a supervisor, planner, relay or churn monitor,
-and it holds no authority.
+The team advisor answers members' questions about method. It hears no host
+facts and sends nothing unasked: interjecting on facts is the
+[team monitor](#team-monitor)'s job, a separate gene. It is not a supervisor,
+planner or relay, and it holds no authority.
 
 **Strictly opt-in.** Select **Team advisor** on the root chat (tick it, or
 `/use advisor`), usually alongside `swarm`, which does not include it. The lens
 offers the `team.advisor` tool hint; unless the root chat's lenses offer it, no
-advisor can be spawned or requested and Control does not compute the team's
-lifecycle topic. This is an availability gate, not authority: the operator's bot
-approval still decides whether an advisor runs, and host checks bound what it can
-do. Unticking the lens stops its facts.
+team observer can be spawned or requested. This is an availability gate, not
+authority: the operator's bot approval still decides whether an advisor runs,
+and host checks bound what it can do.
 
 The advisor is a read-only **judge** (see [delegation](DELEGATION.md)). The lens
 is its procedure and voice; policy comes from the judge role and the operator's
@@ -277,14 +277,38 @@ bot approval.
 1. The lead starts it with `control_agent_spawn` and `role: "judge"`, with one
    objective naming the shared outcome. It gets no resources. It uses the root
    task's advisor allowance (`max_advisors_per_root` in `execution.json`,
-   default 2, range 0–8), which is separate from the root's one blocking judge
+   default 3, range 0–8), which is separate from the root's one blocking judge
    review. `persona: "advisor"` instead of the role spawns the built-in
    [advisor persona](PERSONAS.md): the same judge, with the `advisor` gene as
    its DNA and its purpose first in its prompt.
 2. The lead requests it with `control_bot_request` (no interval). The operator
    approves it like any bot, or types `/bot on` in its chat. The lens or a
    request alone runs nothing.
-3. The approved judge sleeps on its task tree's lifecycle topic,
+3. The approved judge sleeps until a member of its team asks it: members
+   message it directly with `control_agent_message` (no services) instead of
+   spawning a reviewer. The question wakes it at once, urgent or not, and it
+   answers that member with one note. It subscribes to no facts and takes no
+   timer. Judges that are not approved advisors take no messages, and neither
+   do monitors or acceptance checks.
+
+A plain `role: "judge"` child approved as a bot is this advisor. Advisors
+approved before the split keep their fact subscription and run as monitors
+until restarted.
+
+## Team monitor
+
+A specialised team observer, separate from the advisor: a read-only judge that
+catches gaps the team could miss and interjects with one evidence note. Select
+**Team monitor** on the root chat (`/use monitor`); the gene offers
+`team.advisor` (the team-observer gate) and `team.monitor`. The lead, or the
+operator, starts one in the background with `control_agent_spawn` and
+`persona: "monitor"`, one objective naming the shared outcome, then
+`control_bot_request` with no interval. It uses the advisor allowance, so the
+default of 3 fits an advisor, a monitor and an acceptance check. Unticking the
+lens stops its facts.
+
+1. A judge whose persona's DNA offers `team.monitor` sleeps on its task tree's
+   lifecycle topic,
    `task:<root chat>`. Control publishes host facts there, edge-triggered from
    records reconciliation already reads. Facts are gaps, not churn:
    - the team went quiet, with no member turn running or queued (and, when
@@ -345,7 +369,7 @@ bot approval.
    (provider errors included) and a single failed watch exit are never facts.
    Facts coalesce into one wake under the bot's 30-second cooldown and 60 turns
    per hour. There is no clock rule: elapsed time is never a fact.
-4. On waking, the advisor reads the facts and `control_room_read` (participants,
+2. On waking, the monitor reads the facts and `control_room_read` (participants,
    posts and claims with `owner_idle`/`abandoned` flags). If there is a gap, it
    sends the lead's steering chat one concise note with `control_agent_message`:
    the evidence and a suggested step. For blocked members it checks whether
@@ -354,20 +378,17 @@ bot approval.
    alternative. For a bottleneck it suggests adding members, splitting it or
    re-routing dependents. It sends nothing when evidence is unchanged.
 
-Issues rise through the team, not through the lead. The advisor notes the
+Issues rise through the team, not through the lead. The monitor notes the
 member a fact is about; it notes the lead only for what members cannot settle
 themselves (the plan, a reassignment, a blocker spanning several members, or a
 member that did not act on an earlier note). A note is retained peer evidence
 with source `advisor-note`, shown as "Advisor note from …" in its own box. An
 active recipient gets one callback hint at its next tool response; one running
 as an approved bot wakes within its own budget; an idle one is woken by the note
-at once. The advisor never posts to rooms.
+at once. The monitor never posts to rooms, and members do not ask it: they ask
+the advisor.
 
-Members ask the advisor directly with `control_agent_message` (no services)
-instead of spawning a reviewer; the question wakes it, and it answers that
-member with one note. Judges that are not approved advisors take no messages.
-
-The host refuses notes from judges that are not approved advisors, notes to any
+The host refuses notes from judges that are not approved team observers, notes to any
 chat outside the advised team, notes to other judges, notes that share services,
 and a note identical to one already delivered. A note to a lead whose latest turn failed or
 was cancelled is refused by the peer rule that messages cannot restart stopped
@@ -375,26 +396,26 @@ work, unless the lead is itself an approved persistent bot whose turn failed or
 was interrupted: the note then waits for its next supervised wake.
 
 Loop safety is structural. Judge turns, retained notes and turns woken only by
-advisor notes (the lead's included) are not team activity, so the advisor cannot
-re-trigger itself. Stopping the advisor (`/bot off`) drops its team snapshot; a
-later advisor reports only facts after its own subscription. Nodes without an
-opted-in advisor or antibody do no lifecycle work.
+observer notes (the lead's included) are not team activity, so the monitor cannot
+re-trigger itself. Stopping the monitor (`/bot off`) drops its team snapshot; a
+later monitor reports only facts after its own subscription. Nodes without an
+opted-in monitor, acceptance check or antibody do no lifecycle work: an advisor
+alone computes no facts.
 
 ## Acceptance check
 
-A specialised team observer, separate from the advisor: a read-only judge that
+A specialised team observer, separate from the advisor and the monitor: a read-only judge that
 compares what the team calls finished with what was asked. Select **Acceptance
 check** on the root chat (`/use acceptance`); the gene offers `team.advisor`
 (the team-observer gate) and `team.acceptance`. The lead, or the operator,
 starts one in the background with `control_agent_spawn` and
 `persona: "acceptance"`, one objective quoting the request, then
-`control_bot_request` with no interval. It uses the advisor allowance, so the
-default of 2 fits an advisor and an acceptance check.
+`control_bot_request` with no interval. It uses the advisor allowance.
 
 A judge whose persona's DNA offers `team.acceptance` subscribes to
 `done:<root chat>` instead of `task:<root chat>`. Control publishes one fact
 there, `finished`: the team went quiet with no open claim and at least one done.
-No other team fact, question or timer wakes it. The advisor hears the same
+No other team fact, question or timer wakes it. The monitor hears the same
 moment as part of its quiet fact, without an extra wake. If the result falls
 short, the check notes the member who closed the claim (the lead only when no
 member owns it); otherwise it sends nothing. Members still ask the advisor, never
@@ -527,8 +548,8 @@ no packages, so leave it out when a run should rebuild a tool from scratch.
 
 Tool hints contribute to context and catalogue discovery. They do not filter
 callable worker tools, and deselecting a hint revokes no grant. The exceptions
-are `team.advisor`, `team.acceptance` and `node.antibody`, which decide whether
-the advisor, acceptance check or antibody option exists for a task tree, and `operator.notify`, which a lead needs
+are `team.advisor`, `team.monitor`, `team.acceptance` and `node.antibody`, which decide whether
+the advisor, monitor, acceptance check or antibody option exists for a task tree, and `operator.notify`, which a lead needs
 to send operator notices (availability gates, not grants). Host operations enforce execution
 authority independently. Captured documents are attributed evidence, not
 instructions or accepted facts. Inspect the captured context to check what a
