@@ -265,7 +265,7 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     // Run V: comparing a finished result with the request is the acceptance gene's, not the advisor's.
     assert!(!advisor.instructions.contains("a goal called done at a scope the operator would not accept"));
     let acceptance = Library::default().get("acceptance").unwrap().clone();
-    assert_eq!((acceptance.name.as_str(), acceptance.revision), ("Acceptance check", 2));
+    assert_eq!((acceptance.name.as_str(), acceptance.revision), ("Acceptance check", 3));
     assert_eq!(acceptance.tools, ["team.advisor", "team.acceptance"]);
     assert_eq!((acceptance.roles.as_slice(), acceptance.inline.as_slice()), ([Audience::Lead, Audience::Advisor].as_slice(), [Audience::Advisor].as_slice()));
     assert!(acceptance.instructions.chars().count() <= 1100 && !acceptance.summary.is_empty() && acceptance.summary.chars().count() <= MAX_SUMMARY);
