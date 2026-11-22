@@ -64,3 +64,23 @@ fn overflow_must_not_silently_acknowledge_an_evicted_source() {
     let known=completed.iter().find_map(|p|match &p.effect {Effect::RequestTurn{reasons,..}=>Some(reasons),_=>None}).unwrap();
     assert!(known.iter().any(|r|matches!(r,Reason::Info{topic,..}if topic.name=="svc-1")),"svc-1 exit was silently evicted and its cursor prevents replay");
 }
+
+#[test]
+fn consecutive_timer_only_turns_are_counted_until_an_event_arrives() {
+    // Run AD: finished players kept taking recheck turns every two minutes.
+    // The host doubles a recheck by this count.
+    let mut supervisor=S::default();let mut def=definition();def.budget=Budget{cooldown_ms:0,window_ms:100,turns_per_window:100};
+    let bot=def.bot.clone();
+    supervisor.step(Event::Define(def),Now(0));
+    let mut now=0;
+    for expected in [1,2,3,3] {
+        supervisor.step(Event::Wait{bot:bot.clone(),topics:vec![],until:Some(now+10)},Now(now));
+        now+=10;
+        let woke=turn(&supervisor.step(Event::Tick,Now(now)));
+        assert_eq!(supervisor.idle(&bot),expected,"a recheck alone woke it");
+        supervisor.step(Event::TurnCompleted{bot:bot.clone(),turn:woke},Now(now));
+    }
+    let woke=turn(&supervisor.step(message(1),Now(now+1)));
+    assert_eq!(supervisor.idle(&bot),0,"an event resets the count");
+    supervisor.step(Event::TurnCompleted{bot,turn:woke},Now(now+2));
+}

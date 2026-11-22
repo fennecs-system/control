@@ -538,6 +538,30 @@ Two failure modes shaped the text:
 
 `swarm` does not include Ganglia, so runs with and without it can be compared.
 
+## Timers
+
+By default a team's agents wake on events only: messages, claims, observer
+notes and a routine's notifications or exit. Selecting the **Timers** gene on
+the root chat (`/use timers`) offers `bot.timer`, and only then may an agent
+wake itself on a timer:
+
+- `every_minutes` on `control_bot_request`, a recurring check like a cron job;
+- `recheck_seconds` on a wait, a fallback for when no event can report readiness.
+
+Without the gene a bot request with `every_minutes` is refused with the reason,
+and a wait's `recheck_seconds` is dropped and reported in the handoff's
+`adjusted` list. An antibody's patrol timer belongs to its own gene and is
+unaffected.
+
+A recheck backs off while it finds nothing: each consecutive turn woken by
+nothing but a timer doubles the next recheck, up to eight times the asked
+interval, and any event resets it. A bot interval is a schedule and fires as set.
+
+The gate exists because in Run AD a team's agents set a recheck after nearly
+every turn and took about 150 timer turns in an hour, most of them a status
+look, which cost more than playing turn by turn. A member with nothing running
+is the [team monitor](#team-monitor)'s to notice, not a timer's.
+
 ## Tool packages
 
 A lens can name operator-admitted [tool packages](TOOL-PACKAGES.md), such as

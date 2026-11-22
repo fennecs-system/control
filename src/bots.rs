@@ -1128,7 +1128,10 @@ fn reconcile_with_wake_at(state: &mut State, now: u64, mut save: impl FnMut(&Sta
             }
             control_context::turn_mailbox::Disposition::Wait{topics,recheck_seconds} => {
                 let topics = select_wait(state,chat,topics,Now(now),&mut effects);
-                effects.extend(state.bots.supervisor.step(Event::Wait{bot:bot(chat),topics,until:recheck_seconds.map(|seconds| now.saturating_add(u64::from(seconds)*1000))},Now(now)));
+                // A recheck is a fallback: each consecutive turn it alone
+                // woke doubles it (up to eight times) until an event arrives.
+                let idle = state.bots.supervisor.idle(&bot(chat));
+                effects.extend(state.bots.supervisor.step(Event::Wait{bot:bot(chat),topics,until:recheck_seconds.map(|seconds| now.saturating_add((u64::from(seconds)*1000) << idle))},Now(now)));
             }
             control_context::turn_mailbox::Disposition::Done => { select_wait(state,chat,&[],Now(now),&mut effects); }
         } }
@@ -1306,6 +1309,10 @@ pub(crate) const ACCEPTANCE_TOOL: &str = "team.acceptance";
 /// The catalogue tool the `monitor` lens offers: a judge whose persona's DNA
 /// offers it hears its team's host facts.
 pub(crate) const MONITOR_TOOL: &str = "team.monitor";
+/// The catalogue tool the `timers` lens offers: without it on the root, a
+/// team's agents wait for events only and set no check-in timers.
+pub(crate) const TIMER_TOOL: &str = "bot.timer";
+pub(crate) const TIMERS_OFF: &str = "This team did not select the timers gene, so agents take no check-in timer: omit every_minutes. Messages, claims and a routine's notifications or exit still wake you.";
 pub(crate) const MONITOR_OFF: &str = "Monitors are opt-in: select the monitor gene on the root chat (/use monitor) first.";
 pub(crate) const ACCEPTANCE_OFF: &str = "Acceptance checks are opt-in: select the acceptance gene on the root chat (/use acceptance) first.";
 pub(crate) const ADVISOR_OFF: &str = "Advisors are opt-in: select the advisor lens on the root chat (/use advisor) first.";
@@ -1417,6 +1424,11 @@ fn handle_with(state: &mut State, attempt: &AttemptRef<'_>, call: BotCall, save:
             Ok(json!({"chat_id":chat,"bot":status(state, &chat),"requests":requests}))
         }
         BotCall::Request { chat_id, every_minutes, room } => {
+            // An agent's own timer is opt-in per team; a persona's schedule
+            // (an antibody's patrol) is that persona's gene.
+            if every_minutes.is_some() && !offered_for(state, &chat_id, TIMER_TOOL) && !crate::personas::observes_node(state, &chat_id) {
+                return Err(fail(TIMERS_OFF));
+            }
             // A persona's schedule behaviour is the default interval.
             let every_minutes = every_minutes.or_else(|| crate::personas::schedule(state, &chat_id));
             if !attempt.nonce.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') || attempt.nonce.is_empty() || attempt.nonce.len() > 128 {

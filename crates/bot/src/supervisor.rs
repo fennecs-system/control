@@ -209,6 +209,10 @@ struct Bot<I> {
     held: Vec<Topic>,
     #[cfg_attr(feature = "serde", serde(default))]
     wait: Option<Wait>,
+    /// Consecutive turns woken by nothing but a timer, up to three. The host
+    /// reads it to back off a recheck that keeps finding no event.
+    #[cfg_attr(feature = "serde", serde(default))]
+    idle: u8,
     /// When the oldest pending deferred reason was admitted.
     #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
     deferred_since: Option<u64>,
@@ -372,6 +376,10 @@ impl<I: Info> Supervisor<I> {
             && b.processed.get(&topic.key()).is_none_or(|seen| through > *seen))
     }
     /// The published processing watermark of a bot's topic (0 when none).
+    /// Consecutive turns of `bot` woken by nothing but a timer (at most three).
+    pub fn idle(&self, bot: &BotId) -> u8 {
+        self.bots.get(bot).map_or(0, |bot| bot.idle)
+    }
     pub fn processed(&self, bot: &BotId, topic: &Topic) -> u64 {
         self.bots.get(bot).and_then(|b| b.processed.get(&topic.key()).copied()).unwrap_or(0)
     }
@@ -420,6 +428,7 @@ impl<I: Info> Supervisor<I> {
                     rearm: false,
                     held: Vec::new(),
                     wait: None,
+                    idle: 0,
                     deferred_since: None,
                     selected: false,
                 };
@@ -585,6 +594,7 @@ impl<I: Info> Supervisor<I> {
                 bot.turns.push_back(now);
                 bot.exhausted = false;
                 let mut reasons = std::mem::take(&mut bot.pending);
+                bot.idle = if reasons.iter().all(|reason| matches!(reason, Reason::Timer)) { bot.idle.saturating_add(1).min(3) } else { 0 };
                 bot.deferred_since = None;
                 bot.selected = false;
                 if bot.dropped > 0 {

@@ -84,7 +84,7 @@ impl Mcp {
     }
 }
 use roles::{ALL, JUDGE, LEAD, WORKERS};
-pub const TOOLS: [Tool; 36] = [
+pub const TOOLS: [Tool; 37] = [
     Tool {
         name: "tools.search", title: "Tool search", description: "Deferred worker tools · schemas on demand",
         href: None, aliases: "tool search schema deferred index call dispatch",
@@ -206,6 +206,13 @@ pub const TOOLS: [Tool; 36] = [
         name: "team.monitor", title: "Team monitor", description: "Opt-in read-only judge woken by host facts about its team · operator approval",
         href: None, aliases: "monitor observer stall gaps blocked bottleneck facts judge",
         mcp_names: &[], execution: "Rust lifecycle facts / judge bot", surface: "control_agent_spawn persona=monitor · control_bot_request", available: true,
+    },
+    // Offered only by the `timers` lens: a team's agents may set check-in
+    // timers (a bot interval or a wait recheck). Without it they wait for events.
+    Tool {
+        name: "bot.timer", title: "Check-in timers", description: "Opt-in: agents may wake themselves on a timer (a bot interval or a wait recheck)",
+        href: None, aliases: "timer cron schedule recheck interval check-in poll",
+        mcp_names: &[], execution: "Rust bot supervisor", surface: "control_bot_request every_minutes · control_turn_handoff recheck_seconds", available: true,
     },
     // Offered only by the `antibody` lens. Selecting it on an operator-owned root
     // chat makes a node-wide antibody option exist; bot approval still decides.

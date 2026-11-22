@@ -36,6 +36,8 @@ fn fixture() -> (State, String) {
     let mut state = State::default();
     let chat = crate::chat::create(&mut state);
     state.chats[0].room = Some("general".into());
+    // Most bot tests request a timer; the gene that allows one is selected.
+    state.chats[0].lenses = Some(vec!["timers".into()]);
     crate::chat::send(&mut state, &chat, "Watch the game and coordinate", "test").unwrap();
     state.runtime.runs[0].status = "completed".into();
     (state, chat)
@@ -937,6 +939,17 @@ fn ask(
         },
         |_| Ok(()),
     )
+}
+#[test]
+fn an_agent_sets_a_timer_only_when_its_team_selected_the_timers_gene() {
+    // Run AD: players woke themselves every two minutes and spent more than
+    // joystick play. A timer is opt-in for the team; events wake without one.
+    let (mut state, _, child) = requester();
+    state.chats[0].lenses = None;
+    let refused = ask(&mut state, "timer-off", &child, Some(5)).unwrap_err().to_string();
+    assert!(refused.contains("timers gene") && refused.contains("omit every_minutes"), "{refused}");
+    state.chats[0].lenses = Some(vec!["timers".into()]);
+    assert!(ask(&mut state, "timer-on", &child, Some(5)).is_ok());
 }
 #[test]
 fn descendant_bot_requests_reach_ancestors_and_fence_other_actors_and_trees() {
