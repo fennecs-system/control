@@ -15,9 +15,9 @@ pub(super) fn turn(state: &mut State, chat: &str, status: &str) -> usize {
     state.runtime.runs.push(run);
     state.runtime.runs.len() - 1
 }
-/// Ticks (or unticks) the advisor lens on the root chat.
+/// Ticks (or unticks) the advisor and monitor genes on the root chat.
 pub(super) fn opt_in(state: &mut State, root: &str, on: bool) {
-    state.chats.iter_mut().find(|chat| chat.id == root).unwrap().lenses = Some(if on { vec!["advisor".into()] } else { Vec::new() });
+    state.chats.iter_mut().find(|chat| chat.id == root).unwrap().lenses = Some(if on { vec!["advisor".into(), "monitor".into()] } else { Vec::new() });
 }
 /// A completed read-only judge child of `root`, before it runs as a bot.
 fn judge(state: &mut State, root: &str) -> String {
@@ -89,14 +89,14 @@ fn advisors_are_strictly_opt_in_through_the_advisor_lens() {
     let worker = spawned(&mut state, &root, "Builder");
     // The swarm preset does not include the advisor.
     state.chats[0].lenses = Some(vec!["swarm".into()]);
-    assert!(!advisor_offered(&state, &root));
+    assert!(!team_observer_offered(&state, &root));
     let judge = judge(&mut state, &root);
     let error = command_at(&mut state, &judge, "on", Now(0)).unwrap_err();
     assert_eq!(error, ADVISOR_OFF, "without the lens there is no advisor option");
     assert!(!state.bots.advises(&judge));
     // Ticking the lens (with or beside swarm) makes the option exist; approval runs it.
-    state.chats[0].lenses = Some(vec!["swarm".into(), "advisor".into()]);
-    assert!(advisor_offered(&state, &root) && advisor_offered_for(&state, &worker));
+    state.chats[0].lenses = Some(vec!["swarm".into(), "advisor".into(), "monitor".into()]);
+    assert!(team_observer_offered(&state, &root) && team_observer_offered_for(&state, &worker));
     let captured = control_context::persona::Captured::of(&control_context::persona::builtin("monitor").unwrap(), &[]).unwrap();
     state.runtime.runs.last_mut().unwrap().persona.as_mut().unwrap().bundle = Some(Box::new(captured));
     command_at(&mut state, &judge, "on", Now(1)).unwrap();
@@ -169,7 +169,7 @@ fn notes_and_lead_turns_woken_only_by_notes_do_not_re_trigger_the_advisor() {
     let woken = bot_runs(&state).into_iter().filter(|run| run.chat_id.as_deref() == Some(&root)).collect::<Vec<_>>();
     assert_eq!(woken.len(), 1);
     assert!(matches!(woken[0].bot_turn.as_ref().unwrap().reasons.as_slice(), [Reason::Info { info: Message::Note, .. }]));
-    assert!(woken[0].objective.contains("advisor note"));
+    assert!(woken[0].objective.contains("an observer's note"));
     let id = woken[0].id.clone();
     let woken = state.runtime.runs.iter_mut().find(|run| run.id == id).unwrap();
     woken.status = "completed".into();
@@ -316,6 +316,31 @@ fn a_lead_requests_its_judge_as_advisor_and_the_operator_approves_it() {
     assert!(state.bots.advises(&judge));
     let definition = state.bots.supervisor.definitions().find(|d| d.chat.0 == judge).unwrap();
     assert_eq!(definition.sources, [lifecycle::ask_source(&lead)], "a plain judge is the advisor members ask");
+}
+
+#[test]
+fn an_advisor_approved_before_the_split_keeps_hearing_facts_under_the_monitor_gene() {
+    // Its persisted definition holds the task topic and no monitor persona.
+    let (mut state, root) = fixture();
+    let worker = spawned(&mut state, &root, "Builder");
+    let old = advisor(&mut state, &root);
+    let definition = state.bots.supervisor.definitions().find(|d| d.chat.0 == old).unwrap().clone();
+    let effects = state.bots.supervisor.step(Event::Define(Definition { sources: vec![lifecycle::source(&root)], ..definition }), Now(1));
+    record(&mut state, effects);
+    assert!(status(&state, &old).unwrap().starts_with("Monitor · sleeping · team facts"));
+    assert!(state.bots.monitors(&old) && state.bots.team_advisor(&root).is_none());
+    reconcile_at(&mut state, 2, ok).unwrap();
+    turn(&mut state, &worker, "completed");
+    reconcile_at(&mut state, 3, ok).unwrap();
+    let runs = advisor_runs(&state, &old);
+    assert_eq!(runs.len(), 1);
+    assert!(runs[0].objective.contains("read-only monitor") && runs[0].objective.contains("team went quiet"), "{}", runs[0].objective);
+    // Without the monitor gene on the root its facts stop, as for any monitor.
+    finish(&mut state, &old);
+    state.chats[0].lenses = Some(vec!["advisor".into()]);
+    turn(&mut state, &worker, "completed");
+    reconcile_at(&mut state, 40_000, ok).unwrap();
+    assert_eq!(advisor_runs(&state, &old).len(), 1);
 }
 
 #[test]
@@ -810,7 +835,7 @@ fn an_acceptance_check_wakes_only_when_the_team_goes_quiet_with_every_claim_done
     let (mut state, root) = fixture();
     let (builder, miner) = (spawned(&mut state, &root, "Builder"), spawned(&mut state, &root, "Miner"));
     let advisor = monitor(&mut state, &root);
-    state.chats[0].lenses = Some(vec!["advisor".into(), "acceptance".into()]);
+    state.chats[0].lenses = Some(vec!["advisor".into(), "monitor".into(), "acceptance".into()]);
     let check = acceptance(&mut state, &root);
     let definition = state.bots.supervisor.definitions().find(|d| d.chat.0 == check).unwrap();
     assert_eq!(definition.sources, [lifecycle::done_source(&root)], "completion only: no team facts, room, watch or timer");
@@ -903,8 +928,18 @@ fn the_acceptance_gene_alone_offers_an_acceptance_check() {
     let chat = judge(&mut state, &root);
     let captured = control_context::persona::Captured::of(&control_context::persona::builtin("acceptance").unwrap(), &[]).unwrap();
     state.runtime.runs.last_mut().unwrap().persona.as_mut().unwrap().bundle = Some(Box::new(captured));
-    assert_eq!(command_at(&mut state, &chat, "on", Now(0)).unwrap_err(), ADVISOR_OFF, "opt-in");
+    assert_eq!(command_at(&mut state, &chat, "on", Now(0)).unwrap_err(), ACCEPTANCE_OFF, "opt-in");
+    // Each gene offers only its own observer.
+    state.chats[0].lenses = Some(vec!["swarm".into(), "advisor".into()]);
+    assert_eq!(command_at(&mut state, &chat, "on", Now(0)).unwrap_err(), ACCEPTANCE_OFF, "the advisor gene offers no acceptance check");
+    let watcher = judge(&mut state, &root);
+    let captured = control_context::persona::Captured::of(&control_context::persona::builtin("monitor").unwrap(), &[]).unwrap();
+    state.runtime.runs.last_mut().unwrap().persona.as_mut().unwrap().bundle = Some(Box::new(captured));
+    assert_eq!(command_at(&mut state, &watcher, "on", Now(0)).unwrap_err(), MONITOR_OFF, "nor a monitor");
+    let plain = judge(&mut state, &root);
     state.chats[0].lenses = Some(vec!["swarm".into(), "acceptance".into()]);
+    assert_eq!(command_at(&mut state, &plain, "on", Now(0)).unwrap_err(), ADVISOR_OFF, "the acceptance gene offers no advisor");
+    assert_eq!(command_at(&mut state, &watcher, "on", Now(0)).unwrap_err(), MONITOR_OFF);
     command_at(&mut state, &chat, "on", Now(1)).unwrap();
     assert!(state.bots.accepts(&chat));
     reconcile_at(&mut state, 2, ok).unwrap();

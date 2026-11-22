@@ -42,7 +42,7 @@ fn an_approved_advisor_notes_only_the_lead_and_posts_nothing_to_the_room() {
     assert!(state.collective.posts.is_empty(), "the advisor steers; it never posts to the room");
     // The web transcript shows it as one distinct box, and the TUI detail marks it.
     let html = crate::chat::transcript(&state, &lead).unwrap();
-    assert!(html.contains("<article class='advisor-note' aria-label='Advisor note'><p class='advisor-note-label'>Advisor note from"));
+    assert!(html.contains("<article class='advisor-note' aria-label='Observer note'><p class='advisor-note-label'>Advisor note from"));
     assert!(html.contains("read-only evidence</p><p class='preserve'>Claim build is abandoned"));
     let detail = crate::chat::detail(&state, &lead).unwrap();
     let shown = detail["messages"].as_array().unwrap().last().unwrap();
@@ -196,6 +196,7 @@ fn an_acceptance_check_notes_a_member_of_its_team_and_takes_no_questions() {
     note(&mut state, &run, "n0", &builder, "The request was a castle; claim wall closed with a ring three blocks high. Reopen it as a claim.").unwrap();
     let delivered = state.runtime.runs.last().unwrap();
     assert_eq!((delivered.chat_id.as_deref(), delivered.source.as_str()), (Some(builder.as_str()), "advisor-note"));
+    assert!(delivered.objective.starts_with("Acceptance check note from"), "{}", delivered.objective);
     assert_eq!(state.chats.iter().find(|chat| chat.id == lead).unwrap().messages.len(), before, "the lead is not a relay");
     // Members ask the advisor; a question would wake the check outside completion.
     let asking = activate(&mut state, &builder);
@@ -206,13 +207,18 @@ fn an_acceptance_check_notes_a_member_of_its_team_and_takes_no_questions() {
 #[test]
 fn a_monitor_notes_its_team_and_takes_no_questions() {
     let (mut state, _, builder, monitor, run) = team();
+    state.chats[0].lenses = Some(vec!["monitor".into()]);
     let index = state.runtime.runs.iter().position(|r| r.id == run).unwrap();
     let captured = control_context::persona::Captured::of(&control_context::persona::builtin("monitor").unwrap(), &[]).unwrap();
     state.runtime.runs[index].persona.as_mut().unwrap().bundle = Some(Box::new(captured));
     crate::bots::command(&mut state, &monitor, "on").unwrap();
     assert!(state.bots.monitors(&monitor) && state.bots.team_advisor(&state.chats[0].id.clone()).is_none());
     note(&mut state, &run, "n0", &builder, "Claim wall is blocked on a claim that is already done.").unwrap();
-    assert_eq!(state.runtime.runs.last().unwrap().source.as_str(), "advisor-note");
+    let delivered = state.runtime.runs.last().unwrap();
+    assert_eq!(delivered.source.as_str(), "advisor-note");
+    // The note names its sender's kind, in the objective and in the chat.
+    assert!(delivered.objective.starts_with("Monitor note from"), "{}", delivered.objective);
+    assert!(state.chats.iter().find(|chat| chat.id == builder).unwrap().messages.last().unwrap().text.starts_with("Monitor note from"));
     // Members ask the advisor; a question would wake the monitor outside its facts.
     let asking = activate(&mut state, &builder);
     assert!(handle(&mut state, &AttemptRef { run: &asking, generation: "peer-attempt", nonce: "q0" },

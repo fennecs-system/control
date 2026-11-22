@@ -193,14 +193,14 @@ pub const TOOLS: [Tool; 36] = [
         href: None, aliases: "advisor judge ask question method lead swarm",
         mcp_names: &[], execution: "Rust judge bot", surface: "control_agent_spawn role=judge · control_bot_request", available: true,
     },
-    // Offered only by the `acceptance` lens, beside `team.advisor`: its judge
+    // Offered only by the `acceptance` lens: its judge
     // hears only its team's completion.
     Tool {
         name: "team.acceptance", title: "Acceptance check", description: "Opt-in read-only judge that compares a finished result with the request · operator approval",
         href: None, aliases: "acceptance check done finished scope quality judge request",
         mcp_names: &[], execution: "Rust lifecycle fact / judge bot", surface: "control_agent_spawn persona=acceptance · control_bot_request", available: true,
     },
-    // Offered only by the `monitor` lens, beside `team.advisor`: its judge
+    // Offered only by the `monitor` lens: its judge
     // hears its team's host facts.
     Tool {
         name: "team.monitor", title: "Team monitor", description: "Opt-in read-only judge woken by host facts about its team · operator approval",

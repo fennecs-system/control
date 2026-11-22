@@ -554,6 +554,10 @@ fn a_judge_batch_starts_one_advisor_within_its_own_allowance_beside_the_review_j
     assert_eq!(error, crate::bots::ADVISOR_OFF);
     s.chats[0].lenses = Some(vec!["swarm".into()]);
     assert!(request(&mut s, &id, "parent-attempt", "swarm", judge(1), |_| panic!("swarm excludes it")).is_err());
+    // Each gene offers only its own observer: a plain judge is an advisor.
+    s.chats[0].lenses = Some(vec!["swarm".into(), "acceptance".into()]);
+    let error = request(&mut s, &id, "parent-attempt", "other-gene", judge(1), |_| panic!("no advisor gene")).unwrap_err();
+    assert_eq!(error, crate::bots::ADVISOR_OFF);
     s.chats[0].lenses = Some(vec!["swarm".into(), "advisor".into()]);
     assert!(request(&mut s, &id, "parent-attempt", "two", judge(2), |_| panic!("one advisor per batch")).is_err());
     request(&mut s, &id, "parent-attempt", "advisor", judge(1), |_| Ok(())).unwrap();

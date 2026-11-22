@@ -18,7 +18,7 @@ For whoever steers or assigns a team's work. It reads the room's
   Chains that lead into a cycle never finish and are left out.
 - `bottlenecks`: unfinished claims (or unclaimed keys) ranked by the members
   and claims that wait on them directly or transitively. This is the same walk
-  as the [team advisor](LENSES.md#team-advisor)'s bottleneck fact
+  as the [team monitor](LENSES.md#team-monitor)'s bottleneck fact
   (`rooms::claims::graph`), so the two never disagree; a test keeps them equal.
 - `ready`: the parallel frontier, claims with no unfinished dependency:
   `working`, `resumable` (its dependency is done, so the owner can continue),

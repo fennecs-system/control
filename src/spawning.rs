@@ -109,7 +109,7 @@ impl Batch {
 fn advisor_allowance(state: &State, run: &crate::runtime::Run) -> Result<(), &'static str> {
     // Strictly opt-in: without the advisor lens on the root chat there is no
     // advisor option to use.
-    if !run.chat_id.as_deref().is_some_and(|chat| crate::bots::advisor_offered_for(state, chat) || crate::bots::antibody_offered_for(state, chat)) {
+    if !run.chat_id.as_deref().is_some_and(|chat| crate::bots::team_observer_offered_for(state, chat) || crate::bots::antibody_offered_for(state, chat)) {
         return Err(crate::bots::ADVISOR_OFF);
     }
     let root = delegation::lineage(run).root;
@@ -228,14 +228,17 @@ pub fn request(
             return Err("A judge batch starts exactly one read-only advisor candidate.");
         }
         advisor_allowance(state, run)?;
-        // Observer personas keep their own opt-in gene gate.
-        if let (Some(bundle), Some(chat)) = (bundle.as_ref(), run.chat_id.as_deref()) {
-            use control_context::persona::{Sees, Steers};
-            if bundle.standing.sees == Sees::Node && !crate::bots::antibody_offered_for(state, chat) {
+        // Each observer keeps its own opt-in gene gate: a persona's DNA names
+        // it, and a plain judge is an advisor (an antibody on an antibody root).
+        if let Some(chat) = run.chat_id.as_deref() {
+            use control_context::persona::Sees;
+            let node = bundle.as_ref().map_or_else(|| crate::bots::antibody_offered_for(state, chat), |bundle| bundle.standing.sees == Sees::Node);
+            if node && !crate::bots::antibody_offered_for(state, chat) {
                 return Err(crate::bots::ANTIBODY_OFF);
             }
-            if bundle.standing.steers == Steers::Lead && !crate::bots::advisor_offered_for(state, chat) {
-                return Err(crate::bots::ADVISOR_OFF);
+            let (tool, off) = crate::bots::team_gene(state, bundle.as_ref().map_or(&[][..], |bundle| &bundle.lenses));
+            if !node && !crate::bots::offered_for(state, chat, tool) {
+                return Err(off);
             }
         }
     }

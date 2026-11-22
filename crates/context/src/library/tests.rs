@@ -269,7 +269,7 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert!(advisor.instructions.chars().count() <= 1300);
     let monitor = Library::default().get("monitor").unwrap().clone();
     assert_eq!((monitor.name.as_str(), monitor.revision), ("Team monitor", 1));
-    assert_eq!(monitor.tools, ["team.advisor", "team.monitor"]);
+    assert_eq!(monitor.tools, ["team.monitor"]);
     assert_eq!((monitor.roles.as_slice(), monitor.inline.as_slice()), ([Audience::Lead, Audience::Advisor].as_slice(), [Audience::Advisor].as_slice()));
     assert!(monitor.instructions.len() <= 3_000 && !monitor.summary.is_empty() && monitor.summary.chars().count() <= MAX_SUMMARY);
     assert!(monitor.instructions.contains("you are a read-only judge woken only by host facts about your task tree"));
@@ -281,8 +281,8 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     // Run V: comparing a finished result with the request is the acceptance gene's, not the advisor's.
     assert!(!advisor.instructions.contains("a goal called done at a scope the operator would not accept"));
     let acceptance = Library::default().get("acceptance").unwrap().clone();
-    assert_eq!((acceptance.name.as_str(), acceptance.revision), ("Acceptance check", 3));
-    assert_eq!(acceptance.tools, ["team.advisor", "team.acceptance"]);
+    assert_eq!((acceptance.name.as_str(), acceptance.revision), ("Acceptance check", 4));
+    assert_eq!(acceptance.tools, ["team.acceptance"]);
     assert_eq!((acceptance.roles.as_slice(), acceptance.inline.as_slice()), ([Audience::Lead, Audience::Advisor].as_slice(), [Audience::Advisor].as_slice()));
     assert!(acceptance.instructions.chars().count() <= 1100 && !acceptance.summary.is_empty() && acceptance.summary.chars().count() <= MAX_SUMMARY);
     assert!(acceptance.instructions.contains("woken only when the team goes quiet with every claim done"));
@@ -296,6 +296,10 @@ fn every_shipped_lens_revision_upgrades_to_the_current_built_in() {
     assert!(monitor.instructions.contains("several members report a similar blocker"));
     assert!(monitor.instructions.contains("(busy but stalled)"));
     assert!(monitor.instructions.contains("putting more members on the bottleneck, splitting it, or re-routing dependents around it"));
+    // Fact-woken interjection is the monitor's, so that is what an antibody suggests.
+    let antibody = Library::default().get("antibody").unwrap().clone();
+    assert_eq!(antibody.revision, 6);
+    assert!(antibody.instructions.contains("when the team has no monitor, suggest the lead start one in the background"));
     let swarm = Library::default().get("swarm").unwrap().clone();
     assert_eq!(swarm.revision, 2);
     assert!(swarm.includes.contains(&"planning".to_string()));

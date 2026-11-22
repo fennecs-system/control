@@ -77,7 +77,7 @@ resulting policy is identical to the earlier scattered checks.
 
 A standing is a profile, not a grant. Every existing gate still applies:
 
-- Observers need their opt-in gene on the root: `advisor` (or `monitor` or `acceptance`) for team observers,
+- Observers need their own opt-in gene on the root: `advisor`, `monitor` or `acceptance` for that team observer,
   `antibody` on an operator-owned root for node observers, and the root's
   advisor allowance. Operator bot approval still decides whether one runs, and
   only an approved observer may send notes or notices.

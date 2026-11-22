@@ -198,7 +198,7 @@ Dependencies:
   `control_design_ask` and options, and apply standing guidance to similar
   steps. A room post or note "awaiting direction" is not a question: nothing
   reaches the operator, and a claim still marked working fires no blocked or
-  advisor signal.
+  monitor signal.
 
 Communication:
 
@@ -217,7 +217,7 @@ Communication:
   does long work itself can hit its attempt time limit, lose unpublished work and
   leave the team unsteered. The host backs this with advisory notes on tool
   results (see [turn continuity](TURN-CONTINUITY.md#deadline-and-steering-notes))
-  and a `timed_out` advisor fact.
+  and a `timed_out` monitor fact.
 - Check existing task tools and peer findings before reimplementing a common
   capability. Share a reusable finding (a working tool with its invocation and
   version, a method or a proof step) once, where the team will find it: existing
@@ -266,7 +266,8 @@ planner or relay, and it holds no authority.
 **Strictly opt-in.** Select **Team advisor** on the root chat (tick it, or
 `/use advisor`), usually alongside `swarm`, which does not include it. The lens
 offers the `team.advisor` tool hint; unless the root chat's lenses offer it, no
-team observer can be spawned or requested. This is an availability gate, not
+advisor can be spawned or requested. Each team observer has its own gene: this
+one offers no monitor or acceptance check. This is an availability gate, not
 authority: the operator's bot approval still decides whether an advisor runs,
 and host checks bound what it can do.
 
@@ -291,16 +292,16 @@ bot approval.
    timer. Judges that are not approved advisors take no messages, and neither
    do monitors or acceptance checks.
 
-A plain `role: "judge"` child approved as a bot is this advisor. Advisors
-approved before the split keep their fact subscription and run as monitors
-until restarted.
+A plain `role: "judge"` child approved as a bot is this advisor. An advisor
+approved before the split keeps its `task:<root>` subscription: it shows and
+notes as a monitor, and hears facts while the root selects the monitor gene.
 
 ## Team monitor
 
 A specialised team observer, separate from the advisor: a read-only judge that
 catches gaps the team could miss and interjects with one evidence note. Select
 **Team monitor** on the root chat (`/use monitor`); the gene offers
-`team.advisor` (the team-observer gate) and `team.monitor`. The lead, or the
+`team.monitor` and nothing else, so it does not offer an advisor. The lead, or the
 operator, starts one in the background with `control_agent_spawn` and
 `persona: "monitor"`, one objective naming the shared outcome, then
 `control_bot_request` with no interval. It uses the advisor allowance, so the
@@ -360,7 +361,7 @@ lens stops its facts.
      if any; it is reported once per streak;
    - a turn timed out: a member's or the lead's latest turn reached its attempt
      time limit and was stopped before it checkpointed (`timed_out`). It is
-     reported once until that chat's next turn settles otherwise. The advisor
+     reported once until that chat's next turn settles otherwise. The monitor
      suggests splitting the work or, for the lead, delegating it;
    - a pathology (see [antibodies](#antibodies)): harness churn, a repetition
      loop, polling or cost burn.
@@ -382,7 +383,9 @@ Issues rise through the team, not through the lead. The monitor notes the
 member a fact is about; it notes the lead only for what members cannot settle
 themselves (the plan, a reassignment, a blocker spanning several members, or a
 member that did not act on an earlier note). A note is retained peer evidence
-with source `advisor-note`, shown as "Advisor note from …" in its own box. An
+with source `advisor-note` (the internal name for every observer's note), shown
+in its own box under its sender's kind: "Monitor note from …", "Advisor note
+from …", "Acceptance check note from …" or "Antibody note from …". An
 active recipient gets one callback hint at its next tool response; one running
 as an approved bot wakes within its own budget; an idle one is woken by the note
 at once. The monitor never posts to rooms, and members do not ask it: they ask
@@ -406,8 +409,8 @@ alone computes no facts.
 
 A specialised team observer, separate from the advisor and the monitor: a read-only judge that
 compares what the team calls finished with what was asked. Select **Acceptance
-check** on the root chat (`/use acceptance`); the gene offers `team.advisor`
-(the team-observer gate) and `team.acceptance`. The lead, or the operator,
+check** on the root chat (`/use acceptance`); the gene offers
+`team.acceptance` and nothing else. The lead, or the operator,
 starts one in the background with `control_agent_spawn` and
 `persona: "acceptance"`, one objective quoting the request, then
 `control_bot_request` with no interval. It uses the advisor allowance.
@@ -426,8 +429,8 @@ the acceptance check.
 Antibodies are the node's immune system: opt-in read-only observers that patrol
 every team on the node (counter-intel duty), tag pathologies and recruit the
 response from the team's lead or the operator. They never do the work, take
-over, message members, post to rooms, claim work or start services. Where an
-advisor serves one team, an antibody watches all of them.
+over, message members, post to rooms, claim work or start services. Where a
+monitor serves one team, an antibody watches all of them.
 
 **Strictly opt-in, operator-owned.** Select the **Antibodies** gene
 (`/use antibody`) on a root chat the local operator owns. The lens offers `node.antibody`,
@@ -435,7 +438,7 @@ advisor serves one team, an antibody watches all of them.
 the advisor, the lead spawns a judge (`control_agent_spawn` with `role:
 "judge"`, from the root's advisor allowance) and asks for it with
 `control_bot_request`; the operator's approval (or `/bot on` in its chat) runs
-it. An antibody may take a patrol timer (`every_minutes`); an advisor may not.
+it. An antibody may take a patrol timer (`every_minutes`); a team observer may not.
 `persona: "antibody"` spawns the built-in [antibody persona](PERSONAS.md),
 whose captured standing (node visibility) selects the antibody mode even in a
 tree that also offers an advisor; the antibody gene gate still applies.
@@ -444,7 +447,7 @@ team on the node.
 
 **What wakes it.** The approved judge sleeps on the node topic. Each reconcile
 pass observes every team (a root chat with spawned members, except antibody
-trees) in the same single pass the advisor uses, and offers one coalesced event
+trees) in the same single pass the monitor uses, and offers one coalesced event
 of the facts that suggest a team is off course: repeated failures, retired
 restart loops, stalls, idle claim holders, shared blockers, bottlenecks,
 timeouts, members that cannot checkpoint, and four pathologies:
@@ -469,16 +472,16 @@ commands (up to 16 per service), run token counts, claims and score probe
 samples. Commands are classified only when a team's retained set changes. Each
 fact is reported once and again only after it clears; history before the
 antibody's subscription is not reported. Quiet teams, single blocked claims and
-abandoned claims are ordinary coordination for the lead or advisor and do not
+abandoned claims are ordinary coordination for the lead or monitor and do not
 wake an antibody. Stopping the last antibody drops the snapshots of teams no
-advisor watches.
+monitor or acceptance check watches.
 
 **What it does.** It reads the facts and `control_intel_brief` (one team with
 `chat_id`, or the whole node), decides whether a team is working against its
 goal, and sends that team's lead one note with `control_agent_message`. Notes
 are allowed only to another team's steering chat (a top-level chat with
 members), never to members or its own tree, carry no services, and arrive as an
-"Antibody note" that the lead verifies like advisor evidence. If the lead is not
+"Antibody note" that the lead verifies like monitor evidence. If the lead is not
 fixing it, or the operator is needed, it sends one `control_operator_notify`.
 
 **Operator notices.** `control_operator_notify` is a small generic tool: an

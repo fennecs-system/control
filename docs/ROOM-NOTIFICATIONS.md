@@ -82,7 +82,7 @@ continuations, and wake nobody unless the sender sets `urgent: true`.
 | Operator message | always (its own turn) |
 | Resolution of a claim the bot waits on | yes |
 | Wait that selected the bot's `conversation:<chat>` topic | any message, urgent or not |
-| [Advisor note](LENSES.md#team-advisor) to the lead | yes |
+| [Observer note](LENSES.md#team-monitor) (monitor, advisor, acceptance check or antibody) | yes |
 | Urgent message to a bot or a descendant | yes |
 | Non-urgent message | no; carried by the next wake |
 
@@ -201,7 +201,7 @@ Claims are saved with the room's posts:
   or `done`. Done is the owner's report, not host verification. A blocked claim
   records `blocked_at`, the revision at which it became blocked on that claim;
   it is kept while updates stay blocked on the same claim. A team
-  [advisor](LENSES.md#team-advisor) hears of each new blocked state once.
+  [monitor](LENSES.md#team-monitor) hears of each new blocked state once.
 - Revisions come from one room-wide sequence and never repeat. Each acquisition
   starts a new incarnation, identified by its acquisition revision. Released
   claims are kept as tombstones until the room's bound evicts them.
@@ -248,7 +248,9 @@ selects its own `conversation:<chat>` topic, which `wake_topics` always offers.
 Operator input always queues its own turn. The supervisor core only matches
 topics and cursors; claim meaning stays in Control's adapter.
 
-An [advisor note](LENSES.md#team-advisor) is a direct message from the team's
-approved read-only advisor to the lead's steering chat, and follows these rules.
-The advisor sleeps only on its `task:<root>` lifecycle topic; it holds no room
-inbox and never posts to rooms.
+An [observer note](LENSES.md#team-monitor) is a direct message from an approved
+read-only observer to the member concerned or the lead's steering chat, named
+by its sender's kind ("Monitor note from …"), and follows these rules. A
+monitor sleeps only on its `task:<root>` lifecycle topic, an acceptance check
+on `done:<root>` and an advisor until a member asks it; none holds a room inbox
+or posts to rooms.

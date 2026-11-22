@@ -127,7 +127,9 @@ verification builds and use the linked room. Claude and local judges inspect
 workspace.
 
 When the root chat selects the advisor lens, `control_agent_spawn` accepts
-`"role":"judge"` with exactly one objective. This starts an advisor candidate
+`"role":"judge"` with exactly one objective (the monitor and acceptance genes
+offer `persona: "monitor"` and `persona: "acceptance"` the same way, each only
+its own). This starts an advisor candidate
 without pausing the parent, with no services and the task-level review scope. It
 uses the root's advisor allowance (`max_advisors_per_root`), not its blocking
 review. An operator-approved judge bot becomes the team's
