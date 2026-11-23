@@ -27,6 +27,52 @@ keeps its tool permissions and role. Invalid selections are rejected before any
 effect, and changing a retried request's selection is a conflict. There is never
 a silent fallback to another provider.
 
+## Accounts
+
+A backend can have several accounts (sign-ins or keys), chosen in the same
+selection, for example to run two subscriptions of one backend side by side:
+
+| Selection | Runs on |
+| --- | --- |
+| `codex:gpt-6.1-sol` | the backend's default account, on this node (unchanged) |
+| `codex+second:gpt-6.1-sol` | the account named `second` |
+| `codex+*:gpt-6.1-sol` | any enabled account, the least busy one when the work is admitted |
+| `codex:gpt-6.1-sol@fen` or `…@fen:example.org` | another node: reserved, refused until federation routes work |
+
+The first `@` starts the node address and model IDs cannot contain `@`; a
+second `@` is refused. The first `:` ends the backend, so model IDs may contain
+`:` (`codex:a:b` is model `a:b`). Account names are `[a-z0-9-]`, at most 32
+characters. There is no automatic failover: a pool is chosen explicitly. Work
+captures its concrete account when it is admitted, so changing a default never
+moves queued or running work, and a child that names no model inherits its
+parent's account. `/model` shows `+ACCOUNT` only for an account other than the
+default, so selections without accounts look and are saved exactly as before.
+
+Without `<config>/accounts.json` every backend has one implicit account,
+`default`: its credential where it is kept today (including the
+`CONTROL_*_AUTH_FILE` overrides). Accounts are added by hand for now; the file is
+read at startup and refused whole if invalid:
+
+```json
+{
+  "defaults": {"codex": "work"},
+  "accounts": [
+    {"backend": "codex", "name": "work", "kind": "subscription",
+     "secret": {"config": "accounts/codex/work/auth.json"}, "cap": 2, "label": "Work plan"},
+    {"backend": "codex", "name": "key", "kind": "api_key",
+     "secret": {"path": "/run/keys/codex"}, "enabled": false}
+  ]
+}
+```
+
+`kind` is `subscription`, `api_key` or `cloud`; `secret` names where the
+credential is (`config` relative to the configuration directory, or an absolute
+`path`), never the credential itself; `cap`, `enabled` (default true) and `label`
+are optional, and `default` cannot be redefined. `defaults` maps a backend to an
+enabled account. Choosing, capturing and reporting accounts works today; backends
+still sign in with the implicit account's credential until they are handed the
+chosen account, and caps are recorded but not yet enforced.
+
 ## Configure local models
 
 **Manage → Models & providers** lists every model that can run agent turns under

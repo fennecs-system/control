@@ -198,6 +198,10 @@ credentials, network or model calls.
 
 These directions are specified for future work; none exist today.
 
+**Node addresses.** `@node` or `@node:domain` (Matrix style) is reserved at the end
+of a model selection, `codex:MODEL@fen:example.org`, for running on another node.
+It is parsed today and refused with "not available yet" (docs/LOCAL-MODELS.md).
+
 **Network delivery.** A separate federation listener, not the operator HTTP
 interface, accepting only versioned, bounded, signed messages over TLS with
 per-peer limits. Messages carry a recipient-bound request ID, short expiry and
