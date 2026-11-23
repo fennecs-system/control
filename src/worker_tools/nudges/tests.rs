@@ -90,11 +90,17 @@ fn context_notes_belong_to_the_local_loop_and_never_reach_hosted_sessions() {
     }
     // The note asks for findings and the plan in the working notes (the
     // handoff payload) before compaction loses them, or marked lines without one.
-    let note = context_text(81, true);
+    let note = context_text(81, Next::Turn);
     assert!(note.starts_with("Context 81% full: publish your checkpoint (control_turn_handoff) and continue in the next turn."), "{note}");
     assert!(note.contains("working notes, payload.findings and payload.next") && note.contains("Finding:"), "{note}");
-    assert_eq!(context_text(81, false), format!("Context 81% full: finish with a brief final report soon. {MARKS}"));
-    assert!(steps_text(4, true).contains("payload.findings and payload.next"));
+    assert_eq!(context_text(81, Next::Report), format!("Context 81% full: finish with a brief final report soon. {MARKS}"));
+    assert!(steps_text(4, Next::Turn).contains("payload.findings and payload.next"));
+    // A chat with the handoff tool but no persistent bot has no next turn, so
+    // the note names what would give it one and never promises a continuation.
+    assert!(matches!(Next::of(true, true, false), Next::Turn) && matches!(Next::of(true, false, false), Next::Report) && matches!(Next::of(false, true, true), Next::Report));
+    for note in [context_text(81, Next::of(true, false, true)), steps_text(4, Next::of(true, false, true))] {
+        assert!(note.contains("this chat has no next turn") && note.contains("control_bot_request") && !note.contains("continue"), "{note}");
+    }
 }
 #[test]
 fn local_model_attempts_are_warned_before_their_captured_local_limit() {

@@ -6,6 +6,7 @@
       systems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
       eachSystem = f: nixpkgs.lib.genAttrs systems (system: f (import nixpkgs {
         inherit system;
+        overlays = [ (import ./tools/inference/llama.nix) ];
         # CUDA libraries are only evaluated for the optional inference-image-cuda output.
         config.allowUnfreePredicate = pkg:
           let
@@ -46,7 +47,8 @@
           inference = { type = "app"; program = "${inference}/bin/control-inference"; };
           codex = { type = "app"; program = "${pkgs.codex}/bin/codex"; };
         } // nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
-          builder = { type = "app"; program = "${pkgs.darwin.linux-builder}/bin/create-builder"; };
+          # 8 GiB: the stock 3 GiB VM cannot compile large Rust crates (Grok Build's shell crate).
+          builder = { type = "app"; program = "${pkgs.darwin.linux-builder.override { modules = [ { virtualisation.darwin-builder.memorySize = 8192; } ]; }}/bin/create-builder"; };
         });
       packages = eachSystem (pkgs:
         let
