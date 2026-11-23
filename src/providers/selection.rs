@@ -284,7 +284,7 @@ pub(crate) fn choose(runtime: &Runtime, preferred: Backend, text: &str) -> Resul
     }
     runtime
         .accounts
-        .choose(selected.backend, &account, |_| 0)
+        .choose(selected.backend, &account, |_| 0, |_| false)
         .map_err(SelectionError::Unusable)?;
     Ok(Model { account, ..selected })
 }
@@ -299,6 +299,7 @@ pub(crate) fn admit(runtime: &Runtime, model: &Model) -> Result<Target, Selectio
             model.backend,
             &model.account,
             super::accounts::load(&runtime.runs, model.backend),
+            super::accounts::cooling(runtime, model.backend),
         )
         .map_err(SelectionError::Unusable)?;
     Ok(Target {
@@ -322,23 +323,43 @@ pub(crate) fn resolve(runtime: &Runtime, inherited: &Target, selector: Option<&s
 
 /// One sentence teaching the forms with this node's backends and a model it has.
 fn forms(runtime: &Runtime) -> String {
-    let choices = super::choices(runtime);
-    let mut backends: Vec<&str> = choices
-        .iter()
+    // One example model per backend that has one, the node default first.
+    let examples = std::iter::once(Model::captured(runtime.backend, runtime.configured_model()))
+        .chain(super::choices(runtime))
         .filter(|m| super::agent_capable(runtime, m))
-        .map(|m| m.backend.id())
+        .fold(Vec::<Model>::new(), |mut kept, model| {
+            if !kept.iter().any(|k| k.backend == model.backend) {
+                kept.push(model);
+            }
+            kept
+        });
+    let lines: Vec<String> = examples
+        .iter()
+        .flat_map(|example| {
+            let (backend, model) = (example.backend.id(), &example.model);
+            let named: Vec<String> = runtime
+                .accounts
+                .of(example.backend)
+                .filter(|account| account.enabled && !account.id.name.is_implicit())
+                .map(|account| format!("{backend}+{}:{model}", account.id.name))
+                .collect();
+            let pool = (!named.is_empty()).then(|| format!("{backend}+*:{model} (any enabled account)"));
+            std::iter::once(format!("{backend}:{model}")).chain(named).chain(pool)
+        })
         .collect();
-    backends.sort_unstable();
-    backends.dedup();
-    // The node default is the example unless it is a local endpoint, which has no accounts.
-    let (backend, model) = std::iter::once(Model::captured(runtime.backend, runtime.configured_model()))
-        .chain(choices)
+    let add = examples
+        .iter()
         .find(|m| m.backend != Backend::Local)
-        .map_or(("BACKEND", "MODEL".to_owned()), |m| (m.backend.id(), m.model));
-    format!(
-        "Forms: {backend}:{model}, {backend}+NAME:{model} (a named account) or {backend}+*:{model} (any enabled account); backends here: {}.",
-        backends.join(", ")
-    )
+        .filter(|m| runtime.accounts.of(m.backend).count() == 1)
+        .map(|m| {
+            format!(
+                " Another account: control accounts add {0} NAME, then {0}+NAME:{1}.",
+                m.backend.id(),
+                m.model
+            )
+        })
+        .unwrap_or_default();
+    format!("Forms: {}.{add}", lines.join(" · "))
 }
 
 pub(crate) fn command(

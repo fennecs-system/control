@@ -73,6 +73,10 @@ pub struct Attempt {
     /// host checkpoint the worker builds next. Never saved with the attempt.
     #[serde(skip)]
     pub interrupted_reasoning: Option<String>,
+    /// The provider failure the backend classified, for the host to act on
+    /// (a usage limit cools the account down). Never saved with the attempt.
+    #[serde(skip)]
+    pub cause: Option<control_agent::Cause>,
 }
 impl Attempt {
     /// Records what the provider reported, whatever the attempt's outcome.

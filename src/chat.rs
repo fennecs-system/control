@@ -534,6 +534,7 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
     }
     if let Some(option) = commands::tail(text.trim(), Kind::Model) {
         let State { chats, runtime, .. } = state;
+        crate::providers::accounts::refresh(runtime);
         let session = chats.iter_mut().find(|c| c.id == id).ok_or("Chat not found.")?;
         let reply = crate::providers::selection::command(session, runtime, option)?;
         session.messages.push(Message {
@@ -1291,8 +1292,13 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
         } else {
             format!("<span class='message-status' role='status'>{status}</span>")
         };
-        let status = match state.runtime.paused.as_deref().filter(|_| run_status == "queued") {
-            Some(reason) => format!("{status}<p class='message-status'>{}</p>", escape(reason)),
+        // Why a queued turn waits: dispatch is paused, or its account is at its cap or cooling down.
+        let held = run.filter(|_| run_status == "queued").and_then(|run| {
+            crate::providers::accounts::hold(&state.runtime, run)
+                .map(|hold| crate::providers::accounts::held(&hold, run))
+        });
+        let status = match state.runtime.paused.clone().filter(|_| run_status == "queued").or(held) {
+            Some(reason) => format!("{status}<p class='message-status'>{}</p>", escape(&reason)),
             None => status,
         };
         let folder_request = message.run_id.is_none() && commands::tail(message.text.trim(), Kind::Open).is_some();

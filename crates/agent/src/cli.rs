@@ -46,6 +46,7 @@ pub fn checked(path: &Path) -> io::Result<&Path> {
 pub fn base(name: &str, node: &str, owner: User) -> RunSpec {
     // Login and offline checks are supervised by their command, not run reconciliation.
     let check = [
+        "control-codex-login-",
         "control-claude-login-",
         "control-claude-probe-",
         "control-grok-login-",

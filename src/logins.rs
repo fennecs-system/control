@@ -1,8 +1,10 @@
-//! Where each backend's login lives on this node, located and checked by the
+//! Where each account's login lives on this node, located and checked by the
 //! host and handed to a turn as a [`Granted`] value. Metadata only: no
-//! credential is ever read. There is one implicit account per backend, at
-//! exactly the path its backend used to locate itself.
-use crate::accounts::{Location, Roots};
+//! credential is ever read. The implicit `default` account is at exactly the
+//! path its backend used to locate itself; a named account's login is in
+//! `<config>/accounts/BACKEND/NAME/`. Backends never learn which account
+//! they were handed.
+use crate::accounts::{AccountName, Location, Roots};
 use crate::backend::Backend;
 use control_agent::{Form, Granted};
 use control_isolation::User;
@@ -22,17 +24,23 @@ fn owner(meta: &fs::Metadata) -> User {
     }
 }
 
-/// The backend's login directory under the configuration directory, which
-/// `control ID login` creates.
-pub(crate) fn directory(backend: Backend) -> io::Result<PathBuf> {
-    Ok(crate::config::directory().map_err(fail)?.join(backend.id()))
+/// The account's login directory, which `control ID login [--account NAME]`
+/// creates and fills: `<config>/ID` for the implicit account, else
+/// `<config>/accounts/ID/NAME`.
+pub(crate) fn directory(backend: Backend, account: &AccountName) -> io::Result<PathBuf> {
+    let config = crate::config::directory().map_err(fail)?;
+    Ok(if account.is_implicit() {
+        config.join(backend.id())
+    } else {
+        config.join(crate::accounts::directory(backend, account).as_path())
+    })
 }
 
-/// Where the implicit account's login is, from the one table of locations
+/// Where the account's login is, from the one table of locations
 /// (`crate::providers::accounts`), with the location that matched. Tests
 /// never see the operator's home or `CODEX_HOME`: only `CONTROL_*` overrides
 /// count, and the home is the test root.
-fn implicit(backend: Backend) -> io::Result<Option<(Location, PathBuf)>> {
+fn resolve(backend: Backend, account: &AccountName) -> io::Result<Option<(Location, PathBuf)>> {
     let config = crate::config::directory().map_err(fail)?;
     #[cfg(test)]
     let home = Some(crate::config::test_root());
@@ -44,7 +52,7 @@ fn implicit(backend: Backend) -> io::Result<Option<(Location, PathBuf)>> {
             .flatten()
             .map(PathBuf::from)
     };
-    let secret = crate::accounts::default_for(backend).secret;
+    let secret = crate::accounts::secret(backend, account);
     let roots = Roots {
         config: &config,
         home: home.as_deref(),
@@ -53,16 +61,22 @@ fn implicit(backend: Backend) -> io::Result<Option<(Location, PathBuf)>> {
     Ok(secret.resolve(&roots).map(|(location, path)| (location.clone(), path)))
 }
 
-/// The backend's login for a turn or text call.
-pub(crate) fn locate(backend: Backend) -> io::Result<Granted> {
+/// The account's login for a turn or text call.
+pub(crate) fn locate(backend: Backend, account: &AccountName) -> io::Result<Granted> {
+    let located = || resolve(backend, account)?.ok_or_else(|| fail("This backend has no login location"));
     match backend {
-        Backend::Codex => codex().map_err(fail),
-        Backend::Claude => file(backend, "Claude", "claude"),
-        Backend::Grok => file(backend, "Grok", "grok"),
-        Backend::Antigravity => match implicit(backend)? {
-            Some((_, directory)) => antigravity(&directory),
-            None => Err(fail("Antigravity has no login location")),
-        },
+        Backend::Codex => codex_validate(&located()?.1).map_err(|error| {
+            if account.is_implicit() {
+                fail(error)
+            } else {
+                fail(&format!(
+                    "{error} Sign this account in with {}.",
+                    login_command(backend, account)
+                ))
+            }
+        }),
+        Backend::Claude | Backend::Grok => file(located()?, backend, account),
+        Backend::Antigravity => antigravity(&located()?.1),
         Backend::Local => Err(fail("Local endpoints use no provider login")),
     }
 }
@@ -71,23 +85,36 @@ pub(crate) fn locate(backend: Backend) -> io::Result<Granted> {
 pub(crate) fn ready(backend: Backend) -> Result<(), String> {
     match backend.agent().login() {
         None => Ok(()),
-        Some(login) => locate(backend)
+        Some(login) => locate(backend, &AccountName::implicit())
             .map(drop)
             .map_err(|error| login.hint.map_or_else(|| error.to_string(), str::to_owned)),
     }
 }
 
+/// How to sign the account in, for messages and the providers page.
+pub(crate) fn login_command(backend: Backend, account: &AccountName) -> String {
+    if !account.is_implicit() {
+        format!("control {} login --account {account}", backend.id())
+    } else if backend == Backend::Codex {
+        "codex login (on the host)".to_owned()
+    } else {
+        format!("control {} login", backend.id())
+    }
+}
+
 /// A CLI's own sign-in file: an explicit absolute path, or the file in the
-/// backend's private login directory.
-fn file(backend: Backend, label: &str, command: &str) -> io::Result<Granted> {
-    let path = match implicit(backend)? {
-        Some((Location::Variable { .. }, path)) if !path.is_absolute() => {
+/// account's private login directory.
+fn file(located: (Location, PathBuf), backend: Backend, account: &AccountName) -> io::Result<Granted> {
+    let label = backend.label();
+    let path = match located {
+        (Location::Variable { .. }, path) if !path.is_absolute() => {
             return Err(fail(&format!("{label} credential path must be absolute")));
         }
-        Some((Location::Variable { .. }, path)) => path,
-        Some((_, path)) => {
+        (Location::Variable { .. }, path) => path,
+        (Location::Config(_) | Location::Home(_), path) => {
             let directory = path.parent().ok_or_else(|| fail("Invalid login location"))?;
-            let meta = fs::symlink_metadata(directory)?;
+            let meta = fs::symlink_metadata(directory)
+                .map_err(|_| fail(&format!("Run {} to sign in", login_command(backend, account))))?;
             if !meta.is_dir() || meta.mode() & 0o077 != 0 {
                 return Err(fail(&format!(
                     "{label} login directory must be private and not a symlink"
@@ -95,11 +122,11 @@ fn file(backend: Backend, label: &str, command: &str) -> io::Result<Granted> {
             }
             path
         }
-        None => return Err(fail(&format!("{label} has no login location"))),
     };
     let meta = fs::symlink_metadata(&path).map_err(|_| {
         fail(&format!(
-            "Run control {command} login to sign in inside the Nix container"
+            "Run {} to sign in inside the Nix container",
+            login_command(backend, account)
         ))
     })?;
     if !meta.is_file() || meta.mode() & 0o077 != 0 || meta.uid() == 0 {
@@ -109,19 +136,15 @@ fn file(backend: Backend, label: &str, command: &str) -> io::Result<Granted> {
     }
     Ok(Granted::located(Form::Session, path, owner(&meta)))
 }
-
-/// Codex's `auth.json`. Tests resolve only an explicit credential path or one
-/// under the test node directory, never the operator's `CODEX_HOME`/`~/.codex`.
-/// Codex's `auth.json`: its override, `CODEX_HOME`, else `~/.codex`.
+/// The implicit Codex account's `auth.json`: its override, `CODEX_HOME`, else
+/// `~/.codex`. Tests never resolve the operator's own.
+#[cfg(test)]
 pub(crate) fn codex_path() -> Result<PathBuf, &'static str> {
-    implicit(Backend::Codex)
+    resolve(Backend::Codex, &AccountName::implicit())
         .ok()
         .flatten()
         .map(|(_, path)| path)
         .ok_or("Cannot locate Codex auth.json. Sign in with codex login on the host.")
-}
-fn codex() -> Result<Granted, &'static str> {
-    codex_validate(&codex_path()?)
 }
 /// Inspect metadata only. Only Codex inside the worker consumes credential contents.
 pub(crate) fn codex_validate(path: &Path) -> Result<Granted, &'static str> {
@@ -170,19 +193,77 @@ pub(crate) fn antigravity(directory: &Path) -> io::Result<Granted> {
     })
 }
 
-/// Runs a backend's operator subcommand with its account directory and login.
+/// `--account NAME` taken out of a backend subcommand's arguments; the
+/// backend itself never sees it.
+pub(crate) fn account_argument(args: &[String]) -> io::Result<(AccountName, Vec<String>)> {
+    match args.iter().position(|arg| arg == "--account") {
+        None => Ok((AccountName::implicit(), args.to_vec())),
+        Some(at) => {
+            let name = args.get(at + 1).ok_or_else(|| fail("--account needs a name"))?;
+            let name = AccountName::try_from(name.as_str()).map_err(|error| fail(&error.to_string()))?;
+            let rest = args[..at].iter().chain(&args[at + 2..]).cloned().collect();
+            Ok((name, rest))
+        }
+    }
+}
+
+/// One line per account of `backend`: its kind and whether its login is
+/// present and private. Metadata only.
+pub(crate) fn report(backend: Backend, store: &crate::accounts::Store<Backend>) -> Vec<String> {
+    store
+        .of(backend)
+        .map(|account| {
+            let name = &account.id.name;
+            let state = match locate(backend, name) {
+                Ok(_) => "signed in (private file, non-root owner)".to_owned(),
+                Err(error) => format!("not ready: {error}"),
+            };
+            let enabled = if account.enabled { "" } else { ", disabled" };
+            format!("{}+{name} ({}{enabled}): {state}", backend.id(), account.kind.as_str())
+        })
+        .collect()
+}
+
+/// Runs a backend's operator subcommand (`login`, `check`) for one account:
+/// the backend gets that account's directory and login and never its name.
+/// A named account must be in accounts.json first (`control accounts add`).
 pub(crate) fn command(
     backend: Backend,
     args: &[String],
     run: fn(control_agent::Command<'_>) -> io::Result<()>,
 ) -> io::Result<()> {
+    let (account, args) = account_argument(args)?;
+    let store = crate::providers::accounts::read()?;
+    if store.get(backend, &account).is_none() {
+        return Err(fail(&format!(
+            "{} has no account {account}. Add it first: control accounts add {} {account}",
+            backend.id(),
+            backend.id()
+        )));
+    }
+    // A login kept in the operator's own home (Codex's `~/.codex`) is the
+    // operator's to sign in there; Control fills only its own directories.
+    if args.first().is_some_and(|arg| arg == "login")
+        && matches!(resolve(backend, &account)?, Some((Location::Home(_), _)))
+    {
+        return Err(fail(&format!(
+            "The {} {account} account is your own sign-in on this machine: sign in with {}. To add another, run control accounts add {} NAME, then control {} login --account NAME.",
+            backend.label(),
+            login_command(backend, &account),
+            backend.id(),
+            backend.id()
+        )));
+    }
+    if args.first().is_some_and(|arg| arg == "check") {
+        report(backend, &store).iter().for_each(|line| println!("{line}"));
+    }
     run(control_agent::Command {
-        args,
+        args: &args,
         node: &crate::agent_host::NODE,
         isolation: crate::engine::isolation(),
         image: backend.image(),
-        directory: directory(backend)?,
-        login: locate(backend),
+        directory: directory(backend, &account)?,
+        login: locate(backend, &account),
     })
 }
 

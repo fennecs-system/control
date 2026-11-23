@@ -14,7 +14,7 @@ accelerated backend.
 ## Selecting a model for a chat
 
 In chat and the TUI, `/model` lists the configured agent models (text-only local
-models are listed separately, with how to enable them), `/model PROVIDER:ID`
+models are listed separately, with how to enable them), `/model BACKEND:ID` (or `BACKEND+ACCOUNT:ID`, below)
 selects the model for future turns, and `/model default` returns to the node
 default. The selection is chat metadata: it starts no model traffic, does not
 interrupt an active attempt and is excluded from model history. Add models in
@@ -49,29 +49,56 @@ parent's account. `/model` shows `+ACCOUNT` only for an account other than the
 default, so selections without accounts look and are saved exactly as before.
 
 Without `<config>/accounts.json` every backend has one implicit account,
-`default`: its credential where it is kept today (including the
-`CONTROL_*_AUTH_FILE` overrides). Accounts are added by hand for now; the file is
-read at startup and refused whole if invalid:
+`default`: its sign-in where it is kept today (including the
+`CONTROL_*_AUTH_FILE` overrides), so nothing changes until an account is added.
+
+To run a second subscription of one backend beside the first:
+
+```sh
+control accounts add codex second          # or: claude, grok, antigravity
+control codex login --account second       # device-code sign-in in the pinned image
+control codex check                        # each account: kind, signed in or why not
+```
+
+then select it in a chat with `/model codex+second:gpt-6.1-sol` (or give that
+selection to a spawn's `model`). Each named account's login lives in its own
+private directory, `<config>/accounts/BACKEND/NAME/`, holding the same file the
+backend's default location holds (`auth.json`, `.credentials.json`, or
+Antigravity's files). The host locates and checks it and mounts only that file,
+read-only, into the account's turns; a backend is never told which account it
+was handed, and no turn sees another account's login. The Codex default
+account stays your own `~/.codex` sign-in (`codex login` on the host).
+
+`control accounts list` shows each account with its kind, default, cap and
+whether it is signed in; `control accounts default codex second` makes it the
+backend's default (`… default codex default` restores the implicit one) and
+`control accounts remove codex second` removes it (its login directory is
+kept). A running Control picks changes up by itself. The file they write:
 
 ```json
 {
-  "defaults": {"codex": "work"},
+  "defaults": {"codex": "second"},
   "accounts": [
-    {"backend": "codex", "name": "work", "kind": "subscription",
-     "secret": {"config": "accounts/codex/work/auth.json"}, "cap": 2, "label": "Work plan"},
-    {"backend": "codex", "name": "key", "kind": "api_key",
-     "secret": {"path": "/run/keys/codex"}, "enabled": false}
+    {"backend": "codex", "name": "second", "kind": "subscription", "cap": 2, "label": "Work plan"},
+    {"backend": "claude", "name": "spare", "kind": "subscription", "enabled": false}
   ]
 }
 ```
 
-`kind` is `subscription`, `api_key` or `cloud`; `secret` names where the
-credential is (`config` relative to the configuration directory, or an absolute
-`path`), never the credential itself; `cap`, `enabled` (default true) and `label`
-are optional, and `default` cannot be redefined. `defaults` maps a backend to an
-enabled account. Choosing, capturing and reporting accounts works today; backends
-still sign in with the implicit account's credential until they are handed the
-chosen account, and caps are recorded but not yet enforced.
+`kind` is `subscription`, `api_key` or `cloud` (API-key accounts are signed in
+by a later change); `cap`, `enabled` (default true) and `label` are optional,
+`default` cannot be redefined, and `defaults` names an enabled account.
+
+**Caps and cooldowns.** An account at its `cap` holds its next turn in the queue
+with a notice; other accounts and conversations are not held. Codex rewrites its
+own sign-in when it refreshes it, and two attempts refreshing one sign-in at once
+can invalidate it, so a named Codex account runs one attempt at a time unless its
+`cap` says more (Control mounts the file read-only, so a refreshed token is not
+kept; sign in again if Codex reports the login expired). When a turn reports a
+usage limit, its account cools down: new turns on it wait, with a notice, until
+it is cleared on **Manage → Models & providers** (no retry time is read from the
+provider). Nothing moves to another account automatically; a `+*` pool picks an
+enabled account that is not cooling down when the work is admitted.
 
 ## Configure local models
 

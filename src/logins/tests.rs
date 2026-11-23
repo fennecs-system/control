@@ -36,3 +36,48 @@ fn the_login_is_chosen_by_which_private_file_exists() {
     assert!(login_in(&root).is_err());
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn the_account_argument_is_taken_out_before_the_backend_sees_its_arguments() {
+    let args = |words: &[&str]| words.iter().map(|w| (*w).to_owned()).collect::<Vec<_>>();
+    let (account, rest) = account_argument(&args(&["login", "--account", "second"])).unwrap();
+    assert_eq!((account.as_str(), rest), ("second", args(&["login"])));
+    let (account, rest) = account_argument(&args(&["--account", "work", "check"])).unwrap();
+    assert_eq!((account.as_str(), rest), ("work", args(&["check"])));
+    let (account, rest) = account_argument(&args(&["login"])).unwrap();
+    assert!(account.is_implicit() && rest == args(&["login"]));
+    assert!(account_argument(&args(&["login", "--account"])).is_err());
+    assert!(account_argument(&args(&["login", "--account", "Bad"])).is_err());
+}
+
+#[test]
+fn a_named_account_is_located_in_its_own_private_directory() {
+    let second = AccountName::try_from("second").unwrap();
+    let config = crate::config::directory().unwrap();
+    assert_eq!(
+        super::directory(Backend::Grok, &second).unwrap(),
+        config.join("accounts/grok/second")
+    );
+    assert_eq!(
+        super::directory(Backend::Grok, &AccountName::implicit()).unwrap(),
+        config.join("grok")
+    );
+    let missing = locate(Backend::Grok, &second).unwrap_err().to_string();
+    assert!(missing.contains("control grok login --account second"), "{missing}");
+    let account = super::directory(Backend::Grok, &second).unwrap();
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&account)
+        .unwrap();
+    private_file(&account.join("auth.json"), "").unwrap();
+    let granted = locate(Backend::Grok, &second).unwrap();
+    assert_eq!(
+        (granted.form(), granted.path()),
+        (Form::Session, account.join("auth.json").as_path())
+    );
+    // A shared account directory is refused, as the default one is.
+    fs::set_permissions(&account, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(locate(Backend::Grok, &second).is_err());
+    fs::remove_dir_all(account).unwrap();
+}

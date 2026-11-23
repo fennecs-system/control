@@ -24,6 +24,18 @@ impl Backend for Test {
             SecretRef(vec![Location::Config(RelativePath::try_from(file).unwrap())]),
         )
     }
+    fn login_file(self) -> Option<&'static str> {
+        Some(match self {
+            Self::Codex => "auth.json",
+            Self::Claude => ".credentials.json",
+        })
+    }
+    fn signs_in(self) -> bool {
+        true
+    }
+    fn refreshes(self) -> bool {
+        self == Self::Codex
+    }
 }
 fn name(text: &str) -> AccountName {
     AccountName::try_from(text).unwrap()
@@ -31,12 +43,9 @@ fn name(text: &str) -> AccountName {
 const EXAMPLE: &str = r#"{
   "defaults": {"codex": "work"},
   "accounts": [
-    {"backend": "codex", "name": "work", "kind": "subscription",
-     "secret": {"config": "accounts/codex/work/auth.json"}, "cap": 2, "label": "Work plan"},
-    {"backend": "codex", "name": "key", "kind": "api_key",
-     "secret": {"path": "/run/keys/codex"}, "enabled": false},
-    {"backend": "codex", "name": "second", "kind": "subscription",
-     "secret": {"config": "accounts/codex/second/auth.json"}}
+    {"backend": "codex", "name": "work", "kind": "subscription", "cap": 2, "label": "Work plan"},
+    {"backend": "codex", "name": "key", "kind": "api_key", "enabled": false},
+    {"backend": "codex", "name": "second", "kind": "subscription"}
   ]
 }"#;
 
@@ -85,9 +94,14 @@ fn without_a_file_every_backend_has_only_its_implicit_account() {
         AccountChoice::Pool,
         AccountName::implicit().into(),
     ] {
-        assert_eq!(store.choose(Test::Claude, &choice, |_| 0), Ok(implicit.clone()));
+        assert_eq!(
+            store.choose(Test::Claude, &choice, |_| 0, |_| false),
+            Ok(implicit.clone())
+        );
     }
-    let missing = store.choose(Test::Claude, &name("second").into(), |_| 0).unwrap_err();
+    let missing = store
+        .choose(Test::Claude, &name("second").into(), |_| 0, |_| false)
+        .unwrap_err();
     assert_eq!(
         (missing.why, missing.existing),
         (Unusable::Missing, vec![AccountName::implicit()])
@@ -116,20 +130,22 @@ fn a_hand_written_file_defines_named_accounts_and_defaults() {
 
     assert_eq!(
         store
-            .choose(Test::Codex, &AccountChoice::Default, |_| 0)
+            .choose(Test::Codex, &AccountChoice::Default, |_| 0, |_| false)
             .unwrap()
             .id
             .name,
         name("work")
     );
-    let disabled = store.choose(Test::Codex, &name("key").into(), |_| 0).unwrap_err();
+    let disabled = store
+        .choose(Test::Codex, &name("key").into(), |_| 0, |_| false)
+        .unwrap_err();
     assert_eq!(disabled.why, Unusable::Disabled);
     assert_eq!(disabled.existing.len(), 4);
     // A pool skips disabled accounts and takes the least loaded, the first on a tie.
     let load = |busy: &'static [&'static str]| move |n: &AccountName| usize::from(busy.contains(&n.as_str()));
     let pooled = |busy| {
         store
-            .choose(Test::Codex, &AccountChoice::Pool, load(busy))
+            .choose(Test::Codex, &AccountChoice::Pool, load(busy), |_| false)
             .unwrap()
             .id
             .name
@@ -143,23 +159,21 @@ fn a_hand_written_file_defines_named_accounts_and_defaults() {
 #[test]
 fn invalid_files_are_refused_whole() {
     let refused = |text: &str| Store::<Test>::parse(text.as_bytes()).unwrap_err().to_string();
-    let account = |name: &str| {
-        format!(r#"{{"backend":"codex","name":"{name}","kind":"subscription","secret":{{"config":"a"}}}}"#)
-    };
+    let account = |name: &str| format!(r#"{{"backend":"codex","name":"{name}","kind":"subscription"}}"#);
     assert!(refused(&format!(r#"{{"accounts":[{}]}}"#, account("default"))).contains("implicit account"));
     assert!(refused(&format!(r#"{{"accounts":[{0},{0}]}}"#, account("two"))).contains("twice"));
     assert!(refused(r#"{"defaults":{"codex":"nobody"}}"#).contains("does not define"));
     assert!(refused(r#"{"defaults":{"codex":"default","codex":"default"}}"#).contains("twice"));
-    let disabled = r#"{"defaults":{"codex":"off"},"accounts":[{"backend":"codex","name":"off","kind":"api_key","secret":{"config":"a"},"enabled":false}]}"#;
+    let disabled = r#"{"defaults":{"codex":"off"},"accounts":[{"backend":"codex","name":"off","kind":"api_key","enabled":false}]}"#;
     assert!(refused(disabled).contains("enabled"));
     for invalid in [
-        r#"{"accounts":[{"backend":"grok","name":"a","kind":"subscription","secret":{"config":"a"}}]}"#,
-        r#"{"accounts":[{"backend":"codex","name":"A","kind":"subscription","secret":{"config":"a"}}]}"#,
-        r#"{"accounts":[{"backend":"codex","name":"a","kind":"subscription","secret":{"config":"../a"}}]}"#,
-        r#"{"accounts":[{"backend":"codex","name":"a","kind":"subscription","secret":{"config":"/a"}}]}"#,
-        r#"{"accounts":[{"backend":"codex","name":"a","kind":"subscription","secret":{"path":"a"}}]}"#,
-        r#"{"accounts":[{"backend":"codex","name":"a","kind":"subscription","secret":{"config":"a"},"cap":0}]}"#,
-        r#"{"accounts":[{"backend":"codex","name":"a","kind":"subscription","secret":{"config":"a"},"extra":1}]}"#,
+        r#"{"accounts":[{"backend":"grok","name":"a","kind":"subscription"}]}"#,
+        r#"{"accounts":[{"backend":"codex","name":"A","kind":"subscription"}]}"#,
+        r#"{"accounts":[{"backend":"codex","name":"a","kind":"plan"}]}"#,
+        r#"{"accounts":[{"backend":"codex","name":"a","kind":"subscription","cap":0}]}"#,
+        // A login's location follows from the account; it is not written down.
+        r#"{"accounts":[{"backend":"codex","name":"a","kind":"subscription","secret":{"config":"a"}}]}"#,
+        r#"{"accounts":[{"backend":"codex","name":"a","kind":"subscription","extra":1}]}"#,
         r#"{"unknown":{}}"#,
     ] {
         assert!(refused(invalid).starts_with("accounts.json is invalid"), "{invalid}");
@@ -224,4 +238,117 @@ fn a_reference_resolves_to_its_first_available_location() {
         }),
         None
     );
+}
+
+#[test]
+fn a_named_accounts_login_is_in_its_own_directory() {
+    assert_eq!(
+        secret(Test::Claude, &name("second")),
+        SecretRef(vec![Location::Config(
+            RelativePath::try_from("accounts/claude/second/.credentials.json").unwrap()
+        )])
+    );
+    assert_eq!(
+        secret(Test::Claude, &AccountName::implicit()),
+        Test::Claude.implicit().1
+    );
+    assert_eq!(
+        directory(Test::Codex, &name("second")).as_path(),
+        Path::new("accounts/codex/second")
+    );
+    // A CLI that refreshes its own sign-in runs a named account one attempt at a time.
+    let store = Store::<Test>::parse(EXAMPLE.as_bytes()).unwrap();
+    let cap = |backend, account: &str| store.get(backend, &name(account)).unwrap().effective_cap();
+    assert_eq!(cap(Test::Codex, "second"), NonZeroU8::new(1));
+    assert_eq!(cap(Test::Codex, "work"), NonZeroU8::new(2), "an explicit cap wins");
+    assert_eq!(cap(Test::Codex, "default"), None, "the implicit account is unchanged");
+}
+
+#[test]
+fn edits_are_validated_and_saved_in_the_format_read() {
+    let entry = |backend, account: &str| Entry {
+        backend,
+        name: name(account),
+        kind: AccountKind::Subscription,
+        cap: None,
+        enabled: true,
+        label: None,
+    };
+    let store = Store::<Test>::default().add(entry(Test::Claude, "second")).unwrap();
+    let store = store.set_default(Test::Claude, &name("second")).unwrap();
+    assert_eq!(store.default_name(Test::Claude), name("second"));
+    let saved = String::from_utf8(store.encode()).unwrap();
+    assert!(saved.contains(r#""claude": "second""#), "{saved}");
+    assert_eq!(Store::<Test>::parse(saved.as_bytes()).unwrap(), store);
+    assert_eq!(
+        Store::<Test>::parse(EXAMPLE.as_bytes())
+            .map(|s| Store::<Test>::parse(&s.encode()).unwrap())
+            .unwrap(),
+        Store::<Test>::parse(EXAMPLE.as_bytes()).unwrap()
+    );
+    let refused = |result: Result<Store<Test>, LoadError<Test>>| result.unwrap_err().to_string();
+    assert!(refused(store.add(entry(Test::Claude, "second"))).contains("twice"));
+    assert!(refused(store.add(entry(Test::Claude, "default"))).contains("implicit"));
+    assert!(refused(store.set_default(Test::Codex, &name("nobody"))).contains("does not define"));
+    assert!(refused(store.remove(Test::Codex, &name("nobody"))).contains("has no account nobody"));
+    // Removing the default account restores the implicit one.
+    let removed = store.remove(Test::Claude, &name("second")).unwrap();
+    assert_eq!(removed, Store::default());
+    let restored = store.set_default(Test::Claude, &AccountName::implicit()).unwrap();
+    assert_eq!(restored.default_name(Test::Claude), AccountName::implicit());
+}
+
+#[test]
+fn a_usage_limit_cools_an_account_and_admission_holds_it_without_failover() {
+    let store = Store::<Test>::parse(EXAMPLE.as_bytes()).unwrap();
+    let second = store.get(Test::Codex, &name("second")).unwrap();
+    let now = UnixSeconds(1_000);
+    let status = Status::<Test>::default();
+    assert_eq!(may_start(&second, &status, 0, now), Ok(()));
+    assert_eq!(may_start(&second, &status, 1, now), Err(Hold::Cap(NonZeroU8::MIN)));
+    let cooled = status.cool(Test::Codex, &name("second"), now, None);
+    assert_eq!(
+        may_start(&second, &cooled, 0, UnixSeconds(9_999)),
+        Err(Hold::Cooling(None))
+    );
+    // A repeated limit keeps when it began; a known retry time lifts it.
+    let again = cooled.cool(
+        Test::Codex,
+        &name("second"),
+        UnixSeconds(2_000),
+        Some(UnixSeconds(3_000)),
+    );
+    assert_eq!(
+        again
+            .cooling(Test::Codex, &name("second"), UnixSeconds(2_500))
+            .unwrap()
+            .since,
+        now
+    );
+    assert_eq!(may_start(&second, &again, 0, UnixSeconds(3_000)), Ok(()));
+    assert_eq!(cooled.clear(Test::Codex, &name("second")), status);
+    // A pool skips a cooling account while another is available.
+    let cooling = |busy: &'static str| move |n: &AccountName| n.as_str() == busy;
+    let pooled = |cool| {
+        store
+            .choose(Test::Codex, &AccountChoice::Pool, |_| 0, cooling(cool))
+            .unwrap()
+            .id
+            .name
+    };
+    assert_eq!(pooled("default"), name("work"));
+    assert_eq!(pooled("nobody"), AccountName::implicit());
+    // A named choice is never moved to another account.
+    let named = store
+        .choose(Test::Codex, &name("second").into(), |_| 0, |_| true)
+        .unwrap();
+    assert_eq!(named.id.name, name("second"));
+    // Saved with the node state, and absent when nothing cools.
+    assert_eq!(serde_json::to_string(&status).unwrap(), "{}");
+    let saved = serde_json::to_string(&cooled).unwrap();
+    assert_eq!(
+        saved,
+        r#"{"cooling":[{"backend":"codex","name":"second","since":1000}]}"#
+    );
+    assert_eq!(serde_json::from_str::<Status<Test>>(&saved).unwrap(), cooled);
 }

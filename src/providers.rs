@@ -393,9 +393,11 @@ pub fn render(runtime: &crate::runtime::Runtime) -> String {
         html.push_str(&format!("<section class='model-row'><form method='post' action='/providers'><input type='hidden' name='action' value='select'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='model' value='{model}'><button class='model-choice' aria-pressed='{selected}'><span class='model-dot' aria-hidden='true'></span><span class='model-name'><span class='model-id' title='{model}'>{model}</span><span class='model-provider'>{label}</span></span>{marker}</button></form><details class='model-edit'><summary aria-label='Edit {label} model {model}'>Edit</summary><div class='model-edit-body'><form method='post' action='/providers'><input type='hidden' name='action' value='edit'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='old_model' value='{model}'><label>Model ID<input name='model' required maxlength='100' value='{model}' spellcheck='false' autocapitalize='none'></label><button class='primary'>Save model</button></form>"));
         html.push_str(&format!("<form class='model-capacity' method='post' action='/providers'><input type='hidden' name='action' value='capacity'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='model' value='{model}'><h4>Context capacity</h4><p class='provider-description'>Leave context tokens empty to use the provider policy. Instructions that cannot fit are reported, never truncated.</p><div class='provider-fields'><label>Context tokens<input name='context_tokens' type='number' min='1' placeholder='Unknown' value='{}'></label><label>Output token reserve<input name='output_tokens' type='number' min='1' value='{}'></label><label>Provider/tool token reserve<input name='overhead_tokens' type='number' min='0' value='{}'></label></div><p class='provider-description'>Input bytes conservatively count as tokens.</p><button class='primary'>Save capacity</button></form></div></details></section>",capacity.map(|c|c.context_tokens.to_string()).unwrap_or_default(),capacity.map_or(2048,|c|c.output_tokens),capacity.map_or(4096,|c|c.overhead_tokens)));
     }
+    html.push_str("</div>");
+    html.push_str(&render_accounts(runtime));
     // Every local endpoint that serves tool calls runs agent turns too: it is
     // listed with the same one-click default, and its connection is edited here only.
-    html.push_str("</div><h4 class='model-group'>Local</h4><div class='model-list' aria-label='Local models'>");
+    html.push_str("<h4 class='model-group'>Local</h4><div class='model-list' aria-label='Local models'>");
     let (agents, summaries): (Vec<_>, Vec<_>) = runtime
         .compaction
         .models
@@ -933,3 +935,55 @@ pub fn save_with(
 }
 #[cfg(test)]
 mod tests;
+/// Clears an account's cooldown from the page; its held turns may start.
+pub(crate) fn clear_account(
+    runtime: &mut crate::runtime::Runtime,
+    fields: &HashMap<String, String>,
+) -> Result<(), &'static str> {
+    let backend = fields
+        .get("provider")
+        .and_then(|id| hosted(id))
+        .ok_or("Unknown backend")?;
+    let name = fields
+        .get("account")
+        .and_then(|name| crate::accounts::AccountName::try_from(name.as_str()).ok())
+        .ok_or("Unknown account")?;
+    accounts::clear(runtime, backend, &name);
+    crate::worker::wake();
+    Ok(())
+}
+/// The Integrations group's account rows: each backend's accounts with their
+/// kind, whether a login is present, and the command that signs one in.
+/// Metadata only.
+fn render_accounts(runtime: &crate::runtime::Runtime) -> String {
+    let now = accounts::now();
+    let rows: String = crate::backend::Backend::hosted()
+        .flat_map(|backend| {
+            let default = runtime.accounts.default_name(backend);
+            runtime.accounts.of(backend).map(move |account| (backend, account, default.clone()))
+        })
+        .map(|(backend, account, default)| {
+            let name = &account.id.name;
+            let id = backend.id();
+            let signed_in = crate::logins::locate(backend, name).is_ok();
+            let cooling = runtime.account_status.cooling(backend, name, now).map(|_| {
+                format!("<form method='post' action='/providers'><input type='hidden' name='action' value='account-clear'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='account' value='{name}'><button class='provider-secondary'>Cooling down · clear</button></form>")
+            });
+            format!(
+                "<tr><td><code>{id}+{name}</code>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                if *name == default { " <span class='model-default'>Default</span>" } else { "" },
+                account.kind.as_str().replace('_', " "),
+                if signed_in { "Signed in" } else { "No login yet" },
+                match (account.enabled, cooling) {
+                    (false, _) => "Disabled".to_owned(),
+                    (true, Some(cooling)) => cooling,
+                    (true, None) => "Enabled".to_owned(),
+                },
+                crate::escape(&crate::logins::login_command(backend, name))
+            )
+        })
+        .collect();
+    format!(
+        "<h4 class='model-group'>Accounts</h4><p class='provider-description'>Select one with <code>backend+account:model</code>. Add one with <code>control accounts add BACKEND NAME</code>.</p><table class='persona-table provider-accounts'><thead><tr><th>Account</th><th>Kind</th><th>Login</th><th>State</th><th>Sign in with</th></tr></thead><tbody>{rows}</tbody></table>"
+    )
+}

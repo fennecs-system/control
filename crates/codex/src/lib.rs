@@ -817,3 +817,90 @@ fn turn_container(
 
 #[cfg(test)]
 mod tests;
+
+/// `control codex login | check` for the account the host chose: `login`
+/// signs in with a device code inside the pinned worker image and keeps the
+/// sign-in as a file in the account's directory; `check` runs the offline
+/// sandbox probe. The host refuses `login` for an account whose login this
+/// directory cannot hold (the operator's own `~/.codex`).
+pub fn command(command: control_agent::Command<'_>) -> std::io::Result<()> {
+    const USAGE: &str = "Use control codex login --account NAME | check";
+    let fail = |message: &str| std::io::Error::other(message.to_owned());
+    let control_agent::Command {
+        args,
+        node,
+        isolation,
+        image,
+        directory,
+        ..
+    } = command;
+    let [action] = args else { return Err(fail(USAGE)) };
+    let image = || {
+        image
+            .clone()
+            .ok_or_else(|| fail("Build and pin the Codex worker image first: nix run .#setup"))
+    };
+    match action.as_str() {
+        "--help" | "-h" | "help" => {
+            println!(
+                "control codex login --account NAME: sign a named account in with a device code inside the pinned worker image\ncontrol codex check: offline sandbox check; no credentials or model calls"
+            );
+            Ok(())
+        }
+        "login" => {
+            use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+            fs::DirBuilder::new().recursive(true).mode(0o700).create(&directory)?;
+            let meta = fs::symlink_metadata(&directory)?;
+            if !meta.is_dir() || meta.mode() & 0o077 != 0 || meta.uid() == 0 {
+                return Err(fail(
+                    "Codex login directory must be private and owned by a non-root user",
+                ));
+            }
+            let spec = login_container(
+                &format!("control-codex-login-{}", std::process::id()),
+                &node.id().map_err(|e| fail(&e))?,
+                User {
+                    uid: meta.uid(),
+                    gid: meta.gid(),
+                },
+                &directory,
+                &image()?,
+            )?;
+            if !isolation.spawn(&spec, Streams::INHERIT)?.wait()?.success() {
+                return Err(fail("Codex login did not complete"));
+            }
+            fs::set_permissions(directory.join("auth.json"), fs::Permissions::from_mode(0o600))
+        }
+        "check" => {
+            offline_probe(node, isolation, &image()?).map_err(|e| fail(&e))?;
+            println!("Codex offline sandbox verified. No account credentials were mounted or model called.");
+            Ok(())
+        }
+        _ => Err(fail(USAGE)),
+    }
+}
+/// The device login: Codex's home is the account directory, writable, and
+/// the sign-in is kept as a file there (`cli_auth_credentials_store`), not in
+/// a keyring the container does not have.
+fn login_container(name: &str, node: &str, owner: User, directory: &Path, image: &str) -> std::io::Result<RunSpec> {
+    Ok(RunSpec {
+        image: image.into(),
+        input: Input::Terminal,
+        ..control_agent::cli::base(name, node, owner)
+    }
+    .tmpfs(Tmpfs::new("/workspace", Size::Mib(1)))
+    .secret(
+        "codex/login",
+        control_agent::cli::checked(directory)?,
+        "/home/agent/.codex",
+        Access::ReadWrite,
+    )
+    .env("CODEX_HOME", "/home/agent/.codex")
+    .args([
+        "codex",
+        "login",
+        "--device-auth",
+        "-c",
+        "cli_auth_credentials_store=\"file\"",
+    ]))
+}

@@ -153,8 +153,8 @@ fn accounts(json: &str) -> crate::accounts::Store<Backend> {
     crate::accounts::Store::parse(json.as_bytes()).unwrap()
 }
 const TWO_CODEX: &str = r#"{"accounts":[
-    {"backend":"codex","name":"second","kind":"subscription","secret":{"config":"accounts/codex/second/auth.json"}},
-    {"backend":"codex","name":"off","kind":"api_key","secret":{"config":"accounts/codex/off/key"},"enabled":false}]}"#;
+    {"backend":"codex","name":"second","kind":"subscription"},
+    {"backend":"codex","name":"off","kind":"api_key","enabled":false}]}"#;
 
 #[test]
 fn the_grammar_parses_every_form_and_refuses_the_rest_with_its_reason() {
@@ -384,9 +384,60 @@ fn listing_and_errors_teach_the_forms_with_this_nodes_backends() {
         .push(Model::captured(Backend::Claude, "reviewer".into()));
     crate::chat::create(&mut state);
     let listing = command(&mut state.chats[0], &state.runtime, "").unwrap();
-    let forms = "Forms: codex:gpt-6.1-sol, codex+NAME:gpt-6.1-sol (a named account) or codex+*:gpt-6.1-sol (any enabled account); backends here: claude, codex.";
+    let forms = "Forms: codex:gpt-6.1-sol · claude:reviewer. Another account: control accounts add codex NAME, then codex+NAME:gpt-6.1-sol.";
     assert!(listing.contains(forms), "{listing}");
     assert!(listing.starts_with("Selected codex:gpt-6.1-sol."), "{listing}");
     let error = command(&mut state.chats[0], &state.runtime, "codex+").unwrap_err();
     assert!(error.starts_with("Add :MODEL") && error.ends_with(forms), "{error}");
+}
+
+#[test]
+fn the_listing_names_this_nodes_real_accounts_one_form_each() {
+    let mut state = crate::State::default();
+    state.runtime.accounts = accounts(TWO_CODEX);
+    crate::chat::create(&mut state);
+    let listing = command(&mut state.chats[0], &state.runtime, "").unwrap();
+    // A disabled account is not offered; the pool is, once a backend has more than one.
+    assert!(
+        listing.ends_with(
+            "Forms: codex:gpt-6.1-sol · codex+second:gpt-6.1-sol · codex+*:gpt-6.1-sol (any enabled account)."
+        ),
+        "{listing}"
+    );
+}
+
+#[test]
+fn an_account_at_its_cap_holds_its_next_turn_and_says_why() {
+    let mut state = crate::State::default();
+    state.runtime.accounts = accounts(TWO_CODEX);
+    let chats: Vec<String> = (0..2)
+        .map(|_| {
+            let chat = crate::chat::create(&mut state);
+            crate::chat::send(&mut state, &chat, "/model codex+second:gpt-6.1-sol", "test").unwrap();
+            crate::chat::send(&mut state, &chat, "Build", "test").unwrap();
+            chat
+        })
+        .collect();
+    assert!(
+        state
+            .runtime
+            .runs
+            .iter()
+            .all(|run| run.target.account.as_str() == "second")
+    );
+    assert_eq!(crate::scheduler::next_in(&state), Some(0));
+    // Codex rewrites its own sign-in, so a named Codex account runs one at a time.
+    state.runtime.runs[0].status = "running".into();
+    assert_eq!(crate::scheduler::next_in(&state), None, "the second turn is held");
+    let held = crate::providers::accounts::hold(&state.runtime, &state.runtime.runs[1]).unwrap();
+    assert_eq!(held, crate::accounts::Hold::Cap(std::num::NonZeroU8::MIN));
+    let page = crate::chat::transcript(&state, &chats[1]).unwrap();
+    assert!(
+        page.contains("codex+second is running its limit of 1 at once"),
+        "{page}"
+    );
+    // Work on another account of the same backend is not held by it.
+    let other = crate::chat::create(&mut state);
+    crate::chat::send(&mut state, &other, "Build", "test").unwrap();
+    assert_eq!(crate::scheduler::next_in(&state), Some(2));
 }

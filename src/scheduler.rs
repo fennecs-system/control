@@ -207,9 +207,12 @@ pub fn next(runtime: &Runtime) -> Option<usize> {
     next_where(runtime, |_| true)
 }
 /// Application admission applies current bot intent without moving that state
-/// into the scheduling core. Held bot turns do not block other conversations.
+/// into the scheduling core. Held bot turns, and turns held by their account's cap or cooldown, do not block
+/// other conversations.
 pub(crate) fn next_in(state: &crate::State) -> Option<usize> {
-    next_where(&state.runtime, |run| crate::bots::may_start(state, run))
+    next_where(&state.runtime, |run| {
+        crate::bots::may_start(state, run) && crate::providers::accounts::hold(&state.runtime, run).is_none()
+    })
 }
 fn next_where(runtime: &Runtime, permitted: impl Fn(&crate::runtime::Run) -> bool) -> Option<usize> {
     let capacity = Capacity::new(runtime.execution.max_parallel_runs.min(MAX_PARALLEL))?;

@@ -89,8 +89,19 @@ fn lines(records: &[Value]) -> String {
 /// A private, empty stand-in for each backend's login, located where the
 /// backend looks for it in tests. Only its path and metadata are used.
 fn credential(backend: Backend) -> PathBuf {
+    credential_on(backend, &crate::accounts::AccountName::implicit())
+}
+/// The same for a named account, in its own directory.
+fn credential_on(backend: Backend, account: &crate::accounts::AccountName) -> PathBuf {
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    let named = |file| (crate::logins::directory(backend, account).unwrap(), file);
     let (directory, file) = match backend {
+        _ if !account.is_implicit() => named(match backend {
+            Backend::Codex | Backend::Grok => "auth.json",
+            Backend::Claude => ".credentials.json",
+            Backend::Antigravity => "gemini-api-key",
+            Backend::Local => unreachable!("local endpoints have no login"),
+        }),
         Backend::Codex => (crate::config::test_root().join(".codex"), "auth.json"),
         Backend::Claude => (crate::config::directory().unwrap().join("claude"), ".credentials.json"),
         Backend::Grok => (crate::config::directory().unwrap().join("grok"), "auth.json"),
@@ -169,12 +180,32 @@ static NODE_STATE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 /// scripted engine with `turn` serving the CLI container, and committed as
 /// `run_task` commits it.
 fn attempt(backend: Backend, turn: impl Fn(&RunSpec) -> Command + Sync) -> Finished {
+    attempt_on(backend, "default", turn)
+}
+/// The same on `account`, which is added to the node's accounts when named.
+fn attempt_on(backend: Backend, account: &str, turn: impl Fn(&RunSpec) -> Command + Sync) -> Finished {
     NODE_STATE.get_or_init(|| storage::initialize().unwrap());
-    credential(backend);
+    let account = crate::accounts::AccountName::try_from(account).unwrap();
+    credential_on(backend, &account);
     let mut state = State::default();
+    if !account.is_implicit() {
+        state.runtime.accounts = state
+            .runtime
+            .accounts
+            .add(crate::accounts::Entry {
+                backend,
+                name: account.clone(),
+                kind: crate::accounts::AccountKind::Subscription,
+                cap: None,
+                enabled: true,
+                label: None,
+            })
+            .unwrap();
+    }
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Build a stone castle", "test").unwrap();
     state.runtime.runs[0].target.backend = backend;
+    state.runtime.runs[0].target.account = account;
     checkpoint_next(&mut state, |_| Ok(())).unwrap();
     let attempt = &mut state.runtime.runs[0].attempts[0];
     attempt.image = Some(IMAGE.into());
@@ -638,4 +669,100 @@ fn an_unready_engine_blocks_before_any_container_or_workspace() {
     );
     assert_eq!(engine.calls(), [Call::Ready]);
     assert!(!runtime::workspace(&generation).unwrap().exists());
+}
+
+/// Two accounts of one backend launch with their own logins: each turn mounts
+/// its account's file and never the other's, and the backend is told nothing
+/// about accounts.
+#[test]
+fn two_accounts_of_one_backend_launch_with_different_credential_mounts() {
+    let (before, after) = claude_stream();
+    let turn = |spec: &RunSpec| cli(spec, &before, &after, &[(".control-result", REPLY)]);
+    for backend in [Backend::Claude, Backend::Codex] {
+        let target = match backend {
+            Backend::Codex => ("codex/auth.json", "/home/agent/.codex/auth.json"),
+            _ => ("claude/credentials", "/home/agent/.claude/.credentials.json"),
+        };
+        let default = attempt_on(backend, "default", turn);
+        let second = attempt_on(backend, "second", turn);
+        let name = crate::accounts::AccountName::try_from("second").unwrap();
+        let mounted = |finished: &Finished| {
+            let [secret] = finished.turn().secrets.as_slice() else {
+                panic!("one secret: {:?}", finished.turn().secrets)
+            };
+            assert_eq!((secret.name.as_str(), secret.target.as_str()), target);
+            assert_eq!(secret.access, Access::ReadOnly);
+            fs::canonicalize(&secret.source).unwrap()
+        };
+        let canonical = |path: PathBuf| fs::canonicalize(path).unwrap();
+        assert_eq!(mounted(&default), canonical(credential(backend)));
+        assert_eq!(mounted(&second), canonical(credential_on(backend, &name)));
+        assert_ne!(mounted(&default), mounted(&second));
+        for finished in [&default, &second] {
+            let other = if std::ptr::eq(finished, &default) {
+                credential_on(backend, &name)
+            } else {
+                credential(backend)
+            };
+            let spec = finished.turn();
+            let other = other.display().to_string();
+            assert!(
+                spec.mounts
+                    .iter()
+                    .all(|m| !matches!(&m.source, Source::Bind(p) if p.display().to_string() == other))
+                    && spec.secrets.iter().all(|s| s.source.display().to_string() != other)
+                    && !spec
+                        .argv
+                        .iter()
+                        .chain(spec.env.iter().map(|(_, v)| v))
+                        .any(|w| w.contains("second")),
+                "{backend:?}: neither turn sees the other's login nor its account's name"
+            );
+        }
+        assert_eq!(second.attempt.account, name, "the attempt records its account");
+        assert!(default.attempt.account.is_implicit());
+    }
+}
+
+/// A usage limit on one account cools it: the run fails with the provider's
+/// reason, the account is held for new work, and a pool then picks another
+/// account. A run that named the account is never moved.
+#[test]
+fn a_usage_limit_cools_its_account_and_a_pool_picks_another() {
+    let stream = lines(&[
+        json!({"type":"thread.started","thread_id":"0199a1b2-7c3d-7e10-9f00-1a2b3c4d5e6f"}),
+        json!({"type":"turn.started"}),
+        json!({"type":"error","message":"You\u{2019}ve hit your usage limit."}),
+        json!({"type":"turn.failed","error":{"message":"You\u{2019}ve hit your usage limit."}}),
+    ]);
+    let mut finished = attempt_on(Backend::Codex, "second", |_| replay(&stream, 1));
+    let name = crate::accounts::AccountName::try_from("second").unwrap();
+    let runtime = &mut finished.state.runtime;
+    assert_eq!(runtime.runs[0].status, "failed");
+    let now = crate::providers::accounts::now();
+    assert!(runtime.account_status.cooling(Backend::Codex, &name, now).is_some());
+    assert!(
+        runtime
+            .account_status
+            .cooling(Backend::Codex, &crate::accounts::AccountName::implicit(), now)
+            .is_none(),
+        "only the limited account cools"
+    );
+    let saved = serde_json::to_value(&*runtime).unwrap();
+    assert_eq!(
+        saved["account_status"]["cooling"][0]["name"], "second",
+        "saved with the state"
+    );
+    // New work on the cooling account is held; a pool takes the other account.
+    let mut next = runtime.runs[0].clone();
+    next.status = "queued".into();
+    assert_eq!(
+        crate::providers::accounts::hold(runtime, &next),
+        Some(crate::accounts::Hold::Cooling(None))
+    );
+    let pool = crate::providers::selection::choose(runtime, Backend::Codex, "codex+*:gpt-6.1-sol").unwrap();
+    let picked = crate::providers::selection::admit(runtime, &pool).unwrap();
+    assert!(picked.account.is_implicit(), "{picked:?}");
+    crate::providers::accounts::clear(runtime, Backend::Codex, &name);
+    assert_eq!(crate::providers::accounts::hold(runtime, &next), None);
 }

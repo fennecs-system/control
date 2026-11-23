@@ -179,6 +179,7 @@ fn start_with(state: Arc<Mutex<State>>, isolation: &'static dyn Isolation, execu
                         let Ok(mut s) = state.lock() else {
                             break 'supervisor;
                         };
+                        crate::providers::accounts::refresh(&mut s.runtime);
                         // Reconcile before projecting: callbacks can admit new
                         // work even when there was no queued run on entry.
                         if crate::history::emit(&mut s, storage::save).is_err() {
@@ -559,6 +560,10 @@ fn commit(
     } else {
         None
     };
+    // A usage limit cools the attempt's account: new attempts on it wait; none moves to another.
+    if attempt.cause == Some(control_agent::Cause::UsageLimit) {
+        crate::providers::accounts::cool(&mut s.runtime, attempt.backend, &attempt.account);
+    }
     let r = &mut s.runtime.runs[run_index];
     if let Err((status, _)) = &outcome
         && *status != "waiting"
@@ -1313,7 +1318,7 @@ fn execute(
         Some(control_agent::Login {
             checked: control_agent::Checked::BeforeWorkspace,
             ..
-        }) => Some(crate::logins::locate(attempt.backend).map_err(|e| blocked(&e.to_string()))?),
+        }) => Some(crate::logins::locate(attempt.backend, &attempt.account).map_err(|e| blocked(&e.to_string()))?),
         _ => None,
     };
     let workspace = runtime::workspace(id).map_err(blocked)?;
@@ -1382,7 +1387,7 @@ fn execute(
         control_agent::Runs::Cli(cli) => {
             let login = match early {
                 Some(granted) => Ok(granted),
-                None => crate::logins::locate(attempt.backend),
+                None => crate::logins::locate(attempt.backend, &attempt.account),
             };
             let model = attempt.model.clone();
             let turn = control_agent::Turn {
