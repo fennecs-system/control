@@ -640,6 +640,24 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         read_response(&mut stream, &state, &BOTS_PAGE, page);
         return;
     }
+    if method == "GET" && path == history_view::PATH {
+        read_response(
+            &mut stream,
+            &state,
+            &history_view::HISTORY,
+            history_view::Filter::from(&query),
+        );
+        return;
+    }
+    if method == "GET" && path == "/bots/history/turns" {
+        read_response(
+            &mut stream,
+            &state,
+            &history_view::DM_TURNS,
+            history_view::Filter::from(&query),
+        );
+        return;
+    }
     if method == "GET" && path == "/bots/graveyard" {
         let page = graveyard::Query::from(&query);
         read_response(&mut stream, &state, &graveyard::NEXT_PAGE, page);

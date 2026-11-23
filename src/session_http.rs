@@ -380,38 +380,16 @@ pub fn handle(
     }
     if path == crate::history_view::PATH && method == "GET" {
         // Older history URLs redirect here (`url_names::history`). The client
-        // loads a DM's turns when its row opens.
-        let html = crate::history_view::page(state, &crate::history_view::Filter::from(&crate::fields(query)));
-        let page = crate::web_assets::with_client(&crate::shell("history", &html));
-        let _ = control_http::respond(
-            stream,
-            "200 OK",
-            "text/html; charset=utf-8",
-            page.as_bytes(),
-            "",
-            control_http::Policy::Client,
-        );
+        // loads a DM's turns when its row opens. The server serves this and
+        // the turns before taking the lock; a caller holding state gets the
+        // same bytes.
+        let filter = crate::history_view::Filter::from(&crate::fields(query));
+        let _ = crate::history_view::HISTORY.reply(state, filter).write(stream);
         return true;
     }
     if path == "/bots/history/turns" && method == "GET" {
-        let _ = match crate::history_view::turns(state, &crate::history_view::Filter::from(&crate::fields(query))) {
-            Ok(html) => control_http::respond(
-                stream,
-                "200 OK",
-                "text/html; charset=utf-8",
-                html.as_bytes(),
-                "",
-                control_http::Policy::Embedded,
-            ),
-            Err(message) => control_http::respond(
-                stream,
-                "404 Not Found",
-                "text/plain",
-                message.as_bytes(),
-                "",
-                control_http::Policy::Embedded,
-            ),
-        };
+        let filter = crate::history_view::Filter::from(&crate::fields(query));
+        let _ = crate::history_view::DM_TURNS.reply(state, filter).write(stream);
         return true;
     }
     if path == "/bots/graveyard" && method == "GET" {

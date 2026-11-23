@@ -14,6 +14,7 @@
 //! benchmark is `performance::history_page` (docs/PERFORMANCE.md).
 use crate::runtime::RunStatus;
 use crate::runtime::{Run, RunKind};
+use crate::texts::Texts;
 use crate::{State, escape};
 use std::collections::{BTreeSet, HashMap, VecDeque};
 
@@ -428,113 +429,257 @@ fn models(state: &State) -> BTreeSet<&str> {
 
 /// The page: heading, filters, one page of DM rows and its cursors.
 pub fn page(state: &State, filter: &Filter) -> String {
-    let Rows { rows, matches } = rows(state, filter);
-    let find = |id: Option<&str>| id.and_then(|id| rows.iter().position(|row| row.id == id));
-    let range = crate::pagination::sized(
-        rows.len(),
-        find(filter.older.as_deref()),
-        find(filter.newer.as_deref()),
-        PAGE,
-    );
-    let mut listed: Vec<&Row> = rows[range.clone()].iter().collect();
-    // Turns outside DMs lead the newest page; a name search never matches them.
-    let outside = Row {
-        id: OUTSIDE,
-        chat: None,
-    };
-    if range.start == 0
-        && filter.search.is_empty()
-        && filter.dm.as_deref().is_none_or(|dm| dm == OUTSIDE)
-        && matches.as_ref().is_none_or(|matches| matches.contains_key(OUTSIDE))
-    {
-        listed.insert(0, &outside);
+    Page::of(state, filter.clone()).render()
+}
+
+/// What Bots / History shows, copied out of state in one critical section so
+/// the page renders after the state lock is released. Its many short strings
+/// (ids, names, objectives, models) share one buffer.
+pub struct Page {
+    filter: Filter,
+    texts: Texts,
+    /// The model filter's choices, in order.
+    models: Vec<String>,
+    notice: String,
+    /// DMs the filters list, and with a turn filter how many turns match.
+    dms: usize,
+    matching: Option<usize>,
+    rows: Vec<DmRow>,
+    /// The first row after the previous page and the last row of this one,
+    /// when there are such pages.
+    newer: Option<String>,
+    older: Option<String>,
+}
+/// One listed DM, or the turns outside DMs. Its texts are, from `at`: id,
+/// then for a DM its shown name, persona · model and objective tooltip.
+struct DmRow {
+    at: usize,
+    chat: Option<DmChat>,
+    turns: usize,
+    failed: usize,
+    active: usize,
+    tokens: Option<u64>,
+    /// When its latest turn ended.
+    ended: Option<u64>,
+    body: Body,
+}
+struct DmChat {
+    /// Whether the chat has an objective to show as a tooltip.
+    titled: bool,
+}
+/// What a DM row shows when the page opens.
+enum Body {
+    /// The one DM a `dm` filter selects: a page of its turns.
+    Single(Turns),
+    /// Turns a filter matched, or with "Show turns" the newest, newest
+    /// first, and how many there are in all.
+    Found(Vec<Turn>, usize),
+    /// Nothing yet: the client loads the turns when the row opens.
+    Lazy,
+}
+/// One page of a DM's turns, newest first, and the cursor of older ones.
+pub struct Turns {
+    turns: Vec<Turn>,
+    older: Option<usize>,
+}
+/// One turn row. Its texts are, from `at`: run id, chat id (empty outside
+/// DMs), status, objective (clipped), model (empty when unknown), usage.
+struct Turn {
+    at: usize,
+    chat: bool,
+    model: bool,
+    started: Option<u64>,
+    kind: RunKind,
+    group: &'static str,
+    tokens: Option<u64>,
+    /// Milliseconds over its attempts; None before any attempt.
+    elapsed: Option<u64>,
+    /// The latest attempt with a recorded model input, counted from 1.
+    context: Option<usize>,
+    cancellable: bool,
+    resumable: bool,
+}
+impl Turn {
+    fn of(texts: &mut Texts, run: &Run) -> Self {
+        let chat = run.chat_id.as_deref().filter(|id| crate::chat::valid_id(id));
+        let model = run.target.shown_model();
+        let at = texts.len();
+        texts.push(run.id().as_str());
+        texts.push(chat.unwrap_or_default());
+        texts.push(status_label(run));
+        texts.push(&clip(&run.objective, 300));
+        texts.push(model.as_deref().unwrap_or_default());
+        texts.push(&crate::runtime::usage(run));
+        Self {
+            at,
+            chat: chat.is_some(),
+            model: model.is_some(),
+            started: started(run),
+            kind: run.kind,
+            group: status_group(run),
+            tokens: tokens(run),
+            elapsed: (!run.attempts.is_empty()).then(|| run.attempts.iter().map(|attempt| attempt.elapsed_ms).sum()),
+            context: chat
+                .and_then(|_| run.attempts.iter().rposition(|attempt| attempt.context_trace.is_some()))
+                .map(|index| index + 1),
+            cancellable: run.status.is_active() && run.status != RunStatus::Cancelling,
+            resumable: run.status.is_resumable(),
+        }
     }
-    let summaries = summaries(state, &listed, filter.expand && matches.is_none());
-    if summaries.get(OUTSIDE).is_some_and(|summary| summary.turns == 0) {
-        listed.remove(0);
+}
+impl Turns {
+    /// One page of `dm`'s turns matching `filter`, newest first.
+    fn of(texts: &mut Texts, state: &State, dm: &str, filter: &Filter) -> Self {
+        let mut runs = state
+            .runtime
+            .runs
+            .iter()
+            .rev()
+            .filter(|run| key(run) == dm && filter.matches(run));
+        if let Some(before) = filter.before.as_deref() {
+            // An unknown cursor starts at the newest turn.
+            let mut skipped = runs.clone();
+            if skipped.any(|run| run.id() == before) {
+                runs = skipped;
+            }
+        }
+        let turns: Vec<Turn> = runs.by_ref().take(TURNS).map(|run| Turn::of(texts, run)).collect();
+        let older = turns.last().filter(|_| runs.next().is_some()).map(|last| last.at);
+        Self { turns, older }
     }
-    // The Live tab's toolbar with these filters as its search; no canvas, so no zoom slot.
-    let toolbar = crate::navigation::bots_toolbar(true, &form(filter, &models(state)), "");
-    let mut html = format!(
-        "<div class='section-heading'><h2>Bots<span class='slash' aria-hidden='true'>/</span>History</h2><a href='/dms?new=1'>+ New DM</a></div>{toolbar}"
-    );
-    if !state.runtime.notice.is_empty() {
-        html.push_str(&format!("<p role='status'>{}</p>", escape(&state.runtime.notice)));
-    }
-    let dms = rows.iter().filter(|row| row.chat.is_some()).count();
-    let found = match &matches {
-        Some(matches) if filter.narrows() => {
+}
+
+impl Page {
+    pub fn of(state: &State, filter: Filter) -> Self {
+        let Rows { rows, matches } = rows(state, &filter);
+        let find = |id: Option<&str>| id.and_then(|id| rows.iter().position(|row| row.id == id));
+        let range = crate::pagination::sized(
+            rows.len(),
+            find(filter.older.as_deref()),
+            find(filter.newer.as_deref()),
+            PAGE,
+        );
+        let mut listed: Vec<&Row> = rows[range.clone()].iter().collect();
+        // Turns outside DMs lead the newest page; a name search never matches them.
+        let outside = Row {
+            id: OUTSIDE,
+            chat: None,
+        };
+        if range.start == 0
+            && filter.search.is_empty()
+            && filter.dm.as_deref().is_none_or(|dm| dm == OUTSIDE)
+            && matches.as_ref().is_none_or(|matches| matches.contains_key(OUTSIDE))
+        {
+            listed.insert(0, &outside);
+        }
+        let summaries = summaries(state, &listed, filter.expand && matches.is_none());
+        if summaries.get(OUTSIDE).is_some_and(|summary| summary.turns == 0) {
+            listed.remove(0);
+        }
+        let matching = matches.as_ref().map(|matches| {
             let outside = listed.first().filter(|row| row.chat.is_none()).map(|row| row.id);
-            let turns: usize = rows
-                .iter()
+            rows.iter()
                 .map(|row| row.id)
                 .chain(outside)
                 .filter_map(|id| matches.get(id))
                 .map(|found| found.count)
-                .sum();
-            format!("{} with {}", plural(dms, "DM"), plural(turns, "matching turn"))
+                .sum()
+        });
+        let mut texts = Texts::with_capacity(listed.len() * 4, listed.len() * 160);
+        let empty = Summary::default();
+        let dm_rows = listed
+            .iter()
+            .map(|row| {
+                let summary = summaries.get(row.id).unwrap_or(&empty);
+                // Turns to list: those matching a turn filter, or with "Show turns" the newest.
+                let found = match &matches {
+                    Some(matches) => matches.get(row.id),
+                    None => Some(&summary.recent).filter(|_| filter.expand),
+                };
+                dm_row(&mut texts, state, row, summary, found, &filter)
+            })
+            .collect();
+        Self {
+            texts,
+            models: models(state).into_iter().map(str::to_owned).collect(),
+            notice: state.runtime.notice.clone(),
+            dms: rows.iter().filter(|row| row.chat.is_some()).count(),
+            matching,
+            rows: dm_rows,
+            newer: (range.start > 0).then(|| rows[range.start].id.to_owned()),
+            older: (range.end < rows.len()).then(|| rows[range.end - 1].id.to_owned()),
+            filter,
         }
-        _ => plural(dms, "DM"),
-    };
-    html.push_str(&format!("<p class='history-found muted tiny'>{found}</p>"));
-    if let Some(dm) = &filter.dm {
-        html.push_str(&format!(
-            "<p class='history-back tiny'><a href='{}'>← All DMs</a></p>",
-            escape(
-                &Filter {
-                    dm: None,
-                    before: None,
-                    ..filter.clone()
-                }
-                .href(&[])
-            )
-        ));
-        if listed.is_empty() {
+    }
+
+    pub fn render(&self) -> String {
+        let filter = &self.filter;
+        // The Live tab's toolbar with these filters as its search; no canvas, so no zoom slot.
+        let toolbar = crate::navigation::bots_toolbar(true, &form(filter, &self.models), "");
+        let mut html = format!(
+            "<div class='section-heading'><h2>Bots<span class='slash' aria-hidden='true'>/</span>History</h2><a href='/dms?new=1'>+ New DM</a></div>{toolbar}"
+        );
+        if !self.notice.is_empty() {
+            html.push_str(&format!("<p role='status'>{}</p>", escape(&self.notice)));
+        }
+        let found = match self.matching {
+            Some(turns) => format!("{} with {}", plural(self.dms, "DM"), plural(turns, "matching turn")),
+            None => plural(self.dms, "DM"),
+        };
+        html.push_str(&format!("<p class='history-found muted tiny'>{found}</p>"));
+        if let Some(dm) = &filter.dm {
             html.push_str(&format!(
-                "<div class='empty'>No turns match these filters in {}.</div>",
-                if dm == OUTSIDE {
-                    "turns outside DMs".to_owned()
+                "<p class='history-back tiny'><a href='{}'>← All DMs</a></p>",
+                escape(
+                    &Filter {
+                        dm: None,
+                        before: None,
+                        ..filter.clone()
+                    }
+                    .href(&[])
+                )
+            ));
+            if self.rows.is_empty() {
+                html.push_str(&format!(
+                    "<div class='empty'>No turns match these filters in {}.</div>",
+                    if dm == OUTSIDE {
+                        "turns outside DMs".to_owned()
+                    } else {
+                        format!("DM {}", escape(dm))
+                    }
+                ));
+                return html;
+            }
+        }
+        if self.rows.is_empty() {
+            html.push_str(&format!(
+                "<div class='empty'>{}</div>",
+                if *filter == Filter::default() {
+                    "No DMs yet."
                 } else {
-                    format!("DM {}", escape(dm))
+                    "No DMs match these filters."
                 }
             ));
             return html;
         }
+        html.push_str("<div class='history-dms' role='list'><div class='history-head' aria-hidden='true'><span>DM</span><span>Persona · model</span><span>Last activity</span><span>Turns</span><span>Tokens</span><span></span></div>");
+        for row in &self.rows {
+            html.push_str(&render_row(&self.texts, row, filter));
+        }
+        html.push_str("</div>");
+        if filter.dm.is_none() {
+            let base = filter.href(&[]);
+            html.push_str(&crate::pagination::controls(
+                &base,
+                self.newer.as_deref(),
+                self.older.as_deref(),
+            ));
+        }
+        html
     }
-    if listed.is_empty() {
-        html.push_str(&format!(
-            "<div class='empty'>{}</div>",
-            if *filter == Filter::default() {
-                "No DMs yet."
-            } else {
-                "No DMs match these filters."
-            }
-        ));
-        return html;
-    }
-    html.push_str("<div class='history-dms' role='list'><div class='history-head' aria-hidden='true'><span>DM</span><span>Persona · model</span><span>Last activity</span><span>Turns</span><span>Tokens</span><span></span></div>");
-    for row in listed {
-        let summary = summaries.get(row.id);
-        // Turns to list: those matching a turn filter, or with "Show turns" the newest.
-        let found = match &matches {
-            Some(matches) => matches.get(row.id),
-            None => summary.map(|summary| &summary.recent).filter(|_| filter.expand),
-        };
-        html.push_str(&dm_row(state, row, summary, found, filter));
-    }
-    html.push_str("</div>");
-    if filter.dm.is_none() {
-        let base = filter.href(&[]);
-        html.push_str(&crate::pagination::controls(
-            &base,
-            (range.start > 0).then(|| rows[range.start].id),
-            (range.end < rows.len()).then(|| rows[range.end - 1].id),
-        ));
-    }
-    html
 }
 
-fn form(filter: &Filter, models: &BTreeSet<&str>) -> String {
+fn form(filter: &Filter, models: &[String]) -> String {
     let option = |value: &str, label: &str, selected: bool| {
         format!(
             "<option value='{}'{}>{}</option>",
@@ -555,7 +700,7 @@ fn form(filter: &Filter, models: &BTreeSet<&str>) -> String {
         .iter()
         .map(|model| option(model, model, filter.model == *model))
         .collect();
-    if !filter.model.is_empty() && !models.contains(filter.model.as_str()) {
+    if !filter.model.is_empty() && !models.contains(&filter.model) {
         model_options.push_str(&option(&filter.model, &filter.model, true));
     }
     let dm = filter
@@ -582,112 +727,127 @@ fn plural(n: usize, word: &str) -> String {
     format!("{n} {word}{}", if n == 1 { "" } else { "s" })
 }
 
-fn dm_row(state: &State, row: &Row, summary: Option<&Summary>, found: Option<&Matches>, filter: &Filter) -> String {
-    let empty = Summary::default();
-    let summary = summary.unwrap_or(&empty);
-    let (name, open_dm, who) = match row.chat {
-        Some((chat, callsign)) => {
-            let model = summary
-                .latest
-                .and_then(|run| run.target.model.as_deref())
-                .or_else(|| chat.model.as_ref().map(|model| model.model.as_str()));
-            let who = [
-                chat.persona.as_deref().map(|persona| format!("persona {persona}")),
-                model.map(str::to_owned),
-            ]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .join(" · ");
-            (
-                crate::callsigns::label(chat, callsign).into_owned(),
-                format!(
-                    "<a class='dm-open' href='/dm/{}' title='Open DM'>Open ↗</a>",
-                    escape(&chat.id)
-                ),
-                who,
-            )
+/// A listed row's view: its texts, summary and the turns it opens with.
+fn dm_row(
+    texts: &mut Texts,
+    state: &State,
+    row: &Row,
+    summary: &Summary,
+    found: Option<&Matches>,
+    filter: &Filter,
+) -> DmRow {
+    let at = texts.len();
+    texts.push(row.id);
+    let chat = row.chat.map(|(chat, callsign)| {
+        let model = summary
+            .latest
+            .and_then(|run| run.target.model.as_deref())
+            .or_else(|| chat.model.as_ref().map(|model| model.model.as_str()));
+        let who = [
+            chat.persona.as_deref().map(|persona| format!("persona {persona}")),
+            model.map(str::to_owned),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · ");
+        texts.push(&crate::callsigns::label(chat, callsign));
+        texts.push(&who);
+        texts.push(&clip(&chat.title, 300));
+        DmChat {
+            titled: !chat.title.is_empty(),
         }
-        None => ("Outside DMs".to_owned(), String::new(), "tasks and jobs".to_owned()),
-    };
-    let mut counts = plural(summary.turns, "turn");
-    if summary.failed > 0 {
-        counts.push_str(&format!(" · <b>{} failed</b>", summary.failed));
-    }
-    if summary.active > 0 {
-        counts.push_str(&format!(" · {} active", summary.active));
-    }
-    let tokens = if summary.measured {
-        compact(summary.tokens)
+    });
+    let body = if filter.dm.is_some() {
+        Body::Single(Turns::of(texts, state, row.id, filter))
+    } else if let Some(found) = found {
+        Body::Found(
+            found.recent.iter().rev().map(|run| Turn::of(texts, run)).collect(),
+            found.count,
+        )
     } else {
-        "—".to_owned()
+        Body::Lazy
     };
-    let when = summary
-        .latest
-        .and_then(ended)
-        .map(when)
-        .unwrap_or_else(|| "—".to_owned());
+    DmRow {
+        at,
+        chat,
+        turns: summary.turns,
+        failed: summary.failed,
+        active: summary.active,
+        tokens: summary.measured.then_some(summary.tokens),
+        ended: summary.latest.and_then(ended),
+        body,
+    }
+}
+
+fn render_row(texts: &Texts, row: &DmRow, filter: &Filter) -> String {
+    let id = texts.get(row.at);
+    let (name, open_dm, who) = match row.chat {
+        Some(_) => (
+            texts.get(row.at + 1),
+            format!(
+                "<a class='dm-open' href='/dm/{}' title='Open DM'>Open ↗</a>",
+                escape(id)
+            ),
+            texts.get(row.at + 2),
+        ),
+        None => ("Outside DMs", String::new(), "tasks and jobs"),
+    };
+    let mut counts = plural(row.turns, "turn");
+    if row.failed > 0 {
+        counts.push_str(&format!(" · <b>{} failed</b>", row.failed));
+    }
+    if row.active > 0 {
+        counts.push_str(&format!(" · {} active", row.active));
+    }
+    let tokens = row.tokens.map(compact).unwrap_or_else(|| "—".to_owned());
+    let when = row.ended.map(when).unwrap_or_else(|| "—".to_owned());
     let title = row
         .chat
-        .map(|(chat, _)| chat.title.as_str())
-        .filter(|title| !title.is_empty())
-        .map(|title| format!(" title='{}'", escape(&clip(title, 300))))
+        .as_ref()
+        .filter(|chat| chat.titled)
+        .map(|_| format!(" title='{}'", escape(texts.get(row.at + 3))))
         .unwrap_or_default();
     let summary_html = format!(
         "<summary><span class='dm-name'{title}>{}</span><span class='dm-who'>{}</span><span class='dm-when'>{when}</span><span class='dm-count'>{counts}</span><span class='dm-tokens'>{tokens}</span>{open_dm}</summary>",
-        escape(&name),
-        escape(&who),
+        escape(name),
+        escape(who),
     );
-    let single = filter.dm.is_some();
-    let (attributes, body) = if single {
-        (" open".to_owned(), dm_turns(state, row.id, filter))
-    } else if let Some(found) = found {
-        let mut body = turn_list(found.recent.iter().rev().copied());
-        if found.count > found.recent.len() {
-            let link = filter.href(&[("dm", row.id)]);
-            let what = if filter.narrows() { "matching turns" } else { "turns" };
-            body.push_str(&format!(
-                "<a class='turn-more' href='{}'>All {} {what} →</a>",
-                escape(&link),
-                found.count
-            ));
+    let (attributes, body) = match &row.body {
+        Body::Single(turns) => (" open".to_owned(), render_turns(texts, turns, id, filter)),
+        Body::Found(turns, count) => {
+            let mut body = turn_list(texts, turns);
+            if *count > turns.len() {
+                let link = filter.href(&[("dm", id)]);
+                let what = if filter.narrows() { "matching turns" } else { "turns" };
+                body.push_str(&format!(
+                    "<a class='turn-more' href='{}'>All {count} {what} →</a>",
+                    escape(&link),
+                ));
+            }
+            (" open".to_owned(), body)
         }
-        (" open".to_owned(), body)
-    } else {
-        let fragment = format!("{PATH}/turns?dm={}", row.id);
-        let fallback = filter.href(&[("dm", row.id)]);
-        (
-            format!(" data-turns='{}'", escape(&fragment)),
-            format!(
-                "<div class='turn-slot' data-turns-slot><a href='{}'>Show turns</a></div>",
-                escape(&fallback)
-            ),
-        )
+        Body::Lazy => {
+            let fragment = format!("{PATH}/turns?dm={id}");
+            let fallback = filter.href(&[("dm", id)]);
+            (
+                format!(" data-turns='{}'", escape(&fragment)),
+                format!(
+                    "<div class='turn-slot' data-turns-slot><a href='{}'>Show turns</a></div>",
+                    escape(&fallback)
+                ),
+            )
+        }
     };
     format!(
         "<details class='history-dm' role='listitem' data-dm='{}'{attributes}>{summary_html}{body}</details>",
-        escape(row.id)
+        escape(id)
     )
 }
 
-/// One page of `dm`'s turns matching `filter`, newest first, with a link to
-/// older ones.
-fn dm_turns(state: &State, dm: &str, filter: &Filter) -> String {
-    let mut runs = state
-        .runtime
-        .runs
-        .iter()
-        .rev()
-        .filter(|run| key(run) == dm && filter.matches(run));
-    if let Some(before) = filter.before.as_deref() {
-        // An unknown cursor starts at the newest turn.
-        let mut skipped = runs.clone();
-        if skipped.any(|run| run.id() == before) {
-            runs = skipped;
-        }
-    }
-    let page: Vec<&Run> = runs.by_ref().take(TURNS).collect();
-    let mut html = turn_list(page.iter().copied());
+/// A page of `dm`'s turns with links to newer and older ones.
+fn render_turns(texts: &Texts, turns: &Turns, dm: &str, filter: &Filter) -> String {
+    let mut html = turn_list(texts, &turns.turns);
     let mut links = String::new();
     if filter.before.is_some() {
         links.push_str(&format!(
@@ -695,10 +855,10 @@ fn dm_turns(state: &State, dm: &str, filter: &Filter) -> String {
             escape(&filter.href(&[("dm", dm)]))
         ));
     }
-    if let (Some(last), Some(_)) = (page.last(), runs.next()) {
+    if let Some(last) = turns.older {
         links.push_str(&format!(
             "<a href='{}'>Older turns →</a>",
-            escape(&filter.href(&[("dm", dm), ("before", last.id())]))
+            escape(&filter.href(&[("dm", dm), ("before", texts.get(last))]))
         ));
     }
     if !links.is_empty() {
@@ -712,16 +872,36 @@ fn dm_turns(state: &State, dm: &str, filter: &Filter) -> String {
 /// `GET /bots/history/turns?dm=ID`: the turns a DM row shows when it opens.
 /// Errors for a DM that does not exist or is not visible to the operator.
 pub fn turns(state: &State, filter: &Filter) -> Result<String, &'static str> {
-    let dm = filter.dm.as_deref().ok_or("Choose a DM.")?;
-    if dm != OUTSIDE {
-        let chat = state.chats.iter().find(|chat| chat.id == dm).ok_or("DM not found.")?;
-        crate::identity::authorize(&chat.actor, crate::identity::Action::Task).map_err(|_| "DM not found.")?;
+    DmTurns::of(state, filter.clone()).render()
+}
+/// The `GET /bots/history/turns` view: one page of a DM's turns, or why there is none.
+pub struct DmTurns {
+    filter: Filter,
+    texts: Texts,
+    turns: Result<Turns, &'static str>,
+}
+impl DmTurns {
+    pub fn of(state: &State, filter: Filter) -> Self {
+        let mut texts = Texts::with_capacity(TURNS * 6, TURNS * 200);
+        let turns = (|| {
+            let dm = filter.dm.as_deref().ok_or("Choose a DM.")?;
+            if dm != OUTSIDE {
+                let chat = state.chats.iter().find(|chat| chat.id == dm).ok_or("DM not found.")?;
+                crate::identity::authorize(&chat.actor, crate::identity::Action::Task).map_err(|_| "DM not found.")?;
+            }
+            Ok(Turns::of(&mut texts, state, dm, &filter))
+        })();
+        Self { filter, texts, turns }
     }
-    Ok(dm_turns(state, dm, filter))
+    pub fn render(&self) -> Result<String, &'static str> {
+        let turns = self.turns.as_ref().map_err(|message| *message)?;
+        let dm = self.filter.dm.as_deref().unwrap_or_default();
+        Ok(render_turns(&self.texts, turns, dm, &self.filter))
+    }
 }
 
-fn turn_list<'a>(runs: impl Iterator<Item = &'a Run>) -> String {
-    let rows: String = runs.map(turn_row).collect();
+fn turn_list(texts: &Texts, turns: &[Turn]) -> String {
+    let rows: String = turns.iter().map(|turn| turn_row(texts, turn)).collect();
     if rows.is_empty() {
         "<p class='muted tiny turn-none'>No turns.</p>".to_owned()
     } else {
@@ -729,52 +909,41 @@ fn turn_list<'a>(runs: impl Iterator<Item = &'a Run>) -> String {
     }
 }
 
-fn turn_row(run: &Run) -> String {
-    let chat = run.chat_id.as_deref().filter(|id| crate::chat::valid_id(id));
-    let when = started(run).map(when).unwrap_or_else(|| "—".to_owned());
-    let model = run.target.shown_model().unwrap_or_else(|| "—".to_owned());
-    let usage = crate::runtime::usage(run);
-    let tokens = tokens(run).map(compact).unwrap_or_else(|| "—".to_owned());
-    let elapsed: u64 = run.attempts.iter().map(|attempt| attempt.elapsed_ms).sum();
-    let duration = if run.attempts.is_empty() {
-        "—".to_owned()
-    } else {
-        duration(elapsed)
-    };
+fn turn_row(texts: &Texts, turn: &Turn) -> String {
+    let text = |offset: usize| texts.get(turn.at + offset);
+    let (id, objective) = (text(0), text(3));
+    let when = turn.started.map(when).unwrap_or_else(|| "—".to_owned());
+    let model = if turn.model { text(4) } else { "—" };
+    let tokens = turn.tokens.map(compact).unwrap_or_else(|| "—".to_owned());
+    let duration = turn.elapsed.map(duration).unwrap_or_else(|| "—".to_owned());
     let mut links = Vec::new();
-    if let Some(chat) = chat {
-        if let Some((index, _)) = run
-            .attempts
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, attempt)| attempt.context_trace.is_some())
-        {
+    if turn.chat {
+        let chat = text(1);
+        if let Some(attempt) = turn.context {
             links.push(format!(
-                "<a href='/dm/{}/context?run={}&amp;attempt={}' title='What the model was given'>input</a>",
+                "<a href='/dm/{}/context?run={}&amp;attempt={attempt}' title='What the model was given'>input</a>",
                 escape(chat),
-                escape(run.id()),
-                index + 1
+                escape(id),
             ));
         }
         links.push(format!("<a href='/dm/{}' title='Open DM'>DM ↗</a>", escape(chat)));
     }
-    if run.status.is_active() && run.status != RunStatus::Cancelling {
-        links.push(format!("<form method='post' action='/cancel-run'><input type='hidden' name='id' value='{}'><button>Cancel</button></form>", escape(run.id())));
+    if turn.cancellable {
+        links.push(format!("<form method='post' action='/cancel-run'><input type='hidden' name='id' value='{}'><button>Cancel</button></form>", escape(id)));
     }
-    if run.status.is_resumable() {
-        links.push(format!("<form method='post' action='/retry-run'><input type='hidden' name='id' value='{}'><button>Retry</button></form>", escape(run.id())));
+    if turn.resumable {
+        links.push(format!("<form method='post' action='/retry-run'><input type='hidden' name='id' value='{}'><button>Retry</button></form>", escape(id)));
     }
     format!(
         "<li class='history-turn' data-status='{}' data-run='{}'><span class='turn-when'>{when}</span><span class='turn-kind'>{}</span><span class='turn-status'>{}</span><span class='turn-what' title='{}'>{}</span><span class='turn-model'>{}</span><span class='turn-tokens' title='{}'>{tokens}</span><span class='turn-time'>{duration}</span><span class='turn-links'>{}</span></li>",
-        status_group(run),
-        escape(run.id()),
-        kind_label(run.kind),
-        escape(status_label(run)),
-        escape(&clip(&run.objective, 300)),
-        escape(&clip(&run.objective, 90)),
-        escape(&model),
-        escape(usage.trim_start_matches(" · ")),
+        turn.group,
+        escape(id),
+        kind_label(turn.kind),
+        escape(text(2)),
+        escape(objective),
+        escape(&clip(objective, 90)),
+        escape(model),
+        escape(text(5).trim_start_matches(" · ")),
         links.join(""),
     )
 }
@@ -817,6 +986,35 @@ fn clip(text: &str, limit: usize) -> String {
         format!("{}…", line.chars().take(limit - 1).collect::<String>())
     }
 }
+
+/// `GET /bots/history`, served after the state lock is released.
+pub(crate) const HISTORY: crate::Read<Filter, Page> = crate::Read {
+    view: Page::of,
+    render: |page| crate::Reply {
+        status: "200 OK",
+        mime: "text/html; charset=utf-8",
+        body: crate::web_assets::with_client(&crate::shell("history", &page.render())),
+        extra: String::new(),
+        policy: control_http::Policy::Client,
+    },
+};
+/// `GET /bots/history/turns`, served after the state lock is released.
+pub(crate) const DM_TURNS: crate::Read<Filter, DmTurns> = crate::Read {
+    view: DmTurns::of,
+    render: |turns| {
+        let (status, mime, body) = match turns.render() {
+            Ok(html) => ("200 OK", "text/html; charset=utf-8", html),
+            Err(message) => ("404 Not Found", "text/plain", message.to_owned()),
+        };
+        crate::Reply {
+            status,
+            mime,
+            body,
+            extra: String::new(),
+            policy: control_http::Policy::Embedded,
+        }
+    },
+};
 
 #[cfg(test)]
 mod tests;
