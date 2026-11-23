@@ -171,7 +171,7 @@ pub(crate) fn phase(run: &crate::runtime::Run) -> Phase {
         "running" => Phase::Running,
         "cancelling" => Phase::Cancelling,
         "waiting" => Phase::Waiting {
-            reserves_chat: run.delegation.is_some() || run.question.as_ref().is_some_and(|q| q.answer.is_none()),
+            reserves_chat: run.delegation.is_some() || run.question.as_ref().is_some_and(|q| q.pending()),
         },
         _ => Phase::Inactive,
     }
@@ -325,7 +325,7 @@ impl scheduling::RunView for crate::runtime::Run {
     fn reserves_chat(&self) -> bool {
         self.occupies_slot()
             || (self.status == "waiting"
-                && (self.delegation.is_some() || self.question.as_ref().is_some_and(|q| q.answer.is_none())))
+                && (self.delegation.is_some() || self.question.as_ref().is_some_and(|q| q.pending())))
     }
 }
 

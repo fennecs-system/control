@@ -368,8 +368,17 @@ impl Ledger {
             .iter()
             .any(|n| mine(to)(&n.person, &n.conversation) && n.chat == chat && n.kind == kind && n.id == id)
     }
+    /// Keeps at most `LIMIT` notices, dropping settled ones first: an open
+    /// request's notice is what stops it from being announced again.
     pub fn record(&mut self, notice: Notice) {
         self.notices.push(notice);
+        let excess = self.notices.len().saturating_sub(LIMIT);
+        let mut settled = self.notices.iter().filter(|n| n.settled).count().min(excess);
+        self.notices.retain(|n| {
+            let evict = n.settled && settled > 0;
+            settled -= usize::from(evict);
+            !evict
+        });
         let excess = self.notices.len().saturating_sub(LIMIT);
         self.notices.drain(..excess);
     }
@@ -478,6 +487,35 @@ pub fn chat_list(to: &Recipient, list: &Value) -> String {
     )
 }
 
+/// One line for the design questions `settings` forwards that are still open
+/// in `groups` (`control.requests.list`), with the oldest one's age; `None`
+/// when none are. Sent once when a channel starts following again, instead of
+/// announcing each question a second time.
+pub fn still_open(settings: &Settings, groups: &Value) -> Option<String> {
+    let ages = groups
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|group| {
+            group["chat_id"]
+                .as_str()
+                .is_some_and(|chat| settings.forwards(chat, Kind::Question))
+        })
+        .flat_map(|group| group["pending_questions"].as_array().into_iter().flatten())
+        .map(|question| question["age"].as_u64())
+        .collect::<Vec<_>>();
+    let oldest = ages
+        .iter()
+        .flatten()
+        .max()
+        .map(|seconds| format!(", the oldest for {}", operator::age(*seconds)))
+        .unwrap_or_default();
+    match ages.len() {
+        0 => None,
+        1 => Some(format!("Control · 1 decision still open{oldest}.")),
+        n => Some(format!("Control · {n} decisions still open{oldest}.")),
+    }
+}
 /// The notification for one pending request.
 pub fn notice_text(title: &str, link: &str, pending: &Pending<'_>) -> String {
     let mut text = format!(
@@ -522,6 +560,8 @@ pub struct Channel {
     hive: Option<(Hive, Updates)>,
     refreshed: Option<Instant>,
     revisions: Value,
+    /// The "still open" summary was considered since this process started.
+    reopened: bool,
     pub ledger: Ledger,
 }
 impl Channel {
@@ -540,6 +580,7 @@ impl Channel {
             hive: None,
             refreshed: None,
             revisions: Value::Null,
+            reopened: false,
             ledger,
         }
     }
@@ -878,7 +919,7 @@ impl Channel {
             match hive.tool("control.requests.list", json!({})) {
                 Ok(groups) => {
                     self.revisions = revisions;
-                    retry |= self.notify(transport, settings, recipients, &groups);
+                    retry |= self.forward(transport, settings, recipients, &groups);
                 }
                 Err(_) => retry = true,
             }
@@ -935,6 +976,29 @@ impl Channel {
             }
         }
         sent
+    }
+    /// Forwards the pending requests in `groups`. The first time after this
+    /// process starts it also posts one [`still_open`] summary to each
+    /// recipient; requests announced before a restart are in the saved ledger
+    /// and are not posted again. Returns whether a send should be retried.
+    pub fn forward(
+        &mut self,
+        transport: &impl Transport,
+        settings: &Settings,
+        recipients: &[Recipient],
+        groups: &Value,
+    ) -> bool {
+        if !std::mem::replace(&mut self.reopened, true)
+            && let Some(text) = still_open(settings, groups)
+        {
+            for to in recipients {
+                let key = format!("{}:open:{}:{}:{text}", self.name, to.person, to.conversation);
+                if transport.post(to, &settings.present(&text), None, &key) == Posted::Refused {
+                    eprintln!("A channel refused the open decisions summary.");
+                }
+            }
+        }
+        self.notify(transport, settings, recipients, groups)
     }
     /// Sends each forwarded pending request in `groups` (`control.requests.list`)
     /// once per recipient. Returns whether a send should be retried.

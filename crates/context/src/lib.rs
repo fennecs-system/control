@@ -736,6 +736,7 @@ pub const TOOLS: [Tool; 37] = [
             op("control.persona.read"),
             op("control.chat.rename"),
             op("control.chat.ask"),
+            op("control.chat.withdraw"),
             op("control.services.list"),
             op("control.services.stop"),
             w("control_chat", "drive DMs in its own task (operator opt-in)"),

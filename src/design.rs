@@ -67,14 +67,239 @@ fn validate_input(input: &Input) -> Result<(), &'static str> {
     }
     Ok(())
 }
-#[derive(Clone, Serialize, Deserialize)]
+/// A question's identity, `q-` and 32 hex digits, derived from its attempt and nonce.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct QuestionId(String);
+impl QuestionId {
+    fn derive(generation: &str, nonce: &str) -> Self {
+        let digest = ring::digest::digest(&ring::digest::SHA256, format!("{generation}:{nonce}").as_bytes());
+        Self(format!(
+            "q-{}",
+            digest
+                .as_ref()
+                .iter()
+                .take(16)
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        ))
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+/// Fixtures name their questions.
+#[cfg(test)]
+impl<T: Into<String>> From<T> for QuestionId {
+    fn from(id: T) -> Self {
+        Self(id.into())
+    }
+}
+impl PartialEq<str> for QuestionId {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+impl std::fmt::Display for QuestionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+/// Seconds since the Unix epoch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct UnixSeconds(pub u64);
+impl UnixSeconds {
+    pub fn now() -> Self {
+        Self(control_config::unix_seconds())
+    }
+}
+/// Who asked. Derived from the run that holds the question, so records written
+/// before withdrawal existed have one too.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Asker {
+    /// An agent's attempt in this chat.
+    Agent { chat: String },
+    /// The chat MCP caller (`control_design_ask` with no run).
+    ChatMcp,
+}
+impl Asker {
+    pub fn of(run: &runtime::Run) -> Self {
+        if asked(run) {
+            Self::ChatMcp
+        } else {
+            Self::Agent {
+                chat: run.chat_id.clone().unwrap_or_default(),
+            }
+        }
+    }
+}
+/// Who withdrew a question, as history keeps it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Withdrawer {
+    Asker,
+    Operator,
+}
+/// Proof that the operator let this caller decide design questions for them;
+/// made only where that permission is read.
+pub struct OperatorGrant(());
+impl OperatorGrant {
+    pub(crate) fn granted() -> Self {
+        Self(())
+    }
+}
+/// Permission to withdraw one question. Only [`Authority::check`] makes one.
+#[derive(Debug)]
+pub struct Authority {
+    by: Withdrawer,
+    question: QuestionId,
+}
+impl Authority {
+    /// The asker withdraws its own question; anyone else needs the operator's grant.
+    pub fn check(
+        question: &Question,
+        asker: &Asker,
+        caller: &Asker,
+        operator: Option<OperatorGrant>,
+    ) -> Result<Self, Refusal> {
+        let by = match (asker == caller, operator) {
+            (true, _) => Withdrawer::Asker,
+            (false, Some(OperatorGrant(()))) => Withdrawer::Operator,
+            (false, None) => return Err(Refusal::NotAsker),
+        };
+        Ok(Self {
+            by,
+            question: question.id.clone(),
+        })
+    }
+}
+/// A short reason for withdrawing: 1–200 characters after trimming.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Reason(String);
+impl TryFrom<&str> for Reason {
+    type Error = &'static str;
+    fn try_from(text: &str) -> Result<Self, Self::Error> {
+        let text = text.trim();
+        if text.is_empty() || text.chars().count() > 200 {
+            return Err("reason must contain 1–200 characters, or be omitted.");
+        }
+        Ok(Self(text.into()))
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Withdrawal {
+    pub by: Withdrawer,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Reason>,
+    pub at: UnixSeconds,
+}
+/// Where a question is in its life: pending until answered or withdrawn.
+/// Stored flattened into the question, so earlier records still load: `answer`
+/// is a string once answered and null or absent while pending; `withdrawn`
+/// and `asked_at` are absent from records written before they existed.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Status {
+    Answered {
+        answer: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        asked_at: Option<UnixSeconds>,
+    },
+    Withdrawn {
+        withdrawn: Withdrawal,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        asked_at: Option<UnixSeconds>,
+    },
+    Pending {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        asked_at: Option<UnixSeconds>,
+    },
+}
+/// Why a question transition was refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refusal {
+    NotPending,
+    NotAsker,
+}
+impl Refusal {
+    pub fn message(self) -> &'static str {
+        match self {
+            Refusal::NotPending => "That design question is no longer pending.",
+            Refusal::NotAsker => {
+                "Only the party that asked a question, or the operator, may withdraw it. The operator can also /cancel the waiting run."
+            }
+        }
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Question {
-    pub id: String,
+    pub id: QuestionId,
     pub generation: String,
     pub nonce: String,
     pub input: Input,
-    pub answer: Option<String>,
+    #[serde(flatten)]
+    pub status: Status,
     pub continuation: Option<String>,
+}
+impl Question {
+    fn ask(generation: String, nonce: &str, input: Input, at: UnixSeconds) -> Self {
+        Self {
+            id: QuestionId::derive(&generation, nonce),
+            generation,
+            nonce: nonce.into(),
+            input,
+            status: Status::Pending { asked_at: Some(at) },
+            continuation: None,
+        }
+    }
+    pub fn pending(&self) -> bool {
+        matches!(self.status, Status::Pending { .. })
+    }
+    pub fn answer(&self) -> Option<&str> {
+        match &self.status {
+            Status::Answered { answer, .. } => Some(answer),
+            Status::Withdrawn { .. } | Status::Pending { .. } => None,
+        }
+    }
+    pub fn asked_at(&self) -> Option<UnixSeconds> {
+        match self.status {
+            Status::Answered { asked_at, .. } | Status::Withdrawn { asked_at, .. } | Status::Pending { asked_at } => {
+                asked_at
+            }
+        }
+    }
+    /// Pending → answered.
+    fn answered(self, answer: String) -> Result<Self, Refusal> {
+        match self.status {
+            Status::Pending { asked_at } => Ok(Self {
+                status: Status::Answered { answer, asked_at },
+                ..self
+            }),
+            Status::Answered { .. } | Status::Withdrawn { .. } => Err(Refusal::NotPending),
+        }
+    }
+    /// Pending → withdrawn, by the holder of `authority` for this question.
+    pub fn withdraw(self, authority: Authority, reason: Option<Reason>, at: UnixSeconds) -> Result<Self, Refusal> {
+        if authority.question != self.id {
+            return Err(Refusal::NotAsker);
+        }
+        match self.status {
+            Status::Pending { asked_at } => Ok(Self {
+                status: Status::Withdrawn {
+                    withdrawn: Withdrawal {
+                        by: authority.by,
+                        reason,
+                        at,
+                    },
+                    asked_at,
+                },
+                ..self
+            }),
+            Status::Answered { .. } | Status::Withdrawn { .. } => Err(Refusal::NotPending),
+        }
+    }
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Continuation {
@@ -96,7 +321,7 @@ pub fn requested(bridge: Option<(&Arc<Mutex<State>>, &str)>) -> bool {
                     && r.status == "running"
                     && (crate::delegation::pausing(r)
                         || r.question.as_ref().is_some_and(|q| {
-                            q.answer.is_none()
+                            q.pending()
                                 && r.attempts
                                     .last()
                                     .is_some_and(|a| a.workspace_id.as_deref() == Some(&q.generation))
@@ -152,17 +377,11 @@ fn ask_with_save(
             Err("This attempt already has a design question.")
         };
     }
-    let id = question_id(&generation, nonce);
+    let question = Question::ask(generation, nonce, input, UnixSeconds::now());
+    let id = question.id.clone();
     let previous = state.runtime.runs[index].question.clone();
     let revision = state.chats[chat_index].revision;
-    state.runtime.runs[index].question = Some(Question {
-        id: id.clone(),
-        generation,
-        nonce: nonce.into(),
-        input,
-        answer: None,
-        continuation: None,
-    });
+    state.runtime.runs[index].question = Some(question);
     state.chats[chat_index].revision = revision.saturating_add(1);
     if save(state).is_err() {
         state.runtime.runs[index].question = previous;
@@ -173,19 +392,6 @@ fn ask_with_save(
         json!({"question_id":id,"status":"pausing","instruction":"Stop work. Control will resume this task when the user answers."}),
     )
 }
-fn question_id(generation: &str, nonce: &str) -> String {
-    let digest = ring::digest::digest(&ring::digest::SHA256, format!("{generation}:{nonce}").as_bytes());
-    format!(
-        "q-{}",
-        digest
-            .as_ref()
-            .iter()
-            .take(16)
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>()
-    )
-}
-
 /// Source of a question the operator's chat MCP caller raised (`control_design_ask` with no run).
 /// No attempt waits on it: answering only records the answer.
 pub const ASKED: &str = "chat-ask";
@@ -214,7 +420,12 @@ pub fn desk(state: &State) -> Option<&str> {
 /// so every request list and notification shows it, but no run resumes from it
 /// and it approves nothing. A named chat must be an idle operator chat, so the
 /// question never pauses or queues behind a turn.
-pub fn ask_operator(state: &mut State, chat: Option<&str>, input: Input) -> Result<Value, &'static str> {
+pub fn ask_operator(
+    state: &mut State,
+    chat: Option<&str>,
+    input: Input,
+    at: UnixSeconds,
+) -> Result<Value, &'static str> {
     validate_input(&input)?;
     identity::authorize(&identity::Actor::LocalOperator, identity::Action::Task)?;
     if state
@@ -279,14 +490,7 @@ pub fn ask_operator(state: &mut State, chat: Option<&str>, input: Input) -> Resu
         state.runtime.backend,
         (state.runtime.backend == crate::backend::Backend::Local).then(|| state.runtime.configured_model()),
     );
-    let question = Question {
-        id: question_id(&run_id, ASKED),
-        generation: run_id.clone(),
-        nonce: ASKED.into(),
-        input,
-        answer: None,
-        continuation: None,
-    };
+    let question = Question::ask(run_id.clone(), ASKED, input, at);
     let id = question.id.clone();
     run.status = "waiting".into();
     run.chat_id = Some(chat_id.clone());
@@ -312,10 +516,81 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
                 Some(Value::String(id)) if chat::valid_id(&id) => Some(id),
                 _ => return Err("Invalid chat ID."),
             };
-            ask_operator(state, chat.as_deref(), parse_input(Value::Object(fields))?)
+            ask_operator(
+                state,
+                chat.as_deref(),
+                parse_input(Value::Object(fields))?,
+                UnixSeconds::now(),
+            )
+        }
+        "control.chat.withdraw" => {
+            let question = arguments["question_id"]
+                .as_str()
+                .ok_or("Specify the question_id control_design_ask returned.")?;
+            let reason = match &arguments["reason"] {
+                Value::Null => None,
+                Value::String(reason) => Some(Reason::try_from(reason.as_str())?),
+                _ => return Err("reason must be text."),
+            };
+            // The chat MCP caller asked its own questions; others it may withdraw
+            // only for an operator who lets it decide questions.
+            let operator = match &arguments["as"] {
+                Value::Null => None,
+                Value::String(role) if role == "operator" => Some(OperatorGrant::granted()),
+                _ => return Err("as must be operator, or omitted."),
+            };
+            withdraw(state, question, &Asker::ChatMcp, operator, reason, UnixSeconds::now())
         }
         _ => Err("Unknown tool."),
     }
+}
+/// The chat holding a question, for checkpointing a withdrawal.
+pub fn question_chat<'a>(state: &'a State, question: &str) -> Option<&'a str> {
+    state
+        .runtime
+        .runs
+        .iter()
+        .find(|r| r.question.as_ref().is_some_and(|q| q.id == *question))
+        .and_then(|r| r.chat_id.as_deref())
+}
+/// Withdraws a waiting question for `caller`. The run holding it ends the way
+/// `/cancel` ends a waiting run: no continuation is queued, so an agent never
+/// acts on a consequential choice nobody made, and the published workspace
+/// stays as it was. An operator-side question just closes.
+pub fn withdraw(
+    state: &mut State,
+    question: &str,
+    caller: &Asker,
+    operator: Option<OperatorGrant>,
+    reason: Option<Reason>,
+    at: UnixSeconds,
+) -> Result<Value, &'static str> {
+    let index = state
+        .runtime
+        .runs
+        .iter()
+        .position(|r| r.status == "waiting" && r.question.as_ref().is_some_and(|q| q.id == *question && q.pending()))
+        .ok_or(Refusal::NotPending.message())?;
+    let run = &state.runtime.runs[index];
+    let held = run.question.clone().ok_or(Refusal::NotPending.message())?;
+    let authority = Authority::check(&held, &Asker::of(run), caller, operator).map_err(Refusal::message)?;
+    let withdrawn = held.withdraw(authority, reason, at).map_err(Refusal::message)?;
+    let (run_id, chat_id) = (run.id.clone(), run.chat_id.clone());
+    crate::lifecycle::request_cancel(&mut state.runtime, &run_id, &identity::Actor::LocalOperator)?;
+    let note = outcome(&withdrawn).unwrap_or_default();
+    let run = &mut state.runtime.runs[index];
+    *run.result = summary(&withdrawn);
+    run.question = Some(withdrawn);
+    if let Some(chat_id) = chat_id {
+        chat::touch(state, &chat_id);
+        if let Some(session) = state.chats.iter_mut().find(|c| c.id == chat_id) {
+            session
+                .messages
+                .push(chat::Message::notice(format!("{question}: {note}"), Some(run_id)));
+            session.revision = session.revision.saturating_add(1);
+        }
+    }
+    Ok(json!({"question_id":question,"status":"withdrawn"}))
 }
 
 /// The unanswered question waiting in `chat_id`: `question_id` when given,
@@ -327,7 +602,7 @@ fn waiting_for<'a>(state: &'a State, chat_id: &str, question_id: Option<&str>) -
             && r.status == "waiting"
             && r.question
                 .as_ref()
-                .is_some_and(|q| q.answer.is_none() && question_id.is_none_or(|id| id == q.id))
+                .is_some_and(|q| q.pending() && question_id.is_none_or(|id| q.id == *id))
     })
 }
 pub fn waiting<'a>(state: &'a State, chat_id: &str) -> Option<&'a runtime::Run> {
@@ -365,17 +640,20 @@ pub fn pending<'a>(state: &'a State, chat_id: &str) -> Vec<&'a runtime::Run> {
                     .is_some_and(|chat| crate::chat::within(state, chat, chat_id)))
                 && run.actor == chat.actor
                 && run.status == "waiting"
-                && run.question.as_ref().is_some_and(|q| q.answer.is_none())
+                && run.question.as_ref().is_some_and(Question::pending)
         })
         .collect()
 }
 
-pub fn pending_json(state: &State, chat_id: &str) -> Vec<Value> {
+/// Pending questions as request views list them, each with its age in seconds
+/// at `now` when its ask time is known.
+pub fn pending_json(state: &State, chat_id: &str, now: UnixSeconds) -> Vec<Value> {
     pending(state, chat_id)
         .into_iter()
         .map(|run| {
             let question = run.question.as_ref().unwrap();
-            json!({"run_id":run.id,"chat_id":run.chat_id,"question":question,"summary":summary(question)})
+            json!({"run_id":run.id,"chat_id":run.chat_id,"question":question,"summary":summary(question),
+                "age":question.asked_at().map(|at| now.0.saturating_sub(at.0))})
         })
         .collect()
 }
@@ -386,7 +664,7 @@ pub fn decision_revision(state: &State) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     for run in state.runtime.runs.iter().filter(|run| run.question.is_some()) {
-        (&run.id, &run.status, &run.question.as_ref().unwrap().answer).hash(&mut hash);
+        (&run.id, &run.status, &run.question.as_ref().unwrap().status).hash(&mut hash);
     }
     state.collective.proposals.iter().for_each(|p| p.status.hash(&mut hash));
     hash.finish()
@@ -395,7 +673,7 @@ pub fn decision_revision(state: &State) -> u64 {
 pub fn answer_target<'a>(state: &'a State, chat_id: &'a str, question: &str) -> Result<&'a str, &'static str> {
     pending(state, chat_id)
         .into_iter()
-        .find(|run| run.question.as_ref().is_some_and(|q| q.id == question))
+        .find(|run| run.question.as_ref().is_some_and(|q| q.id == *question))
         .and_then(|run| run.chat_id.as_deref())
         .ok_or("That design question is no longer pending or accessible from this chat.")
 }
@@ -413,15 +691,33 @@ pub fn summary(question: &Question) -> String {
             }
         ));
     }
-    if let Some(answer) = &question.answer {
-        text.push_str(&format!("\n\nDecision: {answer}"));
-    } else {
-        text.push_str(&format!(
-            "\n\nReply with a number or your own direction. For this question: /answer {} YOUR_ANSWER",
+    text.push_str("\n\n");
+    text.push_str(&outcome(question).unwrap_or_else(|| {
+        format!(
+            "Reply with a number or your own direction. For this question: /answer {} YOUR_ANSWER",
             question.id
-        ));
-    }
+        )
+    }));
     text
+}
+/// How a decided question ended, as one line; `None` while it is pending.
+fn outcome(question: &Question) -> Option<String> {
+    match &question.status {
+        Status::Pending { .. } => None,
+        Status::Answered { answer, .. } => Some(format!("Decision: {answer}")),
+        Status::Withdrawn { withdrawn, .. } => Some(format!(
+            "Withdrawn by the {}{}. No decision is needed.",
+            match withdrawn.by {
+                Withdrawer::Asker => "asker",
+                Withdrawer::Operator => "operator",
+            },
+            withdrawn
+                .reason
+                .as_ref()
+                .map(|reason| format!(": {}", reason.0))
+                .unwrap_or_default()
+        )),
+    }
 }
 pub fn answer(
     state: &mut State,
@@ -459,11 +755,12 @@ pub fn answer(
             .clone(),
         Err(_) => text.into(),
     };
+    let answered = question.clone().answered(answer.clone()).map_err(Refusal::message)?;
     if asked(run) {
         // Nothing resumes from an operator-side question; the answer stays in the DM.
         let index = state.runtime.runs.iter().position(|r| r.id == run.id).unwrap();
         let run = &mut state.runtime.runs[index];
-        run.question.as_mut().unwrap().answer = Some(answer.clone());
+        run.question = Some(answered);
         run.status = "completed".into();
         *run.result = summary(run.question.as_ref().unwrap());
         let session = &mut state.chats[session_index];
@@ -554,9 +851,10 @@ pub fn answer(
     next.queue_order = queue_order;
     *next.continuation = Some(continuation);
     let next_id = next.id.clone();
-    let question = state.runtime.runs[index].question.as_mut().unwrap();
-    question.answer = Some(answer.clone());
-    question.continuation = Some(next_id.clone());
+    state.runtime.runs[index].question = Some(Question {
+        continuation: Some(next_id.clone()),
+        ..answered
+    });
     *state.runtime.runs[index].result = summary(state.runtime.runs[index].question.as_ref().unwrap());
     let session = &mut state.chats[session_index];
     session.messages.push(chat::Message {
@@ -582,7 +880,7 @@ pub fn discord_chat(state: &State, incoming: &crate::discord::Incoming) -> Strin
                 .runtime
                 .runs
                 .iter()
-                .find(|r| r.actor == actor && r.question.as_ref().is_some_and(|q| q.id == id && q.answer.is_none()))
+                .find(|r| r.actor == actor && r.question.as_ref().is_some_and(|q| q.id == *id && q.pending()))
                 .and_then(|r| r.chat_id.clone())
         })
         .unwrap_or_else(|| crate::discord::chat_id(incoming.user_id, incoming.channel_id))
@@ -595,14 +893,11 @@ pub fn render(question: &Question, chat_id: &str, ready: bool) -> String {
     );
     if ready {
         for (i, option) in question.input.options.iter().enumerate() {
-            html.push_str(&format!("<form method='post' action='/dm/{chat_id}/messages' target='_top'><button name='message' value='/answer {} {}'>{}. {}{}</button></form>",crate::escape(&question.id),i+1,i+1,crate::escape(option),if question.input.recommended == Some(i) {" · recommended"} else {""}));
+            html.push_str(&format!("<form method='post' action='/dm/{chat_id}/messages' target='_top'><button name='message' value='/answer {} {}'>{}. {}{}</button></form>",crate::escape(question.id.as_str()),i+1,i+1,crate::escape(option),if question.input.recommended == Some(i) {" · recommended"} else {""}));
         }
         html.push_str("<small>Or reply with your own direction.</small>");
-    } else if let Some(answer) = &question.answer {
-        html.push_str(&format!(
-            "<p class='muted preserve'>Decision: {}</p>",
-            crate::escape(answer)
-        ));
+    } else if let Some(outcome) = outcome(question) {
+        html.push_str(&format!("<p class='muted preserve'>{}</p>", crate::escape(&outcome)));
     } else {
         html.push_str("<small>Saving the paused workspace…</small>");
     }

@@ -369,6 +369,33 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
+      "description": "Withdraw a pending question this caller asked with control_design_ask, for example when it became moot or was settled elsewhere, with an optional short reason. It leaves chat_requests, the web UI, TUI and Discord and stays in that DM's history as withdrawn. Questions an agent asked can be withdrawn here only when the operator enabled question decisions in Manage → Permissions; the run waiting on one ends as if cancelled.",
+      "inputSchema": {
+        "properties": {
+          "question_id": {
+            "description": "The ID control_design_ask returned.",
+            "maxLength": 128,
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "question_id"
+        ],
+        "type": "object"
+      },
+      "name": "control_design_withdraw"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
       "description": "Decide a pending request that chat_requests listed, for the kinds the operator enabled in Manage → Permissions (listed only when one is). kind folder or port: decision allow|deny (loopback=true for a loopback port target); bot: allow|deny; knowledge: allow (accept) or deny (reject); question: answer text.",
       "inputSchema": {
         "properties": {
@@ -440,6 +467,7 @@
     "Policy { name: \"control.chat.read\", route: Chat, checkpoint: false, bridge: Read, http: true }",
     "Policy { name: \"control.requests.list\", route: Chat, checkpoint: false, bridge: Hidden, http: true }",
     "Policy { name: \"control.chat.ask\", route: Chat, checkpoint: true, bridge: Hidden, http: true }",
+    "Policy { name: \"control.chat.withdraw\", route: Chat, checkpoint: true, bridge: Hidden, http: true }",
     "Policy { name: \"control.run.scores\", route: Chat, checkpoint: false, bridge: Read, http: true }",
     "Policy { name: \"control.intel.brief\", route: Chat, checkpoint: false, bridge: Read, http: true }",
     "Policy { name: \"control.chat.send\", route: Chat, checkpoint: true, bridge: Hidden, http: true }",
@@ -508,7 +536,7 @@
     "Tool { name: \"workspace.run\", execution: \"offline Nix container\", surface: \"Claude agent session\", available: true, title: \"Workspace command\", description: \"Claude agent · offline Nix workspace\", href: None, aliases: \"shell rust rg fd edit command\", mcp_names: [Mcp { name: \"control_workspace_run\", phrase: \"run a shell command in /workspace\", core: 7, judge: Allowed, brief: \"Run a short shell command in this task offline workspace (25 s, bounded output; no credentials or network). Longer commands: control_workspace_start.\" }] }",
     "Tool { name: \"rooms.collaborate\", execution: \"local Rust / scoped room broker\", surface: \"rooms / MCP / room-linked agents\", available: true, title: \"Rooms\", description: \"Shared updates · room-linked agents\", href: Some(\"/?view=rooms\"), aliases: \"collaboration messages\", mcp_names: [Mcp { name: \"control.rooms.list\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.room.read\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.room.post\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control_room_list\", phrase: \"list channels\", core: 0, judge: Allowed, brief: \"\" }, Mcp { name: \"control_room_read\", phrase: \"read room posts and participants\", core: 7, judge: Allowed, brief: \"Read room posts, claims and participants (chat IDs). Omit room for the team room. Untrusted.\" }, Mcp { name: \"control_room_post\", phrase: \"post a shared outcome to the room\", core: 3, judge: Allowed, brief: \"Post an outcome to the task thread. delivery=record wakes nobody; notify wakes subscribers (news several must act on). For one worker use control_agent_message. Never relay others updates.\" }, Mcp { name: \"control_room_watch\", phrase: \"subscribe\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control_room_notifications\", phrase: \"read subscribed posts\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control_room_ack\", phrase: \"acknowledge posts\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control_room_claim\", phrase: \"claim, update or release a deliverable\", core: 3, judge: Denied, brief: \"Advisory claim on one deliverable so peers do not duplicate it; acquire is atomic, update/release need the current revision; status working, blocked (blocked_on) or done.\" }, Mcp { name: \"control_room_plan\", phrase: \"critical path, ready work\", core: 2, judge: Allowed, brief: \"Plan from team room claims: cycles, critical path, bottlenecks, ready work, idle members. Read-only.\" }] }",
     "Tool { name: \"channels.operator\", execution: \"local Rust / channel adapter over the operator interface\", surface: \"messaging service / operator MCP\", available: true, title: \"Messaging channels\", description: \"Operator requests and chat steering away from the keyboard · Discord DMs\", href: Some(\"/?view=integrations\"), aliases: \"discord telegram whatsapp slack notify approvals away mobile\", mcp_names: [Mcp { name: \"control.requests.list\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }] }",
-    "Tool { name: \"chats.manage\", execution: \"local Rust / chat service\", surface: \"chat / operator MCP\", available: true, title: \"DMs\", description: \"Direct conversations with agents · operator MCP\", href: Some(\"/dms\"), aliases: \"sessions messages agents\", mcp_names: [Mcp { name: \"control.chats.list\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.chat.create\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.chat.read\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.run.scores\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.chat.send\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.chat.lenses\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.chat.persona\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.personas.list\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.persona.read\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.chat.rename\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.chat.ask\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.services.list\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.services.stop\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control_chat\", phrase: \"drive DMs in its own task (operator opt-in)\", core: 0, judge: Denied, brief: \"\" }] }",
+    "Tool { name: \"chats.manage\", execution: \"local Rust / chat service\", surface: \"chat / operator MCP\", available: true, title: \"DMs\", description: \"Direct conversations with agents · operator MCP\", href: Some(\"/dms\"), aliases: \"sessions messages agents\", mcp_names: [Mcp { name: \"control.chats.list\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.chat.create\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.chat.read\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.run.scores\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.chat.send\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.chat.lenses\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.chat.persona\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.personas.list\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.persona.read\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.chat.rename\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.chat.ask\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.chat.withdraw\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.services.list\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.services.stop\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control_chat\", phrase: \"drive DMs in its own task (operator opt-in)\", core: 0, judge: Denied, brief: \"\" }] }",
     "Tool { name: \"lenses.resolve\", execution: \"pure Rust / lens library\", surface: \"lens library / MCP\", available: true, title: \"DNA\", description: \"Genes · compose context and tool selections\", href: Some(\"/dna\"), aliases: \"context composition guidance on demand\", mcp_names: [Mcp { name: \"control.lenses.list\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.lens.read\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control.lenses.resolve\", phrase: \"\", core: 0, judge: Denied, brief: \"\" }, Mcp { name: \"control_guidance\", phrase: \"read captured guidance by topic\", core: 7, judge: Allowed, brief: \"Read a guidance topic from your prompt index (or session, rooms); no topic lists them.\" }] }"
   ],
   "operator": [
@@ -871,6 +899,35 @@
         "type": "object"
       },
       "name": "control.chat.ask"
+    },
+    {
+      "annotations": {
+        "readOnlyHint": false
+      },
+      "description": "Withdraw a pending design question the chat MCP caller asked, with an optional short reason; as=operator also withdraws an agent's question for an operator who lets this caller decide questions. It leaves the pending lists and stays in history; a waiting run ends as if cancelled.",
+      "inputSchema": {
+        "properties": {
+          "as": {
+            "enum": [
+              "operator"
+            ],
+            "type": "string"
+          },
+          "question_id": {
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "question_id"
+        ],
+        "type": "object"
+      },
+      "name": "control.chat.withdraw"
     },
     {
       "annotations": {
@@ -1845,6 +1902,7 @@
     "control.intel.brief",
     "control.requests.list",
     "control.chat.ask",
+    "control.chat.withdraw",
     "control.services.list",
     "control.services.stop",
     "control.chat.send",

@@ -206,11 +206,14 @@ fn write_authority_is_lost_when_a_handoff_or_decision_is_staged() {
             options: vec!["First".into(), "Second".into()],
             recommended: None,
         },
-        answer: None,
+        status: crate::design::Status::Pending { asked_at: None },
         continuation: None,
     });
     assert!(authorize_write(&state, caller).is_err());
-    state.runtime.runs[0].question.as_mut().unwrap().answer = Some("First".into());
+    state.runtime.runs[0].question.as_mut().unwrap().status = crate::design::Status::Answered {
+        answer: "First".into(),
+        asked_at: None,
+    };
     assert!(authorize_write(&state, caller).is_ok());
     let binding: Configuration = serde_json::from_value(
         json!({"repository":"example/project","source_root":"/source","token_file":"/private/token","base":"main"}),

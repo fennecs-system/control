@@ -40,7 +40,7 @@ fn questions_from_spawned_descendants_surface_in_the_top_level_chat() {
     let middle = chat::create(&mut state);
     state.chats.iter_mut().find(|s| s.id == middle).unwrap().parent_chat = Some(root.clone());
     state.chats.iter_mut().find(|s| s.id == child).unwrap().parent_chat = Some(middle.clone());
-    let question = state.runtime.runs[0].question.as_ref().unwrap().id.clone();
+    let question = state.runtime.runs[0].question.as_ref().unwrap().id.to_string();
     assert_eq!(pending(&state, &root).len(), 1);
     assert_eq!(answer_target(&state, &root, &question), Ok(child.as_str()));
     let unrelated = chat::create(&mut state);
@@ -122,7 +122,7 @@ fn pause_survives_reload_and_answer_keeps_authority_and_workspace_baseline() {
     assert_eq!(crate::scheduler::next(&state.runtime), Some(2));
     let mut state: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
     assert!(waiting(&state, &chat).is_some());
-    let question = state.runtime.runs[0].question.as_ref().unwrap().id.clone();
+    let question = state.runtime.runs[0].question.as_ref().unwrap().id.to_string();
     assert!(answer(&mut state, &other, Some(&question), "1", "test").is_err());
     assert!(answer(&mut state, &chat, Some("q-stale"), "1", "test").is_err());
     assert!(answer(&mut state, &chat, Some(&question), "9", "test").is_err());
@@ -219,7 +219,7 @@ fn own_direction_is_not_permission_escalation_and_cancel_removes_wait() {
     chat::send(&mut state, &chat, "Use a compact binary format instead", "test").unwrap();
     assert_eq!(state.runtime.runs.last().unwrap().action, identity::Action::Task);
     assert_eq!(
-        state.runtime.runs[0].question.as_ref().unwrap().answer.as_deref(),
+        state.runtime.runs[0].question.as_ref().unwrap().answer(),
         Some("Use a compact binary format instead")
     );
     let (mut state, chat) = paused();
@@ -234,7 +234,7 @@ fn own_direction_is_not_permission_escalation_and_cancel_removes_wait() {
 #[test]
 fn discord_question_routing_is_bound_to_exact_user_and_dm_channel() {
     let (mut state, chat) = paused();
-    let question = state.runtime.runs[0].question.as_ref().unwrap().id.clone();
+    let question = state.runtime.runs[0].question.as_ref().unwrap().id.to_string();
     let mut message = crate::discord::Incoming {
         message_id: "303".parse().unwrap(),
         user_id: "101".parse().unwrap(),
@@ -300,7 +300,7 @@ fn node_wide_requests_group_descendant_questions_under_their_top_level_chat() {
     let (mut state, child) = paused();
     let root = chat::create(&mut state);
     state.chats.iter_mut().find(|s| s.id == child).unwrap().parent_chat = Some(root.clone());
-    let question = state.runtime.runs[0].question.as_ref().unwrap().id.clone();
+    let question = state.runtime.runs[0].question.as_ref().unwrap().id.to_string();
     let view = chat::pending_requests(&state);
     let groups = view.as_array().unwrap();
     assert_eq!(groups.len(), 1, "one group per top-level chat, not per descendant");
@@ -315,7 +315,7 @@ fn node_wide_requests_group_descendant_questions_under_their_top_level_chat() {
     };
     chat::send(&mut state, &root, &command, "discord:1").unwrap();
     assert_eq!(
-        state.runtime.runs[0].question.as_ref().unwrap().answer.as_deref(),
+        state.runtime.runs[0].question.as_ref().unwrap().answer(),
         Some(input().options[1].as_str())
     );
     // A duplicate reply is refused and changes nothing.
@@ -323,4 +323,107 @@ fn node_wide_requests_group_descendant_questions_under_their_top_level_chat() {
     assert!(chat::send(&mut state, &root, &command, "discord:2").is_err());
     assert_eq!(serde_json::to_vec(&state).unwrap(), before);
     assert!(chat::pending_requests(&state).as_array().unwrap().is_empty());
+}
+
+#[test]
+fn only_the_asker_or_an_operator_grant_withdraws_and_only_while_pending() {
+    let pending = || Question::ask("generation".into(), "nonce", input(), UnixSeconds(100));
+    let agent = |chat: &str| Asker::Agent { chat: chat.into() };
+    let grant = || Some(OperatorGrant::granted());
+    // (asker, caller, operator grant) → who withdraws, or the refusal.
+    type Row = (Asker, Asker, Option<OperatorGrant>, Result<Withdrawer, Refusal>);
+    let table: [Row; 6] = [
+        (Asker::ChatMcp, Asker::ChatMcp, None, Ok(Withdrawer::Asker)),
+        (Asker::ChatMcp, Asker::ChatMcp, grant(), Ok(Withdrawer::Asker)),
+        (agent("c-1"), agent("c-1"), None, Ok(Withdrawer::Asker)),
+        (agent("c-1"), agent("c-2"), None, Err(Refusal::NotAsker)),
+        (agent("c-1"), Asker::ChatMcp, None, Err(Refusal::NotAsker)),
+        (agent("c-1"), Asker::ChatMcp, grant(), Ok(Withdrawer::Operator)),
+    ];
+    for (asker, caller, operator, expected) in table {
+        let question = pending();
+        let outcome = Authority::check(&question, &asker, &caller, operator)
+            .and_then(|authority| question.withdraw(authority, None, UnixSeconds(160)))
+            .map(|q| match q.status {
+                Status::Withdrawn { withdrawn, asked_at } => {
+                    assert_eq!((withdrawn.at, asked_at), (UnixSeconds(160), Some(UnixSeconds(100))));
+                    withdrawn.by
+                }
+                other => panic!("{other:?}"),
+            });
+        assert_eq!(outcome, expected, "{asker:?} withdrawn by {caller:?}");
+    }
+    // Terminal states stay terminal: no withdrawing an answer, nor withdrawing twice.
+    let answered = pending().answered("JSON".into()).unwrap();
+    let authority = Authority::check(&answered, &Asker::ChatMcp, &Asker::ChatMcp, None).unwrap();
+    assert_eq!(
+        answered.withdraw(authority, None, UnixSeconds(1)).unwrap_err(),
+        Refusal::NotPending
+    );
+    let question = pending();
+    let authority = Authority::check(&question, &Asker::ChatMcp, &Asker::ChatMcp, None).unwrap();
+    let withdrawn = question.withdraw(authority, None, UnixSeconds(1)).unwrap();
+    assert_eq!(
+        withdrawn.clone().answered("JSON".into()).unwrap_err(),
+        Refusal::NotPending
+    );
+    // An authority is for one question only.
+    let other = Question::ask("other".into(), "nonce", input(), UnixSeconds(1));
+    let authority = Authority::check(&other, &Asker::ChatMcp, &Asker::ChatMcp, None).unwrap();
+    assert_eq!(
+        pending().withdraw(authority, None, UnixSeconds(1)).unwrap_err(),
+        Refusal::NotAsker
+    );
+    assert!(Reason::try_from(" ").is_err() && Reason::try_from("x".repeat(201).as_str()).is_err());
+}
+
+#[test]
+fn records_from_before_withdrawal_load_and_new_ones_round_trip() {
+    let old = |answer: Value| {
+        serde_json::from_value::<Question>(json!({"id":"q-1","generation":"g","nonce":"n",
+            "input":{"question":"Which?","options":["A","B"]},"answer":answer,"continuation":null}))
+        .unwrap()
+    };
+    let pending = old(Value::Null);
+    assert!(pending.pending() && pending.asked_at().is_none());
+    let answered = old(json!("A"));
+    assert_eq!(answered.answer(), Some("A"));
+    // Records omitting `answer` entirely also read as pending.
+    let mut bare = serde_json::to_value(&pending).unwrap();
+    bare.as_object_mut().unwrap().remove("answer");
+    assert!(serde_json::from_value::<Question>(bare).unwrap().pending());
+    let authority = Authority::check(&pending, &Asker::ChatMcp, &Asker::ChatMcp, None).unwrap();
+    let withdrawn = pending
+        .withdraw(authority, Some(Reason::try_from("moot").unwrap()), UnixSeconds(7))
+        .unwrap();
+    let stored = serde_json::to_value(&withdrawn).unwrap();
+    assert_eq!(stored["withdrawn"], json!({"by":"asker","reason":"moot","at":7}));
+    assert!(stored["answer"].is_null(), "readers that check answer see no decision");
+    assert_eq!(
+        serde_json::from_value::<Question>(stored).unwrap().status,
+        withdrawn.status
+    );
+    let asked = Question::ask("g".into(), "n", input(), UnixSeconds(5));
+    let stored = serde_json::to_value(&asked).unwrap();
+    assert_eq!(stored["asked_at"], 5);
+    assert_eq!(
+        serde_json::from_value::<Question>(stored).unwrap().asked_at(),
+        Some(UnixSeconds(5))
+    );
+}
+
+#[test]
+fn pending_lists_show_how_long_a_question_has_been_open() {
+    let (mut state, chat) = paused();
+    let asked = state.runtime.runs[0].question.as_ref().unwrap().asked_at().unwrap();
+    let listed = pending_json(&state, &chat, UnixSeconds(asked.0 + 7200));
+    assert_eq!(listed[0]["age"], 7200);
+    let view = json!({"pending_questions":listed});
+    assert_eq!(
+        control_client::operator::pending(&view)[0].heading,
+        "Decision requested · open 2h"
+    );
+    // A record without an ask time lists without an age.
+    state.runtime.runs[0].question.as_mut().unwrap().status = Status::Pending { asked_at: None };
+    assert!(pending_json(&state, &chat, UnixSeconds(1))[0]["age"].is_null());
 }

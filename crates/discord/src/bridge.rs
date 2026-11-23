@@ -882,6 +882,10 @@ impl Bridge {
                 if status == "waiting" && !run.question.is_null() && questions.contains(&channel) {
                     return Ok(Outcome::Done);
                 }
+                // A withdrawn question only closes its earlier message; its run ending is no news.
+                if status == "cancelled" && !run.question["withdrawn"].is_null() {
+                    return Ok(Outcome::Done);
+                }
                 if (!run.source.starts_with("discord:") && run.chat.is_none())
                     || !control_delivery::DELIVERABLE.contains(&status)
                     || outbound.delivered.contains(&receipt)

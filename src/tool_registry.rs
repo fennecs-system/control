@@ -252,6 +252,23 @@ fn session_definitions() -> Vec<Value> {
                 }
             },
             {
+                "name": "control.chat.withdraw",
+                "description": concat!(
+                    "Withdraw a pending design question the chat MCP caller asked, with an optional short reason; ",
+                    "as=operator also withdraws an agent's question for an operator who lets this caller decide ",
+                    "questions. It leaves the pending lists and stays in history; a waiting run ends as if cancelled."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "question_id": {"type": "string"},
+                        "reason": {"type": "string", "minLength": 1, "maxLength": 200},
+                        "as": {"type": "string", "enum": ["operator"]}
+                    },
+                    "required": ["question_id"]
+                }
+            },
+            {
                 "name": "control.services.list",
                 "description": concat!(
                     "List the live persistent services a chat owns; ",

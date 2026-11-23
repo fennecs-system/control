@@ -64,7 +64,10 @@ Markdown notes plus claims that only the operator can admit.
 
 Managed agents ask consequential questions with `control_design_ask` (2–4
 options, optional recommendation). The task pauses at a checkpoint and resumes
-when answered; a recommendation is never consent.
+when answered; a recommendation is never consent. Request lists show how long a
+question has been open. Only the asker (a chat MCP caller) or the operator can
+withdraw one; a withdrawn question ends its paused task like `/cancel`, without
+resuming it.
 
 ## Artifacts
 

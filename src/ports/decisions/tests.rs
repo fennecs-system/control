@@ -130,7 +130,10 @@ fn request_from_answered_design_continuation_wakes_the_original_conversation() {
             options: vec!["Relay".into(), "Stop".into()],
             recommended: None,
         },
-        answer: Some("Relay".into()),
+        status: crate::design::Status::Answered {
+            answer: "Relay".into(),
+            asked_at: None,
+        },
         continuation: Some(continuation.id.clone()),
     });
     state.ports[0].origin_run = continuation.id.clone();
