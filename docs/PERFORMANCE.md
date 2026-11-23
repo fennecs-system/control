@@ -54,7 +54,7 @@ Fixtures by subsystem:
 | Scheduling and cancellation | `scheduler::qa::scheduling_profile`, `chat::tests::profile_continuation_admission`, `lifecycle::tests::reconcile_profile`, `worker::tests::cancel_profile` |
 | Services and watches | `services::commands::tests::dispatch_profile`, `services::commands::tests::live_latency`, `watches::tests::profile` |
 | Web and HTTP | `performance::hot_paths`, `performance::ownership_snapshots`, `performance::history_reads`, `performance::chat_lists`, `performance::bots_page`, `performance::history_page`, `session_http::tests::fifteen_turn_conversations_workload` |
-| Terminal (`--lib`) | `terminal::profiling` |
+| Terminal (`-p control-tui`) | `terminal::profiling` |
 | Tools | `graph_search::tests::profile`, `compaction::tests::selection_profile`, `scores::tests::due_profile` |
 
 ## Rust benchmark tool
@@ -545,7 +545,7 @@ for 1,000 messages and 24 ms for 10,000. Network refresh is not part of these
 offline fixtures.
 
 ```sh
-cargo test --release --locked --lib terminal::profiling -- --ignored --nocapture --test-threads=1
+cargo test --release --locked -p control-tui terminal::profiling -- --ignored --nocapture --test-threads=1
 ```
 
 The server-only build omits terminal code and its dependencies

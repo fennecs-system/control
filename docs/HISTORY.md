@@ -32,7 +32,7 @@ What lives in journals:
   memory, saved as a journal position, and saved in full again after any edit.
   A finished run is one journal line committed atomically with its save: a
   failed save truncates the line, and load drops lines no save referenced.
-- **Outbox** (`state/history/_outbox.jsonl`, `src/outbox.rs`). Control appends
+- **Outbox** (`state/history/_outbox.jsonl`, `crates/client/src/outbox.rs`). Control appends
   typed delivery events when a run finishes or waits. Frontends (currently the
   Discord bridge) follow it with their own cursor and never read state or chat
   journals. Events are at least once; followers deduplicate by run and status.
@@ -106,7 +106,7 @@ A checkpoint does not rewrite `state.json`. It appends what changed:
   file's bytes rather than re-encoding the state; after a crash it replays the
   log and compacts once.
 - **Readers** that do not own the state (the Discord bridge, federation export)
-  read snapshot plus log through `control::config::read_state` (or
+  read snapshot plus log through `control_config::read_state` (or
   `read_state_in` for a given directory), typed as any partial view of the
   state, without a lock and without repairing anything.
 

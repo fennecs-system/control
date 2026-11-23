@@ -44,8 +44,9 @@ cargo build --release --locked --bins
 ```
 
 Tests never use the operator's node. In test builds (`cfg(test)`, and the
-`test-isolation` feature that the crate's self dev-dependency turns on for every
-`cargo test` build of the binary) `config::directory` and
+`control-config` `test-isolation` feature that the root crate's self
+dev-dependency and each client crate's dev-dependencies turn on for every
+`cargo test` build) `config::directory` and
 `config::state_directory` ignore XDG and HOME: they use `CONTROL_CONFIG_DIR` and
 `CONTROL_STATE_DIR` when set, and otherwise a per-process directory under the
 system temporary directory (`config::test_root`). They panic rather than return
@@ -53,7 +54,7 @@ system temporary directory (`config::test_root`). They panic rather than return
 named explicitly. Every node path (state files, Discord files, image pins,
 credentials) derives from these two helpers; Codex credentials resolve only
 `CONTROL_CODEX_AUTH_FILE` or the test root in tests. New path helpers must do the
-same, and the guard tests in `src/config/tests.rs` and `src/worker/tests.rs`
+same, and the guard tests in `crates/config/src/tests.rs` and `src/worker/tests.rs`
 should list them. Setting both variables to scratch directories when running
 tests remains good practice, especially for ignored live checks.
 

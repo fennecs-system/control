@@ -24,28 +24,43 @@ generic invariant that existing interfaces cannot express.
 | `control-bot` | Persistent, callback-driven bots as a pure `Supervisor` machine, a slice of the [bot-control contract](research/BOT-CONTROL.md). Bots subscribe to room messages, service events and timers; budgets bound turns; commands pause, resume and stop. Cursors drop replayed events, `TurnId`s make turn requests idempotent, and `next_deadline` lets drivers sleep. Depends only on `control-effect`. The application owns authority, persistence and queuing. |
 | `control-comonad` | Comonadic history views: `Space`, `Store`, `Tree` zippers and `lens` cuts that keep the focus verbatim and coarsen with distance. Pure and `std` only. |
 | `control-journal` | Append-only JSON-lines history, one file per conversation. Appends write and sync only the new line; positions never move. Implements `control_comonad::Space`. |
+| `control-config` | Personal node directories, bounded private file reads and writes, the server address and the state file's schema. `test-isolation` keeps every test build off the operator's node. |
+| `control-identity` | Actors, actions, roles, the Discord access policy, DM bindings and the authorization check. Depends only on `control-config`. |
+| `control-client` | The loopback MCP client (`Hive`) and typed operator operations, operator decisions, the live-update follower, chat navigation, GitHub commands and the chat-app channel core. Also the contracts the server writes or answers: the outbox delivery feed, user-facing URL names and diff previews. Talks to the server only over HTTP/MCP and node files. |
+| `control-tui` | The terminal interface behind `control tui` and `control-harness`. Depends on `control-client`; owns ratatui and crossterm. |
+| `control-discord` | The Discord bridge (`control discord`, `control-discord`): gateway, components, delivery and the per-DM routing. Depends on `control-client`. |
 
-The `control` library (`src/lib.rs`) shares configuration, identity, diff
-rendering, the outbox, the loopback MCP client, the terminal UI and the Discord
-adapter between executables. Discord follows typed delivery events from the
-outbox (`src/outbox.rs`) and reads no other application state except which
-inbound DMs were accepted. Authorization and DM binding are rechecked at
-delivery.
+The `control` library (`src/lib.rs`) keeps only build information and the
+operator's permission policy, which the server alone uses. Discord follows typed
+delivery events from the outbox (`crates/client/src/outbox.rs`) and reads no
+other application state except which inbound DMs were accepted. Authorization
+and DM binding are rechecked at delivery.
 
 ## Client and server
 
-The terminal UI and loopback client are library modules compiled once and used
-by `control tui` and `control-harness`. The `tui` feature is on by default;
-`--no-default-features` builds a server without terminal code or its
-dependencies. The terminal calls typed client operations for port decisions and
-project approval; only `src/client.rs` owns their HTTP routes, forms, origin
-headers and confirmation rules. The Rust/WASM package under `web/` is the
+The terminal, the loopback client and the Discord bridge are crates that do not
+depend on the server: the compiler rejects any use of its `State`, routing or
+rendering. They reach Control only over HTTP/MCP and the node's files. The
+server binary depends on them, not the other way round: it runs `control tui`
+and `control discord`, uses the MCP client for `control mcp` and package
+imports, and reads Discord's inbound message type and the channel settings.
+
+The `tui` feature is on by default and is the optional dependency on
+`control-tui`; `--no-default-features` builds a server without terminal code or
+its dependencies. The terminal calls typed client operations for port decisions
+and project approval; only `control-client` owns their HTTP routes, forms,
+origin headers and confirmation rules. The Rust/WASM package under `web/` is the
 browser client. Server state, routing and rendering remain coupled in places.
+
+File formats still couple Discord to the server. The bridge reads
+`discord_seen` from `state.json` and its patch log through
+`control_config::read_state_in`; it writes `discord-inbox/` and
+`discord-status.json`, which the server reads, and reads the server's
+`discord-outbox/` notices and outbox feed. These are data contracts between
+processes, not shared code.
 
 Possible later splits:
 
-- `control-tui` for the MCP client and terminal interface. It is already close
-  to this boundary.
 - `control-web` for server-side HTTP/UI adapters, once web routing and rendering
   call explicit projections and authorization. `control-web-ui` could rename the
   existing browser client.
