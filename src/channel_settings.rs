@@ -1,7 +1,7 @@
 //! The web controls for messaging channels: operator forwarding (off by
 //! default) and the command prefix, saved to the generic `channels.json`
 //! that every channel adapter reads on each poll.
-use control::client::channel;
+use control_client::channel;
 use std::io::Write;
 
 /// Each adapter's forwarding toggle and prefix, for the Connections page.

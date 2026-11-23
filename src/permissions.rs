@@ -139,8 +139,8 @@ const FILE: &str = "permissions.json";
 /// The node's permissions; a missing or unreadable file means all off.
 pub fn read() -> Permissions {
     let read = || {
-        let path = crate::config::directory().ok()?.join(FILE);
-        let bytes = crate::config::read_regular(&path, 65536, false).ok()?;
+        let path = control_config::directory().ok()?.join(FILE);
+        let bytes = control_config::read_regular(&path, 65536, false).ok()?;
         serde_json::from_slice::<Permissions>(&bytes).ok().filter(|p| p.auto_approval.validate().is_ok())
     };
     read().unwrap_or_default()
@@ -148,7 +148,7 @@ pub fn read() -> Permissions {
 pub fn save(permissions: &Permissions) -> Result<(), &'static str> {
     permissions.auto_approval.validate()?;
     let bytes = serde_json::to_vec_pretty(permissions).map_err(|_| "Could not encode permissions.")?;
-    crate::config::write_private(FILE, &bytes).map_err(|_| "Could not save permissions.")
+    control_config::write_private(FILE, &bytes).map_err(|_| "Could not save permissions.")
 }
 
 #[cfg(test)]

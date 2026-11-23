@@ -21,7 +21,7 @@ arbitrary downloaded code safe.
   Imports skip symlinks without following targets, exclude known credential/generated paths and isolate
   Git metadata from the original checkout. Lenses compose context and tools;
   they do not grant authority. Evidence:
-  [identity.rs](../src/identity.rs),
+  [control-identity](../crates/identity/src/lib.rs),
   `roles_bound_actions_and_workspaces`,
   `direct_messages_need_matching_recipient_bindings_and_keep_roles`;
   [projects.rs](../src/projects.rs),

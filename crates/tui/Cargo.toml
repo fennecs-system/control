@@ -1,0 +1,21 @@
+[package]
+name = "control-tui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+control-client = { path = "../client" }
+control-config = { path = "../config" }
+control-context = { path = "../context" }
+control-ai = { path = "../ai" }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde_json = "1"
+ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
+crossterm = "0.29"
+
+[dev-dependencies]
+control-client = { path = "../client", features = ["fixture"] }
+control-config = { path = "../config", features = ["test-isolation"] }
+control-http = { path = "../http" }
+base64 = "0.23"
+ring = "0.17.14"

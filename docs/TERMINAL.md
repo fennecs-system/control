@@ -20,7 +20,7 @@ newline. `/help` opens a scrollable reference of commands and shortcuts; Esc or
 `/chat` returns to the conversation. Shared chat commands (`/improve`, `/spawn`,
 `/answer`, `/open`, …) come from `crates/context/src/commands.rs`; terminal-only
 actions such as `/activity`, `/lenses`, `/context`, `/trust`, `/dismiss`, `/port` and `/bot`
-are added in `src/terminal/command_menu.rs`.
+are added in `crates/tui/src/terminal/command_menu.rs`.
 
 ## Agent tools
 

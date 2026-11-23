@@ -122,7 +122,7 @@ lockfiles; rebuilding the binary does not refresh it. Then use `/improve` to
 request a small source edit with real tests in the `build` environment, and
 publish the completed run as above. The original checkout must stay unchanged.
 
-The ignored test `terminal::tests::live_improve_build_and_independent_judge_roundtrip`
+The ignored test `terminal::tests::live_improve_build_and_independent_judge_roundtrip` (`-p control-tui`)
 covers a source edit, Cargo tests, judge handoff and artifact read through the
 TUI client. It needs an isolated node whose state is under
 `/private/tmp/control-selfdev-qa.*/`, its loopback URL in `CONTROL_QA_URL`, the

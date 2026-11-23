@@ -3,7 +3,8 @@
 //! now with recent automatic decisions, and every request waiting on the
 //! operator. The decisions themselves stay in each DM, where the exact
 //! request is shown.
-use control::{client::operator, permissions::{self, AutoApproval, KindMode, Mode}};
+use control::permissions::{self, AutoApproval, KindMode, Mode};
+use control_client::operator;
 use std::io::Write;
 
 const PATH: &str = "/manage/permissions";
@@ -23,7 +24,7 @@ fn kind_mode(name: &str, label: &str, mode: KindMode) -> String {
 /// The node-wide switch, per-kind modes, standing targets, notices and strict principals.
 fn auto_fieldset(policy: &AutoApproval) -> String {
     let mut principals = vec![("local".to_owned(), "Local operator (this host, TUI, chat MCP)".to_owned())];
-    if let Ok(access) = control::identity::Policy::load() {
+    if let Ok(access) = control_identity::Policy::load() {
         principals.extend(access.principals.iter().filter_map(|p| p.user_id.map(|id| (format!("discord:{id}"), format!("Discord · {}", p.label)))));
     }
     // Keep listed entries whose principal is no longer configured.

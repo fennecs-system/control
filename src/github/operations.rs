@@ -1,7 +1,7 @@
 //! Explicit repository mutations through the existing trusted GitHub broker.
 use super::inspection::{Caller, ReadApi, authorize, project};
 use super::*;
-use control::client::github::Operation;
+use control_client::github::Operation;
 
 static MUTATION: Mutex<()> = Mutex::new(());
 

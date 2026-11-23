@@ -142,7 +142,7 @@ fn delivery_warns_about_missing_activity_without_blocking_other_reports() {
     *state.runtime.runs[1].result = "Healthy report".into();
     emit(&mut state, |_| Ok(())).unwrap();
     let deliveries =
-        control::outbox::read(&outbox_path().unwrap(), control::outbox::Cursor::default())
+        control_client::outbox::read(&outbox_path().unwrap(), control_client::outbox::Cursor::default())
             .unwrap()
             .into_iter()
             .map(|(event, _)| event)
@@ -411,7 +411,7 @@ fn deliveries_are_emitted_once_per_status_and_retried_after_a_failed_save() {
     let chat = own(&mut state, &chat, "outbox");
     let outbox = outbox_path().unwrap();
     let events = || {
-        control::outbox::read(&outbox, control::outbox::Cursor::default())
+        control_client::outbox::read(&outbox, control_client::outbox::Cursor::default())
             .unwrap()
             .into_iter()
             .map(|(e, _)| e)
