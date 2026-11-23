@@ -78,7 +78,9 @@ Existing suites follow this layout throughout the repository, including shared
 standalone tools. Crate entry points and shared `#[path]` modules use explicit
 paths where needed; keep those paths relative to their declaring source file.
 
-CI runs those checks on Linux and macOS for pull requests and pushes to `main`.
+CI runs those checks on Linux for pull requests and pushes to `main`; macOS is
+checked locally before merge, and a change to `docs/`, `README.md`,
+`CONTRIBUTING.md` or `AGENTS.md` alone does not run CI (`DESIGN.md` is compiled into the binary, so it does).
 The default `tui` feature preserves `control tui` and `control-harness`. The
 server-only build omits terminal presentation and its dependencies; CI also
 checks that its normal dependency graph contains neither ratatui nor crossterm.
@@ -121,7 +123,7 @@ updates by ecosystem to reduce redundant CI runs. Security updates have separate
 groups when Dependabot security updates are enabled in repository settings.
 Action versions stay pinned to release commits; Dependabot can update those pins.
 
-Require the `Rust (ubuntu-24.04)` and `Rust (macos-15)` checks on `main` in GitHub
+Require the `Rust (ubuntu-latest)` check on `main` in GitHub
 branch rules, along with pull requests, no force pushes and no branch deletion.
 Branch rules are repository settings; the workflow file does not enable them.
 Keep review requirements practical for the current maintainers while preserving
