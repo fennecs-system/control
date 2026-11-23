@@ -255,7 +255,13 @@ pub(crate) fn report(backend: Backend, store: &crate::accounts::Store<Backend>) 
                 (Err(error), _) => format!("not ready: {error}"),
             };
             let enabled = if account.enabled { "" } else { ", disabled" };
-            format!("{}+{name} ({}{enabled}): {state}", backend.id(), account.kind.as_str())
+            // The one command that recovers this account, whatever its state.
+            format!(
+                "{}+{name} ({}{enabled}): {state} · sign in again with {}",
+                backend.id(),
+                account.kind.as_str(),
+                sign_in_command(&account)
+            )
         })
         .collect()
 }

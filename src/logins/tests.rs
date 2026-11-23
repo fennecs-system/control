@@ -146,3 +146,53 @@ fn an_api_key_account_is_located_by_its_kind_and_reported_from_metadata() {
     fs::remove_dir_all(super::directory(Backend::Claude, &keyed).unwrap()).unwrap();
     fs::remove_dir_all(directory).unwrap();
 }
+
+/// A sign-in failure names the one command that recovers that account.
+#[test]
+fn a_sign_in_failure_names_the_command_for_its_account() {
+    let entry = |name: &str, kind| crate::accounts::Entry {
+        backend: Backend::Claude,
+        name: AccountName::try_from(name).unwrap(),
+        kind,
+        cap: None,
+        enabled: true,
+        label: None,
+    };
+    let store = Store::default()
+        .add(entry("work", AccountKind::Subscription))
+        .and_then(|store| store.add(entry("metered", AccountKind::ApiKey)))
+        .unwrap();
+    let failure = |backend: Backend, account: &str| {
+        let account = super::account(&store, backend, &AccountName::try_from(account).unwrap());
+        control_agent::Failure::Provider {
+            agent: backend.agent().name(),
+            cause: control_agent::Cause::AuthRejected,
+        }
+        .message(&control_agent::SignIn::from(sign_in_command(&account)))
+    };
+    for (backend, account, command) in [
+        (Backend::Claude, "work", "control claude login --account work"),
+        (Backend::Claude, "metered", "control claude key --account metered"),
+        (Backend::Claude, "default", "control claude login"),
+        (Backend::Codex, "default", "codex login (on the host)"),
+    ] {
+        let message = failure(backend, account);
+        assert!(
+            message.contains(&format!("Sign in again with {command} and submit a new run.")),
+            "{message}"
+        );
+    }
+    // Each account's line in `control accounts list` and `check` names it too.
+    let lines = report(Backend::Claude, &store);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.ends_with("sign in again with control claude login --account work")),
+        "{lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.ends_with("sign in again with control claude key --account metered"))
+    );
+}

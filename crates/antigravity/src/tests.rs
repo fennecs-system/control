@@ -20,7 +20,9 @@ fn message(ended: Option<&str>, stderr: &[u8]) -> String {
         text: text.to_owned(),
         rejected_tools: false,
     });
-    diagnose(ended, stderr).message()
+    diagnose(ended, stderr).message(&control_agent::SignIn::from(
+        "control antigravity login --account work".to_owned(),
+    ))
 }
 fn directory(tag: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!("control-antigravity-{tag}-{}", std::process::id()));

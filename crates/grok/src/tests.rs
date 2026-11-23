@@ -28,7 +28,9 @@ fn message(ended: Option<&str>, stderr: &[u8]) -> String {
         text: text.to_owned(),
         rejected_tools: false,
     });
-    diagnose(ended, stderr).message()
+    diagnose(ended, stderr).message(&control_agent::SignIn::from(
+        "control grok login --account work".to_owned(),
+    ))
 }
 
 #[test]
@@ -85,7 +87,7 @@ fn a_known_failure_gets_the_fixed_message_and_an_unknown_one_groks_own_ending() 
     );
     assert_eq!(
         message(None, b"error: 401 Unauthorized"),
-        "Grok account authentication was rejected. Refresh the host login and submit a new run."
+        "Grok account authentication was rejected. Sign in again with control grok login --account work and submit a new run."
     );
     assert!(message(None, b"").starts_with("Grok stopped without success."));
 }

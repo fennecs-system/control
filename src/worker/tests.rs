@@ -25,6 +25,7 @@ fn finish_codex_tools(
         attempt,
         bridge,
         generation,
+        &control_agent::SignIn::from("codex login (on the host)".to_owned()),
     )
     .map(drop)
 }
@@ -2023,7 +2024,9 @@ fn credentials_are_readonly_mounts_and_never_environment_values() {
 
 #[test]
 fn diagnostics_return_fixed_messages_without_echoing_secret_text() {
-    let worker_failure = |bytes: &[u8]| control_codex::diagnose(bytes).message();
+    let worker_failure = |bytes: &[u8]| {
+        control_codex::diagnose(bytes).message(&control_agent::SignIn::from("codex login (on the host)".to_owned()))
+    };
     let failure = worker_failure(b"401 Unauthorized bearer fake-secret-for-test");
     assert!(failure.contains("authentication was rejected"));
     assert!(!failure.contains("fake-secret-for-test"));
@@ -2045,7 +2048,9 @@ fn a_usage_limit_reported_only_in_the_event_stream_is_named() {
     );
     let (_, _, reported) = capture_codex(stream.as_bytes(), |_| {});
     assert_eq!(
-        reported.map(|cause| cause.message("Codex")).as_deref(),
+        reported
+            .map(|cause| cause.message("Codex", &control_agent::SignIn::from(String::new())))
+            .as_deref(),
         Some("The signed-in Codex account reached a usage or rate limit.")
     );
     // Only the provider's error events count, and unknown ones stay unknown.

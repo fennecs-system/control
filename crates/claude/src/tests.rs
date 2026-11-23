@@ -13,7 +13,7 @@ fn capture(reader: impl Read, update: impl FnMut(control_ai::Activity)) -> io::R
     .0
 }
 fn message(stderr: &[u8]) -> String {
-    diagnose(stderr).message()
+    diagnose(stderr).message(&control_agent::SignIn::from("control claude login".to_owned()))
 }
 #[test]
 fn failures_name_the_result_subtype_and_bad_tools_abort_early() {
