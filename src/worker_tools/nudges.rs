@@ -57,21 +57,43 @@ pub(crate) const MARKS: &str = "Write key facts on lines starting Finding: and c
 pub(crate) fn deadline_text(remaining: u64) -> String {
     format!("{remaining} s left in this turn: publish your checkpoint (control_turn_handoff) now and continue in a routine or the next turn. {NOTES}")
 }
+/// What follows a turn that stops now. Only a persistent bot has a next turn:
+/// a chat that hands off without one simply ends, so the note must not promise
+/// a continuation.
+#[derive(Clone, Copy)]
+pub(crate) enum Next {
+    /// A persistent bot with the handoff tool: checkpoint and continue.
+    Turn,
+    /// The handoff tool without a bot yet, and one can be requested.
+    Unscheduled,
+    /// Nothing follows: finish.
+    Report,
+}
+impl Next {
+    pub(crate) fn of(handoff: bool, continues: bool, requestable: bool) -> Self {
+        match (handoff, continues, requestable) {
+            (true, true, _) => Self::Turn,
+            (true, false, true) => Self::Unscheduled,
+            _ => Self::Report,
+        }
+    }
+}
+const UNSCHEDULED: &str = "this chat has no next turn: before you hand off, request your persistent bot (control_bot_request) or delegate what remains; otherwise finish with a brief final report.";
 /// The once-per-turn note when a turn's context passes its threshold (local
 /// endpoints, where Control owns the transcript and measures its size).
-pub(crate) fn context_text(percent: u32, handoff: bool) -> String {
-    if handoff {
-        format!("Context {percent}% full: publish your checkpoint (control_turn_handoff) and continue in the next turn. {NOTES} {MARKS}")
-    } else {
-        format!("Context {percent}% full: finish with a brief final report soon. {MARKS}")
+pub(crate) fn context_text(percent: u32, next: Next) -> String {
+    match next {
+        Next::Turn => format!("Context {percent}% full: publish your checkpoint (control_turn_handoff) and continue in the next turn. {NOTES} {MARKS}"),
+        Next::Unscheduled => format!("Context {percent}% full and {UNSCHEDULED} {NOTES} {MARKS}"),
+        Next::Report => format!("Context {percent}% full: finish with a brief final report soon. {MARKS}"),
     }
 }
 /// The once-per-turn note when a local-model turn nears its model-step cap.
-pub(crate) fn steps_text(left: usize, handoff: bool) -> String {
-    if handoff {
-        format!("{left} model steps left in this turn: publish your checkpoint (control_turn_handoff) and continue next turn. {NOTES}")
-    } else {
-        format!("{left} model steps left in this turn: finish with a brief final report now.")
+pub(crate) fn steps_text(left: usize, next: Next) -> String {
+    match next {
+        Next::Turn => format!("{left} model steps left in this turn: publish your checkpoint (control_turn_handoff) and continue next turn. {NOTES}"),
+        Next::Unscheduled => format!("{left} model steps left in this turn and {UNSCHEDULED} {NOTES}"),
+        Next::Report => format!("{left} model steps left in this turn: finish with a brief final report now."),
     }
 }
 pub(crate) fn steering_text(members: usize) -> String {
