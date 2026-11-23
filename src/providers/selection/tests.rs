@@ -430,7 +430,9 @@ fn an_account_at_its_cap_holds_its_next_turn_and_says_why() {
     // This account is capped at one by the operator.
     state.runtime.runs[0].status = RunStatus::Running;
     assert_eq!(crate::scheduler::next_in(&state), None, "the second turn is held");
-    let held = crate::providers::accounts::hold(&state.runtime, &state.runtime.runs[1]).unwrap();
+    let held = crate::providers::accounts::Holds::of(&state.runtime)
+        .hold(&state.runtime.runs[1])
+        .unwrap();
     assert_eq!(held, crate::accounts::Hold::Cap(std::num::NonZeroU8::MIN));
     let page = crate::chat::transcript(&state, &chats[1]).unwrap();
     assert!(

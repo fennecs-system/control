@@ -913,20 +913,23 @@ fn a_usage_limit_cools_its_account_and_a_pool_picks_another() {
     let mut next = runtime.runs[0].clone();
     next.status = RunStatus::Queued;
     assert_eq!(
-        crate::providers::accounts::hold(runtime, &next),
+        crate::providers::accounts::Holds::of(runtime).hold(&next),
         Some(crate::accounts::Hold::Cooling(until))
     );
     assert!(
-        crate::providers::accounts::held_run(runtime, &next).is_some_and(|text| text
-            .starts_with("Held: codex account second reached its usage limit; retrying at 2099-01-01 00:00 UTC (in ")),
+        crate::providers::accounts::Holds::of(runtime)
+            .held(&next)
+            .is_some_and(|text| text.starts_with(
+                "Held: codex account second reached its usage limit; retrying at 2099-01-01 00:00 UTC (in "
+            )),
         "{:?}",
-        crate::providers::accounts::held_run(runtime, &next)
+        crate::providers::accounts::Holds::of(runtime).held(&next)
     );
     let pool = crate::providers::selection::choose(runtime, Backend::Codex, "codex+*:gpt-6.1-sol").unwrap();
     let picked = crate::providers::selection::admit(runtime, &pool).unwrap();
     assert!(picked.account.is_implicit(), "{picked:?}");
     crate::providers::accounts::clear(runtime, Backend::Codex, &name);
-    assert_eq!(crate::providers::accounts::hold(runtime, &next), None);
+    assert_eq!(crate::providers::accounts::Holds::of(runtime).hold(&next), None);
 }
 
 // API-key accounts: a model can never read the key.

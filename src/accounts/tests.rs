@@ -317,16 +317,16 @@ fn a_usage_limit_cools_an_account_and_admission_holds_it_without_failover() {
     let second = store.get(Test::Codex, &name("second")).unwrap();
     let now = UnixSeconds(1_000);
     let status = Status::<Test>::default();
-    assert_eq!(may_start(&second, &status, 0, now), Ok(()));
+    assert_eq!(may_start(&second, &status, || 0, now), Ok(()));
     assert_eq!(
-        may_start(&second, &status, 5, now),
+        may_start(&second, &status, || 5, now),
         Ok(()),
         "uncapped unless the operator says so"
     );
     let work = store.get(Test::Codex, &name("work")).unwrap();
-    assert_eq!(may_start(&work, &status, 1, now), Ok(()));
+    assert_eq!(may_start(&work, &status, || 1, now), Ok(()));
     assert_eq!(
-        may_start(&work, &status, 2, now),
+        may_start(&work, &status, || 2, now),
         Err(Hold::Cap(NonZeroU8::new(2).unwrap()))
     );
     let limited = |status: &Status<Test>, started, at, retry| {
@@ -341,7 +341,7 @@ fn a_usage_limit_cools_an_account_and_admission_holds_it_without_failover() {
     // No stated time: held for the first backoff step, never until cleared.
     let cooled = limited(&status, 990, 1_000, None);
     assert_eq!(
-        may_start(&second, &cooled, 0, UnixSeconds(1_299)),
+        may_start(&second, &cooled, || 0, UnixSeconds(1_299)),
         Err(Hold::Cooling(RetryAt(UnixSeconds(1_300))))
     );
     // Another attempt that began before the retry time hit the same limit:
@@ -443,8 +443,8 @@ fn a_due_cooldown_lets_one_probe_through_and_its_ending_decides() {
     let cooled = ended(&Status::default(), 0, Ended::Limited(None), 1_000);
     let due = UnixSeconds(1_300);
     // Exactly one attempt starts once due; while it runs the others are held.
-    assert_eq!(may_start(&second, &cooled, 0, due), Ok(()));
-    assert_eq!(may_start(&second, &cooled, 1, due), Err(Hold::Probing));
+    assert_eq!(may_start(&second, &cooled, || 0, due), Ok(()));
+    assert_eq!(may_start(&second, &cooled, || 1, due), Err(Hold::Probing));
     // An attempt that began before the retry time is no probe: its success
     // does not clear the cooldown.
     assert_eq!(ended(&cooled, 1_200, Ended::Succeeded, 1_400), cooled);
@@ -458,7 +458,7 @@ fn a_due_cooldown_lets_one_probe_through_and_its_ending_decides() {
         (UnixSeconds(1_000), RetryAt(UnixSeconds(1_310 + 15 * 60)), 2)
     );
     assert_eq!(
-        may_start(&second, &second_step, 0, UnixSeconds(1_400)),
+        may_start(&second, &second_step, || 0, UnixSeconds(1_400)),
         Err(Hold::Cooling(RetryAt(UnixSeconds(2_210))))
     );
     let third = ended(&second_step, 2_210, Ended::Limited(None), 2_220);
@@ -495,7 +495,7 @@ fn an_old_cooldown_without_a_retry_time_loads_with_the_first_step() {
         );
         let account = default_for(Test::Codex);
         assert_eq!(
-            may_start(&account, &status, 0, UnixSeconds(5_000)),
+            may_start(&account, &status, || 0, UnixSeconds(5_000)),
             Ok(()),
             "a probe may start"
         );
