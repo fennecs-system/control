@@ -1,5 +1,6 @@
 
 use super::*;
+use std::process::{Command, Stdio};
 #[test]
 fn command_admission_survives_reload_without_replaying_an_effect() {
     let root = std::env::temp_dir().join(format!("control-claude-intent-{}", std::process::id()));
@@ -202,20 +203,20 @@ fn stream_requires_valid_init_and_final_and_normalizes_caches() {
 
 #[test]
 fn claude_launch_vectors_are_pinned() {
-    use crate::engine::golden::{args, fill, pin};
+    use crate::engine::golden::{fill, pin_equivalent, run};
     let (root, auth) = (Path::new("/golden/root"), Path::new("/golden/auth/.credentials.json"));
     let tools = control_context::worker_mcp_names().into_iter().map(|name| format!("mcp__control__{name}")).collect::<Vec<_>>().join(",");
     let values = [("tools", tools.as_str())];
-    let text = text_container("sha256:img", "control-summary-1", &root.join("workspace"), "node-1", "sonnet", auth, 501, 20).unwrap();
-    pin(&args(&text), &fill(TEXT, &values));
-    let shell = shell_container("sha256:img", "control-run-1-shell", "node-1", &root.join("workspace"), "cargo test", false, true, 501, 20).unwrap();
-    pin(&args(&shell), &fill(SHELL, &values));
-    let writable = shell_container("sha256:img", "control-run-1-shell", "node-1", &root.join("workspace"), "cargo test", true, false, 501, 20).unwrap();
-    pin(&args(&writable), &fill(SHELL_FULL_ROOT, &values));
-    let turn = turn_container("control-run-1", "node-1", 501, 20, auth, &root.join("claude-mailbox"), "sha256:img", "opus").unwrap();
-    pin(&args(&turn), &fill(TURN, &values));
-    let login = login_container("control-claude-login-7", "node-1", 501, 20, Path::new("/golden/auth"), "sha256:img").unwrap();
-    pin(&args(&login), &fill(LOGIN, &values));
+    let text = text_container("sha256:img", "control-summary-1", &root.join("workspace"), "node-1", "sonnet", auth, User { uid: 501, gid: 20 }).unwrap();
+    pin_equivalent(&run(&text), &fill(TEXT, &values));
+    let shell = shell_container("sha256:img", "control-run-1-shell", "node-1", &root.join("workspace"), "cargo test", false, true, User { uid: 501, gid: 20 }).unwrap();
+    pin_equivalent(&run(&shell), &fill(SHELL, &values));
+    let writable = shell_container("sha256:img", "control-run-1-shell", "node-1", &root.join("workspace"), "cargo test", true, false, User { uid: 501, gid: 20 }).unwrap();
+    pin_equivalent(&run(&writable), &fill(SHELL_FULL_ROOT, &values));
+    let turn = turn_container("control-run-1", "node-1", User { uid: 501, gid: 20 }, auth, &root.join("claude-mailbox"), "sha256:img", "opus").unwrap();
+    pin_equivalent(&run(&turn), &fill(TURN, &values));
+    let login = login_container("control-claude-login-7", "node-1", User { uid: 501, gid: 20 }, Path::new("/golden/auth"), "sha256:img").unwrap();
+    pin_equivalent(&run(&login), &fill(LOGIN, &values));
 }
 const TEXT: &[&str] = &[
     "run",

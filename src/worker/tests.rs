@@ -1,6 +1,6 @@
 
 use super::*;
-use crate::codex::{capture_codex, container_command, container_command_scoped, finish_codex_tools, mount_path, offline_probe, permissions, probe_detail, probe_nonce, sandbox_verdict, tail_reader, Credentials, PERMISSIONS, SANDBOX_PROBE_TIMED_OUT};
+use crate::codex::{capture_codex, container_spec, container_spec_scoped, finish_codex_tools, mount_path, offline_probe, permissions, probe_detail, probe_nonce, sandbox_verdict, tail_reader, Credentials, PERMISSIONS, SANDBOX_PROBE_TIMED_OUT};
 use control_effect::sync::Recv;
 use std::{path::PathBuf, process::{Command, Stdio}};
 use crate::runtime::RunKind;
@@ -2000,7 +2000,7 @@ fn live_judge_source_is_readonly_in_both_execution_adapters() {
     let policy = root.join("seccomp.json");
     fs::write(&policy, include_bytes!("../../hosting/worker-seccomp.json")).unwrap();
     let name = format!("control-judge-codex-qa-{}", std::process::id());
-    let mut command = container_command_scoped(
+    let spec = permissions(container_spec_scoped(
         &image,
         &name,
         &scratch,
@@ -2009,11 +2009,10 @@ fn live_judge_source_is_readonly_in_both_execution_adapters() {
         "synthetic-qa-node",
         Some(&source),
     )
-    .unwrap();
-    command.args(["codex", "sandbox", "-P", "control"]);
-    permissions(&mut command);
-    command.args(["--","bash","-c","set -eu; test \"$(cat /review/code.txt)\" = immutable-source; if printf poisoned > /review/code.txt 2>/dev/null; then exit 42; fi; printf scratch-ok > /workspace/result; printf tmp-ok > /tmp/result"]);
-    let output = command.output().unwrap();
+    .unwrap()
+    .args(["codex", "sandbox", "-P", "control"]))
+    .args(["--","bash","-c","set -eu; test \"$(cat /review/code.txt)\" = immutable-source; if printf poisoned > /review/code.txt 2>/dev/null; then exit 42; fi; printf scratch-ok > /workspace/result; printf tmp-ok > /tmp/result"]);
+    let output = crate::engine::isolation().spawn(&spec, control_isolation::Streams::new(control_isolation::Stream::Null, control_isolation::Stream::Piped, control_isolation::Stream::Piped)).unwrap().wait_with_output().unwrap();
     assert!(
         output.status.success(),
         "Synthetic judge mount probe failed: {}",
@@ -2027,7 +2026,7 @@ fn live_judge_source_is_readonly_in_both_execution_adapters() {
         fs::read_to_string(scratch.join("result")).unwrap(),
         "scratch-ok"
     );
-    let result=crate::claude::shell_scoped(&image,&format!("control-judge-claude-qa-{}",std::process::id()),"synthetic-qa-node",&source,"set -eu; if printf poisoned > /workspace/code.txt 2>/dev/null; then exit 42; fi; printf tmp-ok > /tmp/result; cat /workspace/code.txt",true).unwrap();
+    let result=crate::claude::shell_scoped(crate::engine::isolation(), &image,&format!("control-judge-claude-qa-{}",std::process::id()),"synthetic-qa-node",&source,"set -eu; if printf poisoned > /workspace/code.txt 2>/dev/null; then exit 42; fi; printf tmp-ok > /tmp/result; cat /workspace/code.txt",true).unwrap();
     assert_eq!(result["exit_code"], 0);
     assert_eq!(result["stdout"], "immutable-source");
     assert_eq!(
@@ -2044,7 +2043,7 @@ fn credentials_are_readonly_mounts_and_never_environment_values() {
         uid: 502,
         gid: 20,
     };
-    let command = container_command(
+    let spec = container_spec(
         "sha256:test",
         "control-test",
         Path::new("/private/workspace"),
@@ -2053,7 +2052,8 @@ fn credentials_are_readonly_mounts_and_never_environment_values() {
         "test-node",
     )
     .unwrap();
-    let args: Vec<_> = command.get_args().map(|s| s.to_str().unwrap()).collect();
+    let args = crate::engine::golden::run(&spec);
+    let args: Vec<_> = args.iter().map(String::as_str).collect();
     assert!(
         args.contains(
             &"type=bind,src=/private/auth.json,dst=/home/agent/.codex/auth.json,readonly"
@@ -2064,7 +2064,7 @@ fn credentials_are_readonly_mounts_and_never_environment_values() {
             .iter()
             .any(|s| s.contains("API_KEY") || s.contains("ACCESS_TOKEN"))
     );
-    assert!(!command.get_envs().any(|(name, _)| name == "CODEX_API_KEY"
+    assert!(!control_isolation::Docker::scrubbed().get_envs().any(|(name, _)| name == "CODEX_API_KEY"
         || name == "OPENAI_API_KEY"
         || name == "CODEX_ACCESS_TOKEN"));
     assert!(!args.contains(&"--privileged"));

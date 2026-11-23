@@ -4,13 +4,13 @@ use crate::{
     usage::{Activity, Attempt, Tokens},
     State,
 };
+use control_isolation::{Access, Input, Isolation, Limits, Network, RunSpec, Size, Stream, Streams, Tmpfs, User};
 use serde_json::{json, Value};
 use std::{
     fs,
     io::{self, Read, Write},
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -51,8 +51,8 @@ impl crate::backend::Agent for Claude {
                 _ => "the offline Claude tool-isolation probe failed; check the pinned image and container sandbox support".to_owned(),
             })
     }
-    fn text_command(&self, call: &crate::backend::TextCall<'_>) -> io::Result<Command> {
-        text_command(call.image, call.name, call.workspace, call.node, call.model)
+    fn text_run(&self, call: &crate::backend::TextCall<'_>) -> io::Result<RunSpec> {
+        text_run(call.image, call.name, call.workspace, call.node, call.model)
     }
     fn text(&self, reader: &mut dyn Read, _max: usize, emit: &mut dyn FnMut(control_ai::Event)) -> io::Result<control_ai::Output> {
         control_ai::json_lines(reader, control_ai::claude::Claude::new(&[]), emit)
@@ -109,66 +109,45 @@ pub fn credentials_ready() -> io::Result<()> {
     credential().map(|_| ())
 }
 
-pub(crate) fn text_command(image:&str,name:&str,workspace:&Path,node:&str,model:&str)->io::Result<Command> {
+pub(crate) fn text_run(image:&str,name:&str,workspace:&Path,node:&str,model:&str)->io::Result<RunSpec> {
     let auth=credential()?;
     let meta=fs::symlink_metadata(&auth)?;
-    text_container(image,name,workspace,node,model,&auth,meta.uid(),meta.gid())
+    text_container(image,name,workspace,node,model,&auth,User { uid: meta.uid(), gid: meta.gid() })
 }
-#[allow(clippy::too_many_arguments)]
-fn text_container(image:&str,name:&str,workspace:&Path,node:&str,model:&str,auth:&Path,uid:u32,gid:u32)->io::Result<Command> {
-    let mut command=base(name,node,uid,gid);
+fn text_container(image:&str,name:&str,workspace:&Path,node:&str,model:&str,auth:&Path,owner:User)->io::Result<RunSpec> {
     // Check resources are supervised by the caller rather than run reconciliation.
-    command.args(["--interactive","--tmpfs",&format!("/home/agent/.claude:rw,nosuid,uid={uid},gid={gid},size=32m"),
-        "--mount",&mount(auth,"/home/agent/.claude/.credentials.json",true)?,"--mount",&mount(workspace,"/workspace",true)?,image,
-        "claude","--print","--output-format","stream-json","--verbose","--no-session-persistence","--restricted","--tools","",
-        "--disable-slash-commands","--setting-sources","","--strict-mcp-config","--mcp-config","{\"mcpServers\":{}}","--permission-mode","dontAsk","--model",model]);
-    Ok(command)
+    Ok(RunSpec { image: image.into(), input: Input::Attached, ..base(name,node,owner) }
+        .tmpfs(Tmpfs::new("/home/agent/.claude", Size::Mib(32)).owned(owner))
+        .secret("claude/credentials", checked(auth)?, "/home/agent/.claude/.credentials.json", Access::ReadOnly)
+        .bind(checked(workspace)?, "/workspace", Access::ReadOnly)
+        .args(["claude","--print","--output-format","stream-json","--verbose","--no-session-persistence","--restricted","--tools","",
+            "--disable-slash-commands","--setting-sources","","--strict-mcp-config","--mcp-config","{\"mcpServers\":{}}","--permission-mode","dontAsk","--model",model]))
 }
-pub(crate) fn mount(path: &Path, target: &str, readonly: bool) -> io::Result<String> {
-    let path = path
-        .to_str()
+/// A host path the engine can mount: absolute UTF-8 without commas or newlines.
+pub(crate) fn checked(path: &Path) -> io::Result<&Path> {
+    path.to_str()
         .filter(|s| path.is_absolute() && !s.contains([',', '\n', '\r']))
-        .ok_or_else(|| fail("Unsafe container mount path"))?;
-    Ok(format!(
-        "type=bind,src={path},dst={target}{}",
-        if readonly { ",readonly" } else { "" }
-    ))
+        .map(|_| path)
+        .ok_or_else(|| fail("Unsafe container mount path"))
 }
-pub(crate) fn base(name: &str, node: &str, uid: u32, gid: u32) -> Command {
-    let mut command = crate::engine::scrubbed();
-    command.args([
-        "run",
-        "--rm",
-        "--pull=never",
-        "--name",
-        name,
-        "--label",
-        &format!("dev.control.node={node}"),
-        "--label",
-        &format!("dev.control.attempt={name}"),
-        "--label",
-        // Login and offline checks are supervised by their command, not run reconciliation.
-        if ["control-claude-login-", "control-claude-probe-", "control-grok-login-", "control-grok-probe-", "control-antigravity-login-", "control-antigravity-probe-", "control-summary-"].iter().any(|prefix| name.starts_with(prefix)) { crate::lifecycle::CHECK_LABEL } else { "dev.control.purpose=run" },
-        "--user",
-        &format!("{uid}:{gid}"),
-        "--read-only",
-        "--cap-drop=ALL",
-        "--security-opt=no-new-privileges",
-        "--pids-limit=256",
-        "--memory=2g",
-        "--cpus=2",
-        "--tmpfs",
-        "/tmp:rw,nosuid,size=128m",
-        "--tmpfs",
-        &format!("/home/agent:rw,nosuid,uid={uid},gid={gid},size=64m"),
-        "--env",
-        "HOME=/home/agent",
-        "--env",
-        "CLAUDE_CONFIG_DIR=/home/agent/.claude",
-        "--workdir",
-        "/workspace",
-    ]);
-    command
+/// The shared CLI container; callers add the image, mounts and program.
+pub(crate) fn base(name: &str, node: &str, owner: User) -> RunSpec {
+    // Login and offline checks are supervised by their command, not run reconciliation.
+    let check = ["control-claude-login-", "control-claude-probe-", "control-grok-login-", "control-grok-probe-", "control-antigravity-login-", "control-antigravity-probe-", "control-summary-"].iter().any(|prefix| name.starts_with(prefix));
+    let spec = RunSpec {
+        name: name.into(),
+        user: Some(owner),
+        workdir: Some("/workspace".into()),
+        limits: Limits { pids: Some(256), memory: Some(Size::Gib(2)), cpus: Some(2), ..Limits::default() },
+        ..RunSpec::default()
+    }
+    .label("dev.control.node", node)
+    .label("dev.control.attempt", name);
+    crate::lifecycle::label_purpose(spec, check)
+        .tmpfs(Tmpfs::new("/tmp", Size::Mib(128)))
+        .tmpfs(Tmpfs::new("/home/agent", Size::Mib(64)).owned(owner))
+        .env("HOME", "/home/agent")
+        .env("CLAUDE_CONFIG_DIR", "/home/agent/.claude")
 }
 fn drain(mut reader: impl Read + Send + 'static, max: usize) -> std::thread::JoinHandle<Vec<u8>> {
     std::thread::spawn(move || {
@@ -200,15 +179,16 @@ fn shell(
     workspace: &Path,
     command: &str,
 ) -> io::Result<Value> {
-    shell_scoped(image,name,node,workspace,command,false)
+    shell_scoped(crate::engine::isolation(),image,name,node,workspace,command,false)
 }
 /// A credential-free shell is the only workspace execution capability Claude receives.
 /// The caller supplies persisted attempt inputs, never Docker options from the model.
-pub fn shell_scoped(image:&str,name:&str,node:&str,workspace:&Path,command:&str,readonly:bool)->io::Result<Value> {
-    shell_bounded(image,name,node,workspace,command,readonly,Duration::from_secs(25))
+pub fn shell_scoped(isolation:&dyn Isolation,image:&str,name:&str,node:&str,workspace:&Path,command:&str,readonly:bool)->io::Result<Value> {
+    shell_bounded(isolation,image,name,node,workspace,command,readonly,Duration::from_secs(25))
 }
 /// A command stopped at `deadline` fails with [`io::ErrorKind::TimedOut`].
-pub(crate) fn shell_bounded(image:&str,name:&str,node:&str,workspace:&Path,command:&str,readonly:bool,deadline:Duration)->io::Result<Value> {
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn shell_bounded(isolation:&dyn Isolation,image:&str,name:&str,node:&str,workspace:&Path,command:&str,readonly:bool,deadline:Duration)->io::Result<Value> {
     if crate::shutdown::requested() { return Err(fail("Control is stopping; workspace command was not started.")); }
     if command.is_empty() || command.len() > 16000 {
         return Err(fail("Command must contain 1–16000 bytes"));
@@ -218,12 +198,8 @@ pub(crate) fn shell_bounded(image:&str,name:&str,node:&str,workspace:&Path,comma
         return Err(fail("Workspace is not a directory"));
     }
     let readonly_root = crate::worker_profile::Profile::inspect(image)?.readonly_root();
-    let mut child = shell_container(image, name, node, workspace, command, readonly, readonly_root, meta.uid(), meta.gid())?;
-    child
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = child.spawn()?;
+    let spec = shell_container(image, name, node, workspace, command, readonly, readonly_root, User { uid: meta.uid(), gid: meta.gid() })?;
+    let mut child = isolation.spawn(&spec, Streams::new(Stream::Null, Stream::Piped, Stream::Piped))?;
     let stdout = drain(child.stdout.take().unwrap(), 12000);
     let stderr = drain(child.stderr.take().unwrap(), 4000);
     let start = Instant::now();
@@ -251,23 +227,14 @@ pub(crate) fn shell_bounded(image:&str,name:&str,node:&str,workspace:&Path,comma
 }
 
 #[allow(clippy::too_many_arguments)]
-fn shell_container(image:&str,name:&str,node:&str,workspace:&Path,command:&str,readonly:bool,readonly_root:bool,uid:u32,gid:u32)->io::Result<Command> {
-    let mut child = base(name, node, uid, gid);
-    if !readonly_root {
-        // Explicitly override base's immutable-root default only for this
-        // credential-free command. No login/model container uses this override.
-        child.arg("--read-only=false");
-    }
-    child.args([
-        "--network=none",
-        "--mount",
-        &mount(workspace, "/workspace", readonly)?,
-        image,
-        "bash",
-        "-c",
-        command,
-    ]);
-    Ok(child)
+fn shell_container(image:&str,name:&str,node:&str,workspace:&Path,command:&str,readonly:bool,readonly_root:bool,owner:User)->io::Result<RunSpec> {
+    // Explicitly override base's immutable-root default only for this
+    // credential-free command. No login/model container uses this override.
+    let root = if readonly_root { Access::ReadOnly } else { Access::ReadWrite };
+    let access = if readonly { Access::ReadOnly } else { Access::ReadWrite };
+    Ok(RunSpec { image: image.into(), root, network: Network::None, ..base(name, node, owner) }
+        .bind(checked(workspace)?, "/workspace", access)
+        .args(["bash", "-c", command]))
 }
 
 pub fn definition() -> Value {
@@ -298,17 +265,18 @@ pub(crate) const PROBE_TIMED_OUT: &str = "Claude tool isolation probe timed out 
 /// The offline isolation probe; a timeout fails with [`io::ErrorKind::TimedOut`].
 pub fn probe(image: &str, node: &str, root: &Path) -> io::Result<()> {
     probe_named(
+        crate::engine::isolation(),
         image,
         node,
         root,
         &format!("control-claude-probe-{}", std::process::id()),
     )
 }
-fn probe_named(image: &str, node: &str, root: &Path, name: &str) -> io::Result<()> {
+fn probe_named(isolation: &dyn Isolation, image: &str, node: &str, root: &Path, name: &str) -> io::Result<()> {
     let directory = root.join("claude-isolation-probe");
     fs::create_dir_all(&directory)?;
     let command = "set -eu; test ! -e /home/agent/.claude/.credentials.json; test ! -S /var/run/docker.sock; test ! -e /proc/1/root/home/agent/.claude/.credentials.json; test -z \"${ANTHROPIC_API_KEY-}${CLAUDE_CODE_OAUTH_TOKEN-}\"; printf verified > isolation-check";
-    let output = shell_bounded(image, name, node, &directory, command, false, crate::worker::SANDBOX_PROBE_WAIT).map_err(|error| match error.kind() {
+    let output = shell_bounded(isolation, image, name, node, &directory, command, false, crate::worker::SANDBOX_PROBE_WAIT).map_err(|error| match error.kind() {
         io::ErrorKind::TimedOut => io::Error::new(io::ErrorKind::TimedOut, PROBE_TIMED_OUT),
         _ => error,
     })?;
@@ -342,7 +310,9 @@ pub(crate) fn capture_with(
     (reply, usage)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn execute(
+    isolation: &dyn Isolation,
     id: &str,
     objective: &str,
     attempt: &mut Attempt,
@@ -358,7 +328,7 @@ pub fn execute(
     let root = workspace
         .parent()
         .ok_or_else(|| blocked("Invalid attempt workspace"))?;
-    probe_named(image, node, root, &format!("control-{id}-probe")).map_err(|error| match error.kind() {
+    probe_named(isolation, image, node, root, &format!("control-{id}-probe")).map_err(|error| match error.kind() {
         io::ErrorKind::TimedOut => blocked(PROBE_TIMED_OUT),
         _ => blocked("Claude tool isolation probe failed. No account credentials were mounted."),
     })?;
@@ -367,15 +337,14 @@ pub fn execute(
     let mailbox = root.join("claude-mailbox");
     fs::create_dir_all(&mailbox).map_err(|_| failed("Cannot prepare Claude mailbox"))?;
     let name = format!("control-{id}");
-    mount(&auth, "/home/agent/.claude/.credentials.json", true).map_err(|_| blocked("Invalid Claude credential path"))?;
-    mount(&mailbox, "/workspace", false).map_err(|_| blocked("Invalid Claude mailbox path"))?;
-    let mut command = turn_container(&name, node, meta.uid(), meta.gid(), &auth, &mailbox, image, &attempt.model).map_err(|_| blocked("Invalid Claude mount path"))?;
-    command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    checked(&auth).map_err(|_| blocked("Invalid Claude credential path"))?;
+    checked(&mailbox).map_err(|_| blocked("Invalid Claude mailbox path"))?;
+    let spec = turn_container(&name, node, User { uid: meta.uid(), gid: meta.gid() }, &auth, &mailbox, image, &attempt.model).map_err(|_| blocked("Invalid Claude mount path"))?;
     if crate::lifecycle::cancelled(bridge) {
         return Err(("cancelled", "Cancelled before Claude launch.".into()));
     }
-    let child = command
-        .spawn()
+    let child = isolation
+        .spawn(&spec, Streams::new(Stream::Piped, Stream::Piped, Stream::Piped))
         .map_err(|_| failed("Cannot start the Claude Nix container"))?;
     let prompt = crate::observe::append(bridge, captured.unwrap_or_else(|| render_prompt(objective,attempt.review_only)));
     let cli = Cli {
@@ -385,18 +354,17 @@ pub fn execute(
     };
     supervise(cli, child, attempt, bridge)
 }
-#[allow(clippy::too_many_arguments)]
-fn turn_container(name: &str, node: &str, uid: u32, gid: u32, auth: &Path, mailbox: &Path, image: &str, model: &str) -> io::Result<Command> {
-    let mut command = base(name, node, uid, gid);
+fn turn_container(name: &str, node: &str, owner: User, auth: &Path, mailbox: &Path, image: &str, model: &str) -> io::Result<RunSpec> {
     let tools=control_context::worker_mcp_names().into_iter().map(|name|format!("mcp__control__{name}")).collect::<Vec<_>>().join(",");
-    command.args(["--interactive", "--tmpfs", &format!("/home/agent/.claude:rw,nosuid,uid={uid},gid={gid},size=32m"), "--mount", &mount(auth, "/home/agent/.claude/.credentials.json", true)?,
-        "--mount", &mount(mailbox, "/workspace", false)?, image,
-        "claude", "--print", "--output-format", "stream-json", "--verbose", "--no-session-persistence",
-        "--restricted", "--tools", "", "--disable-slash-commands", "--setting-sources", "", "--strict-mcp-config",
-        "--mcp-config", "{\"mcpServers\":{\"control\":{\"command\":\"/bin/control-room-mcp\"}}}",
-        "--permission-mode", "dontAsk", "--allowedTools", &tools,
-        "--model", model]);
-    Ok(command)
+    Ok(RunSpec { image: image.into(), input: Input::Attached, ..base(name, node, owner) }
+        .tmpfs(Tmpfs::new("/home/agent/.claude", Size::Mib(32)).owned(owner))
+        .secret("claude/credentials", checked(auth)?, "/home/agent/.claude/.credentials.json", Access::ReadOnly)
+        .bind(checked(mailbox)?, "/workspace", Access::ReadWrite)
+        .args(["claude", "--print", "--output-format", "stream-json", "--verbose", "--no-session-persistence",
+            "--restricted", "--tools", "", "--disable-slash-commands", "--setting-sources", "", "--strict-mcp-config",
+            "--mcp-config", "{\"mcpServers\":{\"control\":{\"command\":\"/bin/control-room-mcp\"}}}",
+            "--permission-mode", "dontAsk", "--allowedTools", &tools,
+            "--model", model]))
 }
 /// Decodes a CLI's event stream to its reply and the usage it reported.
 pub(crate) type Capture = fn(&mut dyn Read, &mut dyn FnMut(Activity), &mut dyn FnMut(&control_ai::Usage), &std::sync::atomic::AtomicBool) -> (io::Result<(String, Option<Tokens>)>, control_ai::Usage);
@@ -557,15 +525,14 @@ pub fn command(args: &[String]) -> io::Result<()> {
                     "Claude login directory must be private and owned by a non-root user",
                 ));
             }
-            let mut command = login_container(
+            let spec = login_container(
                 &format!("control-claude-login-{}", std::process::id()),
                 &crate::config::node_id().map_err(fail)?,
-                meta.uid(),
-                meta.gid(),
+                User { uid: meta.uid(), gid: meta.gid() },
                 &directory,
                 &image,
             )?;
-            if !command.status()?.success() {
+            if !crate::engine::isolation().spawn(&spec, Streams::INHERIT)?.wait()?.success() {
                 return Err(fail("Claude login did not complete"));
             }
             fs::set_permissions(
@@ -585,21 +552,11 @@ pub fn command(args: &[String]) -> io::Result<()> {
 }
 
 
-fn login_container(name: &str, node: &str, uid: u32, gid: u32, directory: &Path, image: &str) -> io::Result<Command> {
-    let mut command = base(name, node, uid, gid);
-    command.args([
-        "--interactive",
-        "--tty",
-        "--tmpfs",
-        "/workspace:rw,nosuid,size=1m",
-        "--mount",
-        &mount(directory, "/home/agent/.claude", false)?,
-        image,
-        "claude",
-        "auth",
-        "login",
-    ]);
-    Ok(command)
+fn login_container(name: &str, node: &str, owner: User, directory: &Path, image: &str) -> io::Result<RunSpec> {
+    Ok(RunSpec { image: image.into(), input: Input::Terminal, ..base(name, node, owner) }
+        .tmpfs(Tmpfs::new("/workspace", Size::Mib(1)))
+        .secret("claude/login", checked(directory)?, "/home/agent/.claude", Access::ReadWrite)
+        .args(["claude", "auth", "login"]))
 }
 
 pub(crate) fn render_prompt(objective: &str, review_only: bool) -> String {

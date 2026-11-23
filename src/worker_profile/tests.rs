@@ -85,6 +85,7 @@ printf '%s\n' "$out"
     let workspace = std::env::temp_dir().join(format!("control-profile-qa-{}", std::process::id()));
     std::fs::create_dir(&workspace).unwrap();
     let actual = crate::claude::shell_scoped(
+        crate::engine::isolation(),
         &image,
         &format!("control-profile-qa-{}", std::process::id()),
         "synthetic-profile-qa",

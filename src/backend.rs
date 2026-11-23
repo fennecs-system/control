@@ -1,6 +1,6 @@
 //! Closed backend selection, captured with each run and attempt.
 use serde::{Deserialize, Serialize};
-use std::{io::{self, Read}, path::Path, process::Command};
+use std::{io::{self, Read}, path::Path};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -14,8 +14,8 @@ pub enum Backend {
     /// model ID. Text generation is available; agent turns are not yet.
     Local,
 }
-/// What an agent backend supplies to the host. Signatures name only `std`
-/// and `control_ai`, so an implementation can move to its own crate; what a
+/// What an agent backend supplies to the host. Signatures name only `std`,
+/// `control_ai` and `control_isolation`, so an implementation can move to its own crate; what a
 /// backend needs from the host arrives as arguments.
 ///
 /// The facts below are also the list of where backends are treated differently
@@ -42,7 +42,7 @@ pub(crate) trait Agent: Sync {
     /// Offline isolation probe with a canary credential: no account, no model.
     fn probe(&self, image: &str) -> Result<(), String>;
     /// A bounded text request without tools, or why this backend has no CLI.
-    fn text_command(&self, call: &TextCall<'_>) -> io::Result<Command>;
+    fn text_run(&self, call: &TextCall<'_>) -> io::Result<control_isolation::RunSpec>;
     /// Decodes a text request's event stream; `max` bounds the reply in bytes.
     fn text(&self, reader: &mut dyn Read, max: usize, emit: &mut dyn FnMut(control_ai::Event)) -> io::Result<control_ai::Output>;
     /// Names it keeps in a workspace that are never published or shared.

@@ -1,8 +1,8 @@
 use super::*;
 use crate::backend::Agent;
 
-fn args(command: &Command) -> Vec<String> {
-    command.get_args().map(|a| a.to_string_lossy().into_owned()).collect()
+fn args(spec: &RunSpec) -> Vec<String> {
+    crate::engine::golden::run(spec)
 }
 fn login(tag: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!("control-grok-{tag}-{}", std::process::id()));
@@ -15,7 +15,7 @@ fn login(tag: &str) -> PathBuf {
 #[test]
 fn the_container_mounts_the_login_read_only_and_keeps_grok_state_on_a_tmpfs() {
     let auth = login("container");
-    let args = args(&container("control-run-1", "node", &auth).unwrap());
+    let args = args(&container("control-run-1", "node", &auth, "sha256:img").unwrap());
     let joined = args.join(" ");
     assert!(joined.contains(&format!("type=bind,src={},dst=/home/agent/.grok/auth.json,readonly", auth.display())));
     assert!(joined.contains("--tmpfs /home/agent/.grok:rw,nosuid,"));
@@ -60,7 +60,7 @@ fn the_backend_is_selected_by_its_prefix_and_treated_like_the_shared_default() {
 
 #[test]
 fn grok_launch_vectors_are_pinned() {
-    use crate::engine::golden::{args, fill, pin};
+    use crate::engine::golden::{fill, pin_equivalent, run};
     let auth = login("golden");
     let root = auth.parent().unwrap().to_path_buf();
     let meta = fs::symlink_metadata(&auth).unwrap();
@@ -68,11 +68,11 @@ fn grok_launch_vectors_are_pinned() {
     let values = [("root", root.to_str().unwrap()), ("uid", uid.as_str()), ("gid", gid.as_str())];
     let workspace = root.join("workspace");
     let call = crate::backend::TextCall { image: "sha256:img", name: "control-summary-1", workspace: &workspace, node: "node-1", model: "grok-4.7" };
-    pin(&args(&text_container(&call, &auth).unwrap()), &fill(TEXT, &values));
+    pin_equivalent(&run(&text_container(&call, &auth).unwrap()), &fill(TEXT, &values));
     let turn = turn_container("control-run-1", "node-1", &auth, &root.join("grok-config.toml"), &root.join("grok-prompt"), &root.join(MAILBOX), "sha256:img", "grok-4.7").unwrap();
-    pin(&args(&turn), &fill(TURN, &values));
-    let login = login_container("control-grok-login-7", "node-1", meta.uid(), meta.gid(), &root, "sha256:img").unwrap();
-    pin(&args(&login), &fill(LOGIN, &values));
+    pin_equivalent(&run(&turn), &fill(TURN, &values));
+    let login = login_container("control-grok-login-7", "node-1", User { uid: meta.uid(), gid: meta.gid() }, &root, "sha256:img").unwrap();
+    pin_equivalent(&run(&login), &fill(LOGIN, &values));
     fs::remove_dir_all(root).unwrap();
 }
 const TEXT: &[&str] = &[

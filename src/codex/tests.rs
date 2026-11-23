@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn codex_launch_vectors_are_pinned() {
-    use crate::engine::golden::{args, fill, pin};
+    use crate::engine::golden::{fill, pin, pin_equivalent, run};
     let root = std::env::temp_dir().join(format!("control-codex-golden-{}", std::process::id()));
     fs::create_dir_all(&root).unwrap();
     let policy = root.join("worker-seccomp.json");
@@ -12,16 +12,16 @@ fn codex_launch_vectors_are_pinned() {
     let auth = Credentials { path: PathBuf::from("/golden/auth.json"), uid: 501, gid: 20 };
     let workspace = root.join("workspace");
     let text = text_container("sha256:img", "control-summary-1", &workspace, &auth, &policy, "node-1", "gpt-5").unwrap();
-    pin(&args(&text), &fill(TEXT, &values));
+    pin(&run(&text), &fill(TEXT, &values));
     let probe = probe_container("sha256:img", "control-run-1-probe", &workspace, &auth, &policy, "node-1", "probe-result-00").unwrap();
-    pin(&args(&probe), &fill(PROBE, &values));
+    pin(&run(&probe), &fill(PROBE, &values));
     let turn = turn_container("sha256:img", "control-run-1", &workspace, &auth, &policy, "node-1", None, "gpt-5", false).unwrap();
-    pin(&args(&turn), &fill(TURN, &values));
+    pin(&run(&turn), &fill(TURN, &values));
     let review = turn_container("sha256:img", "control-run-1", &workspace, &auth, &policy, "node-1", Some(&root.join("review-source")), "gpt-5", false).unwrap();
-    pin(&args(&review), &fill(TURN_REVIEW, &values));
+    pin_equivalent(&run(&review), &fill(TURN_REVIEW, &values));
     // The room bridge only appends Codex configuration after the turn's own.
-    let bridged = args(&turn_container("sha256:img", "control-run-1", &workspace, &auth, &policy, "node-1", None, "gpt-5", true).unwrap());
-    let plain = args(&turn);
+    let bridged = run(&turn_container("sha256:img", "control-run-1", &workspace, &auth, &policy, "node-1", None, "gpt-5", true).unwrap());
+    let plain = run(&turn);
     assert_eq!(bridged[..plain.len() - 1], plain[..plain.len() - 1]);
     assert_eq!(bridged.last().map(String::as_str), Some("-"));
     fs::remove_dir_all(root).unwrap();

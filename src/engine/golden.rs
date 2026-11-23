@@ -2,10 +2,19 @@
 //! builds with the exact vector it produced before the isolation interface, so
 //! a flag that changes, appears or disappears fails a test. Golden text uses
 //! `{name}` placeholders for values a test cannot fix (paths, ids, uids).
+//!
+//! A site built from a [`control_isolation::RunSpec`] gets the backend's one
+//! order and spelling of options, while the sites used to differ in both, so
+//! most converted sites compare with [`pin_equivalent`] against the vector
+//! they produced before; those whose bytes did not change keep [`pin`].
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) fn args(command: &std::process::Command) -> Vec<String> {
     command.get_args().map(|a| a.to_string_lossy().into_owned()).collect()
+}
+/// The engine arguments the Docker backend runs `spec` with.
+pub(crate) fn run(spec: &control_isolation::RunSpec) -> Vec<String> {
+    control_isolation::Docker::run_arguments(spec).unwrap()
 }
 /// The golden vector with each `{key}` replaced by its value.
 pub(crate) fn fill(golden: &[&str], values: &[(&str, &str)]) -> Vec<String> {

@@ -2,12 +2,12 @@
 //! only tools are Control's over MCP, and executable work runs in separate
 //! offline containers through the host shell tool.
 use crate::{backend::Backend, claude, usage::Attempt, State};
+use control_isolation::{Access, Input, Isolation, RunSpec, Size, Stream, Streams, Tmpfs, User};
 use std::{
     fs,
     io::{self, Read},
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     sync::{Arc, Mutex},
 };
 
@@ -40,13 +40,13 @@ impl crate::backend::Agent for Grok {
     fn probe(&self, image: &str) -> Result<(), String> {
         crate::config::node_id()
             .map_err(io::Error::other)
-            .and_then(|node| probe(image, &node, &crate::config::state("grok-check").map_err(io::Error::other)?, &format!("control-grok-probe-{}", std::process::id())))
+            .and_then(|node| probe(crate::engine::isolation(), image, &node, &crate::config::state("grok-check").map_err(io::Error::other)?, &format!("control-grok-probe-{}", std::process::id())))
             .map_err(|error| match error.kind() {
                 io::ErrorKind::TimedOut => PROBE_TIMED_OUT.to_owned(),
                 _ => "the offline Grok tool-isolation probe failed; check the pinned image and container sandbox support".to_owned(),
             })
     }
-    fn text_command(&self, call: &crate::backend::TextCall<'_>) -> io::Result<Command> {
+    fn text_run(&self, call: &crate::backend::TextCall<'_>) -> io::Result<RunSpec> {
         text_container(call, &credential()?)
     }
     fn text(&self, reader: &mut dyn Read, _max: usize, emit: &mut dyn FnMut(control_ai::Event)) -> io::Result<control_ai::Output> {
@@ -106,55 +106,47 @@ fn credential() -> io::Result<PathBuf> {
 }
 /// The shared CLI container with Grok's home on a tmpfs, so sessions and logs
 /// die with it, and the login mounted read-only.
-fn container(name: &str, node: &str, auth: &Path) -> io::Result<Command> {
+fn container(name: &str, node: &str, auth: &Path, image: &str) -> io::Result<RunSpec> {
     let meta = fs::symlink_metadata(auth)?;
-    let mut command = claude::base(name, node, meta.uid(), meta.gid());
-    command.args([
-        "--interactive",
-        "--env", "GROK_HOME=/home/agent/.grok",
-        "--tmpfs", &format!("/home/agent/.grok:rw,nosuid,uid={},gid={},size=64m", meta.uid(), meta.gid()),
-        "--mount", &claude::mount(auth, "/home/agent/.grok/auth.json", true)?,
-    ]);
-    Ok(command)
+    let owner = User { uid: meta.uid(), gid: meta.gid() };
+    Ok(RunSpec { image: image.into(), input: Input::Attached, ..claude::base(name, node, owner) }
+        .env("GROK_HOME", "/home/agent/.grok")
+        .tmpfs(Tmpfs::new("/home/agent/.grok", Size::Mib(64)).owned(owner))
+        .secret("grok/auth.json", claude::checked(auth)?, "/home/agent/.grok/auth.json", Access::ReadOnly))
 }
-fn text_container(call: &crate::backend::TextCall<'_>, auth: &Path) -> io::Result<Command> {
+fn text_container(call: &crate::backend::TextCall<'_>, auth: &Path) -> io::Result<RunSpec> {
     // A text request carries no prompt file: the caller writes the prompt to
     // standard input, which `sh` hands to Grok as a file it can read.
-    let mut command = container(call.name, call.node, auth)?;
-    command.args(["--mount", &claude::mount(call.workspace, "/workspace", true)?, call.image, "bash", "-c", "cat > /tmp/prompt && exec grok \"$@\" --prompt-file /tmp/prompt", "grok"]);
-    command.args(FLAGS).args(["--tools", NO_TOOLS, "--disallowed-tools", "search_tool,use_tool", "--model", call.model]);
-    Ok(command)
+    Ok(container(call.name, call.node, auth, call.image)?
+        .bind(claude::checked(call.workspace)?, "/workspace", Access::ReadOnly)
+        .args(["bash", "-c", "cat > /tmp/prompt && exec grok \"$@\" --prompt-file /tmp/prompt", "grok"])
+        .args(FLAGS)
+        .args(["--tools", NO_TOOLS, "--disallowed-tools", "search_tool,use_tool", "--model", call.model]))
 }
 /// One turn's container: Grok's configuration and prompt read-only, the mailbox writable.
 #[allow(clippy::too_many_arguments)]
-fn turn_container(name: &str, node: &str, auth: &Path, config: &Path, turn: &Path, mailbox: &Path, image: &str, model: &str) -> io::Result<Command> {
-    let mut command = container(name, node, auth)?;
-    command.args([
-        "--mount", &claude::mount(config, "/home/agent/.grok/config.toml", true)?,
-        "--mount", &claude::mount(turn, "/home/agent/prompt", true)?,
-        "--mount", &claude::mount(mailbox, "/workspace", false)?,
-        image, "grok", "--prompt-file", "/home/agent/prompt",
-    ]);
-    command.args(FLAGS).args(["--tools", NO_TOOLS, "--model", model]);
-    Ok(command)
+fn turn_container(name: &str, node: &str, auth: &Path, config: &Path, turn: &Path, mailbox: &Path, image: &str, model: &str) -> io::Result<RunSpec> {
+    Ok(container(name, node, auth, image)?
+        .bind(claude::checked(config)?, "/home/agent/.grok/config.toml", Access::ReadOnly)
+        .bind(claude::checked(turn)?, "/home/agent/prompt", Access::ReadOnly)
+        .bind(claude::checked(mailbox)?, "/workspace", Access::ReadWrite)
+        .args(["grok", "--prompt-file", "/home/agent/prompt"])
+        .args(FLAGS)
+        .args(["--tools", NO_TOOLS, "--model", model]))
 }
-fn login_container(name: &str, node: &str, uid: u32, gid: u32, directory: &Path, image: &str) -> io::Result<Command> {
-    let mut command = claude::base(name, node, uid, gid);
-    command.args([
-        "--interactive", "--tty",
-        "--env", "GROK_HOME=/home/agent/.grok",
-        "--tmpfs", "/workspace:rw,nosuid,size=1m",
-        "--mount", &claude::mount(directory, "/home/agent/.grok", false)?,
-        image, "grok", "login", "--device-auth",
-    ]);
-    Ok(command)
+fn login_container(name: &str, node: &str, owner: User, directory: &Path, image: &str) -> io::Result<RunSpec> {
+    Ok(RunSpec { image: image.into(), input: Input::Terminal, ..claude::base(name, node, owner) }
+        .env("GROK_HOME", "/home/agent/.grok")
+        .tmpfs(Tmpfs::new("/workspace", Size::Mib(1)))
+        .secret("grok/login", claude::checked(directory)?, "/home/agent/.grok", Access::ReadWrite)
+        .args(["grok", "login", "--device-auth"]))
 }
 /// The offline isolation probe; a timeout fails with [`io::ErrorKind::TimedOut`].
-fn probe(image: &str, node: &str, root: &Path, name: &str) -> io::Result<()> {
+fn probe(isolation: &dyn Isolation, image: &str, node: &str, root: &Path, name: &str) -> io::Result<()> {
     let directory = root.join(PROBE);
     fs::create_dir_all(&directory)?;
     let command = "set -eu; test ! -e /home/agent/.grok/auth.json; test ! -S /var/run/docker.sock; test ! -e /proc/1/root/home/agent/.grok/auth.json; test -z \"${XAI_API_KEY-}\"; printf verified > isolation-check";
-    let output = claude::shell_bounded(image, name, node, &directory, command, false, crate::worker::SANDBOX_PROBE_WAIT).map_err(|error| match error.kind() {
+    let output = claude::shell_bounded(isolation, image, name, node, &directory, command, false, crate::worker::SANDBOX_PROBE_WAIT).map_err(|error| match error.kind() {
         io::ErrorKind::TimedOut => io::Error::new(io::ErrorKind::TimedOut, PROBE_TIMED_OUT),
         _ => error,
     })?;
@@ -180,7 +172,9 @@ fn private(path: &Path, contents: &str) -> io::Result<()> {
 
 /// One turn. `prompt` is the same captured turn context or framing Codex and
 /// local models receive.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn execute(
+    isolation: &dyn Isolation,
     id: &str,
     prompt: String,
     attempt: &mut Attempt,
@@ -193,7 +187,7 @@ pub(crate) fn execute(
     let failed = |message: &str| ("failed", message.to_owned());
     let auth = credential().map_err(|_| blocked("Grok login unavailable. Run control grok login; no other login on this host is used."))?;
     let root = workspace.parent().ok_or_else(|| blocked("Invalid attempt workspace"))?;
-    probe(image, node, root, &format!("control-{id}-probe")).map_err(|error| match error.kind() {
+    probe(isolation, image, node, root, &format!("control-{id}-probe")).map_err(|error| match error.kind() {
         io::ErrorKind::TimedOut => blocked(PROBE_TIMED_OUT),
         _ => blocked("Grok tool isolation probe failed. No account credentials were mounted."),
     })?;
@@ -204,16 +198,13 @@ pub(crate) fn execute(
     let name = format!("control-{id}");
     // The container's own mount failure reads as a credential problem; the
     // others are checked first so each keeps its own message.
-    container(&name, node, &auth).map_err(|_| blocked("Grok credential metadata unavailable"))?;
-    for (path, target, readonly) in [(&config, "/home/agent/.grok/config.toml", true), (&turn, "/home/agent/prompt", true), (&mailbox, "/workspace", false)] {
-        claude::mount(path, target, readonly).map_err(|_| blocked("Invalid Grok mount path"))?;
-    }
-    let mut command = turn_container(&name, node, &auth, &config, &turn, &mailbox, image, &attempt.model).map_err(|_| blocked("Grok credential metadata unavailable"))?;
-    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    container(&name, node, &auth, image).map_err(|_| blocked("Grok credential metadata unavailable"))?;
+    [&config, &turn, &mailbox].into_iter().try_for_each(|path| claude::checked(path).map(drop)).map_err(|_| blocked("Invalid Grok mount path"))?;
+    let spec = turn_container(&name, node, &auth, &config, &turn, &mailbox, image, &attempt.model).map_err(|_| blocked("Grok credential metadata unavailable"))?;
     if crate::lifecycle::cancelled(bridge) {
         return Err(("cancelled", "Cancelled before Grok launch.".into()));
     }
-    let child = command.spawn().map_err(|_| failed("Cannot start the Grok Nix container"))?;
+    let child = isolation.spawn(&spec, Streams::new(Stream::Null, Stream::Piped, Stream::Piped)).map_err(|_| failed("Cannot start the Grok Nix container"))?;
     let cli = claude::Cli {
         name: "Grok", id, mailbox: &mailbox, workspace, stdin: None,
         capture: |reader, update, progress, bad_tools| claude::capture_with(reader, control_ai::grok::Grok::agent(), "Grok", update, progress, bad_tools),
@@ -240,14 +231,14 @@ pub fn command(args: &[String]) -> io::Result<()> {
             if !meta.is_dir() || meta.mode() & 0o077 != 0 || meta.uid() == 0 {
                 return Err(fail("Grok login directory must be private and owned by a non-root user"));
             }
-            let mut command = login_container(&format!("control-grok-login-{}", std::process::id()), &node()?, meta.uid(), meta.gid(), &directory, &image()?)?;
-            if !command.status()?.success() {
+            let spec = login_container(&format!("control-grok-login-{}", std::process::id()), &node()?, User { uid: meta.uid(), gid: meta.gid() }, &directory, &image()?)?;
+            if !crate::engine::isolation().spawn(&spec, Streams::INHERIT)?.wait()?.success() {
                 return Err(fail("Grok login did not complete"));
             }
             fs::set_permissions(directory.join("auth.json"), fs::Permissions::from_mode(0o600))
         }
         "check" => {
-            probe(&image()?, &node()?, &crate::config::state("grok-check").map_err(fail)?, &format!("control-grok-probe-{}", std::process::id()))?;
+            probe(crate::engine::isolation(), &image()?, &node()?, &crate::config::state("grok-check").map_err(fail)?, &format!("control-grok-probe-{}", std::process::id()))?;
             println!("Grok offline workspace isolation verified. No account credentials were mounted or model called.");
             Ok(())
         }

@@ -384,7 +384,7 @@ fn dispatch_raw(
                     return error("Run is not active");
                 }
                 drop(state);
-                let result = crate::claude::shell_scoped(&image, &name, &node, workspace, &input.command, review_only);
+                let result = crate::claude::shell_scoped(crate::engine::isolation(), &image, &name, &node, workspace, &input.command, review_only);
                 if !review_only {crate::worker::observe_workspace_diff(shared,run_id,&generation,workspace,"observed");}
                 if let Ok(mut state) = shared.lock() {
                     crate::worker::record_activity_for(

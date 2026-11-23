@@ -3,9 +3,14 @@
 //! the remaining operations below still pass engine arguments and move behind
 //! that interface in later steps.
 pub(crate) mod ephemeral;
-use control_isolation::Docker;
+use control_isolation::{Docker, Isolation};
 use std::{io, process::Command, time::Duration};
 
+/// The node's isolation backend. Entry points take it from here and hand it
+/// down, so tests can supply another.
+pub(crate) fn isolation() -> &'static dyn Isolation {
+    &Docker
+}
 /// The engine CLI with the caller's environment.
 pub(crate) fn cli() -> Command {
     Docker::cli()

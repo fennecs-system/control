@@ -1,8 +1,8 @@
 use super::*;
 use crate::backend::Agent;
 
-fn args(command: &Command) -> Vec<String> {
-    command.get_args().map(|a| a.to_string_lossy().into_owned()).collect()
+fn args(spec: &RunSpec) -> Vec<String> {
+    crate::engine::golden::run(spec)
 }
 fn directory(tag: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!("control-antigravity-{tag}-{}", std::process::id()));
@@ -48,7 +48,7 @@ fn each_login_is_mounted_into_this_container_only_and_state_stays_on_a_tmpfs() {
     assert!(joined.contains("--tmpfs /home/agent/.gemini:rw,nosuid,"));
     let key = root.join("gemini-api-key");
     private_file(&key, "k").unwrap();
-    let args = args(&container("control-run-1", "node", &Login::ApiKey(key.clone()), &private).unwrap());
+    let args = args(&container("control-run-1", "node", &Login::ApiKey(key.clone()), &private, "sha256:img").unwrap());
     let joined = args.join(" ");
     assert!(joined.contains(&format!("type=bind,src={},dst={KEY},readonly", key.display())));
     assert!(!joined.contains(TOKEN) && !joined.contains("GEMINI_API_KEY"));
@@ -61,7 +61,7 @@ fn each_login_is_mounted_into_this_container_only_and_state_stays_on_a_tmpfs() {
     fs::remove_dir_all(root).unwrap();
 }
 fn args_of(login: &Login, private: &Path) -> String {
-    args(&container("control-run-1", "node", login, private).unwrap()).join(" ")
+    args(&container("control-run-1", "node", login, private, "sha256:img").unwrap()).join(" ")
 }
 
 #[test]
@@ -124,7 +124,7 @@ fn the_backend_is_selected_by_its_prefix_and_treated_like_the_shared_default() {
 
 #[test]
 fn antigravity_launch_vectors_are_pinned() {
-    use crate::engine::golden::{args, fill, pin};
+    use crate::engine::golden::{fill, pin_equivalent, run};
     let root = directory("golden");
     let private = root.join(PRIVATE);
     fs::create_dir(&private).unwrap();
@@ -137,14 +137,14 @@ fn antigravity_launch_vectors_are_pinned() {
     let values = [("root", root.to_str().unwrap()), ("uid", uid.as_str()), ("gid", gid.as_str())];
     let workspace = root.join("workspace");
     let call = crate::backend::TextCall { image: "sha256:img", name: "control-summary-1", workspace: &workspace, node: "node-1", model: "gemini" };
-    pin(&args(&text_container(&call, &Login::ApiKey(key.clone()), &private).unwrap()), &fill(TEXT_KEY, &values));
-    pin(&args(&text_container(&call, &Login::Adc(adc.clone()), &private).unwrap()), &fill(TEXT_ADC, &values));
+    pin_equivalent(&run(&text_container(&call, &Login::ApiKey(key.clone()), &private).unwrap()), &fill(TEXT_KEY, &values));
+    pin_equivalent(&run(&text_container(&call, &Login::Adc(adc.clone()), &private).unwrap()), &fill(TEXT_ADC, &values));
     let turn = turn_container("control-run-1", "node-1", &Login::Google(token.clone()), &private, &root.join(MAILBOX), "sha256:img", "gemini").unwrap();
-    pin(&args(&turn), &fill(TURN_GOOGLE, &values));
-    let login = login_container("control-antigravity-login-7", "node-1", meta.uid(), meta.gid(), &root.join("login/gemini"), &root.join("login/config"), "sha256:img").unwrap();
-    pin(&args(&login), &fill(LOGIN, &values));
+    pin_equivalent(&run(&turn), &fill(TURN_GOOGLE, &values));
+    let login = login_container("control-antigravity-login-7", "node-1", User { uid: meta.uid(), gid: meta.gid() }, &root.join("login/gemini"), &root.join("login/config"), "sha256:img").unwrap();
+    pin_equivalent(&run(&login), &fill(LOGIN, &values));
     let check = check_container("control-antigravity-probe-7-login", "node-1", &Login::Google(token), &private, "sha256:img").unwrap();
-    pin(&args(&check), &fill(CHECK, &values));
+    pin_equivalent(&run(&check), &fill(CHECK, &values));
     fs::remove_dir_all(root).unwrap();
 }
 const TEXT_KEY: &[&str] = &[
