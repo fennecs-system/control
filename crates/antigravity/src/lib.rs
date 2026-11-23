@@ -141,16 +141,17 @@ const CLI: Cli = Cli {
     },
     failure: diagnose,
 };
-/// Headless and unattended. Approval prompts are skipped, so nothing is
-/// soft-denied; what stays blocked is the deny list in [`settings`], which
-/// applies in every mode.
-const FLAGS: [&str; 4] = [
-    "--dangerously-skip-permissions",
-    "--disable-slash-commands",
-    "--output-format",
-    "stream-json",
-];
-/// Every built-in action class the CLI's permission engine names.
+/// Headless and unattended, without `--dangerously-skip-permissions`: headless
+/// mode cannot prompt, so an action no rule allows is refused
+/// (https://antigravity.google/docs/cli/headless) rather than approved, and the
+/// deny list in [`settings`] need not name every future action. Checked
+/// offline against a scripted model endpoint: Control's MCP tools run under
+/// the `mcp(control/*)` allow rule and every denied read is refused.
+const FLAGS: [&str; 3] = ["--disable-slash-commands", "--output-format", "stream-json"];
+/// Every built-in action class the CLI's rule parser accepts besides `mcp`
+/// (its pattern in 1.5.14:
+/// `^(command|read_file|write_file|read_url|mcp|execute_url|download_url|unsandboxed)\s*\(.*\)$`).
+/// It ignores a rule it cannot parse (https://antigravity.google/docs/settings).
 const DENY: [&str; 7] = [
     "command(*)",
     "unsandboxed(*)",
@@ -202,8 +203,9 @@ fn mcp_config(login: Form) -> Value {
         .collect();
     let server = match login {
         // The entrypoint exports a key for the CLI (tools/antigravity); the
-        // CLI does not document whether a server inherits its environment,
-        // and Control's server needs no key, so it starts without it.
+        // CLI does not document it, but a server inherits its environment
+        // (seen offline in 1.5.14); Control's server needs no key, so it
+        // starts without it.
         Form::ApiKey => {
             json!({"command": "/bin/env", "args": ["-u", "GEMINI_API_KEY", "/bin/control-room-mcp"], "tools": tools})
         }
@@ -295,6 +297,21 @@ fn login_container(
     .tmpfs(Tmpfs::new("/workspace", Size::Mib(1)))
     .args(["control-agy", "login"]))
 }
+/// The credential canary in a turn's own container, for each form of login,
+/// on a fake credential.
+fn canary(isolation: &dyn Isolation, node: &str, root: &Path, image: &str) -> io::Result<()> {
+    let mailbox = root.join(MAILBOX);
+    fs::create_dir_all(&mailbox)?;
+    let name = format!("control-antigravity-probe-{}-canary", std::process::id());
+    [(Form::ApiKey, KEY), (Form::Session, TOKEN), (Form::CloudDefault, ADC)]
+        .into_iter()
+        .try_for_each(|(form, target)| {
+            cli::canary_check(isolation, root, form, target, |login| {
+                let private = prepare(root, login, Some(&mcp_config(login.form())), Some(""))?;
+                turn_container(&name, node, login, &private, &mailbox, image, "canary")
+            })
+        })
+}
 /// Lists models with the saved login, without a workspace.
 fn check_container(name: &str, node: &str, login: &Granted, private: &Path, image: &str) -> io::Result<RunSpec> {
     Ok(container(name, node, login, private, image)?
@@ -338,8 +355,10 @@ fn diagnose(ended: Option<Ending>, stderr: &[u8]) -> Failure {
             cause,
         })
     };
+    // A rejected tool is never read as a provider cause, whatever its wording.
     ended
         .as_ref()
+        .filter(|e| !e.rejected_tools)
         .and_then(|e| own(e.text.as_bytes()))
         .or_else(|| ended.map(Ending::failure))
         .or_else(|| own(stderr))
@@ -363,7 +382,7 @@ pub fn command(command: Command<'_>) -> io::Result<()> {
     let [action] = args else { return Err(fail(USAGE)) };
     if matches!(action.as_str(), "--help" | "-h" | "help") {
         println!(
-            "control antigravity login: sign in to Google inside the pinned Nix Antigravity container; the token stays in a private directory outside the checkout\ncontrol antigravity key --account NAME: save an API-key account's Gemini key from standard input\ncontrol antigravity check: offline tool isolation, then the binary, the saved login and the model list it can see"
+            "control antigravity login: sign in to Google inside the pinned Nix Antigravity container; the token stays in a private directory outside the checkout\ncontrol antigravity key --account NAME: save an API-key account's Gemini key from standard input\ncontrol antigravity check: offline tool isolation, a fake-credential canary in a turn container for each login form, then the binary, the saved login and the model list it can see"
         );
         return Ok(());
     }
@@ -422,6 +441,7 @@ pub fn command(command: Command<'_>) -> io::Result<()> {
             println!(
                 "Antigravity offline workspace isolation verified. No account credentials were mounted or model called."
             );
+            canary(isolation, &node_id, &state, &image)?;
             let login = login?;
             let private = prepare(&state, &login, None, None)?;
             let spec = check_container(

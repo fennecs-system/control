@@ -19,6 +19,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub mod canary;
+
 fn fail(message: &str) -> io::Error {
     io::Error::other(message)
 }
@@ -73,9 +75,32 @@ pub fn base(name: &str, node: &str, owner: User) -> RunSpec {
     .label("dev.control.attempt", name);
     label_purpose(spec, check)
         .tmpfs(Tmpfs::new("/tmp", Size::Mib(128)))
-        .tmpfs(Tmpfs::new("/home/agent", Size::Mib(64)).owned(owner))
+        // Credentials are mounted under this home. Docker Desktop and OrbStack
+        // present a bind-mounted file as owned by whichever uid reads it, so
+        // only the home's own mode keeps other uids out.
+        .tmpfs(Tmpfs::new("/home/agent", Size::Mib(64)).private(owner))
         .env("HOME", "/home/agent")
         .env("CLAUDE_CONFIG_DIR", "/home/agent/.claude")
+}
+
+/// Every secret of `spec` lies under a private tmpfs (mode 0700) owned by the
+/// uid the program runs as, so no other uid in the container reaches it.
+/// Otherwise the first secret that does not, by name.
+pub fn secrets_private(spec: &RunSpec) -> Result<(), String> {
+    let covered = |target: &str| {
+        spec.tmpfs.iter().any(|fs| {
+            fs.mode == Some(0o700)
+                && fs.owner.is_some()
+                && fs.owner == spec.user
+                && Path::new(target)
+                    .strip_prefix(&fs.target)
+                    .is_ok_and(|rest| !rest.as_os_str().is_empty())
+        })
+    };
+    spec.secrets
+        .iter()
+        .find(|secret| !covered(&secret.target))
+        .map_or(Ok(()), |secret| Err(secret.name.clone()))
 }
 
 /// Reads `reader` to its end on a thread, keeping at most `max` bytes.
@@ -335,6 +360,13 @@ pub fn turn(
         Ok(spec) => spec,
         Err(failure) => return failure.into(),
     };
+    if let Err(secret) = secrets_private(&spec) {
+        return Failure::Blocked(format!(
+            "{} turn would mount {secret} outside its private home",
+            cli.name
+        ))
+        .into();
+    }
     if host.cancelled() {
         return Failure::Cancelled(Cancelled::BeforeLaunch(Some(cli.name))).into();
     }
@@ -470,3 +502,41 @@ pub fn supervise(
         usage: Some(usage),
     }
 }
+
+/// `control ID check`'s credential canary: a fake credential, private and
+/// owned like a real login, beside the check's state; `launch` builds the
+/// turn container with it mounted at `target` as a turn would. Prints one
+/// line per assertion and fails unless every one held.
+pub fn canary_check(
+    isolation: &dyn Isolation,
+    root: &Path,
+    form: crate::Form,
+    target: &str,
+    launch: impl FnOnce(&crate::Granted) -> io::Result<RunSpec>,
+) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = fs::metadata(root)?;
+    let owner = User {
+        uid: meta.uid(),
+        gid: meta.gid(),
+    };
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos());
+    let canary = format!("control-canary-{}-{nanos}", std::process::id());
+    let path = root.join("canary-credential");
+    private_file(&path, &canary)?;
+    let results = launch(&crate::Granted::located(form, path.clone(), owner))
+        .and_then(|spec| canary::run(isolation, spec, target, &canary));
+    let _ = fs::remove_file(&path);
+    let (lines, held) = canary::report(&results?);
+    lines.iter().for_each(|line| println!("{line}"));
+    if held {
+        Ok(())
+    } else {
+        Err(fail("the credential canary failed; see the FAIL lines above"))
+    }
+}
+
+#[cfg(test)]
+mod tests;

@@ -10,3 +10,6 @@ control-effect = { path = "../effect" }
 control-isolation = { path = "../isolation" }
 serde_json = "1"
 libc = "0.2"
+
+[dev-dependencies]
+control-isolation = { path = "../isolation", features = ["testing"] }

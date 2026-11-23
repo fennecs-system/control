@@ -167,6 +167,15 @@ impl Tmpfs {
             ..self
         }
     }
+    /// Owned by `owner` and closed to every other uid (mode 0700), whatever
+    /// the engine reports as the owner of files mounted beneath it.
+    pub fn private(self, owner: User) -> Self {
+        Self {
+            owner: Some(owner),
+            mode: Some(0o700),
+            ..self
+        }
+    }
 }
 /// Resource bounds; `None` leaves the engine default.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

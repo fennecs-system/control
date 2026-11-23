@@ -120,6 +120,8 @@ const CLI: Cli = Cli {
     },
     failure,
 };
+/// Where a turn mounts the login.
+const CREDENTIALS: &str = "/home/agent/.claude/.credentials.json";
 const UNCLASSIFIED: &str =
     "Claude stopped without success. Check its login, selected model and usage limits; credentials remain read-only.";
 
@@ -247,9 +249,7 @@ const KEY_SETTINGS: &str = concat!(
 fn mount(spec: RunSpec, login: &Granted) -> io::Result<RunSpec> {
     match login.form() {
         Form::ApiKey => login.mount(spec, "claude/api-key", KEY),
-        Form::Session | Form::CloudDefault => {
-            login.mount(spec, "claude/credentials", "/home/agent/.claude/.credentials.json")
-        }
+        Form::Session | Form::CloudDefault => login.mount(spec, "claude/credentials", CREDENTIALS),
     }
 }
 /// The flags that point Claude at an API key; a sign-in needs none.
@@ -274,7 +274,7 @@ pub fn command(command: Command<'_>) -> io::Result<()> {
     if !matches!(args, [a] if a == "login" || a == "check") {
         if matches!(args, [a] if a == "--help" || a == "-h" || a == "help") {
             println!(
-                "control claude login: sign in inside the pinned Nix Claude container\ncontrol claude key --account NAME: save an API-key account's key from standard input\ncontrol claude check: offline tool isolation check; no credentials or model calls"
+                "control claude login: sign in inside the pinned Nix Claude container\ncontrol claude key --account NAME: save an API-key account's key from standard input\ncontrol claude check: offline tool isolation check, then a fake-credential canary in a turn container for each login form; no real credentials or model calls"
             );
             return Ok(());
         }
@@ -323,10 +323,25 @@ pub fn command(command: Command<'_>) -> io::Result<()> {
             println!(
                 "Claude offline workspace isolation verified. No account credentials were mounted or model called."
             );
-            Ok(())
+            canary(isolation, &node.id().map_err(|e| fail(&e))?, &root, &image)
         }
         _ => Err(fail("Use control claude login | check")),
     }
+}
+
+/// The credential canary in a turn's own container, for each form of login,
+/// on a fake credential.
+fn canary(isolation: &dyn Isolation, node: &str, root: &Path, image: &str) -> io::Result<()> {
+    let mailbox = root.join(CLI.mailbox);
+    fs::create_dir_all(&mailbox)?;
+    let name = format!("control-claude-probe-{}-canary", std::process::id());
+    [(Form::Session, CREDENTIALS), (Form::ApiKey, KEY)]
+        .into_iter()
+        .try_for_each(|(form, target)| {
+            cli::canary_check(isolation, root, form, target, |login| {
+                turn_container(&name, node, login, &mailbox, image, "canary")
+            })
+        })
 }
 
 fn login_container(name: &str, node: &str, owner: User, directory: &Path, image: &str) -> io::Result<RunSpec> {

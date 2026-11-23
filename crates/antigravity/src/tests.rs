@@ -96,10 +96,9 @@ fn every_run_denies_the_clis_own_tools_and_only_a_turn_allows_controls() {
     let text = settings(Form::ApiKey, false);
     assert_eq!(text["permissions"]["allow"], json!([]));
     assert_eq!(text["modelProvider"], "gemini");
-    assert_eq!(
-        &FLAGS[..2],
-        ["--dangerously-skip-permissions", "--disable-slash-commands"]
-    );
+    // Unattended without auto-approval: an action no rule allows is refused.
+    assert!(!FLAGS.contains(&"--dangerously-skip-permissions"));
+    assert_eq!(FLAGS[0], "--disable-slash-commands");
     // Every Control tool is eager, under the server name the decoder expects.
     let mcp = mcp_config(Form::Session);
     let server = &mcp["mcpServers"]["control"];
@@ -287,7 +286,7 @@ const TEXT_KEY: &[&str] = &[
     "--tmpfs",
     "/tmp:rw,nosuid,size=128m",
     "--tmpfs",
-    "/home/agent:rw,nosuid,uid={uid},gid={gid},size=64m",
+    "/home/agent:rw,nosuid,mode=700,uid={uid},gid={gid},size=64m",
     "--env",
     "HOME=/home/agent",
     "--env",
@@ -306,7 +305,6 @@ const TEXT_KEY: &[&str] = &[
     "sha256:img",
     "control-agy",
     "text",
-    "--dangerously-skip-permissions",
     "--disable-slash-commands",
     "--output-format",
     "stream-json",
@@ -336,7 +334,7 @@ const TEXT_ADC: &[&str] = &[
     "--tmpfs",
     "/tmp:rw,nosuid,size=128m",
     "--tmpfs",
-    "/home/agent:rw,nosuid,uid={uid},gid={gid},size=64m",
+    "/home/agent:rw,nosuid,mode=700,uid={uid},gid={gid},size=64m",
     "--env",
     "HOME=/home/agent",
     "--env",
@@ -357,7 +355,6 @@ const TEXT_ADC: &[&str] = &[
     "sha256:img",
     "control-agy",
     "text",
-    "--dangerously-skip-permissions",
     "--disable-slash-commands",
     "--output-format",
     "stream-json",
@@ -387,7 +384,7 @@ const TURN_GOOGLE: &[&str] = &[
     "--tmpfs",
     "/tmp:rw,nosuid,size=128m",
     "--tmpfs",
-    "/home/agent:rw,nosuid,uid={uid},gid={gid},size=64m",
+    "/home/agent:rw,nosuid,mode=700,uid={uid},gid={gid},size=64m",
     "--env",
     "HOME=/home/agent",
     "--env",
@@ -406,7 +403,6 @@ const TURN_GOOGLE: &[&str] = &[
     "sha256:img",
     "control-agy",
     "turn",
-    "--dangerously-skip-permissions",
     "--disable-slash-commands",
     "--output-format",
     "stream-json",
@@ -436,7 +432,7 @@ const LOGIN: &[&str] = &[
     "--tmpfs",
     "/tmp:rw,nosuid,size=128m",
     "--tmpfs",
-    "/home/agent:rw,nosuid,uid={uid},gid={gid},size=64m",
+    "/home/agent:rw,nosuid,mode=700,uid={uid},gid={gid},size=64m",
     "--env",
     "HOME=/home/agent",
     "--env",
@@ -480,7 +476,7 @@ const CHECK: &[&str] = &[
     "--tmpfs",
     "/tmp:rw,nosuid,size=128m",
     "--tmpfs",
-    "/home/agent:rw,nosuid,uid={uid},gid={gid},size=64m",
+    "/home/agent:rw,nosuid,mode=700,uid={uid},gid={gid},size=64m",
     "--env",
     "HOME=/home/agent",
     "--env",
@@ -500,3 +496,46 @@ const CHECK: &[&str] = &[
     "control-agy",
     "check",
 ];
+
+/// A rejected tool is the typed failure even when the ending's wording
+/// resembles a provider cause (a tool named after a login error).
+#[test]
+fn a_rejected_tool_is_always_an_unexpected_tool_failure() {
+    let text = "stopped: unexpected tool (authentication required / resource_exhausted)";
+    let ended = Some(Ending {
+        text: text.to_owned(),
+        rejected_tools: true,
+    });
+    assert_eq!(
+        diagnose(ended, b"rate limit"),
+        Failure::UnexpectedTools(text.to_owned())
+    );
+}
+
+/// Each form of login runs as its owner and is carried read-only beneath the
+/// CLI's private home, and nothing else secret.
+#[test]
+fn every_login_form_is_read_only_beneath_the_private_home_of_the_cli_uid() {
+    let root = directory("private");
+    let private = root.join(PRIVATE);
+    fs::create_dir(&private).unwrap();
+    for (form, target) in [(Form::ApiKey, KEY), (Form::Session, TOKEN), (Form::CloudDefault, ADC)] {
+        let file = root.join("login");
+        cli::private_file(&file, "").unwrap();
+        let login = granted(form, &file);
+        let turn = turn_container(
+            "control-run-1",
+            "node-1",
+            &login,
+            &private,
+            &root.join(MAILBOX),
+            "sha256:img",
+            "gemini",
+        )
+        .unwrap();
+        assert_eq!(turn.user, Some(login.owner()));
+        assert_eq!(cli::secrets_private(&turn), Ok(()), "{form:?}");
+        let targets: Vec<_> = turn.secrets.iter().map(|s| (s.target.as_str(), s.access)).collect();
+        assert_eq!(targets, [(target, Access::ReadOnly)], "{form:?}");
+    }
+}

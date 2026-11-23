@@ -146,7 +146,7 @@ const TEXT: &[&str] = &[
     "--tmpfs",
     "/tmp:rw,nosuid,size=128m",
     "--tmpfs",
-    "/home/agent:rw,nosuid,uid=501,gid=20,size=64m",
+    "/home/agent:rw,nosuid,mode=700,uid=501,gid=20,size=64m",
     "--env",
     "HOME=/home/agent",
     "--env",
@@ -204,7 +204,7 @@ const TURN: &[&str] = &[
     "--tmpfs",
     "/tmp:rw,nosuid,size=128m",
     "--tmpfs",
-    "/home/agent:rw,nosuid,uid=501,gid=20,size=64m",
+    "/home/agent:rw,nosuid,mode=700,uid=501,gid=20,size=64m",
     "--env",
     "HOME=/home/agent",
     "--env",
@@ -264,7 +264,7 @@ const LOGIN: &[&str] = &[
     "--tmpfs",
     "/tmp:rw,nosuid,size=128m",
     "--tmpfs",
-    "/home/agent:rw,nosuid,uid=501,gid=20,size=64m",
+    "/home/agent:rw,nosuid,mode=700,uid=501,gid=20,size=64m",
     "--env",
     "HOME=/home/agent",
     "--env",
@@ -282,6 +282,33 @@ const LOGIN: &[&str] = &[
     "auth",
     "login",
 ];
+
+/// A turn and a text call run as the login's owner and carry the login
+/// read-only beneath the CLI's private home, and nothing else secret.
+#[test]
+fn the_login_is_read_only_beneath_the_private_home_of_the_cli_uid() {
+    let owner = User { uid: 501, gid: 20 };
+    let root = Path::new("/golden/root");
+    for (form, target) in [(Form::Session, CREDENTIALS), (Form::ApiKey, KEY)] {
+        let auth = Granted::located(form, "/golden/auth/login".into(), owner);
+        let turn = turn_container("control-run-1", "node-1", &auth, &root.join("m"), "sha256:img", "opus").unwrap();
+        let text = text_container(
+            "sha256:img",
+            "control-summary-1",
+            &root.join("w"),
+            "node-1",
+            "sonnet",
+            &auth,
+        )
+        .unwrap();
+        for spec in [turn, text] {
+            assert_eq!(spec.user, Some(owner));
+            assert_eq!(cli::secrets_private(&spec), Ok(()));
+            let targets: Vec<_> = spec.secrets.iter().map(|s| (s.target.as_str(), s.access)).collect();
+            assert_eq!(targets, [(target, Access::ReadOnly)], "{form:?}");
+        }
+    }
+}
 
 /// An API-key account's turn and text call: the key is one read-only secret
 /// mount, and the only flag that refers to it names the file, not the key.

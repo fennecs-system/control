@@ -172,7 +172,7 @@ const TEXT: &[&str] = &[
     "--tmpfs",
     "/tmp:rw,nosuid,size=128m",
     "--tmpfs",
-    "/home/agent:rw,nosuid,uid={uid},gid={gid},size=64m",
+    "/home/agent:rw,nosuid,mode=700,uid={uid},gid={gid},size=64m",
     "--env",
     "HOME=/home/agent",
     "--env",
@@ -232,7 +232,7 @@ const TURN: &[&str] = &[
     "--tmpfs",
     "/tmp:rw,nosuid,size=128m",
     "--tmpfs",
-    "/home/agent:rw,nosuid,uid={uid},gid={gid},size=64m",
+    "/home/agent:rw,nosuid,mode=700,uid={uid},gid={gid},size=64m",
     "--env",
     "HOME=/home/agent",
     "--env",
@@ -293,7 +293,7 @@ const LOGIN: &[&str] = &[
     "--tmpfs",
     "/tmp:rw,nosuid,size=128m",
     "--tmpfs",
-    "/home/agent:rw,nosuid,uid={uid},gid={gid},size=64m",
+    "/home/agent:rw,nosuid,mode=700,uid={uid},gid={gid},size=64m",
     "--env",
     "HOME=/home/agent",
     "--env",
@@ -374,4 +374,58 @@ fn an_api_key_is_mounted_and_exported_only_inside_grok() {
     assert!(KEY_CONFIG.contains(r#"args = ["-u", "XAI_API_KEY", "/bin/control-room-mcp"]"#));
     assert!(Grok.private_names().contains(&KEY_FILE));
     fs::remove_dir_all(root).unwrap();
+}
+
+/// A rejected tool is the typed failure even when the ending's wording
+/// resembles a provider cause (a tool named after a login error).
+#[test]
+fn a_rejected_tool_is_always_an_unexpected_tool_failure() {
+    let text = "stopped: unexpected tool (authentication required / resource_exhausted)";
+    let ended = Some(Ending {
+        text: text.to_owned(),
+        rejected_tools: true,
+    });
+    assert_eq!(
+        diagnose(ended, b"rate limit"),
+        Failure::UnexpectedTools(text.to_owned())
+    );
+}
+
+/// A turn and a text call run as the login's owner and carry the login,
+/// whatever its form, read-only beneath the CLI's private home, and nothing
+/// else secret.
+#[test]
+fn the_login_is_read_only_beneath_the_private_home_of_the_cli_uid() {
+    let auth = login("private");
+    let root = auth.parent().unwrap().to_path_buf();
+    let owner = granted(&auth).owner();
+    for (form, target) in [(Form::Session, AUTH), (Form::ApiKey, KEY)] {
+        let granted = Granted::located(form, auth.clone(), owner);
+        let turn = turn_container(
+            "control-run-1",
+            "node-1",
+            &granted,
+            &root.join("grok-config.toml"),
+            &root.join("grok-prompt"),
+            &root.join(MAILBOX),
+            "sha256:img",
+            "grok-4.7",
+        )
+        .unwrap();
+        let call = TextCall {
+            image: "sha256:img",
+            name: "control-summary-1",
+            workspace: &root.join("workspace"),
+            node: "node-1",
+            model: "grok-4.7",
+            login: Some(&granted),
+        };
+        let text = text_container(&call, &granted).unwrap();
+        for spec in [turn, text] {
+            assert_eq!(spec.user, Some(owner));
+            assert_eq!(cli::secrets_private(&spec), Ok(()));
+            let targets: Vec<_> = spec.secrets.iter().map(|s| (s.target.as_str(), s.access)).collect();
+            assert_eq!(targets, [(target, Access::ReadOnly)], "{form:?}");
+        }
+    }
 }

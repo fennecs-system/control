@@ -286,3 +286,59 @@ fn io_failure_does_not_become_a_successful_final_result() {
         io::ErrorKind::ConnectionReset
     );
 }
+
+/// Decodes a stream, reporting whether it failed.
+type Decode = Box<dyn Fn(&[u8], &mut dyn FnMut(Event)) -> bool>;
+
+/// Once a CLI calls a tool outside Control's, nothing decoded afterwards is
+/// recorded: not the call's result, and not a message built on it.
+#[test]
+fn nothing_after_a_forbidden_call_reaches_activity() {
+    const SECRET: &str = "FAKE-CANARY";
+    let streams: [(&str, Decode); 3] = [
+        (
+            "claude",
+            Box::new(|data, emit| json_lines(data, Claude::new(ALLOWED), emit).is_err()),
+        ),
+        (
+            "grok",
+            Box::new(|data, emit| json_lines(data, control_ai::grok::Grok::agent(), emit).is_err()),
+        ),
+        (
+            "antigravity",
+            Box::new(|data, emit| json_lines(data, control_ai::antigravity::Antigravity::agent(), emit).is_err()),
+        ),
+    ];
+    let records = |name: &str| -> Vec<serde_json::Value> {
+        match name {
+            "claude" => vec![
+                serde_json::from_str(INIT.trim_end()).unwrap(),
+                json!({"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/home/agent/.claude/.credentials.json"}}]}}),
+                json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":SECRET}]}}),
+                json!({"type":"assistant","message":{"id":"m2","content":[{"type":"text","text":SECRET}]}}),
+                serde_json::from_str(FINAL.trim_end()).unwrap(),
+            ],
+            "grok" => vec![
+                json!({"type":"tool_call","toolCallId":"t1","toolName":"read_file","rawInput":{}}),
+                json!({"type":"tool_call_update","toolCallId":"t1","status":"completed","rawOutput":SECRET}),
+                json!({"type":"text","data":SECRET}),
+                json!({"type":"end","stopReason":"end_turn"}),
+            ],
+            _ => vec![
+                json!({"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"tool","tool_name":"view_file","tool_info":{"name":"view_file","output":SECRET}}}),
+                json!({"event":"step_update","step_update":{"step_index":2,"state":"DONE","step_type":"agent_response","text_delta":SECRET}}),
+                json!({"event":"result","result":{"status":"SUCCESS","response":SECRET}}),
+            ],
+        }
+    };
+    for (name, run) in streams {
+        let data = records(name).iter().map(|r| format!("{r}\n")).collect::<String>();
+        let (mut rejected, mut leaked) = (false, Vec::new());
+        let failed = run(data.as_bytes(), &mut |event| match event {
+            Event::RejectedTools => rejected = true,
+            Event::Activity(a) => leaked.extend([a.text, a.output].into_iter().filter(|t| t.contains(SECRET))),
+        });
+        assert!(failed && rejected, "{name}");
+        assert!(leaked.is_empty(), "{name}: {leaked:?}");
+    }
+}

@@ -111,6 +111,8 @@ impl Turns for Grok {
     }
 }
 const MAILBOX: &str = "grok-mailbox";
+/// Where a turn mounts the login.
+const AUTH: &str = "/home/agent/.grok/auth.json";
 const LOGIN: &str = "run control grok login; its private login stays outside the checkout";
 const PROBE: Probe = Probe {
     directory: "grok-isolation-probe",
@@ -196,7 +198,7 @@ fn container(name: &str, node: &str, login: &Granted, image: &str) -> io::Result
     .tmpfs(Tmpfs::new("/home/agent/.grok", Size::Mib(64)).owned(owner));
     match login.form() {
         Form::ApiKey => login.mount(spec, "grok/api-key", KEY),
-        Form::Session | Form::CloudDefault => login.mount(spec, "grok/auth.json", "/home/agent/.grok/auth.json"),
+        Form::Session | Form::CloudDefault => login.mount(spec, "grok/auth.json", AUTH),
     }
 }
 fn text_container(call: &TextCall<'_>, login: &Granted) -> io::Result<RunSpec> {
@@ -243,6 +245,26 @@ fn turn_container(
         .args(FLAGS)
         .args(["--tools", NO_TOOLS, "--model", model]))
 }
+/// The credential canary in a turn's own container, for each form of login,
+/// on a fake credential.
+fn canary(isolation: &dyn Isolation, node: &str, root: &Path, image: &str) -> io::Result<()> {
+    let (config, prompt, mailbox) = (
+        root.join("grok-config.toml"),
+        root.join("grok-prompt"),
+        root.join(MAILBOX),
+    );
+    cli::private_file(&prompt, "")?;
+    fs::create_dir_all(&mailbox)?;
+    let name = format!("control-grok-probe-{}-canary", std::process::id());
+    [(Form::Session, AUTH), (Form::ApiKey, KEY)]
+        .into_iter()
+        .try_for_each(|(form, target)| {
+            cli::canary_check(isolation, root, form, target, |login| {
+                cli::private_file(&config, config_for(login))?;
+                turn_container(&name, node, login, &config, &prompt, &mailbox, image, "canary")
+            })
+        })
+}
 fn login_container(name: &str, node: &str, owner: User, directory: &Path, image: &str) -> io::Result<RunSpec> {
     Ok(RunSpec {
         image: image.into(),
@@ -263,8 +285,10 @@ fn login_container(name: &str, node: &str, owner: User, directory: &Path, image:
 /// rejected login); otherwise Grok's own bounded ending.
 fn diagnose(ended: Option<Ending>, stderr: &[u8]) -> Failure {
     let known = |bytes: &[u8]| control_agent::classify(bytes).map(|cause| Failure::Provider { agent: "Grok", cause });
+    // A rejected tool is never read as a provider cause, whatever its wording.
     ended
         .as_ref()
+        .filter(|e| !e.rejected_tools)
         .and_then(|e| known(e.text.as_bytes()))
         .or_else(|| ended.map(Ending::failure))
         .or_else(|| known(stderr))
@@ -287,7 +311,7 @@ pub fn command(command: Command<'_>) -> io::Result<()> {
     let [action] = args else { return Err(fail(USAGE)) };
     if matches!(action.as_str(), "--help" | "-h" | "help") {
         println!(
-            "control grok login: sign in with a device code inside the pinned Nix Grok container\ncontrol grok key --account NAME: save an API-key account's key from standard input\ncontrol grok check: offline tool isolation check; no credentials or model calls"
+            "control grok login: sign in with a device code inside the pinned Nix Grok container\ncontrol grok key --account NAME: save an API-key account's key from standard input\ncontrol grok check: offline tool isolation check, then a fake-credential canary in a turn container for each login form; no real credentials or model calls"
         );
         return Ok(());
     }
@@ -323,17 +347,19 @@ pub fn command(command: Command<'_>) -> io::Result<()> {
             fs::set_permissions(directory.join("auth.json"), fs::Permissions::from_mode(0o600))
         }
         "check" => {
+            let (image, node_id) = (image()?, node_id()?);
+            let root = node.check_root("grok-check").map_err(|e| fail(&e))?;
             cli::probe(
                 node,
                 isolation,
-                &image()?,
-                &node_id()?,
-                &node.check_root("grok-check").map_err(|e| fail(&e))?,
+                &image,
+                &node_id,
+                &root,
                 &format!("control-grok-probe-{}", std::process::id()),
                 &PROBE,
             )?;
             println!("Grok offline workspace isolation verified. No account credentials were mounted or model called.");
-            Ok(())
+            canary(isolation, &node_id, &root, &image)
         }
         _ => Err(fail(USAGE)),
     }
